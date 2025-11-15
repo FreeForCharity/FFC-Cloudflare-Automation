@@ -98,7 +98,7 @@ Visit in browser:
 Your `terraform.tfvars` file contains:
 
 ```hcl
-cloudflare_api_token = "em7chiooYdKI4T3d3Oo1j31-ekEV2FiUfZxwjv-Q"
+cloudflare_api_token = "your-cloudflare-api-token-here"
 domain_name          = "ffcadmin.org"
 github_pages_domain  = "freeforcharity.github.io"
 
@@ -115,7 +115,11 @@ min_tls_version            = "1.2"
 create_https_redirect      = true
 ```
 
-⚠️ **Security Note**: This file is NOT committed to git (protected by .gitignore)
+⚠️ **Security Note**: 
+- The `terraform.tfvars` file contains your actual API token
+- This file is NOT committed to git (protected by .gitignore)
+- The actual API token should be obtained from your CloudFlare account or team lead
+- Never commit API tokens to version control
 
 ## Troubleshooting
 

@@ -5,7 +5,7 @@ This guide helps you test the CloudFlare automation for the ffcadmin.org domain.
 ## Prerequisites
 
 You have:
-- ✅ CloudFlare API token: `em7chiooYdKI4T3d3Oo1j31-ekEV2FiUfZxwjv-Q`
+- ✅ CloudFlare API token (provided separately, not shown in documentation)
 - ✅ Domain: `ffcadmin.org`
 - ✅ Terraform configuration files ready
 
@@ -21,15 +21,17 @@ Expected output: `Terraform v1.0.0` or later
 
 ### Verify Configuration File
 
-The `terraform.tfvars` file has been created with:
-- API token for ffcadmin.org
+The `terraform.tfvars` file should be created with:
+- API token for ffcadmin.org (obtain from your CloudFlare account)
 - Domain name set to ffcadmin.org
 - GitHub Pages domain set to freeforcharity.github.io
 
-Check it exists:
+⚠️ **Security Note**: The API token should be stored securely in `terraform.tfvars` which is excluded from git by `.gitignore`. Never commit API tokens to version control.
+
+Check the file exists:
 
 ```bash
-cat terraform.tfvars
+ls -la terraform.tfvars
 ```
 
 ## Step 2: Initialize Terraform

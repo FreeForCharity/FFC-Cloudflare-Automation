@@ -34,8 +34,10 @@ Both methods are valid and can be used based on your needs.
 3. Click **New repository secret**
 4. Add the following secret:
    - **Name**: `CLOUDFLARE_API_TOKEN`
-   - **Value**: Your CloudFlare API token (e.g., `em7chiooYdKI4T3d3Oo1j31-ekEV2FiUfZxwjv-Q`)
+   - **Value**: Your CloudFlare API token (from CloudFlare dashboard)
 5. Click **Add secret**
+
+⚠️ **Security Note**: The workflow automatically validates that this secret exists before use.
 
 ### Step 2: Verify Secret is Added
 
@@ -52,6 +54,7 @@ Two workflows are included:
 **Purpose**: Validates Terraform configuration and posts plan to PR comments
 
 **Features**:
+- ✅ **Secret validation** - Verifies CLOUDFLARE_API_TOKEN exists before use
 - ✅ Terraform format check
 - ✅ Terraform initialization
 - ✅ Terraform validation
@@ -75,6 +78,7 @@ Plan: 6 to add, 0 to change, 0 to destroy
 **Purpose**: Deploys CloudFlare configuration to production
 
 **Features**:
+- ✅ **Secret validation** - Verifies CLOUDFLARE_API_TOKEN exists before use
 - ✅ Manual approval required (workflow dispatch)
 - ✅ Input domain names via UI
 - ✅ Only runs on main/master branch
@@ -335,6 +339,14 @@ For issues with GitHub Actions:
 - Verify secret is properly configured
 - Review [GitHub Actions documentation](https://docs.github.com/en/actions)
 - Check [Terraform GitHub Actions guide](https://www.terraform.io/docs/github-actions/getting-started.html)
+
+## For AI Agents
+
+**If you are an AI agent working on this repository:**
+
+📖 **REQUIRED**: Read [AI Agent Instructions](.github/agents/AI_AGENT_INSTRUCTIONS.md)
+
+This document contains mandatory security guidelines to prevent secret exposure when modifying workflows or documentation.
 
 ---
 

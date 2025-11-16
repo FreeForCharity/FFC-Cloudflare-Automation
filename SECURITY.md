@@ -214,6 +214,20 @@ See **[GITHUB_ACTIONS.md](GITHUB_ACTIONS.md)** for complete setup guide.
 - [Terraform Sensitive Variables](https://www.terraform.io/docs/language/values/variables.html#suppressing-values-in-cli-output)
 - [Git Security Best Practices](https://git-scm.com/book/en/v2/GitHub-Account-Administration-and-Security)
 
+## For AI Agents
+
+**If you are an AI agent (GitHub Copilot, ChatGPT, Claude, etc.) working on this repository:**
+
+📖 **REQUIRED READING**: [AI Agent Instructions](.github/agents/AI_AGENT_INSTRUCTIONS.md)
+
+This document contains mandatory security rules for AI agents to prevent secret exposure. All AI agents must follow these instructions when working on this codebase.
+
+**Key Points:**
+- NEVER write actual API tokens in any file
+- ALWAYS use GitHub Secrets or environment variables
+- ALWAYS validate secrets exist before use
+- ALWAYS use placeholders in documentation
+
 ---
 
 **Remember**: Security is everyone's responsibility. When in doubt, ask before committing!

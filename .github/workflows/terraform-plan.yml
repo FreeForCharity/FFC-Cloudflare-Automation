@@ -18,6 +18,15 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
     
+    - name: Validate Secret Presence
+      run: |
+        if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
+          echo "::error::CLOUDFLARE_API_TOKEN secret is not set. Please add it to repository secrets."
+          echo "::error::Go to Settings -> Secrets and variables -> Actions -> New repository secret"
+          exit 1
+        fi
+        echo "✅ CLOUDFLARE_API_TOKEN secret is present"
+    
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
       with:

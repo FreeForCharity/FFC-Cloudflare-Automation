@@ -44,6 +44,8 @@ resource "cloudflare_record" "github_pages_caa" {
   type    = "CAA"
   ttl     = var.dns_ttl
 
+  content = "${var.caa_records[count.index].flags} ${var.caa_records[count.index].tag} \"${var.caa_records[count.index].value}\""
+
   data {
     flags = var.caa_records[count.index].flags
     tag   = var.caa_records[count.index].tag

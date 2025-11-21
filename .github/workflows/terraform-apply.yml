@@ -1,0 +1,72 @@
+name: Terraform Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain_name:
+        description: 'Domain name (e.g., ffcadmin.org)'
+        required: true
+        default: 'ffcadmin.org'
+      github_pages_domain:
+        description: 'GitHub Pages domain (e.g., freeforcharity.github.io)'
+        required: true
+        default: 'freeforcharity.github.io'
+
+jobs:
+  terraform:
+    name: 'Terraform Apply'
+    runs-on: ubuntu-latest
+    
+    # Use bash shell for all steps
+    defaults:
+      run:
+        shell: bash
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+    
+    - name: Validate Secret Presence
+      run: |
+        if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
+          echo "::error::CLOUDFLARE_API_TOKEN secret is not set. Please add it to repository secrets."
+          echo "::error::Go to Settings -> Secrets and variables -> Actions -> New repository secret"
+          exit 1
+        fi
+        echo "✅ CLOUDFLARE_API_TOKEN secret is present"
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.5
+        terraform_wrapper: true
+    
+    - name: Terraform Format Check
+      run: terraform fmt -check
+      continue-on-error: true
+    
+    - name: Terraform Init
+      run: terraform init
+    
+    - name: Terraform Validate
+      run: terraform validate
+    
+    - name: Terraform Plan
+      id: plan
+      env:
+        TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        TF_VAR_domain_name: ${{ github.event.inputs.domain_name }}
+        TF_VAR_github_pages_domain: ${{ github.event.inputs.github_pages_domain }}
+      run: terraform plan -no-color -out=tfplan
+    
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      env:
+        TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        TF_VAR_domain_name: ${{ github.event.inputs.domain_name }}
+        TF_VAR_github_pages_domain: ${{ github.event.inputs.github_pages_domain }}
+      run: terraform apply -auto-approve tfplan
+    
+    - name: Terraform Output
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      run: terraform output

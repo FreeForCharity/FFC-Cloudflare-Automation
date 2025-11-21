@@ -25,6 +25,40 @@ ENV/
 env/
 
 # IDE
+# Terraform files
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+!examples/*.tfvars
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Sensitive data
+**/.terraformrc
+**/.terraform.d/
+*.pem
+*.key
+secrets/
+.env
+.env.local
+.env*.local
+.terraformrc
+terraform.rc
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+# Editor files
 .vscode/
 .idea/
 *.swp
@@ -34,3 +68,13 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+# Logs
+*.log
+
+# Backup files
+*.bak
+*.backup
+# Secrets and credentials
+*.pem
+*.key
+secrets/

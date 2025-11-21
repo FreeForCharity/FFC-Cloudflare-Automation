@@ -2,6 +2,7 @@
 *.tfstate
 *.tfstate.*
 *.tfvars
+*.tfvars.json
 !*.tfvars.example
 !examples/*.tfvars
 .terraform/
@@ -12,6 +13,16 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+
+# Sensitive data
+**/.terraformrc
+**/.terraform.d/
+*.pem
+*.key
+secrets/
+.env
+.env.local
+.env*.local
 .terraformrc
 terraform.rc
 
@@ -19,6 +30,7 @@ terraform.rc
 .DS_Store
 Thumbs.db
 
+# IDE files
 # Editor files
 .vscode/
 .idea/
@@ -26,6 +38,12 @@ Thumbs.db
 *.swo
 *~
 
+# Logs
+*.log
+
+# Backup files
+*.bak
+*.backup
 # Secrets and credentials
 *.pem
 *.key

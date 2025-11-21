@@ -12,6 +12,16 @@ This Terraform configuration automatically sets up all the necessary DNS records
 - **HTTPS Redirect**: Sets up automatic HTTPS redirects
 - **Optional CAA Records**: For SSL certificate management
 
+### Security Scanning
+
+This repository includes automated security scanning for Infrastructure-as-Code:
+- **tfsec** - Static analysis for Terraform security issues
+- **Checkov** - Policy-as-code scanner for IaC misconfigurations
+- **Trivy** - Vulnerability scanner for IaC
+- **Terraform Validate** - Built-in validation for syntax and logic
+
+Security scans run automatically on all pull requests and pushes. See [SECURITY.md](SECURITY.md) for more details.
+
 ## Prerequisites
 
 Before using this automation, you need:

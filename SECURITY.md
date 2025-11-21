@@ -1,5 +1,71 @@
 # Security Policy
 
+## Automated Security Scanning
+
+This repository includes automated security scanning for Infrastructure-as-Code (Terraform) using multiple industry-standard tools:
+
+### Security Scanning Tools
+
+| Tool | Purpose | Runs On |
+|------|---------|---------|
+| **tfsec** | Static analysis for Terraform security issues | All PRs and pushes |
+| **Checkov** | Policy-as-code scanner for IaC misconfigurations | All PRs and pushes |
+| **Trivy** | Vulnerability scanner for IaC and container images | All PRs and pushes |
+| **Terraform Validate** | Built-in validation for Terraform syntax and logic | All PRs and pushes |
+
+### Security Workflow
+
+The security scanning workflow (`.github/workflows/terraform-security.yml`) automatically runs on:
+- Every push to `main` or `master` branch
+- Every pull request targeting `main` or `master` branch
+- Manual workflow dispatch
+
+**Results** are uploaded to GitHub Security tab under Code Scanning alerts, where they can be:
+- Reviewed and triaged
+- Tracked over time
+- Integrated with branch protection rules
+
+### Running Security Scans Locally
+
+You can run the same security checks locally before pushing:
+
+#### tfsec
+```bash
+# Install
+brew install tfsec  # macOS
+# or download from https://github.com/aquasecurity/tfsec/releases
+
+# Run
+tfsec . --minimum-severity MEDIUM
+```
+
+#### Checkov
+```bash
+# Install
+pip install checkov
+
+# Run
+checkov -d . --framework terraform
+```
+
+#### Trivy
+```bash
+# Install
+brew install trivy  # macOS
+# or download from https://github.com/aquasecurity/trivy/releases
+
+# Run
+trivy config .
+```
+
+#### Terraform Validate
+```bash
+terraform init -backend=false
+terraform validate
+```
+
+---
+
 ## Sensitive Information Handling
 
 ### CloudFlare API Tokens

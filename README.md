@@ -9,4 +9,4 @@ The static site provides an overview of the Terraform automation, current status
 
 ## 📋 About
 
-This repository contains Infrastructure as Code (IaC) using Terraform to manage FreeForCharity's Cloudflare configuration and infrastructure
+This repository contains Infrastructure as Code (IaC) using Terraform to manage FreeForCharity's Cloudflare configuration and infrastructure.

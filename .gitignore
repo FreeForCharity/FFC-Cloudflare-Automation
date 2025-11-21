@@ -3,6 +3,8 @@
 *.tfstate.*
 *.tfvars
 *.tfvars.json
+!*.tfvars.example
+!examples/*.tfvars
 .terraform/
 .terraform.lock.hcl
 crash.log
@@ -21,12 +23,15 @@ secrets/
 .env
 .env.local
 .env*.local
+.terraformrc
+terraform.rc
 
 # OS files
 .DS_Store
 Thumbs.db
 
 # IDE files
+# Editor files
 .vscode/
 .idea/
 *.swp
@@ -39,3 +44,7 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup
+# Secrets and credentials
+*.pem
+*.key
+secrets/

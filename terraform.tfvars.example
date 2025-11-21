@@ -1,0 +1,42 @@
+# Example Terraform variables file
+# Copy this file to terraform.tfvars and fill in your values
+
+# Required variables
+cloudflare_api_token = "your-cloudflare-api-token-here"
+domain_name         = "example.com"
+github_pages_domain = "username.github.io"
+
+# Optional: Override default GitHub Pages IP addresses if needed
+# github_pages_ips = [
+#   "185.199.108.153",
+#   "185.199.109.153",
+#   "185.199.110.153",
+#   "185.199.111.153"
+# ]
+
+# Optional: DNS settings
+# dns_ttl = 1  # 1 = automatic
+# proxied = false  # Set to true to proxy through CloudFlare CDN
+
+# Optional: WWW subdomain
+# create_www_record = true
+
+# Optional: HTTPS redirect
+# create_https_redirect = true
+
+# Optional: SSL/TLS settings
+# configure_ssl_settings = true
+# ssl_mode = "full"  # Options: off, flexible, full, strict
+# always_use_https = true
+# automatic_https_rewrites = true
+# min_tls_version = "1.2"
+
+# Optional: CAA records for SSL certificate management
+# create_caa_records = true
+# caa_records = [
+#   {
+#     flags = "0"
+#     tag   = "issue"
+#     value = "letsencrypt.org"
+#   }
+# ]

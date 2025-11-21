@@ -5,14 +5,13 @@ A repository for the documentation and automation via Terraform supporting FreeF
 
 View our automation tracking page: [FFC Cloudflare Automation Tracker](https://freeforcharity.github.io/FFC-Cloudflare-Automation-/)
 
-The static site provides an overview of the Terraform automation, current status, key features, and helpful resources.
+The static HTML site provides an overview of the Terraform automation, current status, key features, and helpful resources. The site is currently built with static HTML/CSS and does not contain any JavaScript.
 
 ## 📋 About
 
 This repository contains Infrastructure as Code (IaC) using Terraform to manage FreeForCharity's Cloudflare configuration and infrastructure.
 # FFC Cloudflare Automation
 
-[![CodeQL](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/codeql-analysis.yml)
 [![CI](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/ci.yml/badge.svg)](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
@@ -25,10 +24,10 @@ This repository contains Infrastructure as Code (IaC) configurations for managin
 ## Features
 
 - **Infrastructure as Code**: Declarative configuration using Terraform
-- **Automated Security Scanning**: CodeQL security analysis on every commit
 - **Continuous Validation**: Automated Terraform validation and formatting checks
 - **Dependency Management**: Automated dependency updates via Dependabot
 - **Version Control**: Full audit trail of infrastructure changes
+- **Static Site**: Simple HTML/CSS documentation site hosted on GitHub Pages
 
 ## Getting Started
 

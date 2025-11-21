@@ -1,11 +1,11 @@
 # Testing Guide for ffcadmin.org
 
-This guide helps you test the CloudFlare automation for the ffcadmin.org domain.
+This guide helps you test the Cloudflare automation for the ffcadmin.org domain.
 
 ## Prerequisites
 
 You have:
-- ✅ CloudFlare API token (provided separately, not shown in documentation)
+- ✅ Cloudflare API token (provided separately, not shown in documentation)
 - ✅ Domain: `ffcadmin.org`
 - ✅ Terraform configuration files ready
 
@@ -22,7 +22,7 @@ Expected output: `Terraform v1.0.0` or later
 ### Verify Configuration File
 
 The `terraform.tfvars` file should be created with:
-- API token for ffcadmin.org (obtain from your CloudFlare account)
+- API token for ffcadmin.org (obtain from your Cloudflare account)
 - Domain name set to ffcadmin.org
 - GitHub Pages domain set to freeforcharity.github.io
 
@@ -158,9 +158,9 @@ nslookup ffcadmin.org
 nslookup www.ffcadmin.org
 ```
 
-### Using CloudFlare Dashboard
+### Using Cloudflare Dashboard
 
-1. Log in to CloudFlare dashboard
+1. Log in to Cloudflare dashboard
 2. Select the `ffcadmin.org` domain
 3. Go to DNS → Records
 4. Verify the records were created
@@ -231,11 +231,11 @@ grep cloudflare_api_token terraform.tfvars
 ### Issue: "Zone not found"
 
 **Possible causes:**
-1. Domain not added to CloudFlare account
+1. Domain not added to Cloudflare account
 2. API token not scoped for this domain
 3. Typo in domain name
 
-**Solution:** Verify domain in CloudFlare dashboard
+**Solution:** Verify domain in Cloudflare dashboard
 
 ### Issue: DNS not propagating
 
@@ -254,7 +254,7 @@ Online tool: https://dnschecker.org
 1. Wait 15-30 minutes for DNS propagation
 2. Verify all 4 A records exist
 3. Remove and re-add custom domain in GitHub
-4. Check nameservers are pointing to CloudFlare
+4. Check nameservers are pointing to Cloudflare
 
 ### Issue: SSL certificate not working
 
@@ -302,7 +302,7 @@ If you need to modify settings:
 
 ## Remove Resources
 
-To delete all CloudFlare settings:
+To delete all Cloudflare settings:
 
 ```bash
 terraform destroy

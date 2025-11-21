@@ -27,14 +27,14 @@ Both methods are valid and can be used based on your needs.
 
 ## Setup GitHub Secrets
 
-### Step 1: Add CloudFlare API Token to GitHub Secrets
+### Step 1: Add Cloudflare API Token to GitHub Secrets
 
 1. Go to your repository on GitHub
 2. Click **Settings** → **Secrets and variables** → **Actions**
 3. Click **New repository secret**
 4. Add the following secret:
    - **Name**: `CLOUDFLARE_API_TOKEN`
-   - **Value**: Your CloudFlare API token (from CloudFlare dashboard)
+   - **Value**: Your Cloudflare API token (from Cloudflare dashboard)
 5. Click **Add secret**
 
 ⚠️ **Security Note**: The workflow automatically validates that this secret exists before use.
@@ -75,7 +75,7 @@ Plan: 6 to add, 0 to change, 0 to destroy
 
 **Trigger**: Manual workflow dispatch
 
-**Purpose**: Deploys CloudFlare configuration to production
+**Purpose**: Deploys Cloudflare configuration to production
 
 **Features**:
 - ✅ **Secret validation** - Verifies CLOUDFLARE_API_TOKEN exists before use
@@ -146,7 +146,7 @@ Terraform automatically reads `TF_VAR_*` environment variables and maps them to 
 
 To rotate or update the API token:
 
-1. Generate new CloudFlare API token
+1. Generate new Cloudflare API token
 2. Go to **Settings** → **Secrets and variables** → **Actions**
 3. Click on **CLOUDFLARE_API_TOKEN**
 4. Click **Update secret**
@@ -329,7 +329,7 @@ If you're currently using local `terraform.tfvars`:
 5. **PR is merged** to main branch
 6. **Admin triggers** Terraform Apply workflow
 7. **Workflow runs** using GitHub Secret
-8. **CloudFlare updated** automatically
+8. **Cloudflare updated** automatically
 9. **Team notified** of successful deployment
 
 ## Support

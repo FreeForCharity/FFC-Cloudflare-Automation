@@ -1,6 +1,6 @@
-# Setup Guide: CloudFlare + GitHub Pages
+# Setup Guide: Cloudflare + GitHub Pages
 
-This guide walks you through the complete process of setting up a custom domain with CloudFlare and GitHub Pages using this Terraform automation.
+This guide walks you through the complete process of setting up a custom domain with Cloudflare and GitHub Pages using this Terraform automation.
 
 ## Part 1: Prerequisites Setup
 
@@ -29,24 +29,24 @@ sudo apt update && sudo apt install terraform
 terraform --version
 ```
 
-### 1.2 CloudFlare Account Setup
+### 1.2 Cloudflare Account Setup
 
-1. **Create/Login to CloudFlare Account**
+1. **Create/Login to Cloudflare Account**
    - Visit: https://dash.cloudflare.com
    - Sign up or log in
 
-2. **Add Your Domain to CloudFlare**
+2. **Add Your Domain to Cloudflare**
    - Click "Add a Site"
    - Enter your domain name
    - Select a plan (Free plan works fine)
    - Follow the instructions to update your domain's nameservers
 
 3. **Wait for DNS Propagation**
-   - CloudFlare will scan your existing DNS records
-   - Update your domain registrar with CloudFlare's nameservers
+   - Cloudflare will scan your existing DNS records
+   - Update your domain registrar with Cloudflare's nameservers
    - Wait for nameserver changes to propagate (can take up to 24 hours)
 
-### 1.3 Create CloudFlare API Token
+### 1.3 Create Cloudflare API Token
 
 1. Go to: https://dash.cloudflare.com/profile/api-tokens
 2. Click "Create Token"
@@ -264,8 +264,8 @@ Use SSL Labs to check your SSL configuration:
 
 **Solutions:**
 1. Wait longer (DNS propagation can take time)
-2. Check DNS records in CloudFlare dashboard
-3. Verify nameservers are pointing to CloudFlare
+2. Check DNS records in Cloudflare dashboard
+3. Verify nameservers are pointing to Cloudflare
 4. Use `dig` or online tools to verify DNS records
 5. Try removing and re-adding the custom domain in GitHub
 
@@ -290,7 +290,7 @@ Use SSL Labs to check your SSL configuration:
 
 **Solutions:**
 1. Verify API token has correct permissions
-2. Check that domain exists in CloudFlare
+2. Check that domain exists in Cloudflare
 3. Ensure zone is active (not pending)
 4. Run `terraform plan` to see detailed error messages
 
@@ -336,9 +336,9 @@ terraform destroy
 
 ### Performance Optimization
 
-1. **Enable CloudFlare Proxy**
+1. **Enable Cloudflare Proxy**
    - Set `proxied = true` in terraform.tfvars
-   - Benefit from CloudFlare CDN
+   - Benefit from Cloudflare CDN
    - Get DDoS protection
 
 2. **Configure Caching**
@@ -346,14 +346,14 @@ terraform destroy
    - Configure browser cache settings
 
 3. **Enable Additional Security**
-   - Enable DNSSEC in CloudFlare
+   - Enable DNSSEC in Cloudflare
    - Configure firewall rules
    - Set up rate limiting
 
 ### Monitoring
 
-1. **CloudFlare Analytics**
-   - Monitor traffic in CloudFlare dashboard
+1. **Cloudflare Analytics**
+   - Monitor traffic in Cloudflare dashboard
    - Check for security threats
    - View performance metrics
 
@@ -377,7 +377,7 @@ terraform destroy
 ## Support and Resources
 
 - **GitHub Pages Docs:** https://docs.github.com/en/pages
-- **CloudFlare Docs:** https://developers.cloudflare.com/
+- **Cloudflare Docs:** https://developers.cloudflare.com/
 - **Terraform Docs:** https://www.terraform.io/docs
 - **Issues:** https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues
 
@@ -405,8 +405,8 @@ whois domain.com | grep -i ns # Check nameservers
 
 ### File Checklist
 - [ ] terraform.tfvars configured
-- [ ] CloudFlare API token created
-- [ ] Domain added to CloudFlare
+- [ ] Cloudflare API token created
+- [ ] Domain added to Cloudflare
 - [ ] Nameservers updated
 - [ ] GitHub Pages site created
 - [ ] Terraform applied successfully
@@ -415,4 +415,4 @@ whois domain.com | grep -i ns # Check nameservers
 - [ ] HTTPS enabled
 - [ ] Site accessible at custom domain
 
-Congratulations! Your custom domain should now be fully configured with CloudFlare and GitHub Pages.
+Congratulations! Your custom domain should now be fully configured with Cloudflare and GitHub Pages.

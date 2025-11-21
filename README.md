@@ -259,8 +259,8 @@ For more information, see [.github/workflows/README.md](.github/workflows/README
 - **[Configuration Examples](examples/README.md)** - Example Terraform configurations
 - **[verify_old_token.json.README.md](verify_old_token.json.README.md)** - Information about the test token response file
 - [GitHub Pages Custom Domain Documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site)
-- [CloudFlare DNS Documentation](https://developers.cloudflare.com/dns/)
-- [Terraform CloudFlare Provider](https://registry.terraform.io/providers/cloudflare/cloudflare/latest/docs)
+- [Cloudflare DNS Documentation](https://developers.cloudflare.com/dns/)
+- [Terraform Cloudflare Provider](https://registry.terraform.io/providers/cloudflare/cloudflare/latest/docs)
 - [GitHub Pages IP Addresses](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site#configuring-an-apex-domain)
 
 ## License

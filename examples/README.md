@@ -14,14 +14,14 @@ Minimal setup with default settings. Good for getting started quickly.
 terraform apply -var-file=examples/basic.tfvars
 ```
 
-### 2. With CloudFlare CDN (`with-cdn.tfvars`)
+### 2. With Cloudflare CDN (`with-cdn.tfvars`)
 
-Enables CloudFlare's CDN proxying for improved performance and DDoS protection.
+Enables Cloudflare's CDN proxying for improved performance and DDoS protection.
 
 **Use case:** Production site that needs global CDN and security features
 
 **Features:**
-- Traffic proxied through CloudFlare
+- Traffic proxied through Cloudflare
 - Automatic caching
 - DDoS protection
 - Web application firewall (on paid plans)
@@ -129,7 +129,7 @@ dns_ttl = 120  # 2 minutes
 For production (better performance):
 
 ```hcl
-dns_ttl = 1  # Automatic (CloudFlare decides)
+dns_ttl = 1  # Automatic (Cloudflare decides)
 ```
 
 ### Disable HTTPS Redirect
@@ -155,7 +155,7 @@ ssl_mode = "strict"    # Requires valid certificate
 | Feature | Basic | With CDN | Strict SSL | Apex Only |
 |---------|-------|----------|------------|-----------|
 | www subdomain | ✅ | ✅ | ✅ | ❌ |
-| CloudFlare CDN | ❌ | ✅ | ❌ | ❌ |
+| Cloudflare CDN | ❌ | ✅ | ❌ | ❌ |
 | HTTPS redirect | ✅ | ✅ | ✅ | ✅ |
 | SSL mode | full | full | strict | full |
 | Min TLS | 1.2 | 1.2 | 1.3 | 1.2 |

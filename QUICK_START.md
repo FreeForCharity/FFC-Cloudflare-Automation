@@ -5,8 +5,8 @@ Get your GitHub Pages custom domain up and running in 5 minutes!
 ## Prerequisites Checklist
 
 - [ ] Terraform installed (1.6+)
-- [ ] CloudFlare account with domain added
-- [ ] CloudFlare API token created
+- [ ] Cloudflare account with domain added
+- [ ] Cloudflare API token created
 - [ ] GitHub Pages site ready
 
 ## 5-Step Setup
@@ -70,7 +70,7 @@ curl -I https://yourdomain.com
 
 **DNS not working?**
 - Wait 10-15 minutes for propagation
-- Check CloudFlare dashboard for records
+- Check Cloudflare dashboard for records
 - Verify nameservers: `dig yourdomain.com NS +short`
 
 **GitHub DNS check failing?**

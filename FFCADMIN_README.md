@@ -1,6 +1,6 @@
-# ffcadmin.org CloudFlare Setup
+# ffcadmin.org Cloudflare Setup
 
-This document provides specific instructions for deploying the CloudFlare automation for the **ffcadmin.org** domain.
+This document provides specific instructions for deploying the Cloudflare automation for the **ffcadmin.org** domain.
 
 ## Quick Deploy
 
@@ -24,7 +24,7 @@ Type `yes` when prompted to create the resources.
 
 ## What This Will Do
 
-The automation will configure your CloudFlare DNS to point **ffcadmin.org** to GitHub Pages:
+The automation will configure your Cloudflare DNS to point **ffcadmin.org** to GitHub Pages:
 
 ### DNS Records Created:
 1. **A Records** (root domain):
@@ -36,7 +36,7 @@ The automation will configure your CloudFlare DNS to point **ffcadmin.org** to G
 2. **CNAME Record** (www subdomain):
    - `www.ffcadmin.org` → `freeforcharity.github.io`
 
-### CloudFlare Settings:
+### Cloudflare Settings:
 - **SSL/TLS Mode**: Full (secure)
 - **Minimum TLS Version**: 1.2
 - **Always Use HTTPS**: Enabled
@@ -118,7 +118,7 @@ create_https_redirect      = true
 ⚠️ **Security Note**: 
 - The `terraform.tfvars` file contains your actual API token
 - This file is NOT committed to git (protected by .gitignore)
-- The actual API token should be obtained from your CloudFlare account or team lead
+- The actual API token should be obtained from your Cloudflare account or team lead
 - Never commit API tokens to version control
 
 ## Troubleshooting
@@ -136,7 +136,7 @@ Or use: https://dnschecker.org
 
 1. Wait 15-30 minutes for DNS to fully propagate
 2. Remove and re-add the custom domain in GitHub
-3. Verify all 4 A records exist in CloudFlare
+3. Verify all 4 A records exist in Cloudflare
 
 ### SSL Certificate Issues?
 
@@ -222,7 +222,7 @@ terraform destroy
 ## Next Steps After Successful Deployment
 
 1. **Test the site** thoroughly from multiple devices
-2. **Monitor CloudFlare analytics** for traffic
+2. **Monitor Cloudflare analytics** for traffic
 3. **Set up GitHub Pages** build/deploy process
 4. **Update content** in your GitHub repository
 5. **Share the URL** with your team
@@ -231,7 +231,7 @@ terraform destroy
 
 Want to enable more features? Edit `terraform.tfvars`:
 
-### Enable CloudFlare CDN
+### Enable Cloudflare CDN
 ```hcl
 proxied = true
 ```

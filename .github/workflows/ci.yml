@@ -15,7 +15,7 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v5
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -56,8 +56,19 @@ jobs:
       - name: Check for sensitive files
         run: |
           echo "Checking for accidentally committed sensitive files..."
+          
+          found_sensitive=false
+          
+          # Check for .tfvars files (excluding .tfvars.example and examples/*.tfvars)
+          while IFS= read -r -d '' file; do
+            if [[ "$file" != *".tfvars.example" ]] && [[ "$file" != *"examples/"* ]]; then
+              echo "ERROR: Found sensitive .tfvars file: $file"
+              found_sensitive=true
+            fi
+          done < <(find . -name "*.tfvars" -not -path "./.git/*" -print0)
+          
+          # Check for other sensitive patterns
           sensitive_patterns=(
-            "*.tfvars"
             "*.tfvars.json"
             "*.pem"
             "*.key"
@@ -65,7 +76,6 @@ jobs:
             ".env.local"
           )
           
-          found_sensitive=false
           for pattern in "${sensitive_patterns[@]}"; do
             if find . -name "$pattern" -not -path "./.git/*" | grep -q .; then
               echo "ERROR: Found sensitive files matching pattern: $pattern"

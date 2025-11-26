@@ -186,17 +186,17 @@ For sensitive security matters, please contact the Free For Charity team through
 We appreciate the security research community and will acknowledge researchers who report valid vulnerabilities (with their permission).
 ## Sensitive Information Handling
 
-### CloudFlare API Tokens
+### Cloudflare API Tokens
 
 **⚠️ CRITICAL: Never commit API tokens to version control**
 
 ## Two Secure Storage Methods
 
-This repository supports **two secure methods** for storing the CloudFlare API token:
+This repository supports **two secure methods** for storing the Cloudflare API token:
 
 ### Method 1: Local terraform.tfvars (For Individual Development)
 
-The CloudFlare API token is stored in the `terraform.tfvars` file, which is:
+The Cloudflare API token is stored in the `terraform.tfvars` file, which is:
 - ✅ Located on your local machine
 - ✅ Excluded from git by `.gitignore`
 - ✅ Never committed to the repository
@@ -209,7 +209,7 @@ The CloudFlare API token is stored in the `terraform.tfvars` file, which is:
 
 ### Method 2: GitHub Secrets (For Team/CI/CD) ⭐ **RECOMMENDED**
 
-The CloudFlare API token is stored as a GitHub Secret:
+The Cloudflare API token is stored as a GitHub Secret:
 - ✅ Encrypted at rest (AES-256-GCM)
 - ✅ Encrypted in transit (TLS 1.2+)
 - ✅ Centrally managed by repository admins
@@ -231,7 +231,7 @@ See **[GITHUB_ACTIONS.md](GITHUB_ACTIONS.md)** for complete GitHub Secrets setup
 
 #### How to Securely Obtain the Token
 
-1. **From CloudFlare Dashboard**:
+1. **From Cloudflare Dashboard**:
    - Log in to https://dash.cloudflare.com
    - Go to "My Profile" → "API Tokens"
    - Create a new token or use an existing one
@@ -262,7 +262,7 @@ github_pages_domain  = "freeforcharity.github.io"
 
 If an API token is accidentally committed or exposed:
 
-1. **Immediately revoke the token** in CloudFlare dashboard
+1. **Immediately revoke the token** in Cloudflare dashboard
 2. **Generate a new API token** with the same permissions
 3. **Update `terraform.tfvars`** with the new token
 4. **Notify your team** of the security incident
@@ -327,10 +327,10 @@ If you discover a security vulnerability:
    - Go to your repository on GitHub
    - Click **Settings** → **Secrets and variables** → **Actions**
 
-2. **Add CloudFlare API Token**:
+2. **Add Cloudflare API Token**:
    - Click **New repository secret**
    - Name: `CLOUDFLARE_API_TOKEN`
-   - Value: Your CloudFlare API token
+   - Value: Your Cloudflare API token
    - Click **Add secret**
 
 3. **Deploy Using GitHub Actions**:
@@ -384,7 +384,7 @@ See **[GITHUB_ACTIONS.md](GITHUB_ACTIONS.md)** for complete setup guide.
 
 ### For GitHub Actions/CI/CD:
 
-- [ ] CloudFlare API token added to GitHub Secrets
+- [ ] Cloudflare API token added to GitHub Secrets
 - [ ] Secret named exactly `CLOUDFLARE_API_TOKEN`
 - [ ] Branch protection enabled on main branch
 - [ ] Required reviews configured
@@ -394,7 +394,7 @@ See **[GITHUB_ACTIONS.md](GITHUB_ACTIONS.md)** for complete setup guide.
 
 ## Additional Resources
 
-- [CloudFlare API Token Documentation](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/)
+- [Cloudflare API Token Documentation](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/)
 - [Terraform Sensitive Variables](https://www.terraform.io/docs/language/values/variables.html#suppressing-values-in-cli-output)
 - [Git Security Best Practices](https://git-scm.com/book/en/v2/GitHub-Account-Administration-and-Security)
 

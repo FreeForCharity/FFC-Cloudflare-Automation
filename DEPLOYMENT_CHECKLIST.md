@@ -1,19 +1,19 @@
 # Deployment Checklist for ffcadmin.org
 
-Use this checklist when deploying the CloudFlare automation for ffcadmin.org.
+Use this checklist when deploying the Cloudflare automation for ffcadmin.org.
 
 ## Pre-Deployment
 
-### CloudFlare Setup
-- [x] CloudFlare account created
-- [x] Domain `ffcadmin.org` added to CloudFlare
+### Cloudflare Setup
+- [x] Cloudflare account created
+- [x] Domain `ffcadmin.org` added to Cloudflare
 - [x] API token created with permissions:
   - Zone → DNS → Edit
   - Zone → Zone Settings → Edit
   - Zone → Zone → Read
 - [x] API token scoped to `ffcadmin.org`
 - [ ] Nameservers updated at domain registrar (if not already done)
-- [ ] CloudFlare zone status is "Active"
+- [ ] Cloudflare zone status is "Active"
 
 ### Local Environment
 - [ ] Terraform installed (v1.6.0+)
@@ -22,7 +22,7 @@ Use this checklist when deploying the CloudFlare automation for ffcadmin.org.
 
 ### Configuration File
 - [x] `terraform.tfvars` created with:
-  - CloudFlare API token
+  - Cloudflare API token
   - Domain: `ffcadmin.org`
   - GitHub Pages domain: `freeforcharity.github.io`
 - [x] Configuration file NOT committed to git (.gitignore excludes it)
@@ -85,7 +85,7 @@ terraform output
   - Should show 4 GitHub IPs
 - [ ] Test CNAME: `dig www.ffcadmin.org CNAME +short`
   - Should show `freeforcharity.github.io`
-- [ ] Check CloudFlare dashboard shows records
+- [ ] Check Cloudflare dashboard shows records
 
 ### GitHub Pages Configuration
 - [ ] Navigate to GitHub repository settings
@@ -112,7 +112,7 @@ terraform output
 ### SSL/TLS Verification
 - [ ] HTTPS works without warnings
 - [ ] SSL certificate is valid
-- [ ] Certificate issued by Let's Encrypt or CloudFlare
+- [ ] Certificate issued by Let's Encrypt or Cloudflare
 - [ ] TLS 1.2+ is enforced
 - [ ] Test with: `curl -I https://ffcadmin.org`
 - [ ] Optional: Run SSL Labs test (https://ssllabs.com/ssltest/)
@@ -133,8 +133,8 @@ terraform output
 
 ## Monitoring
 
-- [ ] Add CloudFlare dashboard to bookmarks
-- [ ] Set up CloudFlare email notifications (optional)
+- [ ] Add Cloudflare dashboard to bookmarks
+- [ ] Set up Cloudflare email notifications (optional)
 - [ ] Monitor GitHub Pages status
 - [ ] Check site accessibility regularly
 
@@ -153,7 +153,7 @@ Then investigate the issue before reapplying.
 
 ### Issue: Plan fails with "zone not found"
 **Solution:**
-- Verify domain exists in CloudFlare account
+- Verify domain exists in Cloudflare account
 - Check API token has access to the zone
 - Confirm domain name spelling in terraform.tfvars
 
@@ -167,7 +167,7 @@ Then investigate the issue before reapplying.
 **Solution:**
 - Wait longer (DNS propagation takes time)
 - Check nameservers at domain registrar
-- Verify records in CloudFlare dashboard
+- Verify records in Cloudflare dashboard
 
 ### Issue: GitHub DNS check fails
 **Solution:**
@@ -180,7 +180,7 @@ Then investigate the issue before reapplying.
 
 ### Regular Tasks
 - [ ] Check SSL certificate expiration (auto-renewed by GitHub)
-- [ ] Monitor CloudFlare analytics
+- [ ] Monitor Cloudflare analytics
 - [ ] Review DNS records periodically
 - [ ] Keep Terraform configuration updated
 
@@ -222,7 +222,7 @@ Deployment is successful when:
 ## Support Contacts
 
 - GitHub Pages docs: https://docs.github.com/en/pages
-- CloudFlare docs: https://developers.cloudflare.com/
+- Cloudflare docs: https://developers.cloudflare.com/
 - Terraform docs: https://www.terraform.io/docs
 - Repository issues: https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues
 
@@ -236,7 +236,7 @@ Deployment is successful when:
 
 **Terraform version:** ___________________
 
-**CloudFlare provider version:** ___________________
+**Cloudflare provider version:** ___________________
 
 **Notes:** 
 _______________________________________________
@@ -251,4 +251,4 @@ _______________________________________________
 
 ✅ **Deployment Complete!**
 
-The ffcadmin.org domain is now configured to work with GitHub Pages through CloudFlare.
+The ffcadmin.org domain is now configured to work with GitHub Pages through Cloudflare.

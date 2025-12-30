@@ -123,13 +123,15 @@ body:
         - [ ] GitHub Pages is enabled in repository settings
         
         ### GitHub Pages IP Addresses
-        Current GitHub Pages IP addresses (verify at [GitHub Docs](https://docs.github.com/en/pages)):
+        Current GitHub Pages IP addresses as of December 2024 (always verify at [GitHub Pages documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site#configuring-an-apex-domain)):
         ```
         185.199.108.153
         185.199.109.153
         185.199.110.153
         185.199.111.153
         ```
+        
+        ⚠️ **Important**: Always verify these IPs are current before configuring DNS records.
         
         ### DNS Configuration (Cloudflare Dashboard)
         1. [ ] Login to Cloudflare Dashboard

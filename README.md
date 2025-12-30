@@ -235,14 +235,16 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 ├── README.md               # This file
 ├── SECURITY.md             # Security policy
 ├── STAGING_README.md       # Staging subdomain management guide
+├── LEGACY_TERRAFORM.md     # Information about legacy Terraform files
 ├── requirements.txt        # Python dependencies
 ├── update_dns.py           # Python DNS management script
 ├── export_zone_dns_summary.py  # DNS configuration export tool
 ├── export_zone_a_records.py    # A record export tool
-└── Update-StagingDns.ps1   # PowerShell DNS script
+├── Update-StagingDns.ps1   # PowerShell DNS script
+└── [legacy files]          # See LEGACY_TERRAFORM.md for details
 ```
 
-**Note**: This repository previously used Terraform for infrastructure management. Legacy Terraform files (main.tf, variables.tf, etc.) are retained for reference but are no longer the primary method for DNS management.
+**Note**: This repository previously used Terraform for infrastructure management. Legacy Terraform files and related documentation (main.tf, variables.tf, SETUP_GUIDE.md, QUICK_START.md, etc.) are retained for reference. See [LEGACY_TERRAFORM.md](LEGACY_TERRAFORM.md) for details on legacy files and the migration path.
 
 ## Security
 

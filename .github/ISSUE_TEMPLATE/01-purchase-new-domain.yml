@@ -1,94 +1,119 @@
----
 name: Purchase and Add New .org Domain
-about: Request to purchase and add a new .org domain to the Cloudflare account
-title: '[DOMAIN PURCHASE] '
-labels: ['domain-purchase', 'cloudflare']
-assignees: []
+description: Request to purchase and add a new .org domain to the Cloudflare account
+title: "[DOMAIN PURCHASE] "
+labels: ["domain-purchase", "cloudflare"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Domain Purchase Request
+        Use this template to request the purchase and addition of a new .org domain to the FFC Cloudflare account.
 
----
+  - type: input
+    id: domain_name
+    attributes:
+      label: Domain Name
+      description: Enter the exact domain name you want to purchase
+      placeholder: "example.org"
+    validations:
+      required: true
 
-## Domain Purchase Request
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Purpose
+      description: Describe the purpose of this domain and how it will be used
+      placeholder: "This domain will be used for..."
+    validations:
+      required: true
 
-### Domain Name
-<!-- Please provide the exact domain name you want to purchase -->
-**Domain**: [your-domain.org]
+  - type: textarea
+    id: project_details
+    attributes:
+      label: Project Details
+      description: Provide details about the project or initiative this domain will support
+    validations:
+      required: true
 
-### Purpose
-<!-- Describe the purpose of this domain and how it will be used -->
+  - type: checkboxes
+    id: dns_config
+    attributes:
+      label: DNS Configuration Needed
+      description: Select all that apply
+      options:
+        - label: Point to GitHub Pages (apex domain)
+        - label: Point to GitHub Pages (subdomain)
+        - label: Custom DNS configuration (specify in Additional DNS Records below)
+        - label: Standard FFC configuration
 
+  - type: textarea
+    id: additional_dns
+    attributes:
+      label: Additional DNS Records
+      description: List any specific DNS records needed (A, CNAME, MX, TXT, etc.)
+      placeholder: |
+        Example:
+        - A record: @ -> 203.0.113.42
+        - CNAME: www -> example.org
 
-### Project Details
-<!-- Provide details about the project or initiative this domain will support -->
+  - type: checkboxes
+    id: authorization
+    attributes:
+      label: Budget and Authorization
+      description: Confirm authorization for domain purchase
+      options:
+        - label: I confirm this purchase has been approved
+          required: true
 
+  - type: input
+    id: timeline
+    attributes:
+      label: Timeline
+      description: When is this domain needed?
+      placeholder: "ASAP or specific date"
+    validations:
+      required: true
 
-### Technical Requirements
+  - type: checkboxes
+    id: post_purchase
+    attributes:
+      label: Post-Purchase Actions Required
+      description: Check all that apply
+      options:
+        - label: Configure nameservers to Cloudflare
+        - label: Set up DNS records
+        - label: Configure SSL/TLS settings
+        - label: Enable DNSSEC
 
-#### DNS Configuration Needed
-<!-- Select all that apply -->
-- [ ] Point to GitHub Pages (apex domain)
-- [ ] Point to GitHub Pages (subdomain)
-- [ ] Custom DNS configuration (specify below)
-- [ ] Standard FFC configuration
+  - type: textarea
+    id: additional_notes
+    attributes:
+      label: Additional Notes
+      description: Any other relevant information
 
-#### Additional DNS Records
-<!-- List any specific DNS records needed (A, CNAME, MX, TXT, etc.) -->
-
-
-### Budget and Authorization
-<!-- Confirm authorization for domain purchase -->
-- [ ] I confirm this purchase has been approved
-- **Estimated Annual Cost**: ~$15/year for .org domain
-
-### Timeline
-**Needed by**: [Date or "ASAP"]
-
-### Post-Purchase Actions Required
-<!-- Check all that apply -->
-- [ ] Configure nameservers to Cloudflare
-- [ ] Set up DNS records
-- [ ] Configure SSL/TLS settings
-- [ ] Enable DNSSEC
-- [ ] Other (specify below)
-
-### Additional Notes
-<!-- Any other relevant information -->
-
-
----
-
-## For Administrator Use
-
-### Pre-Purchase Checklist
-- [ ] Domain availability confirmed
-- [ ] Budget approved
-- [ ] Domain aligns with FFC mission and policies
-- [ ] No trademark or legal concerns
-
-### Purchase Steps
-1. [ ] Purchase domain from registrar (e.g., Namecheap, Google Domains)
-2. [ ] Add domain to Cloudflare account
-3. [ ] Update nameservers at registrar to Cloudflare's nameservers
-4. [ ] Configure DNS records as requested
-5. [ ] Enable security settings (SSL/TLS, DNSSEC)
-6. [ ] Verify domain is working correctly
-7. [ ] Document domain in inventory
-
-### Cloudflare API Commands
-<!-- Will be executed by administrator using scripts in this repository -->
-```bash
-# Add domain to Cloudflare account
-# This is typically done via Cloudflare Dashboard first
-
-# Then configure DNS records using update_dns.py or custom scripts
-python update_dns.py --name [domain-name] --type A --ip [IP-ADDRESS]
-```
-
-### Verification
-- [ ] Domain added to Cloudflare
-- [ ] DNS records configured
-- [ ] SSL/TLS working
-- [ ] Domain resolves correctly
-
-### Completion Notes
-<!-- Administrator notes on completion -->
-
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        ## For Administrator Use
+        
+        ### Pre-Purchase Checklist
+        - [ ] Domain availability confirmed
+        - [ ] Budget approved
+        - [ ] Domain aligns with FFC mission and policies
+        - [ ] No trademark or legal concerns
+        
+        ### Purchase Steps
+        1. [ ] Purchase domain from registrar (e.g., Namecheap, Google Domains)
+        2. [ ] Add domain to Cloudflare account
+        3. [ ] Update nameservers at registrar to Cloudflare's nameservers
+        4. [ ] Configure DNS records as requested
+        5. [ ] Enable security settings (SSL/TLS, DNSSEC)
+        6. [ ] Verify domain is working correctly
+        7. [ ] Document domain in inventory
+        
+        ### Verification
+        - [ ] Domain added to Cloudflare
+        - [ ] DNS records configured
+        - [ ] SSL/TLS working
+        - [ ] Domain resolves correctly

@@ -303,6 +303,14 @@ Security is a top priority for this project. We implement multiple security meas
 - **Dependency Updates**: Dependabot keeps dependencies secure and up-to-date
 - **CI Validation**: Automated checks for sensitive files and misconfigurations
 
+### Protecting Cloudflare API Tokens in Workflows
+- **Least privilege**: Use `CLOUDFLARE_API_KEY_READ_ALL` for read-only workflows; use `CLOUDFLARE_API_KEY_DNS_ONLY` scoped to specific zones for DNS edits.
+- **Environment approvals**: Store tokens as Environment secrets (e.g., `cloudflare-prod`) and require reviewers before jobs run.
+- **Apply gating**: Workflows default to `--dry-run`; set `apply=true` to make changes. Applies are blocked unless running on `main`.
+- **Actor allowlist**: Set repository variable `ALLOWED_ACTORS` (comma-separated usernames) to restrict who can dispatch destructive jobs.
+- **Branch protections**: Require PR reviews and status checks on `main` to prevent unreviewed changes.
+- **Rotation**: Set token expiration in Cloudflare and rotate regularly; remove unused tokens.
+
 For details on our security practices and how to report vulnerabilities, see [SECURITY.md](SECURITY.md).
 
 ## Contributing

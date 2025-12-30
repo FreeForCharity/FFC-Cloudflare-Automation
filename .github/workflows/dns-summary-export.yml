@@ -15,6 +15,7 @@ on:
 jobs:
   export:
     runs-on: windows-latest
+    environment: cloudflare-prod
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Cloudflare Dashboard
+    url: https://dash.cloudflare.com/
+    about: Direct access to the Cloudflare dashboard for advanced management
+  - name: GitHub Pages Documentation
+    url: https://docs.github.com/en/pages
+    about: Official GitHub Pages documentation

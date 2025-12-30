@@ -1,0 +1,155 @@
+---
+name: Remove Domain from Cloudflare
+about: Request to remove a domain from the Cloudflare account
+title: '[REMOVE DOMAIN] '
+labels: ['domain-remove', 'cloudflare']
+assignees: []
+
+---
+
+## Remove Domain Request
+
+### Domain Information
+**Domain Name**: [domain-to-remove.org]
+
+### Reason for Removal
+<!-- Explain why this domain should be removed from Cloudflare -->
+
+
+### Domain Status
+<!-- Select the current status -->
+- [ ] Domain is active and will continue to be used elsewhere
+- [ ] Domain is being transferred to another Cloudflare account
+- [ ] Domain is being retired/deprecated
+- [ ] Domain has expired or will not be renewed
+- [ ] Other (specify):
+
+### Data Backup Requirements
+<!-- What data needs to be preserved before removal? -->
+- [ ] Export DNS records
+- [ ] Export analytics data
+- [ ] Export firewall rules
+- [ ] Export page rules
+- [ ] Export SSL certificates
+- [ ] No data backup needed
+- [ ] Other (specify):
+
+### Migration Destination
+<!-- If moving to another provider, specify details -->
+**New DNS Provider**: [e.g., Route 53, Google Cloud DNS, etc.]
+
+**New Nameservers**: 
+```
+ns1.example.com
+ns2.example.com
+```
+
+### Critical DNS Records to Preserve
+<!-- List any DNS records that must be maintained during transition -->
+```
+Example:
+- A record: example.org -> 203.0.113.42
+- CNAME: www -> example.org
+- MX records for email
+- TXT records for verification (SPF, DKIM, etc.)
+```
+
+### Timeline
+**Remove by**: [Date]
+
+**Downtime Acceptable?**: [Yes/No - if yes, specify acceptable window]
+
+### Pre-Removal Actions Required
+<!-- Check all that apply -->
+- [ ] Update nameservers at registrar to new provider
+- [ ] Wait for DNS propagation (24-48 hours)
+- [ ] Verify domain works with new provider
+- [ ] Notify stakeholders
+- [ ] Update documentation
+- [ ] Other (specify):
+
+### Additional Notes
+<!-- Any special considerations, dependencies, or concerns -->
+
+
+---
+
+## For Administrator Use
+
+### Pre-Removal Checklist
+- [ ] Removal reason documented and approved
+- [ ] Data backup completed (if requested)
+- [ ] New DNS provider configured (if applicable)
+- [ ] Nameservers updated at registrar (if applicable)
+- [ ] Stakeholders notified
+- [ ] Grace period allowed for DNS propagation
+
+### Data Export Steps
+1. [ ] Export DNS records
+   ```bash
+   # Export DNS records to CSV
+   python export_zone_dns_summary.py --zones [domain-name] --output [domain-name]_backup.csv
+   
+   # Export all A records
+   python export_zone_a_records.py --zones [domain-name] --output [domain-name]_a_records.csv
+   ```
+
+2. [ ] Export Cloudflare configuration
+   - SSL/TLS settings
+   - Page Rules
+   - Firewall Rules
+   - Workers (if any)
+   - Other configurations
+
+3. [ ] Document current settings
+   - Screenshot important configurations
+   - Save any custom rules or scripts
+   - Archive analytics reports (if needed)
+
+### Removal Steps
+1. [ ] Verify nameservers have been changed at registrar
+   ```bash
+   nslookup -type=NS [domain-name]
+   dig NS [domain-name]
+   ```
+
+2. [ ] Wait for DNS propagation confirmation
+   - Verify domain resolves using new nameservers
+   - Test from multiple locations/DNS servers
+
+3. [ ] Remove domain from Cloudflare
+   - Login to Cloudflare Dashboard
+   - Navigate to the domain
+   - Go to Overview
+   - Scroll to bottom and select "Remove Site from Cloudflare"
+   - Confirm removal
+
+4. [ ] Verify removal
+   - Confirm domain no longer appears in Cloudflare account
+   - Verify domain still resolves with new provider
+
+### Post-Removal Verification
+- [ ] Domain removed from Cloudflare account
+- [ ] Domain resolves with new DNS provider
+- [ ] Website still accessible
+- [ ] Email still functioning (if applicable)
+- [ ] All critical services operational
+- [ ] Documentation updated
+- [ ] Inventory updated
+
+### Rollback Plan
+<!-- In case of issues during removal -->
+If problems occur:
+1. Re-add domain to Cloudflare
+2. Update nameservers back to Cloudflare
+3. Restore DNS records from backup
+4. Wait for propagation
+5. Investigate issues with new provider
+
+### Completion Notes
+<!-- Administrator notes on completion -->
+- **Removal Date**: 
+- **Data Exported**: 
+- **Issues Encountered**: 
+- **Resolution Time**: 
+

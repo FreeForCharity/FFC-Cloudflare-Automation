@@ -1,0 +1,146 @@
+---
+name: Add Existing Domain to Cloudflare
+about: Request to add an existing domain to the Cloudflare account
+title: '[ADD DOMAIN] '
+labels: ['domain-add', 'cloudflare']
+assignees: []
+
+---
+
+## Add Existing Domain Request
+
+### Domain Information
+**Domain Name**: [your-existing-domain.org]
+
+**Current Registrar**: [e.g., Namecheap, Google Domains, GoDaddy]
+
+### Domain Ownership Verification
+- [ ] I confirm I have ownership/administrative access to this domain
+- **Registrar Account Email**: [email@example.com]
+
+### Current Domain Usage
+<!-- Describe how the domain is currently being used -->
+
+
+### Reason for Adding to Cloudflare
+<!-- Explain why you want to move this domain to Cloudflare -->
+
+
+### Technical Requirements
+
+#### Current DNS Records to Preserve
+<!-- List any existing DNS records that must be maintained -->
+- [ ] No existing records (new domain)
+- [ ] Existing records need to be migrated (list below)
+
+**Critical DNS Records**:
+```
+Example:
+- A record: example.org -> 203.0.113.42
+- CNAME: www.example.org -> example.org
+- MX records for email
+- TXT records for verification
+```
+
+#### New Configuration Needed
+<!-- Select all that apply -->
+- [ ] Point to GitHub Pages (apex domain)
+- [ ] Point to GitHub Pages (subdomain)
+- [ ] Migrate existing DNS configuration
+- [ ] Custom DNS configuration (specify below)
+
+### Migration Plan
+<!-- When should the domain be migrated? -->
+**Preferred Migration Date/Time**: [Date and time]
+
+**Downtime Acceptable?**: [Yes/No - explain]
+
+### Post-Migration Actions Required
+<!-- Check all that apply -->
+- [ ] Update nameservers at registrar
+- [ ] Configure DNS records
+- [ ] Configure SSL/TLS settings
+- [ ] Verify email functionality (if applicable)
+- [ ] Test website functionality
+- [ ] Enable DNSSEC
+- [ ] Other (specify below)
+
+### Additional Notes
+<!-- Any other relevant information, special requirements, or concerns -->
+
+
+---
+
+## For Administrator Use
+
+### Pre-Migration Checklist
+- [ ] Domain ownership verified
+- [ ] Current DNS records exported/documented
+- [ ] Migration plan approved
+- [ ] Stakeholders notified
+
+### Migration Steps
+1. [ ] Add domain to Cloudflare account via Dashboard
+   - Login to Cloudflare Dashboard
+   - Add a Site
+   - Enter domain name
+   - Select Free plan (or appropriate plan)
+2. [ ] Review and configure DNS records
+   - Export current DNS records from existing provider
+   - Import/recreate records in Cloudflare
+3. [ ] Configure Cloudflare settings
+   - SSL/TLS mode (Full or Full Strict recommended)
+   - Always Use HTTPS
+   - Auto-minify assets
+   - Other optimizations as needed
+4. [ ] Update nameservers at registrar
+   - Replace existing nameservers with Cloudflare nameservers
+   - Wait for DNS propagation (up to 24-48 hours)
+5. [ ] Verify domain is working
+   - Test website loads correctly
+   - Test all subdomains
+   - Verify email works (if applicable)
+   - Check SSL certificate
+
+### Cloudflare Nameservers
+<!-- Will be provided after adding domain to Cloudflare -->
+```
+Example:
+ns1.cloudflare.com
+ns2.cloudflare.com
+```
+
+### Cloudflare API Commands
+<!-- Sample commands for DNS record management -->
+```bash
+# List existing DNS records for the zone
+python export_zone_dns_summary.py --zones [domain-name] --output [domain-name]_dns.csv
+
+# Add/update DNS records using update_dns.py
+python update_dns.py --name [record-name] --type A --ip [IP-ADDRESS]
+python update_dns.py --name [record-name] --type CNAME --target [TARGET]
+```
+
+### DNS Propagation Check
+```bash
+# Check nameserver propagation
+nslookup -type=NS [domain-name]
+
+# Check DNS records
+nslookup [domain-name]
+dig [domain-name] A
+dig [domain-name] AAAA
+```
+
+### Verification
+- [ ] Domain added to Cloudflare account
+- [ ] DNS records migrated and verified
+- [ ] Nameservers updated at registrar
+- [ ] Website accessible via HTTPS
+- [ ] All subdomains working
+- [ ] Email functioning (if applicable)
+- [ ] SSL/TLS configured correctly
+
+### Completion Notes
+<!-- Administrator notes on completion, issues encountered, resolution time -->
+

@@ -36,6 +36,7 @@ $ApiBase = 'https://api.cloudflare.com/client/v4'
 function Get-PlainToken {
     param([string]$Provided)
     if ($Provided) { return $Provided.Trim() }
+    if ($env:CLOUDFLARE_API_KEY_DNS_ONLY) { return $env:CLOUDFLARE_API_KEY_DNS_ONLY.Trim() }
     if ($env:CLOUDFLARE_API_TOKEN) { return $env:CLOUDFLARE_API_TOKEN.Trim() }
     $secure = Read-Host 'Enter Cloudflare API Token' -AsSecureString
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)

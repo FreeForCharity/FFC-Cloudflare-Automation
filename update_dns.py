@@ -118,7 +118,8 @@ def parse_args():
 def retrieve_token(arg_token: Optional[str]) -> str:
     if arg_token:
         return arg_token.strip()
-    env_token = os.getenv("CLOUDFLARE_API_TOKEN")
+    # Prefer repo-level DNS-only var, then standard token
+    env_token = os.getenv("CLOUDFLARE_API_KEY_DNS_ONLY") or os.getenv("CLOUDFLARE_API_TOKEN")
     if env_token:
         return env_token.strip()
     return getpass.getpass("Enter Cloudflare API Token: ").strip()

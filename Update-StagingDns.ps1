@@ -1,4 +1,4 @@
-<#!
+<#
 .SYNOPSIS
     One-time Cloudflare DNS updater for staging.clarkemoyer.com
 .DESCRIPTION
@@ -56,7 +56,11 @@ function Invoke-CfGet {
     param([string]$Path, [string]$Token, [hashtable]$Query)
     $headers = @{ Authorization = "Bearer $Token" }
     $uri = "$ApiBase$Path"
-    $resp = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers -Body $null -ErrorAction Stop -Verbose:$false -TimeoutSec 30 -ContentType 'application/json' -UseBasicParsing -Query $Query
+    if ($Query -and $Query.Count -gt 0) {
+        $queryString = ($Query.GetEnumerator() | ForEach-Object { [System.Uri]::EscapeDataString($_.Key) + '=' + [System.Uri]::EscapeDataString($_.Value) }) -join '&'
+        $uri = "$uri?$queryString"
+    }
+    $resp = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers -Body $null -ErrorAction Stop -Verbose:$false -TimeoutSec 30 -ContentType 'application/json'
     if (-not $resp.success) { throw "GET $Path failed: $(ConvertTo-Json $resp)" }
     return $resp
 }

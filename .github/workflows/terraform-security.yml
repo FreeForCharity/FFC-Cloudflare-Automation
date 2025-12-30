@@ -1,0 +1,166 @@
+name: Terraform Security Scanning
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - '**.tf'
+      - '.github/workflows/terraform-security.yml'
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - '**.tf'
+      - '.github/workflows/terraform-security.yml'
+  workflow_dispatch:
+
+jobs:
+  tfsec:
+    name: tfsec Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          soft_fail: false
+          format: sarif
+          additional_args: --minimum-severity MEDIUM
+      
+      - name: Upload tfsec SARIF file
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: results.sarif
+          category: tfsec
+  
+  checkov:
+    name: Checkov Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12.2825.0
+        with:
+          directory: .
+          framework: terraform
+          output_format: sarif
+          output_file_path: results.sarif
+          soft_fail: false
+          quiet: false
+      
+      - name: Upload Checkov SARIF file
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: results.sarif
+          category: checkov
+  
+  trivy:
+    name: Trivy Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      
+      - name: Run Trivy vulnerability scanner in IaC mode
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+      
+      - name: Upload Trivy SARIF file
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+  
+  terraform-validate:
+    name: Terraform Validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          # Matches version used in other Terraform workflows (apply/plan) for consistency
+          terraform_version: 1.6.5
+      
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+      
+      - name: Terraform Init
+        id: init
+        run: terraform init -backend=false
+      
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+      
+      - name: Comment PR with validation results
+        uses: actions/github-script@v8
+        if: github.event_name == 'pull_request'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fmtOutcome = '${{ steps.fmt.outcome }}';
+            const fmtStatus = (fmtOutcome === 'success' || fmtOutcome === 'skipped') ? '✅ Pass' : '❌ Fail';
+            const validateOutcome = '${{ steps.validate.outcome }}';
+            const validateStatus = validateOutcome === 'success' ? '✅ Pass' : '❌ Fail';
+            
+            const output = `#### Terraform Security Validation 🔒
+            
+            #### Format Check 🖌 ${fmtStatus}
+            #### Validation 🤖 ${validateStatus}
+            
+            <details><summary>Validation Output</summary>
+            
+            \`\`\`
+            ${{ steps.validate.outputs.stdout }}
+            \`\`\`
+            
+            </details>
+            
+            *Pusher: @${{ github.actor }}, Workflow: \`${{ github.workflow }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })

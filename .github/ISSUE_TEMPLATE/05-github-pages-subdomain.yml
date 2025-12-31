@@ -1,6 +1,6 @@
 name: Configure Subdomain for GitHub Pages
-description: Point a subdomain (e.g., staging.example.org) to GitHub Pages
-title: "[GITHUB PAGES SUBDOMAIN] {subdomain}"
+description: Point the fixed subdomain staging.<base_domain> to GitHub Pages
+title: "[GITHUB PAGES SUBDOMAIN] staging.{base_domain}"
 labels: ["github-pages", "dns-config", "subdomain", "cloudflare"]
 body:
   - type: markdown
@@ -11,9 +11,9 @@ body:
     attributes:
       value: |
         ## GitHub Pages Subdomain Configuration
-        Use this template to configure a subdomain to point to GitHub Pages.
+        Use this template to configure the fixed subdomain `staging` to point to GitHub Pages.
         
-        **Common use cases**: staging environments, preview sites, documentation sites, project-specific sites.
+        **Allowed subdomain**: Only `staging` is permitted.
 
   - type: input
     id: base_domain
@@ -21,15 +21,6 @@ body:
       label: Base Domain
       description: The root domain
       placeholder: "example.org"
-    validations:
-      required: true
-
-  - type: input
-    id: subdomain
-    attributes:
-      label: Subdomain
-      description: The full subdomain to configure
-      placeholder: "staging.example.org"
     validations:
       required: true
 
@@ -97,7 +88,7 @@ body:
     attributes:
       label: DNS Configuration Requirements
       options:
-        - label: Create CNAME record for subdomain pointing to GitHub Pages
+        - label: Create CNAME record for `staging` pointing to GitHub Pages
           required: true
 
   - type: checkboxes
@@ -141,7 +132,7 @@ body:
         2. [ ] Navigate to DNS → Records
         3. [ ] Create CNAME record:
            - Type: CNAME
-           - Name: [subdomain] (e.g., "staging")
+            - Name: staging
            - Target: [username].github.io
            - TTL: Auto
            - Proxy status: DNS only (gray cloud) ⚠️ Important!
@@ -152,7 +143,7 @@ body:
         
         # Create CNAME record for subdomain
         # Example: python update_dns.py --zone example.org --name staging --type CNAME --target freeforcharity.github.io --no-proxy
-        python update_dns.py --zone [base-domain] --name [subdomain-prefix] --type CNAME --target [username].github.io --no-proxy
+        python update_dns.py --zone [base-domain] --name staging --type CNAME --target [username].github.io --no-proxy
         ```
         
         ### GitHub Pages Configuration
@@ -165,16 +156,16 @@ body:
         ```bash
         # GitHub usually creates this automatically
         # If needed, create manually in repository root:
-        echo "[subdomain.domain.org]" > CNAME
+        echo "staging.[domain.org]" > CNAME
         ```
         
         ### Verification
         ```bash
         # Check DNS propagation
-        dig [subdomain.domain.org] CNAME +short
+        dig staging.[domain.org] CNAME +short
         
         # Test HTTPS
-        curl -I https://[subdomain.domain.org]
+        curl -I https://staging.[domain.org]
         ```
         
         ### Cloudflare Settings (Recommended)

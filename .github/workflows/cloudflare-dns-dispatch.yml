@@ -1,0 +1,77 @@
+name: Cloudflare DNS via Repo Dispatch
+
+on:
+  repository_dispatch:
+    types: [dns_update]
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod
+    concurrency:
+      group: dns-update-${{ github.event.client_payload.domain }}
+      cancel-in-progress: true
+    env:
+      CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Guard: allowed actors
+        run: |
+          if [ -n "${{ vars.ALLOWED_ACTORS }}" ]; then
+            IFS=',' read -ra USERS <<< "${{ vars.ALLOWED_ACTORS }}"
+            OK=false
+            for u in "${USERS[@]}"; do
+              if [ "$u" = "${{ github.actor }}" ]; then OK=true; fi
+            done
+            if [ "$OK" != "true" ]; then
+              echo "Actor ${{ github.actor }} is not allowed to run this workflow."; exit 1
+            fi
+          else
+            echo "No ALLOWED_ACTORS repo variable set; skipping actor guard."
+          fi
+
+      - name: Guard: apply only on main
+        if: ${{ github.event.client_payload.apply == true && github.ref != 'refs/heads/main' }}
+        run: |
+          echo "Apply runs are restricted to main. Current ref: ${{ github.ref }}"; exit 1
+
+      - name: Update GitHub Pages with A+AAAA
+        if: ${{ github.event.client_payload.mode == 'github-pages-a-aaaa' }}
+        run: |
+          CMD="python update_pages_dns.py --domain \"${{ github.event.client_payload.domain }}\" --pages-host \"${{ github.event.client_payload.pages_host }}\" --set-github-a --set-github-aaaa"
+          if [ "${{ github.event.client_payload.purge }}" = "true" ]; then CMD="$CMD --purge-a-and-cname"; fi
+          if [ "${{ github.event.client_payload.apply }}" != "true" ]; then CMD="$CMD --dry-run"; fi
+          echo "$CMD"
+          eval "$CMD"
+
+      - name: Set apex CNAME (flattening)
+        if: ${{ github.event.client_payload.mode == 'apex-cname' }}
+        run: |
+          CMD="python update_pages_dns.py --domain \"${{ github.event.client_payload.domain }}\" --pages-host \"${{ github.event.client_payload.pages_host }}\" --set-apex-cname"
+          if [ "${{ github.event.client_payload.apply }}" != "true" ]; then CMD="$CMD --dry-run"; fi
+          echo "$CMD"
+          eval "$CMD"
+
+      - name: Revert apex to IPv4
+        if: ${{ github.event.client_payload.mode == 'revert-apex-a' }}
+        run: |
+          CMD="python update_pages_dns.py --domain \"${{ github.event.client_payload.domain }}\" --set-apex-a \"${{ github.event.client_payload.apex_a }}\" --clear-apex-aaaa --set-www-cname \"${{ github.event.client_payload.domain }}\""
+          if [ "${{ github.event.client_payload.apply }}" != "true" ]; then CMD="$CMD --dry-run"; fi
+          echo "$CMD"
+          eval "$CMD"
+
+      - name: Summary
+        run: |
+          echo "DNS update completed for ${{ github.event.client_payload.domain }}"

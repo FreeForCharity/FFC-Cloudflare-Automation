@@ -184,6 +184,57 @@ function Get-ZoneId {
     return $zones[0].id
 }
 
+function Get-AllDnsRecords {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ZoneId
+    )
+
+    $page = 1
+    $perPage = 100
+    $records = @()
+
+    while ($true) {
+        $resp = Invoke-CfApi -Method 'GET' -Uri "/zones/$ZoneId/dns_records" -Params @{ per_page = $perPage; page = $page }
+        if ($resp.result) { $records += $resp.result }
+
+        $totalPages = $null
+        if ($resp.PSObject.Properties.Name -contains 'result_info' -and $resp.result_info -and ($resp.result_info.PSObject.Properties.Name -contains 'total_pages')) {
+            $totalPages = [int]$resp.result_info.total_pages
+        }
+
+        if ($totalPages -and $page -ge $totalPages) { break }
+        if (-not $totalPages -and ($resp.result.Count -lt $perPage)) { break }
+
+        $page++
+    }
+
+    return $records
+}
+
+function Normalize-TxtContent {
+    param([AllowNull()][string]$Value)
+    if ($null -eq $Value) { return '' }
+    $trimmed = $Value.Trim()
+    if ($trimmed.Length -ge 2 -and $trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) {
+        return $trimmed.Substring(1, $trimmed.Length - 2)
+    }
+    return $trimmed
+}
+
+function Is-TxtQuoted {
+    param([AllowNull()][string]$Value)
+    if ($null -eq $Value) { return $false }
+    $trimmed = $Value.Trim()
+    return ($trimmed.Length -ge 2 -and $trimmed.StartsWith('"') -and $trimmed.EndsWith('"'))
+}
+
+function Quote-TxtContent {
+    param([AllowNull()][string]$Value)
+    $normalized = Normalize-TxtContent -Value $Value
+    return '"' + $normalized + '"'
+}
+
 
 # --- Main Logic ---
 
@@ -223,7 +274,68 @@ try {
         Write-Host "Running Compliance Audit for Zone: $Zone" -ForegroundColor Cyan
         
         # Helper to find
-        $allRecords = (Invoke-CfApi -Method 'GET' -Uri "/zones/$ZoneId/dns_records?per_page=100").result
+        $allRecords = Get-AllDnsRecords -ZoneId $ZoneId
+
+        # 0. CNAME Inventory (helps identify other required CNAMEs beyond WWW)
+        $cnameRecords = $allRecords | Where-Object { $_.type -eq 'CNAME' } | Sort-Object name
+        if (-not $cnameRecords -or $cnameRecords.Count -eq 0) {
+            Write-Host "[INFO] No CNAME records found in zone." -ForegroundColor DarkGray
+        } else {
+            Write-Host "CNAME inventory:" -ForegroundColor DarkCyan
+            foreach ($rec in $cnameRecords) {
+                Write-Host (" - {0} -> {1} (proxied={2}, ttl={3})" -f $rec.name, $rec.content, $rec.proxied, $rec.ttl)
+            }
+        }
+
+        # 0b. Required CNAMEs (M365/Teams/Intune + GitHub Pages)
+        $requiredCnames = @(
+            @{ Name = "autodiscover.$Zone";         Content = 'autodiscover.outlook.com';                        Proxied = $false },
+            @{ Name = "enterpriseenrollment.$Zone"; Content = 'enterpriseenrollment-s.manage.microsoft.com';     Proxied = $false },
+            @{ Name = "enterpriseregistration.$Zone"; Content = 'enterpriseregistration.windows.net';           Proxied = $false },
+            @{ Name = "lyncdiscover.$Zone";         Content = 'webdir.online.lync.com';                         Proxied = $false },
+            @{ Name = "sip.$Zone";                 Content = 'sipdir.online.lync.com';                         Proxied = $false },
+            @{ Name = "www.$Zone";                 Content = 'freeforcharity.github.io';                       Proxied = $true }
+        )
+
+        foreach ($req in $requiredCnames) {
+            $candidates = $allRecords | Where-Object { $_.type -eq 'CNAME' -and $_.name -eq $req.Name }
+            $match = $candidates | Where-Object { $_.content -eq $req.Content -and $_.proxied -eq $req.Proxied }
+
+            if ($match) {
+                Write-Host "[OK] Required CNAME present: $($req.Name)" -ForegroundColor Green
+            } elseif ($candidates) {
+                $example = $candidates | Select-Object -First 1
+                Write-Warning "[DIFFERS] Required CNAME $($req.Name): found '$($example.content)' (proxied=$($example.proxied)), expected '$($req.Content)' (proxied=$($req.Proxied))"
+            } else {
+                Write-Warning "[MISSING] Required CNAME $($req.Name) -> $($req.Content) (proxied=$($req.Proxied))"
+            }
+        }
+
+        # 0c. Required SRV records (Microsoft 365 / Teams)
+        $requiredSrvs = @(
+            @{ Name = "_sip._tls.$Zone";               Priority = 100; Weight = 1; Port = 443;  Target = 'sipdir.online.lync.com' },
+            @{ Name = "_sipfederationtls._tcp.$Zone";  Priority = 100; Weight = 1; Port = 5061; Target = 'sipfed.online.lync.com' }
+        )
+
+        foreach ($req in $requiredSrvs) {
+            $candidates = $allRecords | Where-Object { $_.type -eq 'SRV' -and $_.name -eq $req.Name }
+            $match = $candidates | Where-Object {
+                $_.data -and
+                [int]$_.data.priority -eq [int]$req.Priority -and
+                [int]$_.data.weight -eq [int]$req.Weight -and
+                [int]$_.data.port -eq [int]$req.Port -and
+                $_.data.target -eq $req.Target
+            }
+
+            if ($match) {
+                Write-Host "[OK] Required SRV present: $($req.Name)" -ForegroundColor Green
+            } elseif ($candidates) {
+                $example = $candidates | Select-Object -First 1
+                Write-Warning "[DIFFERS] Required SRV $($req.Name): found '$($example.data.priority) $($example.data.weight) $($example.data.port) $($example.data.target)', expected '$($req.Priority) $($req.Weight) $($req.Port) $($req.Target)'"
+            } else {
+                Write-Warning "[MISSING] Required SRV $($req.Name) -> $($req.Priority) $($req.Weight) $($req.Port) $($req.Target)"
+            }
+        }
         
         # 1. Microsoft 365 MX
         $mx = $allRecords | Where-Object { $_.type -eq 'MX' -and $_.content -like '*.mail.protection.outlook.com' }
@@ -231,24 +343,42 @@ try {
         else { Write-Warning "[MISSING] M365 MX Record (*.mail.protection.outlook.com)" }
 
         # 2. SPF
-        $spf = $allRecords | Where-Object { $_.type -eq 'TXT' -and $_.content -like '*include:spf.protection.outlook.com*' }
-        if ($spf) { Write-Host "[OK] M365 SPF Record found" -ForegroundColor Green }
+        $spf = $allRecords | Where-Object { $_.type -eq 'TXT' -and (Normalize-TxtContent -Value $_.content) -like '*include:spf.protection.outlook.com*' }
+        if ($spf) {
+            $quotedSpf = $spf | Where-Object { Is-TxtQuoted -Value $_.content }
+            if ($quotedSpf) { Write-Host "[OK] M365 SPF Record found (quoted)" -ForegroundColor Green }
+            else { Write-Warning "[DIFFERS] M365 SPF Record found but not quoted (Cloudflare UI warning)" }
+        }
         else { Write-Warning "[MISSING] M365 SPF Record (include:spf.protection.outlook.com)" }
 
         # 3. DMARC
         $dmarc = $allRecords | Where-Object { $_.type -eq 'TXT' -and $_.name -like "_dmarc.$Zone" }
-        if ($dmarc) { Write-Host "[OK] DMARC Record found" -ForegroundColor Green }
+        $dmarcValid = $dmarc | Where-Object { (Normalize-TxtContent -Value $_.content) -like 'v=DMARC1*' }
+        if ($dmarcValid) {
+            $quotedDmarc = $dmarcValid | Where-Object { Is-TxtQuoted -Value $_.content }
+            if ($quotedDmarc) { Write-Host "[OK] DMARC Record found (quoted)" -ForegroundColor Green }
+            else { Write-Warning "[DIFFERS] DMARC Record found but not quoted (Cloudflare UI warning)" }
+        }
         else { Write-Warning "[MISSING] DMARC Record (_dmarc.$Zone)" }
 
-        # 4. GitHub Pages (A Records)
-        $ghIps = @('185.199.108.153', '185.199.109.153', '185.199.110.153', '185.199.111.153')
+        # 4. GitHub Pages (A + AAAA Records)
+        $ghV4Ips = @('185.199.108.153', '185.199.109.153', '185.199.110.153', '185.199.111.153')
+        $ghV6Ips = @('2606:50c0:8000::153', '2606:50c0:8001::153', '2606:50c0:8002::153', '2606:50c0:8003::153')
+
         $aRecords = $allRecords | Where-Object { $_.type -eq 'A' -and $_.name -eq $Zone }
-        $missingIps = $ghIps | Where-Object { $_ -notin $aRecords.content }
-        
-        if ($missingIps.Count -eq 0 -and $aRecords.Count -ge 4) { 
-            Write-Host "[OK] GitHub Pages A Records found" -ForegroundColor Green 
-        } else { 
-            Write-Warning "[MISSING/PARTIAL] GitHub Pages A Records. Missing: $($missingIps -join ', ')" 
+        $missingV4 = $ghV4Ips | Where-Object { $_ -notin $aRecords.content }
+        if ($missingV4.Count -eq 0 -and $aRecords.Count -ge 4) {
+            Write-Host "[OK] GitHub Pages A Records found" -ForegroundColor Green
+        } else {
+            Write-Warning "[MISSING/PARTIAL] GitHub Pages A Records. Missing: $($missingV4 -join ', ')"
+        }
+
+        $aaaaRecords = $allRecords | Where-Object { $_.type -eq 'AAAA' -and $_.name -eq $Zone }
+        $missingV6 = $ghV6Ips | Where-Object { $_ -notin $aaaaRecords.content }
+        if ($missingV6.Count -eq 0 -and $aaaaRecords.Count -ge 4) {
+            Write-Host "[OK] GitHub Pages AAAA Records found" -ForegroundColor Green
+        } else {
+            Write-Warning "[MISSING/PARTIAL] GitHub Pages AAAA Records. Missing: $($missingV6 -join ', ')"
         }
 
         # 5. WWW CNAME
@@ -262,22 +392,46 @@ try {
     # --- ENFORCE STANDARD Operation ---
     if ($EnforceStandard) {
         Write-Host "Enforcing FFC Standard Configuration for Zone: $Zone" -ForegroundColor Cyan
+
+        # IMPORTANT: Enforce needs a full record inventory. Without this, it will treat everything as missing.
+        $allRecords = Get-AllDnsRecords -ZoneId $ZoneId
+
+        $m365MxTarget = (($Zone -replace '\.', '-') + '.mail.protection.outlook.com')
+        $wwwTarget = 'freeforcharity.github.io'
         
         # Define Standard Records
         $standards = @(
             # Microsoft 365 Email
-            @{ Type='MX'; Name='@'; Content='0 .mail.protection.outlook.com'; Priority=0 },
-            @{ Type='TXT'; Name='@'; Content='v=spf1 include:spf.protection.outlook.com -all' },
-            @{ Type='TXT'; Name='_dmarc'; Content='v=DMARC1; p=none; rua=mailto:dmarc-rua@freeforcharity.org' },
+            @{ Type='MX'; Name='@'; Content=$m365MxTarget; Priority=0 },
+            # SPF is treated specially: we preserve existing SPF content but enforce quoting to avoid Cloudflare UI warnings.
+            @{ Type='TXT'; Name='@'; Content='v=spf1 include:spf.protection.outlook.com -all'; MatchContains='include:spf.protection.outlook.com'; EnsureQuoted=$true },
+            @{ Type='TXT'; Name='_dmarc'; Content='v=DMARC1; p=none; rua=mailto:dmarc-rua@freeforcharity.org'; EnsureQuoted=$true },
+
+            # Microsoft 365 / Teams / Intune (Unproxied)
+            @{ Type='CNAME'; Name='autodiscover';          Content='autodiscover.outlook.com';                    Proxied=$false },
+            @{ Type='CNAME'; Name='enterpriseenrollment';  Content='enterpriseenrollment-s.manage.microsoft.com'; Proxied=$false },
+            @{ Type='CNAME'; Name='enterpriseregistration'; Content='enterpriseregistration.windows.net';         Proxied=$false },
+            @{ Type='CNAME'; Name='lyncdiscover';          Content='webdir.online.lync.com';                     Proxied=$false },
+            @{ Type='CNAME'; Name='sip';                   Content='sipdir.online.lync.com';                     Proxied=$false },
+
+            # Microsoft 365 / Teams (SRV)
+            @{ Type='SRV'; Name='_sip._tls';              Data=@{ service='_sip';              proto='_tls'; name=$Zone; priority=100; weight=1; port=443;  target='sipdir.online.lync.com' } },
+            @{ Type='SRV'; Name='_sipfederationtls._tcp'; Data=@{ service='_sipfederationtls'; proto='_tcp'; name=$Zone; priority=100; weight=1; port=5061; target='sipfed.online.lync.com' } },
             
             # GitHub Pages (Apex)
-            @{ Type='A'; Name='@'; Content='185.199.108.153' },
-            @{ Type='A'; Name='@'; Content='185.199.109.153' },
-            @{ Type='A'; Name='@'; Content='185.199.110.153' },
-            @{ Type='A'; Name='@'; Content='185.199.111.153' },
+            @{ Type='A'; Name='@'; Content='185.199.108.153'; Proxied=$true },
+            @{ Type='A'; Name='@'; Content='185.199.109.153'; Proxied=$true },
+            @{ Type='A'; Name='@'; Content='185.199.110.153'; Proxied=$true },
+            @{ Type='A'; Name='@'; Content='185.199.111.153'; Proxied=$true },
+
+            # GitHub Pages (Apex IPv6)
+            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8000::153'; Proxied=$true },
+            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8001::153'; Proxied=$true },
+            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8002::153'; Proxied=$true },
+            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8003::153'; Proxied=$true },
             
             # GitHub Pages (WWW)
-            @{ Type='CNAME'; Name='www'; Content=$Zone }
+            @{ Type='CNAME'; Name='www'; Content=$wwwTarget; Proxied=$true }
         )
 
         foreach ($std in $standards) {
@@ -295,46 +449,160 @@ try {
             # But calling it 8 times might be slow on auth. 
             # BETTER: We implement the "Check & Create" logic right here, reusing the helper variables.
 
-            # 1. Check existence
-            $foundRecord = $null
+            # 1. Check existence (and identify update candidates)
             $stdContent = $std.Content
-            
-            if ($std.Type -in @('MX', 'TXT')) {
-                # Multi-Value: Look for EXACT match
-                 $candidates = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
-                  $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
-            } else {
-                # Single-Value: Look for ANY match (to update) or exact match
-                # For A records, we have multiple IPs for the same name, so they act like Multi-Value for existence check.
-                if ($std.Type -eq 'A') {
-                     $candidates = $allRecords | Where-Object { $_.type -eq 'A' -and $_.name -eq $recName }
-                     $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
-                } else {
-                     $candidates = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
-                     $foundRecord = $candidates # For CNAME, just finding the record is usually enough to say "it exists", but we want to enforce content.
-                     if ($foundRecord.content -ne $stdContent) { $foundRecord = $null } # Force update if content differs
+            $desiredData = $null
+            if ($std.Type -eq 'SRV' -and $std.ContainsKey('Data')) { $desiredData = $std.Data }
+            $desiredProxied = $null
+            if ($std.Type -in @('A', 'AAAA', 'CNAME')) {
+                $desiredProxied = $true
+                if ($std.ContainsKey('Proxied')) { $desiredProxied = [bool]$std.Proxied }
+            }
+            $candidates = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
+
+            $foundRecord = $null
+            $updateCandidate = $null
+
+            switch ($std.Type) {
+                'MX' {
+                    # Cloudflare stores MX target in `content` and priority separately.
+                    # Treat as present if any apex MX points at *.mail.protection.outlook.com with desired priority.
+                    $foundRecord = $candidates | Where-Object {
+                        $_.content -like '*.mail.protection.outlook.com' -and
+                        ($null -eq $std.Priority -or $_.priority -eq $std.Priority)
+                    }
+                }
+                'TXT' {
+                    $ensureQuoted = $false
+                    if ($std.ContainsKey('EnsureQuoted')) { $ensureQuoted = [bool]$std.EnsureQuoted }
+
+                    if ($std.ContainsKey('MatchContains') -and $std.MatchContains) {
+                        # SPF: present if it includes the M365 include, but enforce quoting without overwriting other mechanisms.
+                        $foundRecord = $candidates | Where-Object { (Normalize-TxtContent -Value $_.content) -like ("*" + $std.MatchContains + "*") }
+                        if ($foundRecord) {
+                            $spfCandidate = $foundRecord | Select-Object -First 1
+                            if ($ensureQuoted -and -not (Is-TxtQuoted -Value $spfCandidate.content)) {
+                                $updateCandidate = $spfCandidate
+                                $stdContent = Quote-TxtContent -Value $spfCandidate.content
+                                $foundRecord = $null
+                            } else {
+                                # Keep as OK; do not overwrite SPF content.
+                                $stdContent = $spfCandidate.content
+                            }
+                        }
+                    } elseif ($std.Name -eq '_dmarc') {
+                        $foundRecord = $candidates | Where-Object { (Normalize-TxtContent -Value $_.content) -like 'v=DMARC1*' }
+                        if ($foundRecord) {
+                            $dmarcCandidate = $foundRecord | Select-Object -First 1
+                            if ($ensureQuoted -and -not (Is-TxtQuoted -Value $dmarcCandidate.content)) {
+                                $updateCandidate = $dmarcCandidate
+                                $stdContent = Quote-TxtContent -Value $stdContent
+                                $foundRecord = $null
+                            }
+                        } elseif ($candidates) {
+                            # Prefer updating an existing _dmarc TXT rather than creating duplicates.
+                            $updateCandidate = $candidates | Select-Object -First 1
+                            $stdContent = Quote-TxtContent -Value $stdContent
+                        } else {
+                            $stdContent = Quote-TxtContent -Value $stdContent
+                        }
+                    } else {
+                        $expected = if ($ensureQuoted) { Quote-TxtContent -Value $stdContent } else { $stdContent }
+                        $foundRecord = $candidates | Where-Object { $_.content -eq $expected }
+                        $stdContent = $expected
+                    }
+                }
+                'A' {
+                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }
+                    if (-not $foundRecord -and $candidates) {
+                        $updateCandidate = ($candidates | Where-Object { $_.content -eq $stdContent } | Select-Object -First 1)
+                        if (-not $updateCandidate) { $updateCandidate = $candidates | Select-Object -First 1 }
+                    }
+                }
+                'AAAA' {
+                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }
+                    if (-not $foundRecord -and $candidates) {
+                        $updateCandidate = ($candidates | Where-Object { $_.content -eq $stdContent } | Select-Object -First 1)
+                        if (-not $updateCandidate) { $updateCandidate = $candidates | Select-Object -First 1 }
+                    }
+                }
+                'CNAME' {
+                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }
+                    if (-not $foundRecord -and $candidates) {
+                        # Prefer updating existing CNAME rather than creating a second one.
+                        $updateCandidate = ($candidates | Where-Object { $_.content -eq $stdContent } | Select-Object -First 1)
+                        if (-not $updateCandidate) { $updateCandidate = $candidates | Select-Object -First 1 }
+                    }
+                }
+                'SRV' {
+                    if (-not $desiredData) { break }
+                    $foundRecord = $candidates | Where-Object {
+                        $_.data -and
+                        ($null -eq $_.data.service -or $_.data.service -eq $desiredData.service) -and
+                        ($null -eq $_.data.proto -or $_.data.proto -eq $desiredData.proto) -and
+                        ($null -eq $_.data.name -or $_.data.name -eq $desiredData.name) -and
+                        [int]$_.data.priority -eq [int]$desiredData.priority -and
+                        [int]$_.data.weight -eq [int]$desiredData.weight -and
+                        [int]$_.data.port -eq [int]$desiredData.port -and
+                        $_.data.target -eq $desiredData.target
+                    }
+                    if (-not $foundRecord -and $candidates) {
+                        $updateCandidate = $candidates | Select-Object -First 1
+                    }
+                }
+                default {
+                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
                 }
             }
 
             if ($foundRecord) {
                 Write-Host " [OK]" -ForegroundColor Green
             } else {
+                if ($updateCandidate) {
+                    Write-Host " [DIFFERS] -> Updating..." -ForegroundColor Yellow
+
+                    $updatePayload = @{
+                        type = $std.Type
+                        name = $recName
+                        ttl  = 1
+                    }
+                    if ($std.Type -eq 'SRV') {
+                        $updatePayload['data'] = $desiredData
+                    } else {
+                        $updatePayload['content'] = $stdContent
+                    }
+                    if ($std.Type -eq 'MX') { $updatePayload['priority'] = $std.Priority }
+                    if ($std.Type -in @('A', 'AAAA', 'CNAME') -and $null -ne $desiredProxied) { $updatePayload['proxied'] = $desiredProxied }
+
+                    if (-not $DryRun) {
+                        try {
+                            $null = Invoke-CfApi -Method 'PUT' -Uri "/zones/$ZoneId/dns_records/$($updateCandidate.id)" -Body $updatePayload
+                            Write-Host "UPDATED" -ForegroundColor Green
+                        } catch {
+                            Write-Error "Failed to update $($std.Type) $recName (ID: $($updateCandidate.id))"
+                        }
+                    } else {
+                        Write-Host "[DRY-RUN] PUT $recName" -ForegroundColor DarkGray
+                    }
+                    continue
+                }
+
                 Write-Host " [MISSING] -> Creating..." -ForegroundColor Yellow
                 
                 # Payload
                 $newPayload = @{
-                    type    = $std.Type
-                    name    = $std.Name # API expects relative or absolute? The main logic utilized Name passed in.
-                                        # Main logic handles relative/absolute. Cloudflare API usually wants Name as FQDN or relative?
-                                        # Let's check main logic: $payload = @{ ... name = $RecordName ... }
-                                        # $RecordName is FQDN.
-                    content = $stdContent
-                    ttl     = 1 # Auto
+                    type = $std.Type
+                    ttl  = 1 # Auto
+                }
+                if ($std.Type -eq 'SRV') {
+                    $newPayload['data'] = $desiredData
+                } else {
+                    $newPayload['content'] = $stdContent
                 }
                 if ($std.Type -eq 'MX') { $newPayload['priority'] = $std.Priority }
                 # Proxied? Standard FFC: Pages A/CNAME = Proxied? Usually Yes for SSL. 
                 # M365 = No.
-                if ($std.Type -in @('A', 'CNAME')) { $newPayload['proxied'] = $true }
+                if ($std.Type -in @('A', 'AAAA', 'CNAME') -and $null -ne $desiredProxied) { $newPayload['proxied'] = $desiredProxied }
                 
                 # Name must be FQDN for the API
                 $newPayload['name'] = $recName

@@ -14,6 +14,8 @@ The static site provides an overview of the automation, current status, key feat
 
 This repository contains automation utilities and scripts for managing Free For Charity's Cloudflare DNS configuration. Administrators execute DNS changes based on structured issue requests, using either the Cloudflare Dashboard for manual updates or Python scripts and Cloudflare API tools for automated, consistent, and auditable domain management.
 
+For details on the GitHub Actions standard enforcement workflow (including required GitHub Pages AAAA records), see [docs/enforce-standard-workflow.md](docs/enforce-standard-workflow.md).
+
 ## Features
 
 ### Issue-Based Workflow
@@ -239,10 +241,10 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 │   ├── workflows/          # GitHub Actions workflows
 │   │   ├── ci.yml          # Continuous Integration
 │   │   ├── deploy-pages.yml  # GitHub Pages deployment
-│   │   ├── 1-audit-compliance.yml  # DNS compliance checking
-│   │   ├── 2-enforce-standard.yml  # DNS standard enforcement
-│   │   ├── 3-manage-record.yml     # DNS record management
-│   │   ├── 4-export-summary.yml    # DNS export workflow
+│   │   ├── 1-audit-compliance.yml  # [DNS] Report - Check Compliance
+│   │   ├── 2-enforce-standard.yml  # [DNS] Fix - Enforce Standard
+│   │   ├── 3-manage-record.yml     # [DNS] Manual - Manage Record
+│   │   ├── 4-export-summary.yml    # [DNS] Report - Export All Domains
 │   │   ├── initialize-labels.yml   # Label initialization
 │   │   ├── sync-labels.yml         # Label synchronization
 │   │   └── README.md       # Workflow documentation

@@ -48,14 +48,6 @@ body:
         - label: Google PageSpeed Insights
         - label: Microsoft Clarity
 
-  - type: textarea
-    id: purpose_details
-    attributes:
-      label: Purpose Details (Optional)
-      description: Provide any specifics (e.g., tenant, repo, verification text)
-      placeholder: "Example: Microsoft 365 email for org; GitHub Pages site repo ffc-website; Google site verification TXT"
-    validations:
-      required: false
 
   - type: textarea
     id: project_details

@@ -336,6 +336,7 @@ For more information, see [.github/workflows/README.md](.github/workflows/README
 ## Additional Resources
 
 - **[Staging Subdomain Guide](STAGING_README.md)** - Detailed guide for managing staging subdomains
+- **[Enhancement Ideas](ENHANCEMENTS.md)** - Potential future improvements and features
 - **[Issue Templates](.github/ISSUE_TEMPLATE/)** - Templates for domain management requests
 - [GitHub Pages Custom Domain Documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site)
 - [Cloudflare DNS Documentation](https://developers.cloudflare.com/dns/)

@@ -36,6 +36,32 @@ on:
         required: false
         type: boolean
         default: false
+  workflow_call:
+    inputs:
+      domain:
+        description: Root domain to update (e.g., example.org)
+        required: true
+        type: string
+      pages_host:
+        description: GitHub Pages hostname (e.g., freeforcharity.github.io)
+        required: true
+        type: string
+      mode:
+        description: Update mode (github-pages-a-aaaa | apex-cname | revert-apex-a)
+        required: true
+        type: string
+      apex_a:
+        description: IPv4 for revert-apex-a mode (e.g., 204.44.192.77)
+        required: false
+        type: string
+      purge:
+        description: Purge other A/CNAME (keep apex/www/staging)
+        required: false
+        type: boolean
+      apply:
+        description: Apply changes (default: dry-run)
+        required: false
+        type: boolean
 
 jobs:
   update:

@@ -12,6 +12,8 @@ body:
       value: |
         ## Domain Purchase Request
         Use this template to request the purchase and addition of a new .org domain to the FFC Cloudflare account.
+        
+        Note: Domains are free for all requestors. Budget approval is handled by FFC administrators; requestors do not need to confirm purchase approval.
 
   - type: input
     id: domain_name
@@ -60,14 +62,6 @@ body:
         - A record: @ -> 203.0.113.42
         - CNAME: www -> example.org
 
-  - type: checkboxes
-    id: authorization
-    attributes:
-      label: Budget and Authorization
-      description: Confirm authorization for domain purchase
-      options:
-        - label: I confirm this purchase has been approved
-          required: true
 
   - type: input
     id: timeline
@@ -103,7 +97,7 @@ body:
         
         ### Pre-Purchase Checklist
         - [ ] Domain availability confirmed
-        - [ ] Budget approved
+        - [ ] Budget approved (FFC admin only)
         - [ ] Domain aligns with FFC mission and policies
         - [ ] No trademark or legal concerns
         

@@ -69,6 +69,10 @@ We welcome various types of contributions:
 
 ## Development Workflow
 
+### Pull Requests Required
+
+All changes should be made through a pull request (PR). Avoid pushing directly to `main`, even for small fixes, so reviews and checks are consistently applied.
+
 ### 1. Create a Branch
 
 Create a descriptive branch for your changes:

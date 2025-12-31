@@ -39,6 +39,11 @@ Additional required records:
 
 Note: Cloudflare recommends TXT record content be wrapped in quotation marks. The script enforces quoted TXT content (and for SPF, it preserves existing mechanisms while ensuring quoting) to avoid Cloudflare UI warnings.
 
+DMARC monitoring note:
+
+- If Cloudflare DMARC Management is enabled for a zone, Cloudflare may add a per-zone `rua` recipient like `mailto:<zone-specific>@dmarc-reports.cloudflare.net`.
+- The script always requires the internal `rua` recipient `mailto:dmarc-rua@freeforcharity.org`.
+- Cloudflare `rua` is optional: the audit warns if it’s not detected, but Enforce will not remove it when present.
 Note: for M365 MX, the expected target is computed as `<zone-with-dashes>.mail.protection.outlook.com`.
 
 ### GitHub Pages (apex)

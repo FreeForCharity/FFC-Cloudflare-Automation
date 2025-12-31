@@ -17,40 +17,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          terraform_version: "1.6.0"
+          python-version: '3.9'
 
-      - name: Terraform Format Check
-        id: fmt
-        run: terraform fmt -check -recursive
-        continue-on-error: true
-
-      - name: Terraform Init
-        id: init
+      - name: Install Python dependencies
         run: |
-          if [ -d "terraform" ]; then
-            cd terraform
-            terraform init -backend=false
-          elif [ -f "main.tf" ]; then
-            terraform init -backend=false
-          else
-            echo "No Terraform files found yet - skipping init"
-          fi
-        continue-on-error: true
+          pip install -r requirements.txt
 
-      - name: Terraform Validate
-        id: validate
+      - name: Validate Python scripts
         run: |
-          if [ -d "terraform" ]; then
-            cd terraform
-            terraform validate -no-color
-          elif [ -f "main.tf" ]; then
-            terraform validate -no-color
-          else
-            echo "No Terraform files found yet - skipping validation"
-          fi
+          python -m py_compile update_dns.py
+          python -m py_compile export_zone_dns_summary.py
+          python -m py_compile export_zone_a_records.py
+          python -m py_compile update_pages_dns.py
+          python -m py_compile admin_dns_agent.py
         continue-on-error: true
 
       - name: Check for sensitive files
@@ -59,17 +41,8 @@ jobs:
           
           found_sensitive=false
           
-          # Check for .tfvars files (excluding .tfvars.example and examples/*.tfvars)
-          while IFS= read -r -d '' file; do
-            if [[ "$file" != *".tfvars.example" ]] && [[ "$file" != *"examples/"* ]]; then
-              echo "ERROR: Found sensitive .tfvars file: $file"
-              found_sensitive=true
-            fi
-          done < <(find . -name "*.tfvars" -not -path "./.git/*" -print0)
-          
-          # Check for other sensitive patterns
+          # Check for sensitive patterns
           sensitive_patterns=(
-            "*.tfvars.json"
             "*.pem"
             "*.key"
             ".env"

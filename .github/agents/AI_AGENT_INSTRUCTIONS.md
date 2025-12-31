@@ -37,7 +37,7 @@ If you accidentally expose a secret:
 1. **Always use `${{ secrets.SECRET_NAME }}` syntax**:
    ```yaml
    env:
-     TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+     CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
    ```
 
 2. **Always validate secret presence BEFORE use**:
@@ -63,41 +63,41 @@ If you accidentally expose a secret:
 
 **When instructing users for local development:**
 
-1. **Always use `TF_VAR_` prefix**:
+1. **Always use `CLOUDFLARE_API_TOKEN` environment variable**:
    ```bash
-   export TF_VAR_cloudflare_api_token="<user-must-provide>"
+   export CLOUDFLARE_API_TOKEN="<user-must-provide>"
    ```
 
 2. **Always provide placeholder text, NEVER actual values**:
    ```bash
    # ✅ CORRECT
-   export TF_VAR_cloudflare_api_token="your-api-token-here"
+   export CLOUDFLARE_API_TOKEN="your-api-token-here"
    
    # ❌ WRONG
-   export TF_VAR_cloudflare_api_token="abc123xyz..."
+   export CLOUDFLARE_API_TOKEN="abc123xyz..."
    ```
 
-### Method 3: Local terraform.tfvars (Individual Development)
+### Method 3: Local .env Files (Individual Development)
 
 **When creating example files:**
 
-1. **ONLY commit `.tfvars.example` files**:
-   ```hcl
-   # terraform.tfvars.example
-   cloudflare_api_token = "your-cloudflare-api-token-here"
-   domain_name          = "example.com"
+1. **ONLY commit `.env.example` files**:
+   ```bash
+   # .env.example
+   CLOUDFLARE_API_TOKEN=your-cloudflare-api-token-here
    ```
 
 2. **Ensure `.gitignore` excludes actual secrets**:
    ```gitignore
-   *.tfvars
-   !*.tfvars.example
+   .env
+   .env.local
+   .env*.local
    ```
 
 3. **Instruct users to copy and edit**:
    ```bash
-   cp terraform.tfvars.example terraform.tfvars
-   # Edit terraform.tfvars with actual values
+   cp .env.example .env
+   # Edit .env with actual values
    ```
 
 ---
@@ -109,7 +109,7 @@ If you accidentally expose a secret:
 **DO:**
 - ✅ Use placeholder text: `"your-api-token-here"`
 - ✅ Reference GitHub Secrets: `${{ secrets.CLOUDFLARE_API_TOKEN }}`
-- ✅ Use environment variables: `$TF_VAR_cloudflare_api_token`
+- ✅ Use environment variables: `$CLOUDFLARE_API_TOKEN`
 - ✅ Instruct users to obtain secrets from official sources
 - ✅ Link to official credential management docs
 
@@ -146,7 +146,7 @@ If you accidentally expose a secret:
 - [ ] Secret validation exists in workflows
 - [ ] `.gitignore` excludes secret files
 - [ ] Example files use placeholders only
-- [ ] Environment variables use `TF_VAR_` prefix
+- [ ] Environment variables are properly documented
 - [ ] No secrets in git history
 - [ ] No secrets in commit messages
 - [ ] Instructions guide users to secure methods
@@ -162,12 +162,12 @@ If you accidentally expose a secret:
 3. **DO NOT** commit it to the repository
 4. **DO** instruct them to:
    - Add it to GitHub Secrets (for CI/CD)
-   - Store it in local `terraform.tfvars` (for local dev)
+   - Store it in a local `.env` file (for local dev)
    - Use environment variables (alternative)
 5. **DO** remind them about security:
    ```
    ⚠️ SECURITY NOTE: I will not include your actual token in any files.
-   Please add it to GitHub Secrets or your local terraform.tfvars file.
+   Please add it to GitHub Secrets or your local .env file.
    ```
 
 ---
@@ -194,7 +194,7 @@ jobs:
       # STEP 2: Use secret via environment variables
       - name: Use Secret
         env:
-          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           # Your commands here
           # Secret is available as environment variable
@@ -235,11 +235,11 @@ To configure your CloudFlare API token:
 The workflows will automatically use: `${{ secrets.CLOUDFLARE_API_TOKEN }}`
 
 **For Local Development:**
-1. Copy the example file:
+1. Create a `.env` file:
    ```bash
-   cp terraform.tfvars.example terraform.tfvars
+   cp .env.example .env
    ```
-2. Edit `terraform.tfvars` and add your token
+2. Edit `.env` and add your token
 3. File is excluded by `.gitignore` - never commit it
 
 **Obtain Token From:**
@@ -256,9 +256,9 @@ The workflows will automatically use: `${{ secrets.CLOUDFLARE_API_TOKEN }}`
 
 Instead, I'll show you how to configure it securely:
 - GitHub Actions: Use GitHub Secrets
-- Local dev: Use terraform.tfvars (excluded from git)
+- Local dev: Use .env file (excluded from git)
 
-See SECURITY.md and GITHUB_ACTIONS.md for complete instructions.
+See SECURITY.md for complete instructions.
 ```
 
 ---
@@ -271,7 +271,7 @@ See SECURITY.md and GITHUB_ACTIONS.md for complete instructions.
 2. **Provide rotation steps**:
    - Generate new token in CloudFlare
    - Update GitHub Secret (for CI/CD)
-   - Update local terraform.tfvars (for local)
+   - Update local .env file (for local)
    - Revoke old token
    - Test deployments
 3. **Never expose old tokens**: Treat as sensitive as new ones
@@ -283,9 +283,8 @@ See SECURITY.md and GITHUB_ACTIONS.md for complete instructions.
 Before making ANY changes to this repository, review:
 
 1. **SECURITY.md** - Security policies and best practices
-2. **GITHUB_ACTIONS.md** - GitHub Secrets setup and usage
-3. **.gitignore** - Files excluded from version control
-4. **.github/workflows/** - Existing workflow patterns
+2. **.gitignore** - Files excluded from version control
+3. **.github/workflows/** - Existing workflow patterns
 
 ---
 
@@ -301,7 +300,7 @@ git grep -i "api.*token.*=.*[a-zA-Z0-9_-]\{20,\}"
 git grep -E "[a-zA-Z0-9_-]{32,}"
 
 # 3. Verify .gitignore
-cat .gitignore | grep -E "(tfvars|\.env|secrets)"
+cat .gitignore | grep -E "(\.env|secrets)"
 
 # 4. Check GitHub Actions
 grep -r "secrets\." .github/workflows/
@@ -331,7 +330,7 @@ git log --all --full-history --source --pickaxe-regex -S "token.*[a-zA-Z0-9_-]{2
 
 To configure it:
 1. Add to GitHub Secrets as CLOUDFLARE_API_TOKEN, OR
-2. Add to local terraform.tfvars file
+2. Add to local .env file
 
 See SECURITY.md for detailed instructions.
 ```
@@ -346,7 +345,7 @@ See SECURITY.md for detailed instructions.
 I'll add the token using GitHub Secrets (secure method):
 
 env:
-  TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
 The actual token value should be added to repository secrets.
 ```
@@ -362,7 +361,7 @@ I'll create documentation with secure examples:
 
 1. Using placeholders: "your-api-token-here"
 2. Referencing GitHub Secrets: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-3. Using environment variables: $TF_VAR_cloudflare_api_token
+3. Using environment variables: $CLOUDFLARE_API_TOKEN
 
 No actual tokens will be included in the documentation.
 ```

@@ -15,8 +15,8 @@ updates:
       prefix: "chore"
       include: "scope"
 
-  # Enable version updates for Terraform
-  - package-ecosystem: "terraform"
+  # Enable version updates for Python dependencies
+  - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
@@ -25,7 +25,7 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
-      - "terraform"
+      - "python"
     commit-message:
       prefix: "chore"
       include: "scope"

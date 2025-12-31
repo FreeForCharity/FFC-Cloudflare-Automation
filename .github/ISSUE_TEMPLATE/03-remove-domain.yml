@@ -6,6 +6,10 @@ body:
   - type: markdown
     attributes:
       value: |
+        If you have trouble creating the issue, contact Clarke Moyer by text at 520-222-8104.
+  - type: markdown
+    attributes:
+      value: |
         ## Remove Domain Request
         Use this template to request removal of a domain from the FFC Cloudflare account.
 

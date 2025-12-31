@@ -6,6 +6,10 @@ body:
   - type: markdown
     attributes:
       value: |
+        If you have trouble creating the issue, contact Clarke Moyer by text at 520-222-8104.
+  - type: markdown
+    attributes:
+      value: |
         ## Add Existing Domain Request
         Use this template to request adding an existing domain to the FFC Cloudflare account.
 

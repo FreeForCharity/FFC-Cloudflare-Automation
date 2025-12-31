@@ -6,6 +6,10 @@ body:
   - type: markdown
     attributes:
       value: |
+        If you have trouble creating the issue, contact Clarke Moyer by text at 520-222-8104.
+  - type: markdown
+    attributes:
+      value: |
         ## GitHub Pages Apex Domain Configuration
         Use this template to configure an apex/root domain to point to GitHub Pages.
         

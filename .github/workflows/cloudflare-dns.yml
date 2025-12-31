@@ -1,0 +1,28 @@
+name: "[DEPRECATED] Cloudflare DNS Update (legacy)"
+
+# NOTE: This workflow is intentionally kept as a deprecated stub to avoid
+# stale editor diagnostics and old links breaking after the repository was
+# refactored to the numbered PowerShell workflows.
+#
+# Use these instead:
+# - .github/workflows/1-audit-compliance.yml
+# - .github/workflows/2-enforce-standard.yml
+# - .github/workflows/3-manage-record.yml
+# - .github/workflows/4-export-summary.yml
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: "(Deprecated) Domain name"
+        required: false
+        type: string
+
+jobs:
+  deprecated:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deprecated
+        run: |
+          echo "This workflow is deprecated and no longer performs DNS updates."
+          echo "Use the numbered [DNS] workflows instead."

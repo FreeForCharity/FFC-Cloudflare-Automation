@@ -16,6 +16,7 @@ on:
 jobs:
   enforce_standard:
     runs-on: windows-latest
+    environment: cloudflare-prod
     steps:
       - uses: actions/checkout@v4
 

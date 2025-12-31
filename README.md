@@ -234,6 +234,8 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 │   │   ├── 03-remove-domain.yml
 │   │   ├── 04-github-pages-apex.yml
 │   │   └── 05-github-pages-subdomain.yml
+│   ├── labels.yml          # GitHub labels configuration
+│   ├── LABELS_README.md    # Documentation for labels
 │   ├── workflows/          # GitHub Actions workflows
 │   │   ├── ci.yml          # Continuous Integration
 │   │   ├── deploy-pages.yml  # GitHub Pages deployment
@@ -241,6 +243,8 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 │   │   ├── 2-enforce-standard.yml  # DNS standard enforcement
 │   │   ├── 3-manage-record.yml     # DNS record management
 │   │   ├── 4-export-summary.yml    # DNS export workflow
+│   │   ├── initialize-labels.yml   # Label initialization
+│   │   ├── sync-labels.yml         # Label synchronization
 │   │   └── README.md       # Workflow documentation
 │   └── dependabot.yml      # Dependency update configuration
 ├── CONTRIBUTING.md         # Contribution guidelines

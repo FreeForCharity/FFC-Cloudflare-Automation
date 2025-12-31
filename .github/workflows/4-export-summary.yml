@@ -15,7 +15,6 @@ jobs:
         shell: pwsh
         env:
           CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
-          CLOUDFLARE_API_KEY_READ_ALL: ${{ secrets.CLOUDFLARE_API_KEY_READ_ALL }}
         run: |
           .\Export-CloudflareDns.ps1 -OutputFile "domain_summary.csv"
           

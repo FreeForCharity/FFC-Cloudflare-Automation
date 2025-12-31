@@ -296,27 +296,27 @@ try {
             # BETTER: We implement the "Check & Create" logic right here, reusing the helper variables.
 
             # 1. Check existence
-            $match = $null
+            $foundRecord = $null
             $stdContent = $std.Content
             
             if ($std.Type -in @('MX', 'TXT')) {
                 # Multi-Value: Look for EXACT match
-                 $matches = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
-                 $match = $matches | Where-Object { $_.content -eq $stdContent }
+                 $candidates = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
+                  $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
             } else {
                 # Single-Value: Look for ANY match (to update) or exact match
                 # For A records, we have multiple IPs for the same name, so they act like Multi-Value for existence check.
                 if ($std.Type -eq 'A') {
-                     $matches = $allRecords | Where-Object { $_.type -eq 'A' -and $_.name -eq $recName }
-                     $match = $matches | Where-Object { $_.content -eq $stdContent }
+                     $candidates = $allRecords | Where-Object { $_.type -eq 'A' -and $_.name -eq $recName }
+                     $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
                 } else {
-                     $matches = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
-                     $match = $matches # For CNAME, just finding the record is usually enough to say "it exists", but we want to enforce content.
-                     if ($match.content -ne $stdContent) { $match = $null } # Force update if content differs
+                     $candidates = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
+                     $foundRecord = $candidates # For CNAME, just finding the record is usually enough to say "it exists", but we want to enforce content.
+                     if ($foundRecord.content -ne $stdContent) { $foundRecord = $null } # Force update if content differs
                 }
             }
 
-            if ($match) {
+            if ($foundRecord) {
                 Write-Host " [OK]" -ForegroundColor Green
             } else {
                 Write-Host " [MISSING] -> Creating..." -ForegroundColor Yellow
@@ -399,13 +399,13 @@ try {
     }
 
     # Check for matches (Same Type)
-    $matches = $existing | Where-Object { $_.type -eq $Type }
+    $existingSameType = $existing | Where-Object { $_.type -eq $Type }
 
     # --- LOGIC BRANCH: Multi-Value Types (MX, TXT) ---
     # These types allow multiple records with the same name.
     # Logic: Ensure ONE record exists with this content. Do not overwrite others.
     if ($Type -in @('MX', 'TXT')) {
-        $exactMatch = $matches | Where-Object { 
+        $exactMatch = $existingSameType | Where-Object { 
             $_.content -eq $Content -and 
             ($Type -ne 'MX' -or $_.priority -eq $Priority)
         }
@@ -430,7 +430,7 @@ try {
     # These often imply a single state for a subdomain (e.g. www points to X).
     # Logic: Update ALL matching records to the new state.
     
-    if ($matches.Count -eq 0) {
+    if ($existingSameType.Count -eq 0) {
         # CREATE
         if ($DryRun) {
             Write-Host "[DRY-RUN] Would CREATE new record: $Type $RecordName -> $Content (Proxied: $Proxied)" -ForegroundColor Yellow
@@ -441,7 +441,7 @@ try {
         }
     } else {
         # UPDATE
-        foreach ($rec in $matches) {
+        foreach ($rec in $existingSameType) {
             $needsUpdate = $false
             
             if ($rec.content -ne $Content) { $needsUpdate = $true }

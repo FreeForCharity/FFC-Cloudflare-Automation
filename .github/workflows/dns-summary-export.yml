@@ -1,0 +1,17 @@
+name: "[DEPRECATED] DNS Summary Export (legacy)"
+
+# NOTE: This workflow previously exported DNS summaries using the earlier Python-based
+# tooling. The repository has since been refactored; use the current workflow:
+# - .github/workflows/4-export-summary.yml
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deprecated:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deprecated
+        run: |
+          echo "This workflow is deprecated and no longer exports DNS summaries."
+          echo "Use '[DNS] 4. Report - Export All Domains' instead."

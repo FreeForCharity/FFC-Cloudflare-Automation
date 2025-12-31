@@ -60,7 +60,10 @@ This workflow helps identify security vulnerabilities early in the development p
 |----------|---------|---------|
 | ci.yml | PRs and pushes to main | Validate Python scripts and check for sensitive files |
 | codeql-analysis.yml | PRs, pushes to main, and weekly | Security vulnerability scanning |
-| dns-summary-export.yml | Manual (workflow_dispatch) | Export DNS configuration summaries |
+| 1-audit-compliance.yml | Manual (workflow_dispatch) | Report: Check DNS compliance |
+| 2-enforce-standard.yml | Manual (workflow_dispatch) | Fix: Enforce standard DNS configuration |
+| 3-manage-record.yml | Manual (workflow_dispatch) | Manual: Manage a single DNS record |
+| 4-export-summary.yml | Manual (workflow_dispatch) | Report: Export all domains summary |
 
 ## Current Workflow
 

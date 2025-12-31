@@ -39,7 +39,7 @@ jobs:
                 $hasErrors = $true
               }
             } else {
-              Write-Warning "Script not found: $script"
+              Write-Error "Script not found: $script"
               $hasErrors = $true
             }
           }

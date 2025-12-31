@@ -116,7 +116,7 @@ jobs:
           
           # 1. Clean up existing record (Idempotency) - Allow error if not found
           Write-Host "Ensuring clean state for test record..."
-          .\Update-CloudflareDns.ps1 -Zone $Domain -Name "@" -Type TXT -Remove -ErrorAction SilentlyContinue 
+          .\Update-CloudflareDns.ps1 -Zone $Domain -Name "@" -Type TXT -Content "FFC Automation Test Success" -Remove -ErrorAction SilentlyContinue 
           
           # 2. Add fresh record
           Write-Host "Adding verification TXT record to $Domain..."

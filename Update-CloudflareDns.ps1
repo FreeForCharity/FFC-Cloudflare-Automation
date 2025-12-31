@@ -78,6 +78,7 @@ param(
     [string]$Type,
 
     [Parameter(ParameterSetName='Set', Mandatory=$true)]
+    [Parameter(ParameterSetName='Remove')]
     [string]$Content,
 
     [Parameter(ParameterSetName='Set')]
@@ -218,6 +219,12 @@ try {
             return
         }
         foreach ($rec in $existing) {
+            # Safety: If Content is specified, only delete matching records
+            if ($Content -and $rec.content -ne $Content) {
+                Write-Verbose "Skipping record $($rec.id) (Content mismatch: '$($rec.content)' != '$Content')"
+                continue
+            }
+
             if ($DryRun) {
                 Write-Host "[DRY-RUN] Would DELETE record: $($rec.type) $RecordName -> $($rec.content) (ID: $($rec.id))" -ForegroundColor Yellow
             } else {

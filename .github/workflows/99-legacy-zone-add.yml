@@ -55,15 +55,15 @@ jobs:
         id: acct
         run: |
           if [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
-            echo "id=$CLOUDFLARE_ACCOUNT_ID" >> $GITHUB_OUTPUT
+            echo "id=$CLOUDFLARE_ACCOUNT_ID" >> "$GITHUB_OUTPUT"
           else
             echo "Fetching Cloudflare accounts..."
-            curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN_ZONE_CREATE" \
+            curl -s -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN_ZONE_CREATE}" \
               "https://api.cloudflare.com/client/v4/accounts" > accounts.json
             echo "Response saved to accounts.json"
             ID=$(jq -r '.result[0].id // empty' accounts.json)
             if [ -z "$ID" ]; then echo "Failed to resolve account id"; cat accounts.json; exit 1; fi
-            echo "id=$ID" >> $GITHUB_OUTPUT
+            echo "id=$ID" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Dry-run or Create zone
@@ -75,7 +75,7 @@ jobs:
             echo "DRY-RUN: Would POST /zones with {name: ${{ inputs.domain }}, account: {id: $ACCOUNT_ID}}"; exit 0
           fi
           payload=$(jq -n --arg name "${{ inputs.domain }}" --arg id "$ACCOUNT_ID" '{name: $name, account: {id: $id}}')
-          curl -s -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN_ZONE_CREATE" -H "Content-Type: application/json" \
+          curl -s -X POST -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN_ZONE_CREATE}" -H "Content-Type: application/json" \
             -d "$payload" "https://api.cloudflare.com/client/v4/zones" > create_zone.json
           cat create_zone.json
           ok=$(jq -r '.success' create_zone.json)

@@ -161,7 +161,7 @@ function Invoke-CfApi {
              $stream = $_.Exception.Response.GetResponseStream()
              $reader = [System.IO.StreamReader]::new($stream)
              $body = $reader.ReadToEnd()
-             Write-Warning "API Response: $body"
+             Write-Error "API Error Body: $body"
         }
         throw
     }

@@ -73,6 +73,7 @@ param(
 
     [Parameter(ParameterSetName='Set', Mandatory=$true)]
     [Parameter(ParameterSetName='Get')]
+    [Parameter(ParameterSetName='Remove')]
     [ValidateSet('A', 'AAAA', 'CNAME', 'MX', 'TXT')]
     [string]$Type,
 

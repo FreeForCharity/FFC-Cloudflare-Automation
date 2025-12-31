@@ -113,8 +113,13 @@ jobs:
         shell: pwsh
         run: |
           $Domain = "${{ needs.resolve-context.outputs.domain }}"
-          Write-Host "Adding verification TXT record to $Domain..."
           
+          # 1. Clean up existing record (Idempotency) - Allow error if not found
+          Write-Host "Ensuring clean state for test record..."
+          .\Update-CloudflareDns.ps1 -Zone $Domain -Name "@" -Type TXT -Remove -ErrorAction SilentlyContinue 
+          
+          # 2. Add fresh record
+          Write-Host "Adding verification TXT record to $Domain..."
           .\Update-CloudflareDns.ps1 -Zone $Domain `
             -Name "@" `
             -Type TXT `

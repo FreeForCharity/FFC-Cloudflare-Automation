@@ -96,6 +96,9 @@ param(
     [Parameter(ParameterSetName='Get', Mandatory=$true)]
     [switch]$List,
 
+    [Parameter(ParameterSetName='Audit', Mandatory=$true)]
+    [switch]$Audit,
+
     [string]$Token,
 
     [switch]$DryRun
@@ -209,6 +212,47 @@ try {
         else {
             $existing | Select-Object id, type, name, content, proxied, ttl | Format-Table -AutoSize
         }
+        return
+    }
+
+    # --- AUDIT Operation ---
+    if ($Audit) {
+        Write-Host "Running Compliance Audit for Zone: $Zone" -ForegroundColor Cyan
+        
+        # Helper to find
+        $allRecords = (Invoke-CfApi -Method 'GET' -Uri "/zones/$ZoneId/dns_records?per_page=100").result
+        
+        # 1. Microsoft 365 MX
+        $mx = $allRecords | Where-Object { $_.type -eq 'MX' -and $_.content -like '*.mail.protection.outlook.com' }
+        if ($mx) { Write-Host "[OK] M365 MX Record found ($($mx.content))" -ForegroundColor Green }
+        else { Write-Warning "[MISSING] M365 MX Record (*.mail.protection.outlook.com)" }
+
+        # 2. SPF
+        $spf = $allRecords | Where-Object { $_.type -eq 'TXT' -and $_.content -like '*include:spf.protection.outlook.com*' }
+        if ($spf) { Write-Host "[OK] M365 SPF Record found" -ForegroundColor Green }
+        else { Write-Warning "[MISSING] M365 SPF Record (include:spf.protection.outlook.com)" }
+
+        # 3. DMARC
+        $dmarc = $allRecords | Where-Object { $_.type -eq 'TXT' -and $_.name -like "_dmarc.$Zone" }
+        if ($dmarc) { Write-Host "[OK] DMARC Record found" -ForegroundColor Green }
+        else { Write-Warning "[MISSING] DMARC Record (_dmarc.$Zone)" }
+
+        # 4. GitHub Pages (A Records)
+        $ghIps = @('185.199.108.153', '185.199.109.153', '185.199.110.153', '185.199.111.153')
+        $aRecords = $allRecords | Where-Object { $_.type -eq 'A' -and $_.name -eq $Zone }
+        $missingIps = $ghIps | Where-Object { $_ -notin $aRecords.content }
+        
+        if ($missingIps.Count -eq 0 -and $aRecords.Count -ge 4) { 
+            Write-Host "[OK] GitHub Pages A Records found" -ForegroundColor Green 
+        } else { 
+            Write-Warning "[MISSING/PARTIAL] GitHub Pages A Records. Missing: $($missingIps -join ', ')" 
+        }
+
+        # 5. WWW CNAME
+        $www = $allRecords | Where-Object { $_.type -eq 'CNAME' -and $_.name -eq "www.$Zone" }
+        if ($www) { Write-Host "[OK] WWW CNAME found ($($www.content))" -ForegroundColor Green }
+        else { Write-Warning "[MISSING] WWW CNAME record" }
+
         return
     }
 

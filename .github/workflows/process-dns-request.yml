@@ -11,6 +11,23 @@ on:
         description: 'Dry Run (No changes)'
         type: boolean
         default: true
+      record_type:
+        description: 'Record Type'
+        type: choice
+        options:
+          - TXT
+          - A
+          - CNAME
+          - MX
+        default: TXT
+      record_name:
+        description: 'Record Name (@ or subdomain)'
+        type: string
+        default: '@'
+      record_content:
+        description: 'Record Content'
+        type: string
+        default: 'v=spf1 include:spf.protection.outlook.com -all'
   issues:
     types: [opened, edited, labeled]
 
@@ -109,26 +126,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Create TXT Verification Record
+      - name: Manage DNS Record
         shell: pwsh
         run: |
-          $Domain = "${{ needs.resolve-context.outputs.domain }}"
+          $Domain  = "${{ needs.resolve-context.outputs.domain }}"
+          $Type    = "${{ github.event.inputs.record_type || 'TXT' }}"
+          $Name    = "${{ github.event.inputs.record_name || '@' }}"
+          $Content = "${{ github.event.inputs.record_content || 'v=spf1 include:spf.protection.outlook.com -all' }}"
           
-          # 1. Clean up existing record (Idempotency) - Allow error if not found
-          Write-Host "Ensuring clean state for test record..."
-          .\Update-CloudflareDns.ps1 -Zone $Domain -Name "@" -Type TXT -Content "FFC Automation Test Success" -Remove -ErrorAction SilentlyContinue 
+          Write-Host "Managing $Type record for $Name in zone $Domain..."
           
-          # 2. Add fresh record
-          Write-Host "Adding verification TXT record to $Domain..."
           .\Update-CloudflareDns.ps1 -Zone $Domain `
-            -Name "@" `
-            -Type TXT `
-            -Content "FFC Automation Test Success" `
+            -Name $Name `
+            -Type $Type `
+            -Content $Content `
             -Ttl 1
             
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "SUCCESS: Verification record key added." -ForegroundColor Green
+            Write-Host "SUCCESS: DNS operation completed." -ForegroundColor Green
           } else {
-            Write-Error "FAILURE: Could not add record."
+            Write-Error "FAILURE: Operation failed."
             exit 1
           }
+
+      - name: Post-Change Compliance Audit
+        shell: pwsh
+        run: |
+          $Domain = "${{ needs.resolve-context.outputs.domain }}"
+          Write-Host "--- Running Compliance Audit ---"
+          .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ErrorAction Continue

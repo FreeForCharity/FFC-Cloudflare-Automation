@@ -241,12 +241,14 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 │   ├── workflows/          # GitHub Actions workflows
 │   │   ├── ci.yml          # Continuous Integration
 │   │   ├── deploy-pages.yml  # GitHub Pages deployment
+│   │   ├── codeql-analysis.yml  # Security scanning
 │   │   ├── 1-audit-compliance.yml  # [DNS] Report - Check Compliance
 │   │   ├── 2-enforce-standard.yml  # [DNS] Fix - Enforce Standard
 │   │   ├── 3-manage-record.yml     # [DNS] Manual - Manage Record
 │   │   ├── 4-export-summary.yml    # [DNS] Report - Export All Domains
 │   │   ├── initialize-labels.yml   # Label initialization
 │   │   ├── sync-labels.yml         # Label synchronization
+│   │   ├── 99-legacy-zone-add.yml  # Legacy zone-add (kept for reference)
 │   │   └── README.md       # Workflow documentation
 │   └── dependabot.yml      # Dependency update configuration
 ├── CONTRIBUTING.md         # Contribution guidelines

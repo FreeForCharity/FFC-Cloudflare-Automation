@@ -101,8 +101,8 @@ Exports DNS configuration summary for all domains.
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| ci.yml | PRs and pushes to main | Validate PowerShell scripts and check for sensitive files |
-| deploy-pages.yml | Pushes to main, manual | Deploy GitHub Pages site |
+| ci.yml | PRs and pushes to main | Validate Python scripts and check for sensitive files |
+| codeql-analysis.yml | PRs, pushes to main, and weekly | Security vulnerability scanning |
 | 1-audit-compliance.yml | Manual (workflow_dispatch) | Report: Check DNS compliance |
 | 2-enforce-standard.yml | Manual (workflow_dispatch) | Fix: Enforce standard DNS configuration |
 | 3-manage-record.yml | Manual (workflow_dispatch) | Manual: Manage a single DNS record |

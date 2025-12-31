@@ -1,0 +1,44 @@
+name: Enforce DNS Standard
+run-name: Enforce DNS Standard (Batch Fix) for ${{ inputs.domain }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain Name (e.g., example.org)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry Run (Check before Fix)'
+        type: boolean
+        default: true
+
+jobs:
+  enforce_standard:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enforce FFC Standard Configuration
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+        run: |
+          $Domain = "${{ inputs.domain }}"
+          $DryRun = "${{ inputs.dry_run }}"
+          
+          if ($DryRun -eq "true") {
+            Write-Host "--- DRY RUN MODE: PREVIEWING CHANGES ---"
+            .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -DryRun
+          } else {
+            Write-Host "--- LIVE MODE: APPLYING FIXES ---"
+            .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard
+          }
+          
+      - name: Post-Enforce Compliance Audit
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+        run: |
+           $Domain = "${{ inputs.domain }}"
+           .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ErrorAction Continue

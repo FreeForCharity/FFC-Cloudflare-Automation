@@ -1,0 +1,24 @@
+name: Audit DNS Compliance
+run-name: Audit DNS Compliance for ${{ inputs.domain }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain Name (e.g., example.org)'
+        required: true
+        type: string
+
+jobs:
+  audit_zone:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run DNS Compliance Audit
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+        run: |
+          $Domain = "${{ inputs.domain }}"
+          .\Update-CloudflareDns.ps1 -Zone $Domain -Audit

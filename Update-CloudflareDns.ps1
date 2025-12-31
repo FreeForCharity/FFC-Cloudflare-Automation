@@ -99,6 +99,9 @@ param(
     [Parameter(ParameterSetName='Audit', Mandatory=$true)]
     [switch]$Audit,
 
+    [Parameter(ParameterSetName='Enforce', Mandatory=$true)]
+    [switch]$EnforceStandard,
+
     [string]$Token,
 
     [switch]$DryRun
@@ -253,6 +256,101 @@ try {
         if ($www) { Write-Host "[OK] WWW CNAME found ($($www.content))" -ForegroundColor Green }
         else { Write-Warning "[MISSING] WWW CNAME record" }
 
+        return
+    }
+
+    # --- ENFORCE STANDARD Operation ---
+    if ($EnforceStandard) {
+        Write-Host "Enforcing FFC Standard Configuration for Zone: $Zone" -ForegroundColor Cyan
+        
+        # Define Standard Records
+        $standards = @(
+            # Microsoft 365 Email
+            @{ Type='MX'; Name='@'; Content='0 .mail.protection.outlook.com'; Priority=0 },
+            @{ Type='TXT'; Name='@'; Content='v=spf1 include:spf.protection.outlook.com -all' },
+            @{ Type='TXT'; Name='_dmarc'; Content='v=DMARC1; p=none; rua=mailto:dmarc-rua@freeforcharity.org' },
+            
+            # GitHub Pages (Apex)
+            @{ Type='A'; Name='@'; Content='185.199.108.153' },
+            @{ Type='A'; Name='@'; Content='185.199.109.153' },
+            @{ Type='A'; Name='@'; Content='185.199.110.153' },
+            @{ Type='A'; Name='@'; Content='185.199.111.153' },
+            
+            # GitHub Pages (WWW)
+            @{ Type='CNAME'; Name='www'; Content=$Zone }
+        )
+
+        foreach ($std in $standards) {
+            $recName = if ($std.Name -eq '@') { $Zone } else { "$($std.Name).$Zone" }
+            
+            # Re-use the existing logic by calling the script recursively or refactoring.
+            # For simplicity and safety within this function, we will call the logic we just verified.
+            # We construct the arguments to simulate a "Single Record Ensure" call.
+            
+            Write-Host "Checking standard record: $($std.Type) $($std.Name)..." -NoNewline
+            
+            # We can't easily recurse inside the same script execution context without dot-sourcing, 
+            # so we will use the logic we built for internal function usage? 
+            # Actually, `Update-CloudflareDns.ps1` is a script, so we can call it.
+            # But calling it 8 times might be slow on auth. 
+            # BETTER: We implement the "Check & Create" logic right here, reusing the helper variables.
+
+            # 1. Check existence
+            $match = $null
+            $stdContent = $std.Content
+            
+            if ($std.Type -in @('MX', 'TXT')) {
+                # Multi-Value: Look for EXACT match
+                 $matches = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
+                 $match = $matches | Where-Object { $_.content -eq $stdContent }
+            } else {
+                # Single-Value: Look for ANY match (to update) or exact match
+                # For A records, we have multiple IPs for the same name, so they act like Multi-Value for existence check.
+                if ($std.Type -eq 'A') {
+                     $matches = $allRecords | Where-Object { $_.type -eq 'A' -and $_.name -eq $recName }
+                     $match = $matches | Where-Object { $_.content -eq $stdContent }
+                } else {
+                     $matches = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
+                     $match = $matches # For CNAME, just finding the record is usually enough to say "it exists", but we want to enforce content.
+                     if ($match.content -ne $stdContent) { $match = $null } # Force update if content differs
+                }
+            }
+
+            if ($match) {
+                Write-Host " [OK]" -ForegroundColor Green
+            } else {
+                Write-Host " [MISSING] -> Creating..." -ForegroundColor Yellow
+                
+                # Payload
+                $newPayload = @{
+                    type    = $std.Type
+                    name    = $std.Name # API expects relative or absolute? The main logic utilized Name passed in.
+                                        # Main logic handles relative/absolute. Cloudflare API usually wants Name as FQDN or relative?
+                                        # Let's check main logic: $payload = @{ ... name = $RecordName ... }
+                                        # $RecordName is FQDN.
+                    content = $stdContent
+                    ttl     = 1 # Auto
+                }
+                if ($std.Type -eq 'MX') { $newPayload['priority'] = $std.Priority }
+                # Proxied? Standard FFC: Pages A/CNAME = Proxied? Usually Yes for SSL. 
+                # M365 = No.
+                if ($std.Type -in @('A', 'CNAME')) { $newPayload['proxied'] = $true }
+                
+                # Name must be FQDN for the API
+                $newPayload['name'] = $recName
+
+                if (-not $DryRun) {
+                     try {
+                        $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $newPayload
+                        Write-Host "CREATED" -ForegroundColor Green
+                     } catch {
+                        Write-Error "Failed to create $($std.Type) $recName"
+                     }
+                } else {
+                    Write-Host "[DRY-RUN] POST $recName" -ForegroundColor DarkGray
+                }
+            }
+        }
         return
     }
 

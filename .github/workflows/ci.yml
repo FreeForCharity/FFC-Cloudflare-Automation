@@ -31,7 +31,16 @@ jobs:
             if (Test-Path $script) {
               Write-Host "Checking $script..." -NoNewline
               try {
-                $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content $script -Raw), [ref]$null)
+                $errors = $null
+                [void][System.Management.Automation.Language.Parser]::ParseInput(
+                  (Get-Content $script -Raw),
+                  [ref]$null,
+                  [ref]$errors
+                )
+                if ($errors -and $errors.Count -gt 0) {
+                  $messages = $errors | ForEach-Object { $_.Message } | Where-Object { $_ } | Select-Object -Unique
+                  throw "Syntax errors in '$script': $($messages -join '; ')"
+                }
                 Write-Host " OK" -ForegroundColor Green
               } catch {
                 Write-Host " FAILED" -ForegroundColor Red

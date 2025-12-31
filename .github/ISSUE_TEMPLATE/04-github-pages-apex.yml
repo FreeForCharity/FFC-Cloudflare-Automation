@@ -123,7 +123,7 @@ body:
         - [ ] GitHub Pages is enabled in repository settings
         
         ### GitHub Pages IP Addresses
-        Current GitHub Pages IP addresses as of December 2024 (always verify at [GitHub Pages documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site#configuring-an-apex-domain)):
+        Current GitHub Pages IP addresses as of December 2025 (always verify at [GitHub Pages documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site#configuring-an-apex-domain)):
         ```
         185.199.108.153
         185.199.109.153

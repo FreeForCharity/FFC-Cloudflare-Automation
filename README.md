@@ -13,7 +13,7 @@ The static site provides an overview of the automation, current status, key feat
 
 ## Overview
 
-This repository contains automation utilities and scripts for managing Free For Charity's Cloudflare DNS configuration. Administrators execute DNS changes based on structured issue requests, using Python scripts and Cloudflare API tools to ensure consistent and auditable domain management.
+This repository contains automation utilities and scripts for managing Free For Charity's Cloudflare DNS configuration. Administrators execute DNS changes based on structured issue requests, using either the Cloudflare Dashboard for manual updates or Python scripts and Cloudflare API tools for automated, consistent, and auditable domain management.
 
 ## Features
 
@@ -27,11 +27,12 @@ This repository contains automation utilities and scripts for managing Free For 
 ### DNS Management Utilities
 - **Python Scripts**: Flexible DNS record management using Cloudflare API
 - **Create, update, search, and delete** DNS records
-- **Supports A, AAAA, CNAME** and other record types
+- **Supports A, AAAA, and CNAME** record types for GitHub Pages configuration
 - **Dry-run mode** to preview changes before execution
-- **Cloudflare proxy** (orange cloud) support
+- **Cloudflare proxy** (orange cloud) support with explicit --no-proxy flag
 - **Secure token handling** via environment variables
 - **Export Tools**: Export DNS configurations for backup and analysis
+- **Manual Option**: Administrators can also use Cloudflare Dashboard for manual DNS updates
 
 ### Supported Operations
 1. **Purchase and add new .org domains** to the Cloudflare account
@@ -66,14 +67,14 @@ The simplest way to update DNS records using the Python utilities:
 pip install -r requirements.txt
 
 # Update DNS record (example: staging subdomain)
-python update_dns.py --name staging --type A --ip 203.0.113.42
+python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
 ```
 
 You'll be prompted for your Cloudflare API token, or you can set it as an environment variable:
 
 ```bash
 export CLOUDFLARE_API_TOKEN="your_token_here"
-python update_dns.py --name staging --type A --ip 203.0.113.42
+python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
 ```
 
 **👉 [See detailed staging subdomain guide →](STAGING_README.md)**
@@ -94,32 +95,42 @@ The Python scripts in this repository provide flexible DNS record management for
 
 **Update or create an A record:**
 ```bash
-python update_dns.py --name staging --type A --ip 203.0.113.42
+python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
+```
+
+**Update or create an AAAA record (IPv6):**
+```bash
+python update_dns.py --zone example.org --name @ --type AAAA --ip 2606:50c0:8000::153
 ```
 
 **Update or create a CNAME record:**
 ```bash
-python update_dns.py --name www --type CNAME --target example.com
+python update_dns.py --zone example.org --name www --type CNAME --target example.org
 ```
 
 **Search for existing records:**
 ```bash
-python update_dns.py --name staging --type A --search
+python update_dns.py --zone example.org --name staging --type A --search
 ```
 
 **Delete a specific record:**
 ```bash
-python update_dns.py --record-id abc123xyz --delete
+python update_dns.py --zone example.org --record-id abc123xyz --delete
 ```
 
 **Enable Cloudflare proxy (orange cloud):**
 ```bash
-python update_dns.py --name staging --type A --ip 203.0.113.42 --proxied
+python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --proxied
+```
+
+**Disable Cloudflare proxy (DNS only - required for GitHub Pages):**
+```bash
+python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --no-proxy
 ```
 
 **Dry run (preview changes without applying):**
 ```bash
-python update_dns.py --name staging --type A --ip 203.0.113.42 --dry-run
+python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --dry-run
 ```
 
 ### PowerShell Alternative

@@ -27,12 +27,10 @@ This repository contains automation utilities and scripts for managing Free For 
 ### DNS Management Utilities
 - **Python Scripts**: Flexible DNS record management using Cloudflare API
 - **Create, update, search, and delete** DNS records
-- **Supports A, AAAA, CNAME, MX, and TXT** record types
+- **Supports A, AAAA, and CNAME** record types for GitHub Pages configuration
 - **Dry-run mode** to preview changes before execution
-- **Cloudflare proxy** (orange cloud) support with explicit control
+- **Cloudflare proxy** (orange cloud) support with explicit --no-proxy flag
 - **Secure token handling** via environment variables
-- **Compliance Audit**: Built-in checks for M365 and GitHub Pages configuration
-- **Standard Enforcement**: Automatically apply FFC standard DNS configuration
 - **Export Tools**: Export DNS configurations for backup and analysis
 - **Manual Option**: Administrators can also use Cloudflare Dashboard for manual DNS updates
 
@@ -85,19 +83,13 @@ python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.4
 
 ### For DNS Script Execution (Administrators)
 - Python 3.9+ 
+- PowerShell 5.1+ (optional, for `Update-StagingDns.ps1`)
 - Cloudflare API token with DNS edit permissions
 - Access to FFC Cloudflare account
 
 ## DNS Management Tools
 
 The Python scripts in this repository provide flexible DNS record management for FFC domains.
-
-### Core Scripts
-
-- **`update_dns.py`** - Create, update, search, and delete DNS records
-- **`audit_compliance.py`** - Check DNS configuration for FFC compliance standards
-- **`enforce_standard.py`** - Automatically apply FFC standard DNS configuration
-- **`export_zone_dns_summary.py`** - Export DNS configurations to CSV
 
 ### Basic Examples
 
@@ -114,16 +106,6 @@ python update_dns.py --zone example.org --name @ --type AAAA --ip 2606:50c0:8000
 **Update or create a CNAME record:**
 ```bash
 python update_dns.py --zone example.org --name www --type CNAME --target example.org
-```
-
-**Create an MX record:**
-```bash
-python update_dns.py --zone example.org --name @ --type MX --content mail.protection.outlook.com --priority 0
-```
-
-**Create a TXT record:**
-```bash
-python update_dns.py --zone example.org --name @ --type TXT --content "v=spf1 include:spf.protection.outlook.com -all"
 ```
 
 **Search for existing records:**
@@ -151,36 +133,15 @@ python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.4
 python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --dry-run
 ```
 
-### Compliance & Automation
+### PowerShell Alternative
 
-**Check compliance with FFC standards:**
-```bash
-python audit_compliance.py --zone example.org
+For quick subdomain updates:
+
+```powershell
+./Update-StagingDns.ps1 -NewIp 203.0.113.42
 ```
 
-**Enforce standard configuration (dry-run):**
-```bash
-python enforce_standard.py --zone example.org --dry-run
-```
-
-**Apply standard configuration:**
-```bash
-python enforce_standard.py --zone example.org
-```
-
-**Export DNS summary:**
-```bash
-python export_zone_dns_summary.py --all-zones --output dns_summary.csv
-```
-
-### Setting Up Your API Token
-
-You'll be prompted for your Cloudflare API token, or you can set it as an environment variable:
-
-```bash
-export CLOUDFLARE_API_KEY_DNS_ONLY="your_token_here"
-python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
-```
+**👉 [See PowerShell details in staging guide →](STAGING_README.md)**
 
 ## GitHub Pages DNS Configuration
 
@@ -277,10 +238,7 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 │   ├── workflows/          # GitHub Actions workflows
 │   │   ├── ci.yml          # Continuous Integration
 │   │   ├── codeql-analysis.yml  # Security scanning
-│   │   ├── 1-audit-compliance.yml  # DNS compliance audit
-│   │   ├── 2-enforce-standard.yml  # Enforce FFC standard
-│   │   ├── 3-manage-record.yml     # Manual record management
-│   │   ├── 4-export-summary.yml    # DNS export workflow
+│   │   ├── dns-summary-export.yml  # DNS export workflow
 │   │   └── README.md       # Workflow documentation
 │   └── dependabot.yml      # Dependency update configuration
 ├── CONTRIBUTING.md         # Contribution guidelines
@@ -290,11 +248,9 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 ├── STAGING_README.md       # Staging subdomain management guide
 ├── requirements.txt        # Python dependencies
 ├── update_dns.py           # Python DNS management script
-├── audit_compliance.py     # DNS compliance audit tool
-├── enforce_standard.py     # FFC standard enforcement tool
 ├── export_zone_dns_summary.py  # DNS configuration export tool
 ├── export_zone_a_records.py    # A record export tool
-└── update_pages_dns.py     # GitHub Pages DNS helper
+└── Update-StagingDns.ps1   # PowerShell DNS script
 ```
 
 ## Deprecated Features

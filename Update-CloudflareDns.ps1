@@ -252,6 +252,17 @@ try {
         
         # Helper to find
         $allRecords = Get-AllDnsRecords -ZoneId $ZoneId
+
+        # 0. CNAME Inventory (helps identify other required CNAMEs beyond WWW)
+        $cnameRecords = $allRecords | Where-Object { $_.type -eq 'CNAME' } | Sort-Object name
+        if (-not $cnameRecords -or $cnameRecords.Count -eq 0) {
+            Write-Host "[INFO] No CNAME records found in zone." -ForegroundColor DarkGray
+        } else {
+            Write-Host "CNAME inventory:" -ForegroundColor DarkCyan
+            foreach ($rec in $cnameRecords) {
+                Write-Host (" - {0} -> {1} (proxied={2}, ttl={3})" -f $rec.name, $rec.content, $rec.proxied, $rec.ttl)
+            }
+        }
         
         # 1. Microsoft 365 MX
         $mx = $allRecords | Where-Object { $_.type -eq 'MX' -and $_.content -like '*.mail.protection.outlook.com' }

@@ -1,0 +1,67 @@
+name: Initialize Labels
+
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  create-labels:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create labels from configuration
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const yaml = require('js-yaml');
+            
+            // Read labels configuration
+            const labelsConfig = yaml.load(fs.readFileSync('.github/labels.yml', 'utf8'));
+            
+            console.log(`Found ${labelsConfig.length} labels to create/update`);
+            
+            for (const label of labelsConfig) {
+              try {
+                // Try to get the label first
+                try {
+                  const existing = await github.rest.issues.getLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: label.name
+                  });
+                  
+                  // Update if it exists
+                  await github.rest.issues.updateLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: label.name,
+                    description: label.description,
+                    color: label.color
+                  });
+                  console.log(`✓ Updated label: ${label.name}`);
+                } catch (error) {
+                  if (error.status === 404) {
+                    // Create if it doesn't exist
+                    await github.rest.issues.createLabel({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      name: label.name,
+                      description: label.description,
+                      color: label.color
+                    });
+                    console.log(`✓ Created label: ${label.name}`);
+                  } else {
+                    throw error;
+                  }
+                }
+              } catch (error) {
+                console.error(`✗ Failed to process label ${label.name}:`, error.message);
+              }
+            }
+            
+            console.log('Label initialization complete!');

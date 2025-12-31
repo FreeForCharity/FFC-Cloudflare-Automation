@@ -256,9 +256,38 @@ try {
         $payload['priority'] = $Priority
     }
 
-    # Check for matches
+    # Check for matches (Same Type)
     $matches = $existing | Where-Object { $_.type -eq $Type }
 
+    # --- LOGIC BRANCH: Multi-Value Types (MX, TXT) ---
+    # These types allow multiple records with the same name.
+    # Logic: Ensure ONE record exists with this content. Do not overwrite others.
+    if ($Type -in @('MX', 'TXT')) {
+        $exactMatch = $matches | Where-Object { 
+            $_.content -eq $Content -and 
+            ($Type -ne 'MX' -or $_.priority -eq $Priority)
+        }
+
+        if ($exactMatch) {
+            Write-Verbose "Exact match found (ID: $($exactMatch[0].id))."
+            Write-Host "  [Skip] $Type $RecordName matches desired state." -ForegroundColor DarkGray
+        } else {
+            # No exact match -> CREATE (Append)
+            if ($DryRun) {
+                Write-Host "[DRY-RUN] Would CREATE new record: $Type $RecordName -> $Content" -ForegroundColor Yellow
+            } else {
+                Write-Host "Creating new record: $Type $RecordName -> $Content..." -NoNewline
+                $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $payload
+                Write-Host " DONE" -ForegroundColor Green
+            }
+        }
+        return
+    }
+
+    # --- LOGIC BRANCH: Single-Value / Managed Types (A, AAAA, CNAME) ---
+    # These often imply a single state for a subdomain (e.g. www points to X).
+    # Logic: Update ALL matching records to the new state.
+    
     if ($matches.Count -eq 0) {
         # CREATE
         if ($DryRun) {
@@ -269,22 +298,14 @@ try {
             Write-Host " DONE" -ForegroundColor Green
         }
     } else {
-        # UPDATE (Upsert logic)
+        # UPDATE
         foreach ($rec in $matches) {
-            # Check if update is needed
             $needsUpdate = $false
             
             if ($rec.content -ne $Content) { $needsUpdate = $true }
             
-            # Check proxy status for supported types
-            if ($Type -notin @('MX', 'TXT')) {
-                if ([bool]$rec.proxied -ne $Proxied) { $needsUpdate = $true }
-            }
-            
-            # Check priority for MX
-            if ($Type -eq 'MX') {
-                if ($rec.priority -ne $Priority) { $needsUpdate = $true }
-            }
+            # Check proxy status
+            if ([bool]$rec.proxied -ne $Proxied) { $needsUpdate = $true } 
 
             if (-not $needsUpdate) {
                 Write-Verbose "Record $($rec.id) is up to date."

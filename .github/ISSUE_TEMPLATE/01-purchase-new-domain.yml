@@ -30,37 +30,97 @@ body:
         ### Planned Uses
         Select required mandatory uses and any optional uses.
 
-  - type: checkboxes
-    id: email_uses
+  - type: markdown
     attributes:
-      label: Email Uses
-      description: Grouped email-related configurations (Microsoft 365 only)
+      value: |
+        ### Email Uses
+
+  - type: checkboxes
+    id: email_m365
+    attributes:
+      label: Microsoft 365 Email (Required)
+      description: Configure DNS/MX for Exchange Online
       options:
         - label: Microsoft 365 email (required provider)
           required: true
+  - type: markdown
+    attributes:
+      value: |
+        Microsoft 365 email: Required provider; configures DNS/MX for Exchange Online.
+
+  - type: checkboxes
+    id: email_dmarc
+    attributes:
+      label: DMARC Reporting (Required)
+      description: Configure DMARC rua/ruf via Cloudflare using FFC-managed mailboxes
+      options:
         - label: DMARC reporting (rua/ruf via Cloudflare)
+          required: true
+  - type: markdown
+    attributes:
+      value: |
+        DMARC reporting (rua/ruf) is configured and managed in Cloudflare. Use FFC-managed mailboxes for aggregate (`rua`) and forensic (`ruf`) reports. Enforces alignment and helps prevent spoofing.
+
+  - type: checkboxes
+    id: email_spf
+    attributes:
+      label: SPF (Required)
+      description: Publish SPF for Microsoft 365; additional includes require FFC approval
+      options:
+        - label: SPF (Microsoft 365 record)
+          required: true
+  - type: markdown
+    attributes:
+      value: |
+        SPF (Microsoft 365 record): Authorizes Exchange Online as a permitted sender; prevents softfail. Additional includes (other senders) require prior FFC approval.
+
+  - type: checkboxes
+    id: email_mta_sts
+    attributes:
+      label: MTA‑STS Policy (Optional)
+      description: Publish `_mta-sts` DNS and host HTTPS policy file
+      options:
         - label: MTA-STS policy (_mta-sts)
+  - type: markdown
+    attributes:
+      value: |
+        MTA‑STS policy (`_mta-sts`): Instructs senders to require TLS to your MX (Exchange Online), preventing downgrade/MITM.
+
+  - type: checkboxes
+    id: email_tlsrpt
+    attributes:
+      label: TLS Reporting (Optional)
+      description: Publish `_smtp._tls` DNS for aggregate TLS failure reports
+      options:
         - label: TLS Reporting (_smtp._tls)
-        - label: BIMI (brand logo + VMC)
+  - type: markdown
+    attributes:
+      value: |
+        TLS Reporting (`_smtp._tls`): Aggregated delivery telemetry for TLS failures; pairs with MTA‑STS to monitor encryption issues.
+
+  - type: checkboxes
+    id: email_dkim
+    attributes:
+      label: Additional DKIM Selectors (Optional)
+      description: Configure extra DKIM selectors for specialized send streams
+      options:
         - label: Additional DKIM selectors
-        - label: SPF includes for approved senders
-
   - type: markdown
     attributes:
       value: |
-        Note: DMARC reporting (rua/ruf) is configured and managed in Cloudflare. Use FFC-managed mailboxes for aggregate (`rua`) and forensic (`ruf`) reports. Third-party reporting services require prior FFC approval.
+        Additional DKIM selectors: Separate signing keys per send stream; supported by Exchange Online (e.g., `selector1`/`selector2`).
 
+  - type: checkboxes
+    id: email_bimi
+    attributes:
+      label: BIMI (Optional)
+      description: Publish BIMI TXT with logo URL and VMC (if applicable)
+      options:
+        - label: BIMI (brand logo + VMC)
   - type: markdown
     attributes:
       value: |
-        #### Microsoft 365 Email – Why these options matter
-        - Microsoft 365 email: Required provider; configures DNS/MX for Exchange Online.
-        - DMARC reporting (rua/ruf via Cloudflare): Enforces alignment and collects spoofing reports; Microsoft honors DMARC inbound.
-        - MTA‑STS policy (`_mta-sts`): Instructs senders to require TLS to your MX (Exchange Online), preventing downgrade/MITM.
-        - TLS Reporting (`_smtp._tls`): Aggregated delivery telemetry for TLS failures; helps detect configuration issues alongside MTA‑STS.
-        - BIMI (brand logo + VMC): Logo shown by providers that support BIMI; Microsoft 365 does not display BIMI in Outlook.
-        - Additional DKIM selectors: Separate signing keys per send stream; supported by Exchange Online (e.g., `selector1`/`selector2`).
-        - SPF includes for approved senders: Authorizes permitted outbound sources in addition to Microsoft 365, preventing softfail.
+        BIMI (brand logo + VMC): Logo shown by providers that support BIMI; Microsoft 365 does not display BIMI in Outlook. Requires DMARC enforcement and compliant SVG logo; VMC often required.
 
   - type: checkboxes
     id: mandatory_uses

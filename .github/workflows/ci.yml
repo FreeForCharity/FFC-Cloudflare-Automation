@@ -17,23 +17,44 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
-
-      - name: Install Python dependencies
+      - name: Validate PowerShell scripts
+        shell: pwsh
         run: |
-          pip install -r requirements.txt
-
-      - name: Validate Python scripts
-        run: |
-          python -m py_compile update_dns.py
-          python -m py_compile export_zone_dns_summary.py
-          python -m py_compile export_zone_a_records.py
-          python -m py_compile update_pages_dns.py
-          python -m py_compile admin_dns_agent.py
-        continue-on-error: true
+          Write-Host "Validating PowerShell scripts..."
+          $scripts = @(
+            'Update-CloudflareDns.ps1',
+            'Update-StagingDns.ps1',
+            'Export-CloudflareDns.ps1'
+          )
+          $hasErrors = $false
+          foreach ($script in $scripts) {
+            if (Test-Path $script) {
+              Write-Host "Checking $script..." -NoNewline
+              try {
+                $errors = $null
+                [void][System.Management.Automation.Language.Parser]::ParseInput(
+                  (Get-Content $script -Raw),
+                  [ref]$null,
+                  [ref]$errors
+                )
+                if ($errors -and $errors.Count -gt 0) {
+                  $messages = $errors | ForEach-Object { $_.Message } | Where-Object { $_ } | Select-Object -Unique
+                  throw "Syntax errors in '$script': $($messages -join '; ')"
+                }
+                Write-Host " OK" -ForegroundColor Green
+              } catch {
+                Write-Host " FAILED" -ForegroundColor Red
+                Write-Error $_.Exception.Message
+                $hasErrors = $true
+              }
+            } else {
+              Write-Error "Script not found: $script"
+              $hasErrors = $true
+            }
+          }
+          if ($hasErrors) {
+            exit 1
+          }
 
       - name: Check for sensitive files
         run: |

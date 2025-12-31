@@ -73,6 +73,13 @@ We welcome various types of contributions:
 
 All changes should be made through a pull request (PR). Avoid pushing directly to `main`, even for small fixes, so reviews and checks are consistently applied.
 
+### Issues Before PRs
+
+Before opening a PR, create (or reference) a GitHub issue describing the change.
+
+- Small changes: it’s OK for the issue to be lightweight, but it should still exist.
+- PRs should reference their issue in the description (e.g., `Fixes #123` or `Refs #123`).
+
 ### 1. Create a Branch
 
 Create a descriptive branch for your changes:

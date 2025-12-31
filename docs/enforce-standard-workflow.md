@@ -63,3 +63,9 @@ IPv6 (AAAA):
 The Enforce logic relies on a complete inventory of the zone’s DNS records so it can correctly decide whether a record already exists.
 
 It now loads the full record set before checking the standard list, preventing false "[MISSING]" results caused by comparing against an empty record list.
+
+## Change process (issue → PR)
+
+When changing enforcement requirements, prefer creating an issue first and then opening a PR that references it.
+
+Example: the GitHub Pages AAAA requirement should have been tracked as an issue before implementation (see https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues/40).

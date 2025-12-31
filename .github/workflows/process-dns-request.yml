@@ -119,7 +119,7 @@ jobs:
             -Name "@" `
             -Type TXT `
             -Content "FFC Automation Test Success" `
-            -Ttl 60
+            -Ttl 1
             
           if ($LASTEXITCODE -eq 0) {
             Write-Host "SUCCESS: Verification record key added." -ForegroundColor Green

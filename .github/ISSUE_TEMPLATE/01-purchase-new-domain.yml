@@ -31,13 +31,26 @@ body:
         Select required mandatory uses and any optional uses.
 
   - type: checkboxes
+    id: email_uses
+    attributes:
+      label: Email Uses
+      description: Grouped email-related configurations (Microsoft 365 only)
+      options:
+        - label: Microsoft 365 email (required provider)
+          required: true
+        - label: DMARC reporting (rua/ruf)
+        - label: MTA-STS policy (_mta-sts)
+        - label: TLS Reporting (_smtp._tls)
+        - label: BIMI (brand logo + VMC)
+        - label: Additional DKIM selectors
+        - label: SPF includes for approved senders
+
+  - type: checkboxes
     id: mandatory_uses
     attributes:
       label: Mandatory Uses
       description: All must be selected
       options:
-        - label: Email (Microsoft 365 only)
-          required: true
         - label: Website (GitHub Pages only)
           required: true
         - label: Verification with Google tools (Analytics, PageSpeed, Search Console)

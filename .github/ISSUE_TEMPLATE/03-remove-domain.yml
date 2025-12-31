@@ -1,6 +1,6 @@
 name: Remove Domain from Cloudflare
 description: Request to remove a domain from the Cloudflare account
-title: "[REMOVE DOMAIN] "
+title: "[REMOVE DOMAIN] {domain_name}"
 labels: ["domain-remove", "cloudflare"]
 body:
   - type: markdown

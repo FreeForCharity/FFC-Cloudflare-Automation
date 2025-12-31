@@ -1,6 +1,6 @@
 name: Purchase and Add New .org Domain
 description: Request to purchase and add a new .org domain to the Cloudflare account
-title: "[DOMAIN PURCHASE] "
+title: "[DOMAIN PURCHASE] {domain_name}"
 labels: ["domain-purchase", "cloudflare"]
 body:
   - type: markdown

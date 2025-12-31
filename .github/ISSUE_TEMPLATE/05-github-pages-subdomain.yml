@@ -1,6 +1,6 @@
 name: Configure Subdomain for GitHub Pages
 description: Point a subdomain (e.g., staging.example.org) to GitHub Pages
-title: "[GITHUB PAGES SUBDOMAIN] "
+title: "[GITHUB PAGES SUBDOMAIN] {subdomain}"
 labels: ["github-pages", "dns-config", "subdomain", "cloudflare"]
 body:
   - type: markdown

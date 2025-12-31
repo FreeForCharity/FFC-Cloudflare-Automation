@@ -1,6 +1,6 @@
 name: Configure Apex Domain for GitHub Pages
 description: Point an apex/root domain (e.g., example.org) to GitHub Pages
-title: "[GITHUB PAGES APEX] "
+title: "[GITHUB PAGES APEX] {apex_domain}"
 labels: ["github-pages", "dns-config", "cloudflare"]
 body:
   - type: markdown

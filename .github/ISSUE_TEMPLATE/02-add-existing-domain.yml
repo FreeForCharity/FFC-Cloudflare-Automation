@@ -1,6 +1,6 @@
 name: Add Existing Domain to Cloudflare
 description: Request to add an existing domain to the Cloudflare account
-title: "[ADD DOMAIN] "
+title: "[ADD DOMAIN] {domain_name}"
 labels: ["domain-add", "cloudflare"]
 body:
   - type: markdown

@@ -263,6 +263,30 @@ try {
                 Write-Host (" - {0} -> {1} (proxied={2}, ttl={3})" -f $rec.name, $rec.content, $rec.proxied, $rec.ttl)
             }
         }
+
+        # 0b. Required CNAMEs (M365/Teams/Intune + GitHub Pages)
+        $requiredCnames = @(
+            @{ Name = "autodiscover.$Zone";         Content = 'autodiscover.outlook.com';                        Proxied = $false },
+            @{ Name = "enterpriseenrollment.$Zone"; Content = 'enterpriseenrollment-s.manage.microsoft.com';     Proxied = $false },
+            @{ Name = "enterpriseregistration.$Zone"; Content = 'enterpriseregistration.windows.net';           Proxied = $false },
+            @{ Name = "lyncdiscover.$Zone";         Content = 'webdir.online.lync.com';                         Proxied = $false },
+            @{ Name = "sip.$Zone";                 Content = 'sipdir.online.lync.com';                         Proxied = $false },
+            @{ Name = "www.$Zone";                 Content = 'freeforcharity.github.io';                       Proxied = $true }
+        )
+
+        foreach ($req in $requiredCnames) {
+            $candidates = $allRecords | Where-Object { $_.type -eq 'CNAME' -and $_.name -eq $req.Name }
+            $match = $candidates | Where-Object { $_.content -eq $req.Content -and $_.proxied -eq $req.Proxied }
+
+            if ($match) {
+                Write-Host "[OK] Required CNAME present: $($req.Name)" -ForegroundColor Green
+            } elseif ($candidates) {
+                $example = $candidates | Select-Object -First 1
+                Write-Warning "[DIFFERS] Required CNAME $($req.Name): found '$($example.content)' (proxied=$($example.proxied)), expected '$($req.Content)' (proxied=$($req.Proxied))"
+            } else {
+                Write-Warning "[MISSING] Required CNAME $($req.Name) -> $($req.Content) (proxied=$($req.Proxied))"
+            }
+        }
         
         # 1. Microsoft 365 MX
         $mx = $allRecords | Where-Object { $_.type -eq 'MX' -and $_.content -like '*.mail.protection.outlook.com' }
@@ -323,21 +347,28 @@ try {
             @{ Type='MX'; Name='@'; Content=$m365MxTarget; Priority=0 },
             @{ Type='TXT'; Name='@'; Content='v=spf1 include:spf.protection.outlook.com -all' },
             @{ Type='TXT'; Name='_dmarc'; Content='v=DMARC1; p=none; rua=mailto:dmarc-rua@freeforcharity.org' },
+
+            # Microsoft 365 / Teams / Intune (Unproxied)
+            @{ Type='CNAME'; Name='autodiscover';          Content='autodiscover.outlook.com';                    Proxied=$false },
+            @{ Type='CNAME'; Name='enterpriseenrollment';  Content='enterpriseenrollment-s.manage.microsoft.com'; Proxied=$false },
+            @{ Type='CNAME'; Name='enterpriseregistration'; Content='enterpriseregistration.windows.net';         Proxied=$false },
+            @{ Type='CNAME'; Name='lyncdiscover';          Content='webdir.online.lync.com';                     Proxied=$false },
+            @{ Type='CNAME'; Name='sip';                   Content='sipdir.online.lync.com';                     Proxied=$false },
             
             # GitHub Pages (Apex)
-            @{ Type='A'; Name='@'; Content='185.199.108.153' },
-            @{ Type='A'; Name='@'; Content='185.199.109.153' },
-            @{ Type='A'; Name='@'; Content='185.199.110.153' },
-            @{ Type='A'; Name='@'; Content='185.199.111.153' },
+            @{ Type='A'; Name='@'; Content='185.199.108.153'; Proxied=$true },
+            @{ Type='A'; Name='@'; Content='185.199.109.153'; Proxied=$true },
+            @{ Type='A'; Name='@'; Content='185.199.110.153'; Proxied=$true },
+            @{ Type='A'; Name='@'; Content='185.199.111.153'; Proxied=$true },
 
             # GitHub Pages (Apex IPv6)
-            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8000::153' },
-            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8001::153' },
-            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8002::153' },
-            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8003::153' },
+            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8000::153'; Proxied=$true },
+            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8001::153'; Proxied=$true },
+            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8002::153'; Proxied=$true },
+            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8003::153'; Proxied=$true },
             
             # GitHub Pages (WWW)
-            @{ Type='CNAME'; Name='www'; Content=$wwwTarget }
+            @{ Type='CNAME'; Name='www'; Content=$wwwTarget; Proxied=$true }
         )
 
         foreach ($std in $standards) {
@@ -357,6 +388,11 @@ try {
 
             # 1. Check existence (and identify update candidates)
             $stdContent = $std.Content
+            $desiredProxied = $null
+            if ($std.Type -in @('A', 'AAAA', 'CNAME')) {
+                $desiredProxied = $true
+                if ($std.ContainsKey('Proxied')) { $desiredProxied = [bool]$std.Proxied }
+            }
             $candidates = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
 
             $foundRecord = $null
@@ -386,16 +422,25 @@ try {
                     }
                 }
                 'A' {
-                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
+                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }
+                    if (-not $foundRecord -and $candidates) {
+                        $updateCandidate = ($candidates | Where-Object { $_.content -eq $stdContent } | Select-Object -First 1)
+                        if (-not $updateCandidate) { $updateCandidate = $candidates | Select-Object -First 1 }
+                    }
                 }
                 'AAAA' {
-                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
+                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }
+                    if (-not $foundRecord -and $candidates) {
+                        $updateCandidate = ($candidates | Where-Object { $_.content -eq $stdContent } | Select-Object -First 1)
+                        if (-not $updateCandidate) { $updateCandidate = $candidates | Select-Object -First 1 }
+                    }
                 }
                 'CNAME' {
-                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
+                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }
                     if (-not $foundRecord -and $candidates) {
-                        # Prefer updating existing WWW CNAME rather than creating a second one.
-                        $updateCandidate = $candidates | Select-Object -First 1
+                        # Prefer updating existing CNAME rather than creating a second one.
+                        $updateCandidate = ($candidates | Where-Object { $_.content -eq $stdContent } | Select-Object -First 1)
+                        if (-not $updateCandidate) { $updateCandidate = $candidates | Select-Object -First 1 }
                     }
                 }
                 default {
@@ -416,7 +461,7 @@ try {
                         ttl     = 1
                     }
                     if ($std.Type -eq 'MX') { $updatePayload['priority'] = $std.Priority }
-                    if ($std.Type -in @('A', 'CNAME')) { $updatePayload['proxied'] = $true }
+                    if ($std.Type -in @('A', 'AAAA', 'CNAME') -and $null -ne $desiredProxied) { $updatePayload['proxied'] = $desiredProxied }
 
                     if (-not $DryRun) {
                         try {
@@ -442,7 +487,7 @@ try {
                 if ($std.Type -eq 'MX') { $newPayload['priority'] = $std.Priority }
                 # Proxied? Standard FFC: Pages A/CNAME = Proxied? Usually Yes for SSL. 
                 # M365 = No.
-                if ($std.Type -in @('A', 'AAAA', 'CNAME')) { $newPayload['proxied'] = $true }
+                if ($std.Type -in @('A', 'AAAA', 'CNAME') -and $null -ne $desiredProxied) { $newPayload['proxied'] = $desiredProxied }
                 
                 # Name must be FQDN for the API
                 $newPayload['name'] = $recName

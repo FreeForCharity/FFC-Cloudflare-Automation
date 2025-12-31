@@ -27,6 +27,18 @@ The standard set is enforced by `Update-CloudflareDns.ps1 -EnforceStandard`.
 - Apex TXT (`@`) SPF including `include:spf.protection.outlook.com`
 - DMARC TXT (`_dmarc`) starting with `v=DMARC1`
 
+Additional required records:
+
+- CNAME `autodiscover` → `autodiscover.outlook.com` (DNS only)
+- CNAME `enterpriseenrollment` → `enterpriseenrollment-s.manage.microsoft.com` (DNS only)
+- CNAME `enterpriseregistration` → `enterpriseregistration.windows.net` (DNS only)
+- CNAME `lyncdiscover` → `webdir.online.lync.com` (DNS only)
+- CNAME `sip` → `sipdir.online.lync.com` (DNS only)
+- SRV `_sip._tls` → `100 1 443 sipdir.online.lync.com`
+- SRV `_sipfederationtls._tcp` → `100 1 5061 sipfed.online.lync.com`
+
+Note: Cloudflare recommends TXT record content be wrapped in quotation marks. The script enforces quoted TXT content (and for SPF, it preserves existing mechanisms while ensuring quoting) to avoid Cloudflare UI warnings.
+
 Note: for M365 MX, the expected target is computed as `<zone-with-dashes>.mail.protection.outlook.com`.
 
 ### GitHub Pages (apex)

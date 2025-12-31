@@ -40,7 +40,7 @@ body:
         
         DMARC: Configured and managed in Cloudflare using FFC-managed `rua/ruf` mailboxes; enforces alignment and helps prevent spoofing.
         
-        SPF: Authorizes Exchange Online as a permitted sender; prevents softfail. Additional includes (other senders) require prior FFC approval.
+        SPF: Authorizes Exchange Online as a permitted sender; prevents softfail. (NOTE: Other senders require prior FFC approval.)
 
   - type: checkboxes
     id: mandatory_ack

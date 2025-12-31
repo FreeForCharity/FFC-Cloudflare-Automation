@@ -11,6 +11,8 @@ This document captures potential enhancements and improvements for the FFC Cloud
 - [Testing and Validation](#testing-and-validation)
 - [User Experience](#user-experience)
 - [Cross-Platform Support](#cross-platform-support)
+- [Monitoring and Observability](#monitoring-and-observability)
+- [Integration Enhancements](#integration-enhancements)
 
 ## Automation Enhancements
 

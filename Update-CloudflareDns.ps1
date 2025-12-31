@@ -236,14 +236,16 @@ try {
         name    = $RecordName
         content = $Content
         ttl     = $Ttl
-        proxied = $Proxied
     }
+
+    # Only add proxied for record types that support it
+    if ($Type -notin @('MX', 'TXT')) {
+        $payload['proxied'] = $Proxied.IsPresent
+    }
+
+    # Add priority for MX records
     if ($Type -eq 'MX') {
         $payload['priority'] = $Priority
-        $payload.Remove('proxied') # MX cannot be proxied
-    }
-    if ($Type -eq 'TXT') {
-        $payload.Remove('proxied') # TXT cannot be proxied
     }
 
     # Check for matches

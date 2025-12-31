@@ -566,22 +566,28 @@ try {
                             $normalized = Normalize-TxtContent -Value $dmarcCandidate.content
                             $existingRua = Get-DmarcRuaMailtos -DmarcContent $normalized
 
-                            $cloudflareRua = @()
+                            $hasInternalRua = $existingRua -contains $internalRua
+                            $hasCloudflareRua = $false
                             if ($preserveCloudflareRua) {
-                                $cloudflareRua = @($existingRua | Where-Object { $_ -like 'mailto:*@dmarc-reports.cloudflare.net' })
+                                $hasCloudflareRua = [bool]($existingRua | Where-Object { $_ -like 'mailto:*@dmarc-reports.cloudflare.net' } | Select-Object -First 1)
                             }
+                            $isQuoted = Is-TxtQuoted -Value $dmarcCandidate.content
 
-                            $desiredRua = @()
-                            if ($ensureInternalRua) { $desiredRua += $internalRua }
-                            $desiredRua += $cloudflareRua
-
-                            $desiredNormalized = Set-DmarcRuaMailtos -DmarcContent $normalized -RuaMailtos $desiredRua
-                            $desiredQuoted = if ($ensureQuoted) { Quote-TxtContent -Value $desiredNormalized } else { $desiredNormalized }
-
-                            if ($dmarcCandidate.content -ne $desiredQuoted) {
+                            # Only update when needed: missing quotes or missing required internal rua.
+                            if ($ensureQuoted -and -not $isQuoted) {
                                 $updateCandidate = $dmarcCandidate
-                                $stdContent = $desiredQuoted
+                                $stdContent = Quote-TxtContent -Value $normalized
                                 $foundRecord = $null
+                            } elseif ($ensureInternalRua -and -not $hasInternalRua) {
+                                $updateCandidate = $dmarcCandidate
+                                $desiredRua = @($existingRua)
+                                $desiredRua += $internalRua
+                                $desiredNormalized = Set-DmarcRuaMailtos -DmarcContent $normalized -RuaMailtos $desiredRua
+                                $stdContent = if ($ensureQuoted) { Quote-TxtContent -Value $desiredNormalized } else { $desiredNormalized }
+                                $foundRecord = $null
+                            } else {
+                                # Already compliant; do not rewrite just to normalize formatting/order.
+                                $stdContent = $dmarcCandidate.content
                             }
                         } elseif ($candidates) {
                             # Prefer updating an existing _dmarc TXT rather than creating duplicates.

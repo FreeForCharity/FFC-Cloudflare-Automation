@@ -103,10 +103,10 @@ Exports DNS configuration summary for all domains.
 |----------|---------|---------|
 | ci.yml | PRs and pushes to main | Validate PowerShell scripts and check for sensitive files |
 | deploy-pages.yml | Pushes to main, manual | Deploy GitHub Pages site |
-| 1-audit-compliance.yml | Manual | Check DNS compliance for a domain |
-| 2-enforce-standard.yml | Manual | Enforce FFC DNS standards on a domain |
-| 3-manage-record.yml | Manual, issues | Manage individual DNS records |
-| 4-export-summary.yml | Manual | Export DNS configuration summary |
+| 1-audit-compliance.yml | Manual (workflow_dispatch) | Report: Check DNS compliance |
+| 2-enforce-standard.yml | Manual (workflow_dispatch) | Fix: Enforce standard DNS configuration |
+| 3-manage-record.yml | Manual (workflow_dispatch) | Manual: Manage a single DNS record |
+| 4-export-summary.yml | Manual (workflow_dispatch) | Report: Export all domains summary |
 
 ## Current Workflow
 

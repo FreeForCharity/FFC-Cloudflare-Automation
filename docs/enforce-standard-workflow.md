@@ -41,8 +41,9 @@ Note: Cloudflare recommends TXT record content be wrapped in quotation marks. Th
 
 DMARC monitoring note:
 
-- If Cloudflare DMARC Management is enabled for a zone, Cloudflare may add a per-zone `rua` recipient at `@dmarc-reports.cloudflare.net`.
-- The script preserves any existing Cloudflare `rua` recipients and always ensures the internal recipient `mailto:dmarc-rua@freeforcharity.org` is also present.
+- If Cloudflare DMARC Management is enabled for a zone, Cloudflare may add a per-zone `rua` recipient like `mailto:<zone-specific>@dmarc-reports.cloudflare.net`.
+- The script always requires the internal `rua` recipient `mailto:dmarc-rua@freeforcharity.org`.
+- Cloudflare `rua` is optional: the audit warns if it’s not detected, but Enforce will not remove it when present.
 Note: for M365 MX, the expected target is computed as `<zone-with-dashes>.mail.protection.outlook.com`.
 
 ### GitHub Pages (apex)

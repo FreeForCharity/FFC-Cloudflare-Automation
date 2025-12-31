@@ -407,17 +407,22 @@ try {
             $ruaMailtos = Get-DmarcRuaMailtos -DmarcContent $normalizedDmarc
 
             $hasInternalRua = $ruaMailtos -contains 'mailto:dmarc-rua@freeforcharity.org'
-            $hasCloudflareRua = $ruaMailtos | Where-Object { $_ -like 'mailto:*@dmarc-reports.cloudflare.net' }
+            $hasCloudflareRua = [bool]($ruaMailtos | Where-Object { $_ -like 'mailto:*@dmarc-reports.cloudflare.net' } | Select-Object -First 1)
 
             $quotedDmarc = $dmarcValid | Where-Object { Is-TxtQuoted -Value $_.content }
             $quotedOk = [bool]$quotedDmarc
 
-            if ($hasInternalRua -and $hasCloudflareRua -and $quotedOk) {
-                Write-Host "[OK] DMARC Record found (quoted, Cloudflare+internal rua)" -ForegroundColor Green
+            if ($hasInternalRua -and $quotedOk) {
+                if ($hasCloudflareRua) {
+                    Write-Host "[OK] DMARC Record found (quoted, internal+Cloudflare rua)" -ForegroundColor Green
+                } else {
+                    Write-Host "[OK] DMARC Record found (quoted, internal rua only)" -ForegroundColor Green
+                    Write-Warning "[OPTIONAL] DMARC Record has no Cloudflare rua; enable Cloudflare DMARC Management to add it"
+                }
             } else {
                 if (-not $quotedOk) { Write-Warning "[DIFFERS] DMARC Record found but not quoted (Cloudflare UI warning)" }
                 if (-not $hasInternalRua) { Write-Warning "[DIFFERS] DMARC Record missing internal rua (mailto:dmarc-rua@freeforcharity.org)" }
-                if (-not $hasCloudflareRua) { Write-Warning "[INFO] DMARC Record has no Cloudflare rua; enable Cloudflare DMARC Management to add it" }
+                if (-not $hasCloudflareRua) { Write-Warning "[OPTIONAL] DMARC Record has no Cloudflare rua; enable Cloudflare DMARC Management to add it" }
             }
         }
         else { Write-Warning "[MISSING] DMARC Record (_dmarc.$Zone)" }

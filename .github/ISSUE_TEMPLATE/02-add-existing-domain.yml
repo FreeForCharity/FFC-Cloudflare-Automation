@@ -1,0 +1,160 @@
+name: Add Existing Domain to Cloudflare
+description: Request to add an existing domain to the Cloudflare account
+title: "[ADD DOMAIN] "
+labels: ["domain-add", "cloudflare"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Add Existing Domain Request
+        Use this template to request adding an existing domain to the FFC Cloudflare account.
+
+  - type: input
+    id: domain_name
+    attributes:
+      label: Domain Name
+      description: Enter the existing domain name
+      placeholder: "existing-domain.org"
+    validations:
+      required: true
+
+  - type: input
+    id: current_registrar
+    attributes:
+      label: Current Registrar
+      description: Where is the domain currently registered?
+      placeholder: "Namecheap, Google Domains, GoDaddy, etc."
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: ownership
+    attributes:
+      label: Domain Ownership Verification
+      options:
+        - label: I confirm I have ownership/administrative access to this domain
+          required: true
+
+  - type: input
+    id: registrar_email
+    attributes:
+      label: Registrar Account Email
+      description: Email associated with the domain registrar account
+      placeholder: "admin@example.com"
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_usage
+    attributes:
+      label: Current Domain Usage
+      description: Describe how the domain is currently being used
+    validations:
+      required: true
+
+  - type: textarea
+    id: reason
+    attributes:
+      label: Reason for Adding to Cloudflare
+      description: Explain why you want to move this domain to Cloudflare
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: existing_records
+    attributes:
+      label: Current DNS Records Status
+      options:
+        - label: No existing records (new domain)
+        - label: Existing records need to be migrated (list in Critical DNS Records below)
+
+  - type: textarea
+    id: critical_dns
+    attributes:
+      label: Critical DNS Records to Preserve
+      description: List any existing DNS records that must be maintained
+      placeholder: |
+        Example:
+        - A record: example.org -> 203.0.113.42
+        - CNAME: www.example.org -> example.org
+        - MX records for email
+        - TXT records for verification
+
+  - type: checkboxes
+    id: new_config
+    attributes:
+      label: New Configuration Needed
+      description: Select all that apply
+      options:
+        - label: Point to GitHub Pages (apex domain)
+        - label: Point to GitHub Pages (subdomain)
+        - label: Migrate existing DNS configuration
+        - label: Custom DNS configuration (specify in notes below)
+
+  - type: input
+    id: migration_date
+    attributes:
+      label: Preferred Migration Date/Time
+      description: When should the domain be migrated?
+      placeholder: "YYYY-MM-DD or ASAP"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: downtime_acceptable
+    attributes:
+      label: Is Downtime Acceptable?
+      options:
+        - "No - zero downtime required"
+        - "Yes - brief downtime acceptable"
+        - "Yes - extended downtime acceptable (explain in notes)"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: post_migration
+    attributes:
+      label: Post-Migration Actions Required
+      description: Check all that apply
+      options:
+        - label: Update nameservers at registrar
+        - label: Configure DNS records
+        - label: Configure SSL/TLS settings
+        - label: Verify email functionality (if applicable)
+        - label: Test website functionality
+        - label: Enable DNSSEC
+
+  - type: textarea
+    id: additional_notes
+    attributes:
+      label: Additional Notes
+      description: Any special requirements, dependencies, or concerns
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        ## For Administrator Use
+        
+        ### Pre-Migration Checklist
+        - [ ] Domain ownership verified
+        - [ ] Current DNS records exported/documented
+        - [ ] Migration plan approved
+        - [ ] Stakeholders notified
+        
+        ### Migration Steps
+        1. [ ] Add domain to Cloudflare account via Dashboard
+        2. [ ] Review and configure DNS records
+        3. [ ] Configure Cloudflare settings (SSL/TLS, etc.)
+        4. [ ] Update nameservers at registrar
+        5. [ ] Wait for DNS propagation (up to 24-48 hours)
+        6. [ ] Verify domain is working correctly
+        
+        ### Verification
+        - [ ] Domain added to Cloudflare account
+        - [ ] DNS records migrated and verified
+        - [ ] Nameservers updated at registrar
+        - [ ] Website accessible via HTTPS
+        - [ ] All subdomains working
+        - [ ] Email functioning (if applicable)
+        - [ ] SSL/TLS configured correctly

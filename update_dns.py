@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""One-time Cloudflare DNS updater for staging.clarkemoyer.com
+"""Flexible Cloudflare DNS updater for managing DNS records across multiple domains
 
 Usage examples:
-  python update_dns.py --ip 203.0.113.42
-  CLOUDFLARE_API_TOKEN=tokenvalue python update_dns.py --ip 203.0.113.42
-  python update_dns.py --ip 203.0.113.42 --dry-run
+  python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
+  python update_dns.py --zone example.org --name www --type CNAME --target example.org
+  python update_dns.py --zone example.org --name @ --type AAAA --ip 2606:50c0:8000::153
+  python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --dry-run
+  python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --no-proxy
 
 Prompts for Cloudflare API token if not provided via env var CLOUDFLARE_API_TOKEN or --token argument.
 
@@ -21,9 +23,6 @@ from typing import Optional, List
 import requests
 
 API_BASE = "https://api.cloudflare.com/client/v4"
-ROOT_DOMAIN = "clarkemoyer.com"
-SUBDOMAIN = "staging"
-FULL_NAME = f"{SUBDOMAIN}.{ROOT_DOMAIN}"
 
 class CloudflareError(Exception):
     pass
@@ -116,11 +115,12 @@ def update_or_create_cname(token: str, zone_id: str, name: str, target: str, dry
         created = api_post(f"/zones/{zone_id}/dns_records", token, payload_template)
         return {"message": "CNAME record created", "result": created.get("result")}
 
-def update_or_create_records(token: str, zone_id: str, name: str, new_ip: str, dry_run: bool, proxied: bool) -> dict:
-    existing_records = get_dns_records(token, zone_id, name)
+def update_or_create_records(token: str, zone_id: str, name: str, new_ip: str, dry_run: bool, proxied: bool, record_type: str = "A") -> dict:
+    """Update or create A or AAAA records."""
+    existing_records = get_dns_records(token, zone_id, name, record_type=record_type)
     results = []
     payload_template = {
-        "type": "A",
+        "type": record_type,
         "name": name,
         "content": new_ip,
         "ttl": 120,
@@ -142,36 +142,43 @@ def update_or_create_records(token: str, zone_id: str, name: str, new_ip: str, d
         return {"message": "Existing records processed", "count": len(existing_records), "details": results}
     else:
         if dry_run:
-            return {"message": "DRY-RUN would CREATE new record", "proposed": payload_template}
+            return {"message": f"DRY-RUN would CREATE new {record_type} record", "proposed": payload_template}
         created = api_post(f"/zones/{zone_id}/dns_records", token, payload_template)
-        return {"message": "Record created", "result": created.get("result")}
+        return {"message": f"{record_type} record created", "result": created.get("result")}
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Cloudflare DNS record management tool for clarkemoyer.com",
+        description="Cloudflare DNS record management tool for multiple domains",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent(
             """Examples:
-  # Update A record for staging subdomain
-  python update_dns.py --name staging --type A --ip 203.0.113.42
+  # Update A record
+  python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
+  
+  # Update AAAA record (IPv6)
+  python update_dns.py --zone example.org --name @ --type AAAA --ip 2606:50c0:8000::153
   
   # Update CNAME record
-  python update_dns.py --name www --type CNAME --target example.com
+  python update_dns.py --zone example.org --name www --type CNAME --target example.org
   
   # Search for records
-  python update_dns.py --name staging --type A --search
+  python update_dns.py --zone example.org --name staging --type A --search
   
   # Delete a specific record
-  python update_dns.py --record-id abc123 --delete
+  python update_dns.py --zone example.org --record-id abc123 --delete
   
   # Dry run
-  python update_dns.py --name staging --type A --ip 203.0.113.42 --dry-run"""
+  python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --dry-run
+  
+  # Disable proxy (DNS only mode)
+  python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --no-proxy"""
         ),
     )
-    parser.add_argument("--name", help="Subdomain name (e.g., 'staging' for staging.clarkemoyer.com)")
-    parser.add_argument("--type", choices=["A", "CNAME"], help="DNS record type")
-    parser.add_argument("--ip", help="New IPv4 address for A records")
+    parser.add_argument("--zone", required=True, help="Domain/zone name (e.g., 'example.org')")
+    parser.add_argument("--name", help="Record name (use '@' for apex/root, or subdomain like 'staging')")
+    parser.add_argument("--type", choices=["A", "AAAA", "CNAME"], help="DNS record type")
+    parser.add_argument("--ip", help="IPv4 address for A records or IPv6 address for AAAA records")
     parser.add_argument("--target", help="Target domain for CNAME records")
     parser.add_argument("--record-id", help="Specific record ID for deletion")
     parser.add_argument("--search", action="store_true", help="Search and display existing records")
@@ -179,6 +186,7 @@ def parse_args():
     parser.add_argument("--token", help="Cloudflare API token (if omitted, env var or prompt used)")
     parser.add_argument("--dry-run", action="store_true", help="Show intended changes without applying")
     parser.add_argument("--proxied", action="store_true", help="Enable Cloudflare proxy (orange cloud) on the record(s)")
+    parser.add_argument("--no-proxy", action="store_true", help="Explicitly disable Cloudflare proxy (DNS only mode)")
     return parser.parse_args()
 
 
@@ -192,11 +200,15 @@ def retrieve_token(arg_token: Optional[str]) -> str:
     return getpass.getpass("Enter Cloudflare API Token: ").strip()
 
 
-def validate_ip(ip: str) -> None:
+def validate_ip(ip: str, record_type: str) -> None:
+    """Validate IP address based on record type."""
     try:
-        ipaddress.IPv4Address(ip)
-    except ipaddress.AddressValueError as e:
-        raise SystemExit(f"Invalid IPv4 address '{ip}': {e}")
+        if record_type == "A":
+            ipaddress.IPv4Address(ip)
+        elif record_type == "AAAA":
+            ipaddress.IPv6Address(ip)
+    except (ipaddress.AddressValueError, ValueError) as e:
+        raise SystemExit(f"Invalid {record_type} address '{ip}': {e}")
 
 
 def main():
@@ -216,14 +228,21 @@ def main():
         if not args.name or not args.type:
             print("--name and --type required for update/create", file=sys.stderr)
             sys.exit(2)
-        if args.type == "A" and not args.ip:
-            print("--ip required for A records", file=sys.stderr)
+        if args.type in ["A", "AAAA"] and not args.ip:
+            print(f"--ip required for {args.type} records", file=sys.stderr)
             sys.exit(2)
         if args.type == "CNAME" and not args.target:
             print("--target required for CNAME records", file=sys.stderr)
             sys.exit(2)
-        if args.type == "A":
-            validate_ip(args.ip)
+        if args.type in ["A", "AAAA"]:
+            validate_ip(args.ip, args.type)
+    
+    # Handle --no-proxy flag (takes precedence over --proxied)
+    if args.no_proxy and args.proxied:
+        print("--no-proxy and --proxied are mutually exclusive", file=sys.stderr)
+        sys.exit(2)
+    
+    proxied = args.proxied and not args.no_proxy
     
     token = retrieve_token(args.token)
     if not token:
@@ -231,8 +250,14 @@ def main():
         sys.exit(2)
     
     try:
-        zone_id = get_zone_id(token, ROOT_DOMAIN)
-        full_name = f"{args.name}.{ROOT_DOMAIN}" if args.name else None
+        zone_id = get_zone_id(token, args.zone)
+        # Handle @ for apex domain or construct full name
+        if args.name == "@":
+            full_name = args.zone
+        elif args.name:
+            full_name = f"{args.name}.{args.zone}"
+        else:
+            full_name = None
         
         # Handle deletion
         if args.delete:
@@ -259,10 +284,10 @@ def main():
             return
         
         # Handle update/create
-        if args.type == "A":
-            result = update_or_create_records(token, zone_id, full_name, args.ip, args.dry_run, args.proxied)
+        if args.type in ["A", "AAAA"]:
+            result = update_or_create_records(token, zone_id, full_name, args.ip, args.dry_run, proxied, args.type)
         else:  # CNAME
-            result = update_or_create_cname(token, zone_id, full_name, args.target, args.dry_run, args.proxied)
+            result = update_or_create_cname(token, zone_id, full_name, args.target, args.dry_run, proxied)
         
         print(result["message"])
         if "result" in result:

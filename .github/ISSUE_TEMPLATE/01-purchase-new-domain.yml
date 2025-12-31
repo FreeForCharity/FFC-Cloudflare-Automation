@@ -1,0 +1,119 @@
+name: Purchase and Add New .org Domain
+description: Request to purchase and add a new .org domain to the Cloudflare account
+title: "[DOMAIN PURCHASE] "
+labels: ["domain-purchase", "cloudflare"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Domain Purchase Request
+        Use this template to request the purchase and addition of a new .org domain to the FFC Cloudflare account.
+
+  - type: input
+    id: domain_name
+    attributes:
+      label: Domain Name
+      description: Enter the exact domain name you want to purchase
+      placeholder: "example.org"
+    validations:
+      required: true
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Purpose
+      description: Describe the purpose of this domain and how it will be used
+      placeholder: "This domain will be used for..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: project_details
+    attributes:
+      label: Project Details
+      description: Provide details about the project or initiative this domain will support
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: dns_config
+    attributes:
+      label: DNS Configuration Needed
+      description: Select all that apply
+      options:
+        - label: Point to GitHub Pages (apex domain)
+        - label: Point to GitHub Pages (subdomain)
+        - label: Custom DNS configuration (specify in Additional DNS Records below)
+        - label: Standard FFC configuration
+
+  - type: textarea
+    id: additional_dns
+    attributes:
+      label: Additional DNS Records
+      description: List any specific DNS records needed (A, CNAME, MX, TXT, etc.)
+      placeholder: |
+        Example:
+        - A record: @ -> 203.0.113.42
+        - CNAME: www -> example.org
+
+  - type: checkboxes
+    id: authorization
+    attributes:
+      label: Budget and Authorization
+      description: Confirm authorization for domain purchase
+      options:
+        - label: I confirm this purchase has been approved
+          required: true
+
+  - type: input
+    id: timeline
+    attributes:
+      label: Timeline
+      description: When is this domain needed?
+      placeholder: "ASAP or specific date"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: post_purchase
+    attributes:
+      label: Post-Purchase Actions Required
+      description: Check all that apply
+      options:
+        - label: Configure nameservers to Cloudflare
+        - label: Set up DNS records
+        - label: Configure SSL/TLS settings
+        - label: Enable DNSSEC
+
+  - type: textarea
+    id: additional_notes
+    attributes:
+      label: Additional Notes
+      description: Any other relevant information
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        ## For Administrator Use
+        
+        ### Pre-Purchase Checklist
+        - [ ] Domain availability confirmed
+        - [ ] Budget approved
+        - [ ] Domain aligns with FFC mission and policies
+        - [ ] No trademark or legal concerns
+        
+        ### Purchase Steps
+        1. [ ] Purchase domain from registrar (e.g., Namecheap, Google Domains)
+        2. [ ] Add domain to Cloudflare account
+        3. [ ] Update nameservers at registrar to Cloudflare's nameservers
+        4. [ ] Configure DNS records as requested
+        5. [ ] Enable security settings (SSL/TLS, DNSSEC)
+        6. [ ] Verify domain is working correctly
+        7. [ ] Document domain in inventory
+        
+        ### Verification
+        - [ ] Domain added to Cloudflare
+        - [ ] DNS records configured
+        - [ ] SSL/TLS working
+        - [ ] Domain resolves correctly

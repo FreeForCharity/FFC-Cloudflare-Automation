@@ -1,0 +1,156 @@
+name: Remove Domain from Cloudflare
+description: Request to remove a domain from the Cloudflare account
+title: "[REMOVE DOMAIN] "
+labels: ["domain-remove", "cloudflare"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Remove Domain Request
+        Use this template to request removal of a domain from the FFC Cloudflare account.
+
+  - type: input
+    id: domain_name
+    attributes:
+      label: Domain Name
+      description: Enter the domain name to be removed
+      placeholder: "domain-to-remove.org"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reason
+    attributes:
+      label: Reason for Removal
+      description: Explain why this domain should be removed from Cloudflare
+    validations:
+      required: true
+
+  - type: dropdown
+    id: domain_status
+    attributes:
+      label: Domain Status
+      description: Select the current status of the domain
+      options:
+        - Domain is active and will continue to be used elsewhere
+        - Domain is being transferred to another Cloudflare account
+        - Domain is being retired/deprecated
+        - Domain has expired or will not be renewed
+        - Other (specify in notes)
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: data_backup
+    attributes:
+      label: Data Backup Requirements
+      description: What data needs to be preserved before removal?
+      options:
+        - label: Export DNS records
+        - label: Export analytics data
+        - label: Export firewall rules
+        - label: Export page rules
+        - label: Export SSL certificates
+        - label: No data backup needed
+
+  - type: input
+    id: new_provider
+    attributes:
+      label: New DNS Provider
+      description: If moving to another provider, specify which one
+      placeholder: "Route 53, Google Cloud DNS, etc."
+
+  - type: textarea
+    id: new_nameservers
+    attributes:
+      label: New Nameservers
+      description: If applicable, provide the new nameservers
+      placeholder: |
+        ns1.example.com
+        ns2.example.com
+
+  - type: textarea
+    id: critical_records
+    attributes:
+      label: Critical DNS Records to Preserve
+      description: List any DNS records that must be maintained during transition
+      placeholder: |
+        Example:
+        - A record: example.org -> 203.0.113.42
+        - CNAME: www -> example.org
+        - MX records for email
+        - TXT records for verification (SPF, DKIM, etc.)
+
+  - type: input
+    id: remove_by
+    attributes:
+      label: Remove By Date
+      description: When should this domain be removed?
+      placeholder: "YYYY-MM-DD"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: downtime_acceptable
+    attributes:
+      label: Is Downtime Acceptable?
+      options:
+        - "No - must maintain uptime"
+        - "Yes - specify acceptable downtime window in notes"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: pre_removal
+    attributes:
+      label: Pre-Removal Actions Required
+      description: Check all that apply
+      options:
+        - label: Update nameservers at registrar to new provider
+        - label: Wait for DNS propagation (24-48 hours)
+        - label: Verify domain works with new provider
+        - label: Notify stakeholders
+        - label: Update documentation
+
+  - type: textarea
+    id: additional_notes
+    attributes:
+      label: Additional Notes
+      description: Any special considerations, dependencies, or concerns
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        ## For Administrator Use
+        
+        ### Pre-Removal Checklist
+        - [ ] Removal reason documented and approved
+        - [ ] Data backup completed (if requested)
+        - [ ] New DNS provider configured (if applicable)
+        - [ ] Nameservers updated at registrar (if applicable)
+        - [ ] Stakeholders notified
+        - [ ] Grace period allowed for DNS propagation
+        
+        ### Data Export Commands
+        ```bash
+        # Export DNS records to CSV
+        python export_zone_dns_summary.py --zones [domain-name] --output [domain-name]_backup.csv
+        
+        # Export all A records
+        python export_zone_a_records.py --zones [domain-name] --output [domain-name]_a_records.csv
+        ```
+        
+        ### Removal Steps
+        1. [ ] Verify nameservers have been changed at registrar
+        2. [ ] Wait for DNS propagation confirmation
+        3. [ ] Remove domain from Cloudflare Dashboard
+        4. [ ] Verify removal and domain still resolves with new provider
+        
+        ### Post-Removal Verification
+        - [ ] Domain removed from Cloudflare account
+        - [ ] Domain resolves with new DNS provider
+        - [ ] Website still accessible
+        - [ ] Email still functioning (if applicable)
+        - [ ] All critical services operational
+        - [ ] Documentation updated

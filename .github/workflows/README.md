@@ -1,6 +1,6 @@
 # GitHub Actions Workflows
 
-This repository uses GitHub Actions workflows to ensure code quality, security, and infrastructure validation.
+This repository uses GitHub Actions workflows to ensure code quality, security, and support DNS management operations.
 
 ## ci.yml - Continuous Integration
 
@@ -14,18 +14,20 @@ Runs automated validation and security checks on all pull requests and pushes to
 
 **Validate Repository Job:**
 1. Checks out the code
-2. Sets up Terraform CLI (v1.6.0)
-3. Runs Terraform format check (`terraform fmt -check -recursive`)
-4. Initializes Terraform (if Terraform files exist)
-5. Validates Terraform configuration (if Terraform files exist)
+2. Sets up Terraform CLI (v1.6.0) - for legacy file validation
+3. Runs Terraform format check (`terraform fmt -check -recursive`) on legacy files
+4. Initializes Terraform (if Terraform files exist) - legacy validation
+5. Validates Terraform configuration (if Terraform files exist) - legacy validation
 6. Scans for accidentally committed sensitive files (*.tfvars, *.pem, *.key, .env)
 7. Verifies README.md exists
 
 This workflow ensures that:
-- Terraform code follows proper formatting standards
-- Infrastructure configurations are valid
+- Legacy Terraform code follows proper formatting standards
+- Infrastructure configurations remain valid
 - No sensitive data is accidentally committed
 - Documentation exists
+
+**Note**: Terraform validation is maintained for legacy files but is not the active deployment method.
 
 ## codeql-analysis.yml - Security Scanning
 
@@ -60,8 +62,20 @@ This workflow helps identify security vulnerabilities early in the development p
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| ci.yml | PRs and pushes to main | Validate Terraform and check for sensitive files |
+| ci.yml | PRs and pushes to main | Validate configurations and check for sensitive files |
 | codeql-analysis.yml | PRs, pushes to main, and weekly | Security vulnerability scanning |
+| dns-summary-export.yml | Manual (workflow_dispatch) | Export DNS configuration summaries |
+
+## Current Workflow
+
+This repository uses an **issue-based workflow** for domain management:
+
+1. **Users** submit requests using GitHub issue templates
+2. **Administrators** review requests and execute DNS changes using:
+   - Python scripts (update_dns.py, export_zone_dns_summary.py)
+   - Cloudflare API
+   - GitHub Actions workflows for exports and automation
+3. **Changes are tracked** via GitHub issues for full audit trail
 
 ## Required Setup
 
@@ -82,7 +96,10 @@ No additional setup is required for these workflows to run. However, to get the 
 ## Best Practices
 
 - Never commit sensitive data like API keys, passwords, or private keys
-- Use Terraform variables and environment variables for sensitive values
+- Use environment variables or GitHub Secrets for sensitive values
 - Review the `.gitignore` file to ensure sensitive files are excluded
-- Keep Terraform formatting consistent using `terraform fmt`
+- Keep code formatting consistent using `terraform fmt` (for legacy files)
 - Address security alerts from CodeQL promptly
+- Use issue templates for all domain management requests
+- Document DNS changes in the corresponding GitHub issue
+- Test DNS changes with dry-run mode before applying

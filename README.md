@@ -9,135 +9,133 @@ Automation utilities for Cloudflare tasks supporting Free For Charity.
 
 View our automation tracking page: [FFC Cloudflare Automation Tracker](https://freeforcharity.github.io/FFC-Cloudflare-Automation-/)
 
-The static site provides an overview of the Terraform automation, current status, key features, and helpful resources.
+The static site provides an overview of the automation, current status, key features, and helpful resources.
 
 ## Overview
 
-This repository contains Infrastructure as Code (IaC) using Terraform to manage FreeForCharity's Cloudflare configuration and infrastructure, as well as Python utilities for DNS management.
+This repository contains automation utilities and scripts for managing Free For Charity's Cloudflare DNS configuration. Administrators execute DNS changes based on structured issue requests, using either the Cloudflare Dashboard for manual updates or Python scripts and Cloudflare API tools for automated, consistent, and auditable domain management.
 
 ## Features
 
-### Terraform Infrastructure
-- **Infrastructure as Code**: Declarative Cloudflare configuration using Terraform
-- **GitHub Pages Integration**: Automated DNS setup for custom domains
-- **SSL/TLS Management**: Automated security configuration
-- **Multiple Deployment Methods**: Local Terraform or GitHub Actions
-- **Automated Security Scanning**: CodeQL, tfsec, Checkov, and Trivy
-- **Continuous Validation**: Automated Terraform validation and formatting checks
-- **Version Control**: Full audit trail of infrastructure changes
+### Issue-Based Workflow
+- **Structured Requests**: Use GitHub issue templates for domain management requests
+- **Automated Tracking**: All DNS changes tracked via GitHub issues
+- **Administrator Execution**: FFC Cloudflare administrators execute changes based on approved issues
+- **Full Audit Trail**: Complete history of all domain operations
+- **Standardized Procedures**: Consistent workflows for common operations
 
 ### DNS Management Utilities
-- **Python Script**: Flexible DNS record management for `clarkemoyer.com` zone
+- **Python Scripts**: Flexible DNS record management using Cloudflare API
 - **Create, update, search, and delete** DNS records
-- **Supports A and CNAME** record types
-- **Dry-run mode** to preview changes
-- **Cloudflare proxy** (orange cloud) support
-- **Secure token handling** via environment variable, argument, or prompt
-- **PowerShell Alternative**: Quick staging subdomain updates
+- **Supports A, AAAA, and CNAME** record types for GitHub Pages configuration
+- **Dry-run mode** to preview changes before execution
+- **Cloudflare proxy** (orange cloud) support with explicit --no-proxy flag
+- **Secure token handling** via environment variables
+- **Export Tools**: Export DNS configurations for backup and analysis
+- **Manual Option**: Administrators can also use Cloudflare Dashboard for manual DNS updates
+
+### Supported Operations
+1. **Purchase and add new .org domains** to the Cloudflare account
+2. **Add existing domains** to Cloudflare from other providers
+3. **Remove domains** from the Cloudflare account
+4. **Configure GitHub Pages** for apex domains (e.g., example.org)
+5. **Configure GitHub Pages** for subdomains (e.g., staging.example.org)
 
 ## Quick Start
 
-### For Staging DNS Updates
+### Requesting DNS Changes
 
-The simplest way to update DNS records for `staging.clarkemoyer.com`:
+To request a DNS change or domain operation:
+
+1. Go to the [Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues/new/choose) page
+2. Select the appropriate issue template:
+   - **Purchase and Add New .org Domain** - For new domain acquisitions
+   - **Add Existing Domain to Cloudflare** - For migrating domains
+   - **Remove Domain from Cloudflare** - For domain removal
+   - **Configure Apex Domain for GitHub Pages** - For root domain setup
+   - **Configure Subdomain for GitHub Pages** - For subdomain setup
+3. Fill out all required information in the template
+4. Submit the issue
+5. An administrator will review and execute the request
+
+### For Administrators: Executing DNS Changes
+
+The simplest way to update DNS records using the Python utilities:
 
 ```bash
 # Install dependencies (first time only)
 pip install -r requirements.txt
 
-# Update staging subdomain IP address
-python update_dns.py --name staging --type A --ip 203.0.113.42
+# Update DNS record (example: staging subdomain)
+python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
 ```
 
 You'll be prompted for your Cloudflare API token, or you can set it as an environment variable:
 
 ```bash
 export CLOUDFLARE_API_TOKEN="your_token_here"
-python update_dns.py --name staging --type A --ip 203.0.113.42
+python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
 ```
 
 **👉 [See detailed staging subdomain guide →](STAGING_README.md)**
 
-### For Terraform Automation
-
-**Quick setup in 5 steps:**
-
-1. Clone and configure:
-   ```bash
-   git clone https://github.com/FreeForCharity/FFC-Cloudflare-Automation-.git
-   cd FFC-Cloudflare-Automation-
-   cp terraform.tfvars.example terraform.tfvars
-   ```
-
-2. Edit `terraform.tfvars` with your values
-
-3. Initialize Terraform:
-   ```bash
-   terraform init
-   ```
-
-4. Apply configuration:
-   ```bash
-   terraform apply
-   ```
-
-5. Configure GitHub Pages custom domain
-
-**👉 [See full setup guide →](SETUP_GUIDE.md)**  
-**👉 [See quick start guide →](QUICK_START.md)**
-
 ## Prerequisites
 
-### For Terraform
-- [Terraform](https://www.terraform.io/downloads.html) (v1.6.0 or later)
-- [Git](https://git-scm.com/downloads)
-- Cloudflare account with domain added
-- Cloudflare API token with DNS permissions
+### For DNS Script Execution (Administrators)
+- Python 3.9+ 
+- PowerShell 5.1+ (optional, for `Update-StagingDns.ps1`)
+- Cloudflare API token with DNS edit permissions
+- Access to FFC Cloudflare account
 
-### For DNS Scripts
-- Python 3.9+ (for `update_dns.py`)
-- PowerShell 5.1+ (for `Update-StagingDns.ps1`)
-- Cloudflare API token
+## DNS Management Tools
 
-## DNS Management Tool
-
-The `update_dns.py` script provides flexible DNS record management for the `clarkemoyer.com` zone.
+The Python scripts in this repository provide flexible DNS record management for FFC domains.
 
 ### Basic Examples
 
 **Update or create an A record:**
 ```bash
-python update_dns.py --name staging --type A --ip 203.0.113.42
+python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
+```
+
+**Update or create an AAAA record (IPv6):**
+```bash
+python update_dns.py --zone example.org --name @ --type AAAA --ip 2606:50c0:8000::153
 ```
 
 **Update or create a CNAME record:**
 ```bash
-python update_dns.py --name www --type CNAME --target example.com
+python update_dns.py --zone example.org --name www --type CNAME --target example.org
 ```
 
 **Search for existing records:**
 ```bash
-python update_dns.py --name staging --type A --search
+python update_dns.py --zone example.org --name staging --type A --search
 ```
 
 **Delete a specific record:**
 ```bash
-python update_dns.py --record-id abc123xyz --delete
+python update_dns.py --zone example.org --record-id abc123xyz --delete
 ```
 
 **Enable Cloudflare proxy (orange cloud):**
 ```bash
-python update_dns.py --name staging --type A --ip 203.0.113.42 --proxied
+python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --proxied
+```
+
+**Disable Cloudflare proxy (DNS only - required for GitHub Pages):**
+```bash
+python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --no-proxy
 ```
 
 **Dry run (preview changes without applying):**
 ```bash
-python update_dns.py --name staging --type A --ip 203.0.113.42 --dry-run
+python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --dry-run
 ```
 
 ### PowerShell Alternative
 
-For staging subdomain updates only:
+For quick subdomain updates:
 
 ```powershell
 ./Update-StagingDns.ps1 -NewIp 203.0.113.42
@@ -145,47 +143,32 @@ For staging subdomain updates only:
 
 **👉 [See PowerShell details in staging guide →](STAGING_README.md)**
 
-## Terraform Deployment Methods
+## GitHub Pages DNS Configuration
 
-This repository supports **two deployment approaches**:
+For configuring GitHub Pages with custom domains, please use the appropriate issue template:
+- **Apex domain** (e.g., example.org): Use the "Configure Apex Domain for GitHub Pages" template
+- **Subdomain** (e.g., staging.example.org): Use the "Configure Subdomain for GitHub Pages" template
 
-### Option 1: GitHub Actions (Recommended for Teams) 🚀
+The issue templates provide step-by-step instructions for administrators to configure DNS records correctly.
 
- 
-## GitHub Pages Custom Domain (ffcworkingsite1.org)
+### Quick Reference: GitHub Pages Setup
 
-Use `update_pages_dns.py` to configure Cloudflare DNS so `ffcworkingsite1.org` points to your GitHub Pages site via CNAME records (Cloudflare CNAME flattening supports apex CNAME).
-
-### Steps
-- Decide the GitHub Pages host to target (e.g., `freeforcharity.github.io` for org/user Pages).
-- Run the script with your Cloudflare API token.
-
-```powershell
-# Install deps and activate venv if needed
-python -m venv .venv; .\.venv\Scripts\activate; pip install -r requirements.txt
-
-# Set token and perform a dry run
-$env:CLOUDFLARE_API_TOKEN = "<your_cf_api_token>"
-python update_pages_dns.py --pages-host freeforcharity.github.io --dry-run
-
-# Apply changes
-python update_pages_dns.py --pages-host freeforcharity.github.io
+**For Apex Domains:**
+```bash
+# GitHub Pages requires 4 A records pointing to these IPs:
+# 185.199.108.153
+# 185.199.109.153
+# 185.199.110.153
+# 185.199.111.153
 ```
 
-This will:
-- Create/Update `ffcworkingsite1.org` CNAME -> `freeforcharity.github.io` (proxied=false)
-- Create/Update `www.ffcworkingsite1.org` CNAME -> `freeforcharity.github.io` (proxied=false)
-
-### Configure GitHub Pages
-- In your repository: Settings → Pages → Custom domain → enter `ffcworkingsite1.org`.
-- Ensure the repo contains a `CNAME` file with `ffcworkingsite1.org` (GitHub may add it automatically).
-
-### Verify
-```powershell
-nslookup ffcworkingsite1.org
-nslookup www.ffcworkingsite1.org
+**For Subdomains:**
+```bash
+# Create CNAME record pointing to GitHub Pages
+# Example: staging.example.org -> username.github.io
 ```
-Propagation may take several minutes. If GitHub Pages reports DNS check warnings, wait and retry.
+
+See the issue templates for detailed configuration instructions.
 
 ## DNS Summary Export
 
@@ -240,68 +223,49 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 	- Provide `zones` input to target specific zones, or set `all_zones=true` to export everything accessible to the token.
 	- The workflow prefers `CLOUDFLARE_API_KEY_READ_ALL` and falls back to `CLOUDFLARE_API_KEY_DNS_ONLY`.
 
- 
-Use GitHub Secrets and automated workflows for secure, team-based deployments.
-
-**Benefits**:
-- ✅ Token stored securely in GitHub Secrets (encrypted)
-- ✅ No credentials on local machines
-- ✅ Automated PR validation with Terraform plans
-- ✅ Audit trail of all deployments
-- ✅ Team collaboration without sharing tokens
-
-**👉 [See GitHub Actions setup guide →](GITHUB_ACTIONS.md)**
-
-### Option 2: Local Terraform (For Individual Development)
-
-Use local `terraform.tfvars` file for manual deployments.
-
-**Benefits**:
-- ✅ Simple setup for individual developers
-- ✅ Direct control over deployments
-- ✅ Good for learning and testing
-
-**👉 [See setup guide →](SETUP_GUIDE.md)**
-
 ## Repository Structure
 
 ```
 .
 ├── .github/
+│   ├── ISSUE_TEMPLATE/     # Issue templates for domain management requests
+│   │   ├── config.yml      # Issue template configuration
+│   │   ├── 01-purchase-new-domain.yml
+│   │   ├── 02-add-existing-domain.yml
+│   │   ├── 03-remove-domain.yml
+│   │   ├── 04-github-pages-apex.yml
+│   │   └── 05-github-pages-subdomain.yml
 │   ├── workflows/          # GitHub Actions workflows
 │   │   ├── ci.yml          # Continuous Integration
 │   │   ├── codeql-analysis.yml  # Security scanning
+│   │   ├── dns-summary-export.yml  # DNS export workflow
 │   │   └── README.md       # Workflow documentation
 │   └── dependabot.yml      # Dependency update configuration
-├── examples/               # Example Terraform configurations
 ├── CONTRIBUTING.md         # Contribution guidelines
-├── DEPLOYMENT_CHECKLIST.md # Deployment checklist for ffcadmin.org
-├── FFCADMIN_README.md      # Specific guide for ffcadmin.org
-├── GITHUB_ACTIONS.md       # GitHub Actions deployment guide
 ├── LICENSE                 # GNU AGPL v3 license
-├── QUICK_START.md          # 5-minute quick start guide
 ├── README.md               # This file
 ├── SECURITY.md             # Security policy
-├── SETUP_GUIDE.md          # Detailed setup walkthrough
 ├── STAGING_README.md       # Staging subdomain management guide
-├── TESTING.md              # Testing guide
-├── main.tf                 # Main Terraform configuration
-├── outputs.tf              # Terraform outputs
+├── LEGACY_TERRAFORM.md     # Information about legacy Terraform files
 ├── requirements.txt        # Python dependencies
 ├── update_dns.py           # Python DNS management script
+├── export_zone_dns_summary.py  # DNS configuration export tool
+├── export_zone_a_records.py    # A record export tool
 ├── Update-StagingDns.ps1   # PowerShell DNS script
-├── variables.tf            # Terraform variables
-└── versions.tf             # Terraform version constraints
+└── [legacy files]          # See LEGACY_TERRAFORM.md for details
 ```
+
+**Note**: This repository previously used Terraform for infrastructure management. Legacy Terraform files and related documentation (main.tf, variables.tf, SETUP_GUIDE.md, QUICK_START.md, etc.) are retained for reference. See [LEGACY_TERRAFORM.md](LEGACY_TERRAFORM.md) for details on legacy files and the migration path.
 
 ## Security
 
 Security is a top priority for this project. We implement multiple security measures:
 
-- **Automated Security Scanning**: CodeQL, tfsec, Checkov, and Trivy analysis
+- **Automated Security Scanning**: CodeQL analysis for code vulnerabilities
 - **Secret Detection**: GitHub secret scanning prevents credential exposure
 - **Dependency Updates**: Dependabot keeps dependencies secure and up-to-date
 - **CI Validation**: Automated checks for sensitive files and misconfigurations
+- **API Token Security**: Cloudflare API tokens stored securely in GitHub Secrets
 
 ### Protecting Cloudflare API Tokens in Workflows
 - **Least privilege**: Use `CLOUDFLARE_API_KEY_READ_ALL` for read-only workflows; use `CLOUDFLARE_API_KEY_DNS_ONLY` scoped to specific zones for DNS edits.
@@ -326,8 +290,9 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 This repository uses GitHub Actions for automation:
 
-- **CI Workflow**: Validates Terraform configurations and checks for security issues
+- **CI Workflow**: Validates configurations and checks for security issues
 - **CodeQL Analysis**: Performs automated security scanning
+- **DNS Summary Export**: Exports DNS configurations for reporting
 - **Dependabot**: Keeps dependencies up-to-date
 
 For more information, see [.github/workflows/README.md](.github/workflows/README.md).
@@ -336,29 +301,26 @@ For more information, see [.github/workflows/README.md](.github/workflows/README
 
 ### Never Commit Sensitive Data
 
-- **Do not commit**: API keys, tokens, credentials, `.tfvars` files with real values
-- **Use instead**: Environment variables, Terraform Cloud, or secret management systems
+- **Do not commit**: API keys, tokens, credentials, or configuration files with real values
+- **Use instead**: Environment variables or GitHub Secrets for sensitive data
 - **Reference**: Check `.gitignore` to ensure sensitive files are excluded
 
-### Terraform Conventions
+### DNS Management Best Practices
 
-- Use meaningful resource names
-- Add descriptions to all variables
-- Follow formatting standards (`terraform fmt`)
-- Document complex configurations
-- Use modules for reusable components
+- Always use issue templates for requesting changes
+- Test changes with `--dry-run` flag before applying
+- Document all DNS changes in the corresponding issue
+- Verify DNS propagation after making changes
+- Keep DNS records well-documented and up-to-date
+- Use Cloudflare proxy (orange cloud) appropriately - disable for GitHub Pages
 
 ## Additional Resources
 
-- **[Staging Subdomain Guide](STAGING_README.md)** - Detailed guide for managing staging.clarkemoyer.com
-- **[Deployment Checklist](DEPLOYMENT_CHECKLIST.md)** - Checklist for ffcadmin.org deployment
-- **[FFCAdmin Guide](FFCADMIN_README.md)** - Specific guide for ffcadmin.org domain
-- **[Testing Guide](TESTING.md)** - Testing guide for deployments
-- **[Configuration Examples](examples/README.md)** - Example Terraform configurations
-- **[verify_old_token.json.README.md](verify_old_token.json.README.md)** - Information about the test token response file
+- **[Staging Subdomain Guide](STAGING_README.md)** - Detailed guide for managing staging subdomains
+- **[Issue Templates](.github/ISSUE_TEMPLATE/)** - Templates for domain management requests
 - [GitHub Pages Custom Domain Documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site)
 - [Cloudflare DNS Documentation](https://developers.cloudflare.com/dns/)
-- [Terraform Cloudflare Provider](https://registry.terraform.io/providers/cloudflare/cloudflare/latest/docs)
+- [Cloudflare API Documentation](https://developers.cloudflare.com/api/)
 - [GitHub Pages IP Addresses](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site#configuring-an-apex-domain)
 
 ## License
@@ -367,15 +329,16 @@ This project is licensed under the GNU Affero General Public License v3.0 - see 
 
 ## Support
 
+- **Domain Requests**: Use [issue templates](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues/new/choose) for domain management
 - **Issues**: Report bugs or request features via [GitHub Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues)
-- **Documentation**: Check the guides linked above for detailed help
+- **Documentation**: Check the guides and issue templates for detailed help
 - **Security**: Report vulnerabilities via [SECURITY.md](SECURITY.md)
 
 ## About Free For Charity
 
-Free For Charity is committed to using technology to support charitable giving. This infrastructure repository is part of our commitment to transparency and open-source development.
+Free For Charity is committed to using technology to support charitable giving. This automation repository is part of our commitment to transparency and open-source development.
 
 ---
 
-**Note**: This repository is under active development. Infrastructure configurations will be added as the project evolves.
+**Note**: This repository transitioned from Terraform-based infrastructure management to an issue-based workflow where administrators execute DNS changes using Python scripts and the Cloudflare API. Legacy Terraform files are retained for historical reference.
  

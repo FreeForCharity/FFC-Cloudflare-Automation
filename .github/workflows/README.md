@@ -14,20 +14,16 @@ Runs automated validation and security checks on all pull requests and pushes to
 
 **Validate Repository Job:**
 1. Checks out the code
-2. Sets up Terraform CLI (v1.6.0) - for legacy file validation
-3. Runs Terraform format check (`terraform fmt -check -recursive`) on legacy files
-4. Initializes Terraform (if Terraform files exist) - legacy validation
-5. Validates Terraform configuration (if Terraform files exist) - legacy validation
-6. Scans for accidentally committed sensitive files (*.tfvars, *.pem, *.key, .env)
-7. Verifies README.md exists
+2. Sets up Python environment (3.9)
+3. Installs Python dependencies
+4. Validates Python scripts for syntax errors
+5. Scans for accidentally committed sensitive files (*.pem, *.key, .env)
+6. Verifies README.md exists
 
 This workflow ensures that:
-- Legacy Terraform code follows proper formatting standards
-- Infrastructure configurations remain valid
+- Python scripts are syntactically correct
 - No sensitive data is accidentally committed
 - Documentation exists
-
-**Note**: Terraform validation is maintained for legacy files but is not the active deployment method.
 
 ## codeql-analysis.yml - Security Scanning
 
@@ -62,7 +58,7 @@ This workflow helps identify security vulnerabilities early in the development p
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| ci.yml | PRs and pushes to main | Validate configurations and check for sensitive files |
+| ci.yml | PRs and pushes to main | Validate Python scripts and check for sensitive files |
 | codeql-analysis.yml | PRs, pushes to main, and weekly | Security vulnerability scanning |
 | dns-summary-export.yml | Manual (workflow_dispatch) | Export DNS configuration summaries |
 
@@ -98,7 +94,6 @@ No additional setup is required for these workflows to run. However, to get the 
 - Never commit sensitive data like API keys, passwords, or private keys
 - Use environment variables or GitHub Secrets for sensitive values
 - Review the `.gitignore` file to ensure sensitive files are excluded
-- Keep code formatting consistent using `terraform fmt` (for legacy files)
 - Address security alerts from CodeQL promptly
 - Use issue templates for all domain management requests
 - Document DNS changes in the corresponding GitHub issue

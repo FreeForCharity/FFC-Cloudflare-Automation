@@ -8,7 +8,7 @@ Thank you for your interest in contributing to Free For Charity's Cloudflare aut
 - [Getting Started](#getting-started)
 - [How to Contribute](#how-to-contribute)
 - [Development Workflow](#development-workflow)
-- [Terraform Guidelines](#terraform-guidelines)
+- [Python Guidelines](#python-guidelines)
 - [Security Guidelines](#security-guidelines)
 - [Pull Request Process](#pull-request-process)
 - [Questions and Support](#questions-and-support)
@@ -30,9 +30,8 @@ Free For Charity is committed to fostering an open and welcoming environment. We
 Before contributing, ensure you have:
 
 - Git installed and configured
-- Terraform CLI (v1.6.0 or later)
+- Python 3.9 or later
 - A GitHub account
-- Basic understanding of Infrastructure as Code (IaC)
 - Familiarity with Cloudflare (helpful but not required)
 
 ### Fork and Clone
@@ -54,9 +53,9 @@ Before contributing, ensure you have:
 
 We welcome various types of contributions:
 
-- **Infrastructure Code**: Terraform configurations for Cloudflare resources
+- **Python Scripts**: DNS management scripts and utilities
 - **Documentation**: Improvements to README, guides, and inline comments
-- **Bug Fixes**: Corrections to existing infrastructure code
+- **Bug Fixes**: Corrections to existing code
 - **Security Improvements**: Enhancements to security practices
 - **Automation Scripts**: Helper scripts and tooling
 - **CI/CD**: Improvements to GitHub Actions workflows
@@ -90,15 +89,12 @@ git checkout -b fix/issue-description
 ### 3. Test Your Changes
 
 ```bash
-# Format Terraform code
-terraform fmt -recursive
+# Install dependencies
+pip install -r requirements.txt
 
-# Validate Terraform configuration
-terraform init -backend=false
-terraform validate
-
-# Plan changes (if applicable)
-terraform plan
+# Test Python scripts
+python update_dns.py --help
+python export_zone_dns_summary.py --help
 ```
 
 ### 4. Commit Your Changes
@@ -133,50 +129,32 @@ git push origin your-branch-name
 
 Then create a pull request on GitHub.
 
-## Terraform Guidelines
+## Python Guidelines
 
 ### Code Style
 
-- Use consistent formatting (enforced by `terraform fmt`)
-- Use meaningful resource names
-- Add descriptions to variables and outputs
-- Group related resources together
-- Use modules for reusable components
+- Follow PEP 8 style guidelines
+- Use meaningful variable and function names
+- Add docstrings to functions and classes
+- Add comments for complex logic
+- Use type hints where appropriate
 
-### Variables
+### Error Handling
 
-```hcl
-variable "example_var" {
-  description = "Clear description of what this variable does"
-  type        = string
-  default     = "default-value"
-  
-  validation {
-    condition     = length(var.example_var) > 0
-    error_message = "Variable cannot be empty."
-  }
-}
-```
-
-### Resources
-
-```hcl
-resource "cloudflare_record" "example" {
-  name    = "example"
-  type    = "A"
-  value   = "192.0.2.1"
-  proxied = true
-  
-  # Clear comments for complex configurations
-  comment = "Example DNS record"
-}
+```python
+try:
+    # Code that might fail
+    result = api_call()
+except Exception as e:
+    print(f"Error: {e}")
+    sys.exit(1)
 ```
 
 ### Documentation
 
-- Document all modules with a README
+- Document all scripts with clear help messages
 - Include usage examples
-- Document input variables and outputs
+- Document command-line arguments
 - Explain any non-obvious decisions
 
 ## Security Guidelines
@@ -188,14 +166,12 @@ resource "cloudflare_record" "example" {
 - API keys or tokens
 - Passwords or credentials
 - Private keys or certificates
-- Actual `.tfvars` files with real values
-- `.env` files with secrets
+- `.env` files with real secrets
 
 ### What TO Do
 
-- Use `.tfvars.example` files with placeholder values
+- Use `.env.example` files with placeholder values
 - Document required environment variables
-- Use Terraform Cloud/Enterprise for sensitive values
 - Reference the `.gitignore` file
 - Use GitHub Secrets for CI/CD credentials
 
@@ -204,7 +180,6 @@ resource "cloudflare_record" "example" {
 Before submitting a PR:
 
 - [ ] No hardcoded credentials or secrets
-- [ ] `.tfvars` files are gitignored
 - [ ] Sensitive variables are properly marked
 - [ ] No accidentally committed sensitive files
 - [ ] Security best practices followed

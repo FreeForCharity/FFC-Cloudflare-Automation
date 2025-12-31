@@ -8,6 +8,10 @@ param(
     [string]$UserPrincipalName = 'clarkemoyer@freeforcharity.org',
 
     [Parameter()]
+    [ValidateSet('Auto', 'AzureCli', 'GraphModule')]
+    [string]$LoginProvider = 'Auto',
+
+    [Parameter()]
     [switch]$AlsoCheckExchangeOnline
 )
 
@@ -68,6 +72,48 @@ function Connect-GraphInteractive {
     Connect-MgGraph -Scopes $scopes | Out-Null
 }
 
+function Connect-GraphViaAzureCli {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Interactive', 'DeviceCode')]
+        [string]$Mode
+    )
+
+    $az = Get-Command az -ErrorAction SilentlyContinue
+    if (-not $az) {
+        throw "Azure CLI (az) not found. Install Azure CLI or use -LoginProvider GraphModule."
+    }
+
+    Write-Host "Using Azure CLI for login + Graph token." -ForegroundColor Green
+
+    if ($Mode -eq 'DeviceCode') {
+        Write-Host "Starting: az login --use-device-code" -ForegroundColor DarkGray
+        az login --use-device-code --allow-no-subscriptions | Out-Null
+    } else {
+        Write-Host "Starting: az login (browser popup)" -ForegroundColor DarkGray
+        az login --allow-no-subscriptions | Out-Null
+    }
+
+    $token = (az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+    if (-not $token) {
+        throw 'Failed to acquire Graph access token via Azure CLI.'
+    }
+
+    return $token
+}
+
+function Invoke-GraphGet {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AccessToken,
+        [Parameter(Mandatory = $true)]
+        [string]$Url
+    )
+
+    $headers = @{ Authorization = "Bearer $AccessToken" }
+    return Invoke-RestMethod -Method GET -Uri $Url -Headers $headers -ErrorAction Stop
+}
+
 function Write-Kv {
     param(
         [Parameter(Mandatory = $true)]
@@ -82,22 +128,59 @@ function Write-Kv {
 }
 
 try {
-    Write-Host "Logging into Microsoft Graph ($Auth)..." -ForegroundColor Cyan
-    Connect-GraphInteractive -Mode $Auth
-
-    $ctx = Get-MgContext
-    Write-Host "" 
     Write-Host "Tenant discovery" -ForegroundColor Cyan
-    Write-Kv -Key 'TenantId' -Value $ctx.TenantId
-    Write-Kv -Key 'Account' -Value $ctx.Account
 
-    $org = Get-MgOrganization -ErrorAction Stop | Select-Object -First 1
-    if ($org) {
-        Write-Kv -Key 'Organization' -Value $org.DisplayName
-        Write-Kv -Key 'OrganizationId' -Value $org.Id
+    $isWindowsPowerShell = ($PSVersionTable.PSEdition -eq 'Desktop')
+    $provider = $LoginProvider
+    if ($provider -eq 'Auto') {
+        $provider = if ($isWindowsPowerShell) { 'AzureCli' } else { 'GraphModule' }
     }
 
-    $domains = Get-MgDomain -All -ErrorAction Stop
+    $tenantId = $null
+    $account = $null
+    $orgName = $null
+    $orgId = $null
+    $domains = @()
+
+    if ($provider -eq 'AzureCli') {
+        Write-Host "Logging into Microsoft 365 using Azure CLI ($Auth)..." -ForegroundColor Cyan
+        $token = Connect-GraphViaAzureCli -Mode $Auth
+
+        $acct = Invoke-RestMethod -Method GET -Uri 'https://management.azure.com/tenants?api-version=2020-01-01' -Headers @{ Authorization = "Bearer $(az account get-access-token --resource https://management.azure.com/ --query accessToken -o tsv)" } -ErrorAction SilentlyContinue
+        $tenantId = (az account show --query tenantId -o tsv)
+        $account = (az account show --query user.name -o tsv)
+
+        $org = Invoke-GraphGet -AccessToken $token -Url 'https://graph.microsoft.com/v1.0/organization?$select=id,displayName'
+        if ($org.value -and $org.value.Count -gt 0) {
+            $orgName = $org.value[0].displayName
+            $orgId = $org.value[0].id
+        }
+
+        $dom = Invoke-GraphGet -AccessToken $token -Url 'https://graph.microsoft.com/v1.0/domains?$select=id,isDefault,isVerified'
+        $domains = @($dom.value)
+    } else {
+        Write-Host "Logging into Microsoft Graph module ($Auth)..." -ForegroundColor Cyan
+        Connect-GraphInteractive -Mode $Auth
+
+        $ctx = Get-MgContext
+        $tenantId = $ctx.TenantId
+        $account = $ctx.Account
+
+        $org = Get-MgOrganization -ErrorAction Stop | Select-Object -First 1
+        if ($org) {
+            $orgName = $org.DisplayName
+            $orgId = $org.Id
+        }
+
+        $domains = Get-MgDomain -All -ErrorAction Stop
+        Disconnect-MgGraph | Out-Null
+    }
+
+    Write-Kv -Key 'TenantId' -Value $tenantId
+    Write-Kv -Key 'Account' -Value $account
+    Write-Kv -Key 'Organization' -Value $orgName
+    Write-Kv -Key 'OrganizationId' -Value $orgId
+
     $defaultDomain = $domains | Where-Object { $_.IsDefault } | Select-Object -First 1
     $onMicrosoft = $domains | Where-Object { $_.Id -like '*.onmicrosoft.com' } | Select-Object -First 1
 
@@ -133,7 +216,6 @@ try {
         Disconnect-ExchangeOnline -Confirm:$false | Out-Null
     }
 
-    Disconnect-MgGraph | Out-Null
     exit 0
 } catch {
     Write-Error $_

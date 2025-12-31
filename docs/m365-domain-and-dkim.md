@@ -20,9 +20,18 @@ and confirm Graph connectivity, run:
 
 This uses **interactive browser sign-in** by default.
 
+If you are running **Windows PowerShell 5.1**, the script defaults to using **Azure CLI** for the
+login popup (more reliable than the Graph module on first-run).
+
 If you prefer device code login:
 
 - `pwsh -File scripts/m365-tenant-discovery.ps1 -Auth DeviceCode`
+
+You can force which login method is used:
+- Azure CLI (recommended on Windows PowerShell):
+  - `powershell -File scripts/m365-tenant-discovery.ps1 -LoginProvider AzureCli`
+- Graph PowerShell module:
+  - `pwsh -File scripts/m365-tenant-discovery.ps1 -LoginProvider GraphModule`
 
 To also check Exchange Online DKIM cmdlets interactively:
 

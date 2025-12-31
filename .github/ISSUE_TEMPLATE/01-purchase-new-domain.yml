@@ -41,6 +41,159 @@ body:
     validations:
       required: true
 
+  - type: markdown
+    attributes:
+      value: |
+        ## ICANN Registrant Contact (Required)
+        Provide accurate registrant contact details required for domain registration (ICANN).
+
+  - type: input
+    id: registrant_name
+    attributes:
+      label: Registrant Name
+      description: Legal name of the registrant (person or organization representative)
+      placeholder: "Jane Doe"
+    validations:
+      required: true
+
+  - type: input
+    id: registrant_org
+    attributes:
+      label: Registrant Organization
+      description: Organization name (if applicable)
+      placeholder: "Free For Charity"
+    validations:
+      required: true
+
+  - type: input
+    id: registrant_email
+    attributes:
+      label: Registrant Email
+      description: Primary contact email for the registrant
+      placeholder: "jane.doe@example.org"
+    validations:
+      required: true
+
+  - type: input
+    id: registrant_phone
+    attributes:
+      label: Registrant Phone
+      description: Phone number including country code
+      placeholder: "+1-555-555-1212"
+    validations:
+      required: true
+
+  - type: input
+    id: registrant_address1
+    attributes:
+      label: Registrant Address Line 1
+      placeholder: "123 Main St"
+    validations:
+      required: true
+
+  - type: input
+    id: registrant_address2
+    attributes:
+      label: Registrant Address Line 2
+      placeholder: "Suite 200"
+    validations:
+      required: false
+
+  - type: input
+    id: registrant_city
+    attributes:
+      label: City
+      placeholder: "Tucson"
+    validations:
+      required: true
+
+  - type: input
+    id: registrant_state
+    attributes:
+      label: State/Province
+      placeholder: "AZ"
+    validations:
+      required: true
+
+  - type: input
+    id: registrant_postal_code
+    attributes:
+      label: Postal Code
+      placeholder: "85701"
+    validations:
+      required: true
+
+  - type: input
+    id: registrant_country
+    attributes:
+      label: Country
+      placeholder: "US"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: icann_ack
+    attributes:
+      label: ICANN Accuracy Acknowledgment
+      description: Confirm all registrant details are accurate and kept up to date per ICANN requirements
+      options:
+        - label: I confirm registrant information is accurate
+          required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Administrative Contact (Optional)
+        If different from registrant, provide admin contact.
+
+  - type: input
+    id: admin_name
+    attributes:
+      label: Admin Contact Name
+    validations:
+      required: false
+
+  - type: input
+    id: admin_email
+    attributes:
+      label: Admin Contact Email
+    validations:
+      required: false
+
+  - type: input
+    id: admin_phone
+    attributes:
+      label: Admin Contact Phone
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Technical Contact (Optional)
+        If different from registrant, provide technical contact.
+
+  - type: input
+    id: tech_name
+    attributes:
+      label: Technical Contact Name
+    validations:
+      required: false
+
+  - type: input
+    id: tech_email
+    attributes:
+      label: Technical Contact Email
+    validations:
+      required: false
+
+  - type: input
+    id: tech_phone
+    attributes:
+      label: Technical Contact Phone
+    validations:
+      required: false
+
   - type: checkboxes
     id: dns_config
     attributes:

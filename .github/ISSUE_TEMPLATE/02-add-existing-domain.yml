@@ -48,6 +48,127 @@ body:
     validations:
       required: true
 
+  - type: markdown
+    attributes:
+      value: |
+        ## ICANN & Transfer Details
+        If you are requesting a registrar transfer into FFC, provide the following. If you are only adding the domain to Cloudflare DNS (no registrar change), fill in what applies.
+
+  - type: input
+    id: epp_auth_code
+    attributes:
+      label: EPP/Auth Code (Transfer Code)
+      description: Obtain from current registrar if transferring the domain
+      placeholder: "Auth-XXXX-1234"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: transfer_prereqs
+    attributes:
+      label: Transfer Prerequisites
+      description: Confirm prerequisites if transferring registrar
+      options:
+        - label: Domain is unlocked at the current registrar
+        - label: WHOIS/Privacy shielding is disabled (or email routing works)
+        - label: 60-day transfer lock is not in effect (recent changes may impose lock)
+        - label: Admin/Registrant email is accessible for transfer approval
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Registrant Contact (Optional unless changing registrant)
+        Provide registrant contact details if changing or confirming registrant during transfer.
+
+  - type: input
+    id: registrant_name
+    attributes:
+      label: Registrant Name
+      placeholder: "Jane Doe"
+    validations:
+      required: false
+
+  - type: input
+    id: registrant_org
+    attributes:
+      label: Registrant Organization
+      placeholder: "Free For Charity"
+    validations:
+      required: false
+
+  - type: input
+    id: registrant_email
+    attributes:
+      label: Registrant Email
+      placeholder: "jane.doe@example.org"
+    validations:
+      required: false
+
+  - type: input
+    id: registrant_phone
+    attributes:
+      label: Registrant Phone
+      placeholder: "+1-555-555-1212"
+    validations:
+      required: false
+
+  - type: input
+    id: registrant_address1
+    attributes:
+      label: Registrant Address Line 1
+      placeholder: "123 Main St"
+    validations:
+      required: false
+
+  - type: input
+    id: registrant_address2
+    attributes:
+      label: Registrant Address Line 2
+      placeholder: "Suite 200"
+    validations:
+      required: false
+
+  - type: input
+    id: registrant_city
+    attributes:
+      label: City
+      placeholder: "Tucson"
+    validations:
+      required: false
+
+  - type: input
+    id: registrant_state
+    attributes:
+      label: State/Province
+      placeholder: "AZ"
+    validations:
+      required: false
+
+  - type: input
+    id: registrant_postal_code
+    attributes:
+      label: Postal Code
+      placeholder: "85701"
+    validations:
+      required: false
+
+  - type: input
+    id: registrant_country
+    attributes:
+      label: Country
+      placeholder: "US"
+    validations:
+      required: false
+
+  - type: textarea
+    id: desired_nameservers
+    attributes:
+      label: Desired Nameservers After Transfer
+      description: If transferring registrar, specify target nameservers or confirm Cloudflare nameservers will be used
+      placeholder: |
+        ns1.cloudflare.com
+        ns2.cloudflare.com
+
   - type: textarea
     id: current_usage
     attributes:

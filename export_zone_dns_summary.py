@@ -14,7 +14,7 @@ Usage examples:
     python export_zone_dns_summary.py --zones-file zones.txt --zone-id-file zone_ids.csv --output zone_dns_summary.csv
 
 Token sourcing:
-- Prefers env var CLOUDFLARE_API_KEY_READ_ALL; then CLOUDFLARE_API_KEY_DNS_ONLY; falls back to CLOUDFLARE_API_TOKEN.
+- Uses env var CLOUDFLARE_API_KEY_DNS_ONLY or --token argument.
 - If a DNS-only token cannot list zones, provide explicit zone names via --zones/--zones-file.
 """
 import csv
@@ -44,14 +44,10 @@ def api_get(path: str, token: str, params: Optional[dict] = None) -> dict:
 def get_token(arg_token: Optional[str]) -> str:
     if arg_token:
         return arg_token.strip()
-    env_token = (
-        os.getenv("CLOUDFLARE_API_KEY_READ_ALL")
-        or os.getenv("CLOUDFLARE_API_KEY_DNS_ONLY")
-        or os.getenv("CLOUDFLARE_API_TOKEN")
-    )
+    env_token = os.getenv("CLOUDFLARE_API_KEY_DNS_ONLY")
     if env_token:
         return env_token.strip()
-    raise SystemExit("Cloudflare API token is required (set CLOUDFLARE_API_KEY_READ_ALL or CLOUDFLARE_API_KEY_DNS_ONLY or CLOUDFLARE_API_TOKEN, or pass --token)")
+    raise SystemExit("Cloudflare API token is required (set CLOUDFLARE_API_KEY_DNS_ONLY or pass --token)")
 
 
 def get_zone_id_by_name(token: str, zone_name: str) -> Optional[str]:

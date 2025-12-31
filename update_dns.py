@@ -5,10 +5,12 @@ Usage examples:
   python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
   python update_dns.py --zone example.org --name www --type CNAME --target example.org
   python update_dns.py --zone example.org --name @ --type AAAA --ip 2606:50c0:8000::153
+  python update_dns.py --zone example.org --name @ --type MX --content mail.protection.outlook.com --priority 0
+  python update_dns.py --zone example.org --name @ --type TXT --content "v=spf1 include:spf.protection.outlook.com -all"
   python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --dry-run
   python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --no-proxy
 
-Prompts for Cloudflare API token if not provided via env var CLOUDFLARE_API_TOKEN or --token argument.
+Prompts for Cloudflare API token if not provided via env var CLOUDFLARE_API_KEY_DNS_ONLY or --token argument.
 
 Exits with non-zero status on failure.
 """
@@ -147,6 +149,39 @@ def update_or_create_records(token: str, zone_id: str, name: str, new_ip: str, d
         return {"message": f"{record_type} record created", "result": created.get("result")}
 
 
+def update_or_create_mx_txt(token: str, zone_id: str, name: str, content: str, dry_run: bool, record_type: str, priority: int = 10) -> dict:
+    """Update or create MX or TXT records (multi-value records)."""
+    existing_records = get_dns_records(token, zone_id, name, record_type=record_type)
+    
+    payload_template = {
+        "type": record_type,
+        "name": name,
+        "content": content,
+        "ttl": 1,  # Auto
+    }
+    
+    if record_type == "MX":
+        payload_template["priority"] = priority
+    
+    # Check for exact match
+    exact_match = None
+    for rec in existing_records:
+        if rec.get("content") == content:
+            if record_type != "MX" or rec.get("priority") == priority:
+                exact_match = rec
+                break
+    
+    if exact_match:
+        return {"message": f"{record_type} record already exists with exact content", "id": exact_match.get("id"), "status": "unchanged"}
+    
+    # No exact match - create new record (multi-value records allow multiple)
+    if dry_run:
+        return {"message": f"DRY-RUN would CREATE new {record_type} record", "proposed": payload_template}
+    
+    created = api_post(f"/zones/{zone_id}/dns_records", token, payload_template)
+    return {"message": f"{record_type} record created", "result": created.get("result")}
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Cloudflare DNS record management tool for multiple domains",
@@ -161,6 +196,12 @@ def parse_args():
   
   # Update CNAME record
   python update_dns.py --zone example.org --name www --type CNAME --target example.org
+  
+  # Create MX record
+  python update_dns.py --zone example.org --name @ --type MX --content mail.protection.outlook.com --priority 0
+  
+  # Create TXT record
+  python update_dns.py --zone example.org --name @ --type TXT --content "v=spf1 include:spf.protection.outlook.com -all"
   
   # Search for records
   python update_dns.py --zone example.org --name staging --type A --search
@@ -177,9 +218,11 @@ def parse_args():
     )
     parser.add_argument("--zone", required=True, help="Domain/zone name (e.g., 'example.org')")
     parser.add_argument("--name", help="Record name (use '@' for apex/root, or subdomain like 'staging')")
-    parser.add_argument("--type", choices=["A", "AAAA", "CNAME"], help="DNS record type")
+    parser.add_argument("--type", choices=["A", "AAAA", "CNAME", "MX", "TXT"], help="DNS record type")
     parser.add_argument("--ip", help="IPv4 address for A records or IPv6 address for AAAA records")
     parser.add_argument("--target", help="Target domain for CNAME records")
+    parser.add_argument("--content", help="Content for MX or TXT records")
+    parser.add_argument("--priority", type=int, default=10, help="Priority for MX records (default: 10)")
     parser.add_argument("--record-id", help="Specific record ID for deletion")
     parser.add_argument("--search", action="store_true", help="Search and display existing records")
     parser.add_argument("--delete", action="store_true", help="Delete the specified record")
@@ -234,6 +277,9 @@ def main():
         if args.type == "CNAME" and not args.target:
             print("--target required for CNAME records", file=sys.stderr)
             sys.exit(2)
+        if args.type in ["MX", "TXT"] and not args.content:
+            print(f"--content required for {args.type} records", file=sys.stderr)
+            sys.exit(2)
         if args.type in ["A", "AAAA"]:
             validate_ip(args.ip, args.type)
     
@@ -286,8 +332,10 @@ def main():
         # Handle update/create
         if args.type in ["A", "AAAA"]:
             result = update_or_create_records(token, zone_id, full_name, args.ip, args.dry_run, proxied, args.type)
-        else:  # CNAME
+        elif args.type == "CNAME":
             result = update_or_create_cname(token, zone_id, full_name, args.target, args.dry_run, proxied)
+        elif args.type in ["MX", "TXT"]:
+            result = update_or_create_mx_txt(token, zone_id, full_name, args.content, args.dry_run, args.type, args.priority)
         
         print(result["message"])
         if "result" in result:

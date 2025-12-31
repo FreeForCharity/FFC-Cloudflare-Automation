@@ -11,14 +11,21 @@ on:
 
 jobs:
   audit_zone:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+
       - name: Run DNS Compliance Audit
-        shell: pwsh
         env:
           CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
         run: |
-          $Domain = "${{ inputs.domain }}"
-          .\Update-CloudflareDns.ps1 -Zone $Domain -Audit
+          python audit_compliance.py --zone "${{ inputs.domain }}"

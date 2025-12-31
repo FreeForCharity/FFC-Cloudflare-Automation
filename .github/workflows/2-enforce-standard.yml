@@ -15,30 +15,34 @@ on:
 
 jobs:
   enforce_standard:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+
       - name: Enforce FFC Standard Configuration
-        shell: pwsh
         env:
           CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
         run: |
-          $Domain = "${{ inputs.domain }}"
-          $DryRun = "${{ inputs.dry_run }}"
-          
-          if ($DryRun -eq "true") {
-            Write-Host "--- DRY RUN MODE: PREVIEWING CHANGES ---"
-            .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -DryRun
-          } else {
-            Write-Host "--- LIVE MODE: APPLYING FIXES ---"
-            .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard
-          }
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "--- DRY RUN MODE: PREVIEWING CHANGES ---"
+            python enforce_standard.py --zone "${{ inputs.domain }}" --dry-run
+          else
+            echo "--- LIVE MODE: APPLYING FIXES ---"
+            python enforce_standard.py --zone "${{ inputs.domain }}"
+          fi
           
       - name: Post-Enforce Compliance Audit
-        shell: pwsh
         env:
           CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
         run: |
-           $Domain = "${{ inputs.domain }}"
-           .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ErrorAction Continue
+          python audit_compliance.py --zone "${{ inputs.domain }}"
+        continue-on-error: true

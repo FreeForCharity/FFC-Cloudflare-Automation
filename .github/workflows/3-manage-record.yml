@@ -1,5 +1,5 @@
-name: Process DNS Request
-
+name: "[DNS] 3. Manual - Manage Record"
+run-name: "Manage Record: ${{ inputs.domain }} (${{ inputs.record_type }} ${{ inputs.record_name }})"
 on:
   workflow_dispatch:
     inputs:

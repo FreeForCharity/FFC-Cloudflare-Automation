@@ -1,5 +1,5 @@
-name: Enforce DNS Standard
-run-name: Enforce DNS Standard (Batch Fix) for ${{ inputs.domain }}
+name: "[DNS] 2. Fix - Enforce Standard"
+run-name: "Enforce Standard: ${{ inputs.domain }}"
 
 on:
   workflow_dispatch:

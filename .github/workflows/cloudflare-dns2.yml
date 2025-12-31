@@ -1,9 +1,5 @@
 name: Cloudflare DNS Update v2
 
-permissions:
-  contents: read
-  actions: read
-
 on:
   workflow_dispatch:
     inputs:

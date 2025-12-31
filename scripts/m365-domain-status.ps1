@@ -8,6 +8,9 @@ param(
     [string]$Auth = 'Interactive',
 
     [Parameter()]
+    [string]$AccessToken,
+
+    [Parameter()]
     [string]$TenantId,
 
     [Parameter()]
@@ -35,29 +38,28 @@ function Connect-Graph {
         [string]$Mode,
 
         [Parameter()]
-        [string]$Tenant
+        [string]$Tenant,
+
+        [Parameter()]
+        [string]$Token
     )
 
     Ensure-Module -Name 'Microsoft.Graph'
 
     Import-Module Microsoft.Graph -ErrorAction Stop
 
-    $scopes = @(
-        'Domain.Read.All'
-    )
-
-    $connectParams = @{
-        Scopes = $scopes
-    }
-    if ($Tenant) {
-        $connectParams.TenantId = $Tenant
+    if ($Token) {
+        $secure = ConvertTo-SecureString -String $Token -AsPlainText -Force
+        Connect-MgGraph -AccessToken $secure | Out-Null
+        return
     }
 
-    if ($Mode -eq 'DeviceCode') {
-        Connect-MgGraph @connectParams -UseDeviceCode | Out-Null
-    } else {
-        Connect-MgGraph @connectParams | Out-Null
-    }
+    $scopes = @('Domain.Read.All')
+    $connectParams = @{ Scopes = $scopes }
+    if ($Tenant) { $connectParams.TenantId = $Tenant }
+
+    if ($Mode -eq 'DeviceCode') { Connect-MgGraph @connectParams -UseDeviceCode | Out-Null }
+    else { Connect-MgGraph @connectParams | Out-Null }
 }
 
 function Write-Kv {
@@ -74,7 +76,8 @@ function Write-Kv {
 }
 
 try {
-    Connect-Graph -Mode $Auth -Tenant $TenantId
+    $tokenToUse = if ($AccessToken) { $AccessToken } else { $env:GRAPH_ACCESS_TOKEN }
+    Connect-Graph -Mode $Auth -Tenant $TenantId -Token $tokenToUse
 
     $d = Get-MgDomain -DomainId $Domain -ErrorAction Stop
 

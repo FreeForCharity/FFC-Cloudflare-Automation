@@ -1,0 +1,111 @@
+name: '[M365] Domain Status + DKIM'
+run-name: 'M365: ${{ inputs.domain }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain name (e.g., example.org)'
+        required: true
+        type: string
+      action:
+        description: 'What to run'
+        required: true
+        type: choice
+        options:
+          - status
+          - dkim-check
+          - dkim-enable
+        default: status
+      create_if_missing:
+        description: 'If DKIM config is missing, create it (disabled by default)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  m365:
+    runs-on: windows-latest
+    environment: m365-prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PowerShell modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Acquire Microsoft Graph token
+        id: graph
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $token = (az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+          if (-not $token) { throw 'Failed to acquire Graph access token via Azure CLI.' }
+          "GRAPH_ACCESS_TOKEN=$token" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Domain status (Graph)
+        if: ${{ inputs.action == 'status' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -File scripts/m365-domain-status.ps1 -Domain "${{ inputs.domain }}" -ShowDnsRecords
+
+      - name: Import certificate for Exchange Online (optional)
+        if: ${{ inputs.action != 'status' && secrets.EXO_CERT_PFX_BASE64 != '' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfxBytes = [Convert]::FromBase64String("${{ secrets.EXO_CERT_PFX_BASE64 }}")
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'exo-auth.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
+
+          $securePw = $null
+          if ("${{ secrets.EXO_CERT_PFX_PASSWORD }}") {
+            $securePw = ConvertTo-SecureString -String "${{ secrets.EXO_CERT_PFX_PASSWORD }}" -AsPlainText -Force
+          }
+
+          $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePw
+          if (-not $cert) { throw 'Failed to import PFX certificate.' }
+
+          "EXO_CERT_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: DKIM check / enable (Exchange Online)
+        if: ${{ inputs.action != 'status' }}
+        shell: pwsh
+        env:
+          EXO_APP_ID: ${{ secrets.EXO_APP_ID }}
+          EXO_TENANT: ${{ secrets.EXO_TENANT }}
+          EXO_ORGANIZATION: ${{ secrets.EXO_ORGANIZATION }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $domain = "${{ inputs.domain }}"
+          $create = "${{ inputs.create_if_missing }}"
+
+          if ("${{ inputs.action }}" -eq 'dkim-enable') {
+            if ($create -eq 'true') {
+              pwsh -File scripts/m365-dkim.ps1 -Domain $domain -CreateIfMissing -Enable -Confirm:$false
+            } else {
+              pwsh -File scripts/m365-dkim.ps1 -Domain $domain -Enable -Confirm:$false
+            }
+          } else {
+            if ($create -eq 'true') {
+              pwsh -File scripts/m365-dkim.ps1 -Domain $domain -CreateIfMissing
+            } else {
+              pwsh -File scripts/m365-dkim.ps1 -Domain $domain
+            }
+          }

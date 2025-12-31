@@ -13,6 +13,15 @@ param(
     [string]$Organization,
 
     [Parameter()]
+    [string]$AppId,
+
+    [Parameter()]
+    [string]$TenantId,
+
+    [Parameter()]
+    [string]$CertificateThumbprint,
+
+    [Parameter()]
     [switch]$DeviceCode
 )
 
@@ -36,21 +45,35 @@ function Connect-Exchange {
         [string]$Org,
 
         [Parameter()]
+        [string]$App,
+
+        [Parameter()]
+        [string]$Tenant,
+
+        [Parameter()]
+        [string]$Thumbprint,
+
+        [Parameter()]
         [switch]$UseDeviceCode
     )
 
     Ensure-Module -Name 'ExchangeOnlineManagement'
     Import-Module ExchangeOnlineManagement -ErrorAction Stop
 
-    $connectParams = @{}
-    if ($Org) {
-        $connectParams.Organization = $Org
-    }
-    if ($UseDeviceCode) {
-        $connectParams.Device = $true
+    $connectParams = @{ ShowBanner = $false }
+
+    if ($Org) { $connectParams.Organization = $Org }
+
+    if ($App -and $Tenant -and $Thumbprint) {
+        $connectParams.AppId = $App
+        $connectParams.Organization = $Tenant
+        $connectParams.CertificateThumbprint = $Thumbprint
+        Connect-ExchangeOnline @connectParams | Out-Null
+        return
     }
 
-    Connect-ExchangeOnline @connectParams -ShowBanner:$false | Out-Null
+    if ($UseDeviceCode) { $connectParams.Device = $true }
+    Connect-ExchangeOnline @connectParams | Out-Null
 }
 
 function Write-Section {
@@ -72,7 +95,12 @@ function Print-DkimCnameHints {
 }
 
 try {
-    Connect-Exchange -Org $Organization -UseDeviceCode:$DeviceCode
+    $effectiveOrg = if ($Organization) { $Organization } else { $env:EXO_ORGANIZATION }
+    $effectiveAppId = if ($AppId) { $AppId } else { $env:EXO_APP_ID }
+    $effectiveTenant = if ($TenantId) { $TenantId } else { $env:EXO_TENANT }
+    $effectiveThumb = if ($CertificateThumbprint) { $CertificateThumbprint } else { $env:EXO_CERT_THUMBPRINT }
+
+    Connect-Exchange -Org $effectiveOrg -App $effectiveAppId -Tenant $effectiveTenant -Thumbprint $effectiveThumb -UseDeviceCode:$DeviceCode
 
     Write-Section "Microsoft 365 DKIM status"
 

@@ -4,86 +4,78 @@ This guide explains how to update DNS records for the `staging.clarkemoyer.com` 
 
 ## Quick Start for Staging Updates
 
-### Python Script (Recommended)
+### PowerShell Script (Recommended)
 
 **Requirements:**
 
-- Python 3.9+
-- Install dependencies: `pip install -r requirements.txt`
-
-**Update staging A record:**
-
-```bash
-# Basic usage (will prompt for API token)
-python update_dns.py --name staging --type A --ip 203.0.113.42
-
-# With environment variable
-export CLOUDFLARE_API_TOKEN="your_token_here"
-python update_dns.py --name staging --type A --ip 203.0.113.42
-
-# With explicit token
-python update_dns.py --name staging --type A --ip 203.0.113.42 --token your_token_here
-
-# Enable Cloudflare proxy (orange cloud)
-python update_dns.py --name staging --type A --ip 203.0.113.42 --proxied
-
-# Dry run (preview changes)
-python update_dns.py --name staging --type A --ip 203.0.113.42 --dry-run
-```
-
-### PowerShell Script (Alternative)
-
-**Requirements:**
-
-- PowerShell 5.1+
+- PowerShell 5.1+ (Windows) or PowerShell 7+ (cross-platform)
 
 **Update staging A record:**
 
 ```powershell
 # Basic usage (will prompt for API token)
-./Update-StagingDns.ps1 -NewIp 203.0.113.42
+.\Update-StagingDns.ps1 -NewIp 203.0.113.42
 
 # With environment variable
 $env:CLOUDFLARE_API_TOKEN = "your_token_here"
-./Update-StagingDns.ps1 -NewIp 203.0.113.42
+.\Update-StagingDns.ps1 -NewIp 203.0.113.42
 
 # Enable Cloudflare proxy
-./Update-StagingDns.ps1 -NewIp 203.0.113.42 -Proxied
+.\Update-StagingDns.ps1 -NewIp 203.0.113.42 -Proxied
 
 # Dry run
-./Update-StagingDns.ps1 -NewIp 203.0.113.42 -DryRun
+.\Update-StagingDns.ps1 -NewIp 203.0.113.42 -DryRun
+```
+
+### General DNS Management Script
+
+For more flexibility, use the comprehensive DNS management script:
+
+```powershell
+# Update staging subdomain
+.\Update-CloudflareDns.ps1 -Zone clarkemoyer.com -Name staging -Type A -Content 203.0.113.42
+
+# With environment variable
+$env:CLOUDFLARE_API_TOKEN = "your_token_here"
+.\Update-CloudflareDns.ps1 -Zone clarkemoyer.com -Name staging -Type A -Content 203.0.113.42
+
+# Enable Cloudflare proxy (orange cloud)
+.\Update-CloudflareDns.ps1 -Zone clarkemoyer.com -Name staging -Type A -Content 203.0.113.42 -Proxied
+
+# Dry run (preview changes)
+.\Update-CloudflareDns.ps1 -Zone clarkemoyer.com -Name staging -Type A -Content 203.0.113.42 -DryRun
 ```
 
 ## Behavior
 
-Both scripts:
+The scripts:
 
 - Find the zone ID for `clarkemoyer.com`
 - Fetch all existing A records for `staging.clarkemoyer.com`
 - Update records with differing IP or proxy status
 - Leave unchanged records as-is
 - Create a new record if none exist
-- Set TTL to 120 seconds
-- Support Cloudflare proxy (orange cloud) via `--proxied` or `-Proxied` flag
+- Set TTL to 120 seconds (for `Update-StagingDns.ps1`) or Auto (for `Update-CloudflareDns.ps1`)
+- Support Cloudflare proxy (orange cloud) via `-Proxied` flag
 
 ## Advanced Operations
 
-### Search for Records
+### List Records
 
-```bash
-python update_dns.py --name staging --type A --search
+```powershell
+.\Update-CloudflareDns.ps1 -Zone clarkemoyer.com -Name staging -Type A -List
 ```
 
 ### Delete a Specific Record
 
-```bash
-python update_dns.py --record-id abc123xyz --delete
+```powershell
+.\Update-CloudflareDns.ps1 -Zone clarkemoyer.com -Name staging -Type A -Content 203.0.113.42 -Remove
 ```
 
 ### Update CNAME Record
 
-```bash
-python update_dns.py --name staging --type CNAME --target example.com
+```powershell
+.\Update-CloudflareDns.ps1 -Zone clarkemoyer.com -Name staging -Type CNAME -Content example.com
 ```
 
 ## Security

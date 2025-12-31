@@ -32,7 +32,7 @@ contributors to:
 Before contributing, ensure you have:
 
 - Git installed and configured
-- Python 3.9 or later
+- PowerShell 5.1+ (Windows) or PowerShell 7+ (cross-platform)
 - A GitHub account
 - Familiarity with Cloudflare (helpful but not required)
 
@@ -55,7 +55,7 @@ Before contributing, ensure you have:
 
 We welcome various types of contributions:
 
-- **Python Scripts**: DNS management scripts and utilities
+- **PowerShell Scripts**: DNS management scripts and utilities
 - **Documentation**: Improvements to README, guides, and inline comments
 - **Bug Fixes**: Corrections to existing code
 - **Security Improvements**: Enhancements to security practices
@@ -102,13 +102,11 @@ git checkout -b fix/issue-description
 
 ### 3. Test Your Changes
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Test Python scripts
-python update_dns.py --help
-python export_zone_dns_summary.py --help
+```powershell
+# Test PowerShell scripts
+Get-Help .\Update-CloudflareDns.ps1 -Detailed
+Get-Help .\Update-StagingDns.ps1 -Detailed
+Get-Help .\Export-CloudflareDns.ps1 -Detailed
 ```
 
 ### 4. Commit Your Changes
@@ -144,32 +142,34 @@ git push origin your-branch-name
 
 Then create a pull request on GitHub.
 
-## Python Guidelines
+## PowerShell Guidelines
 
 ### Code Style
 
-- Follow PEP 8 style guidelines
+- Follow PowerShell best practices
+- Use approved verbs (Get-*, Set-*, New-*, Remove-*, etc.)
 - Use meaningful variable and function names
-- Add docstrings to functions and classes
+- Add comment-based help to functions
 - Add comments for complex logic
-- Use type hints where appropriate
+- Use proper parameter validation
 
 ### Error Handling
 
-```python
-try:
+```powershell
+try {
     # Code that might fail
-    result = api_call()
-except Exception as e:
-    print(f"Error: {e}")
-    sys.exit(1)
+    $result = Invoke-RestMethod -Uri $uri -Method Get
+} catch {
+    Write-Error "Error: $_"
+    exit 1
+}
 ```
 
 ### Documentation
 
-- Document all scripts with clear help messages
+- Document all scripts with comment-based help
 - Include usage examples
-- Document command-line arguments
+- Document parameters with proper descriptions
 - Explain any non-obvious decisions
 
 ## Security Guidelines

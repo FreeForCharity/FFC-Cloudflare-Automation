@@ -117,7 +117,7 @@ function Get-AuthToken {
     if ($env:CLOUDFLARE_API_TOKEN) { return $env:CLOUDFLARE_API_TOKEN }
     
     # Non-interactive mode: Fail if no token
-    throw "Cloudflare API Token not found. Set CLOUDFLARE_API_TOKEN environment variable or pass -Token parameter."
+    throw "Cloudflare API Token not found. Set CLOUDFLARE_API_KEY_DNS_ONLY or CLOUDFLARE_API_TOKEN environment variable, or pass -Token parameter."
 }
 
 $AuthToken = Get-AuthToken

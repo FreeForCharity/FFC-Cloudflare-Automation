@@ -8,6 +8,7 @@ permissions:
   pull-requests: write
 
 jobs:
+  create-labels:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -29,7 +30,7 @@ jobs:
               try {
                 // Try to get the label first
                 try {
-                  const existing = await github.rest.issues.getLabel({
+                  await github.rest.issues.getLabel({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
                     name: label.name

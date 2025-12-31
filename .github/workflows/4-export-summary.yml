@@ -19,7 +19,7 @@ jobs:
           .\Export-CloudflareDns.ps1 -OutputFile "domain_summary.csv"
 
       - name: Upload CSV Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: domain_summary
           path: domain_summary.csv

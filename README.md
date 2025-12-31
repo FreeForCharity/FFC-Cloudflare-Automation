@@ -1,5 +1,4 @@
 # FFC-Cloudflare-Automation
-[![CodeQL](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/codeql-analysis.yml)
 [![CI](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/ci.yml/badge.svg)](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
@@ -237,8 +236,11 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 │   │   └── 05-github-pages-subdomain.yml
 │   ├── workflows/          # GitHub Actions workflows
 │   │   ├── ci.yml          # Continuous Integration
-│   │   ├── codeql-analysis.yml  # Security scanning
-│   │   ├── dns-summary-export.yml  # DNS export workflow
+│   │   ├── deploy-pages.yml  # GitHub Pages deployment
+│   │   ├── 1-audit-compliance.yml  # DNS compliance checking
+│   │   ├── 2-enforce-standard.yml  # DNS standard enforcement
+│   │   ├── 3-manage-record.yml     # DNS record management
+│   │   ├── 4-export-summary.yml    # DNS export workflow
 │   │   └── README.md       # Workflow documentation
 │   └── dependabot.yml      # Dependency update configuration
 ├── CONTRIBUTING.md         # Contribution guidelines
@@ -246,11 +248,9 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 ├── README.md               # This file
 ├── SECURITY.md             # Security policy
 ├── STAGING_README.md       # Staging subdomain management guide
-├── requirements.txt        # Python dependencies
-├── update_dns.py           # Python DNS management script
-├── export_zone_dns_summary.py  # DNS configuration export tool
-├── export_zone_a_records.py    # A record export tool
-└── Update-StagingDns.ps1   # PowerShell DNS script
+├── Export-CloudflareDns.ps1  # PowerShell DNS export script
+├── Update-CloudflareDns.ps1  # PowerShell DNS management script
+└── Update-StagingDns.ps1   # PowerShell staging DNS script
 ```
 
 ## Deprecated Features
@@ -261,11 +261,11 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 
 Security is a top priority for this project. We implement multiple security measures:
 
-- **Automated Security Scanning**: CodeQL analysis for code vulnerabilities
 - **Secret Detection**: GitHub secret scanning prevents credential exposure
 - **Dependency Updates**: Dependabot keeps dependencies secure and up-to-date
 - **CI Validation**: Automated checks for sensitive files and misconfigurations
 - **API Token Security**: Cloudflare API tokens stored securely in GitHub Secrets
+- **Code Review**: All changes require review before merging to main branch
 
 ### Protecting Cloudflare API Tokens in Workflows
 - **Least privilege**: Use `CLOUDFLARE_API_KEY_READ_ALL` for read-only workflows; use `CLOUDFLARE_API_KEY_DNS_ONLY` scoped to specific zones for DNS edits.
@@ -290,12 +290,13 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 This repository uses GitHub Actions for automation:
 
-- **CI Workflow**: Validates configurations and checks for security issues
-- **CodeQL Analysis**: Performs automated security scanning
-- **DNS Summary Export**: Exports DNS configurations for reporting
+- **CI Workflow**: Validates PowerShell scripts and checks for security issues
+- **DNS Management Workflows**: Audit, enforce standards, and manage DNS records
+- **DNS Export Workflow**: Exports DNS configurations for reporting
+- **GitHub Pages Deployment**: Deploys documentation and tracking site
 - **Dependabot**: Keeps dependencies up-to-date
 
-For more information, see [.github/workflows/README.md](.github/workflows/README.md).
+For detailed information about each workflow, see [.github/workflows/README.md](.github/workflows/README.md).
 
 ## Best Practices
 

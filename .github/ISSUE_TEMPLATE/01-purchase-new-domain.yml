@@ -27,48 +27,29 @@ body:
   - type: markdown
     attributes:
       value: |
-        ### Planned Uses
-        Select required mandatory uses and any optional uses.
-
-        #### Overall Mandatory Settings (pre‑checked)
+        ### Mandatory Settings
+        The following are mandatory and applied per FFC policy:
         - [x] Website will be pointed to GitHub Pages automatically (per FFC policy)
-
-  - type: checkboxes
-    id: overall_ack
-    attributes:
-      label: Overall Acknowledgement
-      description: Confirm the automatic GitHub Pages pointing for the website
-      options:
-        - label: I acknowledge the website will be pointed to GitHub Pages automatically
-          required: true
-
-  - type: markdown
-    attributes:
-      value: |
-        ### Email Uses
-        
-        #### Mandatory Email Settings (pre‑checked)
         - [x] Microsoft 365 Email (Exchange Online DNS/MX)
         - [x] DMARC reporting (rua/ruf via Cloudflare with FFC-managed mailboxes)
         - [x] SPF (Microsoft 365 record)
 
-  - type: checkboxes
-    id: email_ack
-    attributes:
-      label: Acknowledgement
-      description: Confirm mandatory email settings will be configured
-      options:
-        - label: I acknowledge these mandatory email settings will be configured
-          required: true
-
-  - type: markdown
-    attributes:
-      value: |
+        Website (GitHub Pages): Automatic pointing ensures consistent staging/site hosting with GitHub Pages.
+        
         Microsoft 365 email: Required provider; configures DNS/MX for Exchange Online.
         
         DMARC: Configured and managed in Cloudflare using FFC-managed `rua/ruf` mailboxes; enforces alignment and helps prevent spoofing.
         
         SPF: Authorizes Exchange Online as a permitted sender; prevents softfail. Additional includes (other senders) require prior FFC approval.
+
+  - type: checkboxes
+    id: mandatory_ack
+    attributes:
+      label: Mandatory Settings Acknowledgement
+      description: Confirm all mandatory settings will be configured
+      options:
+        - label: I acknowledge these mandatory settings (GitHub Pages, Microsoft 365 Email, DMARC, SPF) will be configured
+          required: true
 
   - type: checkboxes
     id: email_mta_sts

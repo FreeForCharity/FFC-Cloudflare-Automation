@@ -15,6 +15,8 @@ The static site provides an overview of the automation, current status, key feat
 
 This repository contains automation utilities and scripts for managing Free For Charity's Cloudflare DNS configuration. Administrators execute DNS changes based on structured issue requests, using either the Cloudflare Dashboard for manual updates or Python scripts and Cloudflare API tools for automated, consistent, and auditable domain management.
 
+For details on the GitHub Actions standard enforcement workflow (including required GitHub Pages AAAA records), see [docs/enforce-standard-workflow.md](docs/enforce-standard-workflow.md).
+
 ## Features
 
 ### Issue-Based Workflow

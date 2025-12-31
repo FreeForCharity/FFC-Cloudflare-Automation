@@ -12,6 +12,20 @@ The scripts will install required modules to the current user:
 - `Microsoft.Graph`
 - `ExchangeOnlineManagement`
 
+## Tenant discovery (interactive)
+If you want the repo to tell you exactly what values to use for `EXO_TENANT` / `EXO_ORGANIZATION`
+and confirm Graph connectivity, run:
+
+- `pwsh -File scripts/m365-tenant-discovery.ps1`
+
+If you prefer device code login:
+
+- `pwsh -File scripts/m365-tenant-discovery.ps1 -Auth DeviceCode`
+
+To also check Exchange Online DKIM cmdlets interactively:
+
+- `pwsh -File scripts/m365-tenant-discovery.ps1 -AlsoCheckExchangeOnline`
+
 ## Domain status (Graph)
 Script: `scripts/m365-domain-status.ps1`
 

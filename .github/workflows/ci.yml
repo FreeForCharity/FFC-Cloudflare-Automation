@@ -2,9 +2,9 @@ name: CI - Validate and Test
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
   push:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   validate:
@@ -12,10 +12,30 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+
+      - name: Setup Go (for actionlint)
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
+
+      - name: Lint GitHub Actions workflows
+        run: $(go env GOPATH)/bin/actionlint -color
+
+      - name: Setup Node (for Prettier)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Check formatting (Prettier)
+        run: |
+          npx --yes prettier@3.3.3 --check . --ignore-unknown
 
       - name: Validate PowerShell scripts
         shell: pwsh
@@ -56,12 +76,67 @@ jobs:
             exit 1
           }
 
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber
+
+      - name: Lint PowerShell (PSScriptAnalyzer)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module PSScriptAnalyzer
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity @('Error','Warning') | Where-Object { $_.ScriptPath -like '*.ps1' }
+          $errors = $results | Where-Object { $_.Severity -eq 'Error' }
+          $warnings = $results | Where-Object { $_.Severity -eq 'Warning' }
+
+          if ($warnings) {
+            Write-Host "PSScriptAnalyzer warnings:" -ForegroundColor Yellow
+            $warnings | Select-Object RuleName,Severity,Message,Line | Format-Table -AutoSize | Out-String | Write-Host
+          }
+
+          if ($errors) {
+            Write-Host "PSScriptAnalyzer errors:" -ForegroundColor Red
+            $errors | Select-Object RuleName,Severity,Message,Line | Format-Table -AutoSize | Out-String | Write-Host
+            throw "PSScriptAnalyzer found $($errors.Count) error(s)."
+          }
+
+      - name: Check PowerShell formatting (Invoke-Formatter)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module PSScriptAnalyzer
+
+          $excludePattern = '([/\\]node_modules[/\\]|[/\\]\.git[/\\]|[/\\]\.venv[/\\])'
+          $files = Get-ChildItem -Path . -Filter *.ps1 -File -Recurse | Where-Object { $_.FullName -notmatch $excludePattern }
+          if (-not $files -or $files.Count -eq 0) {
+            Write-Host "No .ps1 files found."
+            exit 0
+          }
+
+          $changed = @()
+          foreach ($file in $files) {
+            $original = Get-Content -Path $file.FullName -Raw
+            $formatted = Invoke-Formatter -ScriptDefinition $original
+            if ($formatted -ne $original) {
+              $changed += $file.FullName
+            }
+          }
+
+          if ($changed.Count -gt 0) {
+            Write-Host "PowerShell formatting differs for:" -ForegroundColor Red
+            $changed | ForEach-Object { Write-Host " - $_" }
+            throw "Invoke-Formatter check failed. Run Invoke-Formatter locally to update files."
+          }
+
       - name: Check for sensitive files
         run: |
           echo "Checking for accidentally committed sensitive files..."
-          
+
           found_sensitive=false
-          
+
           # Check for sensitive patterns
           sensitive_patterns=(
             "*.pem"
@@ -69,7 +144,7 @@ jobs:
             ".env"
             ".env.local"
           )
-          
+
           for pattern in "${sensitive_patterns[@]}"; do
             if find . -name "$pattern" -not -path "./.git/*" | grep -q .; then
               echo "ERROR: Found sensitive files matching pattern: $pattern"
@@ -77,7 +152,7 @@ jobs:
               found_sensitive=true
             fi
           done
-          
+
           if [ "$found_sensitive" = true ]; then
             echo "ERROR: Sensitive files found in repository!"
             exit 1

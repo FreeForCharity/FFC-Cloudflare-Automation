@@ -1,12 +1,12 @@
 name: Purchase and Add New .org Domain
 description: Request to purchase and add a new .org domain to the Cloudflare account
-title: "[DOMAIN PURCHASE] {domain_name}"
+title: "[DOMAIN PURCHASE REQUEST] {domain_name}"
 labels: ["domain-purchase", "cloudflare"]
 body:
   - type: markdown
     attributes:
       value: |
-        If you have trouble creating the issue, contact Clarke Moyer by text at 520-222-8104.
+        If you have trouble creating the request, contact Clarke Moyer by text at 520-222-8104.
   - type: markdown
     attributes:
       value: |
@@ -24,14 +24,37 @@ body:
     validations:
       required: true
 
-  - type: textarea
-    id: purpose
+  - type: dropdown
+    id: primary_use
     attributes:
-      label: Purpose
-      description: Describe the purpose of this domain and how it will be used
-      placeholder: "This domain will be used for..."
+      label: Primary Use
+      description: Choose how this domain will be used
+      options:
+        - Email (Microsoft 365 only)
+        - Website (GitHub Pages only)
+        - Verification with Google tools (Analytics, PageSpeed, Search Console)
     validations:
       required: true
+
+  - type: checkboxes
+    id: verification_tools
+    attributes:
+      label: Verification/Telemetry Tools (if applicable)
+      description: Select tools requiring DNS verification or site checks
+      options:
+        - label: Google Analytics
+        - label: Google Search Console
+        - label: Google PageSpeed Insights
+        - label: Microsoft Clarity
+
+  - type: textarea
+    id: purpose_details
+    attributes:
+      label: Purpose Details (Optional)
+      description: Provide any specifics (e.g., tenant, repo, verification text)
+      placeholder: "Example: Microsoft 365 email for org; GitHub Pages site repo ffc-website; Google site verification TXT"
+    validations:
+      required: false
 
   - type: textarea
     id: project_details
@@ -216,14 +239,11 @@ body:
         - CNAME: www -> example.org
 
 
-  - type: input
-    id: timeline
+  - type: markdown
     attributes:
-      label: Timeline
-      description: When is this domain needed?
-      placeholder: "ASAP or specific date"
-    validations:
-      required: true
+      value: |
+        ### Timeline
+        FFC seeks to process domain name purchase requests within 1 week. If your request has not been assigned within 1 week, please text Clarke Moyer at 520-222-8104.
 
   - type: checkboxes
     id: post_purchase

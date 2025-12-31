@@ -24,17 +24,18 @@ body:
     validations:
       required: true
 
-  - type: dropdown
-    id: primary_use
+  - type: checkboxes
+    id: planned_uses
     attributes:
-      label: Primary Use
-      description: Choose how this domain will be used
+      label: Planned Uses
+      description: Select all applicable uses for this domain (preselect all by default)
       options:
-        - Email (Microsoft 365 only)
-        - Website (GitHub Pages only)
-        - Verification with Google tools (Analytics, PageSpeed, Search Console)
-    validations:
-      required: true
+        - label: Email (Microsoft 365 only)
+          required: true
+        - label: Website (GitHub Pages only)
+          required: true
+        - label: Verification with Google tools (Analytics, PageSpeed, Search Console)
+          required: true
 
   - type: checkboxes
     id: verification_tools

@@ -18,6 +18,8 @@ and confirm Graph connectivity, run:
 
 - `pwsh -File scripts/m365-tenant-discovery.ps1`
 
+This uses **interactive browser sign-in** by default.
+
 If you prefer device code login:
 
 - `pwsh -File scripts/m365-tenant-discovery.ps1 -Auth DeviceCode`

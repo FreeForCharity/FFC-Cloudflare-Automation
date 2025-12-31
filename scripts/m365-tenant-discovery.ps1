@@ -19,6 +19,21 @@ function Ensure-Module {
         [string]$Name
     )
 
+    try {
+        if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing NuGet package provider..." -ForegroundColor Yellow
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+        }
+    } catch {
+        # Best-effort; module install may still succeed.
+    }
+
+    try {
+        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
+    } catch {
+        # Best-effort; if this fails, Install-Module may prompt.
+    }
+
     if (-not (Get-Module -ListAvailable -Name $Name)) {
         Write-Host "Installing PowerShell module: $Name" -ForegroundColor Yellow
         Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber
@@ -41,10 +56,16 @@ function Connect-GraphInteractive {
     )
 
     if ($Mode -eq 'DeviceCode') {
+        Write-Host "Device Code login selected." -ForegroundColor Yellow
+        Write-Host "If you do not see a device login URL/code, the session is likely still installing modules." -ForegroundColor DarkGray
         Connect-MgGraph -Scopes $scopes -UseDeviceCode | Out-Null
-    } else {
-        Connect-MgGraph -Scopes $scopes | Out-Null
+        return
     }
+
+    Write-Host "Interactive login selected." -ForegroundColor Green
+    Write-Host "A browser window/tab should open for Microsoft sign-in." -ForegroundColor DarkGray
+    Write-Host "If nothing opens, re-run with: -Auth DeviceCode" -ForegroundColor DarkGray
+    Connect-MgGraph -Scopes $scopes | Out-Null
 }
 
 function Write-Kv {

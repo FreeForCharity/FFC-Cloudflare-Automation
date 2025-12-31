@@ -11,6 +11,34 @@ on:
         description: "Export for all zones accessible to the token"
         required: false
         type: boolean
+      drive_dns:
+        description: "Also run Cloudflare DNS Update via reusable workflow"
+        required: false
+        type: boolean
+      domain:
+        description: "Domain for DNS Update"
+        required: false
+        type: string
+      pages_host:
+        description: "GitHub Pages hostname"
+        required: false
+        type: string
+      mode:
+        description: "DNS update mode (github-pages-a-aaaa | apex-cname | revert-apex-a)"
+        required: false
+        type: string
+      apex_a:
+        description: "IPv4 for revert-apex-a"
+        required: false
+        type: string
+      purge:
+        description: "Purge other A/CNAME"
+        required: false
+        type: boolean
+      apply:
+        description: "Apply changes (default dry-run)"
+        required: false
+        type: boolean
 
 jobs:
   export:
@@ -50,3 +78,15 @@ jobs:
         with:
           name: zone_dns_summary
           path: zone_dns_summary.csv
+
+  drive-dns-update:
+    if: ${{ inputs.drive_dns == true }}
+    uses: FreeForCharity/FFC-Cloudflare-Automation-/.github/workflows/cloudflare-dns.yml@main
+    secrets: inherit
+    with:
+      domain: ${{ inputs.domain }}
+      pages_host: ${{ inputs.pages_host }}
+      mode: ${{ inputs.mode }}
+      apex_a: ${{ inputs.apex_a }}
+      purge: ${{ inputs.purge }}
+      apply: ${{ inputs.apply }}

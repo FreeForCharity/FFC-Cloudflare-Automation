@@ -1,7 +1,7 @@
 name: Remove Domain from Cloudflare
 description: Request to remove a domain from the Cloudflare account
-title: "[REMOVE DOMAIN] {domain_name}"
-labels: ["domain-remove", "cloudflare"]
+title: '[REMOVE DOMAIN] {domain_name}'
+labels: ['domain-remove', 'cloudflare']
 body:
   - type: markdown
     attributes:
@@ -18,7 +18,7 @@ body:
     attributes:
       label: Domain Name
       description: Enter the domain name to be removed
-      placeholder: "domain-to-remove.org"
+      placeholder: 'domain-to-remove.org'
     validations:
       required: true
 
@@ -62,7 +62,7 @@ body:
     attributes:
       label: New DNS Provider
       description: If moving to another provider, specify which one
-      placeholder: "Route 53, Google Cloud DNS, etc."
+      placeholder: 'Route 53, Google Cloud DNS, etc.'
 
   - type: textarea
     id: new_nameservers
@@ -90,7 +90,7 @@ body:
     attributes:
       label: Remove By Date
       description: When should this domain be removed?
-      placeholder: "YYYY-MM-DD"
+      placeholder: 'YYYY-MM-DD'
     validations:
       required: true
 
@@ -99,8 +99,8 @@ body:
     attributes:
       label: Is Downtime Acceptable?
       options:
-        - "No - must maintain uptime"
-        - "Yes - specify acceptable downtime window in notes"
+        - 'No - must maintain uptime'
+        - 'Yes - specify acceptable downtime window in notes'
     validations:
       required: true
 
@@ -127,7 +127,7 @@ body:
       value: |
         ---
         ## For Administrator Use
-        
+
         ### Pre-Removal Checklist
         - [ ] Removal reason documented and approved
         - [ ] Data backup completed (if requested)
@@ -135,22 +135,22 @@ body:
         - [ ] Nameservers updated at registrar (if applicable)
         - [ ] Stakeholders notified
         - [ ] Grace period allowed for DNS propagation
-        
+
         ### Data Export Commands
         ```bash
         # Export DNS records to CSV
         python export_zone_dns_summary.py --zones [domain-name] --output [domain-name]_backup.csv
-        
+
         # Export all A records
         python export_zone_a_records.py --zones [domain-name] --output [domain-name]_a_records.csv
         ```
-        
+
         ### Removal Steps
         1. [ ] Verify nameservers have been changed at registrar
         2. [ ] Wait for DNS propagation confirmation
         3. [ ] Remove domain from Cloudflare Dashboard
         4. [ ] Verify removal and domain still resolves with new provider
-        
+
         ### Post-Removal Verification
         - [ ] Domain removed from Cloudflare account
         - [ ] Domain resolves with new DNS provider

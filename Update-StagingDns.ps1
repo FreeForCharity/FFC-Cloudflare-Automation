@@ -20,7 +20,7 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [string]$NewIp,
     [string]$Token,
     [switch]$DryRun,
@@ -116,10 +116,12 @@ try {
             $upd = Invoke-CfPatch -Path "/zones/$zoneId/dns_records/$($rec.id)" -Token $plainToken -Payload $payload
             Write-Host "    Updated ip: $($rec.content) -> $($upd.result.content) proxied: $($rec.proxied) -> $($upd.result.proxied)" -ForegroundColor Green
         }
-    } else {
+    }
+    else {
         if ($DryRun) {
             Write-Host "DRY-RUN: Would create new A record for $Fqdn with $NewIp proxied=$([bool]$Proxied)" -ForegroundColor Yellow
-        } else {
+        }
+        else {
             Write-Host "Creating new A record for $Fqdn with $NewIp proxied=$([bool]$Proxied)" -ForegroundColor Yellow
             $create = Invoke-CfPost -Path "/zones/$zoneId/dns_records" -Token $plainToken -Payload $payload
             Write-Host "Created: $($create.result.name) -> $($create.result.content) proxied=$($create.result.proxied)" -ForegroundColor Green

@@ -50,6 +50,3 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup
-
-# Generated DNS export files
-zone_*.csv

@@ -7,10 +7,12 @@ This guide explains how to update DNS records for the `staging.clarkemoyer.com` 
 ### Python Script (Recommended)
 
 **Requirements:**
+
 - Python 3.9+
 - Install dependencies: `pip install -r requirements.txt`
 
 **Update staging A record:**
+
 ```bash
 # Basic usage (will prompt for API token)
 python update_dns.py --name staging --type A --ip 203.0.113.42
@@ -32,9 +34,11 @@ python update_dns.py --name staging --type A --ip 203.0.113.42 --dry-run
 ### PowerShell Script (Alternative)
 
 **Requirements:**
+
 - PowerShell 5.1+
 
 **Update staging A record:**
+
 ```powershell
 # Basic usage (will prompt for API token)
 ./Update-StagingDns.ps1 -NewIp 203.0.113.42
@@ -53,6 +57,7 @@ $env:CLOUDFLARE_API_TOKEN = "your_token_here"
 ## Behavior
 
 Both scripts:
+
 - Find the zone ID for `clarkemoyer.com`
 - Fetch all existing A records for `staging.clarkemoyer.com`
 - Update records with differing IP or proxy status
@@ -64,16 +69,19 @@ Both scripts:
 ## Advanced Operations
 
 ### Search for Records
+
 ```bash
 python update_dns.py --name staging --type A --search
 ```
 
 ### Delete a Specific Record
+
 ```bash
 python update_dns.py --record-id abc123xyz --delete
 ```
 
 ### Update CNAME Record
+
 ```bash
 python update_dns.py --name staging --type CNAME --target example.com
 ```
@@ -88,6 +96,7 @@ python update_dns.py --name staging --type CNAME --target example.com
 ## Multiple Records
 
 If multiple A records exist for `staging.clarkemoyer.com`:
+
 - Each record with a different IP or proxy status is updated
 - Records already matching the requested IP and proxy state are left unchanged
 - All matching records are processed

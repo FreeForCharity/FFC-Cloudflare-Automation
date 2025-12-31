@@ -2,7 +2,8 @@
 
 ## ⚠️ CRITICAL SECURITY REQUIREMENTS
 
-**This document provides mandatory instructions for ALL AI agents (GitHub Copilot, ChatGPT, Claude, etc.) working on this repository.**
+**This document provides mandatory instructions for ALL AI agents (GitHub Copilot, ChatGPT, Claude,
+etc.) working on this repository.**
 
 ---
 
@@ -11,6 +12,7 @@
 ### Rule 1: NEVER Expose API Tokens or Secrets
 
 **FORBIDDEN ACTIONS:**
+
 - ❌ NEVER write actual API tokens in code, documentation, or comments
 - ❌ NEVER hardcode secrets in any file
 - ❌ NEVER include secrets in example files
@@ -18,8 +20,8 @@
 - ❌ NEVER expose secrets in logs, outputs, or error messages
 - ❌ NEVER store secrets in environment files committed to git
 
-**VIOLATION RESPONSE:**
-If you accidentally expose a secret:
+**VIOLATION RESPONSE:** If you accidentally expose a secret:
+
 1. Immediately stop all operations
 2. Alert the user that a secret was exposed
 3. Instruct them to revoke the exposed secret immediately
@@ -35,12 +37,14 @@ If you accidentally expose a secret:
 **When modifying GitHub Actions workflows:**
 
 1. **Always use `${{ secrets.SECRET_NAME }}` syntax**:
+
    ```yaml
    env:
      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
    ```
 
 2. **Always validate secret presence BEFORE use**:
+
    ```yaml
    - name: Validate Secret Presence
      run: |
@@ -51,10 +55,11 @@ If you accidentally expose a secret:
    ```
 
 3. **NEVER echo or print secrets**:
+
    ```yaml
    # ❌ WRONG
    - run: echo ${{ secrets.CLOUDFLARE_API_TOKEN }}
-   
+
    # ✅ CORRECT
    - run: echo "Secret is configured"
    ```
@@ -64,15 +69,17 @@ If you accidentally expose a secret:
 **When instructing users for local development:**
 
 1. **Always use `CLOUDFLARE_API_TOKEN` environment variable**:
+
    ```bash
    export CLOUDFLARE_API_TOKEN="<user-must-provide>"
    ```
 
 2. **Always provide placeholder text, NEVER actual values**:
+
    ```bash
    # ✅ CORRECT
    export CLOUDFLARE_API_TOKEN="your-api-token-here"
-   
+
    # ❌ WRONG
    export CLOUDFLARE_API_TOKEN="abc123xyz..."
    ```
@@ -82,12 +89,14 @@ If you accidentally expose a secret:
 **When creating example files:**
 
 1. **ONLY commit `.env.example` files**:
+
    ```bash
    # .env.example
    CLOUDFLARE_API_TOKEN=your-cloudflare-api-token-here
    ```
 
 2. **Ensure `.gitignore` excludes actual secrets**:
+
    ```gitignore
    .env
    .env.local
@@ -107,6 +116,7 @@ If you accidentally expose a secret:
 ### When Writing Documentation
 
 **DO:**
+
 - ✅ Use placeholder text: `"your-api-token-here"`
 - ✅ Reference GitHub Secrets: `${{ secrets.CLOUDFLARE_API_TOKEN }}`
 - ✅ Use environment variables: `$CLOUDFLARE_API_TOKEN`
@@ -114,6 +124,7 @@ If you accidentally expose a secret:
 - ✅ Link to official credential management docs
 
 **DON'T:**
+
 - ❌ Include actual API tokens (even if "example")
 - ❌ Use realistic-looking token formats
 - ❌ Copy tokens from user messages into docs
@@ -122,6 +133,7 @@ If you accidentally expose a secret:
 ### Example Documentation Patterns
 
 **✅ CORRECT:**
+
 ```markdown
 1. Create a CloudFlare API token at https://dash.cloudflare.com/profile/api-tokens
 2. Add the token to GitHub Secrets as `CLOUDFLARE_API_TOKEN`
@@ -129,6 +141,7 @@ If you accidentally expose a secret:
 ```
 
 **❌ WRONG:**
+
 ```markdown
 1. Use this API token: em7chiooYdKI4T3d3Oo1j31-ekEV2FiUfZxwjv-Q
 2. Copy it to your configuration
@@ -190,7 +203,7 @@ jobs:
             echo "::error::Required secret not set"
             exit 1
           fi
-      
+
       # STEP 2: Use secret via environment variables
       - name: Use Secret
         env:
@@ -198,7 +211,7 @@ jobs:
         run: |
           # Your commands here
           # Secret is available as environment variable
-      
+
       # STEP 3: Never echo secrets in logs
       - name: Show Status
         run: echo "✅ Workflow completed successfully"
@@ -222,10 +235,11 @@ jobs:
 
 **Standard response template:**
 
-```markdown
+````markdown
 To configure your CloudFlare API token:
 
 **For GitHub Actions (Recommended):**
+
 1. Go to repository Settings → Secrets and variables → Actions
 2. Click "New repository secret"
 3. Name: `CLOUDFLARE_API_TOKEN`
@@ -235,17 +249,22 @@ To configure your CloudFlare API token:
 The workflows will automatically use: `${{ secrets.CLOUDFLARE_API_TOKEN }}`
 
 **For Local Development:**
+
 1. Create a `.env` file:
    ```bash
    cp .env.example .env
    ```
+````
+
 2. Edit `.env` and add your token
 3. File is excluded by `.gitignore` - never commit it
 
 **Obtain Token From:**
+
 - CloudFlare Dashboard: https://dash.cloudflare.com/profile/api-tokens
 - Required permissions: Zone DNS Edit, Zone Settings Edit, Zone Read
-```
+
+````
 
 ### When User Asks to Add Token to Docs
 
@@ -259,7 +278,7 @@ Instead, I'll show you how to configure it securely:
 - Local dev: Use .env file (excluded from git)
 
 See SECURITY.md for complete instructions.
-```
+````
 
 ---
 
@@ -310,6 +329,7 @@ git log --all --full-history --source --pickaxe-regex -S "token.*[a-zA-Z0-9_-]{2
 ```
 
 **If ANY check reveals a secret:**
+
 1. STOP immediately
 2. Alert the user
 3. Instruct them to revoke the secret
@@ -322,9 +342,11 @@ git log --all --full-history --source --pickaxe-regex -S "token.*[a-zA-Z0-9_-]{2
 ### Example 1: User Shares Token
 
 **User says:**
+
 > "Here's my API token: em7chiooYdKI4T3d3Oo1j31-ekEV2FiUfZxwjv-Q"
 
 **AI Response:**
+
 ```
 ⚠️ For security, I won't include your actual token in any files.
 
@@ -338,9 +360,11 @@ See SECURITY.md for detailed instructions.
 ### Example 2: Updating Workflows
 
 **User asks:**
+
 > "Add the CloudFlare token to the workflow"
 
 **AI Response:**
+
 ```
 I'll add the token using GitHub Secrets (secure method):
 
@@ -353,9 +377,11 @@ The actual token value should be added to repository secrets.
 ### Example 3: Creating Documentation
 
 **User asks:**
+
 > "Document how to use the API token"
 
 **AI Response:**
+
 ```
 I'll create documentation with secure examples:
 
@@ -377,6 +403,7 @@ No actual tokens will be included in the documentation.
 3. **ALWAYS instruct users on secure methods** - GitHub Secrets, local files, environment variables
 
 **When in doubt:**
+
 - Default to NOT including anything that looks like a secret
 - Ask the user to add it via secure methods
 - Reference documentation on proper secret management
@@ -386,6 +413,7 @@ No actual tokens will be included in the documentation.
 ## 📞 Support
 
 If you encounter a situation not covered by these instructions:
+
 1. Default to the most secure option
 2. Consult SECURITY.md
 3. Ask the user for clarification

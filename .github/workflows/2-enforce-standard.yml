@@ -1,5 +1,5 @@
-name: "[DNS] 2. Fix - Enforce Standard"
-run-name: "Enforce Standard: ${{ inputs.domain }}"
+name: '[DNS] 2. Fix - Enforce Standard'
+run-name: 'Enforce Standard: ${{ inputs.domain }}'
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ jobs:
         run: |
           $Domain = "${{ inputs.domain }}"
           $DryRun = "${{ inputs.dry_run }}"
-          
+
           if ($DryRun -eq "true") {
             Write-Host "--- DRY RUN MODE: PREVIEWING CHANGES ---"
             .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -DryRun
@@ -35,11 +35,11 @@ jobs:
             Write-Host "--- LIVE MODE: APPLYING FIXES ---"
             .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard
           }
-          
+
       - name: Post-Enforce Compliance Audit
         shell: pwsh
         env:
           CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
         run: |
-           $Domain = "${{ inputs.domain }}"
-           .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ErrorAction Continue
+          $Domain = "${{ inputs.domain }}"
+          .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ErrorAction Continue

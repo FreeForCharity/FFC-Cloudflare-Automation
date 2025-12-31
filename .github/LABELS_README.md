@@ -1,20 +1,24 @@
 # GitHub Labels Configuration
 
-This directory contains the configuration for GitHub repository labels used by various automation tools and bots.
+This directory contains the configuration for GitHub repository labels used by various automation
+tools and bots.
 
 ## Files
 
 ### `labels.yml`
+
 Defines all labels used in the repository for issues, pull requests, and automation.
 
 **Label Categories:**
 
 1. **Dependency Management** - Used by Dependabot
+
    - `dependencies` - Updates to dependencies
    - `github-actions` - Updates to GitHub Actions workflows
    - `python` - Updates to Python dependencies
 
 2. **Domain Management** - Used by issue templates and workflows
+
    - `domain-add` - Request to add a new domain
    - `domain-purchase` - Request to purchase a new domain
    - `domain-remove` - Request to remove a domain
@@ -34,9 +38,11 @@ Defines all labels used in the repository for issues, pull requests, and automat
 ## Workflows
 
 ### `initialize-labels.yml`
+
 Manual workflow to create or update all labels defined in `labels.yml`.
 
 **How to use:**
+
 1. Go to Actions tab in GitHub
 2. Select "Initialize Labels" workflow
 3. Click "Run workflow"
@@ -45,9 +51,11 @@ Manual workflow to create or update all labels defined in `labels.yml`.
 This will create/update all labels in the repository based on the configuration.
 
 ### `sync-labels.yml`
+
 Automatic workflow that syncs labels whenever `labels.yml` is updated on the main branch.
 
 **Triggers:**
+
 - Push to main branch that modifies `.github/labels.yml`
 - Manual workflow dispatch
 
@@ -70,6 +78,7 @@ To add, update, or remove labels:
 ## Label Usage
 
 These labels are automatically applied by:
+
 - **Dependabot**: Uses `dependencies`, `github-actions`, and `python` labels for its PRs
 - **Issue Templates**: Automatically apply labels based on the template used
 - **Manual Assignment**: Maintainers can apply any label to issues/PRs

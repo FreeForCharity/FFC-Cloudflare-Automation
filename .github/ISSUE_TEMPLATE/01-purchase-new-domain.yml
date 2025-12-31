@@ -1,7 +1,7 @@
 name: Purchase and Add New .org Domain
 description: Request to purchase and add a new .org domain to the Cloudflare account
-title: "[DOMAIN PURCHASE REQUEST] {domain_name}"
-labels: ["domain-purchase", "cloudflare"]
+title: '[DOMAIN PURCHASE REQUEST] {domain_name}'
+labels: ['domain-purchase', 'cloudflare']
 body:
   - type: markdown
     attributes:
@@ -12,7 +12,7 @@ body:
       value: |
         ## Domain Purchase Request
         Use this template to request the purchase and addition of a new .org domain to the FFC Cloudflare account.
-        
+
         Note: Domains are free for all requestors. Budget approval is handled by FFC administrators; requestors do not need to confirm purchase approval.
 
   - type: input
@@ -20,7 +20,7 @@ body:
     attributes:
       label: Domain Name
       description: Enter the exact domain name you want to purchase
-      placeholder: "example.org"
+      placeholder: 'example.org'
     validations:
       required: true
 
@@ -35,11 +35,11 @@ body:
         - [x] SPF (Microsoft 365 record)
 
         Website (GitHub Pages): Automatic pointing ensures consistent staging/site hosting with GitHub Pages.
-        
+
         Microsoft 365 email: Required provider; configures DNS/MX for Exchange Online.
-        
+
         DMARC: Configured and managed in Cloudflare using FFC-managed `rua/ruf` mailboxes; enforces alignment and helps prevent spoofing.
-        
+
         SPF: Authorizes Exchange Online as a permitted sender; prevents softfail. (NOTE: Other senders require prior FFC approval.)
 
   - type: checkboxes
@@ -48,7 +48,9 @@ body:
       label: Mandatory Settings Acknowledgement
       description: Confirm all mandatory settings will be configured
       options:
-        - label: I acknowledge these mandatory settings (GitHub Pages, Microsoft 365 Email, DMARC, SPF) will be configured
+        - label:
+            I acknowledge these mandatory settings (GitHub Pages, Microsoft 365 Email, DMARC, SPF)
+            will be configured
           required: true
 
   - type: checkboxes
@@ -129,7 +131,6 @@ body:
         - label: Google PageSpeed Insights
         - label: Microsoft Clarity
 
-
   - type: textarea
     id: project_details
     attributes:
@@ -149,7 +150,7 @@ body:
     attributes:
       label: Registrant Name
       description: Legal name of the registrant (person or organization representative)
-      placeholder: "Jane Doe"
+      placeholder: 'Jane Doe'
     validations:
       required: true
 
@@ -158,7 +159,7 @@ body:
     attributes:
       label: Registrant Organization
       description: Organization name (if applicable)
-      placeholder: "Free For Charity"
+      placeholder: 'Free For Charity'
     validations:
       required: true
 
@@ -167,7 +168,7 @@ body:
     attributes:
       label: Registrant Email
       description: Primary contact email for the registrant
-      placeholder: "jane.doe@example.org"
+      placeholder: 'jane.doe@example.org'
     validations:
       required: true
 
@@ -176,7 +177,7 @@ body:
     attributes:
       label: Registrant Phone
       description: Phone number including country code
-      placeholder: "+1-555-555-1212"
+      placeholder: '+1-555-555-1212'
     validations:
       required: true
 
@@ -184,7 +185,7 @@ body:
     id: registrant_address1
     attributes:
       label: Registrant Address Line 1
-      placeholder: "123 Main St"
+      placeholder: '123 Main St'
     validations:
       required: true
 
@@ -192,7 +193,7 @@ body:
     id: registrant_address2
     attributes:
       label: Registrant Address Line 2
-      placeholder: "Suite 200"
+      placeholder: 'Suite 200'
     validations:
       required: false
 
@@ -200,7 +201,7 @@ body:
     id: registrant_city
     attributes:
       label: City
-      placeholder: "Tucson"
+      placeholder: 'Tucson'
     validations:
       required: true
 
@@ -208,7 +209,7 @@ body:
     id: registrant_state
     attributes:
       label: State/Province
-      placeholder: "AZ"
+      placeholder: 'AZ'
     validations:
       required: true
 
@@ -216,7 +217,7 @@ body:
     id: registrant_postal_code
     attributes:
       label: Postal Code
-      placeholder: "85701"
+      placeholder: '85701'
     validations:
       required: true
 
@@ -224,7 +225,7 @@ body:
     id: registrant_country
     attributes:
       label: Country
-      placeholder: "US"
+      placeholder: 'US'
     validations:
       required: true
 
@@ -232,7 +233,8 @@ body:
     id: icann_ack
     attributes:
       label: ICANN Accuracy Acknowledgment
-      description: Confirm all registrant details are accurate and kept up to date per ICANN requirements
+      description:
+        Confirm all registrant details are accurate and kept up to date per ICANN requirements
       options:
         - label: I confirm registrant information is accurate
           required: true
@@ -312,7 +314,6 @@ body:
         - A record: @ -> 203.0.113.42
         - CNAME: www -> example.org
 
-
   - type: markdown
     attributes:
       value: |
@@ -341,13 +342,13 @@ body:
       value: |
         ---
         ## For Administrator Use
-        
+
         ### Pre-Purchase Checklist
         - [ ] Domain availability confirmed
         - [ ] Budget approved (FFC admin only)
         - [ ] Domain aligns with FFC mission and policies
         - [ ] No trademark or legal concerns
-        
+
         ### Purchase Steps
         1. [ ] Purchase domain from registrar (e.g., Namecheap, Google Domains)
         2. [ ] Add domain to Cloudflare account
@@ -356,7 +357,7 @@ body:
         5. [ ] Enable security settings (SSL/TLS, DNSSEC)
         6. [ ] Verify domain is working correctly
         7. [ ] Document domain in inventory
-        
+
         ### Verification
         - [ ] Domain added to Cloudflare
         - [ ] DNS records configured

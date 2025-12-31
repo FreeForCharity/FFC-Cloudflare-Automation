@@ -1,7 +1,7 @@
 name: Configure Apex Domain for GitHub Pages
 description: Point an apex/root domain (e.g., example.org) to GitHub Pages
-title: "[GITHUB PAGES APEX] {apex_domain}"
-labels: ["github-pages", "dns-config", "cloudflare"]
+title: '[GITHUB PAGES APEX] {apex_domain}'
+labels: ['github-pages', 'dns-config', 'cloudflare']
 body:
   - type: markdown
     attributes:
@@ -12,7 +12,7 @@ body:
       value: |
         ## GitHub Pages Apex Domain Configuration
         Use this template to configure an apex/root domain to point to GitHub Pages.
-        
+
         **Apex domains** are root domains without subdomains (e.g., example.org, not www.example.org).
 
   - type: input
@@ -20,7 +20,7 @@ body:
     attributes:
       label: Apex Domain
       description: Enter the apex/root domain name
-      placeholder: "example.org"
+      placeholder: 'example.org'
     validations:
       required: true
 
@@ -29,7 +29,7 @@ body:
     attributes:
       label: GitHub Organization/User
       description: GitHub organization or username
-      placeholder: "FreeForCharity"
+      placeholder: 'FreeForCharity'
     validations:
       required: true
 
@@ -38,7 +38,7 @@ body:
     attributes:
       label: Repository Name
       description: Name of the GitHub repository
-      placeholder: "ffc-website"
+      placeholder: 'ffc-website'
     validations:
       required: true
 
@@ -47,7 +47,7 @@ body:
     attributes:
       label: GitHub Pages URL
       description: Current GitHub Pages URL (before custom domain)
-      placeholder: "freeforcharity.github.io or freeforcharity.github.io/repo-name"
+      placeholder: 'freeforcharity.github.io or freeforcharity.github.io/repo-name'
     validations:
       required: true
 
@@ -105,7 +105,7 @@ body:
     attributes:
       label: Timeline
       description: When is this configuration needed?
-      placeholder: "ASAP or specific date"
+      placeholder: 'ASAP or specific date'
     validations:
       required: true
 
@@ -120,12 +120,12 @@ body:
       value: |
         ---
         ## For Administrator Use
-        
+
         ### Prerequisites
         - [ ] Domain is in Cloudflare account
         - [ ] GitHub repository exists and has content
         - [ ] GitHub Pages is enabled in repository settings
-        
+
         ### GitHub Pages IP Addresses
         Current GitHub Pages IP addresses as of December 2025 (always verify at [GitHub Pages documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site#configuring-an-apex-domain)):
         ```
@@ -134,9 +134,9 @@ body:
         185.199.110.153
         185.199.111.153
         ```
-        
+
         ⚠️ **Important**: Always verify these IPs are current before configuring DNS records.
-        
+
         ### DNS Configuration (Cloudflare Dashboard)
         1. [ ] Login to Cloudflare Dashboard
         2. [ ] Navigate to DNS → Records
@@ -147,51 +147,51 @@ body:
            - Type: A, Name: @, Content: 185.199.111.153, Proxy: Off (DNS only)
         4. [ ] Create www CNAME (if requested):
            - Type: CNAME, Name: www, Content: [username].github.io, Proxy: Off
-        
+
         ### DNS Configuration (Python Script)
         ```bash
         export CLOUDFLARE_API_TOKEN="your-token-here"
-        
+
         # Create A records for GitHub Pages (repeat for all 4 IPs)
         python update_dns.py --zone [domain.org] --name @ --type A --ip 185.199.108.153 --no-proxy
         python update_dns.py --zone [domain.org] --name @ --type A --ip 185.199.109.153 --no-proxy
         python update_dns.py --zone [domain.org] --name @ --type A --ip 185.199.110.153 --no-proxy
         python update_dns.py --zone [domain.org] --name @ --type A --ip 185.199.111.153 --no-proxy
-        
+
         # Create www CNAME (optional)
         python update_dns.py --zone [domain.org] --name www --type CNAME --target [username].github.io --no-proxy
         ```
-        
+
         ### GitHub Pages Configuration
         1. [ ] Navigate to repository Settings → Pages
         2. [ ] Under "Custom domain", enter the apex domain
         3. [ ] Click Save and wait for DNS check
         4. [ ] Once verified (green checkmark), enable "Enforce HTTPS"
-        
+
         ### CNAME File
         ```bash
         # GitHub usually creates this automatically
         # If needed, create manually in repository root:
         echo "[domain.org]" > CNAME
         ```
-        
+
         ### Verification
         ```bash
         # Check DNS propagation
         dig [domain.org] A +short
         dig www.[domain.org] CNAME +short
-        
+
         # Test HTTPS
         curl -I https://[domain.org]
         ```
-        
+
         ### Cloudflare Settings (Recommended)
         - [ ] SSL/TLS Mode: Full (not Full Strict)
         - [ ] Always Use HTTPS: On
         - [ ] Automatic HTTPS Rewrites: On
         - [ ] Minimum TLS Version: 1.2+
         - [ ] **Proxy Status: DNS Only (gray cloud)** ⚠️ Critical!
-        
+
         ### Verification Checklist
         - [ ] All 4 A records created
         - [ ] www CNAME created (if requested)
@@ -203,7 +203,7 @@ body:
         - [ ] HTTPS enabled and enforced
         - [ ] Website loads at https://[domain.org]
         - [ ] SSL certificate valid
-        
+
         ### Timeline
         - DNS configuration: ~5 minutes
         - DNS propagation: 5-30 minutes

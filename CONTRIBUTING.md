@@ -1,6 +1,7 @@
 # Contributing to FFC Cloudflare Automation
 
-Thank you for your interest in contributing to Free For Charity's Cloudflare automation infrastructure! This document provides guidelines for contributing to this project.
+Thank you for your interest in contributing to Free For Charity's Cloudflare automation
+infrastructure! This document provides guidelines for contributing to this project.
 
 ## Table of Contents
 
@@ -15,7 +16,8 @@ Thank you for your interest in contributing to Free For Charity's Cloudflare aut
 
 ## Code of Conduct
 
-Free For Charity is committed to fostering an open and welcoming environment. We expect all contributors to:
+Free For Charity is committed to fostering an open and welcoming environment. We expect all
+contributors to:
 
 - Be respectful and inclusive
 - Exercise empathy and kindness
@@ -71,7 +73,8 @@ We welcome various types of contributions:
 
 ### Pull Requests Required
 
-All changes should be made through a pull request (PR). Avoid pushing directly to `main`, even for small fixes, so reviews and checks are consistently applied.
+All changes should be made through a pull request (PR). Avoid pushing directly to `main`, even for
+small fixes, so reviews and checks are consistently applied.
 
 ### Issues Before PRs
 
@@ -118,6 +121,7 @@ git commit -m "Add: Brief description of what was added/changed"
 ```
 
 Commit message prefixes:
+
 - `Add:` - New features or files
 - `Fix:` - Bug fixes
 - `Update:` - Updates to existing features
@@ -211,20 +215,25 @@ When creating a PR, include:
 
 ```markdown
 ## Description
+
 Brief description of changes
 
 ## Related Issue
+
 Fixes #123
 
 ## Changes Made
+
 - Change 1
 - Change 2
 - Change 3
 
 ## Testing
+
 Describe how you tested these changes
 
 ## Checklist
+
 - [ ] Code follows project style guidelines
 - [ ] Tests pass locally
 - [ ] Documentation updated
@@ -265,8 +274,10 @@ We value all contributions! Contributors will be:
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the same license as the project (GNU AGPL v3).
+By contributing, you agree that your contributions will be licensed under the same license as the
+project (GNU AGPL v3).
 
 ---
 
-Thank you for contributing to Free For Charity! Your efforts help us build better infrastructure for charitable giving.
+Thank you for contributing to Free For Charity! Your efforts help us build better infrastructure for
+charitable giving.

@@ -1,4 +1,4 @@
-name: "[DEPRECATED] Cloudflare DNS Update (legacy)"
+name: '[DEPRECATED] Cloudflare DNS Update (legacy)'
 
 # NOTE: This workflow is intentionally kept as a deprecated stub to avoid
 # stale editor diagnostics and old links breaking after the repository was
@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       domain:
-        description: "(Deprecated) Domain name"
+        description: '(Deprecated) Domain name'
         required: false
         type: string
 

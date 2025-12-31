@@ -1,4 +1,6 @@
 # FFC-Cloudflare-Automation
+
+[![CodeQL](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/codeql-analysis.yml)
 [![CI](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/ci.yml/badge.svg)](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
@@ -6,26 +8,35 @@ Automation utilities for Cloudflare tasks supporting Free For Charity.
 
 ## 🌐 GitHub Pages
 
-View our automation tracking page: [FFC Cloudflare Automation Tracker](https://freeforcharity.github.io/FFC-Cloudflare-Automation-/)
+View our automation tracking page:
+[FFC Cloudflare Automation Tracker](https://freeforcharity.github.io/FFC-Cloudflare-Automation-/)
 
-The static site provides an overview of the automation, current status, key features, and helpful resources.
+The static site provides an overview of the automation, current status, key features, and helpful
+resources.
 
 ## Overview
 
-This repository contains automation utilities and scripts for managing Free For Charity's Cloudflare DNS configuration. Administrators execute DNS changes based on structured issue requests, using either the Cloudflare Dashboard for manual updates or Python scripts and Cloudflare API tools for automated, consistent, and auditable domain management.
+This repository contains automation utilities and scripts for managing Free For Charity's Cloudflare
+DNS configuration. Administrators execute DNS changes based on structured issue requests, using
+either the Cloudflare Dashboard for manual updates or Python scripts and Cloudflare API tools for
+automated, consistent, and auditable domain management.
 
-For details on the GitHub Actions standard enforcement workflow (including required GitHub Pages AAAA records), see [docs/enforce-standard-workflow.md](docs/enforce-standard-workflow.md).
+For details on the GitHub Actions standard enforcement workflow (including required GitHub Pages
+AAAA records), see [docs/enforce-standard-workflow.md](docs/enforce-standard-workflow.md).
 
 ## Features
 
 ### Issue-Based Workflow
+
 - **Structured Requests**: Use GitHub issue templates for domain management requests
 - **Automated Tracking**: All DNS changes tracked via GitHub issues
-- **Administrator Execution**: FFC Cloudflare administrators execute changes based on approved issues
+- **Administrator Execution**: FFC Cloudflare administrators execute changes based on approved
+  issues
 - **Full Audit Trail**: Complete history of all domain operations
 - **Standardized Procedures**: Consistent workflows for common operations
 
 ### DNS Management Utilities
+
 - **Python Scripts**: Flexible DNS record management using Cloudflare API
 - **Create, update, search, and delete** DNS records
 - **Supports A, AAAA, and CNAME** record types for GitHub Pages configuration
@@ -36,6 +47,7 @@ For details on the GitHub Actions standard enforcement workflow (including requi
 - **Manual Option**: Administrators can also use Cloudflare Dashboard for manual DNS updates
 
 ### Supported Operations
+
 1. **Purchase and add new .org domains** to the Cloudflare account
 2. **Add existing domains** to Cloudflare from other providers
 3. **Remove domains** from the Cloudflare account
@@ -48,7 +60,8 @@ For details on the GitHub Actions standard enforcement workflow (including requi
 
 To request a DNS change or domain operation:
 
-1. Go to the [Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues/new/choose) page
+1. Go to the
+   [Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues/new/choose) page
 2. Select the appropriate issue template:
    - **Purchase and Add New .org Domain** - For new domain acquisitions
    - **Add Existing Domain to Cloudflare** - For migrating domains
@@ -83,7 +96,8 @@ python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.4
 ## Prerequisites
 
 ### For DNS Script Execution (Administrators)
-- Python 3.9+ 
+
+- Python 3.9+
 - PowerShell 5.1+ (optional, for `Update-StagingDns.ps1`)
 - Cloudflare API token with DNS edit permissions
 - Access to FFC Cloudflare account
@@ -95,41 +109,49 @@ The Python scripts in this repository provide flexible DNS record management for
 ### Basic Examples
 
 **Update or create an A record:**
+
 ```bash
 python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
 ```
 
 **Update or create an AAAA record (IPv6):**
+
 ```bash
 python update_dns.py --zone example.org --name @ --type AAAA --ip 2606:50c0:8000::153
 ```
 
 **Update or create a CNAME record:**
+
 ```bash
 python update_dns.py --zone example.org --name www --type CNAME --target example.org
 ```
 
 **Search for existing records:**
+
 ```bash
 python update_dns.py --zone example.org --name staging --type A --search
 ```
 
 **Delete a specific record:**
+
 ```bash
 python update_dns.py --zone example.org --record-id abc123xyz --delete
 ```
 
 **Enable Cloudflare proxy (orange cloud):**
+
 ```bash
 python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --proxied
 ```
 
 **Disable Cloudflare proxy (DNS only - required for GitHub Pages):**
+
 ```bash
 python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --no-proxy
 ```
 
 **Dry run (preview changes without applying):**
+
 ```bash
 python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --dry-run
 ```
@@ -147,14 +169,17 @@ For quick subdomain updates:
 ## GitHub Pages DNS Configuration
 
 For configuring GitHub Pages with custom domains, please use the appropriate issue template:
+
 - **Apex domain** (e.g., example.org): Use the "Configure Apex Domain for GitHub Pages" template
 - **Subdomain** (e.g., staging.example.org): Use the "Configure Subdomain for GitHub Pages" template
 
-The issue templates provide step-by-step instructions for administrators to configure DNS records correctly.
+The issue templates provide step-by-step instructions for administrators to configure DNS records
+correctly.
 
 ### Quick Reference: GitHub Pages Setup
 
 **For Apex Domains:**
+
 ```bash
 # GitHub Pages requires 4 A records pointing to these IPs:
 # 185.199.108.153
@@ -164,6 +189,7 @@ The issue templates provide step-by-step instructions for administrators to conf
 ```
 
 **For Subdomains:**
+
 ```bash
 # Create CNAME record pointing to GitHub Pages
 # Example: staging.example.org -> username.github.io
@@ -173,7 +199,8 @@ See the issue templates for detailed configuration instructions.
 
 ## DNS Summary Export
 
-Use `export_zone_dns_summary.py` to export a CSV summarizing apex A/AAAA and `www` CNAME details for specific zones. This tool is friendly to DNS-only tokens by accepting explicit zone names.
+Use `export_zone_dns_summary.py` to export a CSV summarizing apex A/AAAA and `www` CNAME details for
+specific zones. This tool is friendly to DNS-only tokens by accepting explicit zone names.
 
 ### Usage
 
@@ -202,6 +229,7 @@ python export_zone_dns_summary.py --zones-file .\zones.txt --zone-id-file .\zone
 ```
 
 ### CSV Columns
+
 - `zone`: zone name
 - `apex_a_ips`: semicolon-separated apex A IPs
 - `apex_a_ttls`: semicolon-separated TTLs for apex A
@@ -216,13 +244,17 @@ python export_zone_dns_summary.py --zones-file .\zones.txt --zone-id-file .\zone
 - `other_aaaa_count`: count of non-apex AAAA records
 - `other_cname_count`: count of non-apex/`www` CNAME records
 
-If your token lacks permission to list all zones, supply explicit zones with `--zones`/`--zones-file`.
+If your token lacks permission to list all zones, supply explicit zones with
+`--zones`/`--zones-file`.
 
 ### GitHub Actions
+
 - Secret: set `CLOUDFLARE_API_KEY_READ_ALL` (preferred) or `CLOUDFLARE_API_KEY_DNS_ONLY`.
 - Workflow: `DNS Summary Export`.
-	- Provide `zones` input to target specific zones, or set `all_zones=true` to export everything accessible to the token.
-	- The workflow prefers `CLOUDFLARE_API_KEY_READ_ALL` and falls back to `CLOUDFLARE_API_KEY_DNS_ONLY`.
+  - Provide `zones` input to target specific zones, or set `all_zones=true` to export everything
+    accessible to the token.
+  - The workflow prefers `CLOUDFLARE_API_KEY_READ_ALL` and falls back to
+    `CLOUDFLARE_API_KEY_DNS_ONLY`.
 
 ## Repository Structure
 
@@ -236,18 +268,13 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 │   │   ├── 03-remove-domain.yml
 │   │   ├── 04-github-pages-apex.yml
 │   │   └── 05-github-pages-subdomain.yml
-│   ├── labels.yml          # GitHub labels configuration
-│   ├── LABELS_README.md    # Documentation for labels
 │   ├── workflows/          # GitHub Actions workflows
 │   │   ├── ci.yml          # Continuous Integration
-│   │   ├── deploy-pages.yml  # GitHub Pages deployment
 │   │   ├── codeql-analysis.yml  # Security scanning
 │   │   ├── 1-audit-compliance.yml  # [DNS] Report - Check Compliance
 │   │   ├── 2-enforce-standard.yml  # [DNS] Fix - Enforce Standard
 │   │   ├── 3-manage-record.yml     # [DNS] Manual - Manage Record
 │   │   ├── 4-export-summary.yml    # [DNS] Report - Export All Domains
-│   │   ├── initialize-labels.yml   # Label initialization
-│   │   ├── sync-labels.yml         # Label synchronization
 │   │   ├── 99-legacy-zone-add.yml  # Legacy zone-add (kept for reference)
 │   │   └── README.md       # Workflow documentation
 │   └── dependabot.yml      # Dependency update configuration
@@ -256,34 +283,44 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 ├── README.md               # This file
 ├── SECURITY.md             # Security policy
 ├── STAGING_README.md       # Staging subdomain management guide
-├── Export-CloudflareDns.ps1  # PowerShell DNS export script
-├── Update-CloudflareDns.ps1  # PowerShell DNS management script
-└── Update-StagingDns.ps1   # PowerShell staging DNS script
+├── requirements.txt        # Python dependencies
+├── update_dns.py           # Python DNS management script
+├── export_zone_dns_summary.py  # DNS configuration export tool
+├── export_zone_a_records.py    # A record export tool
+└── Update-StagingDns.ps1   # PowerShell DNS script
 ```
 
 ## Deprecated Features
 
-**Terraform**: This repository previously used Terraform for infrastructure management. Terraform support has been removed in favor of Python scripts and the Cloudflare API for DNS management.
+**Terraform**: This repository previously used Terraform for infrastructure management. Terraform
+support has been removed in favor of Python scripts and the Cloudflare API for DNS management.
 
 ## Security
 
 Security is a top priority for this project. We implement multiple security measures:
 
+- **Automated Security Scanning**: CodeQL analysis for code vulnerabilities
 - **Secret Detection**: GitHub secret scanning prevents credential exposure
-- **Dependency Updates**: Dependabot keeps GitHub Actions up-to-date
+- **Dependency Updates**: Dependabot keeps dependencies secure and up-to-date
 - **CI Validation**: Automated checks for sensitive files and misconfigurations
 - **API Token Security**: Cloudflare API tokens stored securely in GitHub Secrets
-- **Code Review**: All changes require review before merging to main branch
 
 ### Protecting Cloudflare API Tokens in Workflows
-- **Least privilege**: Use `CLOUDFLARE_API_KEY_READ_ALL` for read-only workflows; use `CLOUDFLARE_API_KEY_DNS_ONLY` scoped to specific zones for DNS edits.
-- **Environment approvals**: Store tokens as Environment secrets (e.g., `cloudflare-prod`) and require reviewers before jobs run.
-- **Apply gating**: Workflows default to `--dry-run`; set `apply=true` to make changes. Applies are blocked unless running on `main`.
-- **Actor allowlist**: Set repository variable `ALLOWED_ACTORS` (comma-separated usernames) to restrict who can dispatch destructive jobs.
-- **Branch protections**: Require PR reviews and status checks on `main` to prevent unreviewed changes.
+
+- **Least privilege**: Use `CLOUDFLARE_API_KEY_READ_ALL` for read-only workflows; use
+  `CLOUDFLARE_API_KEY_DNS_ONLY` scoped to specific zones for DNS edits.
+- **Environment approvals**: Store tokens as Environment secrets (e.g., `cloudflare-prod`) and
+  require reviewers before jobs run.
+- **Apply gating**: Workflows default to `--dry-run`; set `apply=true` to make changes. Applies are
+  blocked unless running on `main`.
+- **Actor allowlist**: Set repository variable `ALLOWED_ACTORS` (comma-separated usernames) to
+  restrict who can dispatch destructive jobs.
+- **Branch protections**: Require PR reviews and status checks on `main` to prevent unreviewed
+  changes.
 - **Rotation**: Set token expiration in Cloudflare and rotate regularly; remove unused tokens.
 
-For details on our security practices and how to report vulnerabilities, see [SECURITY.md](SECURITY.md).
+For details on our security practices and how to report vulnerabilities, see
+[SECURITY.md](SECURITY.md).
 
 ## Contributing
 
@@ -298,13 +335,12 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 This repository uses GitHub Actions for automation:
 
-- **CI Workflow**: Validates PowerShell scripts and checks for security issues
-- **DNS Management Workflows**: Audit, enforce standards, and manage DNS records
-- **DNS Export Workflow**: Exports DNS configurations for reporting
-- **GitHub Pages Deployment**: Deploys documentation and tracking site
+- **CI Workflow**: Validates configurations and checks for security issues
+- **CodeQL Analysis**: Performs automated security scanning
+- **DNS Summary Export**: Exports DNS configurations for reporting
 - **Dependabot**: Keeps dependencies up-to-date
 
-For detailed information about each workflow, see [.github/workflows/README.md](.github/workflows/README.md).
+For more information, see [.github/workflows/README.md](.github/workflows/README.md).
 
 ## Best Practices
 
@@ -334,15 +370,20 @@ For detailed information about each workflow, see [.github/workflows/README.md](
 
 ## License
 
-This project is licensed under the GNU Affero General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU Affero General Public License v3.0 - see the
+[LICENSE](LICENSE) file for details.
 
 ## Support
 
-- **Domain Requests**: Use [issue templates](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues/new/choose) for domain management
-- **Issues**: Report bugs or request features via [GitHub Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues)
+- **Domain Requests**: Use
+  [issue templates](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues/new/choose)
+  for domain management
+- **Issues**: Report bugs or request features via
+  [GitHub Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues)
 - **Documentation**: Check the guides and issue templates for detailed help
 - **Security**: Report vulnerabilities via [SECURITY.md](SECURITY.md)
 
 ## About Free For Charity
 
-Free For Charity is committed to using technology to support charitable giving. This automation repository is part of our commitment to transparency and open-source development.
+Free For Charity is committed to using technology to support charitable giving. This automation
+repository is part of our commitment to transparency and open-source development.

@@ -1,0 +1,13 @@
+.git/
+.venv/
+node_modules/
+
+# Generated / data files
+zone_*.csv
+*.csv
+
+# Large/unknown provenance artifacts
+verify_old_token.json
+
+# Keep formatting of previews as-authored
+/docs/template-previews/

@@ -24,13 +24,14 @@ function Invoke-CfApi {
         $response = Invoke-RestMethod -Method $Method -Uri $url -Headers $headers -Body ($Body | ConvertTo-Json -Depth 10) -ErrorAction Stop -ContentType 'application/json'
         if (-not $response.success) { throw "API Error: $($response.errors | ConvertTo-Json -Depth 5)" }
         return $response
-    } catch {
+    }
+    catch {
         Write-Error "Request Failed: $($_.Exception.Message)"
         if ($_.Exception.Response) {
-             $stream = $_.Exception.Response.GetResponseStream()
-             $reader = [System.IO.StreamReader]::new($stream)
-             $body = $reader.ReadToEnd()
-             Write-Error "API Error Body: $body"
+            $stream = $_.Exception.Response.GetResponseStream()
+            $reader = [System.IO.StreamReader]::new($stream)
+            $body = $reader.ReadToEnd()
+            Write-Error "API Error Body: $body"
         }
         throw
     }
@@ -44,7 +45,7 @@ Write-Host "Starting DNS Summary Export..." -ForegroundColor Cyan
 $zones = @()
 $page = 1
 $perPage = 50
-Do {
+do {
     Write-Host "Fetching zones page $page..." -NoNewline
     $resp = Invoke-CfApi -Method 'GET' -Uri "/zones?per_page=$perPage&page=$page"
     $batch = $resp.result
@@ -52,7 +53,7 @@ Do {
     $info = $resp.result_info
     Write-Host " Found $($batch.Count) zones." -ForegroundColor Green
     $page++
-} While ($page -le $info.total_pages)
+} while ($page -le $info.total_pages)
 
 Write-Host "Total Zones found: $($zones.Count)" -ForegroundColor Cyan
 
@@ -85,26 +86,27 @@ foreach ($z in $zones) {
         # Let's stick to the Python script's schema: Apex A, WWW Target.
         
         $obj = [PSCustomObject]@{
-            zone = $zName
-            apex_a_ips = ($apexA.content -join ';')
-            apex_a_proxied = ($apexA.proxied -join ';')
-            www_cname_target = if ($wwwCname) { $wwwCname[0].content } else { "" }
+            zone              = $zName
+            apex_a_ips        = ($apexA.content -join ';')
+            apex_a_proxied    = ($apexA.proxied -join ';')
+            www_cname_target  = if ($wwwCname) { $wwwCname[0].content } else { "" }
             www_cname_proxied = if ($wwwCname) { $wwwCname[0].proxied } else { "" }
             # Add Audit Check!
-            m365_compliant = $false
+            m365_compliant    = $false
         }
         
         # Quick Compliance Check (Bonus feature since previous workflow didn't have it but user complained about status)
         # Check if MX points to outlook
         $mx = (Invoke-CfApi -Method 'GET' -Uri "/zones/$zId/dns_records?type=MX&name=$zName").result
         if ($mx -and $mx.content -like '*.mail.protection.outlook.com') {
-             $obj.m365_compliant = $true
+            $obj.m365_compliant = $true
         }
 
         $results += $obj
         Write-Host " Done." -ForegroundColor Green
         
-    } catch {
+    }
+    catch {
         Write-Error "Failed to process $zName : $_"
     }
 }

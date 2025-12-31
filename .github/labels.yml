@@ -4,66 +4,66 @@
 # Dependency Management - Used by Dependabot
 - name: dependencies
   description: Updates to dependencies
-  color: "0366d6"
+  color: '0366d6'
 
 - name: github-actions
   description: Updates to GitHub Actions workflows
-  color: "000000"
+  color: '000000'
 
 - name: python
   description: Updates to Python dependencies
-  color: "3776ab"
+  color: '3776ab'
 
 # Domain Management - Used by issue templates and workflows
 - name: domain-add
   description: Request to add a new domain
-  color: "0e8a16"
+  color: '0e8a16'
 
 - name: domain-purchase
   description: Request to purchase a new domain
-  color: "1d76db"
+  color: '1d76db'
 
 - name: domain-remove
   description: Request to remove a domain
-  color: "d93f0b"
+  color: 'd93f0b'
 
 - name: cloudflare
   description: Related to Cloudflare configuration
-  color: "f6821f"
+  color: 'f6821f'
 
 - name: github-pages
   description: Related to GitHub Pages configuration
-  color: "5319e7"
+  color: '5319e7'
 
 - name: dns-config
   description: DNS configuration changes
-  color: "fbca04"
+  color: 'fbca04'
 
 - name: subdomain
   description: Subdomain configuration
-  color: "c5def5"
+  color: 'c5def5'
 
 # General Labels
 - name: bug
   description: Something isn't working
-  color: "d73a4a"
+  color: 'd73a4a'
 
 - name: enhancement
   description: New feature or request
-  color: "a2eeef"
+  color: 'a2eeef'
 
 - name: documentation
   description: Improvements or additions to documentation
-  color: "0075ca"
+  color: '0075ca'
 
 - name: security
   description: Security-related issues or updates
-  color: "ee0701"
+  color: 'ee0701'
 
 - name: help wanted
   description: Extra attention is needed
-  color: "008672"
+  color: '008672'
 
 - name: good first issue
   description: Good for newcomers
-  color: "7057ff"
+  color: '7057ff'

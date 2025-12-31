@@ -1,7 +1,7 @@
 name: Add Existing Domain to Cloudflare
 description: Request to add an existing domain to the Cloudflare account
-title: "[ADD DOMAIN] {domain_name}"
-labels: ["domain-add", "cloudflare"]
+title: '[ADD DOMAIN] {domain_name}'
+labels: ['domain-add', 'cloudflare']
 body:
   - type: markdown
     attributes:
@@ -18,7 +18,7 @@ body:
     attributes:
       label: Domain Name
       description: Enter the existing domain name
-      placeholder: "existing-domain.org"
+      placeholder: 'existing-domain.org'
     validations:
       required: true
 
@@ -27,7 +27,7 @@ body:
     attributes:
       label: Current Registrar
       description: Where is the domain currently registered?
-      placeholder: "Namecheap, Google Domains, GoDaddy, etc."
+      placeholder: 'Namecheap, Google Domains, GoDaddy, etc.'
     validations:
       required: true
 
@@ -44,7 +44,7 @@ body:
     attributes:
       label: Registrar Account Email
       description: Email associated with the domain registrar account
-      placeholder: "admin@example.com"
+      placeholder: 'admin@example.com'
     validations:
       required: true
 
@@ -59,7 +59,7 @@ body:
     attributes:
       label: EPP/Auth Code (Transfer Code)
       description: Obtain from current registrar if transferring the domain
-      placeholder: "Auth-XXXX-1234"
+      placeholder: 'Auth-XXXX-1234'
     validations:
       required: false
 
@@ -84,7 +84,7 @@ body:
     id: registrant_name
     attributes:
       label: Registrant Name
-      placeholder: "Jane Doe"
+      placeholder: 'Jane Doe'
     validations:
       required: false
 
@@ -92,7 +92,7 @@ body:
     id: registrant_org
     attributes:
       label: Registrant Organization
-      placeholder: "Free For Charity"
+      placeholder: 'Free For Charity'
     validations:
       required: false
 
@@ -100,7 +100,7 @@ body:
     id: registrant_email
     attributes:
       label: Registrant Email
-      placeholder: "jane.doe@example.org"
+      placeholder: 'jane.doe@example.org'
     validations:
       required: false
 
@@ -108,7 +108,7 @@ body:
     id: registrant_phone
     attributes:
       label: Registrant Phone
-      placeholder: "+1-555-555-1212"
+      placeholder: '+1-555-555-1212'
     validations:
       required: false
 
@@ -116,7 +116,7 @@ body:
     id: registrant_address1
     attributes:
       label: Registrant Address Line 1
-      placeholder: "123 Main St"
+      placeholder: '123 Main St'
     validations:
       required: false
 
@@ -124,7 +124,7 @@ body:
     id: registrant_address2
     attributes:
       label: Registrant Address Line 2
-      placeholder: "Suite 200"
+      placeholder: 'Suite 200'
     validations:
       required: false
 
@@ -132,7 +132,7 @@ body:
     id: registrant_city
     attributes:
       label: City
-      placeholder: "Tucson"
+      placeholder: 'Tucson'
     validations:
       required: false
 
@@ -140,7 +140,7 @@ body:
     id: registrant_state
     attributes:
       label: State/Province
-      placeholder: "AZ"
+      placeholder: 'AZ'
     validations:
       required: false
 
@@ -148,7 +148,7 @@ body:
     id: registrant_postal_code
     attributes:
       label: Postal Code
-      placeholder: "85701"
+      placeholder: '85701'
     validations:
       required: false
 
@@ -156,7 +156,7 @@ body:
     id: registrant_country
     attributes:
       label: Country
-      placeholder: "US"
+      placeholder: 'US'
     validations:
       required: false
 
@@ -164,7 +164,9 @@ body:
     id: desired_nameservers
     attributes:
       label: Desired Nameservers After Transfer
-      description: If transferring registrar, specify target nameservers or confirm Cloudflare nameservers will be used
+      description:
+        If transferring registrar, specify target nameservers or confirm Cloudflare nameservers will
+        be used
       placeholder: |
         ns1.cloudflare.com
         ns2.cloudflare.com
@@ -221,7 +223,7 @@ body:
     attributes:
       label: Preferred Migration Date/Time
       description: When should the domain be migrated?
-      placeholder: "YYYY-MM-DD or ASAP"
+      placeholder: 'YYYY-MM-DD or ASAP'
     validations:
       required: true
 
@@ -230,9 +232,9 @@ body:
     attributes:
       label: Is Downtime Acceptable?
       options:
-        - "No - zero downtime required"
-        - "Yes - brief downtime acceptable"
-        - "Yes - extended downtime acceptable (explain in notes)"
+        - 'No - zero downtime required'
+        - 'Yes - brief downtime acceptable'
+        - 'Yes - extended downtime acceptable (explain in notes)'
     validations:
       required: true
 
@@ -260,13 +262,13 @@ body:
       value: |
         ---
         ## For Administrator Use
-        
+
         ### Pre-Migration Checklist
         - [ ] Domain ownership verified
         - [ ] Current DNS records exported/documented
         - [ ] Migration plan approved
         - [ ] Stakeholders notified
-        
+
         ### Migration Steps
         1. [ ] Add domain to Cloudflare account via Dashboard
         2. [ ] Review and configure DNS records
@@ -274,7 +276,7 @@ body:
         4. [ ] Update nameservers at registrar
         5. [ ] Wait for DNS propagation (up to 24-48 hours)
         6. [ ] Verify domain is working correctly
-        
+
         ### Verification
         - [ ] Domain added to Cloudflare account
         - [ ] DNS records migrated and verified

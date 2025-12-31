@@ -1,5 +1,6 @@
-name: "[DNS] 3. Manual - Manage Record"
-run-name: "Manage Record: ${{ inputs.domain }} (${{ inputs.record_type }} ${{ inputs.record_name }})"
+name: '[DNS] 3. Manual - Manage Record'
+run-name:
+  'Manage Record: ${{ inputs.domain }} (${{ inputs.record_type }} ${{ inputs.record_name }})'
 on:
   workflow_dispatch:
     inputs:
@@ -60,7 +61,7 @@ jobs:
               source = 'manual';
               console.log(`[Manual] Domain provided: ${domain}, DryRun: ${dry_run}`);
             } 
-            
+
             // CASE 2: Issue Trigger
             else if (context.eventName === 'issues') {
               const body = context.payload.issue.body || '';
@@ -99,16 +100,16 @@ jobs:
       CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Validate Zone in Cloudflare
         shell: pwsh
         run: |
           $Domain = "${{ needs.resolve-context.outputs.domain }}"
           Write-Host "Checking if zone '$Domain' exists in Cloudflare..."
-          
+
           # Import the function from our script (dot sourcing)
           . .\Update-CloudflareDns.ps1 -Zone $Domain -List -ErrorAction SilentlyContinue
-          
+
           if ($LASTEXITCODE -eq 0) {
             Write-Host "SUCCESS: Zone '$Domain' found and accessible." -ForegroundColor Green
           } else {
@@ -125,7 +126,7 @@ jobs:
       CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Manage DNS Record
         shell: pwsh
         run: |
@@ -133,9 +134,9 @@ jobs:
           $Type    = "${{ github.event.inputs.record_type || 'TXT' }}"
           $Name    = "${{ github.event.inputs.record_name || '@' }}"
           $Content = "${{ github.event.inputs.record_content || 'v=spf1 include:spf.protection.outlook.com -all' }}"
-          
+
           Write-Host "Managing $Type record for $Name in zone $Domain..."
-          
+
           .\Update-CloudflareDns.ps1 -Zone $Domain `
             -Name $Name `
             -Type $Type `

@@ -24,6 +24,9 @@ automated, consistent, and auditable domain management.
 For details on the GitHub Actions standard enforcement workflow (including required GitHub Pages
 AAAA records), see [docs/enforce-standard-workflow.md](docs/enforce-standard-workflow.md).
 
+For Microsoft 365 domain status checks and DKIM helpers (work in progress), see
+[docs/m365-domain-and-dkim.md](docs/m365-domain-and-dkim.md).
+
 ## Features
 
 ### Issue-Based Workflow

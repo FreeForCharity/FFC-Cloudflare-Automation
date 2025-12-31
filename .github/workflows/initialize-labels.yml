@@ -20,12 +20,12 @@ jobs:
           script: |
             const fs = require('fs');
             const yaml = require('js-yaml');
-            
+
             // Read labels configuration
             const labelsConfig = yaml.load(fs.readFileSync('.github/labels.yml', 'utf8'));
-            
+
             console.log(`Found ${labelsConfig.length} labels to create/update`);
-            
+
             for (const label of labelsConfig) {
               try {
                 // Try to get the label first
@@ -64,5 +64,5 @@ jobs:
                 console.error(`✗ Failed to process label ${label.name}:`, error.message);
               }
             }
-            
+
             console.log('Label initialization complete!');

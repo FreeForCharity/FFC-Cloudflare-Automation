@@ -1,4 +1,4 @@
-name: "[DEPRECATED] DNS Summary Export (legacy)"
+name: '[DEPRECATED] DNS Summary Export (legacy)'
 
 # NOTE: This workflow previously exported DNS summaries using the earlier Python-based
 # tooling. The repository has since been refactored; use the current workflow:

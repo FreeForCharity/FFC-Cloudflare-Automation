@@ -6,19 +6,21 @@ This repository includes automated security scanning using industry-standard too
 
 ### Security Scanning Tools
 
-| Tool | Purpose | Runs On |
-|------|---------|---------|
-| **CodeQL** | Static analysis for code security issues | All PRs and pushes |
-| **Dependabot** | Dependency vulnerability scanning | Automated checks |
+| Tool           | Purpose                                  | Runs On            |
+| -------------- | ---------------------------------------- | ------------------ |
+| **CodeQL**     | Static analysis for code security issues | All PRs and pushes |
+| **Dependabot** | Dependency vulnerability scanning        | Automated checks   |
 
 ### Security Workflow
 
 Security scanning automatically runs on:
+
 - Every push to `main` or `master` branch
 - Every pull request targeting `main` or `master` branch
 - Automated dependency checks
 
 **Results** are uploaded to GitHub Security tab under Code Scanning alerts, where they can be:
+
 - Reviewed and triaged
 - Tracked over time
 - Integrated with branch protection rules
@@ -27,7 +29,8 @@ Security scanning automatically runs on:
 
 ## Supported Versions
 
-We are committed to maintaining the security of this project. Currently, we support security updates for the following versions:
+We are committed to maintaining the security of this project. Currently, we support security updates
+for the following versions:
 
 | Version | Supported          |
 | ------- | ------------------ |
@@ -35,7 +38,8 @@ We are committed to maintaining the security of this project. Currently, we supp
 
 ## Reporting a Vulnerability
 
-The Free For Charity team takes security vulnerabilities seriously. We appreciate your efforts to responsibly disclose your findings.
+The Free For Charity team takes security vulnerabilities seriously. We appreciate your efforts to
+responsibly disclose your findings.
 
 ### How to Report
 
@@ -44,6 +48,7 @@ The Free For Charity team takes security vulnerabilities seriously. We appreciat
 Instead, please report security vulnerabilities by:
 
 1. **GitHub Security Advisories** (Preferred):
+
    - Navigate to the Security tab of this repository
    - Click "Report a vulnerability"
    - Fill out the form with details about the vulnerability
@@ -69,7 +74,8 @@ When reporting a vulnerability, please include:
 
 - **Initial Response**: Within 48 hours of receiving your report
 - **Status Update**: Within 7 days with our evaluation and expected resolution timeline
-- **Resolution**: We aim to release fixes for confirmed vulnerabilities as quickly as possible, depending on complexity
+- **Resolution**: We aim to release fixes for confirmed vulnerabilities as quickly as possible,
+  depending on complexity
 
 ### Safe Harbor
 
@@ -88,11 +94,13 @@ When contributing to or using this repository:
 ### For Contributors
 
 1. **Never commit sensitive data**:
+
    - API keys, tokens, or credentials
    - Private keys or certificates
    - Environment files (`.env`, `.env.local`)
 
 2. **Use secure coding practices**:
+
    - Follow the principle of least privilege
    - Validate all inputs
    - Keep dependencies updated
@@ -104,12 +112,14 @@ When contributing to or using this repository:
 ### For Users
 
 1. **Protect your credentials**:
+
    - Never commit credentials to version control
    - Use environment variables or secret management systems
    - Rotate credentials regularly
    - Use unique credentials per environment
 
 2. **Review permissions**:
+
    - Follow least privilege principles
    - Regularly audit access
    - Remove unused credentials
@@ -130,11 +140,13 @@ This repository uses several automated security measures:
 
 ## Security Contacts
 
-For sensitive security matters, please contact the Free For Charity team through the official channels listed on the [Free For Charity website](https://freeforcharity.org).
+For sensitive security matters, please contact the Free For Charity team through the official
+channels listed on the [Free For Charity website](https://freeforcharity.org).
 
 ## Attribution
 
-We appreciate the security research community and will acknowledge researchers who report valid vulnerabilities (with their permission).
+We appreciate the security research community and will acknowledge researchers who report valid
+vulnerabilities (with their permission).
 
 ## Sensitive Information Handling
 
@@ -145,12 +157,14 @@ We appreciate the security research community and will acknowledge researchers w
 #### How to Securely Handle API Tokens
 
 1. **From Cloudflare Dashboard**:
+
    - Log in to https://dash.cloudflare.com
    - Go to "My Profile" → "API Tokens"
    - Create a new token or use an existing one
    - Store it securely using environment variables
 
 2. **Use Environment Variables**:
+
    ```bash
    export CLOUDFLARE_API_TOKEN="your-token-here"
    python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
@@ -174,6 +188,7 @@ If an API token is accidentally committed or exposed:
 #### Best Practices
 
 ✅ **DO**:
+
 - Store tokens in environment variables or GitHub Secrets
 - Use scoped tokens with minimal required permissions
 - Rotate tokens regularly (every 90 days recommended)
@@ -181,6 +196,7 @@ If an API token is accidentally committed or exposed:
 - Review `.gitignore` before committing changes
 
 ❌ **DON'T**:
+
 - Commit tokens to git repositories
 - Share tokens via email, Slack, or other unsecured channels
 - Use tokens in documentation or README files

@@ -1,5 +1,5 @@
-name: "[DNS] 1. Report - Check Compliance"
-run-name: "Check Compliance: ${{ inputs.domain }}"
+name: '[DNS] 1. Report - Check Compliance'
+run-name: 'Check Compliance: ${{ inputs.domain }}'
 
 on:
   workflow_dispatch:

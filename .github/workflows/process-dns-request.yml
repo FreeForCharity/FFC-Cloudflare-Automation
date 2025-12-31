@@ -1,0 +1,129 @@
+name: Process DNS Request
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain Name (Zone)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry Run (No changes)'
+        type: boolean
+        default: true
+  issues:
+    types: [opened, edited, labeled]
+
+permissions:
+  contents: read
+  issues: read
+  actions: read
+
+jobs:
+  resolve-context:
+    runs-on: ubuntu-latest
+    outputs:
+      domain: ${{ steps.parse.outputs.domain }}
+      dry_run: ${{ steps.parse.outputs.dry_run }}
+      source: ${{ steps.parse.outputs.source }}
+    steps:
+      - name: Parse Input Source
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let domain = '';
+            let dry_run = 'true';
+            let source = 'unknown';
+
+            // CASE 1: Manual Trigger (workflow_dispatch)
+            if (context.eventName === 'workflow_dispatch') {
+              domain = context.payload.inputs.domain;
+              dry_run = context.payload.inputs.dry_run;
+              source = 'manual';
+              console.log(`[Manual] Domain provided: ${domain}, DryRun: ${dry_run}`);
+            } 
+            
+            // CASE 2: Issue Trigger
+            else if (context.eventName === 'issues') {
+              const body = context.payload.issue.body || '';
+              source = 'issue';
+              
+              // Simple regex to find "Domain Name" followed by the user's input
+              // Matches: "### Domain Name\n\nexample.org" or "Domain Name: example.org"
+              const domainRegex = /### Domain Name\s+([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/;
+              const match = body.match(domainRegex);
+              
+              if (match && match[1]) {
+                domain = match[1].trim();
+                console.log(`[Issue] Extracted domain: ${domain}`);
+              } else {
+                console.log('[Issue] Could not find "### Domain Name" in issue body.');
+              }
+              
+              // For safety, issue ops always default to DryRun until explicitly approved
+              // You might change this logic later to check labels like "approved"
+            }
+
+            if (!domain) {
+              core.setFailed('Could not determine Domain Name from input or issue body.');
+              return;
+            }
+
+            core.setOutput('domain', domain);
+            core.setOutput('dry_run', dry_run);
+            core.setOutput('source', source);
+
+  validate-zone:
+    needs: resolve-context
+    runs-on: windows-latest # Using Windows runner for PowerShell script
+    environment: cloudflare-prod
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Validate Zone in Cloudflare
+        shell: pwsh
+        run: |
+          $Domain = "${{ needs.resolve-context.outputs.domain }}"
+          Write-Host "Checking if zone '$Domain' exists in Cloudflare..."
+          
+          # Import the function from our script (dot sourcing)
+          . .\Update-CloudflareDns.ps1 -Zone $Domain -List -ErrorAction SilentlyContinue
+          
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "SUCCESS: Zone '$Domain' found and accessible." -ForegroundColor Green
+          } else {
+            Write-Warning "FAILURE: Zone '$Domain' not found or token lacks permission."
+            # We don't exit 1 here yet because 'Purchase New Domain' workflow might *expect* it to be missing.
+          }
+
+  add-test-record:
+    needs: resolve-context
+    runs-on: windows-latest
+    environment: cloudflare-prod
+    if: needs.resolve-context.outputs.dry_run == 'false'
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Create TXT Verification Record
+        shell: pwsh
+        run: |
+          $Domain = "${{ needs.resolve-context.outputs.domain }}"
+          Write-Host "Adding verification TXT record to $Domain..."
+          
+          .\Update-CloudflareDns.ps1 -Zone $Domain `
+            -Name "@" `
+            -Type TXT `
+            -Content "FFC Automation Test Success" `
+            -Ttl 60
+            
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "SUCCESS: Verification record key added." -ForegroundColor Green
+          } else {
+            Write-Error "FAILURE: Could not add record."
+            exit 1
+          }

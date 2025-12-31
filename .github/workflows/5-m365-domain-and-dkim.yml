@@ -87,7 +87,7 @@ jobs:
         if: ${{ inputs.action != 'status' }}
         shell: pwsh
         env:
-          EXO_APP_ID: ${{ secrets.EXO_APP_ID }}
+          EXO_APP_ID: ${{ secrets.AZURE_CLIENT_ID }}
           EXO_TENANT: ${{ secrets.EXO_TENANT }}
           EXO_ORGANIZATION: ${{ secrets.EXO_ORGANIZATION }}
         run: |

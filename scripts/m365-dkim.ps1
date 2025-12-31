@@ -96,7 +96,7 @@ function Print-DkimCnameHints {
 
 try {
     $effectiveOrg = if ($Organization) { $Organization } else { $env:EXO_ORGANIZATION }
-    $effectiveAppId = if ($AppId) { $AppId } else { $env:EXO_APP_ID }
+    $effectiveAppId = if ($AppId) { $AppId } else { ($env:EXO_APP_ID ?? $env:AZURE_CLIENT_ID) }
     $effectiveTenant = if ($TenantId) { $TenantId } else { $env:EXO_TENANT }
     $effectiveThumb = if ($CertificateThumbprint) { $CertificateThumbprint } else { $env:EXO_CERT_THUMBPRINT }
 

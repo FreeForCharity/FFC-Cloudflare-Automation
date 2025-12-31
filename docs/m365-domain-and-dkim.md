@@ -38,11 +38,14 @@ Required secrets (environment: `m365-prod`):
 - `AZURE_SUBSCRIPTION_ID`
 
 For DKIM (Exchange Online) app-only auth, you also need:
-- `EXO_APP_ID` (Entra app id used for Exchange Online)
 - `EXO_TENANT` (your tenant / org, e.g. `freeforcharity.onmicrosoft.com`)
 - `EXO_ORGANIZATION` (same as `EXO_TENANT` unless you use a different org string)
 - `EXO_CERT_PFX_BASE64` (base64-encoded PFX)
 - `EXO_CERT_PFX_PASSWORD` (optional; empty if no password)
+
+Notes:
+- This workflow uses **one Entra app**: `AZURE_CLIENT_ID` is also used as the Exchange Online
+  `AppId` (no separate `EXO_APP_ID` secret).
 
 Notes:
 - The workflow imports the PFX to `Cert:\CurrentUser\My` and uses its thumbprint.
@@ -67,7 +70,7 @@ Notes:
 
 ### Non-interactive (app-only) auth
 `scripts/m365-dkim.ps1` supports app-only auth if you provide:
-- `EXO_APP_ID`
+- `EXO_APP_ID` (in GitHub Actions, this is set to `AZURE_CLIENT_ID`)
 - `EXO_TENANT` (used as `-Organization`)
 - `EXO_CERT_THUMBPRINT` (certificate must already be present in the current user cert store)
 

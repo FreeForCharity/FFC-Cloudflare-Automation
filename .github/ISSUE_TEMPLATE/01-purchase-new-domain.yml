@@ -24,11 +24,17 @@ body:
     validations:
       required: true
 
-  - type: checkboxes
-    id: planned_uses
+  - type: markdown
     attributes:
-      label: Planned Uses
-      description: Select all applicable uses for this domain (preselect all by default)
+      value: |
+        ### Planned Uses
+        Select required mandatory uses and any optional uses.
+
+  - type: checkboxes
+    id: mandatory_uses
+    attributes:
+      label: Mandatory Uses
+      description: All must be selected
       options:
         - label: Email (Microsoft 365 only)
           required: true
@@ -36,6 +42,14 @@ body:
           required: true
         - label: Verification with Google tools (Analytics, PageSpeed, Search Console)
           required: true
+
+  - type: checkboxes
+    id: optional_uses
+    attributes:
+      label: Optional Uses
+      description: Select if applicable
+      options:
+        - label: Newsletter service verification
 
   - type: checkboxes
     id: verification_tools

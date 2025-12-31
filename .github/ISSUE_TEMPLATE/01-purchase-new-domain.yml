@@ -50,6 +50,18 @@ body:
       value: |
         Note: DMARC reporting (rua/ruf) is configured and managed in Cloudflare. Use FFC-managed mailboxes for aggregate (`rua`) and forensic (`ruf`) reports. Third-party reporting services require prior FFC approval.
 
+  - type: markdown
+    attributes:
+      value: |
+        #### Microsoft 365 Email – Why these options matter
+        - Microsoft 365 email: Required provider; configures DNS/MX for Exchange Online.
+        - DMARC reporting (rua/ruf via Cloudflare): Enforces alignment and collects spoofing reports; Microsoft honors DMARC inbound.
+        - MTA‑STS policy (`_mta-sts`): Instructs senders to require TLS to your MX (Exchange Online), preventing downgrade/MITM.
+        - TLS Reporting (`_smtp._tls`): Aggregated delivery telemetry for TLS failures; helps detect configuration issues alongside MTA‑STS.
+        - BIMI (brand logo + VMC): Logo shown by providers that support BIMI; Microsoft 365 does not display BIMI in Outlook.
+        - Additional DKIM selectors: Separate signing keys per send stream; supported by Exchange Online (e.g., `selector1`/`selector2`).
+        - SPF includes for approved senders: Authorizes permitted outbound sources in addition to Microsoft 365, preventing softfail.
+
   - type: checkboxes
     id: mandatory_uses
     attributes:

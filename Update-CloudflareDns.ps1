@@ -235,6 +235,54 @@ function Quote-TxtContent {
     return '"' + $normalized + '"'
 }
 
+function Get-DmarcRuaMailtos {
+    param([AllowNull()][string]$DmarcContent)
+    $normalized = Normalize-TxtContent -Value $DmarcContent
+    if (-not $normalized) { return @() }
+
+    $tags = $normalized -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    $ruaTag = $tags | Where-Object { $_ -match '^(?i)rua\s*=' } | Select-Object -First 1
+    if (-not $ruaTag) { return @() }
+
+    $ruaValue = ($ruaTag -split '=', 2)[1].Trim()
+    if (-not $ruaValue) { return @() }
+
+    return ($ruaValue -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -like 'mailto:*' })
+}
+
+function Set-DmarcRuaMailtos {
+    param(
+        [Parameter(Mandatory = $true)][string]$DmarcContent,
+        [Parameter(Mandatory = $true)][string[]]$RuaMailtos
+    )
+
+    $normalized = Normalize-TxtContent -Value $DmarcContent
+    $tags = @()
+    if ($normalized) {
+        $tags = $normalized -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    }
+
+    # Remove existing rua tag(s)
+    $tags = $tags | Where-Object { $_ -notmatch '^(?i)rua\s*=' }
+
+    # Ensure v and p are present and normalized
+    if (-not ($tags | Where-Object { $_ -match '^(?i)v\s*=\s*DMARC1$' })) {
+        # Remove any existing v tag then re-add
+        $tags = $tags | Where-Object { $_ -notmatch '^(?i)v\s*=' }
+        $tags = @('v=DMARC1') + $tags
+    }
+    if (-not ($tags | Where-Object { $_ -match '^(?i)p\s*=' })) {
+        $tags += 'p=none'
+    }
+
+    $uniqueRua = @($RuaMailtos | Where-Object { $_ } | Select-Object -Unique)
+    if ($uniqueRua.Count -gt 0) {
+        $tags += ('rua=' + ($uniqueRua -join ','))
+    }
+
+    return ($tags -join '; ')
+}
+
 
 # --- Main Logic ---
 
@@ -355,9 +403,22 @@ try {
         $dmarc = $allRecords | Where-Object { $_.type -eq 'TXT' -and $_.name -like "_dmarc.$Zone" }
         $dmarcValid = $dmarc | Where-Object { (Normalize-TxtContent -Value $_.content) -like 'v=DMARC1*' }
         if ($dmarcValid) {
+            $normalizedDmarc = Normalize-TxtContent -Value ($dmarcValid | Select-Object -First 1).content
+            $ruaMailtos = Get-DmarcRuaMailtos -DmarcContent $normalizedDmarc
+
+            $hasInternalRua = $ruaMailtos -contains 'mailto:dmarc-rua@freeforcharity.org'
+            $hasCloudflareRua = $ruaMailtos | Where-Object { $_ -like 'mailto:*@dmarc-reports.cloudflare.net' }
+
             $quotedDmarc = $dmarcValid | Where-Object { Is-TxtQuoted -Value $_.content }
-            if ($quotedDmarc) { Write-Host "[OK] DMARC Record found (quoted)" -ForegroundColor Green }
-            else { Write-Warning "[DIFFERS] DMARC Record found but not quoted (Cloudflare UI warning)" }
+            $quotedOk = [bool]$quotedDmarc
+
+            if ($hasInternalRua -and $hasCloudflareRua -and $quotedOk) {
+                Write-Host "[OK] DMARC Record found (quoted, Cloudflare+internal rua)" -ForegroundColor Green
+            } else {
+                if (-not $quotedOk) { Write-Warning "[DIFFERS] DMARC Record found but not quoted (Cloudflare UI warning)" }
+                if (-not $hasInternalRua) { Write-Warning "[DIFFERS] DMARC Record missing internal rua (mailto:dmarc-rua@freeforcharity.org)" }
+                if (-not $hasCloudflareRua) { Write-Warning "[INFO] DMARC Record has no Cloudflare rua; enable Cloudflare DMARC Management to add it" }
+            }
         }
         else { Write-Warning "[MISSING] DMARC Record (_dmarc.$Zone)" }
 
@@ -405,7 +466,8 @@ try {
             @{ Type='MX'; Name='@'; Content=$m365MxTarget; Priority=0 },
             # SPF is treated specially: we preserve existing SPF content but enforce quoting to avoid Cloudflare UI warnings.
             @{ Type='TXT'; Name='@'; Content='v=spf1 include:spf.protection.outlook.com -all'; MatchContains='include:spf.protection.outlook.com'; EnsureQuoted=$true },
-            @{ Type='TXT'; Name='_dmarc'; Content='v=DMARC1; p=none; rua=mailto:dmarc-rua@freeforcharity.org'; EnsureQuoted=$true },
+            # DMARC: preserve Cloudflare-generated rua (if present) and always include internal rua.
+            @{ Type='TXT'; Name='_dmarc'; Content='v=DMARC1; p=none'; EnsureQuoted=$true; EnsureInternalRua=$true; PreserveCloudflareRua=$true; InternalRua='mailto:dmarc-rua@freeforcharity.org' },
 
             # Microsoft 365 / Teams / Intune (Unproxied)
             @{ Type='CNAME'; Name='autodiscover';          Content='autodiscover.outlook.com';                    Proxied=$false },
@@ -492,19 +554,43 @@ try {
                         }
                     } elseif ($std.Name -eq '_dmarc') {
                         $foundRecord = $candidates | Where-Object { (Normalize-TxtContent -Value $_.content) -like 'v=DMARC1*' }
+                        $ensureInternalRua = $false
+                        $preserveCloudflareRua = $false
+                        $internalRua = 'mailto:dmarc-rua@freeforcharity.org'
+                        if ($std.ContainsKey('EnsureInternalRua')) { $ensureInternalRua = [bool]$std.EnsureInternalRua }
+                        if ($std.ContainsKey('PreserveCloudflareRua')) { $preserveCloudflareRua = [bool]$std.PreserveCloudflareRua }
+                        if ($std.ContainsKey('InternalRua') -and $std.InternalRua) { $internalRua = [string]$std.InternalRua }
+
                         if ($foundRecord) {
                             $dmarcCandidate = $foundRecord | Select-Object -First 1
-                            if ($ensureQuoted -and -not (Is-TxtQuoted -Value $dmarcCandidate.content)) {
+                            $normalized = Normalize-TxtContent -Value $dmarcCandidate.content
+                            $existingRua = Get-DmarcRuaMailtos -DmarcContent $normalized
+
+                            $cloudflareRua = @()
+                            if ($preserveCloudflareRua) {
+                                $cloudflareRua = @($existingRua | Where-Object { $_ -like 'mailto:*@dmarc-reports.cloudflare.net' })
+                            }
+
+                            $desiredRua = @()
+                            if ($ensureInternalRua) { $desiredRua += $internalRua }
+                            $desiredRua += $cloudflareRua
+
+                            $desiredNormalized = Set-DmarcRuaMailtos -DmarcContent $normalized -RuaMailtos $desiredRua
+                            $desiredQuoted = if ($ensureQuoted) { Quote-TxtContent -Value $desiredNormalized } else { $desiredNormalized }
+
+                            if ($dmarcCandidate.content -ne $desiredQuoted) {
                                 $updateCandidate = $dmarcCandidate
-                                $stdContent = Quote-TxtContent -Value $stdContent
+                                $stdContent = $desiredQuoted
                                 $foundRecord = $null
                             }
                         } elseif ($candidates) {
                             # Prefer updating an existing _dmarc TXT rather than creating duplicates.
                             $updateCandidate = $candidates | Select-Object -First 1
-                            $stdContent = Quote-TxtContent -Value $stdContent
+                            $desiredNormalized = Set-DmarcRuaMailtos -DmarcContent $stdContent -RuaMailtos @($internalRua)
+                            $stdContent = if ($ensureQuoted) { Quote-TxtContent -Value $desiredNormalized } else { $desiredNormalized }
                         } else {
-                            $stdContent = Quote-TxtContent -Value $stdContent
+                            $desiredNormalized = Set-DmarcRuaMailtos -DmarcContent $stdContent -RuaMailtos @($internalRua)
+                            $stdContent = if ($ensureQuoted) { Quote-TxtContent -Value $desiredNormalized } else { $desiredNormalized }
                         }
                     } else {
                         $expected = if ($ensureQuoted) { Quote-TxtContent -Value $stdContent } else { $stdContent }

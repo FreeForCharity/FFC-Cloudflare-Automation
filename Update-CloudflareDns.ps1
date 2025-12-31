@@ -184,6 +184,34 @@ function Get-ZoneId {
     return $zones[0].id
 }
 
+function Get-AllDnsRecords {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ZoneId
+    )
+
+    $page = 1
+    $perPage = 100
+    $records = @()
+
+    while ($true) {
+        $resp = Invoke-CfApi -Method 'GET' -Uri "/zones/$ZoneId/dns_records" -Params @{ per_page = $perPage; page = $page }
+        if ($resp.result) { $records += $resp.result }
+
+        $totalPages = $null
+        if ($resp.PSObject.Properties.Name -contains 'result_info' -and $resp.result_info -and ($resp.result_info.PSObject.Properties.Name -contains 'total_pages')) {
+            $totalPages = [int]$resp.result_info.total_pages
+        }
+
+        if ($totalPages -and $page -ge $totalPages) { break }
+        if (-not $totalPages -and ($resp.result.Count -lt $perPage)) { break }
+
+        $page++
+    }
+
+    return $records
+}
+
 
 # --- Main Logic ---
 
@@ -223,7 +251,7 @@ try {
         Write-Host "Running Compliance Audit for Zone: $Zone" -ForegroundColor Cyan
         
         # Helper to find
-        $allRecords = (Invoke-CfApi -Method 'GET' -Uri "/zones/$ZoneId/dns_records?per_page=100").result
+        $allRecords = Get-AllDnsRecords -ZoneId $ZoneId
         
         # 1. Microsoft 365 MX
         $mx = $allRecords | Where-Object { $_.type -eq 'MX' -and $_.content -like '*.mail.protection.outlook.com' }
@@ -262,11 +290,17 @@ try {
     # --- ENFORCE STANDARD Operation ---
     if ($EnforceStandard) {
         Write-Host "Enforcing FFC Standard Configuration for Zone: $Zone" -ForegroundColor Cyan
+
+        # IMPORTANT: Enforce needs a full record inventory. Without this, it will treat everything as missing.
+        $allRecords = Get-AllDnsRecords -ZoneId $ZoneId
+
+        $m365MxTarget = (($Zone -replace '\.', '-') + '.mail.protection.outlook.com')
+        $wwwTarget = 'freeforcharity.github.io'
         
         # Define Standard Records
         $standards = @(
             # Microsoft 365 Email
-            @{ Type='MX'; Name='@'; Content='0 .mail.protection.outlook.com'; Priority=0 },
+            @{ Type='MX'; Name='@'; Content=$m365MxTarget; Priority=0 },
             @{ Type='TXT'; Name='@'; Content='v=spf1 include:spf.protection.outlook.com -all' },
             @{ Type='TXT'; Name='_dmarc'; Content='v=DMARC1; p=none; rua=mailto:dmarc-rua@freeforcharity.org' },
             
@@ -277,7 +311,7 @@ try {
             @{ Type='A'; Name='@'; Content='185.199.111.153' },
             
             # GitHub Pages (WWW)
-            @{ Type='CNAME'; Name='www'; Content=$Zone }
+            @{ Type='CNAME'; Name='www'; Content=$wwwTarget }
         )
 
         foreach ($std in $standards) {
@@ -295,39 +329,84 @@ try {
             # But calling it 8 times might be slow on auth. 
             # BETTER: We implement the "Check & Create" logic right here, reusing the helper variables.
 
-            # 1. Check existence
-            $foundRecord = $null
+            # 1. Check existence (and identify update candidates)
             $stdContent = $std.Content
-            
-            if ($std.Type -in @('MX', 'TXT')) {
-                # Multi-Value: Look for EXACT match
-                 $candidates = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
-                  $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
-            } else {
-                # Single-Value: Look for ANY match (to update) or exact match
-                # For A records, we have multiple IPs for the same name, so they act like Multi-Value for existence check.
-                if ($std.Type -eq 'A') {
-                     $candidates = $allRecords | Where-Object { $_.type -eq 'A' -and $_.name -eq $recName }
-                     $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
-                } else {
-                     $candidates = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
-                     $foundRecord = $candidates # For CNAME, just finding the record is usually enough to say "it exists", but we want to enforce content.
-                     if ($foundRecord.content -ne $stdContent) { $foundRecord = $null } # Force update if content differs
+            $candidates = $allRecords | Where-Object { $_.type -eq $std.Type -and $_.name -eq $recName }
+
+            $foundRecord = $null
+            $updateCandidate = $null
+
+            switch ($std.Type) {
+                'MX' {
+                    # Cloudflare stores MX target in `content` and priority separately.
+                    # Treat as present if any apex MX points at *.mail.protection.outlook.com with desired priority.
+                    $foundRecord = $candidates | Where-Object {
+                        $_.content -like '*.mail.protection.outlook.com' -and
+                        ($null -eq $std.Priority -or $_.priority -eq $std.Priority)
+                    }
+                }
+                'TXT' {
+                    if ($std.Name -eq '@' -and $stdContent -like 'v=spf1*') {
+                        # Avoid duplicates: SPF is "present" if it includes the M365 include, even if it has extra mechanisms.
+                        $foundRecord = $candidates | Where-Object { $_.content -like '*include:spf.protection.outlook.com*' }
+                    } elseif ($std.Name -eq '_dmarc') {
+                        $foundRecord = $candidates | Where-Object { $_.content -like 'v=DMARC1*' }
+                        if (-not $foundRecord -and $candidates) {
+                            # Prefer updating an existing _dmarc TXT rather than creating duplicates.
+                            $updateCandidate = $candidates | Select-Object -First 1
+                        }
+                    } else {
+                        $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
+                    }
+                }
+                'A' {
+                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
+                }
+                'CNAME' {
+                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
+                    if (-not $foundRecord -and $candidates) {
+                        # Prefer updating existing WWW CNAME rather than creating a second one.
+                        $updateCandidate = $candidates | Select-Object -First 1
+                    }
+                }
+                default {
+                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
                 }
             }
 
             if ($foundRecord) {
                 Write-Host " [OK]" -ForegroundColor Green
             } else {
+                if ($updateCandidate) {
+                    Write-Host " [DIFFERS] -> Updating..." -ForegroundColor Yellow
+
+                    $updatePayload = @{
+                        type    = $std.Type
+                        name    = $recName
+                        content = $stdContent
+                        ttl     = 1
+                    }
+                    if ($std.Type -eq 'MX') { $updatePayload['priority'] = $std.Priority }
+                    if ($std.Type -in @('A', 'CNAME')) { $updatePayload['proxied'] = $true }
+
+                    if (-not $DryRun) {
+                        try {
+                            $null = Invoke-CfApi -Method 'PUT' -Uri "/zones/$ZoneId/dns_records/$($updateCandidate.id)" -Body $updatePayload
+                            Write-Host "UPDATED" -ForegroundColor Green
+                        } catch {
+                            Write-Error "Failed to update $($std.Type) $recName (ID: $($updateCandidate.id))"
+                        }
+                    } else {
+                        Write-Host "[DRY-RUN] PUT $recName" -ForegroundColor DarkGray
+                    }
+                    continue
+                }
+
                 Write-Host " [MISSING] -> Creating..." -ForegroundColor Yellow
                 
                 # Payload
                 $newPayload = @{
                     type    = $std.Type
-                    name    = $std.Name # API expects relative or absolute? The main logic utilized Name passed in.
-                                        # Main logic handles relative/absolute. Cloudflare API usually wants Name as FQDN or relative?
-                                        # Let's check main logic: $payload = @{ ... name = $RecordName ... }
-                                        # $RecordName is FQDN.
                     content = $stdContent
                     ttl     = 1 # Auto
                 }

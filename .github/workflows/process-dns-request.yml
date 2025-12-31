@@ -79,7 +79,7 @@ jobs:
     runs-on: windows-latest # Using Windows runner for PowerShell script
     environment: cloudflare-prod
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
     steps:
       - uses: actions/checkout@v4
       
@@ -105,7 +105,7 @@ jobs:
     environment: cloudflare-prod
     if: needs.resolve-context.outputs.dry_run == 'false'
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
     steps:
       - uses: actions/checkout@v4
       

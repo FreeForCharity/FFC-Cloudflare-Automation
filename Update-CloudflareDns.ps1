@@ -108,14 +108,8 @@ function Get-AuthToken {
     if ($env:CLOUDFLARE_API_KEY_DNS_ONLY) { return $env:CLOUDFLARE_API_KEY_DNS_ONLY }
     if ($env:CLOUDFLARE_API_TOKEN) { return $env:CLOUDFLARE_API_TOKEN }
     
-    # Interactive prompt if no token found
-    $secure = Read-Host "Enter Cloudflare API Token" -AsSecureString
-    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-    try {
-        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-    } finally {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-    }
+    # Non-interactive mode: Fail if no token
+    throw "Cloudflare API Token not found. Set CLOUDFLARE_API_TOKEN environment variable or pass -Token parameter."
 }
 
 $AuthToken = Get-AuthToken

@@ -34,45 +34,29 @@ body:
     attributes:
       value: |
         ### Email Uses
+        
+        #### Mandatory Email Settings (pre‑checked)
+        - [x] Microsoft 365 Email (Exchange Online DNS/MX)
+        - [x] DMARC reporting (rua/ruf via Cloudflare with FFC-managed mailboxes)
+        - [x] SPF (Microsoft 365 record)
 
   - type: checkboxes
-    id: email_m365
+    id: email_ack
     attributes:
-      label: Microsoft 365 Email (Required)
-      description: Configure DNS/MX for Exchange Online
+      label: Acknowledgement
+      description: Confirm mandatory email settings will be configured
       options:
-        - label: Microsoft 365 email (required provider)
+        - label: I acknowledge these mandatory email settings will be configured
           required: true
+
   - type: markdown
     attributes:
       value: |
         Microsoft 365 email: Required provider; configures DNS/MX for Exchange Online.
-
-  - type: checkboxes
-    id: email_dmarc
-    attributes:
-      label: DMARC Reporting (Required)
-      description: Configure DMARC rua/ruf via Cloudflare using FFC-managed mailboxes
-      options:
-        - label: DMARC reporting (rua/ruf via Cloudflare)
-          required: true
-  - type: markdown
-    attributes:
-      value: |
-        DMARC reporting (rua/ruf) is configured and managed in Cloudflare. Use FFC-managed mailboxes for aggregate (`rua`) and forensic (`ruf`) reports. Enforces alignment and helps prevent spoofing.
-
-  - type: checkboxes
-    id: email_spf
-    attributes:
-      label: SPF (Required)
-      description: Publish SPF for Microsoft 365; additional includes require FFC approval
-      options:
-        - label: SPF (Microsoft 365 record)
-          required: true
-  - type: markdown
-    attributes:
-      value: |
-        SPF (Microsoft 365 record): Authorizes Exchange Online as a permitted sender; prevents softfail. Additional includes (other senders) require prior FFC approval.
+        
+        DMARC: Configured and managed in Cloudflare using FFC-managed `rua/ruf` mailboxes; enforces alignment and helps prevent spoofing.
+        
+        SPF: Authorizes Exchange Online as a permitted sender; prevents softfail. Additional includes (other senders) require prior FFC approval.
 
   - type: checkboxes
     id: email_mta_sts

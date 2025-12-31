@@ -125,8 +125,9 @@ The workflows require the following secrets to be configured:
 
 1. **CLOUDFLARE_API_KEY_DNS_ONLY** - DNS edit permissions for managing records
 2. **CLOUDFLARE_API_KEY_READ_ALL** (optional) - Read-only access for exports
-3. **CLOUDFLARE_API_TOKEN_ZONE_CREATE** (legacy workflow) - Zone creation permissions
-4. **CLOUDFLARE_ACCOUNT_ID** (repository variable) - Cloudflare account ID
+
+Repository variables:
+- **ALLOWED_ACTORS** (optional) - Comma-separated list of GitHub usernames allowed to run workflows
 
 ### Getting the Most Value
 

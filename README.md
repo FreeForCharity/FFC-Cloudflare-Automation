@@ -262,7 +262,7 @@ If your token lacks permission to list all zones, supply explicit zones with `--
 Security is a top priority for this project. We implement multiple security measures:
 
 - **Secret Detection**: GitHub secret scanning prevents credential exposure
-- **Dependency Updates**: Dependabot keeps dependencies secure and up-to-date
+- **Dependency Updates**: Dependabot keeps GitHub Actions up-to-date
 - **CI Validation**: Automated checks for sensitive files and misconfigurations
 - **API Token Security**: Cloudflare API tokens stored securely in GitHub Secrets
 - **Code Review**: All changes require review before merging to main branch

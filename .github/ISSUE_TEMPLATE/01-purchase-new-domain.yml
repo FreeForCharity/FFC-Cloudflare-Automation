@@ -38,12 +38,17 @@ body:
       options:
         - label: Microsoft 365 email (required provider)
           required: true
-        - label: DMARC reporting (rua/ruf)
+        - label: DMARC reporting (rua/ruf via Cloudflare)
         - label: MTA-STS policy (_mta-sts)
         - label: TLS Reporting (_smtp._tls)
         - label: BIMI (brand logo + VMC)
         - label: Additional DKIM selectors
         - label: SPF includes for approved senders
+
+  - type: markdown
+    attributes:
+      value: |
+        Note: DMARC reporting (rua/ruf) is configured and managed in Cloudflare. Use FFC-managed mailboxes for aggregate (`rua`) and forensic (`ruf`) reports. Third-party reporting services require prior FFC approval.
 
   - type: checkboxes
     id: mandatory_uses

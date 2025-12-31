@@ -30,6 +30,18 @@ body:
         ### Planned Uses
         Select required mandatory uses and any optional uses.
 
+        #### Overall Mandatory Settings (pre‑checked)
+        - [x] Website will be pointed to GitHub Pages automatically (per FFC policy)
+
+  - type: checkboxes
+    id: overall_ack
+    attributes:
+      label: Overall Acknowledgement
+      description: Confirm the automatic GitHub Pages pointing for the website
+      options:
+        - label: I acknowledge the website will be pointed to GitHub Pages automatically
+          required: true
+
   - type: markdown
     attributes:
       value: |

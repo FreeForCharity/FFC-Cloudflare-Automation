@@ -268,15 +268,24 @@ try {
         if ($dmarc) { Write-Host "[OK] DMARC Record found" -ForegroundColor Green }
         else { Write-Warning "[MISSING] DMARC Record (_dmarc.$Zone)" }
 
-        # 4. GitHub Pages (A Records)
-        $ghIps = @('185.199.108.153', '185.199.109.153', '185.199.110.153', '185.199.111.153')
+        # 4. GitHub Pages (A + AAAA Records)
+        $ghV4Ips = @('185.199.108.153', '185.199.109.153', '185.199.110.153', '185.199.111.153')
+        $ghV6Ips = @('2606:50c0:8000::153', '2606:50c0:8001::153', '2606:50c0:8002::153', '2606:50c0:8003::153')
+
         $aRecords = $allRecords | Where-Object { $_.type -eq 'A' -and $_.name -eq $Zone }
-        $missingIps = $ghIps | Where-Object { $_ -notin $aRecords.content }
-        
-        if ($missingIps.Count -eq 0 -and $aRecords.Count -ge 4) { 
-            Write-Host "[OK] GitHub Pages A Records found" -ForegroundColor Green 
-        } else { 
-            Write-Warning "[MISSING/PARTIAL] GitHub Pages A Records. Missing: $($missingIps -join ', ')" 
+        $missingV4 = $ghV4Ips | Where-Object { $_ -notin $aRecords.content }
+        if ($missingV4.Count -eq 0 -and $aRecords.Count -ge 4) {
+            Write-Host "[OK] GitHub Pages A Records found" -ForegroundColor Green
+        } else {
+            Write-Warning "[MISSING/PARTIAL] GitHub Pages A Records. Missing: $($missingV4 -join ', ')"
+        }
+
+        $aaaaRecords = $allRecords | Where-Object { $_.type -eq 'AAAA' -and $_.name -eq $Zone }
+        $missingV6 = $ghV6Ips | Where-Object { $_ -notin $aaaaRecords.content }
+        if ($missingV6.Count -eq 0 -and $aaaaRecords.Count -ge 4) {
+            Write-Host "[OK] GitHub Pages AAAA Records found" -ForegroundColor Green
+        } else {
+            Write-Warning "[MISSING/PARTIAL] GitHub Pages AAAA Records. Missing: $($missingV6 -join ', ')"
         }
 
         # 5. WWW CNAME
@@ -309,6 +318,12 @@ try {
             @{ Type='A'; Name='@'; Content='185.199.109.153' },
             @{ Type='A'; Name='@'; Content='185.199.110.153' },
             @{ Type='A'; Name='@'; Content='185.199.111.153' },
+
+            # GitHub Pages (Apex IPv6)
+            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8000::153' },
+            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8001::153' },
+            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8002::153' },
+            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8003::153' },
             
             # GitHub Pages (WWW)
             @{ Type='CNAME'; Name='www'; Content=$wwwTarget }
@@ -362,6 +377,9 @@ try {
                 'A' {
                     $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
                 }
+                'AAAA' {
+                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
+                }
                 'CNAME' {
                     $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
                     if (-not $foundRecord -and $candidates) {
@@ -413,7 +431,7 @@ try {
                 if ($std.Type -eq 'MX') { $newPayload['priority'] = $std.Priority }
                 # Proxied? Standard FFC: Pages A/CNAME = Proxied? Usually Yes for SSL. 
                 # M365 = No.
-                if ($std.Type -in @('A', 'CNAME')) { $newPayload['proxied'] = $true }
+                if ($std.Type -in @('A', 'AAAA', 'CNAME')) { $newPayload['proxied'] = $true }
                 
                 # Name must be FQDN for the API
                 $newPayload['name'] = $recName

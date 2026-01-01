@@ -2,7 +2,7 @@
 
 This repo primarily enforces DNS in Cloudflare. These scripts are the start of **M365-side** checks so we can align Cloudflare DNS with what Microsoft 365 expects.
 
-## Prereqs
+## Prerequisites
 - PowerShell 7+ recommended
 - Ability to authenticate to:
   - Microsoft Graph (for domain status)

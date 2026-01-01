@@ -94,16 +94,16 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $domain = "${{ inputs.domain }}"
-          $create = "${{ inputs.create_if_missing }}"
+          $create = [System.Convert]::ToBoolean("${{ inputs.create_if_missing }}")
 
           if ("${{ inputs.action }}" -eq 'dkim-enable') {
-            if ($create -eq 'true') {
+            if ($create) {
               pwsh -File scripts/m365-dkim.ps1 -Domain $domain -CreateIfMissing -Enable -Confirm:$false
             } else {
               pwsh -File scripts/m365-dkim.ps1 -Domain $domain -Enable -Confirm:$false
             }
           } else {
-            if ($create -eq 'true') {
+            if ($create) {
               pwsh -File scripts/m365-dkim.ps1 -Domain $domain -CreateIfMissing
             } else {
               pwsh -File scripts/m365-dkim.ps1 -Domain $domain

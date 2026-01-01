@@ -25,6 +25,21 @@ function Ensure-Module {
         [string]$Name
     )
 
+    try {
+        if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing NuGet package provider..." -ForegroundColor Yellow
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+        }
+    } catch {
+        # Best-effort; module install may still succeed.
+    }
+
+    try {
+        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
+    } catch {
+        # Best-effort; if this fails, Install-Module may prompt.
+    }
+
     if (-not (Get-Module -ListAvailable -Name $Name)) {
         Write-Host "Installing PowerShell module: $Name" -ForegroundColor Yellow
         Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber

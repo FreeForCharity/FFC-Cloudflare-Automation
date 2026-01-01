@@ -148,18 +148,18 @@ body:
         4. [ ] Create www CNAME (if requested):
            - Type: CNAME, Name: www, Content: [username].github.io, Proxy: Off
 
-        ### DNS Configuration (Python Script)
-        ```bash
-        export CLOUDFLARE_API_TOKEN="your-token-here"
+        ### DNS Configuration (PowerShell Script)
+        ```powershell
+        $env:CLOUDFLARE_API_TOKEN = "your-token-here"
 
         # Create A records for GitHub Pages (repeat for all 4 IPs)
-        python update_dns.py --zone [domain.org] --name @ --type A --ip 185.199.108.153 --no-proxy
-        python update_dns.py --zone [domain.org] --name @ --type A --ip 185.199.109.153 --no-proxy
-        python update_dns.py --zone [domain.org] --name @ --type A --ip 185.199.110.153 --no-proxy
-        python update_dns.py --zone [domain.org] --name @ --type A --ip 185.199.111.153 --no-proxy
+        .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.108.153
+        .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.109.153
+        .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.110.153
+        .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.111.153
 
         # Create www CNAME (optional)
-        python update_dns.py --zone [domain.org] --name www --type CNAME --target [username].github.io --no-proxy
+        .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name www -Type CNAME -Content [username].github.io
         ```
 
         ### GitHub Pages Configuration

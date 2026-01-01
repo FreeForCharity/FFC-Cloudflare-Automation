@@ -191,7 +191,7 @@ try {
 
     Write-Host "" 
     Write-Host "Recommended GitHub Actions secrets (m365-prod environment)" -ForegroundColor Cyan
-    Write-Host ("AZURE_TENANT_ID={0}" -f $ctx.TenantId)
+    Write-Host ("AZURE_TENANT_ID={0}" -f $tenantId)
     Write-Host ("EXO_TENANT={0}" -f $onMicrosoft.Id)
     Write-Host ("EXO_ORGANIZATION={0}" -f $onMicrosoft.Id)
     Write-Host "AZURE_CLIENT_ID=<Entra app (same app for Graph + EXO)>"

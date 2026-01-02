@@ -8,9 +8,7 @@ param(
 function Get-AuthToken {
     if ($Token) { return $Token }
     if ($env:CLOUDFLARE_API_KEY_DNS_ONLY) { return $env:CLOUDFLARE_API_KEY_DNS_ONLY }
-    if ($env:CLOUDFLARE_API_TOKEN) { return $env:CLOUDFLARE_API_TOKEN }
-    if ($env:CLOUDFLARE_API_KEY_READ_ALL) { return $env:CLOUDFLARE_API_KEY_READ_ALL }
-    throw "No Cloudflare API Token found. Set CLOUDFLARE_API_KEY_DNS_ONLY or CLOUDFLARE_API_TOKEN."
+    throw "No Cloudflare API Token found. Set CLOUDFLARE_API_KEY_DNS_ONLY."
 }
 
 function Invoke-CfApi {

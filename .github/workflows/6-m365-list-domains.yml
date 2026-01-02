@@ -1,0 +1,38 @@
+name: '[M365] List Tenant Domains'
+run-name: 'M365: List tenant domains'
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  list-domains:
+    runs-on: windows-latest
+    environment: m365-prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Acquire Microsoft Graph token
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $token = (az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+          if (-not $token) { throw 'Failed to acquire Graph access token via Azure CLI.' }
+          "GRAPH_ACCESS_TOKEN=$token" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: List tenant domains (Graph)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -File scripts/m365-domain-list.ps1

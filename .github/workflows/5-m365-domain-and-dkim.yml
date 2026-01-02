@@ -44,9 +44,9 @@ jobs:
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
 
       - name: Acquire Microsoft Graph token
         id: graph
@@ -87,7 +87,7 @@ jobs:
         if: ${{ inputs.action != 'status' }}
         shell: pwsh
         env:
-          EXO_APP_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          EXO_APP_ID: ${{ secrets.FFC_AZURE_CLIENT_ID }}
           EXO_TENANT: ${{ secrets.EXO_TENANT }}
           EXO_ORGANIZATION: ${{ secrets.EXO_ORGANIZATION }}
         run: |

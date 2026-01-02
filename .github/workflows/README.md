@@ -90,6 +90,9 @@ This workflow helps identify security vulnerabilities early in the development p
 | 2-enforce-standard.yml | Manual (workflow_dispatch)      | Fix: Enforce standard DNS configuration                         |
 | 3-manage-record.yml    | Manual (workflow_dispatch)      | Manual: Manage a single DNS record                              |
 | 4-export-summary.yml   | Manual (workflow_dispatch)      | Report: Export all domains summary                              |
+| 5-m365-domain-and-dkim.yml | Manual (workflow_dispatch)  | M365: Domain status + DKIM helpers (Graph + Exchange Online)    |
+| 6-m365-list-domains.yml | Manual (workflow_dispatch)      | M365: List tenant domains (Graph)                               |
+| 7-m365-domain-preflight.yml | Manual (workflow_dispatch)   | M365: Domain onboarding preflight (two jobs: Graph in `m365-prod`, Cloudflare audit in `cloudflare-prod`) |
 
 ## Current Workflow
 

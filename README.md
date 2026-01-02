@@ -90,7 +90,7 @@ python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.4
 You'll be prompted for your Cloudflare API token, or you can set it as an environment variable:
 
 ```bash
-export CLOUDFLARE_API_TOKEN="your_token_here"
+export CLOUDFLARE_API_KEY_DNS_ONLY="your_token_here"
 python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
 ```
 
@@ -211,10 +211,8 @@ specific zones. This tool is friendly to DNS-only tokens by accepting explicit z
 # Activate venv (if not already)
 python -m venv .venv; .\.venv\Scripts\activate; pip install -r requirements.txt
 
-# Provide your token via env (prefers CLOUDFLARE_API_KEY_READ_ALL, then CLOUDFLARE_API_KEY_DNS_ONLY)
-$env:CLOUDFLARE_API_KEY_READ_ALL = "<read_all_token>"  # can list zones
-# or
-$env:CLOUDFLARE_API_KEY_DNS_ONLY = "<dns_only_token>"  # needs explicit zones/IDs
+# Provide your token via env
+$env:CLOUDFLARE_API_KEY_DNS_ONLY = "<dns_only_token>"
 
 # Export for selected zones
 python export_zone_dns_summary.py --zones ffcworkingsite1.org,freedomrisingusa.org,legioninthewoods.org,pagbooster.org --output zone_dns_summary.csv
@@ -252,12 +250,10 @@ If your token lacks permission to list all zones, supply explicit zones with
 
 ### GitHub Actions
 
-- Secret: set `CLOUDFLARE_API_KEY_READ_ALL` (preferred) or `CLOUDFLARE_API_KEY_DNS_ONLY`.
+- Secret: set `CLOUDFLARE_API_KEY_DNS_ONLY`.
 - Workflow: `DNS Summary Export`.
   - Provide `zones` input to target specific zones, or set `all_zones=true` to export everything
     accessible to the token.
-  - The workflow prefers `CLOUDFLARE_API_KEY_READ_ALL` and falls back to
-    `CLOUDFLARE_API_KEY_DNS_ONLY`.
 
 ## Repository Structure
 
@@ -310,8 +306,7 @@ Security is a top priority for this project. We implement multiple security meas
 
 ### Protecting Cloudflare API Tokens in Workflows
 
-- **Least privilege**: Use `CLOUDFLARE_API_KEY_READ_ALL` for read-only workflows; use
-  `CLOUDFLARE_API_KEY_DNS_ONLY` scoped to specific zones for DNS edits.
+- **Least privilege**: Use `CLOUDFLARE_API_KEY_DNS_ONLY` scoped to only the zones you intend to manage.
 - **Environment approvals**: Store tokens as Environment secrets (e.g., `cloudflare-prod`) and
   require reviewers before jobs run.
 - **Apply gating**: Workflows default to `--dry-run`; set `apply=true` to make changes. Applies are
@@ -321,6 +316,10 @@ Security is a top priority for this project. We implement multiple security meas
 - **Branch protections**: Require PR reviews and status checks on `main` to prevent unreviewed
   changes.
 - **Rotation**: Set token expiration in Cloudflare and rotate regularly; remove unused tokens.
+
+Where to set Environment secrets (for both `cloudflare-prod` and `m365-prod`):
+
+- See [docs/github-actions-environments-and-secrets.md](docs/github-actions-environments-and-secrets.md).
 
 For details on our security practices and how to report vulnerabilities, see
 [SECURITY.md](SECURITY.md).

@@ -166,7 +166,7 @@ vulnerabilities (with their permission).
 2. **Use Environment Variables**:
 
    ```bash
-   export CLOUDFLARE_API_TOKEN="your-token-here"
+   export CLOUDFLARE_API_KEY_DNS_ONLY="your-token-here"
    python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
    ```
 

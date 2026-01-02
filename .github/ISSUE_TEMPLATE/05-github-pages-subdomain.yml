@@ -139,7 +139,7 @@ body:
 
         ### DNS Configuration (Python Script)
         ```bash
-        export CLOUDFLARE_API_TOKEN="your-token-here"
+        export CLOUDFLARE_API_KEY_DNS_ONLY="your-token-here"
 
         # Create CNAME record for subdomain
         # Example: python update_dns.py --zone example.org --name staging --type CNAME --target freeforcharity.github.io --no-proxy

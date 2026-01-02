@@ -150,7 +150,7 @@ body:
 
         ### DNS Configuration (Python Script)
         ```bash
-        export CLOUDFLARE_API_TOKEN="your-token-here"
+        export CLOUDFLARE_API_KEY_DNS_ONLY="your-token-here"
 
         # Create A records for GitHub Pages (repeat for all 4 IPs)
         python update_dns.py --zone [domain.org] --name @ --type A --ip 185.199.108.153 --no-proxy

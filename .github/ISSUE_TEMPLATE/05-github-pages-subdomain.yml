@@ -137,13 +137,13 @@ body:
            - TTL: Auto
            - Proxy status: DNS only (gray cloud) ⚠️ Important!
 
-        ### DNS Configuration (Python Script)
-        ```bash
-        export CLOUDFLARE_API_KEY_DNS_ONLY="your-token-here"
+  ### DNS Configuration (PowerShell Script)
+  ```powershell
+  $env:CLOUDFLARE_API_KEY_DNS_ONLY = "your-token-here"
 
         # Create CNAME record for subdomain
-        # Example: python update_dns.py --zone example.org --name staging --type CNAME --target freeforcharity.github.io --no-proxy
-        python update_dns.py --zone [base-domain] --name staging --type CNAME --target [username].github.io --no-proxy
+        # Example: .\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type CNAME -Content freeforcharity.github.io
+        .\Update-CloudflareDns.ps1 -Zone [base-domain] -Name staging -Type CNAME -Content [username].github.io
         ```
 
         ### GitHub Pages Configuration

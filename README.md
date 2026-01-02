@@ -77,21 +77,18 @@ To request a DNS change or domain operation:
 
 ### For Administrators: Executing DNS Changes
 
-The simplest way to update DNS records using the Python utilities:
+The simplest way to update DNS records using the PowerShell utilities:
 
-```bash
-# Install dependencies (first time only)
-pip install -r requirements.txt
-
+```powershell
 # Update DNS record (example: staging subdomain)
-python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
+.\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type A -Content 203.0.113.42
 ```
 
 You'll be prompted for your Cloudflare API token, or you can set it as an environment variable:
 
-```bash
-export CLOUDFLARE_API_KEY_DNS_ONLY="your_token_here"
-python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
+```powershell
+$env:CLOUDFLARE_API_KEY_DNS_ONLY = "your_token_here"
+.\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type A -Content 203.0.113.42
 ```
 
 **👉 [See detailed staging subdomain guide →](STAGING_README.md)**
@@ -100,71 +97,71 @@ python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.4
 
 ### For DNS Script Execution (Administrators)
 
-- Python 3.9+
-- PowerShell 5.1+ (optional, for `Update-StagingDns.ps1`)
+- PowerShell 5.1+ (Windows) or PowerShell 7+ (cross-platform)
 - Cloudflare API token with DNS edit permissions
 - Access to FFC Cloudflare account
 
 ## DNS Management Tools
 
-The Python scripts in this repository provide flexible DNS record management for FFC domains.
+The PowerShell scripts in this repository provide flexible DNS record management for FFC domains.
 
 ### Basic Examples
 
 **Update or create an A record:**
 
-```bash
-python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
+```powershell
+.\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type A -Content 203.0.113.42
 ```
 
 **Update or create an AAAA record (IPv6):**
 
-```bash
-python update_dns.py --zone example.org --name @ --type AAAA --ip 2606:50c0:8000::153
+```powershell
+.\Update-CloudflareDns.ps1 -Zone example.org -Name @ -Type AAAA -Content 2606:50c0:8000::153
 ```
 
 **Update or create a CNAME record:**
 
-```bash
-python update_dns.py --zone example.org --name www --type CNAME --target example.org
+```powershell
+.\Update-CloudflareDns.ps1 -Zone example.org -Name www -Type CNAME -Content example.org
 ```
 
-**Search for existing records:**
+**List existing records:**
 
-```bash
-python update_dns.py --zone example.org --name staging --type A --search
+```powershell
+.\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type A -List
 ```
 
 **Delete a specific record:**
 
-```bash
-python update_dns.py --zone example.org --record-id abc123xyz --delete
+```powershell
+.\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type A -Content 203.0.113.42 -Remove
 ```
 
 **Enable Cloudflare proxy (orange cloud):**
 
-```bash
-python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --proxied
+```powershell
+.\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type A -Content 203.0.113.42 -Proxied
 ```
 
-**Disable Cloudflare proxy (DNS only - required for GitHub Pages):**
+**Disable Cloudflare proxy (DNS only - gray cloud, required for GitHub Pages):**
 
-```bash
-python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --no-proxy
+```powershell
+# Proxy is disabled by default, no flag needed
+.\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type A -Content 203.0.113.42
 ```
 
 **Dry run (preview changes without applying):**
 
-```bash
-python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42 --dry-run
+```powershell
+.\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type A -Content 203.0.113.42 -DryRun
 ```
 
-### PowerShell Alternative
+### Quick Subdomain Updates
 
-For quick subdomain updates:
+For quick staging subdomain updates, use the specialized script:
 
 ```powershell
-./Update-StagingDns.ps1 -NewIp 203.0.113.42
+.\Update-StagingDns.ps1 -NewIp 203.0.113.42
 ```
 
 **👉 [See PowerShell details in staging guide →](STAGING_README.md)**
@@ -202,51 +199,32 @@ See the issue templates for detailed configuration instructions.
 
 ## DNS Summary Export
 
-Use `export_zone_dns_summary.py` to export a CSV summarizing apex A/AAAA and `www` CNAME details for
-specific zones. This tool is friendly to DNS-only tokens by accepting explicit zone names.
+Use `Export-CloudflareDns.ps1` to export a CSV summarizing apex A/AAAA and `www` CNAME details for
+specific zones.
 
 ### Usage
 
 ```powershell
-# Activate venv (if not already)
-python -m venv .venv; .\.venv\Scripts\activate; pip install -r requirements.txt
+# Run the export script
+.\Export-CloudflareDns.ps1 -OutputFile zone_dns_summary.csv
 
 # Provide your token via env
 $env:CLOUDFLARE_API_KEY_DNS_ONLY = "<dns_only_token>"
 
-# Export for selected zones
-python export_zone_dns_summary.py --zones ffcworkingsite1.org,freedomrisingusa.org,legioninthewoods.org,pagbooster.org --output zone_dns_summary.csv
-
-# Or read zones from a file (one zone per line)
-python export_zone_dns_summary.py --zones-file .\zones.txt --output zone_dns_summary.csv
-
-# Export for all zones if your token can read zones
-python export_zone_dns_summary.py --all-zones --output zone_dns_summary.csv
-
-# If your token cannot read zone details, provide zone IDs directly
-# (Get zone ID from Cloudflare Dashboard → Zone Overview)
-python export_zone_dns_summary.py --zones ffcworkingsite1.org --zone-ids ffcworkingsite1.org=<zone_id> --output zone_dns_summary.csv
-python export_zone_dns_summary.py --zones-file .\zones.txt --zone-id-file .\zone_ids.csv --output zone_dns_summary.csv
+# Or with explicit token
+.\Export-CloudflareDns.ps1 -OutputFile zone_dns_summary.csv -Token "<your_token>"
 ```
 
 ### CSV Columns
 
 - `zone`: zone name
 - `apex_a_ips`: semicolon-separated apex A IPs
-- `apex_a_ttls`: semicolon-separated TTLs for apex A
 - `apex_a_proxied`: semicolon-separated proxied flags (true/false)
-- `apex_aaaa_ips`: semicolon-separated apex AAAA IPs
-- `apex_aaaa_ttls`: semicolon-separated TTLs for apex AAAA
-- `apex_aaaa_proxied`: semicolon-separated proxied flags
 - `www_cname_target`: CNAME target for `www`
-- `www_cname_ttl`: TTL for `www` CNAME
 - `www_cname_proxied`: proxied flag for `www` CNAME
-- `other_a_count`: count of non-apex A records
-- `other_aaaa_count`: count of non-apex AAAA records
-- `other_cname_count`: count of non-apex/`www` CNAME records
+- `m365_compliant`: whether MX points to outlook.com (compliance check)
 
-If your token lacks permission to list all zones, supply explicit zones with
-`--zones`/`--zones-file`.
+The script supports tokens with various permission levels via environment variables.
 
 ### GitHub Actions
 
@@ -282,17 +260,21 @@ If your token lacks permission to list all zones, supply explicit zones with
 ├── README.md               # This file
 ├── SECURITY.md             # Security policy
 ├── STAGING_README.md       # Staging subdomain management guide
-├── requirements.txt        # Python dependencies
-├── update_dns.py           # Python DNS management script
-├── export_zone_dns_summary.py  # DNS configuration export tool
-├── export_zone_a_records.py    # A record export tool
-└── Update-StagingDns.ps1   # PowerShell DNS script
+├── Update-CloudflareDns.ps1   # Comprehensive PowerShell DNS management script
+├── Update-StagingDns.ps1      # PowerShell staging subdomain script
+└── Export-CloudflareDns.ps1   # PowerShell DNS configuration export tool
 ```
 
 ## Deprecated Features
 
-**Terraform**: This repository previously used Terraform for infrastructure management. Terraform
-support has been removed in favor of Python scripts and the Cloudflare API for DNS management.
+**Python Scripts**: This repository previously used Python scripts (`update_dns.py`, 
+`export_zone_dns_summary.py`) for DNS management. These have been replaced with PowerShell scripts 
+for better Windows integration and simplified dependency management. All DNS operations are now 
+performed using PowerShell scripts.
+
+**Terraform**: This repository also previously used Terraform for infrastructure management. 
+Terraform support has been removed in favor of PowerShell scripts and the Cloudflare API for DNS 
+management.
 
 ## Security
 
@@ -364,6 +346,7 @@ For more information, see [.github/workflows/README.md](.github/workflows/README
 ## Additional Resources
 
 - **[Staging Subdomain Guide](STAGING_README.md)** - Detailed guide for managing staging subdomains
+- **[Enhancement Ideas](ENHANCEMENTS.md)** - Potential future improvements and features
 - **[Issue Templates](.github/ISSUE_TEMPLATE/)** - Templates for domain management requests
 - [GitHub Pages Custom Domain Documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site)
 - [Cloudflare DNS Documentation](https://developers.cloudflare.com/dns/)

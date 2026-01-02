@@ -165,9 +165,9 @@ vulnerabilities (with their permission).
 
 2. **Use Environment Variables**:
 
-   ```bash
-   export CLOUDFLARE_API_KEY_DNS_ONLY="your-token-here"
-   python update_dns.py --zone example.org --name staging --type A --ip 203.0.113.42
+   ```powershell
+   $env:CLOUDFLARE_API_KEY_DNS_ONLY = "your-token-here"
+   .\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type A -Content 203.0.113.42
    ```
 
 3. **Use GitHub Secrets for CI/CD**:

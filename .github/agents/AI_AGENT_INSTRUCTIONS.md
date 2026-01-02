@@ -40,7 +40,7 @@ etc.) working on this repository.**
 
    ```yaml
    env:
-     CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+       CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
    ```
 
 2. **Always validate secret presence BEFORE use**:
@@ -48,8 +48,8 @@ etc.) working on this repository.**
    ```yaml
    - name: Validate Secret Presence
      run: |
-       if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
-         echo "::error::CLOUDFLARE_API_TOKEN secret is not set"
+          if [ -z "${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}" ]; then
+             echo "::error::CLOUDFLARE_API_KEY_DNS_ONLY secret is not set"
          exit 1
        fi
    ```
@@ -58,7 +58,7 @@ etc.) working on this repository.**
 
    ```yaml
    # ❌ WRONG
-   - run: echo ${{ secrets.CLOUDFLARE_API_TOKEN }}
+   - run: echo ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
 
    # ✅ CORRECT
    - run: echo "Secret is configured"
@@ -68,20 +68,20 @@ etc.) working on this repository.**
 
 **When instructing users for local development:**
 
-1. **Always use `CLOUDFLARE_API_TOKEN` environment variable**:
+1. **Always use `CLOUDFLARE_API_KEY_DNS_ONLY` environment variable**:
 
    ```bash
-   export CLOUDFLARE_API_TOKEN="<user-must-provide>"
+   export CLOUDFLARE_API_KEY_DNS_ONLY="<user-must-provide>"
    ```
 
 2. **Always provide placeholder text, NEVER actual values**:
 
    ```bash
    # ✅ CORRECT
-   export CLOUDFLARE_API_TOKEN="your-api-token-here"
+   export CLOUDFLARE_API_KEY_DNS_ONLY="your-api-token-here"
 
    # ❌ WRONG
-   export CLOUDFLARE_API_TOKEN="abc123xyz..."
+   export CLOUDFLARE_API_KEY_DNS_ONLY="abc123xyz..."
    ```
 
 ### Method 3: Local .env Files (Individual Development)
@@ -92,7 +92,7 @@ etc.) working on this repository.**
 
    ```bash
    # .env.example
-   CLOUDFLARE_API_TOKEN=your-cloudflare-api-token-here
+   CLOUDFLARE_API_KEY_DNS_ONLY=your-cloudflare-api-token-here
    ```
 
 2. **Ensure `.gitignore` excludes actual secrets**:
@@ -118,8 +118,8 @@ etc.) working on this repository.**
 **DO:**
 
 - ✅ Use placeholder text: `"your-api-token-here"`
-- ✅ Reference GitHub Secrets: `${{ secrets.CLOUDFLARE_API_TOKEN }}`
-- ✅ Use environment variables: `$CLOUDFLARE_API_TOKEN`
+- ✅ Reference GitHub Secrets: `${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}`
+- ✅ Use environment variables: `$CLOUDFLARE_API_KEY_DNS_ONLY`
 - ✅ Instruct users to obtain secrets from official sources
 - ✅ Link to official credential management docs
 
@@ -136,8 +136,8 @@ etc.) working on this repository.**
 
 ```markdown
 1. Create a CloudFlare API token at https://dash.cloudflare.com/profile/api-tokens
-2. Add the token to GitHub Secrets as `CLOUDFLARE_API_TOKEN`
-3. The workflow will use: `${{ secrets.CLOUDFLARE_API_TOKEN }}`
+2. Add the token to GitHub Secrets as `CLOUDFLARE_API_KEY_DNS_ONLY`
+3. The workflow will use: `${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}`
 ```
 
 **❌ WRONG:**
@@ -199,7 +199,7 @@ jobs:
       # STEP 1: Always validate secret presence first
       - name: Validate Secret Presence
         run: |
-          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
+               if [ -z "${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}" ]; then
             echo "::error::Required secret not set"
             exit 1
           fi
@@ -207,7 +207,7 @@ jobs:
       # STEP 2: Use secret via environment variables
       - name: Use Secret
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+               CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
         run: |
           # Your commands here
           # Secret is available as environment variable
@@ -242,11 +242,11 @@ To configure your CloudFlare API token:
 
 1. Go to repository Settings → Secrets and variables → Actions
 2. Click "New repository secret"
-3. Name: `CLOUDFLARE_API_TOKEN`
+3. Name: `CLOUDFLARE_API_KEY_DNS_ONLY`
 4. Value: [Paste your CloudFlare API token]
 5. Click "Add secret"
 
-The workflows will automatically use: `${{ secrets.CLOUDFLARE_API_TOKEN }}`
+The workflows will automatically use: `${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}`
 
 **For Local Development:**
 
@@ -351,7 +351,7 @@ git log --all --full-history --source --pickaxe-regex -S "token.*[a-zA-Z0-9_-]{2
 ⚠️ For security, I won't include your actual token in any files.
 
 To configure it:
-1. Add to GitHub Secrets as CLOUDFLARE_API_TOKEN, OR
+1. Add to GitHub Secrets as CLOUDFLARE_API_KEY_DNS_ONLY, OR
 2. Add to local .env file
 
 See SECURITY.md for detailed instructions.
@@ -369,7 +369,7 @@ See SECURITY.md for detailed instructions.
 I'll add the token using GitHub Secrets (secure method):
 
 env:
-  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+   CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
 
 The actual token value should be added to repository secrets.
 ```
@@ -386,8 +386,8 @@ The actual token value should be added to repository secrets.
 I'll create documentation with secure examples:
 
 1. Using placeholders: "your-api-token-here"
-2. Referencing GitHub Secrets: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-3. Using environment variables: $CLOUDFLARE_API_TOKEN
+2. Referencing GitHub Secrets: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+3. Using environment variables: $CLOUDFLARE_API_KEY_DNS_ONLY
 
 No actual tokens will be included in the documentation.
 ```

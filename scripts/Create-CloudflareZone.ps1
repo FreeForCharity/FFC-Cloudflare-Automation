@@ -91,6 +91,14 @@ try {
         
         # Output for GitHub Actions
         Write-Host "`n::notice title=Zone Already Exists::Zone '$Domain' already exists with ID: $($existingZone.id)"
+        
+        # Set outputs using GITHUB_OUTPUT (new method)
+        if ($env:GITHUB_OUTPUT) {
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "zone_id=$($existingZone.id)"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "name_servers=$($existingZone.name_servers -join ',')"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "status=$($existingZone.status)"
+        }
+        
         exit 0
     }
 }

@@ -77,9 +77,10 @@ function New-TempPfxFile {
             [Parameter(Mandatory = $true)][string]$Input
         )
 
-        $s = $Input.Trim()
+        $rawLen = if ($null -eq $Input) { 0 } else { $Input.Length }
+        $s = if ($null -eq $Input) { '' } else { $Input.Trim() }
         if ([string]::IsNullOrWhiteSpace($s)) {
-            throw 'PFX base64 input is empty.'
+            throw ("PFX base64 input is empty/whitespace (rawLen={0})." -f $rawLen)
         }
 
         # Remove common whitespace/newlines from multiline GitHub secrets.
@@ -222,6 +223,14 @@ try {
 
     $effectivePfx = if ($CertificatePfxBase64) { $CertificatePfxBase64 } else { Get-FirstNonEmpty @($env:EXO_CERT_PFX_BASE64, $env:FFC_EXO_CERT_PFX_BASE64) }
     $effectivePfxPwd = if ($CertificatePassword) { $CertificatePassword } else { Get-FirstNonEmpty @($env:EXO_CERT_PFX_PASSWORD, $env:FFC_EXO_CERT_PASSWORD) }
+
+    if ([string]::IsNullOrWhiteSpace($effectivePfx)) {
+        $pfxEnv = $env:FFC_EXO_CERT_PFX_BASE64
+        $pwdEnv = $env:FFC_EXO_CERT_PASSWORD
+        $pfxEnvLen = if ($null -eq $pfxEnv) { 0 } else { $pfxEnv.Length }
+        $pwdEnvLen = if ($null -eq $pwdEnv) { 0 } else { $pwdEnv.Length }
+        throw ("Missing/blank EXO PFX base64. env(FFC_EXO_CERT_PFX_BASE64).Length={0}; env(FFC_EXO_CERT_PASSWORD).Length={1}" -f $pfxEnvLen, $pwdEnvLen)
+    }
 
     if (-not $effectiveOrg -and $effectiveTenant) {
         $effectiveOrg = $effectiveTenant

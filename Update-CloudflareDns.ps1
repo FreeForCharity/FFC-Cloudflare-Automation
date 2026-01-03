@@ -610,17 +610,14 @@ try {
                 }
                 'A' {
                     $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }
-                    if (-not $foundRecord -and $candidates) {
-                        $updateCandidate = ($candidates | Where-Object { $_.content -eq $stdContent } | Select-Object -First 1)
-                        if (-not $updateCandidate) { $updateCandidate = $candidates | Select-Object -First 1 }
-                    }
+                    # A records are multi-value in our standard (GitHub Pages needs multiple A records at the apex).
+                    # If a required value is missing, CREATE it rather than updating an arbitrary existing A record,
+                    # which can "swap" values and leave one required IP missing.
                 }
                 'AAAA' {
                     $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }
-                    if (-not $foundRecord -and $candidates) {
-                        $updateCandidate = ($candidates | Where-Object { $_.content -eq $stdContent } | Select-Object -First 1)
-                        if (-not $updateCandidate) { $updateCandidate = $candidates | Select-Object -First 1 }
-                    }
+                    # AAAA records are multi-value in our standard (GitHub Pages needs multiple AAAA records at the apex).
+                    # If a required value is missing, CREATE it rather than updating an arbitrary existing AAAA record.
                 }
                 'CNAME' {
                     $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }

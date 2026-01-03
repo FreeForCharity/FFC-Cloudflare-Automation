@@ -15,6 +15,12 @@ GitHub Actions workflows (manual `workflow_dispatch`):
 - List all tenant domains: `.github/workflows/6-m365-list-domains.yml`
 - Enable DKIM (create selector CNAMEs in Cloudflare and enable signing): `.github/workflows/8-m365-dkim-enable.yml`
 
+## End-to-end testing
+
+For a complete, protected-environment runbook (Cloudflare baseline + M365 verification + DKIM end-to-end + Defender DKIM v2 validation), see:
+
+- `docs/end-to-end-testing-m365-cloudflare.md`
+
 ## Prerequisites
 
 - PowerShell 7+ recommended

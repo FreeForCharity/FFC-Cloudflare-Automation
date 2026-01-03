@@ -173,17 +173,21 @@ function Connect-Exchange {
     $connectParams = @{ ShowBanner = $false }
     if ($Org) { $connectParams.Organization = $Org }
 
+    $hasApp = -not [string]::IsNullOrWhiteSpace($App)
+    $hasThumb = -not [string]::IsNullOrWhiteSpace($Thumbprint)
+    $hasPfx = -not [string]::IsNullOrWhiteSpace($PfxBase64)
+
+    # App-only auth (preferred for automation)
+    if ($hasApp -and ($hasThumb -or $hasPfx)) {
+        $connectParams.AppId = $App
+
+        if ($hasThumb) {
+            $connectParams.CertificateThumbprint = $Thumbprint
             Connect-ExchangeOnline @connectParams | Out-Null
             return
         }
 
-        $resolvedPfx = Get-FirstNonEmpty @(
-            $PfxBase64,
-            $env:EXO_CERT_PFX_BASE64,
-            $env:FFC_EXO_CERT_PFX_BASE64
-        )
-        if ($env:GITHUB_ACTIONS -eq 'true') {
-        $script:TempPfxPath = New-TempPfxFile -PfxBase64 $resolvedPfx
+        $script:TempPfxPath = New-TempPfxFile -PfxBase64 $PfxBase64
         $connectParams.CertificateFilePath = $script:TempPfxPath
         if ($PfxPassword) {
             $connectParams.CertificatePassword = (ConvertTo-SecureString -String $PfxPassword -AsPlainText -Force)
@@ -193,6 +197,7 @@ function Connect-Exchange {
         return
     }
 
+    # Interactive auth (for local use)
     if ($UseDeviceCode) { $connectParams.Device = $true }
     Connect-ExchangeOnline @connectParams | Out-Null
 }
@@ -239,12 +244,14 @@ try {
     $effectivePfx = if ($CertificatePfxBase64) { $CertificatePfxBase64 } else { Get-FirstNonEmpty @($env:EXO_CERT_PFX_BASE64, $env:FFC_EXO_CERT_PFX_BASE64) }
     $effectivePfxPwd = if ($CertificatePassword) { $CertificatePassword } else { Get-FirstNonEmpty @($env:EXO_CERT_PFX_PASSWORD, $env:FFC_EXO_CERT_PASSWORD) }
 
-    if ([string]::IsNullOrWhiteSpace($effectivePfx)) {
-        $pfxEnv = $env:FFC_EXO_CERT_PFX_BASE64
-        $pwdEnv = $env:FFC_EXO_CERT_PASSWORD
-        $pfxEnvLen = if ($null -eq $pfxEnv) { 0 } else { $pfxEnv.Length }
-        $pwdEnvLen = if ($null -eq $pwdEnv) { 0 } else { $pwdEnv.Length }
-        throw ("Missing/blank EXO PFX base64. env(FFC_EXO_CERT_PFX_BASE64).Length={0}; env(FFC_EXO_CERT_PASSWORD).Length={1}" -f $pfxEnvLen, $pwdEnvLen)
+    $useAppOnly = (-not [string]::IsNullOrWhiteSpace($effectiveAppId)) -and (-not [string]::IsNullOrWhiteSpace($effectiveOrg)) -and ((-not [string]::IsNullOrWhiteSpace($effectiveThumb)) -or (-not [string]::IsNullOrWhiteSpace($effectivePfx)))
+    if ($env:GITHUB_ACTIONS -eq 'true' -or $useAppOnly) {
+        if ([string]::IsNullOrWhiteSpace($effectiveThumb) -and [string]::IsNullOrWhiteSpace($effectivePfx)) {
+            throw "Missing EXO certificate for app-only auth. Provide EXO_CERT_THUMBPRINT or EXO_CERT_PFX_BASE64 (+ EXO_CERT_PFX_PASSWORD)."
+        }
+        if ((-not [string]::IsNullOrWhiteSpace($effectivePfx)) -and [string]::IsNullOrWhiteSpace($effectivePfxPwd)) {
+            throw "Missing EXO PFX password for app-only auth. Provide EXO_CERT_PFX_PASSWORD (or use a thumbprint-based cert)."
+        }
     }
 
     if (-not $effectiveOrg -and $effectiveTenant) {

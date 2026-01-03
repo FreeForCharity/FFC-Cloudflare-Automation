@@ -27,6 +27,9 @@ AAAA records), see [docs/enforce-standard-workflow.md](docs/enforce-standard-wor
 For Microsoft 365 domain status checks and DKIM helpers (work in progress), see
 [docs/m365-domain-and-dkim.md](docs/m365-domain-and-dkim.md).
 
+For the end-to-end runbook to align a domain across Cloudflare + Microsoft 365 (including Defender DKIM v2 validation), see
+[docs/end-to-end-testing-m365-cloudflare.md](docs/end-to-end-testing-m365-cloudflare.md).
+
 ## Features
 
 ### Issue-Based Workflow

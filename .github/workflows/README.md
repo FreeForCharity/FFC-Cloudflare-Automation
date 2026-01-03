@@ -187,7 +187,6 @@ If you prefer to run zone creation from Actions (still admin-only), use:
 
 These are intentionally **not** the same as the DNS-only token used for day-to-day DNS changes.
 
-- **11. Cloudflare - Add Zone (Admin)**
 - **03. DNS - Add Domain (Create Zone) (Admin)**
   - `CLOUDFLARE_API_TOKEN_ZONE_CREATE`: Cloudflare API token with minimum permissions to create
     zones

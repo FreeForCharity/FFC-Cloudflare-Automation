@@ -390,11 +390,11 @@ try {
         else { Write-Warning "[MISSING] M365 MX Record (*.mail.protection.outlook.com)" }
 
         # 2. SPF
+        # Note: Cloudflare's API/UI frequently normalizes TXT quoting. Treat normalized content as authoritative
+        # to avoid false diffs and unnecessary rewrites.
         $spf = $allRecords | Where-Object { $_.type -eq 'TXT' -and (Normalize-TxtContent -Value $_.content) -like '*include:spf.protection.outlook.com*' }
         if ($spf) {
-            $quotedSpf = $spf | Where-Object { Is-TxtQuoted -Value $_.content }
-            if ($quotedSpf) { Write-Host "[OK] M365 SPF Record found (quoted)" -ForegroundColor Green }
-            else { Write-Warning "[DIFFERS] M365 SPF Record found but not quoted (Cloudflare UI warning)" }
+            Write-Host "[OK] M365 SPF Record found" -ForegroundColor Green
         }
         else { Write-Warning "[MISSING] M365 SPF Record (include:spf.protection.outlook.com)" }
 
@@ -408,18 +408,14 @@ try {
             $hasInternalRua = $ruaMailtos -contains 'mailto:dmarc-rua@freeforcharity.org'
             $hasCloudflareRua = [bool]($ruaMailtos | Where-Object { $_ -like 'mailto:*@dmarc-reports.cloudflare.net' } | Select-Object -First 1)
 
-            $quotedDmarc = $dmarcValid | Where-Object { Is-TxtQuoted -Value $_.content }
-            $quotedOk = [bool]$quotedDmarc
-
-            if ($hasInternalRua -and $quotedOk) {
+            if ($hasInternalRua) {
                 if ($hasCloudflareRua) {
-                    Write-Host "[OK] DMARC Record found (quoted, internal+Cloudflare rua)" -ForegroundColor Green
+                    Write-Host "[OK] DMARC Record found (internal+Cloudflare rua)" -ForegroundColor Green
                 } else {
-                    Write-Host "[OK] DMARC Record found (quoted, internal rua only)" -ForegroundColor Green
+                    Write-Host "[OK] DMARC Record found (internal rua only)" -ForegroundColor Green
                     Write-Warning "[OPTIONAL] DMARC Record has no Cloudflare rua; enable Cloudflare DMARC Management to add it"
                 }
             } else {
-                if (-not $quotedOk) { Write-Warning "[DIFFERS] DMARC Record found but not quoted (Cloudflare UI warning)" }
                 if (-not $hasInternalRua) { Write-Warning "[DIFFERS] DMARC Record missing internal rua (mailto:dmarc-rua@freeforcharity.org)" }
                 if (-not $hasCloudflareRua) { Write-Warning "[OPTIONAL] DMARC Record has no Cloudflare rua; enable Cloudflare DMARC Management to add it" }
             }
@@ -468,10 +464,10 @@ try {
         $standards = @(
             # Microsoft 365 Email
             @{ Type='MX'; Name='@'; Content=$m365MxTarget; Priority=0 },
-            # SPF is treated specially: we preserve existing SPF content but enforce quoting to avoid Cloudflare UI warnings.
-            @{ Type='TXT'; Name='@'; Content='v=spf1 include:spf.protection.outlook.com -all'; MatchContains='include:spf.protection.outlook.com'; EnsureQuoted=$true },
+            # SPF: preserve existing SPF content; only create if missing.
+            @{ Type='TXT'; Name='@'; Content='v=spf1 include:spf.protection.outlook.com -all'; MatchContains='include:spf.protection.outlook.com' },
             # DMARC: preserve Cloudflare-generated rua (if present) and always include internal rua.
-            @{ Type='TXT'; Name='_dmarc'; Content='v=DMARC1; p=none'; EnsureQuoted=$true; EnsureInternalRua=$true; PreserveCloudflareRua=$true; InternalRua='mailto:dmarc-rua@freeforcharity.org' },
+            @{ Type='TXT'; Name='_dmarc'; Content='v=DMARC1; p=none'; EnsureInternalRua=$true; PreserveCloudflareRua=$true; InternalRua='mailto:dmarc-rua@freeforcharity.org' },
 
             # Microsoft 365 / Teams / Intune (Unproxied)
             @{ Type='CNAME'; Name='autodiscover';          Content='autodiscover.outlook.com';                    Proxied=$false },
@@ -539,22 +535,12 @@ try {
                     }
                 }
                 'TXT' {
-                    $ensureQuoted = $false
-                    if ($std.ContainsKey('EnsureQuoted')) { $ensureQuoted = [bool]$std.EnsureQuoted }
-
                     if ($std.ContainsKey('MatchContains') -and $std.MatchContains) {
-                        # SPF: present if it includes the M365 include, but enforce quoting without overwriting other mechanisms.
+                        # SPF: present if it includes the M365 include; do not overwrite other mechanisms.
                         $foundRecord = $candidates | Where-Object { (Normalize-TxtContent -Value $_.content) -like ("*" + $std.MatchContains + "*") }
                         if ($foundRecord) {
                             $spfCandidate = $foundRecord | Select-Object -First 1
-                            if ($ensureQuoted -and -not (Is-TxtQuoted -Value $spfCandidate.content)) {
-                                $updateCandidate = $spfCandidate
-                                $stdContent = Quote-TxtContent -Value $spfCandidate.content
-                                $foundRecord = $null
-                            } else {
-                                # Keep as OK; do not overwrite SPF content.
-                                $stdContent = $spfCandidate.content
-                            }
+                            $stdContent = $spfCandidate.content
                         }
                     } elseif ($std.Name -eq '_dmarc') {
                         $foundRecord = $candidates | Where-Object { (Normalize-TxtContent -Value $_.content) -like 'v=DMARC1*' }
@@ -575,19 +561,13 @@ try {
                             if ($preserveCloudflareRua) {
                                 $hasCloudflareRua = [bool]($existingRua | Where-Object { $_ -like 'mailto:*@dmarc-reports.cloudflare.net' } | Select-Object -First 1)
                             }
-                            $isQuoted = Is-TxtQuoted -Value $dmarcCandidate.content
-
-                            # Only update when needed: missing quotes or missing required internal rua.
-                            if ($ensureQuoted -and -not $isQuoted) {
-                                $updateCandidate = $dmarcCandidate
-                                $stdContent = Quote-TxtContent -Value $normalized
-                                $foundRecord = $null
-                            } elseif ($ensureInternalRua -and -not $hasInternalRua) {
+                            # Only update when needed: missing required internal rua.
+                            if ($ensureInternalRua -and -not $hasInternalRua) {
                                 $updateCandidate = $dmarcCandidate
                                 $desiredRua = @($existingRua)
                                 $desiredRua += $internalRua
                                 $desiredNormalized = Set-DmarcRuaMailtos -DmarcContent $normalized -RuaMailtos $desiredRua
-                                $stdContent = if ($ensureQuoted) { Quote-TxtContent -Value $desiredNormalized } else { $desiredNormalized }
+                                $stdContent = $desiredNormalized
                                 $foundRecord = $null
                             } else {
                                 # Already compliant; do not rewrite just to normalize formatting/order.
@@ -597,15 +577,13 @@ try {
                             # Prefer updating an existing _dmarc TXT rather than creating duplicates.
                             $updateCandidate = $candidates | Select-Object -First 1
                             $desiredNormalized = Set-DmarcRuaMailtos -DmarcContent $stdContent -RuaMailtos @($internalRua)
-                            $stdContent = if ($ensureQuoted) { Quote-TxtContent -Value $desiredNormalized } else { $desiredNormalized }
+                            $stdContent = $desiredNormalized
                         } else {
                             $desiredNormalized = Set-DmarcRuaMailtos -DmarcContent $stdContent -RuaMailtos @($internalRua)
-                            $stdContent = if ($ensureQuoted) { Quote-TxtContent -Value $desiredNormalized } else { $desiredNormalized }
+                            $stdContent = $desiredNormalized
                         }
                     } else {
-                        $expected = if ($ensureQuoted) { Quote-TxtContent -Value $stdContent } else { $stdContent }
-                        $foundRecord = $candidates | Where-Object { $_.content -eq $expected }
-                        $stdContent = $expected
+                        $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
                     }
                 }
                 'A' {

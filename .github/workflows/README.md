@@ -185,11 +185,10 @@ If you prefer to run zone creation from Actions (still admin-only), use:
 
 ## Required secrets for admin workflows
 
-These are intentionally **not** the same as the DNS-only token used for day-to-day DNS changes.
-
 - **03. DNS - Add Domain (Create Zone) (Admin)**
-  - `CLOUDFLARE_API_TOKEN_ZONE_CREATE`: Cloudflare API token with minimum permissions to create
-    zones
+  - `CLOUDFLARE_API_KEY_DNS_ONLY`: Cloudflare API token. Must have permissions to create zones (per
+    Cloudflare API: at least one of Zone:Edit or Zone:DNS:Edit) and be scoped to allow zone
+    creation.
   - `CLOUDFLARE_ACCOUNT_ID`: Cloudflare account id where zones are created
 - **08. M365 - Add Tenant Domain (Admin)**
   - Uses the existing `m365-prod` environment secrets (`FFC_AZURE_CLIENT_ID`, `FFC_AZURE_TENANT_ID`)

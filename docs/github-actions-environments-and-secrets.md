@@ -84,8 +84,8 @@ Environment secrets (optional, only needed for DKIM app-only mode):
 
 - `EXO_TENANT` (example: `freeforcharity.onmicrosoft.com`)
 - `EXO_ORGANIZATION` (often the same as `EXO_TENANT`)
-- `EXO_CERT_PFX_BASE64` (base64-encoded PFX for certificate auth)
-- `EXO_CERT_PFX_PASSWORD` (optional; empty if the PFX has no password)
+- `FFC_EXO_CERT_PFX_BASE64` (base64-encoded PFX for certificate auth)
+- `FFC_EXO_CERT_PASSWORD` (optional; empty if the PFX has no password)
 
 ## `m365-prod`: OIDC and app prerequisites (Azure/Entra)
 

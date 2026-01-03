@@ -36,9 +36,11 @@ if (-not $ZoneType) {
 }
 
 if ([string]::IsNullOrWhiteSpace($ApiToken)) {
-    $ApiToken = $env:CLOUDFLARE_API_TOKEN_ZONE_CREATE
+    $ApiToken = $env:CLOUDFLARE_API_KEY_DNS_ONLY
 }
-if ([string]::IsNullOrWhiteSpace($ApiToken)) { throw 'ApiToken cannot be empty.' }
+if ([string]::IsNullOrWhiteSpace($ApiToken)) {
+    throw 'Cloudflare API token not found. Set CLOUDFLARE_API_KEY_DNS_ONLY or pass -ApiToken.'
+}
 
 $headers = @{
     Authorization  = "Bearer $ApiToken"

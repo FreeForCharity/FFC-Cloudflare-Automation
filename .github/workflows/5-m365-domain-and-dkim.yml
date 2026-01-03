@@ -33,8 +33,8 @@ jobs:
     environment: m365-prod
 
     env:
-      EXO_CERT_PFX_BASE64: ${{ secrets.EXO_CERT_PFX_BASE64 }}
-      EXO_CERT_PFX_PASSWORD: ${{ secrets.EXO_CERT_PFX_PASSWORD }}
+      EXO_CERT_PFX_BASE64: ${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}
+      EXO_CERT_PFX_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4

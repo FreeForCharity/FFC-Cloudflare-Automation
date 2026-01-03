@@ -29,7 +29,7 @@ permissions:
 jobs:
   create_zone:
     runs-on: ubuntu-latest
-    environment: cloudflare-admin
+    environment: cloudflare-prod
 
     outputs:
       zone_id: ${{ steps.zone.outputs.zone_id }}
@@ -43,7 +43,7 @@ jobs:
         id: zone
         shell: pwsh
         env:
-          CLOUDFLARE_API_TOKEN_ZONE_CREATE: ${{ secrets.CLOUDFLARE_API_TOKEN_ZONE_CREATE }}
+          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           $ErrorActionPreference = 'Stop'

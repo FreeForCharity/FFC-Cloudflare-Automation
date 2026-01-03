@@ -1,0 +1,114 @@
+name: '11. Cloudflare - Add Zone (Admin)'
+run-name: 'Cloudflare: Add zone ${{ inputs.domain }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain name to add as a new Cloudflare zone (e.g., example.org)'
+        required: true
+        type: string
+      zone_type:
+        description: 'Zone type'
+        required: true
+        type: choice
+        options:
+          - full
+          - partial
+        default: full
+      issue_number:
+        description: 'Optional: issue number to comment results back to'
+        required: false
+        type: number
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  create_zone:
+    runs-on: ubuntu-latest
+    environment: cloudflare-admin
+
+    outputs:
+      zone_id: ${{ steps.zone.outputs.zone_id }}
+      name_servers: ${{ steps.zone.outputs.name_servers }}
+      created: ${{ steps.zone.outputs.created }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Cloudflare zone
+        id: zone
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN_ZONE_CREATE: ${{ secrets.CLOUDFLARE_API_TOKEN_ZONE_CREATE }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $domain = '${{ inputs.domain }}'.Trim()
+          if (-not $domain) { throw 'Input domain is required.' }
+
+          $outPath = Join-Path $env:RUNNER_TEMP 'cloudflare-zone-add.txt'
+          pwsh -NoProfile -File ./scripts/cloudflare-zone-add.ps1 \
+            -Domain $domain \
+            -AccountId $env:CLOUDFLARE_ACCOUNT_ID \
+            -ApiToken $env:CLOUDFLARE_API_TOKEN_ZONE_CREATE \
+            -ZoneType '${{ inputs.zone_type }}' \
+            *>&1 | Tee-Object -FilePath $outPath
+
+          "out_path=$outPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload output
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-zone-add
+          path: ${{ steps.zone.outputs.out_path }}
+          if-no-files-found: error
+
+  post_back:
+    runs-on: ubuntu-latest
+    needs: [create_zone]
+    if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
+
+    steps:
+      - name: Download output
+        uses: actions/download-artifact@v4
+        with:
+          name: cloudflare-zone-add
+          path: artifacts
+
+      - name: Comment results back to issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const issueNumber = Number('${{ inputs.issue_number }}');
+            const domain = '${{ inputs.domain }}';
+
+            const created = String('${{ needs.create_zone.outputs.created }}');
+            const zoneId = String('${{ needs.create_zone.outputs.zone_id }}');
+            const nameServers = String('${{ needs.create_zone.outputs.name_servers }}');
+
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const logText = fs.readFileSync('artifacts/cloudflare-zone-add.txt', 'utf8');
+
+            const body = [
+              `Cloudflare zone add for **${domain}**`,
+              '',
+              `- Created: **${created}**`,
+              `- Zone ID: ${zoneId || '(unknown)'}`,
+              `- Name servers: ${nameServers || '(see details)'}`,
+              `- Run: ${runUrl}`,
+              '',
+              '<details><summary>Details</summary>\n\n```\n' + logText.trim() + '\n```\n</details>',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });

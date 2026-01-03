@@ -144,6 +144,8 @@ This workflow helps identify security vulnerabilities early in the development p
 | 5-m365-domain-and-dkim.yml    | Manual (workflow_dispatch)      | M365: Domain status + DKIM helpers (Graph + Exchange Online)                                              |
 | 6-m365-list-domains.yml       | Manual (workflow_dispatch)      | M365: List tenant domains (Graph)                                                                         |
 | 7-m365-domain-preflight.yml   | Manual (workflow_dispatch)      | M365: Domain onboarding preflight (two jobs: Graph in `m365-prod`, Cloudflare audit in `cloudflare-prod`) |
+| 11-cloudflare-zone-add.yml    | Manual (workflow_dispatch)      | Cloudflare: Create a new zone (add domain) and output assigned name servers                               |
+| 12-m365-add-domain.yml        | Manual (workflow_dispatch)      | M365: Add tenant domain (Graph) + print verification DNS records                                          |
 
 ## Deprecated workflows (kept as stubs)
 
@@ -162,6 +164,10 @@ These workflows are **not** needed anymore because the repo moved to:
   the zone exists, use **01/02** (preferred) or the **03–06** DNS workflows to manage records and
   apply standards.
 
+If you prefer to run zone creation from Actions (still admin-only), use:
+
+- **11. Cloudflare - Add Zone (Admin)**
+
 ### Legacy Cloudflare DNS update / run
 
 - **What it used to do**: a monolithic “do DNS automation” flow.
@@ -172,6 +178,17 @@ These workflows are **not** needed anymore because the repo moved to:
 
 - **What it used to do**: export summaries via old tooling.
 - **What replaces it**: **06. DNS - Export All Domains (Report)**.
+
+## Required secrets for admin workflows
+
+These are intentionally **not** the same as the DNS-only token used for day-to-day DNS changes.
+
+- **11. Cloudflare - Add Zone (Admin)**
+  - `CLOUDFLARE_API_TOKEN_ZONE_CREATE`: Cloudflare API token with minimum permissions to create
+    zones
+  - `CLOUDFLARE_ACCOUNT_ID`: Cloudflare account id where zones are created
+- **12. M365 - Add Tenant Domain (Admin)**
+  - Uses the existing `m365-prod` environment secrets (`FFC_AZURE_CLIENT_ID`, `FFC_AZURE_TENANT_ID`)
 
 ## Current Workflow
 

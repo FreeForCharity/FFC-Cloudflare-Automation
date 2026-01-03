@@ -1,0 +1,102 @@
+name: '12. M365 - Add Tenant Domain (Admin)'
+run-name: 'M365: Add domain ${{ inputs.domain }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain name to add to the tenant (e.g., example.org)'
+        required: true
+        type: string
+      issue_number:
+        description: 'Optional: issue number to comment results back to'
+        required: false
+        type: number
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+jobs:
+  add_domain:
+    runs-on: windows-latest
+    environment: m365-prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Acquire Microsoft Graph token
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $token = (az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+          if (-not $token) { throw 'Failed to acquire Graph access token via Azure CLI.' }
+          "GRAPH_ACCESS_TOKEN=$token" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Add tenant domain + fetch verification records
+        id: run
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $domain = '${{ inputs.domain }}'.Trim()
+          if (-not $domain) { throw 'Input domain is required.' }
+
+          $outPath = Join-Path $env:RUNNER_TEMP 'm365-domain-add.txt'
+          pwsh -NoProfile -File ./scripts/m365-domain-add.ps1 -Domain $domain *>&1 | Tee-Object -FilePath $outPath
+
+          "out_path=$outPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload output
+        uses: actions/upload-artifact@v4
+        with:
+          name: m365-domain-add
+          path: ${{ steps.run.outputs.out_path }}
+          if-no-files-found: error
+
+  post_back:
+    runs-on: ubuntu-latest
+    needs: [add_domain]
+    if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
+
+    steps:
+      - name: Download output
+        uses: actions/download-artifact@v4
+        with:
+          name: m365-domain-add
+          path: artifacts
+
+      - name: Comment results back to issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const issueNumber = Number('${{ inputs.issue_number }}');
+            const domain = '${{ inputs.domain }}';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const logText = fs.readFileSync('artifacts/m365-domain-add.txt', 'utf8');
+
+            const body = [
+              `M365 add domain for **${domain}**`,
+              '',
+              `- Run: ${runUrl}`,
+              '',
+              '<details><summary>Details + DNS records</summary>\n\n```\n' + logText.trim() + '\n```\n</details>',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });

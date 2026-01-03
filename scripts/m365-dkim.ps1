@@ -183,7 +183,16 @@ function Connect-Exchange {
             return
         }
 
-        $script:TempPfxPath = New-TempPfxFile -PfxBase64 $PfxBase64
+        $resolvedPfx = Get-FirstNonEmpty @(
+            $PfxBase64,
+            $env:EXO_CERT_PFX_BASE64,
+            $env:FFC_EXO_CERT_PFX_BASE64
+        )
+        if ($env:GITHUB_ACTIONS -eq 'true') {
+            $pfxLenHere = if ($null -eq $resolvedPfx) { 0 } else { $resolvedPfx.Length }
+            Write-Host ("EXO Connect: resolved PfxBase64 length={0}" -f $pfxLenHere) -ForegroundColor DarkGray
+        }
+        $script:TempPfxPath = New-TempPfxFile -PfxBase64 $resolvedPfx
         $connectParams.CertificateFilePath = $script:TempPfxPath
         if ($PfxPassword) {
             $connectParams.CertificatePassword = (ConvertTo-SecureString -String $PfxPassword -AsPlainText -Force)

@@ -6,12 +6,12 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$AccountId,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter()]
     [string]$ApiToken,
 
     [Parameter()]
     [ValidateSet('full', 'partial')]
-    [string]$ZoneType = 'full'
+    [string]$ZoneType
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,6 +30,14 @@ function Write-GitHubOutput {
 $domainName = $Domain.Trim().ToLowerInvariant()
 if ([string]::IsNullOrWhiteSpace($domainName)) { throw 'Domain cannot be empty.' }
 if ([string]::IsNullOrWhiteSpace($AccountId)) { throw 'AccountId cannot be empty.' }
+
+if (-not $ZoneType) {
+    $ZoneType = 'full'
+}
+
+if ([string]::IsNullOrWhiteSpace($ApiToken)) {
+    $ApiToken = $env:CLOUDFLARE_API_TOKEN_ZONE_CREATE
+}
 if ([string]::IsNullOrWhiteSpace($ApiToken)) { throw 'ApiToken cannot be empty.' }
 
 $headers = @{
@@ -81,7 +89,7 @@ try {
 catch {
     Write-Host "Create zone failed; checking if zone already exists..." -ForegroundColor Yellow
 
-    $q = [System.Web.HttpUtility]::UrlEncode($domainName)
+    $q = [uri]::EscapeDataString($domainName)
     $lookupPath = "/zones?name=$q&account.id=$AccountId&per_page=1"
     $existing = Invoke-Cloudflare -Method GET -Path $lookupPath
 

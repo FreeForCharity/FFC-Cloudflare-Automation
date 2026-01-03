@@ -129,5 +129,4 @@ Write-Host "- After verification: run 02. Domain - Enforce Standard (Fix) (LIVE)
 
 if ($env:GITHUB_OUTPUT) {
     "created={0}" -f $created | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-    "is_verified={0}" -f $domain.isVerified | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 }

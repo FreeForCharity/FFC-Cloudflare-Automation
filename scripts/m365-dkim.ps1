@@ -249,7 +249,7 @@ try {
         if ([string]::IsNullOrWhiteSpace($effectiveThumb) -and [string]::IsNullOrWhiteSpace($effectivePfx)) {
             throw "Missing EXO certificate for app-only auth. Provide EXO_CERT_THUMBPRINT or EXO_CERT_PFX_BASE64 (+ EXO_CERT_PFX_PASSWORD)."
         }
-        if ([string]::IsNullOrWhiteSpace($effectivePfxPwd) -and [string]::IsNullOrWhiteSpace($effectiveThumb)) {
+        if ((-not [string]::IsNullOrWhiteSpace($effectivePfx)) -and [string]::IsNullOrWhiteSpace($effectivePfxPwd)) {
             throw "Missing EXO PFX password for app-only auth. Provide EXO_CERT_PFX_PASSWORD (or use a thumbprint-based cert)."
         }
     }

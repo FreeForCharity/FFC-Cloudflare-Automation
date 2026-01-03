@@ -40,8 +40,12 @@ jobs:
           echo "Domain: $DOMAIN"
           echo "Zone Type: $ZONE_TYPE"
 
-          # Basic domain validation
-          if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$ ]]; then
+          # Basic domain validation (RFC 1123 hostname rules)
+          # - Must start/end with alphanumeric character
+          # - Labels can contain alphanumeric and hyphens (max 63 chars each)
+          # - Must have at least one dot and a valid TLD (2+ chars)
+          DOMAIN_REGEX='^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$'
+          if [[ ! "$DOMAIN" =~ $DOMAIN_REGEX ]]; then
             echo "::error::Invalid domain name format: $DOMAIN"
             exit 1
           fi
@@ -185,10 +189,3 @@ jobs:
           echo "::notice title=Zone ID::$ZONE_ID"
           echo "::notice title=Name Servers::$NAME_SERVERS"
           echo "::notice title=Status::$ZONE_STATUS"
-
-      - name: Verify No Secrets in Logs
-        shell: bash
-        run: |
-          echo "✓ Workflow completed without exposing secrets"
-          echo "✓ API token was masked in all outputs"
-          echo "✓ Zone creation validated successfully"

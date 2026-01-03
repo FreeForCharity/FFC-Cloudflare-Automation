@@ -173,12 +173,6 @@ function Connect-Exchange {
     $connectParams = @{ ShowBanner = $false }
     if ($Org) { $connectParams.Organization = $Org }
 
-    if ($App -and $Org -and ($Thumbprint -or $PfxBase64)) {
-        $connectParams.AppId = $App
-        $connectParams.Organization = $Org
-
-        if ($Thumbprint) {
-            $connectParams.CertificateThumbprint = $Thumbprint
             Connect-ExchangeOnline @connectParams | Out-Null
             return
         }
@@ -189,9 +183,6 @@ function Connect-Exchange {
             $env:FFC_EXO_CERT_PFX_BASE64
         )
         if ($env:GITHUB_ACTIONS -eq 'true') {
-            $pfxLenHere = if ($null -eq $resolvedPfx) { 0 } else { $resolvedPfx.Length }
-            Write-Host ("EXO Connect: resolved PfxBase64 length={0}" -f $pfxLenHere) -ForegroundColor DarkGray
-        }
         $script:TempPfxPath = New-TempPfxFile -PfxBase64 $resolvedPfx
         $connectParams.CertificateFilePath = $script:TempPfxPath
         if ($PfxPassword) {
@@ -258,12 +249,6 @@ try {
 
     if (-not $effectiveOrg -and $effectiveTenant) {
         $effectiveOrg = $effectiveTenant
-    }
-
-    if ($env:GITHUB_ACTIONS -eq 'true') {
-        $pfxLen = if ($null -eq $effectivePfx) { 0 } else { $effectivePfx.Length }
-        $pwdLen = if ($null -eq $effectivePfxPwd) { 0 } else { $effectivePfxPwd.Length }
-        Write-Host ("EXO auth material lengths: PfxBase64={0}, Password={1}" -f $pfxLen, $pwdLen) -ForegroundColor DarkGray
     }
 
     Connect-Exchange -Org $effectiveOrg -App $effectiveAppId -Thumbprint $effectiveThumb -PfxBase64 $effectivePfx -PfxPassword $effectivePfxPwd -UseDeviceCode:$DeviceCode

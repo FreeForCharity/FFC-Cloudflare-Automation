@@ -40,7 +40,7 @@ etc.) working on this repository.**
 
    ```yaml
    env:
-       CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+     CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
    ```
 
 2. **Always validate secret presence BEFORE use**:

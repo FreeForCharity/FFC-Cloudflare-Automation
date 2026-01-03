@@ -14,7 +14,8 @@ After completing this run for a domain:
 
 ### Cloudflare side
 
-- The zone passes the repo DNS audit (`Update-CloudflareDns.ps1 -Audit`) with no `[MISSING]` / `[DIFFERS]` items related to Microsoft 365.
+- The zone passes the repo DNS audit (`Update-CloudflareDns.ps1 -Audit`) with no `[MISSING]` /
+  `[DIFFERS]` items related to Microsoft 365.
 - The zone includes the two Exchange Online DKIM selector CNAME records:
   - `selector1._domainkey.<domain>`
   - `selector2._domainkey.<domain>`
@@ -35,7 +36,8 @@ After completing this run for a domain:
 
 ### Access / permissions
 
-- Cloudflare API token with DNS edit permissions for the zone (GitHub Actions environment: `cloudflare-prod` / secret: `CLOUDFLARE_API_KEY_DNS_ONLY`).
+- Cloudflare API token with DNS edit permissions for the zone (GitHub Actions environment:
+  `cloudflare-prod` / secret: `CLOUDFLARE_API_KEY_DNS_ONLY`).
 - Microsoft Entra app configured for app-only Exchange Online:
   - Graph application permission: `Domain.Read.All` (or `Directory.Read.All`) admin-consented
   - Exchange Online application role: `Exchange.ManageAsApp` admin-consented
@@ -55,7 +57,8 @@ This repo’s “protected environments” are expected to hold the real credent
 
 ## Workflow run order (recommended)
 
-This order is designed to (1) establish Cloudflare baselines, (2) confirm M365 status, (3) apply DKIM, and (4) validate.
+This order is designed to (1) establish Cloudflare baselines, (2) confirm M365 status, (3) apply
+DKIM, and (4) validate.
 
 ### 1) Cloudflare baseline audit (read-only)
 
@@ -63,6 +66,7 @@ This order is designed to (1) establish Cloudflare baselines, (2) confirm M365 s
 - Input: `domain = ffcadmin.org`
 
 Expected outcome:
+
 - You get a full audit report, including the M365/Teams/Intune record checks.
 
 ### 2) Enforce Cloudflare standard DNS (dry-run, then live)
@@ -74,11 +78,14 @@ Expected outcome:
   - then re-run with `dry_run = false` (apply)
 
 Important:
-- This step **does not** create DKIM selector records. DKIM is handled by the DKIM workflow (step 5).
+
+- This step **does not** create DKIM selector records. DKIM is handled by the DKIM workflow (step
+  5).
 
 ### 3) Add Microsoft domain verification TXT (only if needed)
 
-If the domain is not verified in the tenant yet, Microsoft will provide a verification DNS record (typically a TXT).
+If the domain is not verified in the tenant yet, Microsoft will provide a verification DNS record
+(typically a TXT).
 
 To discover the exact TXT record Microsoft expects:
 
@@ -105,7 +112,9 @@ Then complete the verification in the Microsoft 365 admin UI.
 - Input: `domain = ffcadmin.org`
 
 Expected outcome:
-- Confirms the domain exists in the tenant and reports whether Cloudflare has the DKIM selector names present.
+
+- Confirms the domain exists in the tenant and reports whether Cloudflare has the DKIM selector
+  names present.
 
 ### 5) End-to-end DKIM enablement (creates DKIM, sets Cloudflare DKIM CNAMEs, enables EXO DKIM)
 
@@ -113,6 +122,7 @@ Expected outcome:
 - Input: `domain = ffcadmin.org`
 
 This workflow performs three protected steps:
+
 1. Exchange Online: ensure DKIM config exists and fetch selector targets
 2. Cloudflare: upsert selector CNAMEs to the targets from step 1
 3. Exchange Online: enable DKIM signing
@@ -125,14 +135,17 @@ Run these after DKIM enablement:
 - `M365: Domain preflight (read-only)` (confirms selector presence)
 
 Then validate in the UI:
+
 - `https://security.microsoft.com/dkimv2`
 
 Note on propagation:
-- Public DNS updates are usually quick, but the Defender DKIM UI can lag. Expect anywhere from minutes to a few hours.
+
+- Public DNS updates are usually quick, but the Defender DKIM UI can lag. Expect anywhere from
+  minutes to a few hours.
 
 ## Expected records after the test
 
-This section summarizes the *final state* you should see for a domain after the complete run.
+This section summarizes the _final state_ you should see for a domain after the complete run.
 
 ### Cloudflare DNS (expected)
 
@@ -181,5 +194,7 @@ In `https://security.microsoft.com/dkimv2`:
 
 ## Troubleshooting notes
 
-- If the DKIM enable workflow fails in the first job (`exo_check`), it’s almost always EXO auth/cert/app permissions.
-- If Cloudflare shows the DKIM records but Defender still shows `CnameMissing`, it’s usually propagation/caching; confirm via a public DNS lookup of both selector records.
+- If the DKIM enable workflow fails in the first job (`exo_check`), it’s almost always EXO
+  auth/cert/app permissions.
+- If Cloudflare shows the DKIM records but Defender still shows `CnameMissing`, it’s usually
+  propagation/caching; confirm via a public DNS lookup of both selector records.

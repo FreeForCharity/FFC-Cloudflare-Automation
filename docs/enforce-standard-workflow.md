@@ -1,6 +1,7 @@
 # Enforce Standard Workflow
 
-This repository includes a GitHub Actions workflow that checks (and optionally enforces) a baseline DNS configuration for a zone in Cloudflare.
+This repository includes a GitHub Actions workflow that checks (and optionally enforces) a baseline
+DNS configuration for a zone in Cloudflare.
 
 - Workflow: `.github/workflows/2-enforce-standard.yml`
 - Script: `Update-CloudflareDns.ps1`
@@ -10,7 +11,8 @@ This repository includes a GitHub Actions workflow that checks (and optionally e
 The workflow is triggered manually (`workflow_dispatch`) with two inputs:
 
 - `domain` (required): the Cloudflare zone name, e.g. `example.org`
-- `dry_run` (boolean): when `true`, the workflow prints proposed changes but does not write to Cloudflare
+- `dry_run` (boolean): when `true`, the workflow prints proposed changes but does not write to
+  Cloudflare
 
 The workflow performs two steps:
 
@@ -37,19 +39,25 @@ Additional required records:
 - SRV `_sip._tls` → `100 1 443 sipdir.online.lync.com`
 - SRV `_sipfederationtls._tcp` → `100 1 5061 sipfed.online.lync.com`
 
-Note: Cloudflare recommends TXT record content be wrapped in quotation marks. The script enforces quoted TXT content (and for SPF, it preserves existing mechanisms while ensuring quoting) to avoid Cloudflare UI warnings.
+Note: Cloudflare recommends TXT record content be wrapped in quotation marks. The script enforces
+quoted TXT content (and for SPF, it preserves existing mechanisms while ensuring quoting) to avoid
+Cloudflare UI warnings.
 
 DKIM note:
 
-- DKIM selector records (`selector1._domainkey` / `selector2._domainkey`) are intentionally **not** part of Enforce Standard.
-- DKIM selectors are created/updated by the M365 DKIM workflow: `.github/workflows/8-m365-dkim-enable.yml`.
+- DKIM selector records (`selector1._domainkey` / `selector2._domainkey`) are intentionally **not**
+  part of Enforce Standard.
+- DKIM selectors are created/updated by the M365 DKIM workflow:
+  `.github/workflows/8-m365-dkim-enable.yml`.
 
 DMARC monitoring note:
 
-- If Cloudflare DMARC Management is enabled for a zone, Cloudflare may add a per-zone `rua` recipient like `mailto:<zone-specific>@dmarc-reports.cloudflare.net`.
+- If Cloudflare DMARC Management is enabled for a zone, Cloudflare may add a per-zone `rua`
+  recipient like `mailto:<zone-specific>@dmarc-reports.cloudflare.net`.
 - The script always requires the internal `rua` recipient `mailto:dmarc-rua@freeforcharity.org`.
-- Cloudflare `rua` is optional: the audit warns if it’s not detected, but Enforce will not remove it when present.
-Note: for M365 MX, the expected target is computed as `<zone-with-dashes>.mail.protection.outlook.com`.
+- Cloudflare `rua` is optional: the audit warns if it’s not detected, but Enforce will not remove it
+  when present. Note: for M365 MX, the expected target is computed as
+  `<zone-with-dashes>.mail.protection.outlook.com`.
 
 ### GitHub Pages (apex)
 
@@ -82,12 +90,16 @@ IPv6 (AAAA):
 
 ## Recent behavior changes
 
-The Enforce logic relies on a complete inventory of the zone’s DNS records so it can correctly decide whether a record already exists.
+The Enforce logic relies on a complete inventory of the zone’s DNS records so it can correctly
+decide whether a record already exists.
 
-It now loads the full record set before checking the standard list, preventing false "[MISSING]" results caused by comparing against an empty record list.
+It now loads the full record set before checking the standard list, preventing false "[MISSING]"
+results caused by comparing against an empty record list.
 
 ## Change process (issue → PR)
 
-When changing enforcement requirements, prefer creating an issue first and then opening a PR that references it.
+When changing enforcement requirements, prefer creating an issue first and then opening a PR that
+references it.
 
-Example: the GitHub Pages AAAA requirement should have been tracked as an issue before implementation (see https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues/40).
+Example: the GitHub Pages AAAA requirement should have been tracked as an issue before
+implementation (see https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues/40).

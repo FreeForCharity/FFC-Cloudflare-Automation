@@ -18,7 +18,8 @@ This is used for:
 4. Name it exactly (case-sensitive):
    - `cloudflare-prod` or
    - `m365-prod`
-5. (Recommended) Add **Required reviewers** to gate any workflow jobs that reference that environment.
+5. (Recommended) Add **Required reviewers** to gate any workflow jobs that reference that
+   environment.
 6. Add **Environment secrets** for that environment.
 
 ## How secrets/vars resolve
@@ -65,7 +66,8 @@ Environment secrets (required for the M365 workflows in this repo):
 
 ### Split-environment preflight
 
-The preflight workflow `.github/workflows/7-m365-domain-preflight.yml` is intentionally split into two jobs so secrets do not have to be duplicated across environments:
+The preflight workflow `.github/workflows/7-m365-domain-preflight.yml` is intentionally split into
+two jobs so secrets do not have to be duplicated across environments:
 
 - **Graph job** runs in `m365-prod` and requires:
   - `FFC_AZURE_CLIENT_ID`
@@ -75,7 +77,8 @@ The preflight workflow `.github/workflows/7-m365-domain-preflight.yml` is intent
 
 Environment secrets (optional):
 
-- `AZURE_SUBSCRIPTION_ID` (only needed if you later add steps that require an Azure subscription context)
+- `AZURE_SUBSCRIPTION_ID` (only needed if you later add steps that require an Azure subscription
+  context)
 
 Environment secrets (optional, only needed for DKIM app-only mode):
 
@@ -86,7 +89,8 @@ Environment secrets (optional, only needed for DKIM app-only mode):
 
 ## `m365-prod`: OIDC and app prerequisites (Azure/Entra)
 
-The M365 workflows authenticate with GitHub OIDC via `azure/login@v2`, then use Azure CLI to fetch a Microsoft Graph token.
+The M365 workflows authenticate with GitHub OIDC via `azure/login@v2`, then use Azure CLI to fetch a
+Microsoft Graph token.
 
 This is what makes the workflow **headless**:
 
@@ -97,33 +101,40 @@ This is what makes the workflow **headless**:
 You must configure the Entra application referenced by `FFC_AZURE_CLIENT_ID`:
 
 - **Federated credential** (for GitHub OIDC)
+
   - Issuer: `https://token.actions.githubusercontent.com`
   - Audience: `api://AzureADTokenExchange`
   - Subject (recommended pattern when workflows use `environment: m365-prod`):
     - `repo:FreeForCharity/FFC-Cloudflare-Automation-:environment:m365-prod`
-  - Note: if you scope the federated credential differently (branch/ref), the subject format changes.
+  - Note: if you scope the federated credential differently (branch/ref), the subject format
+    changes.
 
 - **Azure subscription access**
+
   - Not required for the current M365 workflows because they set `allow-no-subscriptions: true`.
   - Only required if you add steps that manage Azure resources.
 
 - **Microsoft Graph permissions**
+
   - For the domain listing/status workflows, grant (and admin-consent) one of:
     - Application permission `Domain.Read.All` (recommended), or
     - Application permission `Directory.Read.All`
 
 - **Exchange Online (DKIM) permissions (only if using app-only DKIM)**
   - Certificate-based auth is required.
-  - The app must be permitted for Exchange Online app-only access and have the required EXO permissions.
+  - The app must be permitted for Exchange Online app-only access and have the required EXO
+    permissions.
 
 ## Troubleshooting quick hits
 
 - `azure/login` fails:
+
   - Confirm the job has `permissions: id-token: write`.
   - Confirm `FFC_AZURE_CLIENT_ID` / `FFC_AZURE_TENANT_ID` are set on the `m365-prod` environment.
   - Confirm the Entra app federated credential subject matches the repo/environment.
 
 - Graph calls return `403 Forbidden`:
+
   - Confirm the Entra app has Graph **application** permissions and **admin consent**.
 
 - DKIM steps fail:

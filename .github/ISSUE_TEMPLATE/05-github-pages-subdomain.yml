@@ -137,71 +137,71 @@ body:
            - TTL: Auto
            - Proxy status: DNS only (gray cloud) ⚠️ Important!
 
-  ### DNS Configuration (PowerShell Script)
-  ```powershell
-  $env:CLOUDFLARE_API_KEY_DNS_ONLY = "your-token-here"
+          ### DNS Configuration (PowerShell Script)
+          ```powershell
+          $env:CLOUDFLARE_API_KEY_DNS_ONLY = "your-token-here"
 
-        # Create CNAME record for subdomain
-        # Example: .\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type CNAME -Content freeforcharity.github.io
-        .\Update-CloudflareDns.ps1 -Zone [base-domain] -Name staging -Type CNAME -Content [username].github.io
-        ```
+          # Create CNAME record for subdomain
+          # Example: .\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type CNAME -Content freeforcharity.github.io
+          .\Update-CloudflareDns.ps1 -Zone [base-domain] -Name staging -Type CNAME -Content [username].github.io
+          ```
 
-        ### GitHub Pages Configuration
-        1. [ ] Navigate to repository Settings → Pages
-        2. [ ] Under "Custom domain", enter the full subdomain
-        3. [ ] Click Save and wait for DNS check
-        4. [ ] Once verified (green checkmark), enable "Enforce HTTPS"
+          ### GitHub Pages Configuration
+          1. [ ] Navigate to repository Settings → Pages
+          2. [ ] Under "Custom domain", enter the full subdomain
+          3. [ ] Click Save and wait for DNS check
+          4. [ ] Once verified (green checkmark), enable "Enforce HTTPS"
 
-        ### CNAME File
-        ```bash
-        # GitHub usually creates this automatically
-        # If needed, create manually in repository root:
-        echo "staging.[domain.org]" > CNAME
-        ```
+          ### CNAME File
+          ```bash
+          # GitHub usually creates this automatically
+          # If needed, create manually in repository root:
+          echo "staging.[domain.org]" > CNAME
+          ```
 
-        ### Verification
-        ```bash
-        # Check DNS propagation
-        dig staging.[domain.org] CNAME +short
+          ### Verification
+          ```bash
+          # Check DNS propagation
+          dig staging.[domain.org] CNAME +short
 
-        # Test HTTPS
-        curl -I https://staging.[domain.org]
-        ```
+          # Test HTTPS
+          curl -I https://staging.[domain.org]
+          ```
 
-        ### Cloudflare Settings (Recommended)
-        - [ ] SSL/TLS Mode: Full (not Full Strict)
-        - [ ] Always Use HTTPS: On
-        - [ ] Automatic HTTPS Rewrites: On
-        - [ ] Minimum TLS Version: 1.2+
-        - [ ] **Proxy Status: DNS Only (gray cloud)** ⚠️ Critical!
+          ### Cloudflare Settings (Recommended)
+          - [ ] SSL/TLS Mode: Full (not Full Strict)
+          - [ ] Always Use HTTPS: On
+          - [ ] Automatic HTTPS Rewrites: On
+          - [ ] Minimum TLS Version: 1.2+
+          - [ ] **Proxy Status: DNS Only (gray cloud)** ⚠️ Critical!
 
-        ### Common Issues
-        - **DNS check fails**: Verify CNAME exists, wait 15-30 min for propagation, ensure proxy disabled
-        - **SSL errors**: Ensure proxy disabled, wait up to 24 hours for GitHub certificate
-        - **404 errors**: Verify CNAME file in repo, check GitHub Pages enabled, verify branch/folder
+          ### Common Issues
+          - **DNS check fails**: Verify CNAME exists, wait 15-30 min for propagation, ensure proxy disabled
+          - **SSL errors**: Ensure proxy disabled, wait up to 24 hours for GitHub certificate
+          - **404 errors**: Verify CNAME file in repo, check GitHub Pages enabled, verify branch/folder
 
-        ### Migration from Production to Staging
-        If this is for migrating a live site to GitHub Pages:
-        1. [ ] Set up staging subdomain first (this issue)
-        2. [ ] Deploy site content to GitHub Pages
-        3. [ ] Test thoroughly on staging
-        4. [ ] Once verified, migrate apex domain (create separate issue)
-        5. [ ] Keep staging subdomain for future development
+          ### Migration from Production to Staging
+          If this is for migrating a live site to GitHub Pages:
+          1. [ ] Set up staging subdomain first (this issue)
+          2. [ ] Deploy site content to GitHub Pages
+          3. [ ] Test thoroughly on staging
+          4. [ ] Once verified, migrate apex domain (create separate issue)
+          5. [ ] Keep staging subdomain for future development
 
-        ### Verification Checklist
-        - [ ] CNAME record created in Cloudflare
-        - [ ] Cloudflare proxy disabled (DNS only - gray cloud)
-        - [ ] DNS propagation verified
-        - [ ] Custom domain configured in GitHub Pages
-        - [ ] DNS check passed (green checkmark)
-        - [ ] CNAME file present in repository
-        - [ ] HTTPS enabled and enforced
-        - [ ] Website loads at https://[subdomain.domain.org]
-        - [ ] SSL certificate valid
-        - [ ] Content displays correctly
+          ### Verification Checklist
+          - [ ] CNAME record created in Cloudflare
+          - [ ] Cloudflare proxy disabled (DNS only - gray cloud)
+          - [ ] DNS propagation verified
+          - [ ] Custom domain configured in GitHub Pages
+          - [ ] DNS check passed (green checkmark)
+          - [ ] CNAME file present in repository
+          - [ ] HTTPS enabled and enforced
+          - [ ] Website loads at https://[subdomain.domain.org]
+          - [ ] SSL certificate valid
+          - [ ] Content displays correctly
 
-        ### Timeline
-        - DNS configuration: ~2 minutes
-        - DNS propagation: 5-15 minutes
-        - GitHub DNS verification: 5-15 minutes
-        - SSL certificate: 1-24 hours
+          ### Timeline
+          - DNS configuration: ~2 minutes
+          - DNS propagation: 5-15 minutes
+          - GitHub DNS verification: 5-15 minutes
+          - SSL certificate: 1-24 hours

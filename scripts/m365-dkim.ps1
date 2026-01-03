@@ -72,7 +72,47 @@ function New-TempPfxFile {
         [Parameter(Mandatory = $true)][string]$PfxBase64
     )
 
-    $bytes = [Convert]::FromBase64String($PfxBase64)
+    function Convert-FromBase64Flexible {
+        param(
+            [Parameter(Mandatory = $true)][string]$Input
+        )
+
+        $s = $Input.Trim()
+        if ([string]::IsNullOrWhiteSpace($s)) {
+            throw 'PFX base64 input is empty.'
+        }
+
+        # Remove common whitespace/newlines from multiline GitHub secrets.
+        $s = ($s -replace '\s', '')
+
+        # Support base64url variants.
+        if ($s -match '[-_]') {
+            $s = $s.Replace('-', '+').Replace('_', '/')
+        }
+
+        # Fix missing padding.
+        switch ($s.Length % 4) {
+            2 { $s += '==' }
+            3 { $s += '=' }
+        }
+
+        try {
+            return [Convert]::FromBase64String($s)
+        } catch {
+            # As a last resort, drop any non-base64 characters.
+            $s2 = ($Input -replace '[^A-Za-z0-9\+/=]', '')
+            if ([string]::IsNullOrWhiteSpace($s2)) {
+                throw
+            }
+            switch ($s2.Length % 4) {
+                2 { $s2 += '==' }
+                3 { $s2 += '=' }
+            }
+            return [Convert]::FromBase64String($s2)
+        }
+    }
+
+    $bytes = Convert-FromBase64Flexible -Input $PfxBase64
     $path = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), ("exo-auth-{0}.pfx" -f ([guid]::NewGuid().ToString('n'))))
     [System.IO.File]::WriteAllBytes($path, $bytes)
     return $path

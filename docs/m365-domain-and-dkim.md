@@ -13,6 +13,7 @@ GitHub Actions workflows (manual `workflow_dispatch`):
 
 - Domain status + DKIM: `.github/workflows/5-m365-domain-and-dkim.yml`
 - List all tenant domains: `.github/workflows/6-m365-list-domains.yml`
+- Enable DKIM (creates selector CNAMEs in Cloudflare and enables signing): `.github/workflows/8-m365-dkim-enable.yml`
 
 ## Prerequisites
 - PowerShell 7+ recommended
@@ -149,10 +150,8 @@ Graph permissions:
   - Application permission `Directory.Read.All`.
 
 For DKIM (Exchange Online) app-only auth, you also need:
-- `EXO_TENANT` (your tenant / org, e.g. `freeforcharity.onmicrosoft.com`)
-- `EXO_ORGANIZATION` (same as `EXO_TENANT` unless you use a different org string)
-- `EXO_CERT_PFX_BASE64` (base64-encoded PFX)
-- `EXO_CERT_PFX_PASSWORD` (optional; empty if no password)
+- `FFC_EXO_CERT_PFX_BASE64` (base64-encoded PFX containing the private key)
+- `FFC_EXO_CERT_PASSWORD` (PFX password)
 
 Notes:
 - This workflow uses **one Entra app**: `FFC_AZURE_CLIENT_ID` is also used as the Exchange Online
@@ -185,11 +184,13 @@ Notes:
 
 ### Non-interactive (app-only) auth
 `scripts/m365-dkim.ps1` supports app-only auth if you provide:
-- `EXO_APP_ID` (in GitHub Actions, this is set to `FFC_AZURE_CLIENT_ID`)
-- `EXO_TENANT` (used as `-Organization`)
-- `EXO_CERT_THUMBPRINT` (certificate must already be present in the current user cert store)
+- `EXO_APP_ID` (optional; in GitHub Actions, this can be set to `FFC_AZURE_CLIENT_ID`)
+- `EXO_ORGANIZATION` (used as `-Organization`; in workflows we resolve this via Graph as the tenant's `*.onmicrosoft.com` domain)
+- Either:
+  - `EXO_CERT_THUMBPRINT` (Windows/local only, certificate already in cert store), OR
+  - `EXO_CERT_PFX_BASE64` + `EXO_CERT_PFX_PASSWORD` (cross-platform)
 
-In GitHub Actions, `EXO_CERT_THUMBPRINT` is set automatically after importing the PFX.
+In GitHub Actions, we use environment secrets `FFC_EXO_CERT_PFX_BASE64` and `FFC_EXO_CERT_PASSWORD` and the script reads them automatically.
 
 ## Safety
 - Scripts do not print secrets.

@@ -22,10 +22,44 @@ param(
     [string]$CertificateThumbprint,
 
     [Parameter()]
+    [string]$CertificatePfxBase64,
+
+    [Parameter()]
+    [string]$CertificatePassword,
+
+    [Parameter()]
     [switch]$DeviceCode
 )
 
 $ErrorActionPreference = 'Stop'
+
+$script:TempPfxPath = $null
+
+function Set-GitHubOutput {
+    param(
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter()][AllowNull()][object]$Value
+    )
+
+    $outFile = $env:GITHUB_OUTPUT
+    if ([string]::IsNullOrWhiteSpace($outFile)) {
+        return
+    }
+
+    $val = if ($null -eq $Value) { '' } else { [string]$Value }
+    Add-Content -Path $outFile -Value ("{0}={1}" -f $Key, $val)
+}
+
+function New-TempPfxFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$PfxBase64
+    )
+
+    $bytes = [Convert]::FromBase64String($PfxBase64)
+    $path = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), ("exo-auth-{0}.pfx" -f ([guid]::NewGuid().ToString('n'))))
+    [System.IO.File]::WriteAllBytes($path, $bytes)
+    return $path
+}
 
 function Ensure-Module {
     param(
@@ -69,6 +103,12 @@ function Connect-Exchange {
         [string]$Thumbprint,
 
         [Parameter()]
+        [string]$PfxBase64,
+
+        [Parameter()]
+        [string]$PfxPassword,
+
+        [Parameter()]
         [switch]$UseDeviceCode
     )
 
@@ -79,10 +119,22 @@ function Connect-Exchange {
 
     if ($Org) { $connectParams.Organization = $Org }
 
-    if ($App -and $Tenant -and $Thumbprint) {
+    if ($App -and $Tenant -and ($Thumbprint -or $PfxBase64)) {
         $connectParams.AppId = $App
         $connectParams.Organization = $Org
-        $connectParams.CertificateThumbprint = $Thumbprint
+
+        if ($Thumbprint) {
+            $connectParams.CertificateThumbprint = $Thumbprint
+            Connect-ExchangeOnline @connectParams | Out-Null
+            return
+        }
+
+        $script:TempPfxPath = New-TempPfxFile -PfxBase64 $PfxBase64
+        $connectParams.CertificateFilePath = $script:TempPfxPath
+        if ($PfxPassword) {
+            $connectParams.CertificatePassword = (ConvertTo-SecureString -String $PfxPassword -AsPlainText -Force)
+        }
+
         Connect-ExchangeOnline @connectParams | Out-Null
         return
     }
@@ -115,7 +167,10 @@ try {
     $effectiveTenant = if ($TenantId) { $TenantId } else { $env:EXO_TENANT }
     $effectiveThumb = if ($CertificateThumbprint) { $CertificateThumbprint } else { $env:EXO_CERT_THUMBPRINT }
 
-    Connect-Exchange -Org $effectiveOrg -App $effectiveAppId -Tenant $effectiveTenant -Thumbprint $effectiveThumb -UseDeviceCode:$DeviceCode
+    $effectivePfx = if ($CertificatePfxBase64) { $CertificatePfxBase64 } else { ($env:EXO_CERT_PFX_BASE64 ?? $env:FFC_EXO_CERT_PFX_BASE64) }
+    $effectivePfxPwd = if ($CertificatePassword) { $CertificatePassword } else { ($env:EXO_CERT_PFX_PASSWORD ?? $env:FFC_EXO_CERT_PASSWORD) }
+
+    Connect-Exchange -Org $effectiveOrg -App $effectiveAppId -Tenant $effectiveTenant -Thumbprint $effectiveThumb -PfxBase64 $effectivePfx -PfxPassword $effectivePfxPwd -UseDeviceCode:$DeviceCode
 
     Write-Section "Microsoft 365 DKIM status"
 
@@ -161,10 +216,19 @@ try {
             Write-Host "- selector2._domainkey.$Domain CNAME (not returned)" -ForegroundColor Yellow
         }
 
+        Set-GitHubOutput -Key 'dkim_enabled' -Value $config.Enabled
+        Set-GitHubOutput -Key 'selector1_name' -Value ("selector1._domainkey.{0}" -f $Domain)
+        Set-GitHubOutput -Key 'selector2_name' -Value ("selector2._domainkey.{0}" -f $Domain)
+        Set-GitHubOutput -Key 'selector1_target' -Value $s1
+        Set-GitHubOutput -Key 'selector2_target' -Value $s2
+
         if ($Enable -and (-not $config.Enabled)) {
             if ($PSCmdlet.ShouldProcess($Domain, 'Enable DKIM signing')) {
                 Set-DkimSigningConfig -Identity $Domain -Enabled:$true | Out-Null
                 Write-Host "Enabled DKIM signing." -ForegroundColor Green
+
+                $post = Get-DkimSigningConfig -Identity $Domain -ErrorAction Stop
+                Set-GitHubOutput -Key 'dkim_enabled_after' -Value $post.Enabled
             }
         }
     } else {
@@ -175,9 +239,11 @@ try {
     }
 
     Disconnect-ExchangeOnline -Confirm:$false | Out-Null
+    if ($script:TempPfxPath) { Remove-Item -Path $script:TempPfxPath -Force -ErrorAction SilentlyContinue; $script:TempPfxPath = $null }
     exit 0
 } catch {
     Write-Error $_
     try { Disconnect-ExchangeOnline -Confirm:$false | Out-Null } catch { }
+    if ($script:TempPfxPath) { Remove-Item -Path $script:TempPfxPath -Force -ErrorAction SilentlyContinue; $script:TempPfxPath = $null }
     exit 1
 }

@@ -282,7 +282,7 @@ try {
 
     $config = $null
     try {
-        $config = Get-DkimSigningConfig -Identity $Domain -ErrorAction Stop
+        $config = Get-DkimSigningConfig -Identity $Domain -ErrorAction Stop -WarningAction Stop
     } catch {
         $config = $null
     }
@@ -292,9 +292,21 @@ try {
 
         if ($CreateIfMissing) {
             if ($PSCmdlet.ShouldProcess($Domain, 'Create DKIM signing config')) {
-                New-DkimSigningConfig -DomainName $Domain -Enabled:$false | Out-Null
+                New-DkimSigningConfig -DomainName $Domain -Enabled:$false -ErrorAction Stop -WarningAction Stop | Out-Null
                 Write-Host "Created DKIM signing config (disabled by default)." -ForegroundColor Green
-                $config = Get-DkimSigningConfig -Identity $Domain -ErrorAction Stop
+
+                $config = $null
+                for ($i = 0; $i -lt 24; $i++) {
+                    try {
+                        $config = Get-DkimSigningConfig -Identity $Domain -ErrorAction Stop -WarningAction Stop
+                        break
+                    } catch {
+                        Start-Sleep -Seconds 5
+                    }
+                }
+                if (-not $config) {
+                    throw ("DKIM signing config creation did not become visible in time for '{0}'." -f $Domain)
+                }
             }
         }
     }
@@ -357,10 +369,23 @@ try {
 
         if ($Enable -and (-not $config.Enabled)) {
             if ($PSCmdlet.ShouldProcess($Domain, 'Enable DKIM signing')) {
-                Set-DkimSigningConfig -Identity $Domain -Enabled:$true | Out-Null
+                $enabledOk = $false
+                for ($i = 0; $i -lt 24; $i++) {
+                    try {
+                        Set-DkimSigningConfig -Identity $Domain -Enabled:$true -ErrorAction Stop -WarningAction Stop | Out-Null
+                        $enabledOk = $true
+                        break
+                    } catch {
+                        Start-Sleep -Seconds 5
+                    }
+                }
+                if (-not $enabledOk) {
+                    throw ("Failed to enable DKIM signing for '{0}' after multiple retries." -f $Domain)
+                }
+
                 Write-Host "Enabled DKIM signing." -ForegroundColor Green
 
-                $post = Get-DkimSigningConfig -Identity $Domain -ErrorAction Stop
+                $post = Get-DkimSigningConfig -Identity $Domain -ErrorAction Stop -WarningAction Stop
                 Set-GitHubOutput -Key 'dkim_enabled_after' -Value $post.Enabled
             }
         }

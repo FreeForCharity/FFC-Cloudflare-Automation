@@ -34,10 +34,10 @@ For the end-to-end runbook to align a domain across Cloudflare + Microsoft 365 (
 
 For the new “3 step” approach (tracked in issue #61), use these GitHub Actions:
 
-1. **0. Domain - Status (Check)**
+1. **1. Domain - Status (Check)**
   - Read-only report across Cloudflare + M365
   - Includes a Cloudflare “what will change” dry-run preview
-2. **1. Domain - Enforce Standard (Fix)**
+2. **2. Domain - Enforce Standard (Fix)**
   - Cloudflare standard enforcement + M365 DKIM enable flow (when run in LIVE mode)
 3. **Issue post-back (Step 3)**
   - Both workflows accept an optional `issue_number` input and will comment results back to that issue.

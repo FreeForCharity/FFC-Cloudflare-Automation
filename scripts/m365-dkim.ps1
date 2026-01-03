@@ -74,11 +74,11 @@ function New-TempPfxFile {
 
     function Convert-FromBase64Flexible {
         param(
-            [Parameter(Mandatory = $true)][string]$Input
+            [Parameter(Mandatory = $true)][string]$Base64Text
         )
 
-        $rawLen = if ($null -eq $Input) { 0 } else { $Input.Length }
-        $s = if ($null -eq $Input) { '' } else { $Input.Trim() }
+        $rawLen = if ($null -eq $Base64Text) { 0 } else { $Base64Text.Length }
+        $s = if ($null -eq $Base64Text) { '' } else { $Base64Text.Trim() }
         if ([string]::IsNullOrWhiteSpace($s)) {
             throw ("PFX base64 input is empty/whitespace (rawLen={0})." -f $rawLen)
         }
@@ -101,7 +101,7 @@ function New-TempPfxFile {
             return [Convert]::FromBase64String($s)
         } catch {
             # As a last resort, drop any non-base64 characters.
-            $s2 = ($Input -replace '[^A-Za-z0-9\+/=]', '')
+            $s2 = ($Base64Text -replace '[^A-Za-z0-9\+/=]', '')
             if ([string]::IsNullOrWhiteSpace($s2)) {
                 throw
             }
@@ -113,7 +113,7 @@ function New-TempPfxFile {
         }
     }
 
-    $bytes = Convert-FromBase64Flexible -Input $PfxBase64
+    $bytes = Convert-FromBase64Flexible -Base64Text $PfxBase64
     $path = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), ("exo-auth-{0}.pfx" -f ([guid]::NewGuid().ToString('n'))))
     [System.IO.File]::WriteAllBytes($path, $bytes)
     return $path

@@ -120,5 +120,5 @@ if ($created) {
     Write-Host ''
     Write-Host 'Next steps:' -ForegroundColor Cyan
     Write-Host '- Update registrar nameservers to the values above.'
-    Write-Host '- Wait for DNS propagation, then run 01/02 domain workflows for configuration.'
+    Write-Host '- Wait for DNS propagation, then run 01. Domain - Status (Check) followed by 02. Domain - Enforce Standard (Fix), as described in the workflow README.'
 }

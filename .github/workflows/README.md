@@ -165,7 +165,7 @@ These workflows are **not** needed anymore because the repo moved to:
   (and often additional setup like plan/ownership validation). We avoid automating that because it
   increases blast radius and is rarely repeatable in a safe “DNS-only” token.
 - **What replaces it**: zone creation is done in the Cloudflare dashboard by an account admin; once
-  the zone exists, use **01/02** (preferred) or the **03–07** DNS workflows to manage records and
+  the zone exists, use **01/02** (preferred) or the **04–07** DNS workflows to manage records and
   apply standards.
 
 If you prefer to run zone creation from Actions (still admin-only), use:

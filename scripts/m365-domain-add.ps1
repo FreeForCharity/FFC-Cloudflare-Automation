@@ -125,7 +125,7 @@ catch {
 Write-Host ''
 Write-Host 'Next steps:' -ForegroundColor Cyan
 Write-Host '- Add the verification TXT record(s) to DNS (Cloudflare), then re-run status/preflight workflows to confirm verification.'
-Write-Host "- After verification: run 02. Domain - Enforce Standard (Fix) (LIVE) to enable DKIM when appropriate."
+Write-Host "- After verification: run 02. Domain - Enforce Standard (Fix) with dry_run disabled (LIVE) to enable DKIM when appropriate."
 
 if ($env:GITHUB_OUTPUT) {
     "created={0}" -f $created | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8

@@ -37,6 +37,7 @@ domain configuration.
 
 ### 03–06 DNS workflows
 
+- **03. DNS - Add Domain (Create Zone) (Admin)**: create a new Cloudflare zone for a domain.
 - **03. DNS - Manage Record (Manual)**: create/update/delete one record (best for one-off changes).
 - **04. DNS - Audit Compliance (Report)**: report-only compliance check.
 - **05. DNS - Enforce Standard (Fix)**: apply standard DNS configuration (DNS-only).
@@ -139,7 +140,8 @@ This workflow helps identify security vulnerabilities early in the development p
 | 1-enforce-domain-standard.yml | Manual (workflow_dispatch)      | 02. Domain: Enforce standard (Cloudflare + M365; supports issue post-back)                                |
 | 1-audit-compliance.yml        | Manual (workflow_dispatch)      | Report: Check DNS compliance                                                                              |
 | 2-enforce-standard.yml        | Manual (workflow_dispatch)      | Fix: Enforce standard DNS configuration                                                                   |
-| 3-manage-record.yml           | Manual (workflow_dispatch)      | Manual: Manage a single DNS record                                                                        |
+| 3-zone-create.yml             | Manual (workflow_dispatch)      | 03. DNS: Add Domain (Create Zone) - Create new Cloudflare zone with validation                            |
+| 3-manage-record.yml           | Manual (workflow_dispatch)      | 03. DNS: Manage a single DNS record                                                                       |
 | 4-export-summary.yml          | Manual (workflow_dispatch)      | Report: Export all domains summary                                                                        |
 | 5-m365-domain-and-dkim.yml    | Manual (workflow_dispatch)      | M365: Domain status + DKIM helpers (Graph + Exchange Online)                                              |
 | 6-m365-list-domains.yml       | Manual (workflow_dispatch)      | M365: List tenant domains (Graph)                                                                         |
@@ -155,11 +157,12 @@ These workflows are **not** needed anymore because the repo moved to:
 
 ### Cloudflare Zone Add (removed)
 
-- **Why not needed**: creating a Cloudflare zone generally requires **account-level** permissions
-  (and often additional setup like plan/ownership validation). We avoid automating that because it
-  increases blast radius and is rarely repeatable in a safe “DNS-only” token.
-- **What replaces it**: zone creation is done in the Cloudflare dashboard by an account admin; once
-  the zone exists, use **01/02** (preferred) or the **03–06** DNS workflows to manage records and
+- **Why it was removed**: the legacy zone-add workflow required a separate zone-create token and
+  lacked proper validation and error handling.
+- **What replaces it**: **03. DNS - Add Domain (Create Zone) (Admin)** - a new workflow that uses
+  the CLOUDFLARE_API_KEY_DNS_ONLY token (with zone creation permissions) and CLOUDFLARE_ACCOUNT_ID
+  to safely create zones with proper validation, error handling, and secret protection. Once the
+  zone exists, use **01/02** (preferred) or the other **03-06** DNS workflows to manage records and
   apply standards.
 
 ### Legacy Cloudflare DNS update / run

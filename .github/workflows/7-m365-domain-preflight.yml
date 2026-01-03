@@ -1,4 +1,4 @@
-name: '9. M365 - Domain Preflight (Read-only)'
+name: '09. M365 - Domain Preflight (Read-only)'
 
 permissions:
   contents: read

@@ -1,4 +1,4 @@
-name: '2. Domain - Enforce Standard (Fix)'
+name: '02. Domain - Enforce Standard (Fix)'
 run-name: 'Enforce Domain Standard: ${{ inputs.domain }}'
 
 on:

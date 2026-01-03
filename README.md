@@ -30,6 +30,18 @@ For Microsoft 365 domain status checks and DKIM helpers (work in progress), see
 For the end-to-end runbook to align a domain across Cloudflare + Microsoft 365 (including Defender DKIM v2 validation), see
 [docs/end-to-end-testing-m365-cloudflare.md](docs/end-to-end-testing-m365-cloudflare.md).
 
+## Simplified 3-step domain workflow
+
+For the new “3 step” approach (tracked in issue #61), use these GitHub Actions:
+
+1. **[Domain] 1. Check - Domain Status**
+  - Read-only report across Cloudflare + M365
+  - Includes a Cloudflare “what will change” dry-run preview
+2. **[Domain] 2. Fix - Enforce Domain Standard**
+  - Cloudflare standard enforcement + M365 DKIM enable flow (when run in LIVE mode)
+3. **Issue post-back (Step 3)**
+  - Both workflows accept an optional `issue_number` input and will comment results back to that issue.
+
 ## Features
 
 ### Issue-Based Workflow

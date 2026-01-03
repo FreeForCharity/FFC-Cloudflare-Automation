@@ -65,7 +65,7 @@ jobs:
             echo "::error::Failed to acquire Microsoft Graph token";
             exit 1;
           fi
-          org=$(curl -sS -H "Authorization: Bearer $token" "https://graph.microsoft.com/v1.0/domains?$select=id" | jq -r '.value[].id' | grep -i '\\.onmicrosoft\\.com$' | head -n 1)
+          org=$(curl -sS -H "Authorization: Bearer $token" "https://graph.microsoft.com/v1.0/domains?%24select=id" | jq -r '.value[].id | select(test("\\.onmicrosoft\\.com$";"i"))' | head -n 1)
           if [ -z "$org" ]; then
             echo "::error::Failed to resolve onmicrosoft.com domain for tenant";
             exit 1;
@@ -81,7 +81,7 @@ jobs:
           FFC_EXO_CERT_PFX_BASE64: ${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}
           FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
         run: |
-          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ steps.org.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}"
+          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ steps.org.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing
 
   cloudflare_set:
     runs-on: ubuntu-latest
@@ -142,4 +142,4 @@ jobs:
           FFC_EXO_CERT_PFX_BASE64: ${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}
           FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
         run: |
-          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ needs.exo_check.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -Enable -Confirm:$false
+          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ needs.exo_check.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing -Enable -Confirm:$false

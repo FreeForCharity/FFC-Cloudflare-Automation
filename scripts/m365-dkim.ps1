@@ -236,6 +236,12 @@ try {
         $effectiveOrg = $effectiveTenant
     }
 
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        $pfxLen = if ($null -eq $effectivePfx) { 0 } else { $effectivePfx.Length }
+        $pwdLen = if ($null -eq $effectivePfxPwd) { 0 } else { $effectivePfxPwd.Length }
+        Write-Host ("EXO auth material lengths: PfxBase64={0}, Password={1}" -f $pfxLen, $pwdLen) -ForegroundColor DarkGray
+    }
+
     Connect-Exchange -Org $effectiveOrg -App $effectiveAppId -Thumbprint $effectiveThumb -PfxBase64 $effectivePfx -PfxPassword $effectivePfxPwd -UseDeviceCode:$DeviceCode
 
     Write-Section "Microsoft 365 DKIM status"

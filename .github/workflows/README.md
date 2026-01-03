@@ -3,6 +3,52 @@
 This repository uses GitHub Actions workflows to ensure code quality, security, and support DNS
 management operations.
 
+## Why some workflows are deprecated
+
+Older workflows (including the legacy “Cloudflare DNS Run” and “Zone Add”) were created before the
+repository moved to a safer, issue-based process and the current PowerShell-first automation.
+
+We keep deprecated workflows as **stubs** for two reasons:
+
+1. **Stale links**: old docs/bookmarks/runbooks may still point to the legacy workflow file.
+2. **Clarity**: the stub explains what replaced it and why.
+
+If you see a workflow named like `.github/workflows/...`, that typically means the workflow did not
+have a `name:` at the time it was created. GitHub uses the file path as the display name, which
+sorts to the top. Stubs exist to prevent that confusion.
+
+## Operational workflows (DNS + M365)
+
+These are the workflows administrators run manually (Actions → Run workflow) to report on or change
+domain configuration.
+
+### 01. Domain - Status (Check)
+
+- **Why**: quick read-only report across Cloudflare + M365.
+- **When**: use first for any domain request or troubleshooting.
+- **How**: run with `domain`, optionally provide `issue_number` to post results back.
+
+### 02. Domain - Enforce Standard (Fix)
+
+- **Why**: applies the standard DNS configuration and can enable DKIM (when run LIVE).
+- **When**: after reviewing status output and confirming the change is desired.
+- **How**: run with `domain`; keep `dry_run` enabled until ready to apply changes; optionally set
+  `issue_number` to post results back.
+
+### 03–06 DNS workflows
+
+- **03. DNS - Manage Record (Manual)**: create/update/delete one record (best for one-off changes).
+- **04. DNS - Audit Compliance (Report)**: report-only compliance check.
+- **05. DNS - Enforce Standard (Fix)**: apply standard DNS configuration (DNS-only).
+- **06. DNS - Export All Domains (Report)**: export summaries for review/audit.
+
+### 07–10 M365 workflows
+
+- **07. M365 - Domain Status + DKIM (Toolbox)**: mixed utilities for domain and DKIM.
+- **08. M365 - Enable DKIM (Exchange Online)**: focused DKIM enable.
+- **09. M365 - Domain Preflight (Read-only)**: onboarding checks.
+- **10. M365 - List Tenant Domains**: discovery/listing.
+
 ## ci.yml - Continuous Integration
 
 Runs automated validation and security checks on all pull requests and pushes to main branch.
@@ -85,17 +131,47 @@ This workflow helps identify security vulnerabilities early in the development p
 
 ## Workflow Summary
 
-| Workflow                    | Trigger                         | Purpose                                                                                                   |
-| --------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| ci.yml                      | PRs and pushes to main          | Lint workflows, validate scripts, and check for sensitive files                                           |
-| codeql-analysis.yml         | PRs, pushes to main, and weekly | Security scanning of GitHub Actions workflows                                                             |
-| 1-audit-compliance.yml      | Manual (workflow_dispatch)      | Report: Check DNS compliance                                                                              |
-| 2-enforce-standard.yml      | Manual (workflow_dispatch)      | Fix: Enforce standard DNS configuration                                                                   |
-| 3-manage-record.yml         | Manual (workflow_dispatch)      | Manual: Manage a single DNS record                                                                        |
-| 4-export-summary.yml        | Manual (workflow_dispatch)      | Report: Export all domains summary                                                                        |
-| 5-m365-domain-and-dkim.yml  | Manual (workflow_dispatch)      | M365: Domain status + DKIM helpers (Graph + Exchange Online)                                              |
-| 6-m365-list-domains.yml     | Manual (workflow_dispatch)      | M365: List tenant domains (Graph)                                                                         |
-| 7-m365-domain-preflight.yml | Manual (workflow_dispatch)      | M365: Domain onboarding preflight (two jobs: Graph in `m365-prod`, Cloudflare audit in `cloudflare-prod`) |
+| Workflow                      | Trigger                         | Purpose                                                                                                   |
+| ----------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| ci.yml                        | PRs and pushes to main          | Lint workflows, validate scripts, and check for sensitive files                                           |
+| codeql-analysis.yml           | PRs, pushes to main, and weekly | Security scanning of GitHub Actions workflows                                                             |
+| 0-domain-status.yml           | Manual (workflow_dispatch)      | 01. Domain: Status check (Cloudflare + M365)                                                              |
+| 1-enforce-domain-standard.yml | Manual (workflow_dispatch)      | 02. Domain: Enforce standard (Cloudflare + M365; supports issue post-back)                                |
+| 1-audit-compliance.yml        | Manual (workflow_dispatch)      | Report: Check DNS compliance                                                                              |
+| 2-enforce-standard.yml        | Manual (workflow_dispatch)      | Fix: Enforce standard DNS configuration                                                                   |
+| 3-manage-record.yml           | Manual (workflow_dispatch)      | Manual: Manage a single DNS record                                                                        |
+| 4-export-summary.yml          | Manual (workflow_dispatch)      | Report: Export all domains summary                                                                        |
+| 5-m365-domain-and-dkim.yml    | Manual (workflow_dispatch)      | M365: Domain status + DKIM helpers (Graph + Exchange Online)                                              |
+| 6-m365-list-domains.yml       | Manual (workflow_dispatch)      | M365: List tenant domains (Graph)                                                                         |
+| 7-m365-domain-preflight.yml   | Manual (workflow_dispatch)      | M365: Domain onboarding preflight (two jobs: Graph in `m365-prod`, Cloudflare audit in `cloudflare-prod`) |
+
+## Deprecated workflows (kept as stubs)
+
+These workflows are **not** needed anymore because the repo moved to:
+
+- safer least-privilege tokens (DNS-only for Cloudflare)
+- issue-based change tracking (with optional post-back)
+- clearer split between reporting, enforcement, and manual record edits
+
+### Cloudflare Zone Add (removed)
+
+- **Why not needed**: creating a Cloudflare zone generally requires **account-level** permissions
+  (and often additional setup like plan/ownership validation). We avoid automating that because it
+  increases blast radius and is rarely repeatable in a safe “DNS-only” token.
+- **What replaces it**: zone creation is done in the Cloudflare dashboard by an account admin; once
+  the zone exists, use **01/02** (preferred) or the **03–06** DNS workflows to manage records and
+  apply standards.
+
+### Legacy Cloudflare DNS update / run
+
+- **What it used to do**: a monolithic “do DNS automation” flow.
+- **What replaces it**: use **03** for single-record work, **04** for audit/reporting, **05** for
+  applying the standard, **06** for exports — or use **01/02** for the simplified domain flow.
+
+### Legacy DNS summary export
+
+- **What it used to do**: export summaries via old tooling.
+- **What replaces it**: **06. DNS - Export All Domains (Report)**.
 
 ## Current Workflow
 

@@ -1,0 +1,93 @@
+name: '03. DNS - Add Domain (Create Zone) (Admin)'
+run-name: 'Create Zone: ${{ inputs.domain }} (${{ inputs.zone_type }})'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain Name to add (e.g., example.org)'
+        required: true
+        type: string
+      zone_type:
+        description: 'Zone Type'
+        type: choice
+        options:
+          - full
+          - partial
+        default: full
+      jump_start:
+        description: 'Enable Jump Start (auto-scan DNS records)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  create-zone:
+    runs-on: windows-latest
+    environment: cloudflare-prod
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        shell: pwsh
+        run: |
+          $Domain = "${{ inputs.domain }}"
+          if ([string]::IsNullOrWhiteSpace($Domain)) {
+            Write-Error "Domain name is required"
+            exit 1
+          }
+
+          # Basic domain validation
+          if ($Domain -notmatch '^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}$') {
+            Write-Error "Invalid domain name format: $Domain"
+            exit 1
+          }
+
+          Write-Host "✓ Domain validation passed: $Domain" -ForegroundColor Green
+
+      - name: Create Cloudflare Zone
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          $Domain = "${{ inputs.domain }}"
+          $ZoneType = "${{ inputs.zone_type }}"
+          $JumpStart = [bool]::Parse("${{ inputs.jump_start }}")
+
+          Write-Host "Creating zone for domain: $Domain" -ForegroundColor Cyan
+
+          # Check that secrets are available (without printing them)
+          if ([string]::IsNullOrWhiteSpace($env:CLOUDFLARE_API_KEY_DNS_ONLY)) {
+            Write-Error "CLOUDFLARE_API_KEY_DNS_ONLY secret is not set"
+            exit 1
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:CLOUDFLARE_ACCOUNT_ID)) {
+            Write-Error "CLOUDFLARE_ACCOUNT_ID secret is not set"
+            exit 1
+          }
+
+          Write-Host "✓ Secrets validated (values not displayed for security)" -ForegroundColor Green
+
+          # Run the zone creation script
+          .\scripts\Create-CloudflareZone.ps1 `
+            -Domain $Domain `
+            -ZoneType $ZoneType `
+            -JumpStart $JumpStart
+
+      - name: Summary
+        if: success()
+        shell: pwsh
+        run: |
+          Write-Host "`n=== Zone Creation Complete ===" -ForegroundColor Green
+          Write-Host "Domain: ${{ inputs.domain }}"
+          Write-Host "Zone Type: ${{ inputs.zone_type }}"
+          Write-Host "`nNext steps:"
+          Write-Host "1. Verify zone in Cloudflare dashboard"
+          Write-Host "2. Update domain registrar to use Cloudflare name servers"
+          Write-Host "3. Use other workflows to manage DNS records"

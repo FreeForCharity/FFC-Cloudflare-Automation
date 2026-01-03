@@ -268,6 +268,16 @@ try {
 
     Connect-Exchange -Org $effectiveOrg -App $effectiveAppId -Thumbprint $effectiveThumb -PfxBase64 $effectivePfx -PfxPassword $effectivePfxPwd -UseDeviceCode:$DeviceCode
 
+    $acceptedDomain = $null
+    try {
+        $acceptedDomain = Get-AcceptedDomain -Identity $Domain -ErrorAction Stop
+    } catch {
+        $acceptedDomain = $null
+    }
+    if (-not $acceptedDomain) {
+        throw ("Domain '{0}' was not found in Exchange Online (Accepted Domains). Add/verify the domain in the tenant before enabling DKIM." -f $Domain)
+    }
+
     Write-Section "Microsoft 365 DKIM status"
 
     $config = $null

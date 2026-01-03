@@ -1,4 +1,4 @@
-name: '[Domain] 1. Check - Domain Status'
+name: '0. Domain - Status (Check)'
 run-name: 'Domain Status: ${{ inputs.domain }}'
 
 on:

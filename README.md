@@ -35,12 +35,12 @@ DKIM v2 validation), see
 
 For the new “3 step” approach (tracked in issue #61), use these GitHub Actions:
 
-1. **1. Domain - Status (Check)**
+1. **01. Domain - Status (Check)**
 
 - Read-only report across Cloudflare + M365
 - Includes a Cloudflare “what will change” dry-run preview
 
-2. **2. Domain - Enforce Standard (Fix)**
+2. **02. Domain - Enforce Standard (Fix)**
 
 - Cloudflare standard enforcement + M365 DKIM enable flow (when run in LIVE mode)
 

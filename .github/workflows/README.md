@@ -37,6 +37,7 @@ domain configuration.
 
 ### 03–06 DNS workflows
 
+- **03. DNS - Add Domain (Create Zone) (Admin)**: create a new zone in Cloudflare (admin-only).
 - **03. DNS - Manage Record (Manual)**: create/update/delete one record (best for one-off changes).
 - **04. DNS - Audit Compliance (Report)**: report-only compliance check.
 - **05. DNS - Enforce Standard (Fix)**: apply standard DNS configuration (DNS-only).
@@ -131,19 +132,20 @@ This workflow helps identify security vulnerabilities early in the development p
 
 ## Workflow Summary
 
-| Workflow                      | Trigger                         | Purpose                                                                                                   |
-| ----------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| ci.yml                        | PRs and pushes to main          | Lint workflows, validate scripts, and check for sensitive files                                           |
-| codeql-analysis.yml           | PRs, pushes to main, and weekly | Security scanning of GitHub Actions workflows                                                             |
-| 0-domain-status.yml           | Manual (workflow_dispatch)      | 01. Domain: Status check (Cloudflare + M365)                                                              |
-| 1-enforce-domain-standard.yml | Manual (workflow_dispatch)      | 02. Domain: Enforce standard (Cloudflare + M365; supports issue post-back)                                |
-| 1-audit-compliance.yml        | Manual (workflow_dispatch)      | Report: Check DNS compliance                                                                              |
-| 2-enforce-standard.yml        | Manual (workflow_dispatch)      | Fix: Enforce standard DNS configuration                                                                   |
-| 3-manage-record.yml           | Manual (workflow_dispatch)      | Manual: Manage a single DNS record                                                                        |
-| 4-export-summary.yml          | Manual (workflow_dispatch)      | Report: Export all domains summary                                                                        |
-| 5-m365-domain-and-dkim.yml    | Manual (workflow_dispatch)      | M365: Domain status + DKIM helpers (Graph + Exchange Online)                                              |
-| 6-m365-list-domains.yml       | Manual (workflow_dispatch)      | M365: List tenant domains (Graph)                                                                         |
-| 7-m365-domain-preflight.yml   | Manual (workflow_dispatch)      | M365: Domain onboarding preflight (two jobs: Graph in `m365-prod`, Cloudflare audit in `cloudflare-prod`) |
+| Workflow                      | Trigger                         | Purpose                                                                                                       |
+| ----------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| ci.yml                        | PRs and pushes to main          | Lint workflows, validate scripts, and check for sensitive files                                               |
+| codeql-analysis.yml           | PRs, pushes to main, and weekly | Security scanning of GitHub Actions workflows                                                                 |
+| 0-domain-status.yml           | Manual (workflow_dispatch)      | 01. Domain: Status check (Cloudflare + M365)                                                                  |
+| 1-enforce-domain-standard.yml | Manual (workflow_dispatch)      | 02. Domain: Enforce standard (Cloudflare + M365; supports issue post-back)                                    |
+| 03-zone-create.yml            | Manual (workflow_dispatch)      | 03. DNS: Add Domain (Create Zone) - Create new zones in Cloudflare (Admin)                                    |
+| 3-manage-record.yml           | Manual (workflow_dispatch)      | 03. DNS: Manage a single DNS record (Manual)                                                                  |
+| 1-audit-compliance.yml        | Manual (workflow_dispatch)      | 04. DNS: Check DNS compliance (Report)                                                                        |
+| 2-enforce-standard.yml        | Manual (workflow_dispatch)      | 05. DNS: Enforce standard DNS configuration (Fix)                                                             |
+| 4-export-summary.yml          | Manual (workflow_dispatch)      | 06. DNS: Export all domains summary (Report)                                                                  |
+| 5-m365-domain-and-dkim.yml    | Manual (workflow_dispatch)      | 07. M365: Domain status + DKIM helpers (Graph + Exchange Online)                                              |
+| 6-m365-list-domains.yml       | Manual (workflow_dispatch)      | 10. M365: List tenant domains (Graph)                                                                         |
+| 7-m365-domain-preflight.yml   | Manual (workflow_dispatch)      | 09. M365: Domain onboarding preflight (two jobs: Graph in `m365-prod`, Cloudflare audit in `cloudflare-prod`) |
 
 ## Deprecated workflows (kept as stubs)
 

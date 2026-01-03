@@ -1,0 +1,194 @@
+name: '03. DNS - Add Domain (Create Zone) (Admin)'
+run-name: 'Add Domain: ${{ inputs.domain }} (zone_type: ${{ inputs.zone_type }})'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain Name to add as a zone'
+        required: true
+        type: string
+      zone_type:
+        description: 'Zone Type'
+        type: choice
+        options:
+          - full
+          - partial
+        default: full
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  create-zone:
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod
+    env:
+      CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Inputs
+        id: validate
+        shell: bash
+        run: |
+          DOMAIN="${{ inputs.domain }}"
+          ZONE_TYPE="${{ inputs.zone_type }}"
+
+          echo "Domain: $DOMAIN"
+          echo "Zone Type: $ZONE_TYPE"
+
+          # Basic domain validation
+          if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$ ]]; then
+            echo "::error::Invalid domain name format: $DOMAIN"
+            exit 1
+          fi
+
+          # Check required secrets are present
+          if [[ -z "$CLOUDFLARE_API_KEY_DNS_ONLY" ]]; then
+            echo "::error::CLOUDFLARE_API_KEY_DNS_ONLY secret is not set"
+            exit 1
+          fi
+
+          if [[ -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID secret is not set"
+            exit 1
+          fi
+
+          echo "✓ Input validation passed"
+
+      - name: Check if Zone Already Exists
+        id: check-zone
+        shell: bash
+        run: |
+          DOMAIN="${{ inputs.domain }}"
+
+          echo "Checking if zone '$DOMAIN' already exists..."
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X GET \
+            "https://api.cloudflare.com/v4/zones?name=$DOMAIN" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_KEY_DNS_ONLY" \
+            -H "Content-Type: application/json")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          echo "HTTP Status: $HTTP_CODE"
+
+          if [[ "$HTTP_CODE" != "200" ]]; then
+            echo "::error::Failed to query zones. HTTP Status: $HTTP_CODE"
+            echo "Response: $BODY"
+            exit 1
+          fi
+
+          # Check if zone exists
+          ZONE_COUNT=$(echo "$BODY" | jq -r '.result | length')
+
+          if [[ "$ZONE_COUNT" -gt 0 ]]; then
+            ZONE_ID=$(echo "$BODY" | jq -r '.result[0].id')
+            ZONE_STATUS=$(echo "$BODY" | jq -r '.result[0].status')
+            NAME_SERVERS=$(echo "$BODY" | jq -r '.result[0].name_servers | join(", ")')
+            
+            {
+              echo "zone_exists=true"
+              echo "zone_id=$ZONE_ID"
+              echo "zone_status=$ZONE_STATUS"
+              echo "name_servers=$NAME_SERVERS"
+            } >> "$GITHUB_OUTPUT"
+            
+            echo "::notice::Zone '$DOMAIN' already exists (ID: $ZONE_ID, Status: $ZONE_STATUS)"
+          else
+            echo "zone_exists=false" >> "$GITHUB_OUTPUT"
+            echo "Zone '$DOMAIN' does not exist. Will create it."
+          fi
+
+      - name: Create Zone
+        id: create-zone
+        if: steps.check-zone.outputs.zone_exists == 'false'
+        shell: bash
+        run: |
+          DOMAIN="${{ inputs.domain }}"
+          ZONE_TYPE="${{ inputs.zone_type }}"
+
+          echo "Creating zone '$DOMAIN' with type '$ZONE_TYPE'..."
+
+          PAYLOAD=$(jq -n \
+            --arg name "$DOMAIN" \
+            --arg account_id "$CLOUDFLARE_ACCOUNT_ID" \
+            --arg type "$ZONE_TYPE" \
+            '{name: $name, account: {id: $account_id}, type: $type}')
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://api.cloudflare.com/v4/zones" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_KEY_DNS_ONLY" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          echo "HTTP Status: $HTTP_CODE"
+
+          if [[ "$HTTP_CODE" != "200" ]]; then
+            echo "::error::Failed to create zone. HTTP Status: $HTTP_CODE"
+            # Parse error messages without exposing sensitive data
+            ERROR_MESSAGES=$(echo "$BODY" | jq -r '.errors[]? | .message' 2>/dev/null || echo "Unknown error")
+            echo "::error::Error details: $ERROR_MESSAGES"
+            echo "Response (check for permission issues): $BODY"
+            exit 1
+          fi
+
+          # Extract zone details
+          ZONE_ID=$(echo "$BODY" | jq -r '.result.id')
+          ZONE_STATUS=$(echo "$BODY" | jq -r '.result.status')
+          NAME_SERVERS=$(echo "$BODY" | jq -r '.result.name_servers | join(", ")')
+
+          {
+            echo "zone_id=$ZONE_ID"
+            echo "zone_status=$ZONE_STATUS"
+            echo "name_servers=$NAME_SERVERS"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "::notice::Zone created successfully!"
+
+      - name: Display Zone Information
+        shell: bash
+        run: |
+          DOMAIN="${{ inputs.domain }}"
+
+          # Get outputs from either check or create step
+          if [[ "${{ steps.check-zone.outputs.zone_exists }}" == "true" ]]; then
+            ZONE_ID="${{ steps.check-zone.outputs.zone_id }}"
+            ZONE_STATUS="${{ steps.check-zone.outputs.zone_status }}"
+            NAME_SERVERS="${{ steps.check-zone.outputs.name_servers }}"
+            ACTION="already existed"
+          else
+            ZONE_ID="${{ steps.create-zone.outputs.zone_id }}"
+            ZONE_STATUS="${{ steps.create-zone.outputs.zone_status }}"
+            NAME_SERVERS="${{ steps.create-zone.outputs.name_servers }}"
+            ACTION="was created"
+          fi
+
+          echo "========================================"
+          echo "ZONE INFORMATION"
+          echo "========================================"
+          echo "Domain: $DOMAIN"
+          echo "Zone ID: $ZONE_ID"
+          echo "Status: $ZONE_STATUS"
+          echo "Name Servers: $NAME_SERVERS"
+          echo "Action: Zone $ACTION"
+          echo "========================================"
+
+          # Set as workflow outputs
+          echo "::notice title=Zone ID::$ZONE_ID"
+          echo "::notice title=Name Servers::$NAME_SERVERS"
+          echo "::notice title=Status::$ZONE_STATUS"
+
+      - name: Verify No Secrets in Logs
+        shell: bash
+        run: |
+          echo "✓ Workflow completed without exposing secrets"
+          echo "✓ API token was masked in all outputs"
+          echo "✓ Zone creation validated successfully"

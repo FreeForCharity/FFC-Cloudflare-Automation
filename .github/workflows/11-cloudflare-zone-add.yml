@@ -1,4 +1,4 @@
-name: '11. Cloudflare - Add Zone (Admin)'
+name: '03. DNS - Add Domain (Create Zone) (Admin)'
 run-name: 'Cloudflare: Add zone ${{ inputs.domain }}'
 
 on:

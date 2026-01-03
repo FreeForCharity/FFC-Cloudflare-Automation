@@ -35,19 +35,23 @@ domain configuration.
 - **How**: run with `domain`; keep `dry_run` enabled until ready to apply changes; optionally set
   `issue_number` to post results back.
 
-### 03–06 DNS workflows
+### 03–07 DNS workflows
 
-- **03. DNS - Manage Record (Manual)**: create/update/delete one record (best for one-off changes).
-- **04. DNS - Audit Compliance (Report)**: report-only compliance check.
-- **05. DNS - Enforce Standard (Fix)**: apply standard DNS configuration (DNS-only).
-- **06. DNS - Export All Domains (Report)**: export summaries for review/audit.
+- **03. DNS - Add Domain (Create Zone) (Admin)**: create a new Cloudflare zone and output assigned
+  name servers.
+- **04. DNS - Manage Record (Manual)**: create/update/delete one record (best for one-off changes).
+- **05. DNS - Audit Compliance (Report)**: report-only compliance check.
+- **06. DNS - Enforce Standard (Fix)**: apply standard DNS configuration (DNS-only).
+- **07. DNS - Export All Domains (Report)**: export summaries for review/audit.
 
-### 07–10 M365 workflows
+### 08–12 M365 workflows
 
-- **07. M365 - Domain Status + DKIM (Toolbox)**: mixed utilities for domain and DKIM.
-- **08. M365 - Enable DKIM (Exchange Online)**: focused DKIM enable.
-- **09. M365 - Domain Preflight (Read-only)**: onboarding checks.
-- **10. M365 - List Tenant Domains**: discovery/listing.
+- **08. M365 - Add Tenant Domain (Admin)**: add a new domain in the tenant and print required DNS
+  verification records.
+- **09. M365 - Domain Status + DKIM (Toolbox)**: mixed utilities for domain and DKIM.
+- **10. M365 - Enable DKIM (Exchange Online)**: focused DKIM enable.
+- **11. M365 - Domain Preflight (Read-only)**: onboarding checks.
+- **12. M365 - List Tenant Domains**: discovery/listing.
 
 ## ci.yml - Continuous Integration
 
@@ -144,8 +148,8 @@ This workflow helps identify security vulnerabilities early in the development p
 | 5-m365-domain-and-dkim.yml    | Manual (workflow_dispatch)      | M365: Domain status + DKIM helpers (Graph + Exchange Online)                                              |
 | 6-m365-list-domains.yml       | Manual (workflow_dispatch)      | M365: List tenant domains (Graph)                                                                         |
 | 7-m365-domain-preflight.yml   | Manual (workflow_dispatch)      | M365: Domain onboarding preflight (two jobs: Graph in `m365-prod`, Cloudflare audit in `cloudflare-prod`) |
-| 11-cloudflare-zone-add.yml    | Manual (workflow_dispatch)      | Cloudflare: Create a new zone (add domain) and output assigned name servers                               |
-| 12-m365-add-domain.yml        | Manual (workflow_dispatch)      | M365: Add tenant domain (Graph) + print verification DNS records                                          |
+| 11-cloudflare-zone-add.yml    | Manual (workflow_dispatch)      | DNS: Add domain by creating a Cloudflare zone (admin-only) + output assigned name servers                 |
+| 12-m365-add-domain.yml        | Manual (workflow_dispatch)      | M365: Add tenant domain (Graph; admin-only) + print verification DNS records                              |
 
 ## Deprecated workflows (kept as stubs)
 
@@ -161,33 +165,34 @@ These workflows are **not** needed anymore because the repo moved to:
   (and often additional setup like plan/ownership validation). We avoid automating that because it
   increases blast radius and is rarely repeatable in a safe “DNS-only” token.
 - **What replaces it**: zone creation is done in the Cloudflare dashboard by an account admin; once
-  the zone exists, use **01/02** (preferred) or the **03–06** DNS workflows to manage records and
+  the zone exists, use **01/02** (preferred) or the **03–07** DNS workflows to manage records and
   apply standards.
 
 If you prefer to run zone creation from Actions (still admin-only), use:
 
-- **11. Cloudflare - Add Zone (Admin)**
+- **03. DNS - Add Domain (Create Zone) (Admin)**
 
 ### Legacy Cloudflare DNS update / run
 
 - **What it used to do**: a monolithic “do DNS automation” flow.
-- **What replaces it**: use **03** for single-record work, **04** for audit/reporting, **05** for
-  applying the standard, **06** for exports — or use **01/02** for the simplified domain flow.
+- **What replaces it**: use **04** for single-record work, **05** for audit/reporting, **06** for
+  applying the standard, **07** for exports — or use **01/02** for the simplified domain flow.
 
 ### Legacy DNS summary export
 
 - **What it used to do**: export summaries via old tooling.
-- **What replaces it**: **06. DNS - Export All Domains (Report)**.
+- **What replaces it**: **07. DNS - Export All Domains (Report)**.
 
 ## Required secrets for admin workflows
 
 These are intentionally **not** the same as the DNS-only token used for day-to-day DNS changes.
 
 - **11. Cloudflare - Add Zone (Admin)**
+- **03. DNS - Add Domain (Create Zone) (Admin)**
   - `CLOUDFLARE_API_TOKEN_ZONE_CREATE`: Cloudflare API token with minimum permissions to create
     zones
   - `CLOUDFLARE_ACCOUNT_ID`: Cloudflare account id where zones are created
-- **12. M365 - Add Tenant Domain (Admin)**
+- **08. M365 - Add Tenant Domain (Admin)**
   - Uses the existing `m365-prod` environment secrets (`FFC_AZURE_CLIENT_ID`, `FFC_AZURE_TENANT_ID`)
 
 ## Current Workflow

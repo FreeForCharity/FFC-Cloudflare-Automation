@@ -1,4 +1,4 @@
-name: '08. M365 - Enable DKIM (Exchange Online)'
+name: '10. M365 - Enable DKIM (Exchange Online)'
 
 permissions:
   contents: read

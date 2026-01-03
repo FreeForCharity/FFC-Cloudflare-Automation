@@ -1,4 +1,4 @@
-name: '07. M365 - Domain Status + DKIM (Toolbox)'
+name: '09. M365 - Domain Status + DKIM (Toolbox)'
 run-name: 'M365: ${{ inputs.domain }}'
 
 on:

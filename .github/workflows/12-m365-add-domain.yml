@@ -1,4 +1,4 @@
-name: '12. M365 - Add Tenant Domain (Admin)'
+name: '08. M365 - Add Tenant Domain (Admin)'
 run-name: 'M365: Add domain ${{ inputs.domain }}'
 
 on:

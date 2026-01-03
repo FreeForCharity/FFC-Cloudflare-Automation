@@ -1,4 +1,4 @@
-name: '[DEPRECATED] Cloudflare DNS Update (legacy)'
+name: '99. Deprecated - Cloudflare DNS Update (legacy)'
 
 # NOTE: This workflow is intentionally kept as a deprecated stub to avoid
 # stale editor diagnostics and old links breaking after the repository was

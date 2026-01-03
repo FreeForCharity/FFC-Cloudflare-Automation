@@ -1,4 +1,4 @@
-name: '[DNS] 4. Report - Export All Domains'
+name: '6. DNS - Export All Domains (Report)'
 run-name: 'Export Domain Summary'
 
 on:

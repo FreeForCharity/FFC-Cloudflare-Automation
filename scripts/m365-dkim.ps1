@@ -315,6 +315,16 @@ try {
             }
         }
 
+        if ([string]::IsNullOrWhiteSpace([string]$s1) -or [string]::IsNullOrWhiteSpace([string]$s2)) {
+            if (-not [string]::IsNullOrWhiteSpace($effectiveOrg)) {
+                $dashed = ($Domain.ToLowerInvariant() -replace '\.', '-')
+                $orgLower = $effectiveOrg.ToLowerInvariant()
+                $s1 = "selector1-$dashed._domainkey.$orgLower"
+                $s2 = "selector2-$dashed._domainkey.$orgLower"
+                Write-Host "Selector CNAME targets not returned by EXO; using computed fallback targets." -ForegroundColor Yellow
+            }
+        }
+
         Write-Host ""
         Write-Host "DKIM DNS records (from Exchange Online):" -ForegroundColor Gray
         if ($s1) {

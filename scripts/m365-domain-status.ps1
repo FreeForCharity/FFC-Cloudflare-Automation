@@ -32,13 +32,15 @@ function Ensure-Module {
             Write-Host "Installing NuGet package provider..." -ForegroundColor Yellow
             Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
         }
-    } catch {
+    }
+    catch {
         # Best-effort; module install may still succeed.
     }
 
     try {
         Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
-    } catch {
+    }
+    catch {
         # Best-effort; if this fails, Install-Module may prompt.
     }
 
@@ -131,7 +133,8 @@ try {
     if ($useRest) {
         $encodedDomain = [Uri]::EscapeDataString($Domain)
         $d = Invoke-GraphRequest -Uri ("https://graph.microsoft.com/v1.0/domains/{0}?$select=id,isVerified,isDefault,isAdminManaged,supportedServices" -f $encodedDomain) -AccessToken $tokenToUse
-    } else {
+    }
+    else {
         $d = Get-MgDomain -DomainId $Domain -ErrorAction Stop
     }
 
@@ -150,32 +153,38 @@ try {
         if ($useRest) {
             try {
                 $verification = (Invoke-GraphRequest -Uri ("https://graph.microsoft.com/v1.0/domains/{0}/verificationDnsRecords" -f $encodedDomain) -AccessToken $tokenToUse).value
-            } catch {
+            }
+            catch {
                 $verification = @()
             }
 
             try {
                 $service = (Invoke-GraphRequest -Uri ("https://graph.microsoft.com/v1.0/domains/{0}/serviceConfigurationRecords" -f $encodedDomain) -AccessToken $tokenToUse).value
-            } catch {
+            }
+            catch {
                 $service = @()
             }
-        } else {
+        }
+        else {
             try {
                 $verification = Get-MgDomainVerificationDnsRecord -DomainId $Domain -ErrorAction Stop
-            } catch {
+            }
+            catch {
                 $verification = @()
             }
 
             try {
                 $service = Get-MgDomainServiceConfigurationRecord -DomainId $Domain -ErrorAction Stop
-            } catch {
+            }
+            catch {
                 $service = @()
             }
         }
 
         if (($verification.Count -eq 0) -and ($service.Count -eq 0)) {
             Write-Host "No DNS record details returned by Graph for this domain (or missing permissions)." -ForegroundColor Yellow
-        } else {
+        }
+        else {
             if ($verification.Count -gt 0) {
                 Write-Host "Verification records:" -ForegroundColor Gray
                 if ($useRest) {
@@ -183,7 +192,8 @@ try {
                         $target = Get-DnsRecordText -Record $_
                         Write-Host ("- {0} {1} -> {2}" -f $_.recordType, $_.label, $target)
                     }
-                } else {
+                }
+                else {
                     $verification | Sort-Object RecordType, Label | ForEach-Object {
                         Write-Host ("- {0} {1} -> {2}" -f $_.RecordType, $_.Label, $_.Text)
                     }
@@ -197,7 +207,8 @@ try {
                         $target = Get-DnsRecordText -Record $_
                         Write-Host ("- {0} {1} -> {2}" -f $_.recordType, $_.label, $target)
                     }
-                } else {
+                }
+                else {
                     $service | Sort-Object RecordType, Label | ForEach-Object {
                         Write-Host ("- {0} {1} -> {2}" -f $_.RecordType, $_.Label, $_.Text)
                     }
@@ -208,7 +219,8 @@ try {
 
     if (-not $useRest) { Disconnect-MgGraph | Out-Null }
     exit 0
-} catch {
+}
+catch {
     Write-Error $_
     try { if (-not $useRest) { Disconnect-MgGraph | Out-Null } } catch { }
     exit 1

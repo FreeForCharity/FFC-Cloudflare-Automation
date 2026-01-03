@@ -87,9 +87,9 @@ function Get-TenantSummary {
     $onMicrosoft = $domains | Where-Object { $_.id -like '*.onmicrosoft.com' } | Select-Object -First 1
 
     [pscustomobject]@{
-        TenantId = if ($org0) { $org0.id } else { $null }
-        Organization = if ($org0) { $org0.displayName } else { $null }
-        DefaultDomain = if ($defaultDomain) { $defaultDomain.id } else { $null }
+        TenantId          = if ($org0) { $org0.id } else { $null }
+        Organization      = if ($org0) { $org0.displayName } else { $null }
+        DefaultDomain     = if ($defaultDomain) { $defaultDomain.id } else { $null }
         OnMicrosoftDomain = if ($onMicrosoft) { $onMicrosoft.id } else { $null }
     }
 }
@@ -107,7 +107,8 @@ function Try-GetDomainFromTenant {
 
     try {
         return (Invoke-GraphGet -Token $Token -Uri $uri)
-    } catch {
+    }
+    catch {
         $resp = $_.Exception.Response
         if ($resp -and $resp.StatusCode -and ([int]$resp.StatusCode -eq 404)) {
             return $null
@@ -131,19 +132,21 @@ function Try-GetMicrosoftDnsGuidance {
 
     try {
         $verification = (Invoke-GraphGet -Token $Token -Uri "https://graph.microsoft.com/v1.0/domains/$encoded/verificationDnsRecords").value
-    } catch {
+    }
+    catch {
         $verification = @()
     }
 
     try {
         $service = (Invoke-GraphGet -Token $Token -Uri "https://graph.microsoft.com/v1.0/domains/$encoded/serviceConfigurationRecords").value
-    } catch {
+    }
+    catch {
         $service = @()
     }
 
     [pscustomobject]@{
         Verification = @($verification)
-        Service = @($service)
+        Service      = @($service)
     }
 }
 
@@ -200,8 +203,8 @@ function Try-GetCloudflareDkimSelectors {
     $sel2 = (Invoke-CfApi -Method 'GET' -Uri "/zones/$zoneId/dns_records" -Headers $headers -Params @{ type = 'CNAME'; name = $sel2Name }).result
 
     [pscustomobject]@{
-        Found = $true
-        Reason = $null
+        Found     = $true
+        Reason    = $null
         Selector1 = ($sel1 | Select-Object -First 1)
         Selector2 = ($sel2 | Select-Object -First 1)
     }
@@ -227,8 +230,8 @@ function Run-CloudflareAudit {
 
     [pscustomobject]@{
         OutputLines = $lines
-        Issues = @($issues)
-        Optional = @($optional)
+        Issues      = @($issues)
+        Optional    = @($optional)
     }
 }
 
@@ -293,10 +296,12 @@ try {
             Write-Kv -Key 'IsDefault' -Value $tenantDomain.isDefault
             $supportsEmail = @($tenantDomain.supportedServices) -contains 'Email'
             Write-Kv -Key 'SupportsEmail' -Value $supportsEmail
-        } else {
+        }
+        else {
             Write-Kv -Key 'DomainExistsInTenant' -Value 'NO'
         }
-    } else {
+    }
+    else {
         Write-Host ''
         Write-Host 'Step 1-2: Graph checks skipped (-SkipGraph)' -ForegroundColor DarkGray
     }
@@ -308,32 +313,36 @@ try {
 
     if ($SkipCloudflare) {
         Write-Host 'Cloudflare checks skipped (-SkipCloudflare)' -ForegroundColor DarkGray
-    } else {
+    }
+    else {
         $cfToken = Get-CfToken -Provided $CloudflareToken
         if (-not $cfToken) {
             Write-Host 'Cloudflare token not set; skipping Cloudflare audit.' -ForegroundColor Yellow
             Write-Host 'Set CLOUDFLARE_API_KEY_DNS_ONLY, or pass -CloudflareToken.' -ForegroundColor DarkGray
-        } else {
+        }
+        else {
             $audit = Run-CloudflareAudit -Zone $Domain -Token $cfToken
 
-        if ($audit.Issues.Count -eq 0) {
-            Write-Host 'Cloudflare audit: no [MISSING]/[DIFFERS] issues found.' -ForegroundColor Green
-        } else {
-            Write-Host 'Cloudflare audit issues:' -ForegroundColor Yellow
-            $audit.Issues | ForEach-Object { Write-Host "- $_" }
-        }
+            if ($audit.Issues.Count -eq 0) {
+                Write-Host 'Cloudflare audit: no [MISSING]/[DIFFERS] issues found.' -ForegroundColor Green
+            }
+            else {
+                Write-Host 'Cloudflare audit issues:' -ForegroundColor Yellow
+                $audit.Issues | ForEach-Object { Write-Host "- $_" }
+            }
 
-        if ($audit.Optional.Count -gt 0) {
-            Write-Host 'Cloudflare audit optional notices:' -ForegroundColor DarkGray
-            $audit.Optional | ForEach-Object { Write-Host "- $_" }
-        }
+            if ($audit.Optional.Count -gt 0) {
+                Write-Host 'Cloudflare audit optional notices:' -ForegroundColor DarkGray
+                $audit.Optional | ForEach-Object { Write-Host "- $_" }
+            }
 
             Write-Host ''
             Write-Host 'Step 4: DKIM quick check (Cloudflare selectors)' -ForegroundColor Cyan
             $dkim = Try-GetCloudflareDkimSelectors -Zone $Domain -Token $cfToken
             if (-not $dkim.Found) {
                 Write-Host $dkim.Reason -ForegroundColor Yellow
-            } else {
+            }
+            else {
                 $hasSel1 = $null -ne $dkim.Selector1
                 $hasSel2 = $null -ne $dkim.Selector2
 
@@ -348,22 +357,27 @@ try {
                         if ($expected.Selector1 -and $hasSel1) {
                             Write-Kv -Key 'selector1 expected target' -Value (Get-GraphDnsRecordTargetText -Record $expected.Selector1)
                             Write-Kv -Key 'selector1 current target' -Value $dkim.Selector1.content
-                        } else {
+                        }
+                        else {
                             Write-Host 'selector1 target cannot be validated via Graph service records.' -ForegroundColor DarkGray
                         }
 
                         if ($expected.Selector2 -and $hasSel2) {
                             Write-Kv -Key 'selector2 expected target' -Value (Get-GraphDnsRecordTargetText -Record $expected.Selector2)
                             Write-Kv -Key 'selector2 current target' -Value $dkim.Selector2.content
-                        } else {
+                        }
+                        else {
                             Write-Host 'selector2 target cannot be validated via Graph service records.' -ForegroundColor DarkGray
                         }
-                    } catch {
+                    }
+                    catch {
                         Write-Host 'DKIM expected targets could not be fetched from Graph (permissions or API response).' -ForegroundColor DarkGray
                     }
-                } elseif ($SkipGraph) {
+                }
+                elseif ($SkipGraph) {
                     Write-Host 'Graph checks skipped, so DKIM target cannot be validated (only selector presence checked).' -ForegroundColor DarkGray
-                } elseif (-not $tenantDomain) {
+                }
+                elseif (-not $tenantDomain) {
                     Write-Host 'Domain not yet in tenant, so DKIM target cannot be validated (only selector presence checked).' -ForegroundColor DarkGray
                 }
             }
@@ -375,7 +389,8 @@ try {
     }
 
     exit 0
-} catch {
+}
+catch {
     Write-Error $_
     exit 1
 }

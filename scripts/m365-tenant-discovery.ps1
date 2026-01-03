@@ -28,13 +28,15 @@ function Ensure-Module {
             Write-Host "Installing NuGet package provider..." -ForegroundColor Yellow
             Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
         }
-    } catch {
+    }
+    catch {
         # Best-effort; module install may still succeed.
     }
 
     try {
         Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
-    } catch {
+    }
+    catch {
         # Best-effort; if this fails, Install-Module may prompt.
     }
 
@@ -89,7 +91,8 @@ function Connect-GraphViaAzureCli {
     if ($Mode -eq 'DeviceCode') {
         Write-Host "Starting: az login --use-device-code" -ForegroundColor DarkGray
         az login --use-device-code --allow-no-subscriptions | Out-Null
-    } else {
+    }
+    else {
         Write-Host "Starting: az login (browser popup)" -ForegroundColor DarkGray
         az login --allow-no-subscriptions | Out-Null
     }
@@ -158,7 +161,8 @@ try {
 
         $dom = Invoke-GraphGet -AccessToken $token -Url 'https://graph.microsoft.com/v1.0/domains?$select=id,isDefault,isVerified'
         $domains = @($dom.value)
-    } else {
+    }
+    else {
         Write-Host "Logging into Microsoft Graph module ($Auth)..." -ForegroundColor Cyan
         Connect-GraphInteractive -Mode $Auth
 
@@ -209,7 +213,8 @@ try {
         $cmd = Get-Command Get-DkimSigningConfig -ErrorAction SilentlyContinue
         if (-not $cmd) {
             Write-Host "Get-DkimSigningConfig not found. You may lack permissions or the cmdlet isn’t available." -ForegroundColor Yellow
-        } else {
+        }
+        else {
             Write-Host "Exchange Online DKIM cmdlets are available." -ForegroundColor Green
         }
 
@@ -217,7 +222,8 @@ try {
     }
 
     exit 0
-} catch {
+}
+catch {
     Write-Error $_
     try { Disconnect-MgGraph | Out-Null } catch { }
     try { Disconnect-ExchangeOnline -Confirm:$false | Out-Null } catch { }

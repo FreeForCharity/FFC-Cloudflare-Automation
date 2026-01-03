@@ -61,45 +61,45 @@
     # Delete a record
     .\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Remove
 #>
-[CmdletBinding(DefaultParameterSetName='Set')]
+[CmdletBinding(DefaultParameterSetName = 'Set')]
 param(
-    [Parameter(Mandatory=$true, HelpMessage="The Zone/Domain name (e.g. example.org)")]
+    [Parameter(Mandatory = $true, HelpMessage = "The Zone/Domain name (e.g. example.org)")]
     [string]$Zone,
 
-    [Parameter(ParameterSetName='Set', Mandatory=$true)]
-    [Parameter(ParameterSetName='Get')]
-    [Parameter(ParameterSetName='Remove', Mandatory=$true)]
+    [Parameter(ParameterSetName = 'Set', Mandatory = $true)]
+    [Parameter(ParameterSetName = 'Get')]
+    [Parameter(ParameterSetName = 'Remove', Mandatory = $true)]
     [string]$Name,
 
-    [Parameter(ParameterSetName='Set', Mandatory=$true)]
-    [Parameter(ParameterSetName='Get')]
-    [Parameter(ParameterSetName='Remove')]
+    [Parameter(ParameterSetName = 'Set', Mandatory = $true)]
+    [Parameter(ParameterSetName = 'Get')]
+    [Parameter(ParameterSetName = 'Remove')]
     [ValidateSet('A', 'AAAA', 'CNAME', 'MX', 'TXT')]
     [string]$Type,
 
-    [Parameter(ParameterSetName='Set', Mandatory=$true)]
-    [Parameter(ParameterSetName='Remove')]
+    [Parameter(ParameterSetName = 'Set', Mandatory = $true)]
+    [Parameter(ParameterSetName = 'Remove')]
     [string]$Content,
 
-    [Parameter(ParameterSetName='Set')]
+    [Parameter(ParameterSetName = 'Set')]
     [int]$Priority = 10,
 
-    [Parameter(ParameterSetName='Set')]
+    [Parameter(ParameterSetName = 'Set')]
     [int]$Ttl = 1, # 1 = Auto
 
-    [Parameter(ParameterSetName='Set')]
+    [Parameter(ParameterSetName = 'Set')]
     [switch]$Proxied,
 
-    [Parameter(ParameterSetName='Remove', Mandatory=$true)]
+    [Parameter(ParameterSetName = 'Remove', Mandatory = $true)]
     [switch]$Remove,
 
-    [Parameter(ParameterSetName='Get', Mandatory=$true)]
+    [Parameter(ParameterSetName = 'Get', Mandatory = $true)]
     [switch]$List,
 
-    [Parameter(ParameterSetName='Audit', Mandatory=$true)]
+    [Parameter(ParameterSetName = 'Audit', Mandatory = $true)]
     [switch]$Audit,
 
-    [Parameter(ParameterSetName='Enforce', Mandatory=$true)]
+    [Parameter(ParameterSetName = 'Enforce', Mandatory = $true)]
     [switch]$EnforceStandard,
 
     [string]$Token,
@@ -164,11 +164,11 @@ function Invoke-CfApi {
     catch {
         Write-Error "Request Failed: $($_.Exception.Message)"
         if ($_.Exception.Response) {
-             # Try to read the error stream
-             $stream = $_.Exception.Response.GetResponseStream()
-             $reader = [System.IO.StreamReader]::new($stream)
-             $body = $reader.ReadToEnd()
-             Write-Error "API Error Body: $body"
+            # Try to read the error stream
+            $stream = $_.Exception.Response.GetResponseStream()
+            $reader = [System.IO.StreamReader]::new($stream)
+            $body = $reader.ReadToEnd()
+            Write-Error "API Error Body: $body"
         }
         throw
     }
@@ -293,7 +293,8 @@ try {
     # 2. Resolve Full Record Name
     if ($Name -eq '@') {
         $RecordName = $Zone
-    } else {
+    }
+    else {
         # If user passed full fqdn (e.g. staging.example.org) use it, otherwise append zone
         if ($Name.EndsWith($Zone)) { $RecordName = $Name }
         else { $RecordName = "$Name.$Zone" }
@@ -327,7 +328,8 @@ try {
         $cnameRecords = $allRecords | Where-Object { $_.type -eq 'CNAME' } | Sort-Object name
         if (-not $cnameRecords -or $cnameRecords.Count -eq 0) {
             Write-Host "[INFO] No CNAME records found in zone." -ForegroundColor DarkGray
-        } else {
+        }
+        else {
             Write-Host "CNAME inventory:" -ForegroundColor DarkCyan
             foreach ($rec in $cnameRecords) {
                 Write-Host (" - {0} -> {1} (proxied={2}, ttl={3})" -f $rec.name, $rec.content, $rec.proxied, $rec.ttl)
@@ -336,12 +338,12 @@ try {
 
         # 0b. Required CNAMEs (M365/Teams/Intune + GitHub Pages)
         $requiredCnames = @(
-            @{ Name = "autodiscover.$Zone";         Content = 'autodiscover.outlook.com';                        Proxied = $false },
-            @{ Name = "enterpriseenrollment.$Zone"; Content = 'enterpriseenrollment-s.manage.microsoft.com';     Proxied = $false },
-            @{ Name = "enterpriseregistration.$Zone"; Content = 'enterpriseregistration.windows.net';           Proxied = $false },
-            @{ Name = "lyncdiscover.$Zone";         Content = 'webdir.online.lync.com';                         Proxied = $false },
-            @{ Name = "sip.$Zone";                 Content = 'sipdir.online.lync.com';                         Proxied = $false },
-            @{ Name = "www.$Zone";                 Content = 'freeforcharity.github.io';                       Proxied = $true }
+            @{ Name = "autodiscover.$Zone"; Content = 'autodiscover.outlook.com'; Proxied = $false },
+            @{ Name = "enterpriseenrollment.$Zone"; Content = 'enterpriseenrollment-s.manage.microsoft.com'; Proxied = $false },
+            @{ Name = "enterpriseregistration.$Zone"; Content = 'enterpriseregistration.windows.net'; Proxied = $false },
+            @{ Name = "lyncdiscover.$Zone"; Content = 'webdir.online.lync.com'; Proxied = $false },
+            @{ Name = "sip.$Zone"; Content = 'sipdir.online.lync.com'; Proxied = $false },
+            @{ Name = "www.$Zone"; Content = 'freeforcharity.github.io'; Proxied = $true }
         )
 
         foreach ($req in $requiredCnames) {
@@ -350,18 +352,20 @@ try {
 
             if ($match) {
                 Write-Host "[OK] Required CNAME present: $($req.Name)" -ForegroundColor Green
-            } elseif ($candidates) {
+            }
+            elseif ($candidates) {
                 $example = $candidates | Select-Object -First 1
                 Write-Warning "[DIFFERS] Required CNAME $($req.Name): found '$($example.content)' (proxied=$($example.proxied)), expected '$($req.Content)' (proxied=$($req.Proxied))"
-            } else {
+            }
+            else {
                 Write-Warning "[MISSING] Required CNAME $($req.Name) -> $($req.Content) (proxied=$($req.Proxied))"
             }
         }
 
         # 0c. Required SRV records (Microsoft 365 / Teams)
         $requiredSrvs = @(
-            @{ Name = "_sip._tls.$Zone";               Priority = 100; Weight = 1; Port = 443;  Target = 'sipdir.online.lync.com' },
-            @{ Name = "_sipfederationtls._tcp.$Zone";  Priority = 100; Weight = 1; Port = 5061; Target = 'sipfed.online.lync.com' }
+            @{ Name = "_sip._tls.$Zone"; Priority = 100; Weight = 1; Port = 443; Target = 'sipdir.online.lync.com' },
+            @{ Name = "_sipfederationtls._tcp.$Zone"; Priority = 100; Weight = 1; Port = 5061; Target = 'sipfed.online.lync.com' }
         )
 
         foreach ($req in $requiredSrvs) {
@@ -376,10 +380,12 @@ try {
 
             if ($match) {
                 Write-Host "[OK] Required SRV present: $($req.Name)" -ForegroundColor Green
-            } elseif ($candidates) {
+            }
+            elseif ($candidates) {
                 $example = $candidates | Select-Object -First 1
                 Write-Warning "[DIFFERS] Required SRV $($req.Name): found '$($example.data.priority) $($example.data.weight) $($example.data.port) $($example.data.target)', expected '$($req.Priority) $($req.Weight) $($req.Port) $($req.Target)'"
-            } else {
+            }
+            else {
                 Write-Warning "[MISSING] Required SRV $($req.Name) -> $($req.Priority) $($req.Weight) $($req.Port) $($req.Target)"
             }
         }
@@ -411,11 +417,13 @@ try {
             if ($hasInternalRua) {
                 if ($hasCloudflareRua) {
                     Write-Host "[OK] DMARC Record found (internal+Cloudflare rua)" -ForegroundColor Green
-                } else {
+                }
+                else {
                     Write-Host "[OK] DMARC Record found (internal rua only)" -ForegroundColor Green
                     Write-Warning "[OPTIONAL] DMARC Record has no Cloudflare rua; enable Cloudflare DMARC Management to add it"
                 }
-            } else {
+            }
+            else {
                 if (-not $hasInternalRua) { Write-Warning "[DIFFERS] DMARC Record missing internal rua (mailto:dmarc-rua@freeforcharity.org)" }
                 if (-not $hasCloudflareRua) { Write-Warning "[OPTIONAL] DMARC Record has no Cloudflare rua; enable Cloudflare DMARC Management to add it" }
             }
@@ -430,7 +438,8 @@ try {
         $missingV4 = $ghV4Ips | Where-Object { $_ -notin $aRecords.content }
         if ($missingV4.Count -eq 0 -and $aRecords.Count -ge 4) {
             Write-Host "[OK] GitHub Pages A Records found" -ForegroundColor Green
-        } else {
+        }
+        else {
             Write-Warning "[MISSING/PARTIAL] GitHub Pages A Records. Missing: $($missingV4 -join ', ')"
         }
 
@@ -438,7 +447,8 @@ try {
         $missingV6 = $ghV6Ips | Where-Object { $_ -notin $aaaaRecords.content }
         if ($missingV6.Count -eq 0 -and $aaaaRecords.Count -ge 4) {
             Write-Host "[OK] GitHub Pages AAAA Records found" -ForegroundColor Green
-        } else {
+        }
+        else {
             Write-Warning "[MISSING/PARTIAL] GitHub Pages AAAA Records. Missing: $($missingV6 -join ', ')"
         }
 
@@ -463,37 +473,37 @@ try {
         # Define Standard Records
         $standards = @(
             # Microsoft 365 Email
-            @{ Type='MX'; Name='@'; Content=$m365MxTarget; Priority=0 },
+            @{ Type = 'MX'; Name = '@'; Content = $m365MxTarget; Priority = 0 },
             # SPF: preserve existing SPF content; only create if missing.
-            @{ Type='TXT'; Name='@'; Content='v=spf1 include:spf.protection.outlook.com -all'; MatchContains='include:spf.protection.outlook.com' },
+            @{ Type = 'TXT'; Name = '@'; Content = 'v=spf1 include:spf.protection.outlook.com -all'; MatchContains = 'include:spf.protection.outlook.com' },
             # DMARC: preserve Cloudflare-generated rua (if present) and always include internal rua.
-            @{ Type='TXT'; Name='_dmarc'; Content='v=DMARC1; p=none'; EnsureInternalRua=$true; PreserveCloudflareRua=$true; InternalRua='mailto:dmarc-rua@freeforcharity.org' },
+            @{ Type = 'TXT'; Name = '_dmarc'; Content = 'v=DMARC1; p=none'; EnsureInternalRua = $true; PreserveCloudflareRua = $true; InternalRua = 'mailto:dmarc-rua@freeforcharity.org' },
 
             # Microsoft 365 / Teams / Intune (Unproxied)
-            @{ Type='CNAME'; Name='autodiscover';          Content='autodiscover.outlook.com';                    Proxied=$false },
-            @{ Type='CNAME'; Name='enterpriseenrollment';  Content='enterpriseenrollment-s.manage.microsoft.com'; Proxied=$false },
-            @{ Type='CNAME'; Name='enterpriseregistration'; Content='enterpriseregistration.windows.net';         Proxied=$false },
-            @{ Type='CNAME'; Name='lyncdiscover';          Content='webdir.online.lync.com';                     Proxied=$false },
-            @{ Type='CNAME'; Name='sip';                   Content='sipdir.online.lync.com';                     Proxied=$false },
+            @{ Type = 'CNAME'; Name = 'autodiscover'; Content = 'autodiscover.outlook.com'; Proxied = $false },
+            @{ Type = 'CNAME'; Name = 'enterpriseenrollment'; Content = 'enterpriseenrollment-s.manage.microsoft.com'; Proxied = $false },
+            @{ Type = 'CNAME'; Name = 'enterpriseregistration'; Content = 'enterpriseregistration.windows.net'; Proxied = $false },
+            @{ Type = 'CNAME'; Name = 'lyncdiscover'; Content = 'webdir.online.lync.com'; Proxied = $false },
+            @{ Type = 'CNAME'; Name = 'sip'; Content = 'sipdir.online.lync.com'; Proxied = $false },
 
             # Microsoft 365 / Teams (SRV)
-            @{ Type='SRV'; Name='_sip._tls';              Data=@{ service='_sip';              proto='_tls'; name=$Zone; priority=100; weight=1; port=443;  target='sipdir.online.lync.com' } },
-            @{ Type='SRV'; Name='_sipfederationtls._tcp'; Data=@{ service='_sipfederationtls'; proto='_tcp'; name=$Zone; priority=100; weight=1; port=5061; target='sipfed.online.lync.com' } },
+            @{ Type = 'SRV'; Name = '_sip._tls'; Data = @{ service = '_sip'; proto = '_tls'; name = $Zone; priority = 100; weight = 1; port = 443; target = 'sipdir.online.lync.com' } },
+            @{ Type = 'SRV'; Name = '_sipfederationtls._tcp'; Data = @{ service = '_sipfederationtls'; proto = '_tcp'; name = $Zone; priority = 100; weight = 1; port = 5061; target = 'sipfed.online.lync.com' } },
             
             # GitHub Pages (Apex)
-            @{ Type='A'; Name='@'; Content='185.199.108.153'; Proxied=$true },
-            @{ Type='A'; Name='@'; Content='185.199.109.153'; Proxied=$true },
-            @{ Type='A'; Name='@'; Content='185.199.110.153'; Proxied=$true },
-            @{ Type='A'; Name='@'; Content='185.199.111.153'; Proxied=$true },
+            @{ Type = 'A'; Name = '@'; Content = '185.199.108.153'; Proxied = $true },
+            @{ Type = 'A'; Name = '@'; Content = '185.199.109.153'; Proxied = $true },
+            @{ Type = 'A'; Name = '@'; Content = '185.199.110.153'; Proxied = $true },
+            @{ Type = 'A'; Name = '@'; Content = '185.199.111.153'; Proxied = $true },
 
             # GitHub Pages (Apex IPv6)
-            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8000::153'; Proxied=$true },
-            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8001::153'; Proxied=$true },
-            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8002::153'; Proxied=$true },
-            @{ Type='AAAA'; Name='@'; Content='2606:50c0:8003::153'; Proxied=$true },
+            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8000::153'; Proxied = $true },
+            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8001::153'; Proxied = $true },
+            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8002::153'; Proxied = $true },
+            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8003::153'; Proxied = $true },
             
             # GitHub Pages (WWW)
-            @{ Type='CNAME'; Name='www'; Content=$wwwTarget; Proxied=$true }
+            @{ Type = 'CNAME'; Name = 'www'; Content = $wwwTarget; Proxied = $true }
         )
 
         foreach ($std in $standards) {
@@ -542,7 +552,8 @@ try {
                             $spfCandidate = $foundRecord | Select-Object -First 1
                             $stdContent = $spfCandidate.content
                         }
-                    } elseif ($std.Name -eq '_dmarc') {
+                    }
+                    elseif ($std.Name -eq '_dmarc') {
                         $foundRecord = $candidates | Where-Object { (Normalize-TxtContent -Value $_.content) -like 'v=DMARC1*' }
                         $ensureInternalRua = $false
                         $preserveCloudflareRua = $false
@@ -569,20 +580,24 @@ try {
                                 $desiredNormalized = Set-DmarcRuaMailtos -DmarcContent $normalized -RuaMailtos $desiredRua
                                 $stdContent = $desiredNormalized
                                 $foundRecord = $null
-                            } else {
+                            }
+                            else {
                                 # Already compliant; do not rewrite just to normalize formatting/order.
                                 $stdContent = $dmarcCandidate.content
                             }
-                        } elseif ($candidates) {
+                        }
+                        elseif ($candidates) {
                             # Prefer updating an existing _dmarc TXT rather than creating duplicates.
                             $updateCandidate = $candidates | Select-Object -First 1
                             $desiredNormalized = Set-DmarcRuaMailtos -DmarcContent $stdContent -RuaMailtos @($internalRua)
                             $stdContent = $desiredNormalized
-                        } else {
+                        }
+                        else {
                             $desiredNormalized = Set-DmarcRuaMailtos -DmarcContent $stdContent -RuaMailtos @($internalRua)
                             $stdContent = $desiredNormalized
                         }
-                    } else {
+                    }
+                    else {
                         $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent }
                     }
                 }
@@ -628,7 +643,8 @@ try {
 
             if ($foundRecord) {
                 Write-Host " [OK]" -ForegroundColor Green
-            } else {
+            }
+            else {
                 if ($updateCandidate) {
                     Write-Host " [DIFFERS] -> Updating..." -ForegroundColor Yellow
 
@@ -639,7 +655,8 @@ try {
                     }
                     if ($std.Type -eq 'SRV') {
                         $updatePayload['data'] = $desiredData
-                    } else {
+                    }
+                    else {
                         $updatePayload['content'] = $stdContent
                     }
                     if ($std.Type -eq 'MX') { $updatePayload['priority'] = $std.Priority }
@@ -649,10 +666,12 @@ try {
                         try {
                             $null = Invoke-CfApi -Method 'PUT' -Uri "/zones/$ZoneId/dns_records/$($updateCandidate.id)" -Body $updatePayload
                             Write-Host "UPDATED" -ForegroundColor Green
-                        } catch {
+                        }
+                        catch {
                             Write-Error "Failed to update $($std.Type) $recName (ID: $($updateCandidate.id))"
                         }
-                    } else {
+                    }
+                    else {
                         Write-Host "[DRY-RUN] PUT $recName" -ForegroundColor DarkGray
                     }
                     continue
@@ -667,7 +686,8 @@ try {
                 }
                 if ($std.Type -eq 'SRV') {
                     $newPayload['data'] = $desiredData
-                } else {
+                }
+                else {
                     $newPayload['content'] = $stdContent
                 }
                 if ($std.Type -eq 'MX') { $newPayload['priority'] = $std.Priority }
@@ -679,13 +699,15 @@ try {
                 $newPayload['name'] = $recName
 
                 if (-not $DryRun) {
-                     try {
+                    try {
                         $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $newPayload
                         Write-Host "CREATED" -ForegroundColor Green
-                     } catch {
+                    }
+                    catch {
                         Write-Error "Failed to create $($std.Type) $recName"
-                     }
-                } else {
+                    }
+                }
+                else {
                     Write-Host "[DRY-RUN] POST $recName" -ForegroundColor DarkGray
                 }
             }
@@ -708,7 +730,8 @@ try {
 
             if ($DryRun) {
                 Write-Host "[DRY-RUN] Would DELETE record: $($rec.type) $RecordName -> $($rec.content) (ID: $($rec.id))" -ForegroundColor Yellow
-            } else {
+            }
+            else {
                 Write-Host "Deleting record: $($rec.type) $RecordName -> $($rec.content)..." -NoNewline
                 $null = Invoke-CfApi -Method 'DELETE' -Uri "/zones/$ZoneId/dns_records/$($rec.id)"
                 Write-Host " DONE" -ForegroundColor Green
@@ -752,11 +775,13 @@ try {
         if ($exactMatch) {
             Write-Verbose "Exact match found (ID: $($exactMatch[0].id))."
             Write-Host "  [Skip] $Type $RecordName matches desired state." -ForegroundColor DarkGray
-        } else {
+        }
+        else {
             # No exact match -> CREATE (Append)
             if ($DryRun) {
                 Write-Host "[DRY-RUN] Would CREATE new record: $Type $RecordName -> $Content" -ForegroundColor Yellow
-            } else {
+            }
+            else {
                 Write-Host "Creating new record: $Type $RecordName -> $Content..." -NoNewline
                 $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $payload
                 Write-Host " DONE" -ForegroundColor Green
@@ -773,12 +798,14 @@ try {
         # CREATE
         if ($DryRun) {
             Write-Host "[DRY-RUN] Would CREATE new record: $Type $RecordName -> $Content (Proxied: $Proxied)" -ForegroundColor Yellow
-        } else {
+        }
+        else {
             Write-Host "Creating new record: $Type $RecordName -> $Content..." -NoNewline
             $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $payload
             Write-Host " DONE" -ForegroundColor Green
         }
-    } else {
+    }
+    else {
         # UPDATE
         foreach ($rec in $existingSameType) {
             $needsUpdate = $false
@@ -796,7 +823,8 @@ try {
 
             if ($DryRun) {
                 Write-Host "[DRY-RUN] Would UPDATE record $($rec.id): $Content (Proxied: $Proxied)" -ForegroundColor Yellow
-            } else {
+            }
+            else {
                 Write-Host "Updating record $($rec.id)..." -NoNewline
                 $null = Invoke-CfApi -Method 'PUT' -Uri "/zones/$ZoneId/dns_records/$($rec.id)" -Body $payload
                 Write-Host " DONE" -ForegroundColor Green
@@ -804,7 +832,8 @@ try {
         }
     }
 
-} catch {
+}
+catch {
     Write-Error $_
     exit 1
 }

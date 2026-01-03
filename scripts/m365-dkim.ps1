@@ -190,7 +190,12 @@ function Connect-Exchange {
         $script:TempPfxPath = New-TempPfxFile -PfxBase64 $PfxBase64
         $connectParams.CertificateFilePath = $script:TempPfxPath
         if ($PfxPassword) {
-            $connectParams.CertificatePassword = (ConvertTo-SecureString -String $PfxPassword -AsPlainText -Force)
+            $securePfxPassword = [System.Security.SecureString]::new()
+            foreach ($ch in $PfxPassword.ToCharArray()) {
+                $securePfxPassword.AppendChar($ch)
+            }
+            $securePfxPassword.MakeReadOnly()
+            $connectParams.CertificatePassword = $securePfxPassword
         }
 
         Connect-ExchangeOnline @connectParams | Out-Null

@@ -1,0 +1,226 @@
+name: '1. Domain - Status (Check)'
+run-name: 'Domain Status: ${{ inputs.domain }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain name (e.g., example.org)'
+        required: true
+        type: string
+      issue_number:
+        description: 'Optional: issue number to comment results back to'
+        required: false
+        type: number
+
+permissions:
+  contents: read
+  issues: write
+  id-token: write
+
+jobs:
+  cloudflare:
+    runs-on: windows-latest
+    environment: cloudflare-prod
+
+    outputs:
+      issues_count: ${{ steps.summary.outputs.issues_count }}
+      changes_count: ${{ steps.summary.outputs.changes_count }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cloudflare audit + dry-run preview
+        id: run
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ inputs.domain }}"
+
+          $outDir = Join-Path $env:RUNNER_TEMP 'domain-status-cloudflare'
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          $audit = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -Audit *>&1
+          $auditPath = Join-Path $outDir 'cloudflare-audit.txt'
+          $audit | Out-File -FilePath $auditPath -Encoding utf8
+
+          $dry = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -DryRun *>&1
+          $dryPath = Join-Path $outDir 'cloudflare-dryrun.txt'
+          $dry | Out-File -FilePath $dryPath -Encoding utf8
+
+          "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Summarize Cloudflare results
+        id: summary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = "${{ steps.run.outputs.out_dir }}"
+
+          $auditLines = @(Get-Content -Path (Join-Path $dir 'cloudflare-audit.txt') -ErrorAction Stop)
+          $issues = @($auditLines | Where-Object { $_ -match '^[[](?:MISSING|MISSING/PARTIAL|DIFFERS)[]]' })
+
+          $dryLines = @(Get-Content -Path (Join-Path $dir 'cloudflare-dryrun.txt') -ErrorAction Stop)
+          $changes = @($dryLines | Where-Object { $_ -match '^[[]DRY-RUN[]]' })
+
+          "issues_count=$($issues.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "changes_count=$($changes.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload Cloudflare outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-domain-status
+          path: ${{ steps.run.outputs.out_dir }}/*.txt
+          if-no-files-found: error
+
+  m365:
+    runs-on: windows-latest
+    environment: m365-prod
+
+    outputs:
+      domain_exists: ${{ steps.graph.outputs.domain_exists }}
+      is_verified: ${{ steps.graph.outputs.is_verified }}
+      supports_email: ${{ steps.graph.outputs.supports_email }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: M365 domain status (Graph summary)
+        id: graph
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ inputs.domain }}"
+
+          $token = (az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+          if ([string]::IsNullOrWhiteSpace($token)) { throw 'Failed to acquire Microsoft Graph access token' }
+
+          $encoded = [Uri]::EscapeDataString($domain)
+          $uri = "https://graph.microsoft.com/v1.0/domains/$encoded`?$select=id,isVerified,supportedServices"
+          $headers = @{ Authorization = "Bearer $token" }
+
+          $exists = $true
+          $d = $null
+          try {
+            $d = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers -ErrorAction Stop
+          } catch {
+            $resp = $_.Exception.Response
+            if ($resp -and $resp.StatusCode -and ([int]$resp.StatusCode -eq 404)) {
+              $exists = $false
+            } else {
+              throw
+            }
+          }
+
+          $supportsEmail = $false
+          if ($d -and $d.supportedServices) {
+            $supportsEmail = @($d.supportedServices) -contains 'Email'
+          }
+
+          "domain_exists=$exists" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "is_verified=$(if ($d) { $d.isVerified } else { '' })" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "supports_email=$supportsEmail" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Run repo M365 preflight (read-only)
+        id: preflight
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ inputs.domain }}"
+
+          $outDir = Join-Path $env:RUNNER_TEMP 'domain-status-m365'
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          $pre = & pwsh -NoProfile -File .\scripts\m365-domain-preflight.ps1 -Domain $domain -SkipCloudflare *>&1
+          $prePath = Join-Path $outDir 'm365-preflight.txt'
+          $pre | Out-File -FilePath $prePath -Encoding utf8
+
+          "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload M365 outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: m365-domain-status
+          path: ${{ steps.preflight.outputs.out_dir }}/*.txt
+          if-no-files-found: error
+
+  post_back:
+    runs-on: ubuntu-latest
+    needs: [cloudflare, m365]
+    if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
+
+    steps:
+      - name: Download Cloudflare artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cloudflare-domain-status
+          path: artifacts/cloudflare
+
+      - name: Download M365 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: m365-domain-status
+          path: artifacts/m365
+
+      - name: Comment results back to issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const issueNumber = Number('${{ inputs.issue_number }}');
+            const domain = '${{ inputs.domain }}';
+
+            const cfIssues = Number('${{ needs.cloudflare.outputs.issues_count }}');
+            const cfChanges = Number('${{ needs.cloudflare.outputs.changes_count }}');
+
+            const m365Exists = String('${{ needs.m365.outputs.domain_exists }}');
+            const m365Verified = String('${{ needs.m365.outputs.is_verified }}');
+            const m365Email = String('${{ needs.m365.outputs.supports_email }}');
+
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const m365Status = (m365Exists === 'True' || m365Exists === 'true')
+              ? ((m365Verified === 'True' || m365Verified === 'true') ? 'PASS' : 'PARTIAL')
+              : 'FAIL';
+
+            const cfStatus = (cfIssues === 0) ? 'PASS' : 'PARTIAL';
+
+            const overall = (m365Status === 'PASS' && cfStatus === 'PASS')
+              ? 'PASS'
+              : ((m365Status === 'FAIL') ? 'FAIL' : 'PARTIAL');
+
+            const cfAudit = fs.readFileSync('artifacts/cloudflare/cloudflare-audit.txt', 'utf8');
+            const cfDryRun = fs.readFileSync('artifacts/cloudflare/cloudflare-dryrun.txt', 'utf8');
+            const m365Preflight = fs.readFileSync('artifacts/m365/m365-preflight.txt', 'utf8');
+
+            const body = [
+              `Domain status for **${domain}**`,
+              '',
+              `- Overall: **${overall}**`,
+              `- Cloudflare: **${cfStatus}** (${cfIssues} audit issues; ${cfChanges} planned changes)`,
+              `- M365: **${m365Status}** (exists=${m365Exists}, verified=${m365Verified}, supportsEmail=${m365Email})`,
+              `- Run: ${runUrl}`,
+              '',
+              '<details><summary>Cloudflare audit</summary>\n\n```\n' + cfAudit.trim() + '\n```\n</details>',
+              '',
+              '<details><summary>Cloudflare dry-run preview (what will change)</summary>\n\n```\n' + cfDryRun.trim() + '\n```\n</details>',
+              '',
+              '<details><summary>M365 preflight (read-only)</summary>\n\n```\n' + m365Preflight.trim() + '\n```\n</details>',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });

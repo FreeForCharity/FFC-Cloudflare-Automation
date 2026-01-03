@@ -13,10 +13,10 @@ Write-Host ("Errors: {0}" -f ($errors | Measure-Object).Count)
 Write-Host ("Warnings: {0}" -f ($warnings | Measure-Object).Count)
 
 if ($errors) {
-    $errors | Select-Object RuleName,Severity,Message,Line | Format-Table -AutoSize | Out-String | Write-Host
+    $errors | Select-Object RuleName, Severity, Message, Line | Format-Table -AutoSize | Out-String | Write-Host
     exit 1
 }
 
 if ($warnings) {
-    $warnings | Select-Object RuleName,Severity,Message,Line | Format-Table -AutoSize | Out-String | Write-Host
+    $warnings | Select-Object RuleName, Severity, Message, Line | Format-Table -AutoSize | Out-String | Write-Host
 }

@@ -1,0 +1,222 @@
+name: '2. Domain - Enforce Standard (Fix)'
+run-name: 'Enforce Domain Standard: ${{ inputs.domain }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain name (e.g., example.org)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run (preview only)'
+        type: boolean
+        default: true
+      issue_number:
+        description: 'Optional: issue number to comment results back to'
+        required: false
+        type: number
+
+permissions:
+  contents: read
+  issues: write
+  id-token: write
+
+jobs:
+  cloudflare_enforce:
+    runs-on: windows-latest
+    environment: cloudflare-prod
+
+    outputs:
+      issues_count: ${{ steps.summary.outputs.issues_count }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enforce Cloudflare standard
+        id: enforce
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ inputs.domain }}"
+          $dryRun = "${{ inputs.dry_run }}"
+
+          $outDir = Join-Path $env:RUNNER_TEMP 'domain-enforce-cloudflare'
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          if ($dryRun -eq 'true') {
+            $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -DryRun *>&1
+          } else {
+            $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard *>&1
+          }
+
+          $outPath = Join-Path $outDir 'cloudflare-enforce.txt'
+          $out | Out-File -FilePath $outPath -Encoding utf8
+
+          $audit = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -Audit -ErrorAction Continue *>&1
+          $auditPath = Join-Path $outDir 'cloudflare-audit-after.txt'
+          $audit | Out-File -FilePath $auditPath -Encoding utf8
+
+          "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Summarize Cloudflare post-audit
+        id: summary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = "${{ steps.enforce.outputs.out_dir }}"
+          $auditLines = @(Get-Content -Path (Join-Path $dir 'cloudflare-audit-after.txt') -ErrorAction Stop)
+          $issues = @($auditLines | Where-Object { $_ -match '^[[](?:MISSING|MISSING/PARTIAL|DIFFERS)[]]' })
+          "issues_count=$($issues.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload Cloudflare outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-domain-enforce
+          path: ${{ steps.enforce.outputs.out_dir }}/*.txt
+          if-no-files-found: error
+
+  exo_check:
+    runs-on: ubuntu-latest
+    environment: m365-prod
+    needs: [cloudflare_enforce]
+
+    outputs:
+      organization: ${{ steps.org.outputs.organization }}
+      selector1_target: ${{ steps.dkim.outputs.selector1_target }}
+      selector2_target: ${{ steps.dkim.outputs.selector2_target }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Resolve tenant onmicrosoft.com domain
+        id: org
+        shell: bash
+        run: |
+          token=$(az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+          if [ -z "$token" ]; then
+            echo "::error::Failed to acquire Microsoft Graph token";
+            exit 1;
+          fi
+          org=$(curl -sS -H "Authorization: Bearer $token" "https://graph.microsoft.com/v1.0/domains?%24select=id" | jq -r '.value[].id | select(test("\\.onmicrosoft\\.com$";"i"))' | head -n 1)
+          if [ -z "$org" ]; then
+            echo "::error::Failed to resolve onmicrosoft.com domain for tenant";
+            exit 1;
+          fi
+          echo "organization=$org" >> "$GITHUB_OUTPUT"
+
+      - name: Check DKIM selector targets (Exchange Online)
+        id: dkim
+        shell: pwsh
+        env:
+          FFC_EXO_CERT_PFX_BASE64: ${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}
+          FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
+        run: |
+          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ steps.org.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing -Confirm:$false
+
+  cloudflare_set_dkim:
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod
+    needs: [exo_check]
+    if: ${{ inputs.dry_run == false }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create/Update DKIM selector CNAMEs in Cloudflare
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+        run: |
+          $domain = "${{ inputs.domain }}"
+          $s1Target = "${{ needs.exo_check.outputs.selector1_target }}"
+          $s2Target = "${{ needs.exo_check.outputs.selector2_target }}"
+
+          if ([string]::IsNullOrWhiteSpace($s1Target) -or [string]::IsNullOrWhiteSpace($s2Target)) {
+            throw 'Missing DKIM selector targets from Exchange Online check job.'
+          }
+
+          pwsh -NoProfile -File Update-CloudflareDns.ps1 -Zone $domain -Name "selector1._domainkey" -Type CNAME -Content $s1Target
+          pwsh -NoProfile -File Update-CloudflareDns.ps1 -Zone $domain -Name "selector2._domainkey" -Type CNAME -Content $s2Target
+
+  exo_enable:
+    runs-on: ubuntu-latest
+    environment: m365-prod
+    needs: [cloudflare_set_dkim, exo_check]
+    if: ${{ inputs.dry_run == false }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Enable DKIM signing (Exchange Online)
+        shell: pwsh
+        env:
+          FFC_EXO_CERT_PFX_BASE64: ${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}
+          FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
+        run: |
+          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ needs.exo_check.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing -Enable -Confirm:$false
+
+  post_back:
+    runs-on: ubuntu-latest
+    needs: [cloudflare_enforce, exo_check]
+    if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
+
+    steps:
+      - name: Download Cloudflare artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cloudflare-domain-enforce
+          path: artifacts/cloudflare
+
+      - name: Comment results back to issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const issueNumber = Number('${{ inputs.issue_number }}');
+            const domain = '${{ inputs.domain }}';
+            const dryRun = String('${{ inputs.dry_run }}');
+
+            const cfIssues = Number('${{ needs.cloudflare_enforce.outputs.issues_count }}');
+            const cfStatus = (cfIssues === 0) ? 'PASS' : 'PARTIAL';
+
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const cfEnforce = fs.readFileSync('artifacts/cloudflare/cloudflare-enforce.txt', 'utf8');
+            const cfAuditAfter = fs.readFileSync('artifacts/cloudflare/cloudflare-audit-after.txt', 'utf8');
+
+            const body = [
+              `Enforce Domain Standard for **${domain}**`,
+              '',
+              `- Mode: **${dryRun === 'true' ? 'DRY RUN' : 'LIVE'}**`,
+              `- Cloudflare post-audit: **${cfStatus}** (${cfIssues} issues)`,
+              `- Run: ${runUrl}`,
+              '',
+              '<details><summary>Cloudflare enforce output</summary>\n\n```\n' + cfEnforce.trim() + '\n```\n</details>',
+              '',
+              '<details><summary>Cloudflare audit (after)</summary>\n\n```\n' + cfAuditAfter.trim() + '\n```\n</details>',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });

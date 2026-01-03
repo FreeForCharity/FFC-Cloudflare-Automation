@@ -148,64 +148,64 @@ body:
         4. [ ] Create www CNAME (if requested):
            - Type: CNAME, Name: www, Content: [username].github.io, Proxy: Off
 
-  ### DNS Configuration (PowerShell Script)
-  ```powershell
-  $env:CLOUDFLARE_API_KEY_DNS_ONLY = "your-token-here"
+          ### DNS Configuration (PowerShell Script)
+          ```powershell
+          $env:CLOUDFLARE_API_KEY_DNS_ONLY = "your-token-here"
 
-        # Create A records for GitHub Pages (repeat for all 4 IPs)
-        .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.108.153
-        .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.109.153
-        .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.110.153
-        .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.111.153
+          # Create A records for GitHub Pages (repeat for all 4 IPs)
+          .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.108.153
+          .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.109.153
+          .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.110.153
+          .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.111.153
 
-        # Create www CNAME (optional)
-        .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name www -Type CNAME -Content [username].github.io
-        ```
+          # Create www CNAME (optional)
+          .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name www -Type CNAME -Content [username].github.io
+          ```
 
-        ### GitHub Pages Configuration
-        1. [ ] Navigate to repository Settings → Pages
-        2. [ ] Under "Custom domain", enter the apex domain
-        3. [ ] Click Save and wait for DNS check
-        4. [ ] Once verified (green checkmark), enable "Enforce HTTPS"
+          ### GitHub Pages Configuration
+          1. [ ] Navigate to repository Settings → Pages
+          2. [ ] Under "Custom domain", enter the apex domain
+          3. [ ] Click Save and wait for DNS check
+          4. [ ] Once verified (green checkmark), enable "Enforce HTTPS"
 
-        ### CNAME File
-        ```bash
-        # GitHub usually creates this automatically
-        # If needed, create manually in repository root:
-        echo "[domain.org]" > CNAME
-        ```
+          ### CNAME File
+          ```bash
+          # GitHub usually creates this automatically
+          # If needed, create manually in repository root:
+          echo "[domain.org]" > CNAME
+          ```
 
-        ### Verification
-        ```bash
-        # Check DNS propagation
-        dig [domain.org] A +short
-        dig www.[domain.org] CNAME +short
+          ### Verification
+          ```bash
+          # Check DNS propagation
+          dig [domain.org] A +short
+          dig www.[domain.org] CNAME +short
 
-        # Test HTTPS
-        curl -I https://[domain.org]
-        ```
+          # Test HTTPS
+          curl -I https://[domain.org]
+          ```
 
-        ### Cloudflare Settings (Recommended)
-        - [ ] SSL/TLS Mode: Full (not Full Strict)
-        - [ ] Always Use HTTPS: On
-        - [ ] Automatic HTTPS Rewrites: On
-        - [ ] Minimum TLS Version: 1.2+
-        - [ ] **Proxy Status: DNS Only (gray cloud)** ⚠️ Critical!
+          ### Cloudflare Settings (Recommended)
+          - [ ] SSL/TLS Mode: Full (not Full Strict)
+          - [ ] Always Use HTTPS: On
+          - [ ] Automatic HTTPS Rewrites: On
+          - [ ] Minimum TLS Version: 1.2+
+          - [ ] **Proxy Status: DNS Only (gray cloud)** ⚠️ Critical!
 
-        ### Verification Checklist
-        - [ ] All 4 A records created
-        - [ ] www CNAME created (if requested)
-        - [ ] Cloudflare proxy disabled (DNS only)
-        - [ ] DNS propagation verified
-        - [ ] Custom domain configured in GitHub Pages
-        - [ ] DNS check passed (green checkmark)
-        - [ ] CNAME file present in repository
-        - [ ] HTTPS enabled and enforced
-        - [ ] Website loads at https://[domain.org]
-        - [ ] SSL certificate valid
+          ### Verification Checklist
+          - [ ] All 4 A records created
+          - [ ] www CNAME created (if requested)
+          - [ ] Cloudflare proxy disabled (DNS only)
+          - [ ] DNS propagation verified
+          - [ ] Custom domain configured in GitHub Pages
+          - [ ] DNS check passed (green checkmark)
+          - [ ] CNAME file present in repository
+          - [ ] HTTPS enabled and enforced
+          - [ ] Website loads at https://[domain.org]
+          - [ ] SSL certificate valid
 
-        ### Timeline
-        - DNS configuration: ~5 minutes
-        - DNS propagation: 5-30 minutes
-        - GitHub DNS verification: 10-30 minutes
-        - SSL certificate: 1-24 hours
+          ### Timeline
+          - DNS configuration: ~5 minutes
+          - DNS propagation: 5-30 minutes
+          - GitHub DNS verification: 10-30 minutes
+          - SSL certificate: 1-24 hours

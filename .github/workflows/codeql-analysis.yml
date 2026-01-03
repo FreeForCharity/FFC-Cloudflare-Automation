@@ -1,4 +1,4 @@
-name: 'CodeQL Security Analysis'
+name: '92. Repo - CodeQL Security Analysis'
 
 on:
   pull_request:

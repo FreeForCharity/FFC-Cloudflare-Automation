@@ -147,7 +147,7 @@ Then create a pull request on GitHub.
 ### Code Style
 
 - Follow PowerShell best practices
-- Use approved verbs (Get-*, Set-*, New-*, Remove-*, etc.)
+- Use approved verbs (Get-_, Set-_, New-_, Remove-_, etc.)
 - Use meaningful variable and function names
 - Add comment-based help to functions
 - Add comments for complex logic

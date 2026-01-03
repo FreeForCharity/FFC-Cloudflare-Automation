@@ -99,7 +99,8 @@ function New-TempPfxFile {
 
         try {
             return [Convert]::FromBase64String($s)
-        } catch {
+        }
+        catch {
             # As a last resort, drop any non-base64 characters.
             $s2 = ($Base64Text -replace '[^A-Za-z0-9\+/=]', '')
             if ([string]::IsNullOrWhiteSpace($s2)) {
@@ -130,13 +131,15 @@ function Ensure-Module {
             Write-Host "Installing NuGet package provider..." -ForegroundColor Yellow
             Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
         }
-    } catch {
+    }
+    catch {
         # Best-effort; module install may still succeed.
     }
 
     try {
         Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
-    } catch {
+    }
+    catch {
         # Best-effort; if this fails, Install-Module may prompt.
     }
 
@@ -190,7 +193,12 @@ function Connect-Exchange {
         $script:TempPfxPath = New-TempPfxFile -PfxBase64 $PfxBase64
         $connectParams.CertificateFilePath = $script:TempPfxPath
         if ($PfxPassword) {
-            $connectParams.CertificatePassword = (ConvertTo-SecureString -String $PfxPassword -AsPlainText -Force)
+            $securePfxPassword = [System.Security.SecureString]::new()
+            foreach ($ch in $PfxPassword.ToCharArray()) {
+                $securePfxPassword.AppendChar($ch)
+            }
+            $securePfxPassword.MakeReadOnly()
+            $connectParams.CertificatePassword = $securePfxPassword
         }
 
         Connect-ExchangeOnline @connectParams | Out-Null
@@ -263,7 +271,8 @@ try {
     $acceptedDomain = $null
     try {
         $acceptedDomain = Get-AcceptedDomain -Identity $Domain -ErrorAction Stop
-    } catch {
+    }
+    catch {
         $acceptedDomain = $null
     }
     if (-not $acceptedDomain) {
@@ -275,7 +284,8 @@ try {
     $config = $null
     try {
         $config = Get-DkimSigningConfig -Identity $Domain -ErrorAction Stop -WarningAction Stop
-    } catch {
+    }
+    catch {
         $config = $null
     }
 
@@ -292,7 +302,8 @@ try {
                     try {
                         $config = Get-DkimSigningConfig -Identity $Domain -ErrorAction Stop -WarningAction Stop
                         break
-                    } catch {
+                    }
+                    catch {
                         Start-Sleep -Seconds 5
                     }
                 }
@@ -324,7 +335,8 @@ try {
             Start-Sleep -Seconds 5
             try {
                 $config = Get-DkimSigningConfig -Identity $Domain -ErrorAction Stop
-            } catch {
+            }
+            catch {
                 break
             }
         }
@@ -343,13 +355,15 @@ try {
         Write-Host "DKIM DNS records (from Exchange Online):" -ForegroundColor Gray
         if ($s1) {
             Write-Host ("- selector1._domainkey.{0} CNAME {1}" -f $Domain, $s1)
-        } else {
+        }
+        else {
             Write-Host "- selector1._domainkey.$Domain CNAME (not returned)" -ForegroundColor Yellow
         }
 
         if ($s2) {
             Write-Host ("- selector2._domainkey.{0} CNAME {1}" -f $Domain, $s2)
-        } else {
+        }
+        else {
             Write-Host "- selector2._domainkey.$Domain CNAME (not returned)" -ForegroundColor Yellow
         }
 
@@ -367,7 +381,8 @@ try {
                         Set-DkimSigningConfig -Identity $Domain -Enabled:$true -ErrorAction Stop -WarningAction Stop | Out-Null
                         $enabledOk = $true
                         break
-                    } catch {
+                    }
+                    catch {
                         Start-Sleep -Seconds 5
                     }
                 }
@@ -381,7 +396,8 @@ try {
                 Set-GitHubOutput -Key 'dkim_enabled_after' -Value $post.Enabled
             }
         }
-    } else {
+    }
+    else {
         Print-DkimCnameHints -D $Domain
         if (-not $CreateIfMissing) {
             Write-Host "Run again with -CreateIfMissing to create DKIM config." -ForegroundColor DarkGray
@@ -394,7 +410,8 @@ try {
         $script:TempPfxPath = $null
     }
     exit 0
-} catch {
+}
+catch {
     Write-Error $_
     try { Disconnect-ExchangeOnline -Confirm:$false | Out-Null } catch { }
     if ($script:TempPfxPath) {

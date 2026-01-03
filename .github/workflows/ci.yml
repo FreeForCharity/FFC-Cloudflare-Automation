@@ -1,4 +1,4 @@
-name: CI - Validate and Test
+name: '91. Repo - CI Validate and Test'
 
 on:
   pull_request:
@@ -26,7 +26,7 @@ jobs:
         run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
 
       - name: Lint GitHub Actions workflows
-        run: "$(go env GOPATH)/bin/actionlint" -color
+        run: '"$(go env GOPATH)/bin/actionlint" -color'
 
       - name: Setup Node (for Prettier)
         uses: actions/setup-node@v4

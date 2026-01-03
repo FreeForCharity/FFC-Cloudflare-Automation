@@ -1,4 +1,4 @@
-name: '[M365] Domain Status + DKIM'
+name: '7. M365 - Domain Status + DKIM (Toolbox)'
 run-name: 'M365: ${{ inputs.domain }}'
 
 on:
@@ -31,6 +31,10 @@ jobs:
   m365:
     runs-on: windows-latest
     environment: m365-prod
+
+    env:
+      EXO_CERT_PFX_BASE64: ${{ secrets.EXO_CERT_PFX_BASE64 }}
+      EXO_CERT_PFX_PASSWORD: ${{ secrets.EXO_CERT_PFX_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4
@@ -65,17 +69,17 @@ jobs:
           pwsh -File scripts/m365-domain-status.ps1 -Domain "${{ inputs.domain }}" -ShowDnsRecords
 
       - name: Import certificate for Exchange Online (optional)
-        if: ${{ inputs.action != 'status' && secrets.EXO_CERT_PFX_BASE64 != '' }}
+        if: ${{ inputs.action != 'status' && env.EXO_CERT_PFX_BASE64 != '' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $pfxBytes = [Convert]::FromBase64String("${{ secrets.EXO_CERT_PFX_BASE64 }}")
+          $pfxBytes = [Convert]::FromBase64String($env:EXO_CERT_PFX_BASE64)
           $pfxPath = Join-Path $env:RUNNER_TEMP 'exo-auth.pfx'
           [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
 
           $securePw = $null
-          if ("${{ secrets.EXO_CERT_PFX_PASSWORD }}") {
-            $securePw = ConvertTo-SecureString -String "${{ secrets.EXO_CERT_PFX_PASSWORD }}" -AsPlainText -Force
+          if ($env:EXO_CERT_PFX_PASSWORD) {
+            $securePw = ConvertTo-SecureString -String $env:EXO_CERT_PFX_PASSWORD -AsPlainText -Force
           }
 
           $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePw

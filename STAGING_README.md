@@ -7,6 +7,7 @@ This guide explains how to update DNS records for the `staging.clarkemoyer.com` 
 ### PowerShell Script (Recommended)
 
 **Requirements:**
+
 - PowerShell 5.1+ (Windows) or PowerShell 7+ (cross-platform)
 
 **Update staging A record:**

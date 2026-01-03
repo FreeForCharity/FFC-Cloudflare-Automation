@@ -49,7 +49,8 @@ try {
         }
 
     exit 0
-} catch {
+}
+catch {
     Write-Error $_
     exit 1
 }

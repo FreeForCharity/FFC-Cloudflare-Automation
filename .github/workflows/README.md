@@ -40,14 +40,17 @@ This workflow ensures that:
 - Prettier (check): `npx --yes prettier@3.3.3 --check . --ignore-unknown`
 - Prettier (write): `npx --yes prettier@3.3.3 --write . --ignore-unknown`
 - actionlint (requires Go):
-   - Install: `go install github.com/rhysd/actionlint/cmd/actionlint@latest`
-   - Run: `actionlint`
-- PowerShell formatting (repo helper): run [scripts/format-powershell.ps1](../../scripts/format-powershell.ps1)
-- PowerShell lint summary (repo helper): run [scripts/analyze-powershell.ps1](../../scripts/analyze-powershell.ps1)
+  - Install: `go install github.com/rhysd/actionlint/cmd/actionlint@latest`
+  - Run: `actionlint`
+- PowerShell formatting (repo helper): run
+  [scripts/format-powershell.ps1](../../scripts/format-powershell.ps1)
+- PowerShell lint summary (repo helper): run
+  [scripts/analyze-powershell.ps1](../../scripts/analyze-powershell.ps1)
 
 Notes:
 
-- Prettier configuration lives in [.prettierrc.json](../../.prettierrc.json) and [.prettierignore](../../.prettierignore).
+- Prettier configuration lives in [.prettierrc.json](../../.prettierrc.json) and
+  [.prettierignore](../../.prettierignore).
 - Prettier does not format PowerShell; PowerShell formatting is handled by Invoke-Formatter.
 
 ## codeql-analysis.yml - Security Scanning
@@ -82,17 +85,17 @@ This workflow helps identify security vulnerabilities early in the development p
 
 ## Workflow Summary
 
-| Workflow               | Trigger                         | Purpose                                                         |
-| ---------------------- | ------------------------------- | --------------------------------------------------------------- |
-| ci.yml                 | PRs and pushes to main          | Lint workflows, validate scripts, and check for sensitive files |
-| codeql-analysis.yml    | PRs, pushes to main, and weekly | Security scanning of GitHub Actions workflows                   |
-| 1-audit-compliance.yml | Manual (workflow_dispatch)      | Report: Check DNS compliance                                    |
-| 2-enforce-standard.yml | Manual (workflow_dispatch)      | Fix: Enforce standard DNS configuration                         |
-| 3-manage-record.yml    | Manual (workflow_dispatch)      | Manual: Manage a single DNS record                              |
-| 4-export-summary.yml   | Manual (workflow_dispatch)      | Report: Export all domains summary                              |
-| 5-m365-domain-and-dkim.yml | Manual (workflow_dispatch)  | M365: Domain status + DKIM helpers (Graph + Exchange Online)    |
-| 6-m365-list-domains.yml | Manual (workflow_dispatch)      | M365: List tenant domains (Graph)                               |
-| 7-m365-domain-preflight.yml | Manual (workflow_dispatch)   | M365: Domain onboarding preflight (two jobs: Graph in `m365-prod`, Cloudflare audit in `cloudflare-prod`) |
+| Workflow                    | Trigger                         | Purpose                                                                                                   |
+| --------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| ci.yml                      | PRs and pushes to main          | Lint workflows, validate scripts, and check for sensitive files                                           |
+| codeql-analysis.yml         | PRs, pushes to main, and weekly | Security scanning of GitHub Actions workflows                                                             |
+| 1-audit-compliance.yml      | Manual (workflow_dispatch)      | Report: Check DNS compliance                                                                              |
+| 2-enforce-standard.yml      | Manual (workflow_dispatch)      | Fix: Enforce standard DNS configuration                                                                   |
+| 3-manage-record.yml         | Manual (workflow_dispatch)      | Manual: Manage a single DNS record                                                                        |
+| 4-export-summary.yml        | Manual (workflow_dispatch)      | Report: Export all domains summary                                                                        |
+| 5-m365-domain-and-dkim.yml  | Manual (workflow_dispatch)      | M365: Domain status + DKIM helpers (Graph + Exchange Online)                                              |
+| 6-m365-list-domains.yml     | Manual (workflow_dispatch)      | M365: List tenant domains (Graph)                                                                         |
+| 7-m365-domain-preflight.yml | Manual (workflow_dispatch)      | M365: Domain onboarding preflight (two jobs: Graph in `m365-prod`, Cloudflare audit in `cloudflare-prod`) |
 
 ## Current Workflow
 

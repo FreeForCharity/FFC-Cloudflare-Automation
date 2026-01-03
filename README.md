@@ -27,8 +27,27 @@ AAAA records), see [docs/enforce-standard-workflow.md](docs/enforce-standard-wor
 For Microsoft 365 domain status checks and DKIM helpers (work in progress), see
 [docs/m365-domain-and-dkim.md](docs/m365-domain-and-dkim.md).
 
-For the end-to-end runbook to align a domain across Cloudflare + Microsoft 365 (including Defender DKIM v2 validation), see
+For the end-to-end runbook to align a domain across Cloudflare + Microsoft 365 (including Defender
+DKIM v2 validation), see
 [docs/end-to-end-testing-m365-cloudflare.md](docs/end-to-end-testing-m365-cloudflare.md).
+
+## Simplified 3-step domain workflow
+
+For the new “3 step” approach (tracked in issue #61), use these GitHub Actions:
+
+1. **1. Domain - Status (Check)**
+
+- Read-only report across Cloudflare + M365
+- Includes a Cloudflare “what will change” dry-run preview
+
+2. **2. Domain - Enforce Standard (Fix)**
+
+- Cloudflare standard enforcement + M365 DKIM enable flow (when run in LIVE mode)
+
+3. **Issue post-back (Step 3)**
+
+- Both workflows accept an optional `issue_number` input and will comment results back to that
+  issue.
 
 ## Features
 
@@ -270,13 +289,13 @@ The script supports tokens with various permission levels via environment variab
 
 ## Deprecated Features
 
-**Python Scripts**: This repository previously used Python scripts (`update_dns.py`, 
-`export_zone_dns_summary.py`) for DNS management. These have been replaced with PowerShell scripts 
-for better Windows integration and simplified dependency management. All DNS operations are now 
+**Python Scripts**: This repository previously used Python scripts (`update_dns.py`,
+`export_zone_dns_summary.py`) for DNS management. These have been replaced with PowerShell scripts
+for better Windows integration and simplified dependency management. All DNS operations are now
 performed using PowerShell scripts.
 
-**Terraform**: This repository also previously used Terraform for infrastructure management. 
-Terraform support has been removed in favor of PowerShell scripts and the Cloudflare API for DNS 
+**Terraform**: This repository also previously used Terraform for infrastructure management.
+Terraform support has been removed in favor of PowerShell scripts and the Cloudflare API for DNS
 management.
 
 ## Security
@@ -291,7 +310,8 @@ Security is a top priority for this project. We implement multiple security meas
 
 ### Protecting Cloudflare API Tokens in Workflows
 
-- **Least privilege**: Use `CLOUDFLARE_API_KEY_DNS_ONLY` scoped to only the zones you intend to manage.
+- **Least privilege**: Use `CLOUDFLARE_API_KEY_DNS_ONLY` scoped to only the zones you intend to
+  manage.
 - **Environment approvals**: Store tokens as Environment secrets (e.g., `cloudflare-prod`) and
   require reviewers before jobs run.
 - **Apply gating**: Workflows default to `--dry-run`; set `apply=true` to make changes. Applies are
@@ -304,7 +324,8 @@ Security is a top priority for this project. We implement multiple security meas
 
 Where to set Environment secrets (for both `cloudflare-prod` and `m365-prod`):
 
-- See [docs/github-actions-environments-and-secrets.md](docs/github-actions-environments-and-secrets.md).
+- See
+  [docs/github-actions-environments-and-secrets.md](docs/github-actions-environments-and-secrets.md).
 
 For details on our security practices and how to report vulnerabilities, see
 [SECURITY.md](SECURITY.md).

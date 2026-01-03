@@ -81,7 +81,7 @@ jobs:
           FFC_EXO_CERT_PFX_BASE64: ${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}
           FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
         run: |
-          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ steps.org.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing
+          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ steps.org.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing -Confirm:$false
 
   cloudflare_set:
     runs-on: ubuntu-latest

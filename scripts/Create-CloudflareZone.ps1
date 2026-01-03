@@ -137,9 +137,13 @@ try {
         
         # Output for GitHub Actions
         Write-Host "`n::notice title=Zone Created::Zone '$Domain' created with ID: $($zone.id)"
-        Write-Host "::set-output name=zone_id::$($zone.id)"
-        Write-Host "::set-output name=name_servers::$($zone.name_servers -join ',')"
-        Write-Host "::set-output name=status::$($zone.status)"
+        
+        # Set outputs using GITHUB_OUTPUT (new method)
+        if ($env:GITHUB_OUTPUT) {
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "zone_id=$($zone.id)"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "name_servers=$($zone.name_servers -join ',')"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "status=$($zone.status)"
+        }
         
         exit 0
     }

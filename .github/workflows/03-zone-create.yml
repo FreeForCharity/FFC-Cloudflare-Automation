@@ -42,7 +42,7 @@ jobs:
           }
 
           # Basic domain validation
-          if ($Domain -notmatch '^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}$') {
+          if ($Domain -notmatch '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$') {
             Write-Error "Invalid domain name format: $Domain"
             exit 1
           }

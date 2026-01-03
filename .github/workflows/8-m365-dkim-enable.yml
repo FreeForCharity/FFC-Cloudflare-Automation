@@ -1,0 +1,145 @@
+name: "M365: Enable DKIM (Exchange Online)"
+
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: Domain to enable DKIM for (e.g., ffcworkingsite1.org)
+        required: true
+        type: string
+
+jobs:
+  exo_check:
+    runs-on: ubuntu-latest
+    environment: m365-prod
+
+    outputs:
+      organization: ${{ steps.org.outputs.organization }}
+      dkim_enabled: ${{ steps.dkim.outputs.dkim_enabled }}
+      selector1_name: ${{ steps.dkim.outputs.selector1_name }}
+      selector2_name: ${{ steps.dkim.outputs.selector2_name }}
+      selector1_target: ${{ steps.dkim.outputs.selector1_target }}
+      selector2_target: ${{ steps.dkim.outputs.selector2_target }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.FFC_AZURE_CLIENT_ID }}" ]; then
+            echo "::error::FFC_AZURE_CLIENT_ID secret is not set (environment: m365-prod)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::FFC_AZURE_TENANT_ID secret is not set (environment: m365-prod)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}" ]; then
+            echo "::error::FFC_EXO_CERT_PFX_BASE64 secret is not set (environment: m365-prod)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.FFC_EXO_CERT_PASSWORD }}" ]; then
+            echo "::error::FFC_EXO_CERT_PASSWORD secret is not set (environment: m365-prod)";
+            exit 1;
+          fi
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Resolve tenant onmicrosoft.com domain
+        id: org
+        shell: bash
+        run: |
+          token=$(az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+          if [ -z "$token" ]; then
+            echo "::error::Failed to acquire Microsoft Graph token";
+            exit 1;
+          fi
+          org=$(curl -sS -H "Authorization: Bearer $token" "https://graph.microsoft.com/v1.0/domains?$select=id" | jq -r '.value[].id' | grep -i '\\.onmicrosoft\\.com$' | head -n 1)
+          if [ -z "$org" ]; then
+            echo "::error::Failed to resolve onmicrosoft.com domain for tenant";
+            exit 1;
+          fi
+          echo "organization=$org" >> "$GITHUB_OUTPUT"
+
+      - name: Check DKIM status + targets (Exchange Online)
+        id: dkim
+        shell: pwsh
+        env:
+          FFC_AZURE_CLIENT_ID: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          FFC_AZURE_TENANT_ID: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          FFC_EXO_CERT_PFX_BASE64: ${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}
+          FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
+        run: |
+          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ steps.org.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}"
+
+  cloudflare_set:
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod
+    needs: [exo_check]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}" ]; then
+            echo "::error::CLOUDFLARE_API_KEY_DNS_ONLY secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+
+      - name: Create/Update DKIM selector CNAMEs in Cloudflare
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+        run: |
+          $domain = "${{ inputs.domain }}"
+          $s1Name = "selector1._domainkey"
+          $s2Name = "selector2._domainkey"
+          $s1Target = "${{ needs.exo_check.outputs.selector1_target }}"
+          $s2Target = "${{ needs.exo_check.outputs.selector2_target }}"
+
+          if ([string]::IsNullOrWhiteSpace($s1Target) -or [string]::IsNullOrWhiteSpace($s2Target)) {
+            throw 'Missing selector targets from Exchange Online check job.'
+          }
+
+          pwsh -NoProfile -File Update-CloudflareDns.ps1 -Zone $domain -Name $s1Name -Type CNAME -Content $s1Target
+          pwsh -NoProfile -File Update-CloudflareDns.ps1 -Zone $domain -Name $s2Name -Type CNAME -Content $s2Target
+
+  exo_enable:
+    runs-on: ubuntu-latest
+    environment: m365-prod
+    needs: [exo_check, cloudflare_set]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Enable DKIM signing (Exchange Online)
+        shell: pwsh
+        env:
+          FFC_AZURE_CLIENT_ID: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          FFC_AZURE_TENANT_ID: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          FFC_EXO_CERT_PFX_BASE64: ${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}
+          FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
+        run: |
+          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ needs.exo_check.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -Enable -Confirm:$false

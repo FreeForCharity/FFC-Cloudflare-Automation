@@ -224,6 +224,21 @@ function Print-DkimCnameHints {
     Write-Host "(Targets depend on tenant; script prints actual values when available.)" -ForegroundColor DarkGray
 }
 
+function Get-ObjectPropertyValue {
+    param(
+        [Parameter(Mandatory = $true)][object]$Obj,
+        [Parameter(Mandatory = $true)][string[]]$Names
+    )
+
+    foreach ($n in $Names) {
+        if ($Obj.PSObject.Properties.Name -contains $n) {
+            return $Obj.$n
+        }
+    }
+
+    return $null
+}
+
 try {
     $effectiveOrg = if ($Organization) { $Organization } else { $env:EXO_ORGANIZATION }
     $effectiveAppId = if ($AppId) { $AppId } else { Get-FirstNonEmpty @($env:EXO_APP_ID, $env:AZURE_CLIENT_ID) }
@@ -280,8 +295,25 @@ try {
 
         $s1 = $null
         $s2 = $null
-        if ($config.PSObject.Properties.Name -contains 'Selector1CNAME') { $s1 = $config.Selector1CNAME }
-        if ($config.PSObject.Properties.Name -contains 'Selector2CNAME') { $s2 = $config.Selector2CNAME }
+        $selectorNames1 = @('Selector1CNAME', 'Selector1Cname')
+        $selectorNames2 = @('Selector2CNAME', 'Selector2Cname')
+
+        # After creating a DKIM config, the selector targets can take a moment to populate.
+        for ($i = 0; $i -lt 12; $i++) {
+            $s1 = Get-ObjectPropertyValue -Obj $config -Names $selectorNames1
+            $s2 = Get-ObjectPropertyValue -Obj $config -Names $selectorNames2
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$s1) -and -not [string]::IsNullOrWhiteSpace([string]$s2)) {
+                break
+            }
+
+            Start-Sleep -Seconds 5
+            try {
+                $config = Get-DkimSigningConfig -Identity $Domain -ErrorAction Stop
+            } catch {
+                break
+            }
+        }
 
         Write-Host ""
         Write-Host "DKIM DNS records (from Exchange Online):" -ForegroundColor Gray

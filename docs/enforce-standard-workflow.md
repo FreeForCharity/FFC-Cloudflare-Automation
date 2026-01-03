@@ -39,6 +39,11 @@ Additional required records:
 
 Note: Cloudflare recommends TXT record content be wrapped in quotation marks. The script enforces quoted TXT content (and for SPF, it preserves existing mechanisms while ensuring quoting) to avoid Cloudflare UI warnings.
 
+DKIM note:
+
+- DKIM selector records (`selector1._domainkey` / `selector2._domainkey`) are intentionally **not** part of Enforce Standard.
+- DKIM selectors are created/updated by the M365 DKIM workflow: `.github/workflows/8-m365-dkim-enable.yml`.
+
 DMARC monitoring note:
 
 - If Cloudflare DMARC Management is enabled for a zone, Cloudflare may add a per-zone `rua` recipient like `mailto:<zone-specific>@dmarc-reports.cloudflare.net`.

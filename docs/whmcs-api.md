@@ -34,8 +34,8 @@ Create an environment secret where:
 - Secret **name** = the WHMCS **API Identifier** (as shown in WHMCS)
 - Secret **value** = the WHMCS **API Secret**
 
-This matches the workflow input `credential_set`, so humans can correlate runs with the WHMCS
-credential set.
+This repo currently assumes a single credential set and hard-codes the identifier/secret name in the
+workflow, so the workflow does not require selecting a credential at runtime.
 
 Optional:
 

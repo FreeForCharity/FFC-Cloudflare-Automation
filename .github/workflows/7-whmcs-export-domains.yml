@@ -4,11 +4,6 @@ run-name: 'WHMCS Export Domains'
 on:
   workflow_dispatch:
     inputs:
-      credential_set:
-        description:
-          'WHMCS API Identifier (also the GitHub secret name that holds the WHMCS API Secret)'
-        required: true
-        type: string
       api_url:
         description: 'WHMCS API endpoint (e.g., https://freeforcharity.org/hub/includes/api.php)'
         required: false
@@ -34,20 +29,20 @@ jobs:
       - name: Validate required WHMCS secrets
         shell: pwsh
         env:
-          WHMCS_API_SECRET: ${{ secrets[inputs.credential_set] }}
+          WHMCS_API_SECRET: ${{ secrets['zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'] }}
         run: |
           $ErrorActionPreference = 'Stop'
 
           if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
-            throw "Missing secret in environment 'whmcs-prod': ${{ inputs.credential_set }}"
+            throw "Missing secret in environment 'whmcs-prod': zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu"
           }
 
       - name: Export domains (read-only)
         shell: pwsh
         env:
           WHMCS_API_URL: ${{ inputs.api_url }}
-          WHMCS_API_IDENTIFIER: ${{ inputs.credential_set }}
-          WHMCS_API_SECRET: ${{ secrets[inputs.credential_set] }}
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets['zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'] }}
         run: |
           $ErrorActionPreference = 'Stop'
           $out = "${{ inputs.output_file }}"

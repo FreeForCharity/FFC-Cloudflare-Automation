@@ -37,6 +37,8 @@ Used by the numbered DNS workflows in `.github/workflows/`.
 Environment secrets:
 
 - `CLOUDFLARE_API_KEY_DNS_ONLY` (required)
+- `CLOUDFLARE_API_KEY_REPORTS` (optional; if set, report-only workflows prefer this token so
+  reporting can span multiple Cloudflare accounts/zones)
 
 Repository variable (non-secret):
 
@@ -73,7 +75,8 @@ two jobs so secrets do not have to be duplicated across environments:
   - `FFC_AZURE_CLIENT_ID`
   - `FFC_AZURE_TENANT_ID`
 - **Cloudflare job** runs in `cloudflare-prod` and requires:
-  - `CLOUDFLARE_API_KEY_DNS_ONLY`
+  - `CLOUDFLARE_API_KEY_REPORTS` (preferred for cross-account reporting) or
+    `CLOUDFLARE_API_KEY_DNS_ONLY`
 
 Environment secrets (optional):
 

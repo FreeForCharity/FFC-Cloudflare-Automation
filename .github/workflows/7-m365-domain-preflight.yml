@@ -70,14 +70,15 @@ jobs:
       - name: Validate required secrets
         shell: bash
         run: |
-          if [ -z "${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}" ]; then
-            echo "::error::CLOUDFLARE_API_KEY_DNS_ONLY secret is not set (environment: cloudflare-prod)";
+          if [ -z "${{ secrets.CLOUDFLARE_API_KEY_REPORTS }}" ] && [ -z "${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}" ]; then
+            echo "::error::Neither CLOUDFLARE_API_KEY_REPORTS nor CLOUDFLARE_API_KEY_DNS_ONLY is set (environment: cloudflare-prod)";
             exit 1;
           fi
 
       - name: Run Cloudflare audit portion
         shell: pwsh
         env:
-          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+          CLOUDFLARE_API_KEY_DNS_ONLY:
+            ${{ secrets.CLOUDFLARE_API_KEY_REPORTS || secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
         run: |
           pwsh -NoProfile -File scripts/m365-domain-preflight.ps1 -Domain "${{ inputs.domain }}" -SkipGraph

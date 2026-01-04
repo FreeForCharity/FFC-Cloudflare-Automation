@@ -19,7 +19,8 @@ jobs:
       - name: Run DNS Compliance Audit
         shell: pwsh
         env:
-          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+          CLOUDFLARE_API_KEY_DNS_ONLY:
+            ${{ secrets.CLOUDFLARE_API_KEY_REPORTS || secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
         run: |
           $Domain = "${{ inputs.domain }}"
           .\Update-CloudflareDns.ps1 -Zone $Domain -Audit

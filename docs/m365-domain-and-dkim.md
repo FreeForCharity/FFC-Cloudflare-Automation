@@ -51,8 +51,7 @@ Required secrets (environment: `m365-prod`):
 
 Required secrets (environment: `cloudflare-prod`):
 
-- `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
-- `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
+- `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` and/or `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
 
 Permissions:
 

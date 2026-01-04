@@ -17,8 +17,8 @@ This guide explains how to update DNS records for the `staging.clarkemoyer.com` 
 .\Update-StagingDns.ps1 -NewIp 203.0.113.42
 
 # With environment variable
-$env:CLOUDFLARE_API_TOKEN_FFC = "your_token_here"
-\Update-StagingDns.ps1 -NewIp 203.0.113.42
+$env:CLOUDFLARE_API_TOKEN = "your_token_here"
+.\Update-StagingDns.ps1 -NewIp 203.0.113.42
 
 # Enable Cloudflare proxy
 .\Update-StagingDns.ps1 -NewIp 203.0.113.42 -Proxied
@@ -36,7 +36,7 @@ For more flexibility, use the comprehensive DNS management script:
 .\Update-CloudflareDns.ps1 -Zone clarkemoyer.com -Name staging -Type A -Content 203.0.113.42
 
 # With environment variable
-$env:CLOUDFLARE_API_TOKEN_FFC = "your_token_here"
+$env:CLOUDFLARE_API_TOKEN = "your_token_here"
 .\Update-CloudflareDns.ps1 -Zone clarkemoyer.com -Name staging -Type A -Content 203.0.113.42
 
 # Enable Cloudflare proxy (orange cloud)

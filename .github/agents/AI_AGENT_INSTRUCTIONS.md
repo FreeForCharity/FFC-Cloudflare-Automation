@@ -49,14 +49,10 @@ etc.) working on this repository.**
    ```yaml
    - name: Validate Secret Presence
      run: |
-               if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-                  echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set"
-                  exit 1
-               fi
-               if [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-                  echo "::error::CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set"
-                  exit 1
-               fi
+          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ] && [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+             echo "::error::Cloudflare token secret(s) are not set"
+             exit 1
+          fi
    ```
 
 3. **NEVER echo or print secrets**:
@@ -73,21 +69,20 @@ etc.) working on this repository.**
 
 **When instructing users for local development:**
 
-1. **Use `CLOUDFLARE_API_TOKEN_FFC` / `CLOUDFLARE_API_TOKEN_CM` environment variables**:
+1. **Use `CLOUDFLARE_API_TOKEN` (or `CLOUDFLARE_API_TOKEN_FFC` / `CLOUDFLARE_API_TOKEN_CM`)**:
 
    ```bash
-   export CLOUDFLARE_API_TOKEN_FFC="<user-must-provide>"
-   export CLOUDFLARE_API_TOKEN_CM="<user-must-provide>"
+   export CLOUDFLARE_API_TOKEN="<user-must-provide>"
    ```
 
 2. **Always provide placeholder text, NEVER actual values**:
 
    ```bash
    # ✅ CORRECT
-   export CLOUDFLARE_API_TOKEN_FFC="your-api-token-here"
+   export CLOUDFLARE_API_TOKEN="your-api-token-here"
 
    # ❌ WRONG
-   export CLOUDFLARE_API_TOKEN_FFC="abc123xyz..."
+   export CLOUDFLARE_API_TOKEN="abc123xyz..."
    ```
 
 ### Method 3: Local .env Files (Individual Development)
@@ -98,8 +93,7 @@ etc.) working on this repository.**
 
    ```bash
    # .env.example
-   CLOUDFLARE_API_TOKEN_FFC=your-cloudflare-api-token-here
-   CLOUDFLARE_API_TOKEN_CM=your-cloudflare-api-token-here
+   CLOUDFLARE_API_TOKEN=your-cloudflare-api-token-here
    ```
 
 2. **Ensure `.gitignore` excludes actual secrets**:
@@ -126,7 +120,7 @@ etc.) working on this repository.**
 
 - ✅ Use placeholder text: `"your-api-token-here"`
 - ✅ Reference GitHub Secrets: `${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}` / `${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}`
-- ✅ Use environment variables: `$CLOUDFLARE_API_TOKEN_FFC` / `$CLOUDFLARE_API_TOKEN_CM`
+- ✅ Use environment variables: `$CLOUDFLARE_API_TOKEN` / `$CLOUDFLARE_API_TOKEN_FFC` / `$CLOUDFLARE_API_TOKEN_CM`
 - ✅ Instruct users to obtain secrets from official sources
 - ✅ Link to official credential management docs
 
@@ -143,8 +137,8 @@ etc.) working on this repository.**
 
 ```markdown
 1. Create a CloudFlare API token at https://dash.cloudflare.com/profile/api-tokens
-2. Add the token(s) to the `cloudflare-prod` GitHub Environment secrets as `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` and `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
-3. The workflow will use: `${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}` / `${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}`
+2. Add the token(s) to the `cloudflare-prod` Environment secrets as `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` and/or `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
+3. The workflow will map them to env vars: `CLOUDFLARE_API_TOKEN_FFC` / `CLOUDFLARE_API_TOKEN_CM`
 ```
 
 **❌ WRONG:**
@@ -206,20 +200,16 @@ jobs:
       # STEP 1: Always validate secret presence first
       - name: Validate Secret Presence
         run: |
-               if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set"
-            exit 1
-          fi
-               if [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-            echo "::error::CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set"
-            exit 1
-          fi
+               if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ] && [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+                  echo "::error::Cloudflare token secret(s) not set"
+                  exit 1
+               fi
 
       # STEP 2: Use secret via environment variables
       - name: Use Secret
         env:
-                      CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
-                      CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+               CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+               CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
           # Your commands here
           # Secret is available as environment variable
@@ -253,12 +243,10 @@ To configure your CloudFlare API token:
 **For GitHub Actions (Recommended):**
 
 1. Go to repository Settings → Environments → `cloudflare-prod`
-2. Add two Environment secrets:
+2. Add Environment secrets:
    - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
    - `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
-3. Value: [Paste the corresponding Cloudflare API token]
-
-The workflows will automatically use: `${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}` / `${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}`
+3. Workflows map these to environment variables: `CLOUDFLARE_API_TOKEN_FFC` / `CLOUDFLARE_API_TOKEN_CM`
 
 **For Local Development:**
 
@@ -363,7 +351,7 @@ git log --all --full-history --source --pickaxe-regex -S "token.*[a-zA-Z0-9_-]{2
 ⚠️ For security, I won't include your actual token in any files.
 
 To configure it:
-1. Add to the `cloudflare-prod` GitHub Environment secrets as FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS and CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS, OR
+1. Add to GitHub Environment secrets (cloudflare-prod) as FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS and/or CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS, OR
 2. Add to local .env file
 
 See SECURITY.md for detailed instructions.
@@ -399,8 +387,8 @@ The actual token value should be added to repository secrets.
 I'll create documentation with secure examples:
 
 1. Using placeholders: "your-api-token-here"
-2. Referencing GitHub Secrets: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }} / ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
-3. Using environment variables: $CLOUDFLARE_API_TOKEN_FFC / $CLOUDFLARE_API_TOKEN_CM
+2. Referencing GitHub Secrets: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+3. Using environment variables: $CLOUDFLARE_API_TOKEN
 
 No actual tokens will be included in the documentation.
 ```

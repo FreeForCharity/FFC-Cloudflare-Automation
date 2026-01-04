@@ -23,6 +23,16 @@ In WHMCS Admin:
 - Assign at least one API Role that allows read access for domains (the workflow uses the
   `GetClientsDomains` action)
 
+If your WHMCS API credentials use an IP allowlist (often called **Allowed IPs**), the workflow may
+fail from GitHub-hosted runners with an error like `Invalid IP x.x.x.x`. GitHub-hosted runners do
+not have a single fixed outbound IP.
+
+Options:
+
+- Remove/disable the IP allowlist for this read-only credential set, or
+- Run the workflow on a self-hosted runner with a fixed outbound IP, then allowlist that IP in
+  WHMCS.
+
 ## GitHub Actions environment
 
 The workflow

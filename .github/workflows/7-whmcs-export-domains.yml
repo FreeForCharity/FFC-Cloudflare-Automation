@@ -48,6 +48,10 @@ jobs:
           $out = "${{ inputs.output_file }}"
           & pwsh -NoProfile -File .\scripts\whmcs-domain-export.ps1 -ApiUrl $env:WHMCS_API_URL -OutputFile $out
 
+          if ($LASTEXITCODE -ne 0) {
+            throw "WHMCS export script failed with exit code $LASTEXITCODE. See logs above."
+          }
+
           if (-not (Test-Path $out)) {
             throw "Expected output file not found: $out"
           }

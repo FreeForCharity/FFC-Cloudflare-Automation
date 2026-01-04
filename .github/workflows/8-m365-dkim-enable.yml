@@ -95,15 +95,20 @@ jobs:
       - name: Validate required secrets
         shell: bash
         run: |
-          if [ -z "${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}" ]; then
-            echo "::error::CLOUDFLARE_API_KEY_DNS_ONLY secret is not set (environment: cloudflare-prod)";
+          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
             exit 1;
           fi
 
       - name: Create/Update DKIM selector CNAMEs in Cloudflare
         shell: pwsh
         env:
-          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
           $domain = "${{ inputs.domain }}"
           $s1Name = "selector1._domainkey"

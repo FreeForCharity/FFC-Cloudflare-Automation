@@ -44,7 +44,8 @@ jobs:
           $scripts = @(
             'Update-CloudflareDns.ps1',
             'Update-StagingDns.ps1',
-            'Export-CloudflareDns.ps1'
+            'Export-CloudflareDns.ps1',
+            'scripts/whmcs-domain-export.ps1'
           )
           $hasErrors = $false
           foreach ($script in $scripts) {

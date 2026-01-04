@@ -13,7 +13,7 @@ on:
         description: 'Output CSV filename'
         required: false
         type: string
-        default: 'whmcs_domains.csv'
+        default: 'artifacts/whmcs/whmcs_domains.csv'
 
 permissions:
   contents: read
@@ -47,6 +47,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $out = "${{ inputs.output_file }}"
+
+          $dir = Split-Path -Parent $out
+          if (-not [string]::IsNullOrWhiteSpace($dir)) {
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          }
+
           & pwsh -NoProfile -File .\scripts\whmcs-domain-export.ps1 -ApiUrl $env:WHMCS_API_URL -OutputFile $out
 
           if ($LASTEXITCODE -ne 0) {
@@ -56,6 +62,12 @@ jobs:
           if (-not (Test-Path $out)) {
             throw "Expected output file not found: $out"
           }
+
+          "## WHMCS domain export" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Output path: `$out`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Artifact name: `whmcs_domains`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Download: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload CSV Artifact
         uses: actions/upload-artifact@v6

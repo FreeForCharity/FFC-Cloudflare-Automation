@@ -69,6 +69,19 @@ Optional:
 
 - `WHMCS_API_URL` (if your endpoint differs)
 
+## Output and downloads
+
+The GitHub Actions workflow writes the export CSV into a safe workspace folder by default:
+
+- `artifacts/whmcs/whmcs_domains.csv`
+
+It then uploads an Actions artifact named:
+
+- `whmcs_domains`
+
+The workflow also writes a short job summary that includes a direct link to the workflow run page
+(where the artifact download UI lives).
+
 ## Local usage
 
 Run the export script locally:
@@ -77,3 +90,7 @@ Run the export script locally:
 - Then run: `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\whmcs-domain-export.ps1`
 
 The script writes `whmcs_domains.csv` by default.
+
+To write to a specific path (for example, matching the workflow default), pass:
+
+- `-OutputFile artifacts/whmcs/whmcs_domains.csv`

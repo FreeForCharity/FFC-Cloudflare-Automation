@@ -1,0 +1,52 @@
+﻿name: '12. M365 - Add Tenant Domain (Admin)'
+run-name: 'M365: Add domain ${{ inputs.domain }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain to add to tenant (e.g., example.org)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  add-tenant-domain:
+    runs-on: windows-latest
+    environment: m365-prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not "${{ secrets.FFC_AZURE_CLIENT_ID }}") { throw 'FFC_AZURE_CLIENT_ID secret is not set (environment: m365-prod)' }
+          if (-not "${{ secrets.FFC_AZURE_TENANT_ID }}") { throw 'FFC_AZURE_TENANT_ID secret is not set (environment: m365-prod)' }
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Acquire Microsoft Graph token
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $token = (az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+          if (-not $token) { throw 'Failed to acquire Graph access token via Azure CLI.' }
+          "GRAPH_ACCESS_TOKEN=$token" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Add domain + print DNS verification records (Graph)
+        shell: pwsh
+        env:
+          GRAPH_ACCESS_TOKEN: ${{ env.GRAPH_ACCESS_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -File scripts/m365-add-tenant-domain.ps1 -Domain "${{ inputs.domain }}" -AccessToken $env:GRAPH_ACCESS_TOKEN

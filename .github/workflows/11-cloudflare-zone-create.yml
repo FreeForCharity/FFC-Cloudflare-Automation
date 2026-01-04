@@ -1,0 +1,66 @@
+﻿name: '11. DNS - Add Domain (Create Zone) (Admin)'
+run-name: 'Create Zone: ${{ inputs.domain }} (${{ inputs.account }})'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain name to add as a Cloudflare zone (e.g., example.org)'
+        required: true
+        type: string
+      account:
+        description: 'Which Cloudflare account should own this zone? (required to prevent duplicates)'
+        required: true
+        type: choice
+        options:
+          - FFC
+          - CM
+      zone_type:
+        description: 'Zone type'
+        required: true
+        type: choice
+        options:
+          - full
+          - partial
+        default: full
+      jump_start:
+        description: 'Attempt to auto-import DNS records from existing nameservers'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  create-zone:
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+
+      - name: Create zone
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -File scripts/cloudflare-zone-create.ps1 `
+            -Domain "${{ inputs.domain }}" `
+            -Account "${{ inputs.account }}" `
+            -ZoneType "${{ inputs.zone_type }}" `
+            $(if ('${{ inputs.jump_start }}' -eq 'true') { '-JumpStart' } else { '' })

@@ -108,6 +108,54 @@ function Invoke-WhmcsApi {
     return $resp
 }
 
+function Get-WhmcsDomainsFromResponse {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Response
+    )
+
+    # Newer/cleaner response format (nested arrays)
+    if ($Response.domains) {
+        if ($Response.domains.domain) {
+            return @($Response.domains.domain)
+        }
+        if ($Response.domains -is [System.Array]) {
+            return @($Response.domains)
+        }
+    }
+
+    # WHMCS API documentation shows a flat JSON response with keys like:
+    #   "domains[domain][0][domainname]": "example.com"
+    # Convert that into a list of objects.
+    $rx = '^domains\[domain\]\[(\d+)\]\[([^\]]+)\]$'
+    $byIndex = @{}
+
+    foreach ($prop in $Response.PSObject.Properties) {
+        $m = [regex]::Match($prop.Name, $rx)
+        if (-not $m.Success) { continue }
+
+        $idx = [int]$m.Groups[1].Value
+        $field = $m.Groups[2].Value
+
+        if (-not $byIndex.ContainsKey($idx)) {
+            $byIndex[$idx] = @{}
+        }
+
+        $byIndex[$idx][$field] = $prop.Value
+    }
+
+    if ($byIndex.Count -le 0) {
+        return @()
+    }
+
+    $domains = @()
+    foreach ($idx in ($byIndex.Keys | Sort-Object)) {
+        $domains += [PSCustomObject]$byIndex[$idx]
+    }
+
+    return $domains
+}
+
 try {
     $api = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
     $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret -CredentialsJsonParam $CredentialsJson
@@ -137,28 +185,31 @@ try {
             [void][int]::TryParse($r.totalresults.ToString(), [ref]$total)
         }
 
-        $domains = @()
-        if ($r.domains) {
-            if ($r.domains.domain) {
-                $domains = @($r.domains.domain)
-            }
-            elseif ($r.domains -is [System.Array]) {
-                $domains = @($r.domains)
-            }
+        $numReturnedApi = 0
+        if ($r.numreturned) {
+            [void][int]::TryParse($r.numreturned.ToString(), [ref]$numReturnedApi)
         }
+
+        $domains = Get-WhmcsDomainsFromResponse -Response $r
 
         $all += $domains
 
         $returned = $domains.Count
         if ($returned -le 0) { break }
 
-        $start += $returned
+        if ($numReturnedApi -gt 0) {
+            $start += $numReturnedApi
+        }
+        else {
+            $start += $returned
+        }
         if ($total -gt 0 -and $start -ge $total) { break }
     }
 
     $rows = $all | ForEach-Object {
+        $domainName = if ($_.domainname) { $_.domainname } else { $_.domain }
         [PSCustomObject]@{
-            domain = $_.domain
+            domain = $domainName
             status = $_.status
             id     = $_.id
             userid = $_.userid

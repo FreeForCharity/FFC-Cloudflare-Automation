@@ -4,26 +4,16 @@ run-name: 'WHMCS Export Domains'
 on:
   workflow_dispatch:
     inputs:
+      credential_set:
+        description:
+          'WHMCS API Identifier (also the GitHub secret name that holds the WHMCS API Secret)'
+        required: true
+        type: string
       api_url:
         description: 'WHMCS API endpoint (e.g., https://freeforcharity.org/hub/includes/api.php)'
         required: false
         type: string
         default: 'https://freeforcharity.org/hub/includes/api.php'
-      identifier_secret_name:
-        description: 'Environment secret name containing the WHMCS API Identifier'
-        required: false
-        type: string
-        default: 'WHMCS_API_IDENTIFIER'
-      secret_secret_name:
-        description: 'Environment secret name containing the WHMCS API Secret'
-        required: false
-        type: string
-        default: 'WHMCS_API_SECRET'
-      credentials_json_secret_name:
-        description: 'Optional: secret name containing JSON {"identifier":"...","secret":"..."} (fallback)'
-        required: false
-        type: string
-        default: 'WHMCS_API_CREDENTIALS_JSON'
       output_file:
         description: 'Output CSV filename'
         required: false
@@ -44,37 +34,20 @@ jobs:
       - name: Validate required WHMCS secrets
         shell: pwsh
         env:
-          WHMCS_API_IDENTIFIER: ${{ secrets[inputs.identifier_secret_name] }}
-          WHMCS_API_SECRET: ${{ secrets[inputs.secret_secret_name] }}
-          WHMCS_API_CREDENTIALS_JSON: ${{ secrets[inputs.credentials_json_secret_name] }}
+          WHMCS_API_SECRET: ${{ secrets[inputs.credential_set] }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $hasPair = -not [string]::IsNullOrWhiteSpace($env:WHMCS_API_IDENTIFIER) -and -not [string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)
-          $hasJson = -not [string]::IsNullOrWhiteSpace($env:WHMCS_API_CREDENTIALS_JSON)
-
-          if (-not $hasPair -and -not $hasJson) {
-            throw @"
-Missing WHMCS credentials in environment 'whmcs-prod'.
-
-Recommended secrets:
-- WHMCS_API_IDENTIFIER
-- WHMCS_API_SECRET
-
-Optional fallback secret:
-- WHMCS_API_CREDENTIALS_JSON (JSON with fields identifier/secret)
-
-You can also override the secret names in the workflow inputs.
-"@
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
+            throw "Missing secret in environment 'whmcs-prod': ${{ inputs.credential_set }}"
           }
 
       - name: Export domains (read-only)
         shell: pwsh
         env:
           WHMCS_API_URL: ${{ inputs.api_url }}
-          WHMCS_API_IDENTIFIER: ${{ secrets[inputs.identifier_secret_name] }}
-          WHMCS_API_SECRET: ${{ secrets[inputs.secret_secret_name] }}
-          WHMCS_API_CREDENTIALS_JSON: ${{ secrets[inputs.credentials_json_secret_name] }}
+          WHMCS_API_IDENTIFIER: ${{ inputs.credential_set }}
+          WHMCS_API_SECRET: ${{ secrets[inputs.credential_set] }}
         run: |
           $ErrorActionPreference = 'Stop'
           $out = "${{ inputs.output_file }}"

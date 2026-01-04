@@ -772,9 +772,19 @@ try {
         }
         foreach ($rec in $existing) {
             # Safety: If Content is specified, only delete matching records
-            if ($Content -and $rec.content -ne $Content) {
-                Write-Verbose "Skipping record $($rec.id) (Content mismatch: '$($rec.content)' != '$Content')"
-                continue
+            if ($Content) {
+                $matches = $false
+                if ($Type -eq 'TXT') {
+                    $matches = ((Normalize-TxtContent -Value $rec.content) -eq (Normalize-TxtContent -Value $Content))
+                }
+                else {
+                    $matches = ($rec.content -eq $Content)
+                }
+
+                if (-not $matches) {
+                    Write-Verbose "Skipping record $($rec.id) (Content mismatch: '$($rec.content)' != '$Content')"
+                    continue
+                }
             }
 
             if ($DryRun) {
@@ -791,11 +801,16 @@ try {
 
     # --- SET (Create/Update) Operation ---
     
+    $desiredContent = $Content
+    if ($Type -eq 'TXT') {
+        $desiredContent = Quote-TxtContent -Value $Content
+    }
+
     # Prepare payload
     $payload = @{
         type    = $Type
         name    = $RecordName
-        content = $Content
+        content = $desiredContent
         ttl     = $Ttl
     }
 
@@ -816,26 +831,68 @@ try {
     # These types allow multiple records with the same name.
     # Logic: Ensure ONE record exists with this content. Do not overwrite others.
     if ($Type -in @('MX', 'TXT')) {
-        $exactMatch = $existingSameType | Where-Object { 
-            $_.content -eq $Content -and 
-            ($Type -ne 'MX' -or $_.priority -eq $Priority)
-        }
+        if ($Type -eq 'MX') {
+            $exactMatch = $existingSameType | Where-Object {
+                $_.content -eq $Content -and
+                $_.priority -eq $Priority
+            }
 
-        if ($exactMatch) {
-            Write-Verbose "Exact match found (ID: $($exactMatch[0].id))."
-            Write-Host "  [Skip] $Type $RecordName matches desired state." -ForegroundColor DarkGray
-        }
-        else {
-            # No exact match -> CREATE (Append)
-            if ($DryRun) {
-                Write-Host "[DRY-RUN] Would CREATE new record: $Type $RecordName -> $Content" -ForegroundColor Yellow
+            if ($exactMatch) {
+                Write-Verbose "Exact match found (ID: $($exactMatch[0].id))."
+                Write-Host "  [Skip] $Type $RecordName matches desired state." -ForegroundColor DarkGray
             }
             else {
-                Write-Host "Creating new record: $Type $RecordName -> $Content..." -NoNewline
-                $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $payload
+                # No exact match -> CREATE (Append)
+                if ($DryRun) {
+                    Write-Host "[DRY-RUN] Would CREATE new record: $Type $RecordName -> $Content" -ForegroundColor Yellow
+                }
+                else {
+                    Write-Host "Creating new record: $Type $RecordName -> $Content..." -NoNewline
+                    $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $payload
+                    Write-Host " DONE" -ForegroundColor Green
+                }
+            }
+
+            return
+        }
+
+        # TXT: treat normalized content as authoritative; Cloudflare may normalize quoting.
+        $desiredNormalized = Normalize-TxtContent -Value $Content
+        $normalizedMatch = @($existingSameType | Where-Object {
+                (Normalize-TxtContent -Value $_.content) -eq $desiredNormalized
+            })
+
+        if ($normalizedMatch.Count -gt 0) {
+            $match = $normalizedMatch[0]
+
+            if (Is-TxtQuoted -Value $match.content) {
+                Write-Verbose "Normalized TXT match found (already quoted) (ID: $($match.id))."
+                Write-Host "  [Skip] $Type $RecordName matches desired state." -ForegroundColor DarkGray
+                return
+            }
+
+            if ($DryRun) {
+                Write-Host "[DRY-RUN] Would UPDATE TXT record $($match.id): $RecordName -> $desiredContent" -ForegroundColor Yellow
+            }
+            else {
+                Write-Host "Updating TXT record $($match.id) to quoted content..." -NoNewline
+                $null = Invoke-CfApi -Method 'PUT' -Uri "/zones/$ZoneId/dns_records/$($match.id)" -Body $payload
                 Write-Host " DONE" -ForegroundColor Green
             }
+
+            return
         }
+
+        # No normalized match -> CREATE
+        if ($DryRun) {
+            Write-Host "[DRY-RUN] Would CREATE new record: $Type $RecordName -> $desiredContent" -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "Creating new record: $Type $RecordName -> $desiredContent..." -NoNewline
+            $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $payload
+            Write-Host " DONE" -ForegroundColor Green
+        }
+
         return
     }
 

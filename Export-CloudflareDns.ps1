@@ -7,8 +7,14 @@ param(
 # Shared Logic (Should ideally be in a module, but copying for standalone behavior within repo structure)
 function Get-AuthToken {
     if ($Token) { return $Token }
-    if ($env:CLOUDFLARE_API_KEY_DNS_ONLY) { return $env:CLOUDFLARE_API_KEY_DNS_ONLY }
-    throw "No Cloudflare API Token found. Set CLOUDFLARE_API_KEY_DNS_ONLY."
+    if ($env:CLOUDFLARE_API_TOKEN_FFC -and -not $env:CLOUDFLARE_API_TOKEN_CM) { return $env:CLOUDFLARE_API_TOKEN_FFC }
+    if ($env:CLOUDFLARE_API_TOKEN_CM -and -not $env:CLOUDFLARE_API_TOKEN_FFC) { return $env:CLOUDFLARE_API_TOKEN_CM }
+
+    if ($env:CLOUDFLARE_API_TOKEN_FFC -and $env:CLOUDFLARE_API_TOKEN_CM) {
+        throw "Multiple Cloudflare tokens are set (CLOUDFLARE_API_TOKEN_FFC and CLOUDFLARE_API_TOKEN_CM). Pass -Token to choose which account to export."
+    }
+
+    throw "No Cloudflare API token found. Pass -Token, or set CLOUDFLARE_API_TOKEN_FFC / CLOUDFLARE_API_TOKEN_CM."
 }
 
 function Invoke-CfApi {

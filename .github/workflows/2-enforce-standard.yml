@@ -20,10 +20,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate required Cloudflare secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+
       - name: Enforce FFC Standard Configuration
         shell: pwsh
         env:
-          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
           $Domain = "${{ inputs.domain }}"
           $DryRun = "${{ inputs.dry_run }}"
@@ -39,7 +52,8 @@ jobs:
       - name: Post-Enforce Compliance Audit
         shell: pwsh
         env:
-          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
           $Domain = "${{ inputs.domain }}"
           .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ErrorAction Continue

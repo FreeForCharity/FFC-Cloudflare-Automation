@@ -109,7 +109,8 @@ The simplest way to update DNS records using the PowerShell utilities:
 You'll be prompted for your Cloudflare API token, or you can set it as an environment variable:
 
 ```powershell
-$env:CLOUDFLARE_API_KEY_DNS_ONLY = "your_token_here"
+$env:CLOUDFLARE_API_TOKEN_FFC = "your_token_here"
+$env:CLOUDFLARE_API_TOKEN_CM = "your_token_here"
 .\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type A -Content 203.0.113.42
 ```
 
@@ -230,9 +231,6 @@ specific zones.
 # Run the export script
 .\Export-CloudflareDns.ps1 -OutputFile zone_dns_summary.csv
 
-# Provide your token via env
-$env:CLOUDFLARE_API_KEY_DNS_ONLY = "<dns_only_token>"
-
 # Or with explicit token
 .\Export-CloudflareDns.ps1 -OutputFile zone_dns_summary.csv -Token "<your_token>"
 ```
@@ -250,7 +248,7 @@ The script supports tokens with various permission levels via environment variab
 
 ### GitHub Actions
 
-- Secret: set `CLOUDFLARE_API_KEY_DNS_ONLY`.
+- Secrets (environment `cloudflare-prod`): set `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` and `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`.
 - Workflow: `DNS Summary Export`.
   - Provide `zones` input to target specific zones, or set `all_zones=true` to export everything
     accessible to the token.
@@ -310,8 +308,7 @@ Security is a top priority for this project. We implement multiple security meas
 
 ### Protecting Cloudflare API Tokens in Workflows
 
-- **Least privilege**: Use `CLOUDFLARE_API_KEY_DNS_ONLY` scoped to only the zones you intend to
-  manage.
+- **Least privilege**: Use two scoped tokens (FFC + CM) instead of one overbroad token.
 - **Environment approvals**: Store tokens as Environment secrets (e.g., `cloudflare-prod`) and
   require reviewers before jobs run.
 - **Apply gating**: Workflows default to `--dry-run`; set `apply=true` to make changes. Applies are

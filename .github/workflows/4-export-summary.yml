@@ -11,12 +11,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run DNS Export
+      - name: Validate required Cloudflare secrets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}")) {
+            throw 'FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)'
+          }
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}")) {
+            throw 'CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)'
+          }
+
+      - name: Run DNS Export (FFC)
         shell: pwsh
         env:
-          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+          CF_TOKEN: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
-          .\Export-CloudflareDns.ps1 -OutputFile "domain_summary.csv"
+          .\Export-CloudflareDns.ps1 -Token $env:CF_TOKEN -OutputFile "domain_summary_ffc.csv"
+
+      - name: Run DNS Export (CM)
+        shell: pwsh
+        env:
+          CF_TOKEN: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+        run: |
+          .\Export-CloudflareDns.ps1 -Token $env:CF_TOKEN -OutputFile "domain_summary_cm.csv"
+
+      - name: Merge exports
+        shell: pwsh
+        run: |
+          $files = @('domain_summary_ffc.csv', 'domain_summary_cm.csv') | Where-Object { Test-Path $_ }
+          if ($files.Count -eq 0) { throw 'No export files were generated; cannot produce combined domain_summary.csv.' }
+
+          $rows = foreach ($f in $files) { Import-Csv $f }
+          $seen = @{}
+          $merged = foreach ($r in $rows) {
+            if (-not $r.zone) { continue }
+            $key = $r.zone.ToString().ToLowerInvariant()
+            if (-not $seen.ContainsKey($key)) {
+              $seen[$key] = $true
+              $r
+            }
+          }
+
+          $merged | Sort-Object zone | Export-Csv -Path 'domain_summary.csv' -NoTypeInformation -Encoding utf8
+          Write-Host "Merged $($merged.Count) unique zones into domain_summary.csv"
 
       - name: Upload CSV Artifact
         uses: actions/upload-artifact@v6

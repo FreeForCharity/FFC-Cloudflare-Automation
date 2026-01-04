@@ -92,6 +92,17 @@ function Invoke-WhmcsApi {
 
     $resp = Invoke-RestMethod -Method Post -Uri $ApiUrl -Body $Body -ContentType 'application/x-www-form-urlencoded' -ErrorAction Stop
 
+    if ($resp -is [string]) {
+        $raw = $resp
+        try {
+            $resp = $raw | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            $snippet = if ($raw.Length -gt 400) { $raw.Substring(0, 400) + '...' } else { $raw }
+            throw "WHMCS API returned a non-JSON response: $snippet"
+        }
+    }
+
     if (-not $resp) {
         throw 'WHMCS API returned an empty response.'
     }
@@ -101,7 +112,19 @@ function Invoke-WhmcsApi {
         if ($resp.message) { $msg = $resp.message }
         elseif ($resp.errormessage) { $msg = $resp.errormessage }
         elseif ($resp.error) { $msg = $resp.error }
-        if ([string]::IsNullOrWhiteSpace($msg)) { $msg = 'Unknown WHMCS API error.' }
+        if ([string]::IsNullOrWhiteSpace($msg)) {
+            $keys = @()
+            try { $keys = @($resp.PSObject.Properties | Select-Object -ExpandProperty Name) } catch {}
+            $keysText = if ($keys.Count -gt 0) { ($keys | Sort-Object) -join ', ' } else { '<no properties>' }
+
+            $diag = $null
+            try { $diag = ($resp | ConvertTo-Json -Depth 6 -Compress) } catch {}
+            if (-not [string]::IsNullOrWhiteSpace($diag) -and $diag.Length -gt 800) {
+                $diag = $diag.Substring(0, 800) + '...'
+            }
+
+            $msg = "Unknown WHMCS API error. Response keys: $keysText" + (if ($diag) { " Response: $diag" } else { '' })
+        }
         throw "WHMCS API error: $msg"
     }
 

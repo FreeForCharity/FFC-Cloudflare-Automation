@@ -43,6 +43,7 @@ jobs:
           WHMCS_API_URL: ${{ inputs.api_url }}
           WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
           WHMCS_API_SECRET: ${{ secrets['zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'] }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
         run: |
           $ErrorActionPreference = 'Stop'
           $out = "${{ inputs.output_file }}"

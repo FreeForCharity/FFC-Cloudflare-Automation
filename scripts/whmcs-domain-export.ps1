@@ -13,6 +13,9 @@ param(
     [string]$CredentialsJson,
 
     [Parameter()]
+    [string]$AccessKey,
+
+    [Parameter()]
     [string]$OutputFile = 'whmcs_domains.csv',
 
     [Parameter()]
@@ -69,6 +72,15 @@ function Resolve-WhmcsApiUrl {
     return 'https://freeforcharity.org/hub/includes/api.php'
 }
 
+function Resolve-WhmcsAccessKey {
+    param([string]$AccessKeyParam)
+
+    if ($AccessKeyParam) { return $AccessKeyParam }
+    if ($env:WHMCS_API_ACCESS_KEY) { return $env:WHMCS_API_ACCESS_KEY }
+
+    return $null
+}
+
 function Invoke-WhmcsApi {
     param(
         [Parameter(Mandatory = $true)]
@@ -99,6 +111,7 @@ function Invoke-WhmcsApi {
 try {
     $api = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
     $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret -CredentialsJsonParam $CredentialsJson
+    $accessKey = Resolve-WhmcsAccessKey -AccessKeyParam $AccessKey
 
     $all = @()
     $start = 0
@@ -111,6 +124,10 @@ try {
             responsetype = 'json'
             limitstart   = $start
             limitnum     = $PageSize
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($accessKey)) {
+            $body.accesskey = $accessKey
         }
 
         $r = Invoke-WhmcsApi -ApiUrl $api -Body $body

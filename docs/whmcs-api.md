@@ -23,15 +23,33 @@ In WHMCS Admin:
 - Assign at least one API Role that allows read access for domains (the workflow uses the
   `GetClientsDomains` action)
 
-If your WHMCS API credentials use an IP allowlist (often called **Allowed IPs**), the workflow may
-fail from GitHub-hosted runners with an error like `Invalid IP x.x.x.x`. GitHub-hosted runners do
-not have a single fixed outbound IP.
+### API access control (IP restriction)
+
+WHMCS restricts API access by IP by default. If the WHMCS API rejects requests, you may see an
+error like `Invalid IP x.x.x.x`.
+
+GitHub-hosted runners do not have a single fixed outbound IP, so a strict IP allowlist is usually
+not compatible with GitHub-hosted runners.
 
 Options:
 
-- Remove/disable the IP allowlist for this read-only credential set, or
-- Run the workflow on a self-hosted runner with a fixed outbound IP, then allowlist that IP in
-  WHMCS.
+- Self-hosted runner (fixed outbound IP): allowlist that IP in WHMCS.
+- WHMCS API Access Key (bypass IP restriction): configure an access key in WHMCS and pass it with
+  API calls (recommended for GitHub-hosted runners).
+- Run locally from an allowlisted IP.
+
+### WHMCS API Access Key (bypass IP restriction)
+
+WHMCS supports an API Access Key that can bypass the IP restriction.
+
+In your WHMCS server `configuration.php`, add:
+
+- `$api_access_key = 'your_secret_passphrase_here';`
+
+Then configure a GitHub environment secret in `whmcs-prod`:
+
+- Secret name: `WHMCS_API_ACCESS_KEY`
+- Secret value: the exact passphrase you set in `configuration.php`
 
 ## GitHub Actions environment
 

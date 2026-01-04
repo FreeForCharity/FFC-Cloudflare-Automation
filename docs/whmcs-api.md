@@ -59,7 +59,7 @@ in environment `whmcs-prod`.
 
 Create an environment secret where:
 
-- Secret **name** = the WHMCS **API Identifier** (as shown in WHMCS)
+- Secret **name** = the WHMCS **API Identifier**, but uppercased (GitHub secret names are stored as uppercase)
 - Secret **value** = the WHMCS **API Secret**
 
 This repo currently assumes a single credential set and hard-codes the identifier/secret name in the

@@ -29,12 +29,12 @@ jobs:
       - name: Validate required WHMCS secrets
         shell: pwsh
         env:
-          WHMCS_API_SECRET: ${{ secrets['zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'] }}
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
         run: |
           $ErrorActionPreference = 'Stop'
 
           if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
-            throw "Missing secret in environment 'whmcs-prod': zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu"
+            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
           }
 
       - name: Export domains (read-only)
@@ -42,7 +42,7 @@ jobs:
         env:
           WHMCS_API_URL: ${{ inputs.api_url }}
           WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
-          WHMCS_API_SECRET: ${{ secrets['zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'] }}
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
           WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
         run: |
           $ErrorActionPreference = 'Stop'

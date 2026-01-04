@@ -59,8 +59,16 @@ jobs:
           CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
           $ErrorActionPreference = 'Stop'
-          pwsh -NoProfile -File scripts/cloudflare-zone-create.ps1 `
-            -Domain "${{ inputs.domain }}" `
-            -Account "${{ inputs.account }}" `
-            -ZoneType "${{ inputs.zone_type }}" `
-            $(if ('${{ inputs.jump_start }}' -eq 'true') { '-JumpStart' } else { '' })
+          if ('${{ inputs.jump_start }}' -eq 'true') {
+            pwsh -NoProfile -File scripts/cloudflare-zone-create.ps1 `
+              -Domain "${{ inputs.domain }}" `
+              -Account "${{ inputs.account }}" `
+              -ZoneType "${{ inputs.zone_type }}" `
+              -JumpStart
+          }
+          else {
+            pwsh -NoProfile -File scripts/cloudflare-zone-create.ps1 `
+              -Domain "${{ inputs.domain }}" `
+              -Account "${{ inputs.account }}" `
+              -ZoneType "${{ inputs.zone_type }}"
+          }

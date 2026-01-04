@@ -121,9 +121,6 @@ function Get-AuthTokens {
     if ($env:CLOUDFLARE_API_TOKEN_FFC) { $tokens += @($env:CLOUDFLARE_API_TOKEN_FFC) }
     if ($env:CLOUDFLARE_API_TOKEN_CM) { $tokens += @($env:CLOUDFLARE_API_TOKEN_CM) }
 
-    # Backward-compatible fallback (deprecated)
-    if ($tokens.Count -eq 0 -and $env:CLOUDFLARE_API_KEY_DNS_ONLY) { $tokens = @($env:CLOUDFLARE_API_KEY_DNS_ONLY) }
-
     if ($tokens.Count -eq 0) {
         throw "Cloudflare API token(s) not found. Set CLOUDFLARE_API_TOKEN_FFC and CLOUDFLARE_API_TOKEN_CM (recommended), or pass -Token."
     }

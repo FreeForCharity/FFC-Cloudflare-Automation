@@ -14,11 +14,6 @@ function Get-AuthToken {
         throw "Multiple Cloudflare tokens are set (CLOUDFLARE_API_TOKEN_FFC and CLOUDFLARE_API_TOKEN_CM). Pass -Token to choose which account to export."
     }
 
-    if ($env:CLOUDFLARE_API_KEY_DNS_ONLY) {
-        Write-Warning "CLOUDFLARE_API_KEY_DNS_ONLY is deprecated; use CLOUDFLARE_API_TOKEN_FFC / CLOUDFLARE_API_TOKEN_CM, or pass -Token."
-        return $env:CLOUDFLARE_API_KEY_DNS_ONLY
-    }
-
     throw "No Cloudflare API token found. Pass -Token, or set CLOUDFLARE_API_TOKEN_FFC / CLOUDFLARE_API_TOKEN_CM."
 }
 

@@ -37,10 +37,6 @@ function Get-PlainToken {
     param([string]$Provided)
     if ($Provided) { return $Provided.Trim() }
     if ($env:CLOUDFLARE_API_TOKEN_FFC) { return $env:CLOUDFLARE_API_TOKEN_FFC.Trim() }
-    if ($env:CLOUDFLARE_API_KEY_DNS_ONLY) {
-        Write-Warning 'CLOUDFLARE_API_KEY_DNS_ONLY is deprecated; use CLOUDFLARE_API_TOKEN_FFC.'
-        return $env:CLOUDFLARE_API_KEY_DNS_ONLY.Trim()
-    }
     $secure = Read-Host 'Enter Cloudflare API Token' -AsSecureString
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }

@@ -206,19 +206,58 @@ try {
         if ($total -gt 0 -and $start -ge $total) { break }
     }
 
-    $rows = $all | ForEach-Object {
-        $domainName = if ($_.domainname) { $_.domainname } else { $_.domain }
-        [PSCustomObject]@{
-            domain = $domainName
-            status = $_.status
-            id     = $_.id
-            userid = $_.userid
+    # Normalize and export ALL fields returned by WHMCS.
+    # Note: Export-Csv uses the first object's properties as the schema, so we build a stable, complete schema.
+    $domainsNormalized = $all | ForEach-Object {
+        $obj = $_
+        $domainName = if ($obj.domainname) { $obj.domainname } else { $obj.domain }
+
+        if (-not $obj.PSObject.Properties['domain'] -and -not [string]::IsNullOrWhiteSpace($domainName)) {
+            $obj | Add-Member -NotePropertyName domain -NotePropertyValue $domainName -Force
         }
+        $obj
     } | Where-Object { -not [string]::IsNullOrWhiteSpace($_.domain) }
+
+    $preferredColumns = @(
+        'domain',
+        'domainname',
+        'id',
+        'userid',
+        'status',
+        'regtype',
+        'registrar',
+        'regdate',
+        'expirydate',
+        'nextduedate',
+        'firstpaymentamount',
+        'recurringamount',
+        'paymentmethod',
+        'paymentmethodname',
+        'regperiod'
+    )
+
+    $allColumnsSet = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($d in $domainsNormalized) {
+        foreach ($p in $d.PSObject.Properties) {
+            [void]$allColumnsSet.Add($p.Name)
+        }
+    }
+
+    $extraColumns = @($allColumnsSet | Where-Object { $_ -notin $preferredColumns } | Sort-Object)
+    $columns = @($preferredColumns | Where-Object { $allColumnsSet.Contains($_) }) + $extraColumns
+
+    $rows = foreach ($d in $domainsNormalized) {
+        $row = [ordered]@{}
+        foreach ($c in $columns) {
+            $prop = $d.PSObject.Properties[$c]
+            $row[$c] = if ($null -ne $prop) { $prop.Value } else { $null }
+        }
+        [PSCustomObject]$row
+    }
 
     $rows | Sort-Object domain | Export-Csv -Path $OutputFile -NoTypeInformation -Encoding utf8
 
-    Write-Host ("Exported {0} domain(s) to {1}" -f ($rows | Measure-Object).Count, $OutputFile)
+    Write-Host ("Exported {0} domain(s) with {1} column(s) to {2}" -f ($rows | Measure-Object).Count, $columns.Count, $OutputFile)
     exit 0
 }
 catch {

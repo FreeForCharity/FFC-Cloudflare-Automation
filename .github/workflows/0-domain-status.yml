@@ -145,6 +145,11 @@ jobs:
           $prePath = Join-Path $outDir 'm365-preflight.txt'
           $pre | Out-File -FilePath $prePath -Encoding utf8
 
+          # Include Graph-provided DNS guidance so Step 1 output contains exact expected values.
+          $dns = & pwsh -NoProfile -File .\scripts\m365-domain-status.ps1 -Domain $domain -AccessToken $token -ShowDnsRecords *>&1
+          $dnsPath = Join-Path $outDir 'm365-dns-guidance.txt'
+          $dns | Out-File -FilePath $dnsPath -Encoding utf8
+
           "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload M365 outputs
@@ -153,6 +158,81 @@ jobs:
           name: m365-domain-status
           path: ${{ steps.preflight.outputs.out_dir }}/*.txt
           if-no-files-found: error
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [cloudflare, m365]
+
+    steps:
+      - name: Download Cloudflare artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cloudflare-domain-status
+          path: artifacts/cloudflare
+
+      - name: Download M365 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: m365-domain-status
+          path: artifacts/m365
+
+      - name: Build deterministic summary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $domain = "${{ inputs.domain }}"
+
+          $cfIssues = [int]"${{ needs.cloudflare.outputs.issues_count }}"
+          $cfChanges = [int]"${{ needs.cloudflare.outputs.changes_count }}"
+
+          $m365Exists = "${{ needs.m365.outputs.domain_exists }}"
+          $m365Verified = "${{ needs.m365.outputs.is_verified }}"
+          $m365Email = "${{ needs.m365.outputs.supports_email }}"
+
+          $m365ExistsBool = ($m365Exists -eq 'True' -or $m365Exists -eq 'true')
+          $m365VerifiedBool = ($m365Verified -eq 'True' -or $m365Verified -eq 'true')
+          $m365EmailBool = ($m365Email -eq 'True' -or $m365Email -eq 'true')
+
+          $m365Status = if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }
+          $cfStatus = if ($cfIssues -eq 0) { 'PASS' } else { 'PARTIAL' }
+          $overall = if ($m365Status -eq 'PASS' -and $cfStatus -eq 'PASS') { 'PASS' } elseif ($m365Status -eq 'FAIL') { 'FAIL' } else { 'PARTIAL' }
+
+          $auditPath = 'artifacts/cloudflare/cloudflare-audit.txt'
+          $dryPath = 'artifacts/cloudflare/cloudflare-dryrun.txt'
+          $dnsPath = 'artifacts/m365/m365-dns-guidance.txt'
+
+          $auditLines = if (Test-Path $auditPath) { @(Get-Content -Path $auditPath) } else { @() }
+          $issueLines = @($auditLines | Where-Object { $_ -match '^[[](?:MISSING|MISSING/PARTIAL|DIFFERS)[]]' } | Sort-Object)
+
+          $dryLines = if (Test-Path $dryPath) { @(Get-Content -Path $dryPath) } else { @() }
+          $changeLines = @($dryLines | Where-Object { $_ -match '^[[]DRY-RUN[]]' } | Sort-Object)
+
+          $summary = @()
+          $summary += "# Domain status: $domain"
+          $summary += ""
+          $summary += "- Overall: **$overall**"
+          $summary += "- Cloudflare: **$cfStatus** ($cfIssues audit issues; $cfChanges planned changes)"
+          $summary += "- M365: **$m365Status** (exists=$m365ExistsBool, verified=$m365VerifiedBool, supportsEmail=$m365EmailBool)"
+          $summary += ""
+          $summary += "## Cloudflare audit (deterministic list)"
+          if ($issueLines.Count -eq 0) { $summary += "- No audit issues found." }
+          else { $summary += ($issueLines | ForEach-Object { "- $_" }) }
+          $summary += ""
+          $summary += "## Cloudflare plan (what will change)"
+          if ($changeLines.Count -eq 0) { $summary += "- No planned changes (dry-run)." }
+          else { $summary += ($changeLines | ForEach-Object { "- $_" }) }
+          $summary += ""
+          $summary += "## M365 expected DNS records (Graph)"
+          if (Test-Path $dnsPath) {
+            $dns = (Get-Content -Path $dnsPath -Raw).Trim()
+            if ($dns) { $summary += "```"; $summary += $dns; $summary += "```" }
+            else { $summary += "- No DNS guidance output." }
+          } else {
+            $summary += "- DNS guidance file not found."
+          }
+
+          ($summary -join "`n") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
 
   post_back:
     runs-on: ubuntu-latest

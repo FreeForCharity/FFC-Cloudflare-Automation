@@ -144,6 +144,8 @@ This workflow helps identify security vulnerabilities early in the development p
 | 5-m365-domain-and-dkim.yml    | Manual (workflow_dispatch)      | M365: Domain status + DKIM helpers (Graph + Exchange Online)                                              |
 | 6-m365-list-domains.yml       | Manual (workflow_dispatch)      | M365: List tenant domains (Graph)                                                                         |
 | 7-m365-domain-preflight.yml   | Manual (workflow_dispatch)      | M365: Domain onboarding preflight (two jobs: Graph in `m365-prod`, Cloudflare audit in `cloudflare-prod`) |
+| 11-cloudflare-zone-create.yml | Manual (workflow_dispatch)      | Admin: Create a new Cloudflare zone (explicit account selection)                                          |
+| 12-m365-add-tenant-domain.yml | Manual (workflow_dispatch)      | Admin: Add a domain to the M365 tenant (Graph) and print DNS verification records                         |
 
 ## Deprecated workflows (kept as stubs)
 
@@ -155,12 +157,36 @@ These workflows are **not** needed anymore because the repo moved to:
 
 ### Cloudflare Zone Add (removed)
 
-- **Why not needed**: creating a Cloudflare zone generally requires **account-level** permissions
-  (and often additional setup like plan/ownership validation). We avoid automating that because it
-  increases blast radius and is rarely repeatable in a safe “DNS-only” token.
-- **What replaces it**: zone creation is done in the Cloudflare dashboard by an account admin; once
-  the zone exists, use **01/02** (preferred) or the **03–06** DNS workflows to manage records and
-  apply standards.
+- **Why removed**: the legacy workflow required a separate secret and had unclear safety guardrails.
+- **What replaces it**: use **11. DNS - Add Domain (Create Zone) (Admin)**.
+  - It requires explicit account selection (FFC/CM) to reduce accidental duplicates.
+  - It refuses to create a zone if the domain already exists in the other account.
+  - It uses the `cloudflare-prod` environment secrets.
+
+## Admin workflow test notes
+
+These workflows are higher-blast-radius and should be tested with a domain you control.
+
+### 11. DNS - Add Domain (Create Zone) (Admin)
+
+- Ensure the `cloudflare-prod` environment has both secrets:
+  - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
+  - `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
+- Run the workflow with:
+  - `domain`: a safe test domain
+  - `account`: the intended owning account
+  - `zone_type`: usually `full`
+- Confirm output includes:
+  - Zone ID
+  - Assigned name servers
+
+### 12. M365 - Add Tenant Domain (Admin)
+
+- Ensure the `m365-prod` environment has:
+  - `FFC_AZURE_CLIENT_ID`
+  - `FFC_AZURE_TENANT_ID`
+- Run the workflow with `domain` set to a safe test domain.
+- Confirm output includes `verificationDnsRecords` and `serviceConfigurationRecords`.
 
 ### Legacy Cloudflare DNS update / run
 

@@ -150,11 +150,47 @@ function Try-GetMicrosoftDnsGuidance {
     }
 }
 
-function Get-CfToken {
+function Get-CfTokens {
     param([AllowNull()][string]$Provided)
 
-    if ($Provided) { return $Provided }
-    if ($env:CLOUDFLARE_API_KEY_DNS_ONLY) { return $env:CLOUDFLARE_API_KEY_DNS_ONLY }
+    if ($Provided) { return @($Provided) }
+
+    $tokens = @()
+    if ($env:CLOUDFLARE_API_TOKEN_FFC) { $tokens += @($env:CLOUDFLARE_API_TOKEN_FFC) }
+    if ($env:CLOUDFLARE_API_TOKEN_CM) { $tokens += @($env:CLOUDFLARE_API_TOKEN_CM) }
+
+    # Preserve order, de-dupe
+    $seen = @{}
+    return @(
+        foreach ($t in $tokens) {
+            if ([string]::IsNullOrWhiteSpace($t)) { continue }
+            $key = $t.Trim()
+            if (-not $seen.ContainsKey($key)) {
+                $seen[$key] = $true
+                $key
+            }
+        }
+    )
+}
+
+function Resolve-CfTokenForZone {
+    param(
+        [Parameter(Mandatory = $true)][string]$Zone,
+        [AllowNull()][string]$ProvidedToken
+    )
+
+    $tokens = @(Get-CfTokens -Provided $ProvidedToken)
+    foreach ($t in $tokens) {
+        try {
+            $headers = @{ Authorization = "Bearer $t"; 'Content-Type' = 'application/json' }
+            $zones = (Invoke-CfApi -Method 'GET' -Uri '/zones' -Headers $headers -Params @{ name = $Zone }).result
+            if ($zones -and $zones.Count -gt 0) { return $t }
+        }
+        catch {
+            continue
+        }
+    }
+
     return $null
 }
 
@@ -315,10 +351,10 @@ try {
         Write-Host 'Cloudflare checks skipped (-SkipCloudflare)' -ForegroundColor DarkGray
     }
     else {
-        $cfToken = Get-CfToken -Provided $CloudflareToken
+        $cfToken = Resolve-CfTokenForZone -Zone $Domain -ProvidedToken $CloudflareToken
         if (-not $cfToken) {
             Write-Host 'Cloudflare token not set; skipping Cloudflare audit.' -ForegroundColor Yellow
-            Write-Host 'Set CLOUDFLARE_API_KEY_DNS_ONLY, or pass -CloudflareToken.' -ForegroundColor DarkGray
+            Write-Host 'Set CLOUDFLARE_API_TOKEN_FFC and CLOUDFLARE_API_TOKEN_CM, or pass -CloudflareToken.' -ForegroundColor DarkGray
         }
         else {
             $audit = Run-CloudflareAudit -Zone $Domain -Token $cfToken

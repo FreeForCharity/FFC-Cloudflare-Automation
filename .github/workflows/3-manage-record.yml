@@ -97,7 +97,8 @@ jobs:
     runs-on: windows-latest # Using Windows runner for PowerShell script
     environment: cloudflare-prod
     env:
-      CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+      CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+      CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
     steps:
       - uses: actions/checkout@v4
 
@@ -107,8 +108,7 @@ jobs:
           $Domain = "${{ needs.resolve-context.outputs.domain }}"
           Write-Host "Checking if zone '$Domain' exists in Cloudflare..."
 
-          # Import the function from our script (dot sourcing)
-          . .\Update-CloudflareDns.ps1 -Zone $Domain -List -ErrorAction SilentlyContinue
+          .\Update-CloudflareDns.ps1 -Zone $Domain -List -ErrorAction SilentlyContinue
 
           if ($LASTEXITCODE -eq 0) {
             Write-Host "SUCCESS: Zone '$Domain' found and accessible." -ForegroundColor Green
@@ -123,7 +123,8 @@ jobs:
     environment: cloudflare-prod
     if: needs.resolve-context.outputs.dry_run == 'false'
     env:
-      CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+      CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+      CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
     steps:
       - uses: actions/checkout@v4
 

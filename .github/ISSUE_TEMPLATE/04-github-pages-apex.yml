@@ -150,7 +150,7 @@ body:
 
           ### DNS Configuration (PowerShell Script)
           ```powershell
-          $env:CLOUDFLARE_API_KEY_DNS_ONLY = "your-token-here"
+          $env:CLOUDFLARE_API_TOKEN_FFC = "your-token-here"
 
           # Create A records for GitHub Pages (repeat for all 4 IPs)
           .\Update-CloudflareDns.ps1 -Zone [domain.org] -Name @ -Type A -Content 185.199.108.153

@@ -30,7 +30,10 @@
     Switch to enable Cloudflare Proxy (Orange Cloud). Default is DNS Only (Grey Cloud).
 
 .PARAMETER Token
-    Cloudflare API Token. Defaults to $env:CLOUDFLARE_API_KEY_DNS_ONLY.
+    Cloudflare API Token. If omitted, the script will try both account tokens from the environment
+    (recommended for GitHub Actions):
+    - $env:CLOUDFLARE_API_TOKEN_FFC
+    - $env:CLOUDFLARE_API_TOKEN_CM
 
 .PARAMETER DryRun
     Preview changes without applying them.
@@ -111,21 +114,33 @@ $ErrorActionPreference = 'Stop'
 $ApiBase = 'https://api.cloudflare.com/client/v4'
 
 # --- Authenticate ---
-function Get-AuthToken {
-    if ($Token) { return $Token }
-    if ($env:CLOUDFLARE_API_KEY_DNS_ONLY) { return $env:CLOUDFLARE_API_KEY_DNS_ONLY }
-    
-    # Non-interactive mode: Fail if no token
-    throw "Cloudflare API Token not found. Set CLOUDFLARE_API_KEY_DNS_ONLY environment variable, or pass -Token parameter."
+function Get-AuthTokens {
+    if ($Token) { return @($Token) }
+
+    $tokens = @()
+    if ($env:CLOUDFLARE_API_TOKEN_FFC) { $tokens += @($env:CLOUDFLARE_API_TOKEN_FFC) }
+    if ($env:CLOUDFLARE_API_TOKEN_CM) { $tokens += @($env:CLOUDFLARE_API_TOKEN_CM) }
+
+    # Backward-compatible fallback (deprecated)
+    if ($tokens.Count -eq 0 -and $env:CLOUDFLARE_API_KEY_DNS_ONLY) { $tokens = @($env:CLOUDFLARE_API_KEY_DNS_ONLY) }
+
+    if ($tokens.Count -eq 0) {
+        throw "Cloudflare API token(s) not found. Set CLOUDFLARE_API_TOKEN_FFC and CLOUDFLARE_API_TOKEN_CM (recommended), or pass -Token."
+    }
+
+    return $tokens
 }
 
-$AuthToken = Get-AuthToken
-if (-not $AuthToken) { Write-Error "No Cloudflare API Token provided."; exit 1 }
-
-$Headers = @{
-    'Authorization' = "Bearer $AuthToken"
-    'Content-Type'  = 'application/json'
+function New-CfHeaders {
+    param([Parameter(Mandatory = $true)][string]$AuthToken)
+    return @{
+        'Authorization' = "Bearer $AuthToken"
+        'Content-Type'  = 'application/json'
+    }
 }
+
+$AuthToken = $null
+$Headers = $null
 
 # --- Helper Functions ---
 
@@ -181,6 +196,34 @@ function Get-ZoneId {
     $zones = $resp.result
     if ($zones.Count -eq 0) { throw "Zone '$ZoneName' not found." }
     return $zones[0].id
+}
+
+function Try-ResolveZoneContext {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ZoneName,
+        [Parameter(Mandatory = $true)]
+        [string[]]$Tokens
+    )
+
+    foreach ($t in $Tokens) {
+        if ([string]::IsNullOrWhiteSpace($t)) { continue }
+        $script:AuthToken = $t
+        $script:Headers = New-CfHeaders -AuthToken $t
+
+        try {
+            $resp = Invoke-CfApi -Method 'GET' -Uri '/zones' -Params @{ name = $ZoneName }
+            $zones = @($resp.result)
+            if ($zones.Count -gt 0) {
+                return [pscustomobject]@{ Token = $t; ZoneId = $zones[0].id }
+            }
+        }
+        catch {
+            # Ignore and try next token
+        }
+    }
+
+    return $null
 }
 
 function Get-AllDnsRecords {
@@ -286,9 +329,18 @@ function Set-DmarcRuaMailtos {
 # --- Main Logic ---
 
 try {
-    # 1. Resolve Zone ID
-    $ZoneId = Get-ZoneId -ZoneName $Zone
-    Write-Verbose "Found Zone ID: $ZoneId"
+    # 1. Resolve which account owns the zone (tries both configured tokens)
+    $tokens = Get-AuthTokens
+    $ctx = Try-ResolveZoneContext -ZoneName $Zone -Tokens $tokens
+    if (-not $ctx) {
+        throw "Zone '$Zone' not found in any configured Cloudflare account (tokens tried: $($tokens.Count))."
+    }
+
+    $AuthToken = $ctx.Token
+    $Headers = New-CfHeaders -AuthToken $AuthToken
+    $ZoneId = $ctx.ZoneId
+
+    Write-Verbose "Resolved zone '$Zone' to Zone ID: $ZoneId"
 
     # 2. Resolve Full Record Name
     if ($Name -eq '@') {

@@ -166,7 +166,7 @@ vulnerabilities (with their permission).
 2. **Use Environment Variables**:
 
    ```powershell
-   $env:CLOUDFLARE_API_KEY_DNS_ONLY = "your-token-here"
+   $env:CLOUDFLARE_API_TOKEN_FFC = "your-token-here"
    .\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type A -Content 203.0.113.42
    ```
 

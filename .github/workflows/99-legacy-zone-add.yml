@@ -14,5 +14,5 @@ jobs:
       - name: Deprecated workflow
         run: |
           echo "This legacy workflow required a separate zone-create token and has been removed."
-          echo "Use the supported DNS workflows that authenticate with CLOUDFLARE_API_KEY_DNS_ONLY."
+          echo "Use the supported DNS workflows that authenticate with the cloudflare-prod environment secrets FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS and CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS."
           exit 1

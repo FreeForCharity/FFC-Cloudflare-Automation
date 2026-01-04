@@ -12,7 +12,7 @@
 .EXAMPLE
     ./Update-StagingDns.ps1 -NewIp 203.0.113.42
 .EXAMPLE
-    $env:CLOUDFLARE_API_KEY_DNS_ONLY = "token"; ./Update-StagingDns.ps1 -NewIp 203.0.113.42
+    $env:CLOUDFLARE_API_TOKEN_FFC = "token"; ./Update-StagingDns.ps1 -NewIp 203.0.113.42
 .EXAMPLE
     ./Update-StagingDns.ps1 -NewIp 203.0.113.42 -DryRun
 .NOTES
@@ -36,7 +36,11 @@ $ApiBase = 'https://api.cloudflare.com/client/v4'
 function Get-PlainToken {
     param([string]$Provided)
     if ($Provided) { return $Provided.Trim() }
-    if ($env:CLOUDFLARE_API_KEY_DNS_ONLY) { return $env:CLOUDFLARE_API_KEY_DNS_ONLY.Trim() }
+    if ($env:CLOUDFLARE_API_TOKEN_FFC) { return $env:CLOUDFLARE_API_TOKEN_FFC.Trim() }
+    if ($env:CLOUDFLARE_API_KEY_DNS_ONLY) {
+        Write-Warning 'CLOUDFLARE_API_KEY_DNS_ONLY is deprecated; use CLOUDFLARE_API_TOKEN_FFC.'
+        return $env:CLOUDFLARE_API_KEY_DNS_ONLY.Trim()
+    }
     $secure = Read-Host 'Enter Cloudflare API Token' -AsSecureString
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }

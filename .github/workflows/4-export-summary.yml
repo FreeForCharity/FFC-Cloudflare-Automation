@@ -11,13 +11,82 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run DNS Export
+      - name: Smoke test token (REPORTS)
+        if: ${{ secrets.CLOUDFLARE_API_KEY_REPORTS != '' }}
         shell: pwsh
         env:
-          CLOUDFLARE_API_KEY_DNS_ONLY:
-            ${{ secrets.CLOUDFLARE_API_KEY_REPORTS || secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_KEY_REPORTS }}
         run: |
-          .\Export-CloudflareDns.ps1 -OutputFile "domain_summary.csv"
+          $headers = @{ Authorization = "Bearer $env:CF_TOKEN" }
+          $baseUrl = 'https://api.cloudflare.com/client/v4'
+
+          $verify = Invoke-RestMethod -Method 'POST' -Uri "$baseUrl/user/tokens/verify" -Headers $headers -ContentType 'application/json'
+          if (-not $verify.success) { throw "Cloudflare token verify failed (REPORTS): $($verify.errors | ConvertTo-Json -Depth 10)" }
+
+          $zones = Invoke-RestMethod -Method 'GET' -Uri "$baseUrl/zones?per_page=1&page=1" -Headers $headers
+          if (-not $zones.success) { throw "Cloudflare zones list failed (REPORTS): $($zones.errors | ConvertTo-Json -Depth 10)" }
+
+          $total = $zones.result_info.total_count
+          if ($null -eq $total) { $total = $zones.result_info.count }
+          Write-Host "REPORTS token OK. Zones visible: $total"
+
+      - name: Smoke test token (DNS_ONLY)
+        shell: pwsh
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+        run: |
+          $headers = @{ Authorization = "Bearer $env:CF_TOKEN" }
+          $baseUrl = 'https://api.cloudflare.com/client/v4'
+
+          $verify = Invoke-RestMethod -Method 'POST' -Uri "$baseUrl/user/tokens/verify" -Headers $headers -ContentType 'application/json'
+          if (-not $verify.success) { throw "Cloudflare token verify failed (DNS_ONLY): $($verify.errors | ConvertTo-Json -Depth 10)" }
+
+          $zones = Invoke-RestMethod -Method 'GET' -Uri "$baseUrl/zones?per_page=1&page=1" -Headers $headers
+          if (-not $zones.success) { throw "Cloudflare zones list failed (DNS_ONLY): $($zones.errors | ConvertTo-Json -Depth 10)" }
+
+          $total = $zones.result_info.total_count
+          if ($null -eq $total) { $total = $zones.result_info.count }
+          Write-Host "DNS_ONLY token OK. Zones visible: $total"
+
+      - name: Run DNS Export (REPORTS)
+        if: ${{ secrets.CLOUDFLARE_API_KEY_REPORTS != '' }}
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_REPORTS }}
+        run: |
+          .\Export-CloudflareDns.ps1 -OutputFile "domain_summary_reports.csv"
+
+      - name: Run DNS Export (DNS_ONLY)
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_KEY_DNS_ONLY: ${{ secrets.CLOUDFLARE_API_KEY_DNS_ONLY }}
+        run: |
+          .\Export-CloudflareDns.ps1 -OutputFile "domain_summary_dns_only.csv"
+
+      - name: Merge exports
+        shell: pwsh
+        run: |
+          $files = @()
+          if (Test-Path 'domain_summary_reports.csv') { $files += 'domain_summary_reports.csv' }
+          if (Test-Path 'domain_summary_dns_only.csv') { $files += 'domain_summary_dns_only.csv' }
+
+          if ($files.Count -eq 0) {
+            throw 'No export files were generated; cannot produce combined domain_summary.csv.'
+          }
+
+          $rows = foreach ($f in $files) { Import-Csv $f }
+          $seen = @{}
+          $merged = foreach ($r in $rows) {
+            if (-not $r.zone) { continue }
+            $key = $r.zone.ToString().ToLowerInvariant()
+            if (-not $seen.ContainsKey($key)) {
+              $seen[$key] = $true
+              $r
+            }
+          }
+
+          $merged | Sort-Object zone | Export-Csv -Path 'domain_summary.csv' -NoTypeInformation -Encoding utf8
+          Write-Host "Merged $($merged.Count) unique zones into domain_summary.csv"
 
       - name: Upload CSV Artifact
         uses: actions/upload-artifact@v6

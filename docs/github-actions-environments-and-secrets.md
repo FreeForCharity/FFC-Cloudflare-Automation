@@ -40,6 +40,17 @@ Environment secrets:
 - `CLOUDFLARE_API_KEY_REPORTS` (optional; if set, report-only workflows prefer this token so
   reporting can span multiple Cloudflare accounts/zones)
 
+Notes:
+
+- The export workflow `.github/workflows/4-export-summary.yml` runs the export once per token
+  (`CLOUDFLARE_API_KEY_REPORTS` when set, and `CLOUDFLARE_API_KEY_DNS_ONLY`) and merges results into
+  one `domain_summary.csv` artifact so domains across multiple accounts are included.
+- To sanity-check whether the two tokens have equivalent access, run the export workflow and compare
+  the “Zones visible” counts printed by the token smoke-test steps.
+- Cloudflare does not reliably expose full token permission policies via API, so the authoritative
+  way to confirm both tokens have identical permissions is in the Cloudflare dashboard token summary
+  (compare **Permissions** and **Resources** sections for the two tokens).
+
 Repository variable (non-secret):
 
 - `ALLOWED_ACTORS` (optional guardrail; comma-separated GitHub usernames)

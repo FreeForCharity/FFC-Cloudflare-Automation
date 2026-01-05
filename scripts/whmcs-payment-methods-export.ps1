@@ -69,21 +69,66 @@ function Invoke-WhmcsApi {
         [hashtable]$Body
     )
 
+    $requestedResponseType = if ($Body.ContainsKey('responsetype') -and -not [string]::IsNullOrWhiteSpace($Body.responsetype)) { $Body.responsetype } else { 'json' }
+
     $headers = @{
-        'Accept'     = 'application/json'
+        'Accept'     = 'application/json, application/xml;q=0.9, */*;q=0.8'
         'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
     $resp = Invoke-RestMethod -Method Post -Uri $ApiUrl -Headers $headers -Body $Body -ContentType 'application/x-www-form-urlencoded' -ErrorAction Stop
 
-    if ($resp -is [string]) {
-        $raw = $resp
-        try {
-            $resp = $raw | ConvertFrom-Json -ErrorAction Stop
+    if ($requestedResponseType -eq 'xml') {
+        if ($resp -is [string]) {
+            $raw = $resp
+            try {
+                $resp = [xml]$raw
+            }
+            catch {
+                $clean = $raw -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
+                try {
+                    $resp = [xml]$clean
+                }
+                catch {
+                    $snippet = if ($raw.Length -gt 400) { $raw.Substring(0, 400) + '...' } else { $raw }
+                    throw "WHMCS API returned XML that could not be parsed (likely contains invalid control characters). Snippet: $snippet"
+                }
+            }
         }
-        catch {
-            $snippet = if ($raw.Length -gt 400) { $raw.Substring(0, 400) + '...' } else { $raw }
-            throw "WHMCS API returned a non-JSON response: $snippet"
+
+        if ($resp -is [xml] -and $resp.whmcsapi) {
+            $resp = $resp.whmcsapi
+        }
+    }
+    else {
+        if ($resp -is [string]) {
+            $raw = $resp
+            try {
+                $resp = $raw | ConvertFrom-Json -ErrorAction Stop
+            }
+            catch {
+                if ($raw.TrimStart().StartsWith('<')) {
+                    try {
+                        try {
+                            $xml = [xml]$raw
+                        }
+                        catch {
+                            $clean = $raw -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
+                            $xml = [xml]$clean
+                        }
+                        $resp = if ($xml.whmcsapi) { $xml.whmcsapi } else { $xml }
+                        $requestedResponseType = 'xml'
+                    }
+                    catch {
+                        $snippet = if ($raw.Length -gt 400) { $raw.Substring(0, 400) + '...' } else { $raw }
+                        throw "WHMCS API returned a non-JSON response: $snippet"
+                    }
+                }
+                else {
+                    $snippet = if ($raw.Length -gt 400) { $raw.Substring(0, 400) + '...' } else { $raw }
+                    throw "WHMCS API returned a non-JSON response: $snippet"
+                }
+            }
         }
     }
 
@@ -104,6 +149,12 @@ function Invoke-WhmcsApi {
                 $diag = $diag.Substring(0, 800) + '...'
             }
             $msg = "Unknown WHMCS API error." + (if ($diag) { " Response: $diag" } else { '' })
+        }
+
+        if ($requestedResponseType -eq 'json' -and $msg -match 'Error generating JSON encoded response|Malformed UTF-8') {
+            $fallbackBody = $Body.Clone()
+            $fallbackBody.responsetype = 'xml'
+            return Invoke-WhmcsApi -ApiUrl $ApiUrl -Body $fallbackBody
         }
 
         throw "WHMCS API error: $msg"
@@ -218,7 +269,7 @@ try {
             identifier   = $creds.Identifier
             secret       = $creds.Secret
             action       = 'GetTransactions'
-            responsetype = 'json'
+            responsetype = 'xml'
             limitstart   = $start
             limitnum     = $PageSize
         }
@@ -250,7 +301,7 @@ try {
             identifier   = $creds.Identifier
             secret       = $creds.Secret
             action       = 'GetInvoices'
-            responsetype = 'json'
+            responsetype = 'xml'
             limitstart   = $start
             limitnum     = $PageSize
         }
@@ -282,7 +333,7 @@ try {
             identifier   = $creds.Identifier
             secret       = $creds.Secret
             action       = 'GetClientsProducts'
-            responsetype = 'json'
+            responsetype = 'xml'
             limitstart   = $start
             limitnum     = $PageSize
         }

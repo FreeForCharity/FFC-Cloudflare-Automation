@@ -143,6 +143,52 @@ jobs:
             throw "Expected output file not found: $out"
           }
 
+      - name: Lookup invoices for deleted clients (userid=0)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $txPath = "${{ inputs.transactions_output }}"
+          if (-not (Test-Path $txPath)) {
+            throw "Transactions CSV not found: $txPath"
+          }
+
+          $out = 'artifacts/whmcs/whmcs_invoices_deleted_clients.csv'
+          $outDir = Split-Path -Parent $out
+          if (-not [string]::IsNullOrWhiteSpace($outDir)) {
+            New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          }
+
+          $invoiceIds = @(Import-Csv -LiteralPath $txPath |
+            Where-Object { $_.userid -eq '0' -and -not [string]::IsNullOrWhiteSpace($_.invoiceid) } |
+            Select-Object -ExpandProperty invoiceid -Unique |
+            ForEach-Object { $_.ToString().Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+          if ($invoiceIds.Count -eq 0) {
+            Write-Host 'No userid=0 invoices found; skipping invoice lookup.'
+            # Create an empty CSV with headers so the artifact upload is predictable.
+            @([pscustomobject]@{ invoiceid=''; userid=''; status=''; date=''; duedate=''; total=''; paymentmethod=''; firstname=''; lastname=''; companyname=''; email=''; address1=''; address2=''; city=''; state=''; postcode=''; country='' }) |
+              Export-Csv -NoTypeInformation -Encoding utf8 -Path $out
+            exit 0
+          }
+
+          $tmpIds = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'deleted_client_invoice_ids.txt'
+          $invoiceIds | Sort-Object -Unique | Set-Content -LiteralPath $tmpIds -Encoding utf8
+
+          & pwsh -NoProfile -File .\scripts\whmcs-invoices-lookup.ps1 -ApiUrl $env:WHMCS_API_URL -InvoiceIdFile $tmpIds -OutputFile $out
+          if ($LASTEXITCODE -ne 0) {
+            throw "WHMCS invoice lookup failed with exit code $LASTEXITCODE."
+          }
+
+          $count = (Import-Csv -LiteralPath $out | Where-Object { $_.invoiceid -and $_.status -ne 'ERROR' }).Count
+          "- Deleted-client invoices looked up: $count" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
       - name: Generate Zeffy payments import draft
         shell: pwsh
         run: |
@@ -267,6 +313,13 @@ jobs:
         with:
           name: whmcs_transactions
           path: ${{ inputs.transactions_output }}
+          if-no-files-found: error
+
+      - name: Upload WHMCS deleted-client invoices
+        uses: actions/upload-artifact@v6
+        with:
+          name: whmcs_invoices_deleted_clients
+          path: artifacts/whmcs/whmcs_invoices_deleted_clients.csv
           if-no-files-found: error
 
       - name: Upload Zeffy draft

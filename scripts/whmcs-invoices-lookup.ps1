@@ -12,22 +12,18 @@ param(
     [Parameter()]
     [string]$AccessKey,
 
-    [Parameter()]
-    [string]$OutputFile = 'whmcs_transactions.csv',
+    [Parameter(Mandatory = $true, ParameterSetName = 'Ids')]
+    [string[]]$InvoiceId,
+
+    [Parameter(Mandatory = $true, ParameterSetName = 'FromFile')]
+    [string]$InvoiceIdFile,
 
     [Parameter()]
-    [ValidateRange(1, 250)]
-    [int]$PageSize = 250,
+    [string]$OutputFile = 'whmcs_invoices.csv',
 
     [Parameter()]
-    [ValidateRange(1, 1000000)]
-    [int]$MaxRows = 200000,
-
-    [Parameter()]
-    [datetime]$StartDate,
-
-    [Parameter()]
-    [datetime]$EndDate
+    [ValidateRange(0, 2000)]
+    [int]$SleepMs = 150
 )
 
 $ErrorActionPreference = 'Stop'
@@ -136,18 +132,37 @@ function Get-Text {
     param($Node)
 
     if (-not $Node) { return $null }
-    $s = [string]$Node
+    if ($Node -is [System.Xml.XmlNode]) {
+        $s = $Node.InnerText
+    }
+    else {
+        $s = [string]$Node
+    }
     if ([string]::IsNullOrWhiteSpace($s)) { return $null }
     return $s
 }
 
-function Normalize-DateParam {
-    param([Nullable[datetime]]$Date)
+function Get-Invoice {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ApiUrl,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Creds,
+        [Parameter(Mandatory = $true)]
+        [string]$InvoiceId,
+        [string]$AccessKey
+    )
 
-    if ($null -eq $Date) { return $null }
-    if ($Date.Value -eq [datetime]::MinValue) { return $null }
+    $body = @{
+        identifier   = $Creds.Identifier
+        secret       = $Creds.Secret
+        action       = 'GetInvoice'
+        responsetype = 'xml'
+        invoiceid    = $InvoiceId
+    }
 
-    return $Date.Value.ToString('yyyy-MM-dd')
+    if ($AccessKey) { $body.accesskey = $AccessKey }
+    return Invoke-WhmcsApiXml -ApiUrl $ApiUrl -Body $body
 }
 
 try {
@@ -155,100 +170,76 @@ try {
     $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret
     $accessKey = Resolve-WhmcsAccessKey -AccessKeyParam $AccessKey
 
+    $ids = @()
+    if ($PSCmdlet.ParameterSetName -eq 'FromFile') {
+        if (-not (Test-Path $InvoiceIdFile)) { throw "InvoiceIdFile not found: $InvoiceIdFile" }
+        $ids = Get-Content -LiteralPath $InvoiceIdFile | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    }
+    else {
+        $ids = $InvoiceId | ForEach-Object { [string]$_ } | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    }
+
+    $ids = $ids | Sort-Object -Unique
+    if ($ids.Count -eq 0) { throw 'No invoice IDs provided.' }
+
     New-DirectoryForFile -Path $OutputFile
 
     $rows = @()
-    $seenTransactionIds = @{}
 
-    $start = 0
-    $total = $null
+    foreach ($id in $ids) {
+        if ($SleepMs -gt 0) { Start-Sleep -Milliseconds $SleepMs }
 
-    while ($true) {
-        if ($rows.Count -ge $MaxRows) {
-            Write-Warning "Reached MaxRows=$MaxRows; stopping export early."
-            break
-        }
+        try {
+            $resp = Get-Invoice -ApiUrl $api -Creds $creds -InvoiceId $id -AccessKey $accessKey
 
-        $body = @{
-            identifier   = $creds.Identifier
-            secret       = $creds.Secret
-            action       = 'GetTransactions'
-            responsetype = 'xml'
-            limitstart   = $start
-            limitnum     = $PageSize
-        }
-
-        $sd = Normalize-DateParam -Date $StartDate
-        if ($sd) { $body.date = $sd }
-
-        $ed = Normalize-DateParam -Date $EndDate
-        if ($ed) { $body.enddate = $ed }
-
-        if ($accessKey) { $body.accesskey = $accessKey }
-
-        $resp = Invoke-WhmcsApiXml -ApiUrl $api -Body $body
-
-        if ($null -eq $total) {
-            $totalText = Get-Text -Node $resp.totalresults
-            if (-not [string]::IsNullOrWhiteSpace($totalText)) {
-                $total = [int]$totalText
-            }
-        }
-
-        $batch = @()
-        if ($resp.transactions -and $resp.transactions.transaction) {
-            $batch = @($resp.transactions.transaction)
-        }
-
-        $stopAfterThisBatch = $false
-        if ($batch.Count -gt $PageSize) {
-            Write-Warning "WHMCS GetTransactions returned $($batch.Count) rows with PageSize=$PageSize for limitstart=$start; pagination may be unsupported or ignored. De-duplicating and stopping after this request to avoid duplicates."
-            $stopAfterThisBatch = $true
-        }
-
-        $addedThisBatch = 0
-
-        foreach ($t in $batch) {
-            $txId = Get-Text $t.id
-            if (-not [string]::IsNullOrWhiteSpace($txId)) {
-                if ($seenTransactionIds.ContainsKey($txId)) {
-                    continue
-                }
-                $seenTransactionIds[$txId] = $true
-            }
+            $inv = $resp.invoice
 
             $rows += [pscustomobject]@{
-                transactionid = $txId
-                userid        = Get-Text $t.userid
-                date          = Get-Text $t.date
-                gateway       = Get-Text $t.gateway
-                amountin      = Get-Text $t.amountin
-                fees          = Get-Text $t.fees
-                amountout     = Get-Text $t.amountout
-                transid       = Get-Text $t.transid
-                invoiceid     = Get-Text $t.invoiceid
-                description   = Get-Text $t.description
-                currency      = Get-Text $t.currency
+                invoiceid     = $id
+                userid        = Get-Text $inv.userid
+                status        = Get-Text $inv.status
+                date          = Get-Text $inv.date
+                duedate       = Get-Text $inv.duedate
+                total         = Get-Text $inv.total
+                paymentmethod = Get-Text $inv.paymentmethod
+                firstname     = Get-Text $inv.firstname
+                lastname      = Get-Text $inv.lastname
+                companyname   = Get-Text $inv.companyname
+                email         = Get-Text $inv.email
+                address1      = Get-Text $inv.address1
+                address2      = Get-Text $inv.address2
+                city          = Get-Text $inv.city
+                state         = Get-Text $inv.state
+                postcode      = Get-Text $inv.postcode
+                country       = Get-Text $inv.country
             }
-            $addedThisBatch++
         }
-
-        if ($addedThisBatch -eq 0) {
-            Write-Warning "WHMCS GetTransactions returned no new rows for limitstart=$start; stopping to avoid an infinite loop and duplicates."
-            break
+        catch {
+            $rows += [pscustomobject]@{
+                invoiceid     = $id
+                userid        = $null
+                status        = 'ERROR'
+                date          = $null
+                duedate       = $null
+                total         = $null
+                paymentmethod = $null
+                firstname     = $null
+                lastname      = $null
+                companyname   = $null
+                email         = $null
+                address1      = $null
+                address2      = $null
+                city          = $null
+                state         = $null
+                postcode      = $null
+                country       = $null
+            }
+            Write-Warning "Failed to fetch invoice ${id}: $($_.Exception.Message)"
         }
-
-        if ($stopAfterThisBatch) { break }
-
-        if ($batch.Count -lt $PageSize) { break }
-        $start += $PageSize
-
-        if ($total -and $start -ge $total) { break }
     }
 
     $rows | Export-Csv -NoTypeInformation -Encoding utf8 -Path $OutputFile
-
-    Write-Host "Exported $($rows.Count) transactions to $OutputFile"
+    Write-Host "Exported $($rows.Count) invoices to $OutputFile"
 }
 catch {
     Write-Error $_

@@ -75,8 +75,8 @@ This is primarily used to ensure Zeffy contact creation has a corresponding “p
 Some WHMCS transactions can have `userid=0` (deleted clients). These rows are excluded from the
 Zeffy output so imports do not break on missing/unknown contact data.
 
-The generator also skips rows where the resolved client is missing a first/last name (Zeffy
-requires a contact name).
+The generator also skips rows where the resolved client is missing a first/last name (Zeffy requires
+a contact name).
 
 The workflow also emits a separate export (`whmcs_invoices_deleted_clients`) that looks up invoice
 details (including contact fields) for any `userid=0` transactions that still have an `invoiceid`.

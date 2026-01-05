@@ -175,6 +175,43 @@ To discover what WHMCS uses in your data (so we can map deterministically), use:
 The export enumerates distinct values seen across `GetTransactions.gateway`,
 `GetInvoices.paymentmethod`, and `GetClientsProducts.paymentmethod`.
 
+## WPMUDEV exports (read-only)
+
+This repo includes a read-only WPMUDEV export workflow for domain inventory and reconciliation.
+
+### WPMUDEV domain/site inventory
+
+- Workflow: `.github/workflows/13-wpmudev-export-sites.yml`
+- Script: `scripts/wpmudev-sites-export.ps1`
+- Environment: `wpmudev-prod`
+- Required secret: `FFC_WPMUDEV_GA_API_Token`
+
+This workflow exports all sites hosted on WPMUDEV's managed hosting platform, aggregated by domain.
+The output CSV includes domain names, site IDs, site names, home URLs, and site counts.
+
+**Use cases:**
+
+- **Domain reconciliation**: Compare WPMUDEV hosted sites with Cloudflare DNS zones and WHMCS billing
+  records to detect drift
+- **Hosting audit**: Verify which domains are actively hosted vs. only registered
+- **Migration planning**: Understand the full scope of hosted sites before infrastructure changes
+
+**Output CSV columns:**
+
+- `domain` (normalized to lowercase)
+- `siteIds` (semicolon-separated)
+- `siteNames` (semicolon+space separated; may be empty if no title)
+- `homeUrls` (semicolon+space separated)
+- `sitesCount` (integer)
+- `source` (`wpmudev`)
+- `fetchedUtc` (ISO-8601 UTC timestamp)
+
+For detailed setup and usage, see
+[docs/wpmudev-domain-inventory.md](docs/wpmudev-domain-inventory.md).
+
+For cross-source domain reconciliation (Cloudflare + WHMCS + WPMUDEV), see
+[docs/domain-inventory-reconciliation.md](docs/domain-inventory-reconciliation.md).
+
 ### Basic Examples
 
 **Update or create an A record:**

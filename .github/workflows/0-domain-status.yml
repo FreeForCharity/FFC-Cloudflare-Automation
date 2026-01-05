@@ -138,6 +138,9 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $domain = "${{ inputs.domain }}"
 
+          $token = (az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+          if ([string]::IsNullOrWhiteSpace($token)) { throw 'Failed to acquire Microsoft Graph access token' }
+
           $outDir = Join-Path $env:RUNNER_TEMP 'domain-status-m365'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 

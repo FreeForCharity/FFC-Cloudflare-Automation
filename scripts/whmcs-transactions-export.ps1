@@ -142,10 +142,12 @@ function Get-Text {
 }
 
 function Normalize-DateParam {
-    param([datetime]$Date)
+    param([Nullable[datetime]]$Date)
 
-    if (-not $Date) { return $null }
-    return $Date.ToString('yyyy-MM-dd')
+    if ($null -eq $Date) { return $null }
+    if ($Date.Value -eq [datetime]::MinValue) { return $null }
+
+    return $Date.Value.ToString('yyyy-MM-dd')
 }
 
 try {

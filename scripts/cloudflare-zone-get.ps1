@@ -68,10 +68,10 @@ try {
 
     if ($zones.Count -lt 1) {
         [pscustomobject]@{
-            domain = $d
-            account = $Account
-            exists = $false
-            zoneId = $null
+            domain      = $d
+            account     = $Account
+            exists      = $false
+            zoneId      = $null
             nameServers = @()
         } | ConvertTo-Json -Depth 5
         exit 0
@@ -79,10 +79,10 @@ try {
 
     $z = $zones[0]
     [pscustomobject]@{
-        domain = $d
-        account = $Account
-        exists = $true
-        zoneId = $z.id
+        domain      = $d
+        account     = $Account
+        exists      = $true
+        zoneId      = $z.id
         nameServers = @($z.name_servers)
     } | ConvertTo-Json -Depth 5
     exit 0

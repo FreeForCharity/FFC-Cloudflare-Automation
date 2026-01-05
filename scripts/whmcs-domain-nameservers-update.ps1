@@ -250,7 +250,7 @@ try {
 
     $auth = @{
         identifier = $creds.Identifier
-        secret = $creds.Secret
+        secret     = $creds.Secret
     }
     if (-not [string]::IsNullOrWhiteSpace($accessKey)) {
         $auth.accesskey = $accessKey

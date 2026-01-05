@@ -16,6 +16,7 @@ on:
 permissions:
   contents: read
   issues: write
+  pull-requests: write
   id-token: write
 
 jobs:
@@ -410,6 +411,11 @@ jobs:
     needs: [cloudflare, m365]
     if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
 
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
     steps:
       - name: Download Cloudflare artifacts
         uses: actions/download-artifact@v4
@@ -423,57 +429,246 @@ jobs:
           name: m365-domain-status
           path: artifacts/m365
 
+      - name: Build comment markdown (includes checks table)
+        id: comment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $domain = "${{ inputs.domain }}"
+
+          $cfIssues = [int]"${{ needs.cloudflare.outputs.issues_count }}"
+          $cfSevere = [int]"${{ needs.cloudflare.outputs.severe_issues_count }}"
+          $cfChanges = [int]"${{ needs.cloudflare.outputs.changes_count }}"
+
+          $m365Exists = "${{ needs.m365.outputs.domain_exists }}"
+          $m365Verified = "${{ needs.m365.outputs.is_verified }}"
+          $m365Email = "${{ needs.m365.outputs.supports_email }}"
+
+          $m365ExistsBool = ($m365Exists -eq 'True' -or $m365Exists -eq 'true')
+          $m365VerifiedBool = ($m365Verified -eq 'True' -or $m365Verified -eq 'true')
+          $m365EmailBool = ($m365Email -eq 'True' -or $m365Email -eq 'true')
+
+          $m365Status = if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }
+          $cfStatus = if ($cfIssues -eq 0) { 'PASS' } elseif ($cfSevere -gt 0) { 'FAIL' } else { 'PARTIAL' }
+          $overall = if ($m365Status -eq 'PASS' -and $cfStatus -eq 'PASS') { 'PASS' } elseif ($m365Status -eq 'FAIL') { 'FAIL' } else { 'PARTIAL' }
+
+          $auditPath = 'artifacts/cloudflare/cloudflare-audit.txt'
+          $dryPath = 'artifacts/cloudflare/cloudflare-dryrun.txt'
+          $dkimCfPath = 'artifacts/cloudflare/cloudflare-dkim-check.txt'
+          $dnsPath = 'artifacts/m365/m365-dns-guidance.txt'
+          $m365PreflightPath = 'artifacts/m365/m365-preflight.txt'
+
+          $auditLinesRaw = if (Test-Path $auditPath) { @(Get-Content -Path $auditPath) } else { @() }
+          $auditLines = @($auditLinesRaw | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' })
+          $dryLinesRaw = if (Test-Path $dryPath) { @(Get-Content -Path $dryPath) } else { @() }
+          $dryLines = @($dryLinesRaw | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' })
+
+          $dkimLinesRaw = if (Test-Path $dkimCfPath) { @(Get-Content -Path $dkimCfPath) } else { @() }
+          $dkimLines = @($dkimLinesRaw | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' })
+          if ($dkimLines -isnot [System.Array]) { $dkimLines = @($dkimLines) }
+          $dkimLines = @($dkimLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+          function Get-KvValue {
+            param(
+              [string[]] $Lines = @(),
+              [Parameter(Mandatory)] [string] $Key
+            )
+            if (-not $Lines -or $Lines.Count -eq 0) { return $null }
+            $rx = '^' + [regex]::Escape($Key) + ':\s*(.*)$'
+            $m = $Lines | Where-Object { $_ -match $rx } | Select-Object -First 1
+            if (-not $m) { return $null }
+            return ($m -replace $rx, '$1').Trim()
+          }
+
+          function Get-IssueLevel {
+            param(
+              [Parameter(Mandatory)] [string[]] $Lines,
+              [Parameter(Mandatory)] [string] $MatchText
+            )
+            $hits = @($Lines | Where-Object { $_ -match '^(?:WARNING:\s*)?\[(?:MISSING|MISSING/PARTIAL|DIFFERS)\]' -and $_ -like "*$MatchText*" })
+            if ($hits.Count -eq 0) { return $null }
+            if ($hits | Where-Object { $_ -match '^(?:WARNING:\s*)?\[(?:MISSING|DIFFERS)\]' }) { return 'FAIL' }
+            return 'PARTIAL'
+          }
+
+          function Get-CheckStatus {
+            param(
+              [Parameter(Mandatory)] [string] $Name,
+              [Parameter(Mandatory)] [string] $OkMatch,
+              [Parameter(Mandatory)] [string] $IssueMatch
+            )
+
+            $okRegex = [regex]::Escape($OkMatch)
+            $okLine = $auditLines | Where-Object { $_ -match $okRegex } | Select-Object -First 1
+            if ($okLine) {
+              return @{ Name = $Name; Status = 'PASS'; Value = $okLine.Trim() }
+            }
+
+            $issueLevel = Get-IssueLevel -Lines $auditLines -MatchText $IssueMatch
+            if ($issueLevel) {
+              $issueLine = $auditLines | Where-Object { $_ -match '^(?:WARNING:\s*)?\[(?:MISSING|MISSING/PARTIAL|DIFFERS)\]' -and $_ -like "*$IssueMatch*" } | Select-Object -First 1
+              $issueVal = if ($issueLine) { $issueLine.Trim() } else { '' }
+              return @{ Name = $Name; Status = $issueLevel; Value = $issueVal }
+            }
+
+            return @{ Name = $Name; Status = 'UNKNOWN'; Value = '' }
+          }
+
+          $checks = @()
+          $checks += @{ Name = 'M365: domain exists in tenant'; Status = $(if ($m365ExistsBool) { 'PASS' } else { 'FAIL' }); Value = "exists=$m365ExistsBool" }
+          $checks += @{ Name = 'M365: domain verified'; Status = $(if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }); Value = "verified=$m365VerifiedBool" }
+          $checks += @{ Name = 'M365: supports email'; Status = $(if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365EmailBool) { 'PASS' } else { 'PARTIAL' }); Value = "supportsEmail=$m365EmailBool" }
+
+          $dkimSel1 = Get-KvValue -Lines $dkimLines -Key 'selector1 CNAME present'
+          $dkimSel2 = Get-KvValue -Lines $dkimLines -Key 'selector2 CNAME present'
+          $dkimSel1Target = Get-KvValue -Lines $dkimLines -Key 'selector1 current target'
+          $dkimSel2Target = Get-KvValue -Lines $dkimLines -Key 'selector2 current target'
+
+          if ($null -ne $dkimSel1) {
+            $v = if ($dkimSel1 -match '^(?i:true)$' -and $dkimSel1Target) { $dkimSel1Target } else { $dkimSel1 }
+            $checks += @{ Name = 'DKIM: selector1 CNAME present (Cloudflare)'; Status = $(if ($dkimSel1 -match '^(?i:true)$') { 'PASS' } else { 'FAIL' }); Value = $v }
+          } else {
+            $checks += @{ Name = 'DKIM: selector1 CNAME present (Cloudflare)'; Status = 'UNKNOWN'; Value = 'not checked' }
+          }
+          if ($null -ne $dkimSel2) {
+            $v = if ($dkimSel2 -match '^(?i:true)$' -and $dkimSel2Target) { $dkimSel2Target } else { $dkimSel2 }
+            $checks += @{ Name = 'DKIM: selector2 CNAME present (Cloudflare)'; Status = $(if ($dkimSel2 -match '^(?i:true)$') { 'PASS' } else { 'FAIL' }); Value = $v }
+          } else {
+            $checks += @{ Name = 'DKIM: selector2 CNAME present (Cloudflare)'; Status = 'UNKNOWN'; Value = 'not checked' }
+          }
+
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME autodiscover' -OkMatch 'Required CNAME present: autodiscover.' -IssueMatch 'autodiscover.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME enterpriseenrollment' -OkMatch 'Required CNAME present: enterpriseenrollment.' -IssueMatch 'enterpriseenrollment.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME enterpriseregistration' -OkMatch 'Required CNAME present: enterpriseregistration.' -IssueMatch 'enterpriseregistration.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME lyncdiscover' -OkMatch 'Required CNAME present: lyncdiscover.' -IssueMatch 'lyncdiscover.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME sip' -OkMatch 'Required CNAME present: sip.' -IssueMatch 'sip.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME www' -OkMatch 'Required CNAME present: www.' -IssueMatch 'WWW CNAME')
+
+          $checks += (Get-CheckStatus -Name 'Cloudflare: SRV _sip._tls' -OkMatch 'Required SRV present: _sip._tls.' -IssueMatch '_sip._tls.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: SRV _sipfederationtls._tcp' -OkMatch 'Required SRV present: _sipfederationtls._tcp.' -IssueMatch '_sipfederationtls._tcp.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: MX (M365) present' -OkMatch 'M365 MX Record found' -IssueMatch 'M365 MX')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: SPF (M365) present' -OkMatch 'M365 SPF Record found' -IssueMatch 'M365 SPF')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: DMARC present' -OkMatch 'DMARC Record found' -IssueMatch 'DMARC')
+
+          $ghA = Get-IssueLevel -Lines $auditLines -MatchText 'GitHub Pages A Records'
+          $ghAAAA = Get-IssueLevel -Lines $auditLines -MatchText 'GitHub Pages AAAA Records'
+          $ghALine = $auditLines | Where-Object { $_ -match 'GitHub Pages A Records' } | Select-Object -First 1
+          $ghAAAALine = $auditLines | Where-Object { $_ -match 'GitHub Pages AAAA Records' } | Select-Object -First 1
+          $checks += @{ Name = 'Cloudflare: GitHub Pages apex A records'; Status = ($ghA ?? 'PASS'); Value = $(if ($ghALine) { $ghALine.Trim() } else { '' }) }
+          $checks += @{ Name = 'Cloudflare: GitHub Pages apex AAAA records'; Status = ($ghAAAA ?? 'PASS'); Value = $(if ($ghAAAALine) { $ghAAAALine.Trim() } else { '' }) }
+
+          $plannedChanges = @(
+            $dryLines |
+              Where-Object { $_ -match '^[[]DRY-RUN[]] Would (?:CREATE|UPDATE|DELETE)|^[[]DRY-RUN[]] Would (?:CREATE new record|UPDATE record|DELETE record)' }
+          )
+          if ($plannedChanges.Count -eq 0) {
+            $plannedChanges = @(
+              $dryLines |
+                Where-Object { $_ -match '^Checking standard record:' -and $_ -match '\[(?:MISSING|MISSING/PARTIAL|DIFFERS)\]' }
+            )
+          }
+          if ($plannedChanges.Count -eq 0) {
+            $plannedChanges = @($dryLines | Where-Object { $_ -match '^[[]DRY-RUN[]]' })
+          }
+
+          $runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          $lines = @()
+          $lines += "Domain status for **$domain**"
+          $lines += ''
+          $lines += "- Overall: **$overall**"
+          $lines += "- Cloudflare: **$cfStatus** ($cfIssues audit issues; $cfSevere severe; $cfChanges planned changes)"
+          $lines += "- M365: **$m365Status** (exists=$m365ExistsBool, verified=$m365VerifiedBool, supportsEmail=$m365EmailBool)"
+          $lines += "- Run: $runUrl"
+
+          $lines += ''
+          $lines += '## Checks'
+          $lines += '| Check | Status | Value |'
+          $lines += '| --- | --- | --- |'
+          foreach ($c in $checks) {
+            $val = if ($c.ContainsKey('Value') -and $c.Value) { ($c.Value -replace '\|', '\\|') } else { '' }
+            $lines += "| $($c.Name) | **$($c.Status)** | $val |"
+          }
+
+          $lines += ''
+          $lines += '## Planned changes (if you run Enforce)'
+          if ($plannedChanges.Count -eq 0) {
+            $lines += '- None (dry-run shows no changes).'
+          }
+          else {
+            foreach ($line in $plannedChanges) {
+              $lines += "- $line"
+            }
+          }
+
+          if (Test-Path $auditPath) {
+            $lines += ''
+            $lines += '<details><summary>Cloudflare audit</summary>'
+            $lines += ''
+            $lines += '```'
+            $lines += (Get-Content -Path $auditPath -Raw).Trim()
+            $lines += '```'
+            $lines += '</details>'
+          }
+
+          if (Test-Path $dryPath) {
+            $lines += ''
+            $lines += '<details><summary>Cloudflare dry-run preview (what will change)</summary>'
+            $lines += ''
+            $lines += '```'
+            $lines += (Get-Content -Path $dryPath -Raw).Trim()
+            $lines += '```'
+            $lines += '</details>'
+          }
+
+          if (Test-Path $m365PreflightPath) {
+            $lines += ''
+            $lines += '<details><summary>M365 preflight (read-only)</summary>'
+            $lines += ''
+            $lines += '```'
+            $lines += (Get-Content -Path $m365PreflightPath -Raw).Trim()
+            $lines += '```'
+            $lines += '</details>'
+          }
+
+          if (Test-Path $dnsPath) {
+            $lines += ''
+            $lines += '<details><summary>M365 DNS guidance (Graph)</summary>'
+            $lines += ''
+            $lines += '```'
+            $lines += (Get-Content -Path $dnsPath -Raw).Trim()
+            $lines += '```'
+            $lines += '</details>'
+          }
+
+          $commentPath = Join-Path $env:GITHUB_WORKSPACE 'post-back-comment.md'
+          ($lines -join "`n") | Out-File -FilePath $commentPath -Encoding utf8
+          "comment_path=$commentPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Comment results back to issue
         uses: actions/github-script@v7
         with:
+          github-token: ${{ github.token }}
           script: |
             const fs = require('fs');
 
             const issueNumber = Number('${{ inputs.issue_number }}');
-            const domain = '${{ inputs.domain }}';
+            const commentPath = '${{ steps.comment.outputs.comment_path }}';
+            const body = fs.readFileSync(commentPath, 'utf8');
 
-            const cfIssues = Number('${{ needs.cloudflare.outputs.issues_count }}');
-            const cfSevere = Number('${{ needs.cloudflare.outputs.severe_issues_count }}');
-            const cfChanges = Number('${{ needs.cloudflare.outputs.changes_count }}');
-
-            const m365Exists = String('${{ needs.m365.outputs.domain_exists }}');
-            const m365Verified = String('${{ needs.m365.outputs.is_verified }}');
-            const m365Email = String('${{ needs.m365.outputs.supports_email }}');
-
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-
-            const m365Status = (m365Exists === 'True' || m365Exists === 'true')
-              ? ((m365Verified === 'True' || m365Verified === 'true') ? 'PASS' : 'PARTIAL')
-              : 'FAIL';
-
-            const cfStatus = (cfIssues === 0) ? 'PASS' : ((cfSevere > 0) ? 'FAIL' : 'PARTIAL');
-
-            const overall = (m365Status === 'PASS' && cfStatus === 'PASS')
-              ? 'PASS'
-              : ((m365Status === 'FAIL') ? 'FAIL' : 'PARTIAL');
-
-            const cfAudit = fs.readFileSync('artifacts/cloudflare/cloudflare-audit.txt', 'utf8');
-            const cfDryRun = fs.readFileSync('artifacts/cloudflare/cloudflare-dryrun.txt', 'utf8');
-            const m365Preflight = fs.readFileSync('artifacts/m365/m365-preflight.txt', 'utf8');
-
-            const body = [
-              `Domain status for **${domain}**`,
-              '',
-              `- Overall: **${overall}**`,
-              `- Cloudflare: **${cfStatus}** (${cfIssues} audit issues; ${cfSevere} severe; ${cfChanges} planned changes)`,
-              `- M365: **${m365Status}** (exists=${m365Exists}, verified=${m365Verified}, supportsEmail=${m365Email})`,
-              `- Run: ${runUrl}`,
-              '',
-              '<details><summary>Cloudflare audit</summary>\n\n```\n' + cfAudit.trim() + '\n```\n</details>',
-              '',
-              '<details><summary>Cloudflare dry-run preview (what will change)</summary>\n\n```\n' + cfDryRun.trim() + '\n```\n</details>',
-              '',
-              '<details><summary>M365 preflight (read-only)</summary>\n\n```\n' + m365Preflight.trim() + '\n```\n</details>',
-            ].join('\n');
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              body,
-            });
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body,
+              });
+            } catch (e) {
+              const status = e && (e.status || (e.response && e.response.status));
+              if (status === 403) {
+                core.warning(`Could not comment on #${issueNumber} (403: ${e.message}). This is often due to repo/org Actions permissions. See run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`);
+                return;
+              }
+              throw e;
+            }

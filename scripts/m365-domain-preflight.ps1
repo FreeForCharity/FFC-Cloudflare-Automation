@@ -356,6 +356,13 @@ try {
                 Write-Kv -Key 'selector1 CNAME present' -Value $hasSel1
                 Write-Kv -Key 'selector2 CNAME present' -Value $hasSel2
 
+                if ($hasSel1) {
+                    Write-Kv -Key 'selector1 current target' -Value $dkim.Selector1.content
+                }
+                if ($hasSel2) {
+                    Write-Kv -Key 'selector2 current target' -Value $dkim.Selector2.content
+                }
+
                 if ($tenantDomain -and $graphToken) {
                     try {
                         $guidance = Try-GetMicrosoftDnsGuidance -Domain $Domain -Token $graphToken

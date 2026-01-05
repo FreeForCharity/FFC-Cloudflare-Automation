@@ -145,15 +145,25 @@ jobs:
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
           $pre = & pwsh -NoProfile -File .\scripts\m365-domain-preflight.ps1 -Domain $domain -SkipCloudflare *>&1
+          $preExit = $LASTEXITCODE
           $prePath = Join-Path $outDir 'm365-preflight.txt'
           $pre | Out-File -FilePath $prePath -Encoding utf8
+          if ($preExit -ne 0) {
+            Write-Warning "m365-domain-preflight.ps1 exited with code $preExit (output saved to $prePath)"
+          }
 
           # Include Graph-provided DNS guidance so Step 1 output contains exact expected values.
           $dns = & pwsh -NoProfile -File .\scripts\m365-domain-status.ps1 -Domain $domain -AccessToken $token -ShowDnsRecords *>&1
+          $dnsExit = $LASTEXITCODE
           $dnsPath = Join-Path $outDir 'm365-dns-guidance.txt'
           $dns | Out-File -FilePath $dnsPath -Encoding utf8
+          if ($dnsExit -ne 0) {
+            Write-Warning "m365-domain-status.ps1 exited with code $dnsExit (output saved to $dnsPath)"
+          }
 
           "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          exit 0
 
       - name: Upload M365 outputs
         uses: actions/upload-artifact@v4

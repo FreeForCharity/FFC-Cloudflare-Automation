@@ -61,7 +61,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $dir = "${{ steps.run.outputs.out_dir }}"
 
-          $auditLines = @(Get-Content -Path (Join-Path $dir 'cloudflare-audit.txt') -ErrorAction Stop)
+          $auditLinesRaw = @(Get-Content -Path (Join-Path $dir 'cloudflare-audit.txt') -ErrorAction Stop)
+          $auditLines = @($auditLinesRaw | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' })
           $issues = @($auditLines | Where-Object { $_ -match '^(?:WARNING:\s*)?\[(?:MISSING|MISSING/PARTIAL|DIFFERS)\]' })
           $severe = @($auditLines | Where-Object { $_ -match '^(?:WARNING:\s*)?\[(?:MISSING|DIFFERS)\]' })
 
@@ -219,7 +220,8 @@ jobs:
           $dryPath = 'artifacts/cloudflare/cloudflare-dryrun.txt'
           $dnsPath = 'artifacts/m365/m365-dns-guidance.txt'
 
-          $auditLines = if (Test-Path $auditPath) { @(Get-Content -Path $auditPath) } else { @() }
+          $auditLinesRaw = if (Test-Path $auditPath) { @(Get-Content -Path $auditPath) } else { @() }
+          $auditLines = @($auditLinesRaw | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' })
           $dryLines = if (Test-Path $dryPath) { @(Get-Content -Path $dryPath) } else { @() }
 
           function Get-IssueLevel {

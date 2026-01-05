@@ -56,6 +56,21 @@ jobs:
           $out = '${{ inputs.output_file }}'
           pwsh -NoProfile -File scripts/wpmudev-sites-export.ps1 -OutputFile $out
 
+          Write-Host "::group::WPMUDEV Summary"
+          if (Test-Path $out) {
+            $rows = Import-Csv -Path $out
+            $domainCount = $rows.Count
+            $multiSiteDomains = ($rows | Where-Object {
+                $c = 0
+                [int]::TryParse([string]$_.sitesCount, [ref]$c) -and $c -gt 1
+              }).Count
+            Write-Host "Summary: domains=$domainCount; domainsWithMultipleSites=$multiSiteDomains"
+          }
+          else {
+            Write-Host "Summary: output file not found: $out"
+          }
+          Write-Host "::endgroup::"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

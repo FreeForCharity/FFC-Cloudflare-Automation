@@ -85,8 +85,14 @@ function Invoke-WhmcsApi {
                 $resp = [xml]$raw
             }
             catch {
-                $snippet = if ($raw.Length -gt 400) { $raw.Substring(0, 400) + '...' } else { $raw }
-                throw "WHMCS API returned a non-XML response: $snippet"
+                $clean = $raw -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
+                try {
+                    $resp = [xml]$clean
+                }
+                catch {
+                    $snippet = if ($raw.Length -gt 400) { $raw.Substring(0, 400) + '...' } else { $raw }
+                    throw "WHMCS API returned XML that could not be parsed (likely contains invalid control characters). Snippet: $snippet"
+                }
             }
         }
 
@@ -103,7 +109,13 @@ function Invoke-WhmcsApi {
             catch {
                 if ($raw.TrimStart().StartsWith('<')) {
                     try {
-                        $xml = [xml]$raw
+                        try {
+                            $xml = [xml]$raw
+                        }
+                        catch {
+                            $clean = $raw -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
+                            $xml = [xml]$clean
+                        }
                         $resp = if ($xml.whmcsapi) { $xml.whmcsapi } else { $xml }
                         $requestedResponseType = 'xml'
                     }

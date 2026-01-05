@@ -11,10 +11,12 @@ The workflow produces these files and uploads them as artifacts:
 
 - `artifacts/whmcs/whmcs_clients.csv` (from WHMCS `GetClients`)
 - `artifacts/whmcs/whmcs_transactions.csv` (from WHMCS `GetTransactions`)
-- `artifacts/whmcs/whmcs_invoices.csv` (from WHMCS `GetInvoices`, only when `include_zero_invoices=true`)
+- `artifacts/whmcs/whmcs_invoices.csv` (from WHMCS `GetInvoices`, only when
+  `include_zero_invoices=true`)
 - `artifacts/whmcs/whmcs_invoices_deleted_clients.csv` (invoice lookups for `userid=0` transactions)
 - `artifacts/zeffy/zeffy_payments_import_draft.csv` (Zeffy import draft)
-- `artifacts/zeffy/zeffy_payments_import_draft-part*.csv` (only when split due to `max_rows_per_file`)
+- `artifacts/zeffy/zeffy_payments_import_draft-part*.csv` (only when split due to
+  `max_rows_per_file`)
 
 Artifact names (download from the Actions run page):
 
@@ -59,8 +61,8 @@ Secrets are stored in the GitHub Actions environment `whmcs-prod`.
 
 ### Invoice-only $0 invoices
 
-WHMCS `$0` invoices do not always show up in `GetTransactions`. When `include_zero_invoices=true` and
-an invoices export is present, the generator will:
+WHMCS `$0` invoices do not always show up in `GetTransactions`. When `include_zero_invoices=true`
+and an invoices export is present, the generator will:
 
 - Identify invoices where `total == 0`.
 - Skip any `$0` invoice that already has a matching transaction (by `invoiceid`).
@@ -131,7 +133,8 @@ so the draft matches 1:1.
 ## Troubleshooting
 
 - Workflow fails during invoices export with “parameter cannot be found … `ApiUrl` / `OutputFile`”
-  - The invoices exporter must accept the workflow parameters. See `scripts/whmcs-invoices-export.ps1`.
+  - The invoices exporter must accept the workflow parameters. See
+    `scripts/whmcs-invoices-export.ps1`.
 - Workflow fails with a Zeffy header mismatch
   - Zeffy template header strings can change. Use the generator `template` mode with an exported
     Zeffy template header to force exact header output.

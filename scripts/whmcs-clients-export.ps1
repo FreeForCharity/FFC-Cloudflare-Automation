@@ -125,10 +125,56 @@ function Invoke-WhmcsApiXml {
 function Get-Text {
     param($Node)
 
-    if (-not $Node) { return $null }
+    if ($null -eq $Node) { return $null }
+
+    # Handle XML nodes/lists robustly (PowerShell sometimes stringifies to type names)
+    if ($Node -is [System.Xml.XmlNode]) {
+        $s = $Node.InnerText
+        if ([string]::IsNullOrWhiteSpace($s)) { return $null }
+        return $s.Trim()
+    }
+
+    if ($Node -is [System.Xml.XmlNodeList] -or $Node -is [System.Collections.IEnumerable] -and -not ($Node -is [string])) {
+        $parts = @()
+        foreach ($n in $Node) {
+            if ($n -is [System.Xml.XmlNode]) {
+                $t = $n.InnerText
+                if (-not [string]::IsNullOrWhiteSpace($t)) { $parts += $t.Trim() }
+            }
+            else {
+                $t = [string]$n
+                if (-not [string]::IsNullOrWhiteSpace($t) -and $t -ne 'System.Xml.XmlElement') { $parts += $t.Trim() }
+            }
+        }
+        if ($parts.Count -eq 0) { return $null }
+        return ($parts -join ' ')
+    }
+
     $s = [string]$Node
     if ([string]::IsNullOrWhiteSpace($s)) { return $null }
+    $s = $s.Trim()
+    if ($s -eq 'System.Xml.XmlElement') { return $null }
     return $s
+}
+
+function Get-ClientDetails {
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiUrl,
+        [Parameter(Mandatory = $true)][hashtable]$BaseBody,
+        [Parameter(Mandatory = $true)][string]$ClientId
+    )
+
+    $body = @{} + $BaseBody
+    $body.action = 'GetClientsDetails'
+    $body.responsetype = 'xml'
+    $body.clientid = $ClientId
+    $body.stats = 0
+
+    $resp = Invoke-WhmcsApiXml -ApiUrl $ApiUrl -Body $body
+
+    # WHMCS typically returns <client>...</client>
+    if ($resp.client) { return $resp.client }
+    return $null
 }
 
 try {
@@ -171,18 +217,56 @@ try {
         }
 
         foreach ($c in $batch) {
+            $clientId = Get-Text $c.id
+
+            $company = Get-Text $c.companyname
+            $address1 = Get-Text $c.address1
+            $address2 = Get-Text $c.address2
+            $city = Get-Text $c.city
+            $state = Get-Text $c.state
+            $postcode = Get-Text $c.postcode
+            $country = Get-Text $c.country
+
+            $needsDetails = $false
+            if ([string]::IsNullOrWhiteSpace($company)) { $needsDetails = $true }
+            if ([string]::IsNullOrWhiteSpace($address1) -or [string]::IsNullOrWhiteSpace($city) -or [string]::IsNullOrWhiteSpace($postcode)) { $needsDetails = $true }
+
+            if ($needsDetails -and -not [string]::IsNullOrWhiteSpace($clientId)) {
+                try {
+                    $base = @{
+                        identifier = $creds.Identifier
+                        secret = $creds.Secret
+                    }
+                    if ($accessKey) { $base.accesskey = $accessKey }
+
+                    $detail = Get-ClientDetails -ApiUrl $api -BaseBody $base -ClientId $clientId
+                    if ($detail) {
+                        if ([string]::IsNullOrWhiteSpace($company)) { $company = Get-Text $detail.companyname }
+                        if ([string]::IsNullOrWhiteSpace($address1)) { $address1 = Get-Text $detail.address1 }
+                        if ([string]::IsNullOrWhiteSpace($address2)) { $address2 = Get-Text $detail.address2 }
+                        if ([string]::IsNullOrWhiteSpace($city)) { $city = Get-Text $detail.city }
+                        if ([string]::IsNullOrWhiteSpace($state)) { $state = Get-Text $detail.state }
+                        if ([string]::IsNullOrWhiteSpace($postcode)) { $postcode = Get-Text $detail.postcode }
+                        if ([string]::IsNullOrWhiteSpace($country)) { $country = Get-Text $detail.country }
+                    }
+                }
+                catch {
+                    # Best-effort enrichment; keep base row if details call fails
+                }
+            }
+
             $clients += [pscustomobject]@{
-                clientid     = Get-Text $c.id
+                clientid     = $clientId
                 firstname    = Get-Text $c.firstname
                 lastname     = Get-Text $c.lastname
-                companyname  = Get-Text $c.companyname
+                companyname  = $company
                 email        = Get-Text $c.email
-                address1     = Get-Text $c.address1
-                address2     = Get-Text $c.address2
-                city         = Get-Text $c.city
-                state        = Get-Text $c.state
-                postcode     = Get-Text $c.postcode
-                country      = Get-Text $c.country
+                address1     = $address1
+                address2     = $address2
+                city         = $city
+                state        = $state
+                postcode     = $postcode
+                country      = $country
                 phonenumber  = Get-Text $c.phonenumber
                 status       = Get-Text $c.status
                 datecreated  = Get-Text $c.datecreated

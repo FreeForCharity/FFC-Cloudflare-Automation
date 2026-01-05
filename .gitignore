@@ -53,3 +53,6 @@ Thumbs.db
 
 # Local workflow outputs
 artifacts/
+
+# Local downloads of GitHub Actions artifacts (debugging)
+artifacts_run_*/

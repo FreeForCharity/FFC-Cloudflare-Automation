@@ -147,6 +147,15 @@ function Join-Address {
     return ($parts -join ' ')
 }
 
+function Normalize-Text {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    $v = $Value.Trim()
+    if ($v -eq 'System.Xml.XmlElement') { return $null }
+    return $v
+}
+
 function Convert-RowToHeaders {
     param(
         [hashtable]$Canonical,
@@ -239,6 +248,12 @@ $out = foreach ($t in $transactions) {
     $country = if ($client) { $client.country } else { $null }
     $stateProv = if ($client) { $client.state } else { $null }
 
+    $addr = Normalize-Text -Value $addr
+    $city = Normalize-Text -Value $city
+    $postal = Normalize-Text -Value $postal
+    $country = Normalize-Text -Value $country
+    $stateProv = Normalize-Text -Value $stateProv
+
     if ([string]::IsNullOrWhiteSpace($addr)) { $addr = 'unknown' }
     if ([string]::IsNullOrWhiteSpace($city)) { $city = 'unknown' }
     if ([string]::IsNullOrWhiteSpace($postal)) { $postal = 'unknown' }
@@ -247,8 +262,8 @@ $out = foreach ($t in $transactions) {
     $date = Format-ZeffyDate -Value $t.date
 
     $canonical = @{
-        firstName       = if ($client) { $client.firstname } else { $null }
-        lastName        = if ($client) { $client.lastname } else { $null }
+        firstName       = if ($client) { Normalize-Text -Value $client.firstname } else { $null }
+        lastName        = if ($client) { Normalize-Text -Value $client.lastname } else { $null }
         amount          = $amountFormatted
         address         = $addr
         city            = $city
@@ -257,7 +272,7 @@ $out = foreach ($t in $transactions) {
         type            = $DefaultType
         formTitle       = $defaultFormTitle
         rateTitle       = $defaultFormTitle
-        email           = if ($client) { $client.email } else { $null }
+        email           = if ($client) { Normalize-Text -Value $client.email } else { $null }
         language        = $DefaultLanguage
         'date (MM/DD/YYYY)' = $date
         'state/province' = $stateProv
@@ -265,7 +280,7 @@ $out = foreach ($t in $transactions) {
         receiptUrl      = $null
         ticketUrl       = $null
         receiptNumber   = $null
-        companyName     = if ($client) { $client.companyname } else { $null }
+        companyName     = if ($client) { Normalize-Text -Value $client.companyname } else { $null }
         note            = 'Imported from WHMCS'
         annotation      = (@(
             if ($t.transactionid) { "whmcs_transactionid=$($t.transactionid)" }

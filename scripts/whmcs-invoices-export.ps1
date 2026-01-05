@@ -38,8 +38,8 @@ function Invoke-WhmcsApi {
     )
 
     $request = @{
-        identifier = $Identifier
-        secret     = $Secret
+        identifier   = $Identifier
+        secret       = $Secret
         responsetype = 'json'
     } + $Body
 
@@ -64,13 +64,13 @@ $rows = 0
 
 while ($true) {
     $body = @{
-        action = 'GetInvoices'
+        action     = 'GetInvoices'
         limitstart = $offset
         limitnum   = $Limit
     }
 
     if ($start) { $body['datecreated'] = $start }
-    if ($end)   { $body['datecreatedend'] = $end }
+    if ($end) { $body['datecreatedend'] = $end }
 
     $resp = Invoke-WhmcsApi -Url $WhmcsApiUrl -Identifier $WhmcsIdentifier -Secret $WhmcsSecret -Body $body
 
@@ -92,14 +92,14 @@ while ($true) {
 
     foreach ($inv in $items) {
         $all.Add([pscustomobject]@{
-            invoiceid      = $inv.id
-            userid         = $inv.userid
-            status         = $inv.status
-            date           = $inv.date
-            duedate        = $inv.duedate
-            total          = $inv.total
-            paymentmethod  = $inv.paymentmethod
-        })
+                invoiceid     = $inv.id
+                userid        = $inv.userid
+                status        = $inv.status
+                date          = $inv.date
+                duedate       = $inv.duedate
+                total         = $inv.total
+                paymentmethod = $inv.paymentmethod
+            })
         $rows++
         if ($MaxRows -gt 0 -and $rows -ge $MaxRows) { break }
     }

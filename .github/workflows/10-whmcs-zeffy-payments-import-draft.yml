@@ -19,6 +19,21 @@ on:
         required: false
         type: string
         default: 'artifacts/whmcs/whmcs_transactions.csv'
+      start_date:
+        description: 'Optional start date for transactions export (YYYY-MM-DD)'
+        required: false
+        type: string
+        default: ''
+      end_date:
+        description: 'Optional end date for transactions export (YYYY-MM-DD)'
+        required: false
+        type: string
+        default: ''
+      max_rows:
+        description: 'Safety cap for number of transactions exported'
+        required: false
+        type: number
+        default: 200000
       zeffy_output:
         description: 'Zeffy draft CSV output path'
         required: false
@@ -89,7 +104,16 @@ jobs:
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
           }
 
-          & pwsh -NoProfile -File .\scripts\whmcs-transactions-export.ps1 -ApiUrl $env:WHMCS_API_URL -OutputFile $out
+          $args = @('-NoProfile','-File','.\\scripts\\whmcs-transactions-export.ps1','-ApiUrl',$env:WHMCS_API_URL,'-OutputFile',$out,'-MaxRows','${{ inputs.max_rows }}')
+
+          if (-not [string]::IsNullOrWhiteSpace('${{ inputs.start_date }}')) {
+            $args += @('-StartDate','${{ inputs.start_date }}')
+          }
+          if (-not [string]::IsNullOrWhiteSpace('${{ inputs.end_date }}')) {
+            $args += @('-EndDate','${{ inputs.end_date }}')
+          }
+
+          & pwsh @args
 
           if ($LASTEXITCODE -ne 0) {
             throw "WHMCS transactions export failed with exit code $LASTEXITCODE."

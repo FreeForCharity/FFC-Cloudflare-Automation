@@ -252,7 +252,7 @@ jobs:
 
           "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "### Inputs" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "- api_url: `${{ inputs.api_url }}`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- api_url: ${{ inputs.api_url }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "- start_date: ${{ inputs.start_date }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "- end_date: ${{ inputs.end_date }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "- max_rows: ${{ inputs.max_rows }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

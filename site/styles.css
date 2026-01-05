@@ -299,7 +299,12 @@ footer:not(.site-footer) .footer-note {
 .site-footer__cta:hover {
   border-color: transparent;
   background-color: rgba(52, 152, 219, 0.15);
-  background-color: color-mix(in srgb, var(--accent-color) 15%, transparent);
+}
+
+@supports (background-color: color-mix(in srgb, #000 0%, transparent)) {
+  .site-footer__cta:hover {
+    background-color: color-mix(in srgb, var(--accent-color) 15%, transparent);
+  }
 }
 
 .site-footer__cta-arrow {

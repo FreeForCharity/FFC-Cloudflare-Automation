@@ -172,7 +172,7 @@
 
             <p class="site-footer__ein">Free For Charity EIN: 46-2471893</p>
 
-            <div class="site-footer__social" aria-label="Social links">
+            <nav class="site-footer__social" aria-label="Social links">
               <a
                 href="https://www.facebook.com/freeforcharity"
                 target="_blank"
@@ -197,7 +197,7 @@
               >
                 GitHub
               </a>
-            </div>
+            </nav>
           </div>
         </section>
 
@@ -335,12 +335,16 @@
           <div class="site-footer__contact">
             <div class="site-footer__contact-item">
               <div class="site-footer__contact-label">E-mail</div>
-              <a href="mailto:clarkemoyer@freeforcharity.org">clarkemoyer@freeforcharity.org</a>
+              <a
+                href="mailto:clarkemoyer@freeforcharity.org"
+                aria-label="Email clarkemoyer@freeforcharity.org"
+                >clarkemoyer@freeforcharity.org</a
+              >
             </div>
 
             <div class="site-footer__contact-item">
               <div class="site-footer__contact-label">Call Us Today</div>
-              <a href="tel:5202228104">(520) 222-8104</a>
+              <a href="tel:5202228104" aria-label="Call us at 520-222-8104">(520) 222-8104</a>
             </div>
 
             <a
@@ -387,7 +391,7 @@
       (() => {
         const yearEl = document.getElementById('site-footer-year');
         if (!yearEl) return;
-        yearEl.textContent = new Date().getFullYear().toString();
+        yearEl.textContent = new Date().getFullYear();
       })();
     </script>
   </body>

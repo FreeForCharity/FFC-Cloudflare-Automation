@@ -65,9 +65,9 @@ jobs:
 
           "## WHMCS domain export" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "- Output path: `$out`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "- Artifact name: `whmcs_domains`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "- Download: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Output path: $out" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Artifact name: whmcs_domains" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Download: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload CSV Artifact
         uses: actions/upload-artifact@v6

@@ -1,0 +1,78 @@
+name: '09. WHMCS - Export Payment Methods (Research)'
+run-name: 'WHMCS Export Payment Methods'
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'WHMCS API endpoint (e.g., https://freeforcharity.org/hub/includes/api.php)'
+        required: false
+        type: string
+        default: 'https://freeforcharity.org/hub/includes/api.php'
+      output_file:
+        description: 'Output CSV filename'
+        required: false
+        type: string
+        default: 'artifacts/whmcs/whmcs_payment_methods.csv'
+
+permissions:
+  contents: read
+
+jobs:
+  export_payment_methods:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required WHMCS secrets
+        shell: pwsh
+        env:
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
+            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
+          }
+
+      - name: Export payment method identifiers (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $out = "${{ inputs.output_file }}"
+          $dir = Split-Path -Parent $out
+          if (-not [string]::IsNullOrWhiteSpace($dir)) {
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          }
+
+          & pwsh -NoProfile -File .\scripts\whmcs-payment-methods-export.ps1 -ApiUrl $env:WHMCS_API_URL -OutputFile $out
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "WHMCS export script failed with exit code $LASTEXITCODE. See logs above."
+          }
+
+          if (-not (Test-Path $out)) {
+            throw "Expected output file not found: $out"
+          }
+
+          "## WHMCS payment method discovery" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Output path: $out" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Artifact name: whmcs_payment_methods" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Download: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Artifacts: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)/artifacts" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload CSV Artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: whmcs_payment_methods
+          path: ${{ inputs.output_file }}
+          if-no-files-found: error

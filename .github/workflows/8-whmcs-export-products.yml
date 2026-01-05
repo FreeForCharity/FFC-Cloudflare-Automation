@@ -1,0 +1,92 @@
+name: '08. WHMCS - Export Products (Report)'
+run-name: 'WHMCS Export Products'
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'WHMCS API endpoint (e.g., https://freeforcharity.org/hub/includes/api.php)'
+        required: false
+        type: string
+        default: 'https://freeforcharity.org/hub/includes/api.php'
+      products_output_file:
+        description: 'Output CSV filename (product catalog)'
+        required: false
+        type: string
+        default: 'artifacts/whmcs/whmcs_products.csv'
+      client_products_output_file:
+        description: 'Output CSV filename (client products/services)'
+        required: false
+        type: string
+        default: 'artifacts/whmcs/whmcs_client_products.csv'
+
+permissions:
+  contents: read
+
+jobs:
+  export_products:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required WHMCS secrets
+        shell: pwsh
+        env:
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
+            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
+          }
+
+      - name: Export products + client products (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $productsOut = "${{ inputs.products_output_file }}"
+          $clientProductsOut = "${{ inputs.client_products_output_file }}"
+
+          foreach ($out in @($productsOut, $clientProductsOut)) {
+            $dir = Split-Path -Parent $out
+            if (-not [string]::IsNullOrWhiteSpace($dir)) {
+              New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            }
+          }
+
+          & pwsh -NoProfile -File .\scripts\whmcs-products-export.ps1 -ApiUrl $env:WHMCS_API_URL -ProductsOutputFile $productsOut -ClientProductsOutputFile $clientProductsOut
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "WHMCS export script failed with exit code $LASTEXITCODE. See logs above."
+          }
+
+          foreach ($out in @($productsOut, $clientProductsOut)) {
+            if (-not (Test-Path $out)) {
+              throw "Expected output file not found: $out"
+            }
+          }
+
+          "## WHMCS products export" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Products output path: $productsOut" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Client products output path: $clientProductsOut" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Artifact name: whmcs_products" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Download: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Artifacts: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)/artifacts" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload CSV Artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: whmcs_products
+          path: |
+            ${{ inputs.products_output_file }}
+            ${{ inputs.client_products_output_file }}
+          if-no-files-found: error

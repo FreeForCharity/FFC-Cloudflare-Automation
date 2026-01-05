@@ -109,8 +109,7 @@ The simplest way to update DNS records using the PowerShell utilities:
 You'll be prompted for your Cloudflare API token, or you can set it as an environment variable:
 
 ```powershell
-$env:CLOUDFLARE_API_TOKEN_FFC = "your_token_here"
-$env:CLOUDFLARE_API_TOKEN_CM = "your_token_here"
+$env:CLOUDFLARE_API_TOKEN = "your_token_here"
 .\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type A -Content 203.0.113.42
 ```
 
@@ -127,6 +126,54 @@ $env:CLOUDFLARE_API_TOKEN_CM = "your_token_here"
 ## DNS Management Tools
 
 The PowerShell scripts in this repository provide flexible DNS record management for FFC domains.
+
+## WHMCS exports (read-only)
+
+This repo also includes read-only WHMCS export workflows/scripts used for migrations (e.g., Zeffy).
+
+### Products + billing cycles (research)
+
+- Workflow: `.github/workflows/8-whmcs-export-products.yml`
+- Script: `scripts/whmcs-products-export.ps1`
+
+This export is specifically useful to answer: “What products exist, and which are monthly vs yearly?”
+It also captures the raw WHMCS gateway/paymentmethod identifiers used by services.
+
+### What are “gateway strings”?
+
+In WHMCS, the payment method/gateway is represented as an internal identifier string (for example
+`paypal`, `stripe`, `authorize`, etc.). You’ll see these values in fields like:
+
+- `GetTransactions.transaction[].gateway`
+- `GetInvoice.paymentmethod` / `GetInvoices.invoice[].paymentmethod`
+- `GetClientsProducts.product[].paymentmethod`
+
+These raw strings are what we map into Zeffy’s allowed `paymentMethod` values (card, ach, pad,
+transfer, cheque, cash, applePayOrGooglePay, unknown, etc.). If we don’t know the exact strings in
+your WHMCS, the exports let us discover them deterministically.
+
+### Zeffy approved paymentMethod values
+
+Per Zeffy’s Payments Import Template requirements, `paymentMethod` must be exactly one of:
+
+- card
+- cash
+- cheque
+- transfer
+- unknown
+- free
+- manual
+- pad
+- ach
+- applePayOrGooglePay
+
+To discover what WHMCS uses in your data (so we can map deterministically), use:
+
+- Workflow: `.github/workflows/9-whmcs-export-payment-methods.yml`
+- Script: `scripts/whmcs-payment-methods-export.ps1`
+
+The export enumerates distinct values seen across `GetTransactions.gateway`,
+`GetInvoices.paymentmethod`, and `GetClientsProducts.paymentmethod`.
 
 ### Basic Examples
 
@@ -231,6 +278,9 @@ specific zones.
 # Run the export script
 .\Export-CloudflareDns.ps1 -OutputFile zone_dns_summary.csv
 
+# Provide your token via env
+$env:CLOUDFLARE_API_TOKEN = "<dns_token>"
+
 # Or with explicit token
 .\Export-CloudflareDns.ps1 -OutputFile zone_dns_summary.csv -Token "<your_token>"
 ```
@@ -248,7 +298,9 @@ The script supports tokens with various permission levels via environment variab
 
 ### GitHub Actions
 
-- Secrets (environment `cloudflare-prod`): set `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` and `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`.
+- Secrets (recommended as Environment secrets on `cloudflare-prod`):
+  - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
+  - `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
 - Workflow: `DNS Summary Export`.
   - Provide `zones` input to target specific zones, or set `all_zones=true` to export everything
     accessible to the token.
@@ -308,7 +360,8 @@ Security is a top priority for this project. We implement multiple security meas
 
 ### Protecting Cloudflare API Tokens in Workflows
 
-- **Least privilege**: Use two scoped tokens (FFC + CM) instead of one overbroad token.
+- **Least privilege**: Use scoped Cloudflare API tokens limited to only the zones you intend to
+  manage (DNS edit + zone read as needed).
 - **Environment approvals**: Store tokens as Environment secrets (e.g., `cloudflare-prod`) and
   require reviewers before jobs run.
 - **Apply gating**: Workflows default to `--dry-run`; set `apply=true` to make changes. Applies are

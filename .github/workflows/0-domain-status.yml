@@ -62,8 +62,8 @@ jobs:
           $dir = "${{ steps.run.outputs.out_dir }}"
 
           $auditLines = @(Get-Content -Path (Join-Path $dir 'cloudflare-audit.txt') -ErrorAction Stop)
-          $issues = @($auditLines | Where-Object { $_ -match '^(?:WARNING:\s*)?[[](?:MISSING|MISSING/PARTIAL|DIFFERS)[]]' })
-          $severe = @($auditLines | Where-Object { $_ -match '^(?:WARNING:\s*)?[[](?:MISSING|DIFFERS)[]]' })
+          $issues = @($auditLines | Where-Object { $_ -match '^(?:WARNING:\s*)?\[(?:MISSING|MISSING/PARTIAL|DIFFERS)\]' })
+          $severe = @($auditLines | Where-Object { $_ -match '^(?:WARNING:\s*)?\[(?:MISSING|DIFFERS)\]' })
 
           $dryLines = @(Get-Content -Path (Join-Path $dir 'cloudflare-dryrun.txt') -ErrorAction Stop)
           $changes = @($dryLines | Where-Object { $_ -match '^[[]DRY-RUN[]]' })
@@ -227,9 +227,9 @@ jobs:
               [Parameter(Mandatory)] [string[]] $Lines,
               [Parameter(Mandatory)] [string] $MatchText
             )
-            $hits = @($Lines | Where-Object { $_ -match '^(?:WARNING:\s*)?[[](?:MISSING|MISSING/PARTIAL|DIFFERS)[]]' -and $_ -like "*$MatchText*" })
+            $hits = @($Lines | Where-Object { $_ -match '^(?:WARNING:\s*)?\[(?:MISSING|MISSING/PARTIAL|DIFFERS)\]' -and $_ -like "*$MatchText*" })
             if ($hits.Count -eq 0) { return $null }
-            if ($hits | Where-Object { $_ -match '^(?:WARNING:\s*)?[[]MISSING[]]' -or $_ -match '^(?:WARNING:\s*)?[[]DIFFERS[]]' }) { return 'FAIL' }
+            if ($hits | Where-Object { $_ -match '^(?:WARNING:\s*)?\[(?:MISSING|DIFFERS)\]' }) { return 'FAIL' }
             return 'PARTIAL'
           }
 

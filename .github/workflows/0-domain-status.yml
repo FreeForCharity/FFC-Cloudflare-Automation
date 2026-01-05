@@ -52,6 +52,16 @@ jobs:
           $dryPath = Join-Path $outDir 'cloudflare-dryrun.txt'
           $dry | Out-File -FilePath $dryPath -Encoding utf8
 
+          # DKIM quick check (Cloudflare selector records) using repo script.
+          # This is Cloudflare-only (no Graph) and runs under cloudflare-prod where CF tokens are available.
+          $dkim = & pwsh -NoProfile -File .\scripts\m365-domain-preflight.ps1 -Domain $domain -SkipGraph *>&1
+          $dkimExit = $LASTEXITCODE
+          $dkimPath = Join-Path $outDir 'cloudflare-dkim-check.txt'
+          $dkim | Out-File -FilePath $dkimPath -Encoding utf8
+          if ($dkimExit -ne 0) {
+            Write-Warning "m365-domain-preflight.ps1 (DKIM Cloudflare-only) exited with code $dkimExit (output saved to $dkimPath)"
+          }
+
           "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Summarize Cloudflare results
@@ -218,11 +228,29 @@ jobs:
 
           $auditPath = 'artifacts/cloudflare/cloudflare-audit.txt'
           $dryPath = 'artifacts/cloudflare/cloudflare-dryrun.txt'
+          $dkimCfPath = 'artifacts/cloudflare/cloudflare-dkim-check.txt'
           $dnsPath = 'artifacts/m365/m365-dns-guidance.txt'
 
           $auditLinesRaw = if (Test-Path $auditPath) { @(Get-Content -Path $auditPath) } else { @() }
           $auditLines = @($auditLinesRaw | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' })
-          $dryLines = if (Test-Path $dryPath) { @(Get-Content -Path $dryPath) } else { @() }
+          $dryLinesRaw = if (Test-Path $dryPath) { @(Get-Content -Path $dryPath) } else { @() }
+          $dryLines = @($dryLinesRaw | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' })
+
+          $dkimLinesRaw = if (Test-Path $dkimCfPath) { @(Get-Content -Path $dkimCfPath) } else { @() }
+          $dkimLines = @($dkimLinesRaw | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' })
+
+          function Get-KvValue {
+            param(
+              [Parameter(Mandatory)] [string[]] $Lines,
+              [Parameter(Mandatory)] [string] $Key
+            )
+
+            $rx = '^' + [regex]::Escape($Key) + ':\s*(.*)$'
+            $m = $Lines | Where-Object { $_ -match $rx } | Select-Object -First 1
+            if (-not $m) { return $null }
+
+            return ($m -replace $rx, '$1').Trim()
+          }
 
           function Get-IssueLevel {
             param(
@@ -243,22 +271,37 @@ jobs:
             )
 
             $okRegex = [regex]::Escape($OkMatch)
-            if ($auditLines | Where-Object { $_ -match $okRegex }) {
-              return @{ Name = $Name; Status = 'PASS' }
+            $okLine = $auditLines | Where-Object { $_ -match $okRegex } | Select-Object -First 1
+            if ($okLine) {
+              return @{ Name = $Name; Status = 'PASS'; Value = $okLine.Trim() }
             }
 
             $issueLevel = Get-IssueLevel -Lines $auditLines -MatchText $IssueMatch
             if ($issueLevel) {
-              return @{ Name = $Name; Status = $issueLevel }
+              $issueLine = $auditLines | Where-Object { $_ -match '^(?:WARNING:\s*)?\[(?:MISSING|MISSING/PARTIAL|DIFFERS)\]' -and $_ -like "*$IssueMatch*" } | Select-Object -First 1
+              return @{ Name = $Name; Status = $issueLevel; Value = ($issueLine?.Trim()) }
             }
 
-            return @{ Name = $Name; Status = 'UNKNOWN' }
+            return @{ Name = $Name; Status = 'UNKNOWN'; Value = '' }
           }
 
           $checks = @()
-          $checks += @{ Name = 'M365: domain exists in tenant'; Status = $(if ($m365ExistsBool) { 'PASS' } else { 'FAIL' }) }
-          $checks += @{ Name = 'M365: domain verified'; Status = $(if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }) }
-          $checks += @{ Name = 'M365: supports email'; Status = $(if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365EmailBool) { 'PASS' } else { 'PARTIAL' }) }
+          $checks += @{ Name = 'M365: domain exists in tenant'; Status = $(if ($m365ExistsBool) { 'PASS' } else { 'FAIL' }); Value = "exists=$m365ExistsBool" }
+          $checks += @{ Name = 'M365: domain verified'; Status = $(if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }); Value = "verified=$m365VerifiedBool" }
+          $checks += @{ Name = 'M365: supports email'; Status = $(if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365EmailBool) { 'PASS' } else { 'PARTIAL' }); Value = "supportsEmail=$m365EmailBool" }
+
+          $dkimSel1 = Get-KvValue -Lines $dkimLines -Key 'selector1 CNAME present'
+          $dkimSel2 = Get-KvValue -Lines $dkimLines -Key 'selector2 CNAME present'
+          if ($null -ne $dkimSel1) {
+            $checks += @{ Name = 'DKIM: selector1 CNAME present (Cloudflare)'; Status = $(if ($dkimSel1 -match '^(?i:true)$') { 'PASS' } else { 'FAIL' }); Value = $dkimSel1 }
+          } else {
+            $checks += @{ Name = 'DKIM: selector1 CNAME present (Cloudflare)'; Status = 'UNKNOWN'; Value = 'not checked' }
+          }
+          if ($null -ne $dkimSel2) {
+            $checks += @{ Name = 'DKIM: selector2 CNAME present (Cloudflare)'; Status = $(if ($dkimSel2 -match '^(?i:true)$') { 'PASS' } else { 'FAIL' }); Value = $dkimSel2 }
+          } else {
+            $checks += @{ Name = 'DKIM: selector2 CNAME present (Cloudflare)'; Status = 'UNKNOWN'; Value = 'not checked' }
+          }
 
           $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME autodiscover' -OkMatch 'Required CNAME present: autodiscover.' -IssueMatch 'autodiscover.')
           $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME enterpriseenrollment' -OkMatch 'Required CNAME present: enterpriseenrollment.' -IssueMatch 'enterpriseenrollment.')
@@ -276,10 +319,16 @@ jobs:
           # GitHub Pages apex records are reported as a combined check.
           $ghA = Get-IssueLevel -Lines $auditLines -MatchText 'GitHub Pages A Records'
           $ghAAAA = Get-IssueLevel -Lines $auditLines -MatchText 'GitHub Pages AAAA Records'
-          $checks += @{ Name = 'Cloudflare: GitHub Pages apex A records'; Status = ($ghA ?? 'PASS'); Details = '' }
-          $checks += @{ Name = 'Cloudflare: GitHub Pages apex AAAA records'; Status = ($ghAAAA ?? 'PASS'); Details = '' }
+          $checks += @{ Name = 'Cloudflare: GitHub Pages apex A records'; Status = ($ghA ?? 'PASS'); Value = ($auditLines | Where-Object { $_ -match 'GitHub Pages A Records' } | Select-Object -First 1).Trim() }
+          $checks += @{ Name = 'Cloudflare: GitHub Pages apex AAAA records'; Status = ($ghAAAA ?? 'PASS'); Value = ($auditLines | Where-Object { $_ -match 'GitHub Pages AAAA Records' } | Select-Object -First 1).Trim() }
 
-          $plannedChanges = @($dryLines | Where-Object { $_ -match '^[[]DRY-RUN[]]' })
+          $plannedChanges = @(
+            $dryLines |
+              Where-Object { $_ -match '^Checking standard record:' -and $_ -match '\[(?:MISSING|MISSING/PARTIAL|DIFFERS)\]' }
+          )
+          if ($plannedChanges.Count -eq 0) {
+            $plannedChanges = @($dryLines | Where-Object { $_ -match '^[[]DRY-RUN[]]' })
+          }
 
           $summary = @()
           $summary += "# Domain status: $domain"
@@ -289,10 +338,11 @@ jobs:
           $summary += "- M365: **$m365Status** (exists=$m365ExistsBool, verified=$m365VerifiedBool, supportsEmail=$m365EmailBool)"
           $summary += ''
           $summary += '## Checks'
-          $summary += '| Check | Status |'
-          $summary += '| --- | --- |'
+          $summary += '| Check | Status | Value |'
+          $summary += '| --- | --- | --- |'
           foreach ($c in $checks) {
-            $summary += "| $($c.Name) | **$($c.Status)** |"
+            $val = if ($c.ContainsKey('Value') -and $c.Value) { ($c.Value -replace '\|', '\\|') } else { '' }
+            $summary += "| $($c.Name) | **$($c.Status)** | $val |"
           }
 
           $summary += ''

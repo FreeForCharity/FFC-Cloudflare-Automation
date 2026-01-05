@@ -112,7 +112,10 @@ function Get-DnsRecordText {
 
     if ($Record.PSObject.Properties.Name -contains 'mailExchange' -and $Record.mailExchange) {
         $pref = if ($Record.PSObject.Properties.Name -contains 'preference') { $Record.preference } else { $null }
-        return if ($null -ne $pref) { "{0} (pref {1})" -f $Record.mailExchange, $pref } else { [string]$Record.mailExchange }
+        if ($null -ne $pref) {
+            return ("{0} (pref {1})" -f $Record.mailExchange, $pref)
+        }
+        return [string]$Record.mailExchange
     }
 
     if ($Record.PSObject.Properties.Name -contains 'canonicalName' -and $Record.canonicalName) { return [string]$Record.canonicalName }
@@ -132,7 +135,7 @@ try {
 
     if ($useRest) {
         $encodedDomain = [Uri]::EscapeDataString($Domain)
-        $d = Invoke-GraphRequest -Uri ("https://graph.microsoft.com/v1.0/domains/{0}?$select=id,isVerified,isDefault,isAdminManaged,supportedServices" -f $encodedDomain) -AccessToken $tokenToUse
+        $d = Invoke-GraphRequest -Uri ("https://graph.microsoft.com/v1.0/domains/{0}?`$select=id,isVerified,isDefault,isAdminManaged,supportedServices" -f $encodedDomain) -AccessToken $tokenToUse
     }
     else {
         $d = Get-MgDomain -DomainId $Domain -ErrorAction Stop

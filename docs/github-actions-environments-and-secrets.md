@@ -111,7 +111,7 @@ You must configure the Entra application referenced by `FFC_AZURE_CLIENT_ID`:
   - Issuer: `https://token.actions.githubusercontent.com`
   - Audience: `api://AzureADTokenExchange`
   - Subject (recommended pattern when workflows use `environment: m365-prod`):
-    - `repo:FreeForCharity/FFC-Cloudflare-Automation-:environment:m365-prod`
+    - `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:m365-prod`
   - Note: if you scope the federated credential differently (branch/ref), the subject format
     changes.
 

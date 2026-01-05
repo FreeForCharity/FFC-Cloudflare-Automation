@@ -102,4 +102,4 @@ When changing enforcement requirements, prefer creating an issue first and then 
 references it.
 
 Example: the GitHub Pages AAAA requirement should have been tracked as an issue before
-implementation (see https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues/40).
+implementation (see https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/40).

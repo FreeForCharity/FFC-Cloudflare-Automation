@@ -32,6 +32,11 @@ on:
         required: false
         type: boolean
         default: true
+      require_whmcs_domain:
+        description: 'Fail fast if domain is not found in WHMCS'
+        required: false
+        type: boolean
+        default: true
       issue_number:
         description: 'Optional: issue number to comment results back to'
         required: false
@@ -42,9 +47,66 @@ permissions:
   issues: write
 
 jobs:
-  cloudflare_zone_create:
+  whmcs_preflight:
+    runs-on: windows-latest
+    environment: whmcs-prod
+    outputs:
+      domain: ${{ steps.meta.outputs.domain }}
+      found: ${{ steps.check.outputs.found }}
+      domain_id: ${{ steps.check.outputs.domain_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $d = "${{ inputs.domain }}".Trim().ToLowerInvariant().Trim('.')
+          "domain=$d" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Validate required WHMCS secrets
+        shell: pwsh
+        env:
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
+            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
+          }
+
+      - name: Check domain exists in WHMCS (smoke test)
+        id: check
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ steps.meta.outputs.domain }}"
+
+          $json = & pwsh -NoProfile -File .\scripts\whmcs-domain-exists.ps1 -Domain $domain
+          if ($LASTEXITCODE -ne 0) {
+            throw "WHMCS preflight check failed (exit $LASTEXITCODE)."
+          }
+
+          $r = $json | ConvertFrom-Json -ErrorAction Stop
+          $found = [bool]$r.found
+          $domainId = [string]$r.domainId
+
+          "found=$found" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "domain_id=$domainId" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          if (-not $found -and ('${{ inputs.require_whmcs_domain }}' -eq 'true')) {
+            throw "Domain '$domain' not found in WHMCS. Add it in WHMCS first (or rerun with require_whmcs_domain=false)."
+          }
+
+  cloudflare_preflight:
     runs-on: ubuntu-latest
     environment: cloudflare-prod
+    needs: [whmcs_preflight]
     outputs:
       domain: ${{ steps.meta.outputs.domain }}
       ns1: ${{ steps.meta.outputs.ns1 }}
@@ -57,13 +119,82 @@ jobs:
         id: meta
         shell: bash
         run: |
-          d=$(echo "${{ inputs.domain }}" | tr '[:upper:]' '[:lower:]' | xargs)
+          d="${{ needs.whmcs_preflight.outputs.domain }}"
+          if [ -z "$d" ]; then d=$(echo "${{ inputs.domain }}" | tr '[:upper:]' '[:lower:]' | xargs); fi
           echo "domain=$d" >> "$GITHUB_OUTPUT"
 
           # Custom account nameservers (preferred): store as variables on the cloudflare-prod environment.
           # Fallback: use the known FFC custom nameservers.
           ns1="${{ vars.FFC_CUSTOM_NAMESERVER_1 }}"
           ns2="${{ vars.FFC_CUSTOM_NAMESERVER_2 }}"
+          if [ -z "$ns1" ]; then ns1='ns1.freeforcharity.org'; fi
+          if [ -z "$ns2" ]; then ns2='ns2.freeforcharity.org'; fi
+          echo "ns1=$ns1" >> "$GITHUB_OUTPUT"
+          echo "ns2=$ns2" >> "$GITHUB_OUTPUT"
+
+      - name: Validate required Cloudflare secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+
+      - name: Check zone exists in Cloudflare (smoke test)
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ steps.meta.outputs.domain }}"
+
+          $ffcJson = & pwsh -NoProfile -File scripts/cloudflare-zone-get.ps1 -Domain $domain -Account 'FFC'
+          if ($LASTEXITCODE -ne 0) { throw "Cloudflare preflight (FFC) failed (exit $LASTEXITCODE)." }
+          $ffc = $ffcJson | ConvertFrom-Json -ErrorAction Stop
+
+          $cmJson = & pwsh -NoProfile -File scripts/cloudflare-zone-get.ps1 -Domain $domain -Account 'CM'
+          if ($LASTEXITCODE -ne 0) { throw "Cloudflare preflight (CM) failed (exit $LASTEXITCODE)." }
+          $cm = $cmJson | ConvertFrom-Json -ErrorAction Stop
+
+          if ($cm.exists -and -not $ffc.exists) {
+            throw "Zone '$domain' already exists in the CM Cloudflare account. Refusing to create a duplicate in FFC."
+          }
+
+          if ($ffc.exists) {
+            Write-Host "[OK] Zone exists in FFC (zoneId=$($ffc.zoneId))." -ForegroundColor Green
+          } else {
+            Write-Host "[OK] Zone does not exist in FFC yet; will create." -ForegroundColor Yellow
+          }
+
+  cloudflare_zone_create:
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod
+    needs: [cloudflare_preflight]
+    outputs:
+      domain: ${{ steps.meta.outputs.domain }}
+      ns1: ${{ steps.meta.outputs.ns1 }}
+      ns2: ${{ steps.meta.outputs.ns2 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Metadata
+        id: meta
+        shell: bash
+        run: |
+          d="${{ needs.cloudflare_preflight.outputs.domain }}"
+          if [ -z "$d" ]; then d=$(echo "${{ inputs.domain }}" | tr '[:upper:]' '[:lower:]' | xargs); fi
+          echo "domain=$d" >> "$GITHUB_OUTPUT"
+
+          # Custom account nameservers (preferred): store as variables on the cloudflare-prod environment.
+          # Fallback: use the known FFC custom nameservers.
+          ns1="${{ needs.cloudflare_preflight.outputs.ns1 }}"
+          ns2="${{ needs.cloudflare_preflight.outputs.ns2 }}"
           if [ -z "$ns1" ]; then ns1='ns1.freeforcharity.org'; fi
           if [ -z "$ns2" ]; then ns2='ns2.freeforcharity.org'; fi
           echo "ns1=$ns1" >> "$GITHUB_OUTPUT"
@@ -158,7 +289,7 @@ jobs:
   whmcs_update_nameservers:
     runs-on: windows-latest
     environment: whmcs-prod
-    needs: [cloudflare_zone_create, cloudflare_enforce_standard]
+    needs: [whmcs_preflight, cloudflare_zone_create, cloudflare_enforce_standard]
     if: ${{ inputs.update_whmcs_nameservers }}
 
     steps:
@@ -185,6 +316,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = "${{ needs.cloudflare_zone_create.outputs.domain }}"
+
+          if ("${{ needs.whmcs_preflight.outputs.found }}" -ne 'true') {
+            throw "WHMCS preflight indicates domain '$domain' is not present. Add it in WHMCS first (or rerun with update_whmcs_nameservers=false)."
+          }
 
           $ns1 = "${{ needs.cloudflare_zone_create.outputs.ns1 }}"
           $ns2 = "${{ needs.cloudflare_zone_create.outputs.ns2 }}"

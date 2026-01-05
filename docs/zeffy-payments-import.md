@@ -75,6 +75,9 @@ This is primarily used to ensure Zeffy contact creation has a corresponding “p
 Some WHMCS transactions can have `userid=0` (deleted clients). These rows are excluded from the
 Zeffy output so imports do not break on missing/unknown contact data.
 
+The generator also skips rows where the resolved client is missing a first/last name (Zeffy
+requires a contact name).
+
 The workflow also emits a separate export (`whmcs_invoices_deleted_clients`) that looks up invoice
 details (including contact fields) for any `userid=0` transactions that still have an `invoiceid`.
 This file is for investigation/auditing, not automatic inclusion.
@@ -135,6 +138,8 @@ so the draft matches 1:1.
 - Workflow fails during invoices export with “parameter cannot be found … `ApiUrl` / `OutputFile`”
   - The invoices exporter must accept the workflow parameters. See
     `scripts/whmcs-invoices-export.ps1`.
+- CI fails with `Invoke-Formatter` / formatting errors
+  - Run the repo formatter (see `scripts/format-powershell.ps1`) and re-push.
 - Workflow fails with a Zeffy header mismatch
   - Zeffy template header strings can change. Use the generator `template` mode with an exported
     Zeffy template header to force exact header output.

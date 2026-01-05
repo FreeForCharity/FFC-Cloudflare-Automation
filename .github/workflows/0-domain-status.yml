@@ -249,9 +249,9 @@ jobs:
           }
 
           $checks = @()
-          $checks += @{ Name = 'M365: domain exists in tenant'; Status = (if ($m365ExistsBool) { 'PASS' } else { 'FAIL' }); Details = "exists=$m365ExistsBool" }
-          $checks += @{ Name = 'M365: domain verified'; Status = (if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }); Details = "verified=$m365VerifiedBool" }
-          $checks += @{ Name = 'M365: supports email'; Status = (if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365EmailBool) { 'PASS' } else { 'PARTIAL' }); Details = "supportsEmail=$m365EmailBool" }
+          $checks += @{ Name = 'M365: domain exists in tenant'; Status = $(if ($m365ExistsBool) { 'PASS' } else { 'FAIL' }) }
+          $checks += @{ Name = 'M365: domain verified'; Status = $(if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }) }
+          $checks += @{ Name = 'M365: supports email'; Status = $(if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365EmailBool) { 'PASS' } else { 'PARTIAL' }) }
 
           $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME autodiscover' -OkMatch '[OK] Required CNAME present: autodiscover.' -IssueMatch 'autodiscover.')
           $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME enterpriseenrollment' -OkMatch '[OK] Required CNAME present: enterpriseenrollment.' -IssueMatch 'enterpriseenrollment.')

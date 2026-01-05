@@ -10,6 +10,9 @@ param(
     [string]$Secret,
 
     [Parameter()]
+    [string]$CredentialsJson,
+
+    [Parameter()]
     [string]$AccessKey,
 
     [Parameter()]
@@ -25,7 +28,8 @@ $ErrorActionPreference = 'Stop'
 function Resolve-WhmcsCredentials {
     param(
         [string]$IdentifierParam,
-        [string]$SecretParam
+        [string]$SecretParam,
+        [string]$CredentialsJsonParam
     )
 
     $id = if ($IdentifierParam) { $IdentifierParam } else { $env:WHMCS_API_IDENTIFIER }
@@ -35,7 +39,28 @@ function Resolve-WhmcsCredentials {
         return @{ Identifier = $id; Secret = $sec }
     }
 
-    throw 'Missing WHMCS credentials. Provide -Identifier/-Secret or set WHMCS_API_IDENTIFIER/WHMCS_API_SECRET.'
+    $json = if ($CredentialsJsonParam) { $CredentialsJsonParam } else { $env:WHMCS_API_CREDENTIALS_JSON }
+    if ([string]::IsNullOrWhiteSpace($json)) {
+        throw 'Missing WHMCS credentials. Provide -Identifier/-Secret, set WHMCS_API_IDENTIFIER/WHMCS_API_SECRET, or set WHMCS_API_CREDENTIALS_JSON.'
+    }
+
+    $jsonTrim = $json.Trim()
+
+    if ($jsonTrim.StartsWith('{')) {
+        $obj = $jsonTrim | ConvertFrom-Json -ErrorAction Stop
+        $jid = $obj.identifier
+        $jsec = $obj.secret
+        if ([string]::IsNullOrWhiteSpace($jid) -or [string]::IsNullOrWhiteSpace($jsec)) {
+            throw 'WHMCS_API_CREDENTIALS_JSON must contain fields "identifier" and "secret".'
+        }
+        return @{ Identifier = $jid; Secret = $jsec }
+    }
+
+    if ($jsonTrim -match '^([^:]+):(.+)$') {
+        return @{ Identifier = $Matches[1]; Secret = $Matches[2] }
+    }
+
+    throw 'WHMCS_API_CREDENTIALS_JSON must be JSON (identifier/secret) or in the format "identifier:secret".'
 }
 
 function Resolve-WhmcsApiUrl {
@@ -92,125 +117,81 @@ function Invoke-WhmcsApi {
         if ($resp.message) { $msg = $resp.message }
         elseif ($resp.errormessage) { $msg = $resp.errormessage }
         elseif ($resp.error) { $msg = $resp.error }
-
         if ([string]::IsNullOrWhiteSpace($msg)) {
+            $keys = @()
+            try { $keys = @($resp.PSObject.Properties | Select-Object -ExpandProperty Name) } catch {}
+            $keysText = if ($keys.Count -gt 0) { ($keys | Sort-Object) -join ', ' } else { '<no properties>' }
+
             $diag = $null
             try { $diag = ($resp | ConvertTo-Json -Depth 6 -Compress) } catch {}
             if (-not [string]::IsNullOrWhiteSpace($diag) -and $diag.Length -gt 800) {
                 $diag = $diag.Substring(0, 800) + '...'
             }
-            $msg = "Unknown WHMCS API error." + (if ($diag) { " Response: $diag" } else { '' })
-        }
 
+            $msg = "Unknown WHMCS API error. Response keys: $keysText" + (if ($diag) { " Response: $diag" } else { '' })
+        }
         throw "WHMCS API error: $msg"
     }
 
     return $resp
 }
 
-function New-DirectoryForFile {
-    param([string]$Path)
-
-    if ([string]::IsNullOrWhiteSpace($Path)) { return }
-    $dir = Split-Path -Parent $Path
-    if (-not [string]::IsNullOrWhiteSpace($dir)) {
-        New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    }
-}
-
-function ConvertTo-Scalar {
-    param($Value)
-
-    if ($null -eq $Value) { return $null }
-
-    if ($Value -is [string] -or $Value -is [ValueType]) {
-        return $Value
-    }
-
-    try {
-        return ($Value | ConvertTo-Json -Depth 10 -Compress)
-    }
-    catch {
-        return $Value.ToString()
-    }
-}
-
-function Normalize-WhmcsFlatFieldName {
-    param([string]$Field)
-
-    if ([string]::IsNullOrWhiteSpace($Field)) { return $Field }
-
-    $n = $Field
-    $n = $n -replace '\]\[', '.'
-    $n = $n -replace '\[', '.'
-    $n = $n -replace '\]', ''
-    $n = $n.Trim('.')
-
-    return $n
-}
-
 function Get-WhmcsDomainsFromResponse {
-    param([Parameter(Mandatory = $true)]$Response)
-
-    # Preferred: structured response
-    if ($Response.domains -and $Response.domains.domain) {
-        return @($Response.domains.domain)
-    }
-
-    if ($Response.domains -is [System.Array]) {
-        return @($Response.domains)
-    }
-
-    # Fallback: WHMCS sometimes returns "flat-key" JSON like domains[domain][0][field]
-    $matches = @()
-    foreach ($prop in @($Response.PSObject.Properties)) {
-        if ($prop.Name -match '^domains\[domain\]\[(\d+)\]\[(.+)\]$') {
-            $matches += [PSCustomObject]@{ idx = [int]$Matches[1]; field = $Matches[2]; value = $prop.Value }
-        }
-    }
-
-    if ($matches.Count -eq 0) { return @() }
-
-    $byIndex = @{}
-    foreach ($m in $matches) {
-        $idx = $m.idx
-        if (-not $byIndex.ContainsKey($idx)) {
-            $byIndex[$idx] = [ordered]@{ __index = $idx }
-        }
-
-        $fieldName = Normalize-WhmcsFlatFieldName -Field $m.field
-        $byIndex[$idx][$fieldName] = ConvertTo-Scalar -Value $m.value
-    }
-
-    return @($byIndex.GetEnumerator() | Sort-Object Name | ForEach-Object { [PSCustomObject]$_.Value })
-}
-
-function ConvertTo-DomainRow {
     param(
         [Parameter(Mandatory = $true)]
-        $Domain
+        $Response
     )
 
-    $row = [ordered]@{}
-
-    foreach ($p in @($Domain.PSObject.Properties)) {
-        if ($p.Name -eq '__index') { continue }
-        $row[$p.Name] = ConvertTo-Scalar -Value $p.Value
+    # Newer/cleaner response format (nested arrays)
+    if ($Response.domains) {
+        if ($Response.domains.domain) {
+            return @($Response.domains.domain)
+        }
+        if ($Response.domains -is [System.Array]) {
+            return @($Response.domains)
+        }
     }
 
-    return [PSCustomObject]$row
+    # WHMCS API documentation shows a flat JSON response with keys like:
+    #   "domains[domain][0][domainname]": "example.com"
+    # Convert that into a list of objects.
+    $rx = '^domains\[domain\]\[(\d+)\]\[([^\]]+)\]$'
+    $byIndex = @{}
+
+    foreach ($prop in $Response.PSObject.Properties) {
+        $m = [regex]::Match($prop.Name, $rx)
+        if (-not $m.Success) { continue }
+
+        $idx = [int]$m.Groups[1].Value
+        $field = $m.Groups[2].Value
+
+        if (-not $byIndex.ContainsKey($idx)) {
+            $byIndex[$idx] = @{}
+        }
+
+        $byIndex[$idx][$field] = $prop.Value
+    }
+
+    if ($byIndex.Count -le 0) {
+        return @()
+    }
+
+    $domains = @()
+    foreach ($idx in ($byIndex.Keys | Sort-Object)) {
+        $domains += [PSCustomObject]$byIndex[$idx]
+    }
+
+    return $domains
 }
 
 try {
     $api = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
-    $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret
+    $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret -CredentialsJsonParam $CredentialsJson
     $accessKey = Resolve-WhmcsAccessKey -AccessKeyParam $AccessKey
 
-    New-DirectoryForFile -Path $OutputFile
-
-    $allDomains = @()
-
+    $all = @()
     $start = 0
+
     while ($true) {
         $body = @{
             identifier   = $creds.Identifier
@@ -220,29 +201,92 @@ try {
             limitstart   = $start
             limitnum     = $PageSize
         }
-        if (-not [string]::IsNullOrWhiteSpace($accessKey)) { $body.accesskey = $accessKey }
+
+        if (-not [string]::IsNullOrWhiteSpace($accessKey)) {
+            $body.accesskey = $accessKey
+        }
 
         $r = Invoke-WhmcsApi -ApiUrl $api -Body $body
-        $domains = Get-WhmcsDomainsFromResponse -Response $r
-        if ($domains.Count -le 0) { break }
-
-        $allDomains += ($domains | ForEach-Object { ConvertTo-DomainRow -Domain $_ })
-
-        $numReturnedApi = 0
-        if ($r.numreturned) { [void][int]::TryParse($r.numreturned.ToString(), [ref]$numReturnedApi) }
-        $start += (if ($numReturnedApi -gt 0) { $numReturnedApi } else { $domains.Count })
 
         $total = 0
-        if ($r.totalresults) { [void][int]::TryParse($r.totalresults.ToString(), [ref]$total) }
-        if ($total -gt 0 -and $start -ge $total) { break }
+        if ($r.totalresults) {
+            [void][int]::TryParse($r.totalresults.ToString(), [ref]$total)
+        }
 
-        # If WHMCS ignored limitstart/limitnum and keeps returning the same block, avoid an infinite loop.
-        if ($total -eq 0 -and $start -gt 50000) { break }
+        $numReturnedApi = 0
+        if ($r.numreturned) {
+            [void][int]::TryParse($r.numreturned.ToString(), [ref]$numReturnedApi)
+        }
+
+        $domains = Get-WhmcsDomainsFromResponse -Response $r
+
+        $all += $domains
+
+        $returned = $domains.Count
+        if ($returned -le 0) { break }
+
+        if ($numReturnedApi -gt 0) {
+            $start += $numReturnedApi
+        }
+        else {
+            $start += $returned
+        }
+        if ($total -gt 0 -and $start -ge $total) { break }
     }
 
-    $allDomains | Export-Csv -Path $OutputFile -NoTypeInformation -Encoding UTF8
+    # Normalize and export ALL fields returned by WHMCS.
+    # Note: Export-Csv uses the first object's properties as the schema, so we build a stable, complete schema.
+    $domainsNormalized = $all | ForEach-Object {
+        $obj = $_
+        $domainName = if ($obj.domainname) { $obj.domainname } else { $obj.domain }
 
-    Write-Host "Exported $($allDomains.Count) domains to $OutputFile"
+        if (-not $obj.PSObject.Properties['domain'] -and -not [string]::IsNullOrWhiteSpace($domainName)) {
+            $obj | Add-Member -NotePropertyName domain -NotePropertyValue $domainName -Force
+        }
+        $obj
+    } | Where-Object { -not [string]::IsNullOrWhiteSpace($_.domain) }
+
+    $preferredColumns = @(
+        'domain',
+        'domainname',
+        'id',
+        'userid',
+        'status',
+        'regtype',
+        'registrar',
+        'regdate',
+        'expirydate',
+        'nextduedate',
+        'firstpaymentamount',
+        'recurringamount',
+        'paymentmethod',
+        'paymentmethodname',
+        'regperiod'
+    )
+
+    $allColumnsSet = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($d in $domainsNormalized) {
+        foreach ($p in $d.PSObject.Properties) {
+            [void]$allColumnsSet.Add($p.Name)
+        }
+    }
+
+    $extraColumns = @($allColumnsSet | Where-Object { $_ -notin $preferredColumns } | Sort-Object)
+    $columns = @($preferredColumns | Where-Object { $allColumnsSet.Contains($_) }) + $extraColumns
+
+    $rows = foreach ($d in $domainsNormalized) {
+        $row = [ordered]@{}
+        foreach ($c in $columns) {
+            $prop = $d.PSObject.Properties[$c]
+            $row[$c] = if ($null -ne $prop) { $prop.Value } else { $null }
+        }
+        [PSCustomObject]$row
+    }
+
+    $rows | Sort-Object domain | Export-Csv -Path $OutputFile -NoTypeInformation -Encoding utf8
+
+    Write-Host ("Exported {0} domain(s) with {1} column(s) to {2}" -f ($rows | Measure-Object).Count, $columns.Count, $OutputFile)
+    exit 0
 }
 catch {
     Write-Error $_

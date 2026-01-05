@@ -126,9 +126,55 @@ function Get-Text {
     param($Node)
 
     if (-not $Node) { return $null }
-    $s = [string]$Node
+    if ($Node -is [System.Xml.XmlNode]) {
+        $s = $Node.InnerText
+    }
+    else {
+        $s = [string]$Node
+    }
     if ([string]::IsNullOrWhiteSpace($s)) { return $null }
     return $s
+}
+
+function Needs-ClientDetailsEnrichment {
+    param([pscustomobject]$Client)
+
+    foreach ($prop in @('address1', 'city', 'postcode', 'country', 'state', 'companyname')) {
+        $v = $null
+        try { $v = $Client.$prop } catch { }
+        if ([string]::IsNullOrWhiteSpace([string]$v)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-ClientDetails {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ApiUrl,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Creds,
+        [Parameter(Mandatory = $true)]
+        [string]$ClientId,
+        [string]$AccessKey
+    )
+
+    $body = @{
+        identifier   = $Creds.Identifier
+        secret       = $Creds.Secret
+        action       = 'GetClientsDetails'
+        responsetype = 'xml'
+        clientid     = $ClientId
+        stats        = 'false'
+    }
+
+    if ($AccessKey) { $body.accesskey = $AccessKey }
+    $resp = Invoke-WhmcsApiXml -ApiUrl $ApiUrl -Body $body
+
+    if (-not $resp.client) { return $null }
+    return $resp.client
 }
 
 try {
@@ -171,7 +217,7 @@ try {
         }
 
         foreach ($c in $batch) {
-            $clients += [pscustomobject]@{
+            $clientRow = [pscustomobject]@{
                 clientid    = Get-Text $c.id
                 firstname   = Get-Text $c.firstname
                 lastname    = Get-Text $c.lastname
@@ -187,6 +233,8 @@ try {
                 status      = Get-Text $c.status
                 datecreated = Get-Text $c.datecreated
             }
+
+            $clients += $clientRow
         }
 
         if ($batch.Count -lt $PageSize) { break }
@@ -195,9 +243,44 @@ try {
         if ($total -and $start -ge $total) { break }
     }
 
+    $enriched = 0
+    $enrichFailed = 0
+    foreach ($client in $clients) {
+        if (-not (Needs-ClientDetailsEnrichment -Client $client)) { continue }
+        if ([string]::IsNullOrWhiteSpace($client.clientid)) { continue }
+
+        try {
+            # Be gentle on WHMCS API.
+            Start-Sleep -Milliseconds 150
+
+            $d = Get-ClientDetails -ApiUrl $api -Creds $creds -ClientId $client.clientid -AccessKey $accessKey
+            if (-not $d) { continue }
+
+            foreach ($field in @('companyname', 'address1', 'address2', 'city', 'state', 'postcode', 'country', 'phonenumber')) {
+                $current = $null
+                try { $current = $client.$field } catch { $current = $null }
+                if (-not [string]::IsNullOrWhiteSpace([string]$current)) { continue }
+
+                $val = $null
+                try { $val = Get-Text $d.$field } catch { $val = $null }
+                if (-not [string]::IsNullOrWhiteSpace([string]$val)) {
+                    $client | Add-Member -NotePropertyName $field -NotePropertyValue $val -Force
+                }
+            }
+
+            $enriched++
+        }
+        catch {
+            $enrichFailed++
+        }
+    }
+
     $clients | Export-Csv -NoTypeInformation -Encoding utf8 -Path $OutputFile
 
     Write-Host "Exported $($clients.Count) clients to $OutputFile"
+    if ($enriched -gt 0 -or $enrichFailed -gt 0) {
+        Write-Host "Client detail enrichment: updated=$enriched, failed=$enrichFailed"
+    }
 }
 catch {
     Write-Error $_

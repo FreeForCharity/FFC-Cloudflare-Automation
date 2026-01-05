@@ -135,8 +135,10 @@ so the draft matches 1:1.
 
 ## Troubleshooting
 
-- Workflow fails during invoices export with “parameter cannot be found … `ApiUrl` / `OutputFile`”
-  - The invoices exporter must accept the workflow parameters. See
+- The workflow fails during invoices export with errors like
+  `A parameter cannot be found that matches parameter name 'ApiUrl'` or
+  `A parameter cannot be found that matches parameter name 'OutputFile'`.
+  - Ensure the invoices exporter accepts these workflow parameters. See
     `scripts/whmcs-invoices-export.ps1`.
 - CI fails with `Invoke-Formatter` / formatting errors
   - Run the repo formatter (see `scripts/format-powershell.ps1`) and re-push.

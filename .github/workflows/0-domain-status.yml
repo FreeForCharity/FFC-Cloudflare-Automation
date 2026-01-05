@@ -216,33 +216,117 @@ jobs:
           $dnsPath = 'artifacts/m365/m365-dns-guidance.txt'
 
           $auditLines = if (Test-Path $auditPath) { @(Get-Content -Path $auditPath) } else { @() }
-          $issueLines = @($auditLines | Where-Object { $_ -match '^[[](?:MISSING|MISSING/PARTIAL|DIFFERS)[]]' } | Sort-Object)
-
           $dryLines = if (Test-Path $dryPath) { @(Get-Content -Path $dryPath) } else { @() }
-          $changeLines = @($dryLines | Where-Object { $_ -match '^[[]DRY-RUN[]]' } | Sort-Object)
+
+          function Get-IssueLevel {
+            param(
+              [Parameter(Mandatory)] [string[]] $Lines,
+              [Parameter(Mandatory)] [string] $MatchText
+            )
+            $hits = @($Lines | Where-Object { $_ -match '^[[](MISSING|MISSING/PARTIAL|DIFFERS)[]]' -and $_ -like "*$MatchText*" })
+            if ($hits.Count -eq 0) { return $null }
+            if ($hits | Where-Object { $_ -match '^[[]MISSING[]]' -or $_ -match '^[[]DIFFERS[]]' }) { return 'FAIL' }
+            return 'PARTIAL'
+          }
+
+          function Get-CheckStatus {
+            param(
+              [Parameter(Mandatory)] [string] $Name,
+              [Parameter(Mandatory)] [string] $OkMatch,
+              [Parameter(Mandatory)] [string] $IssueMatch
+            )
+
+            if ($auditLines | Where-Object { $_ -like "*$OkMatch*" }) {
+              return @{ Name = $Name; Status = 'PASS' }
+            }
+
+            $issueLevel = Get-IssueLevel -Lines $auditLines -MatchText $IssueMatch
+            if ($issueLevel) {
+              return @{ Name = $Name; Status = $issueLevel }
+            }
+
+            return @{ Name = $Name; Status = 'UNKNOWN' }
+          }
+
+          $checks = @()
+          $checks += @{ Name = 'M365: domain exists in tenant'; Status = (if ($m365ExistsBool) { 'PASS' } else { 'FAIL' }); Details = "exists=$m365ExistsBool" }
+          $checks += @{ Name = 'M365: domain verified'; Status = (if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }); Details = "verified=$m365VerifiedBool" }
+          $checks += @{ Name = 'M365: supports email'; Status = (if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365EmailBool) { 'PASS' } else { 'PARTIAL' }); Details = "supportsEmail=$m365EmailBool" }
+
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME autodiscover' -OkMatch '[OK] Required CNAME present: autodiscover.' -IssueMatch 'autodiscover.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME enterpriseenrollment' -OkMatch '[OK] Required CNAME present: enterpriseenrollment.' -IssueMatch 'enterpriseenrollment.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME enterpriseregistration' -OkMatch '[OK] Required CNAME present: enterpriseregistration.' -IssueMatch 'enterpriseregistration.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME lyncdiscover' -OkMatch '[OK] Required CNAME present: lyncdiscover.' -IssueMatch 'lyncdiscover.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME sip' -OkMatch '[OK] Required CNAME present: sip.' -IssueMatch 'sip.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME www' -OkMatch '[OK] Required CNAME present: www.' -IssueMatch 'WWW CNAME')
+
+          $checks += (Get-CheckStatus -Name 'Cloudflare: SRV _sip._tls' -OkMatch '[OK] Required SRV present: _sip._tls.' -IssueMatch '_sip._tls.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: SRV _sipfederationtls._tcp' -OkMatch '[OK] Required SRV present: _sipfederationtls._tcp.' -IssueMatch '_sipfederationtls._tcp.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: MX (M365) present' -OkMatch '[OK] M365 MX Record found' -IssueMatch 'MX')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: SPF (M365) present' -OkMatch '[OK] M365 SPF Record found' -IssueMatch 'SPF')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: DMARC present' -OkMatch '[OK] DMARC Record found' -IssueMatch '_dmarc')
+
+          # GitHub Pages apex records are reported as a combined check.
+          $ghA = Get-IssueLevel -Lines $auditLines -MatchText 'GitHub Pages A Records'
+          $ghAAAA = Get-IssueLevel -Lines $auditLines -MatchText 'GitHub Pages AAAA Records'
+          $checks += @{ Name = 'Cloudflare: GitHub Pages apex A records'; Status = ($ghA ?? 'PASS'); Details = '' }
+          $checks += @{ Name = 'Cloudflare: GitHub Pages apex AAAA records'; Status = ($ghAAAA ?? 'PASS'); Details = '' }
+
+          $plannedChanges = @($dryLines | Where-Object { $_ -match '^[[]DRY-RUN[]]' })
 
           $summary = @()
           $summary += "# Domain status: $domain"
-          $summary += ""
+          $summary += ''
           $summary += "- Overall: **$overall**"
           $summary += "- Cloudflare: **$cfStatus** ($cfIssues audit issues; $cfChanges planned changes)"
           $summary += "- M365: **$m365Status** (exists=$m365ExistsBool, verified=$m365VerifiedBool, supportsEmail=$m365EmailBool)"
-          $summary += ""
-          $summary += "## Cloudflare audit (deterministic list)"
-          if ($issueLines.Count -eq 0) { $summary += "- No audit issues found." }
-          else { $summary += ($issueLines | ForEach-Object { "- $_" }) }
-          $summary += ""
-          $summary += "## Cloudflare plan (what will change)"
-          if ($changeLines.Count -eq 0) { $summary += "- No planned changes (dry-run)." }
-          else { $summary += ($changeLines | ForEach-Object { "- $_" }) }
-          $summary += ""
-          $summary += "## M365 expected DNS records (Graph)"
-          if (Test-Path $dnsPath) {
-            $dns = (Get-Content -Path $dnsPath -Raw).Trim()
-            if ($dns) { $summary += '```'; $summary += $dns; $summary += '```' }
-            else { $summary += "- No DNS guidance output." }
+          $summary += ''
+          $summary += '## Checks'
+          $summary += '| Check | Status |'
+          $summary += '| --- | --- |'
+          foreach ($c in $checks) {
+            $summary += "| $($c.Name) | **$($c.Status)** |"
+          }
+
+          $summary += ''
+          $summary += '## Planned changes (if you run Enforce)'
+          if ($plannedChanges.Count -eq 0) {
+            $summary += '- None (dry-run shows no changes).'
           } else {
-            $summary += "- DNS guidance file not found."
+            foreach ($line in $plannedChanges) {
+              $summary += "- $line"
+            }
+          }
+
+          $summary += ''
+          $summary += '## Details (raw outputs)'
+          if (Test-Path $auditPath) {
+            $summary += '<details><summary>Cloudflare audit</summary>'
+            $summary += ''
+            $summary += '```'
+            $summary += (Get-Content -Path $auditPath -Raw).Trim()
+            $summary += '```'
+            $summary += '</details>'
+          }
+
+          if (Test-Path $dryPath) {
+            $summary += ''
+            $summary += '<details><summary>Cloudflare dry-run</summary>'
+            $summary += ''
+            $summary += '```'
+            $summary += (Get-Content -Path $dryPath -Raw).Trim()
+            $summary += '```'
+            $summary += '</details>'
+          }
+
+          if (Test-Path $dnsPath) {
+            $summary += ''
+            $summary += '<details><summary>M365 DNS guidance (Graph)</summary>'
+            $summary += ''
+            $summary += '```'
+            $summary += (Get-Content -Path $dnsPath -Raw).Trim()
+            $summary += '```'
+            $summary += '</details>'
           }
 
           ($summary -join "`n") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8

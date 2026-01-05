@@ -240,7 +240,8 @@ jobs:
               [Parameter(Mandatory)] [string] $IssueMatch
             )
 
-            if ($auditLines | Where-Object { $_ -like "*$OkMatch*" }) {
+            $okRegex = [regex]::Escape($OkMatch)
+            if ($auditLines | Where-Object { $_ -match $okRegex }) {
               return @{ Name = $Name; Status = 'PASS' }
             }
 
@@ -257,18 +258,18 @@ jobs:
           $checks += @{ Name = 'M365: domain verified'; Status = $(if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }) }
           $checks += @{ Name = 'M365: supports email'; Status = $(if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365EmailBool) { 'PASS' } else { 'PARTIAL' }) }
 
-          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME autodiscover' -OkMatch '[OK] Required CNAME present: autodiscover' -IssueMatch 'autodiscover')
-          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME enterpriseenrollment' -OkMatch '[OK] Required CNAME present: enterpriseenrollment' -IssueMatch 'enterpriseenrollment')
-          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME enterpriseregistration' -OkMatch '[OK] Required CNAME present: enterpriseregistration' -IssueMatch 'enterpriseregistration')
-          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME lyncdiscover' -OkMatch '[OK] Required CNAME present: lyncdiscover' -IssueMatch 'lyncdiscover')
-          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME sip' -OkMatch '[OK] Required CNAME present: sip' -IssueMatch 'Required CNAME present: sip')
-          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME www' -OkMatch '[OK] Required CNAME present: www' -IssueMatch 'WWW CNAME')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME autodiscover' -OkMatch 'Required CNAME present: autodiscover.' -IssueMatch 'autodiscover.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME enterpriseenrollment' -OkMatch 'Required CNAME present: enterpriseenrollment.' -IssueMatch 'enterpriseenrollment.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME enterpriseregistration' -OkMatch 'Required CNAME present: enterpriseregistration.' -IssueMatch 'enterpriseregistration.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME lyncdiscover' -OkMatch 'Required CNAME present: lyncdiscover.' -IssueMatch 'lyncdiscover.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME sip' -OkMatch 'Required CNAME present: sip.' -IssueMatch 'Required CNAME present: sip.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: CNAME www' -OkMatch 'Required CNAME present: www.' -IssueMatch 'WWW CNAME')
 
-          $checks += (Get-CheckStatus -Name 'Cloudflare: SRV _sip._tls' -OkMatch '[OK] Required SRV present: _sip._tls' -IssueMatch '_sip._tls')
-          $checks += (Get-CheckStatus -Name 'Cloudflare: SRV _sipfederationtls._tcp' -OkMatch '[OK] Required SRV present: _sipfederationtls._tcp' -IssueMatch '_sipfederationtls._tcp')
-          $checks += (Get-CheckStatus -Name 'Cloudflare: MX (M365) present' -OkMatch '[OK] M365 MX Record found' -IssueMatch 'MX')
-          $checks += (Get-CheckStatus -Name 'Cloudflare: SPF (M365) present' -OkMatch '[OK] M365 SPF Record found' -IssueMatch 'SPF')
-          $checks += (Get-CheckStatus -Name 'Cloudflare: DMARC present' -OkMatch '[OK] DMARC Record found' -IssueMatch '_dmarc')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: SRV _sip._tls' -OkMatch 'Required SRV present: _sip._tls.' -IssueMatch '_sip._tls.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: SRV _sipfederationtls._tcp' -OkMatch 'Required SRV present: _sipfederationtls._tcp.' -IssueMatch '_sipfederationtls._tcp.')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: MX (M365) present' -OkMatch 'M365 MX Record found' -IssueMatch 'M365 MX')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: SPF (M365) present' -OkMatch 'M365 SPF Record found' -IssueMatch 'M365 SPF')
+          $checks += (Get-CheckStatus -Name 'Cloudflare: DMARC present' -OkMatch 'DMARC Record found' -IssueMatch 'DMARC')
 
           # GitHub Pages apex records are reported as a combined check.
           $ghA = Get-IssueLevel -Lines $auditLines -MatchText 'GitHub Pages A Records'

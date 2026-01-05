@@ -115,6 +115,8 @@ do {
     }
 } while (-not $totalPages -or $page -le $totalPages)
 
+$sitesCount = $sites.Count
+
 $rows = foreach ($s in $sites) {
     $domain = $null
     if ($null -ne $s.domain) { $domain = [string]$s.domain }
@@ -127,7 +129,23 @@ $rows = foreach ($s in $sites) {
         }
     }
 
-    $title = if ($null -ne $s.title) { [string]$s.title } else { '' }
+    if (-not [string]::IsNullOrWhiteSpace($domain)) {
+        $domain = $domain.Trim().ToLowerInvariant()
+    }
+
+    $title = ''
+    foreach ($prop in @('title', 'name', 'site_name', 'blogname', 'blog_name')) {
+        $propInfo = $null
+        try { $propInfo = $s.PSObject.Properties[$prop] } catch { }
+
+        if ($null -ne $propInfo) {
+            $value = $propInfo.Value
+            if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+                $title = [string]$value
+                break
+            }
+        }
+    }
     $homeUrl = if ($null -ne $s.home_url) { [string]$s.home_url } else { '' }
 
     [PSCustomObject]@{
@@ -140,10 +158,26 @@ $rows = foreach ($s in $sites) {
     }
 }
 
-$rows
-| Where-Object { -not [string]::IsNullOrWhiteSpace($_.domain) }
-| Sort-Object -Property domain -Unique
-| Export-Csv -NoTypeInformation -Encoding UTF8 -Path $OutputFile
+$domainRows = $rows | Where-Object { -not [string]::IsNullOrWhiteSpace($_.domain) } | Group-Object -Property domain | ForEach-Object {
+    $group = $_.Group
+
+    $siteIds = ($group | ForEach-Object { $_.siteId } | Where-Object { $null -ne $_ } | Sort-Object -Unique) -join ';'
+    $siteNames = ($group | ForEach-Object { $_.siteName } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique) -join '; '
+    $homeUrls = ($group | ForEach-Object { $_.homeUrl } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique) -join '; '
+
+    [PSCustomObject]@{
+        domain     = $_.Name
+        siteIds    = $siteIds
+        siteNames  = $siteNames
+        homeUrls   = $homeUrls
+        sitesCount = $group.Count
+        source     = 'wpmudev'
+        fetchedUtc = ($group | Select-Object -First 1).fetchedUtc
+    }
+} | Sort-Object -Property domain
+
+$domainRows | Export-Csv -NoTypeInformation -Encoding UTF8 -Path $OutputFile
 
 Write-Host "WPMUDEV export complete: $OutputFile" -ForegroundColor Green
-Write-Host "Sites exported: $((Import-Csv -Path $OutputFile).Count)" -ForegroundColor Cyan
+Write-Host "Sites fetched: $sitesCount" -ForegroundColor Cyan
+Write-Host "Domains exported: $((Import-Csv -Path $OutputFile).Count)" -ForegroundColor Cyan

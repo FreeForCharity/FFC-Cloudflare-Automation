@@ -53,14 +53,21 @@ function Invoke-WpmuDevGet {
     )
 
     $headersList = @(
+        # The Hub API swagger defines an API key header literally named "AUTHORIZATION".
+        # Some endpoints accept the raw key, not a Bearer token.
+        @{ AUTHORIZATION = $Token },
+        @{ AUTHORIZATION = "Bearer $Token" },
+        @{ Authorization = $Token },
         @{ Authorization = "Bearer $Token" },
         @{ 'X-Api-Key' = $Token },
         @{ 'X-WPMUDEV-API-Key' = $Token }
     )
 
     $lastError = $null
+    $lastHeaderLabel = $null
     foreach ($h in $headersList) {
         try {
+            $lastHeaderLabel = ($h.Keys | Select-Object -First 1)
             $rh = $null
             $result = Invoke-RestMethod -Method Get -Uri $Url -Headers $h -ResponseHeadersVariable rh -ErrorAction Stop
             $ResponseHeaders.Value = $rh
@@ -71,7 +78,23 @@ function Invoke-WpmuDevGet {
         }
     }
 
-    if ($lastError) { throw $lastError }
+    if ($lastError) {
+        $message = $lastError.Exception.Message
+        $statusCode = $null
+        try {
+            if ($lastError.Exception.Response -and $lastError.Exception.Response.StatusCode) {
+                $statusCode = [int]$lastError.Exception.Response.StatusCode
+            }
+        }
+        catch {
+        }
+
+        if ($statusCode) {
+            throw "Request failed ($statusCode) using header '$lastHeaderLabel': $message"
+        }
+
+        throw "Request failed using header '$lastHeaderLabel': $message"
+    }
     throw "Request failed: $Url"
 }
 

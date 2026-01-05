@@ -239,11 +239,17 @@ jobs:
           $dkimLinesRaw = if (Test-Path $dkimCfPath) { @(Get-Content -Path $dkimCfPath) } else { @() }
           $dkimLines = @($dkimLinesRaw | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' })
 
+          # Normalize DKIM lines: always an array, drop blank lines.
+          if ($dkimLines -isnot [System.Array]) { $dkimLines = @($dkimLines) }
+          $dkimLines = @($dkimLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
           function Get-KvValue {
             param(
-              [Parameter(Mandatory)] [string[]] $Lines,
+              [string[]] $Lines = @(),
               [Parameter(Mandatory)] [string] $Key
             )
+
+            if (-not $Lines -or $Lines.Count -eq 0) { return $null }
 
             $rx = '^' + [regex]::Escape($Key) + ':\s*(.*)$'
             $m = $Lines | Where-Object { $_ -match $rx } | Select-Object -First 1

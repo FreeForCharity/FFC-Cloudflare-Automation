@@ -29,6 +29,11 @@ param(
     ,
     [Parameter()]
     [string]$DefaultCountry = 'US'
+
+    ,
+    [Parameter()]
+    [ValidateRange(1, 1000000)]
+    [int]$MaxRowsPerFile = 10000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,6 +46,38 @@ function New-DirectoryForFile {
     if (-not [string]::IsNullOrWhiteSpace($dir)) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
     }
+}
+
+function Get-OutputPartPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BaseOutputFile,
+        [Parameter(Mandatory = $true)]
+        [int]$PartNumber
+    )
+
+    $dir = Split-Path -Parent $BaseOutputFile
+    if ([string]::IsNullOrWhiteSpace($dir)) { $dir = '.' }
+
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($BaseOutputFile)
+    $ext = [System.IO.Path]::GetExtension($BaseOutputFile)
+    if ([string]::IsNullOrWhiteSpace($ext)) { $ext = '.csv' }
+
+    $partName = '{0}-part{1:000}{2}' -f $baseName, $PartNumber, $ext
+    return (Join-Path -Path $dir -ChildPath $partName)
+}
+
+function Remove-StalePartFiles {
+    param([string]$BaseOutputFile)
+
+    $dir = Split-Path -Parent $BaseOutputFile
+    if ([string]::IsNullOrWhiteSpace($dir)) { $dir = '.' }
+
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($BaseOutputFile)
+    $pattern = "$baseName-part*.csv"
+
+    Get-ChildItem -Path $dir -Filter $pattern -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
 function Get-ZeffyPaymentMethodSuggestion {
@@ -279,7 +316,28 @@ $out = foreach ($t in $transactions) {
     Convert-RowToHeaders -Canonical $canonical -Headers $headers
 }
 
-$out | Export-Csv -NoTypeInformation -Encoding utf8 -Path $OutputFile
+$rows = @($out)
 
-Write-Host "Generated Zeffy import draft: $OutputFile"
-Write-Host "Mode=$Mode; Rows=$($transactions.Count)"
+Remove-StalePartFiles -BaseOutputFile $OutputFile
+
+if ($rows.Count -le $MaxRowsPerFile) {
+    $rows | Export-Csv -NoTypeInformation -Encoding utf8 -Path $OutputFile
+    Write-Host "Generated Zeffy import draft: $OutputFile"
+    Write-Host "Mode=$Mode; Rows=$($rows.Count)"
+}
+else {
+    $part = 1
+    for ($i = 0; $i -lt $rows.Count; $i += $MaxRowsPerFile) {
+        $endExclusive = [Math]::Min($i + $MaxRowsPerFile, $rows.Count)
+        $chunk = $rows[$i..($endExclusive - 1)]
+
+        $partPath = Get-OutputPartPath -BaseOutputFile $OutputFile -PartNumber $part
+        $chunk | Export-Csv -NoTypeInformation -Encoding utf8 -Path $partPath
+        Write-Host "Generated Zeffy import draft part: $partPath (Rows=$($chunk.Count))"
+        $part++
+    }
+
+    $partsWritten = $part - 1
+    Write-Host "Generated Zeffy import draft parts: $partsWritten"
+    Write-Host "Mode=$Mode; TotalRows=$($rows.Count); MaxRowsPerFile=$MaxRowsPerFile"
+}

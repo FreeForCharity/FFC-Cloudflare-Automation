@@ -25,6 +25,30 @@ on:
         type: string
         default: 'artifacts/zeffy/zeffy_payments_import_draft.csv'
 
+      start_date:
+        description: 'Optional start date filter for WHMCS transactions (YYYY-MM-DD)'
+        required: false
+        type: string
+        default: ''
+
+      end_date:
+        description: 'Optional end date filter for WHMCS transactions (YYYY-MM-DD)'
+        required: false
+        type: string
+        default: ''
+
+      max_rows:
+        description: 'Maximum number of WHMCS transactions to export (safety cap)'
+        required: false
+        type: string
+        default: '200000'
+
+      max_rows_per_file:
+        description: 'Maximum Zeffy rows per CSV file (Zeffy import limit is 10,000)'
+        required: false
+        type: string
+        default: '10000'
+
 permissions:
   contents: read
 
@@ -89,7 +113,27 @@ jobs:
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
           }
 
-          & pwsh -NoProfile -File .\scripts\whmcs-transactions-export.ps1 -ApiUrl $env:WHMCS_API_URL -OutputFile $out
+          $args = @(
+            '-ApiUrl', $env:WHMCS_API_URL,
+            '-OutputFile', $out
+          )
+
+          $maxRows = "${{ inputs.max_rows }}".Trim()
+          if (-not [string]::IsNullOrWhiteSpace($maxRows)) {
+            $args += @('-MaxRows', $maxRows)
+          }
+
+          $startDate = "${{ inputs.start_date }}".Trim()
+          if (-not [string]::IsNullOrWhiteSpace($startDate)) {
+            $args += @('-StartDate', $startDate)
+          }
+
+          $endDate = "${{ inputs.end_date }}".Trim()
+          if (-not [string]::IsNullOrWhiteSpace($endDate)) {
+            $args += @('-EndDate', $endDate)
+          }
+
+          & pwsh -NoProfile -File .\scripts\whmcs-transactions-export.ps1 @args
 
           if ($LASTEXITCODE -ne 0) {
             throw "WHMCS transactions export failed with exit code $LASTEXITCODE."
@@ -108,40 +152,106 @@ jobs:
           $tx = "${{ inputs.transactions_output }}"
           $out = "${{ inputs.zeffy_output }}"
 
+          function Get-ZeffyOutputFiles {
+            param([string]$BaseOutputFile)
+
+            $dir = Split-Path -Parent $BaseOutputFile
+            if ([string]::IsNullOrWhiteSpace($dir)) { $dir = '.' }
+
+            $baseName = [System.IO.Path]::GetFileNameWithoutExtension($BaseOutputFile)
+
+            $single = @()
+            if (Test-Path -LiteralPath $BaseOutputFile) {
+              $single = @($BaseOutputFile)
+            }
+
+            $parts = @(Get-ChildItem -Path $dir -Filter "$baseName-part*.csv" -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+
+            if ($single.Count -gt 0 -and $parts.Count -eq 0) {
+              return $single
+            }
+
+            if ($parts.Count -gt 0) {
+              return ($parts | Sort-Object)
+            }
+
+            return @()
+          }
+
           $dir = Split-Path -Parent $out
           if (-not [string]::IsNullOrWhiteSpace($dir)) {
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
           }
 
-          & pwsh -NoProfile -File .\scripts\zeffy-payments-import-draft.ps1 -ClientsCsv $clients -TransactionsCsv $tx -OutputFile $out
+          $maxRowsPerFile = "${{ inputs.max_rows_per_file }}".Trim()
+          $genArgs = @(
+            '-ClientsCsv', $clients,
+            '-TransactionsCsv', $tx,
+            '-OutputFile', $out
+          )
+          if (-not [string]::IsNullOrWhiteSpace($maxRowsPerFile)) {
+            $genArgs += @('-MaxRowsPerFile', $maxRowsPerFile)
+          }
+
+          & pwsh -NoProfile -File .\scripts\zeffy-payments-import-draft.ps1 @genArgs
 
           if ($LASTEXITCODE -ne 0) {
             throw "Zeffy draft generation failed with exit code $LASTEXITCODE."
           }
 
-          if (-not (Test-Path $out)) {
-            throw "Expected output file not found: $out"
+          $files = Get-ZeffyOutputFiles -BaseOutputFile $out
+          if (-not $files -or $files.Count -eq 0) {
+            throw "Expected Zeffy output file(s) not found. Base: $out"
           }
+
+          $envBlock = @()
+          $envBlock += 'ZEFFY_OUTPUT_FILES<<EOF'
+          $envBlock += ($files -join "`n")
+          $envBlock += 'EOF'
+          $envBlock -join "`n" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Validate Zeffy CSV headers
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $out = "${{ inputs.zeffy_output }}"
+          if ([string]::IsNullOrWhiteSpace($env:ZEFFY_OUTPUT_FILES)) {
+            throw 'Missing ZEFFY_OUTPUT_FILES from previous step.'
+          }
+
+          $files = @($env:ZEFFY_OUTPUT_FILES -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+          if ($files.Count -eq 0) {
+            throw 'ZEFFY_OUTPUT_FILES was empty.'
+          }
 
           $expected = 'firstName,lastName,amount,address,city,postalCode,country,type,formTitle,rateTitle,email,language,date (MM/DD/YYYY),state/province,paymentMethod,receiptUrl,ticketUrl,receiptNumber,companyName,note,annotation'
-          $actual = (Get-Content -LiteralPath $out -TotalCount 1) -replace '^\uFEFF',''
-          $actual = $actual.Trim() -replace '^"','' -replace '"$',''
-          $actual = $actual -replace '","',','
 
-          if ($actual -ne $expected) {
-            throw "Zeffy CSV header mismatch. Expected: $expected  Actual: $actual"
+          $totalRows = 0
+          foreach ($f in $files) {
+            $actual = (Get-Content -LiteralPath $f -TotalCount 1) -replace '^\uFEFF',''
+            $actual = $actual.Trim() -replace '^"','' -replace '"$',''
+            $actual = $actual -replace '","',','
+
+            if ($actual -ne $expected) {
+              throw "Zeffy CSV header mismatch in file '$f'. Expected: $expected  Actual: $actual"
+            }
+
+            try {
+              $count = (Import-Csv -LiteralPath $f).Count
+              $totalRows += $count
+            }
+            catch {
+              throw "Failed to count rows in '$f': $($_.Exception.Message)"
+            }
           }
 
           "## WHMCS -> Zeffy import draft" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "- Zeffy output: $out" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Zeffy output files: $($files.Count)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Total Zeffy rows: $totalRows" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          foreach ($f in $files) {
+            "  - $f" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
           "- Download: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "- Artifacts: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)/artifacts" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
@@ -163,5 +273,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: zeffy_payments_import_draft
-          path: ${{ inputs.zeffy_output }}
+          path: |
+            ${{ inputs.zeffy_output }}
+            artifacts/zeffy/*-part*.csv
           if-no-files-found: error

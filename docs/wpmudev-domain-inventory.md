@@ -261,7 +261,7 @@ sites.
 
 The WPMUDEV inventory is designed to complement:
 
-- **Cloudflare exports** (workflows 04, 06): DNS zone and record summaries
+- **Cloudflare exports** (workflow 06): DNS zone and record summaries
 - **WHMCS exports** (workflow 07): Billing and domain ownership records
 
 For cross-source reconciliation, see

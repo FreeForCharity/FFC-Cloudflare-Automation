@@ -134,11 +134,11 @@ $normalized = $domain.TrimEnd('.')
 **Excel/Sheets:**
 
 ```
-=SUBSTITUTE(A2,".","")
+=IF(RIGHT(A2,1)=".", LEFT(A2, LEN(A2)-1), A2)
 ```
 
-_(Note: This removes all dots, not just trailing. For trailing only, use:
-`=IF(RIGHT(A2,1)=".", LEFT(A2, LEN(A2)-1), A2)`)_
+_(Note: This checks if the last character is a period and removes it if so, preserving the domain
+with its TLD intact.)_
 
 ### Rule 3: Handle www Subdomains (Optional)
 

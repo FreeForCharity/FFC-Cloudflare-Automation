@@ -3,7 +3,7 @@
 This repo includes scripts/workflows to generate a **first-draft** Zeffy payments import CSV from
 WHMCS (read-only).
 
-The primary entrypoint is GitHub Actions workflow **"10. WHMCS -> Zeffy Payments Import (Draft)"**.
+The primary entrypoint is GitHub Actions workflow **10. WHMCS -> Zeffy Payments Import (Draft)**.
 
 ## What it generates
 

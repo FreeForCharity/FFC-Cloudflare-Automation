@@ -18,7 +18,8 @@ on:
           - partial
         default: full
       jump_start:
-        description: 'Attempt to auto-import DNS records from existing nameservers (Cloudflare jump_start)'
+        description:
+          'Attempt to auto-import DNS records from existing nameservers (Cloudflare jump_start)'
         required: false
         type: boolean
         default: false

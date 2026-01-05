@@ -62,7 +62,8 @@ Used by the WHMCS export workflows and any automation that updates WHMCS domain 
 
 Environment secrets (required):
 
-- `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` (WHMCS API secret for identifier `zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu`)
+- `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` (WHMCS API secret for identifier
+  `zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu`)
 
 Environment secrets (optional):
 

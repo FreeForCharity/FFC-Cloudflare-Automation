@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter()]
     [string]$ApiUrl,
@@ -236,7 +236,7 @@ try {
 
         $numReturnedApi = 0
         if ($r.numreturned) { [void][int]::TryParse($r.numreturned.ToString(), [ref]$numReturnedApi) }
-        $start += (if ($numReturnedApi -gt 0) { $numReturnedApi } else { $tx.Count })
+        $start += $(if ($numReturnedApi -gt 0) { $numReturnedApi } else { $tx.Count })
 
         $total = 0
         if ($r.totalresults) { [void][int]::TryParse($r.totalresults.ToString(), [ref]$total) }
@@ -268,7 +268,7 @@ try {
 
         $numReturnedApi = 0
         if ($r.numreturned) { [void][int]::TryParse($r.numreturned.ToString(), [ref]$numReturnedApi) }
-        $start += (if ($numReturnedApi -gt 0) { $numReturnedApi } else { $invoices.Count })
+        $start += $(if ($numReturnedApi -gt 0) { $numReturnedApi } else { $invoices.Count })
 
         $total = 0
         if ($r.totalresults) { [void][int]::TryParse($r.totalresults.ToString(), [ref]$total) }
@@ -303,7 +303,7 @@ try {
 
         $numReturnedApi = 0
         if ($r.numreturned) { [void][int]::TryParse($r.numreturned.ToString(), [ref]$numReturnedApi) }
-        $start += (if ($numReturnedApi -gt 0) { $numReturnedApi } else { $svc.Count })
+        $start += $(if ($numReturnedApi -gt 0) { $numReturnedApi } else { $svc.Count })
 
         $total = 0
         if ($r.totalresults) { [void][int]::TryParse($r.totalresults.ToString(), [ref]$total) }

@@ -1,0 +1,17 @@
+M365 domain preflight (read-only)
+Domain: ffcworkingsite1.org
+
+Step 1: Active M365 tenant (from current auth context)
+TenantId: 80c64bf2-fa5b-425c-9a5a-1fcf282d3274
+Organization: Free For Charity
+DefaultDomain: freeforcharity.org
+OnMicrosoftDomain: FreeForCharity.onmicrosoft.com
+
+Step 2: Check if domain is already added to this tenant
+DomainExistsInTenant: YES
+IsVerified: True
+IsDefault: False
+SupportsEmail: True
+
+Step 3: Check Cloudflare DNS health (repo standard audit)
+Cloudflare checks skipped (-SkipCloudflare)

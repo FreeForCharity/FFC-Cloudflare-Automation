@@ -1,0 +1,15 @@
+Microsoft 365 domain status
+Domain: ffcworkingsite1.org
+IsVerified: True
+IsDefault: False
+IsAdminManaged: True
+SupportsEmail: True
+
+DNS records Microsoft provides for verification/service configuration
+Verification records:
+Write-Error: D:\a\FFC-Cloudflare-Automation-\FFC-Cloudflare-Automation-\scripts\m365-domain-status.ps1:224
+Line |
+ 224 |      Write-Error $_
+     |      ~~~~~~~~~~~~~~
+     | The term 'if' is not recognized as a name of a cmdlet, function, script file, or executable program. Check the
+     | spelling of the name, or if a path was included, verify that the path is correct and try again.

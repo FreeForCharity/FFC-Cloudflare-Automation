@@ -50,3 +50,6 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup
+
+# Local workflow outputs
+artifacts/

@@ -127,6 +127,54 @@ $env:CLOUDFLARE_API_TOKEN = "your_token_here"
 
 The PowerShell scripts in this repository provide flexible DNS record management for FFC domains.
 
+## WHMCS exports (read-only)
+
+This repo also includes read-only WHMCS export workflows/scripts used for migrations (e.g., Zeffy).
+
+### Products + billing cycles (research)
+
+- Workflow: `.github/workflows/8-whmcs-export-products.yml`
+- Script: `scripts/whmcs-products-export.ps1`
+
+This export is specifically useful to answer: “What products exist, and which are monthly vs yearly?”
+It also captures the raw WHMCS gateway/paymentmethod identifiers used by services.
+
+### What are “gateway strings”?
+
+In WHMCS, the payment method/gateway is represented as an internal identifier string (for example
+`paypal`, `stripe`, `authorize`, etc.). You’ll see these values in fields like:
+
+- `GetTransactions.transaction[].gateway`
+- `GetInvoice.paymentmethod` / `GetInvoices.invoice[].paymentmethod`
+- `GetClientsProducts.product[].paymentmethod`
+
+These raw strings are what we map into Zeffy’s allowed `paymentMethod` values (card, ach, pad,
+transfer, cheque, cash, applePayOrGooglePay, unknown, etc.). If we don’t know the exact strings in
+your WHMCS, the exports let us discover them deterministically.
+
+### Zeffy approved paymentMethod values
+
+Per Zeffy’s Payments Import Template requirements, `paymentMethod` must be exactly one of:
+
+- card
+- cash
+- cheque
+- transfer
+- unknown
+- free
+- manual
+- pad
+- ach
+- applePayOrGooglePay
+
+To discover what WHMCS uses in your data (so we can map deterministically), use:
+
+- Workflow: `.github/workflows/9-whmcs-export-payment-methods.yml`
+- Script: `scripts/whmcs-payment-methods-export.ps1`
+
+The export enumerates distinct values seen across `GetTransactions.gateway`,
+`GetInvoices.paymentmethod`, and `GetClientsProducts.paymentmethod`.
+
 ### Basic Examples
 
 **Update or create an A record:**

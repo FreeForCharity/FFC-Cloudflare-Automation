@@ -90,7 +90,12 @@ function Invoke-WhmcsApi {
         [hashtable]$Body
     )
 
-    $resp = Invoke-RestMethod -Method Post -Uri $ApiUrl -Body $Body -ContentType 'application/x-www-form-urlencoded' -ErrorAction Stop
+    $headers = @{
+        'Accept'     = 'application/json'
+        'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
+    $resp = Invoke-RestMethod -Method Post -Uri $ApiUrl -Headers $headers -Body $Body -ContentType 'application/x-www-form-urlencoded' -ErrorAction Stop
 
     if ($resp -is [string]) {
         $raw = $resp

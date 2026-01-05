@@ -131,6 +131,8 @@ The PowerShell scripts in this repository provide flexible DNS record management
 
 This repo also includes read-only WHMCS export workflows/scripts used for migrations (e.g., Zeffy).
 
+- Runbook: `docs/zeffy-payments-import.md` (Workflow 10: WHMCS -> Zeffy Payments Import)
+
 ### Products + billing cycles (research)
 
 - Workflow: `.github/workflows/8-whmcs-export-products.yml`

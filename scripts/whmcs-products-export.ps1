@@ -59,6 +59,34 @@ function Resolve-WhmcsAccessKey {
     return $null
 }
 
+function ConvertFrom-WhmcsXmlString {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Raw
+    )
+
+    try {
+        return [xml]$Raw
+    }
+    catch {
+        $clean = $Raw -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
+        try {
+            return [xml]$clean
+        }
+        catch {
+            # Last-resort: escape bare ampersands that often break XML parsing.
+            $escaped = $clean -replace '&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9A-Fa-f]+;)', '&amp;'
+            try {
+                return [xml]$escaped
+            }
+            catch {
+                $snippet = if ($Raw.Length -gt 400) { $Raw.Substring(0, 400) + '...' } else { $Raw }
+                throw "WHMCS API returned XML that could not be parsed (likely contains invalid control characters or malformed entities). Snippet: $snippet"
+            }
+        }
+    }
+}
+
 function Invoke-WhmcsApi {
     param(
         [Parameter(Mandatory = $true)]
@@ -80,19 +108,7 @@ function Invoke-WhmcsApi {
     if ($requestedResponseType -eq 'xml') {
         if ($resp -is [string]) {
             $raw = $resp
-            try {
-                $resp = [xml]$raw
-            }
-            catch {
-                $clean = $raw -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
-                try {
-                    $resp = [xml]$clean
-                }
-                catch {
-                    $snippet = if ($raw.Length -gt 400) { $raw.Substring(0, 400) + '...' } else { $raw }
-                    throw "WHMCS API returned XML that could not be parsed (likely contains invalid control characters). Snippet: $snippet"
-                }
-            }
+            $resp = ConvertFrom-WhmcsXmlString -Raw $raw
         }
 
         if ($resp -is [xml] -and $resp.whmcsapi) {
@@ -108,13 +124,7 @@ function Invoke-WhmcsApi {
             catch {
                 if ($raw.TrimStart().StartsWith('<')) {
                     try {
-                        try {
-                            $xml = [xml]$raw
-                        }
-                        catch {
-                            $clean = $raw -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ''
-                            $xml = [xml]$clean
-                        }
+                        $xml = ConvertFrom-WhmcsXmlString -Raw $raw
                         $resp = if ($xml.whmcsapi) { $xml.whmcsapi } else { $xml }
                         $requestedResponseType = 'xml'
                     }

@@ -34,6 +34,18 @@ param(
     [Parameter()]
     [ValidateRange(1, 1000000)]
     [int]$MaxRowsPerFile = 10000
+
+    ,
+    [Parameter()]
+    [string]$InvoicesCsv
+
+    ,
+    [Parameter()]
+    [switch]$IncludeZeroInvoices
+
+    ,
+    [Parameter()]
+    [switch]$ExcludeUserIdZero = $true
 )
 
 $ErrorActionPreference = 'Stop'
@@ -235,6 +247,71 @@ New-DirectoryForFile -Path $OutputFile
 $clients = Import-Csv -LiteralPath $ClientsCsv
 $transactions = Import-Csv -LiteralPath $TransactionsCsv
 
+$invoices = @()
+if ($IncludeZeroInvoices -and -not [string]::IsNullOrWhiteSpace($InvoicesCsv)) {
+    if (-not (Test-Path -LiteralPath $InvoicesCsv)) {
+        throw "Invoices CSV not found: $InvoicesCsv"
+    }
+    $invoices = Import-Csv -LiteralPath $InvoicesCsv
+}
+
+$invoiceIdsWithTransactions = @{}
+foreach ($t in $transactions) {
+    if (-not [string]::IsNullOrWhiteSpace($t.invoiceid)) {
+        $invoiceIdsWithTransactions[$t.invoiceid.ToString().Trim()] = $true
+    }
+}
+
+function ConvertTo-NullableDecimal {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    try {
+        return [decimal]::Parse($Value, [System.Globalization.NumberStyles]::Any, [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    catch {
+        try {
+            $clean = $Value -replace '[,\s]', ''
+            return [decimal]::Parse($clean, [System.Globalization.NumberStyles]::Any, [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+        catch {
+            return $null
+        }
+    }
+}
+
+if ($IncludeZeroInvoices -and $invoices.Count -gt 0) {
+    $added = 0
+    foreach ($inv in $invoices) {
+        if ([string]::IsNullOrWhiteSpace($inv.invoiceid)) { continue }
+
+        $invoiceId = $inv.invoiceid.ToString().Trim()
+        if ($invoiceIdsWithTransactions.ContainsKey($invoiceId)) { continue }
+
+        $totalValue = ConvertTo-NullableDecimal -Value $inv.total
+        if ($null -eq $totalValue) { continue }
+        if ($totalValue -ne 0) { continue }
+
+        # Append as a pseudo-transaction so we can reuse the mapping logic below.
+        $transactions += [pscustomobject]@{
+            transactionid = $null
+            userid        = $inv.userid
+            date          = $inv.date
+            gateway       = if ($inv.paymentmethod) { $inv.paymentmethod } else { 'free' }
+            amountin      = $inv.total
+            fees          = $null
+            amountout     = $null
+            transid       = $null
+            invoiceid     = $invoiceId
+            description   = "Invoice (0 total) status=$($inv.status)"
+            currency      = $null
+        }
+        $added++
+    }
+
+    Write-Host "Included zero-total invoices: $added"
+}
+
 $clientById = @{}
 foreach ($c in $clients) {
     if (-not [string]::IsNullOrWhiteSpace($c.clientid)) {
@@ -248,9 +325,19 @@ $importDate = (Get-Date).ToString('MM/dd/yyyy', [System.Globalization.CultureInf
 $defaultFormTitle = "Import - $importDate"
 
 $out = foreach ($t in $transactions) {
+    if ($ExcludeUserIdZero) {
+        if ([string]::IsNullOrWhiteSpace($t.userid) -or $t.userid -eq '0') {
+            continue
+        }
+    }
+
     $client = $null
     if ($t.userid -and $clientById.ContainsKey($t.userid)) {
         $client = $clientById[$t.userid]
+    }
+
+    if (-not $client) {
+        continue
     }
 
     $amount = $t.amountin
@@ -259,6 +346,9 @@ $out = foreach ($t in $transactions) {
     }
 
     $amountFormatted = Format-ZeffyAmount -Value $amount
+    if ([string]::IsNullOrWhiteSpace($amountFormatted)) {
+        continue
+    }
     $amountValue = $null
     if (-not [string]::IsNullOrWhiteSpace($amountFormatted)) {
         try { $amountValue = [decimal]::Parse($amountFormatted, [System.Globalization.NumberStyles]::Any, [System.Globalization.CultureInfo]::InvariantCulture) } catch { $amountValue = $null }
@@ -266,7 +356,7 @@ $out = foreach ($t in $transactions) {
 
     $rawGateway = $t.gateway
     $suggested = Get-ZeffyPaymentMethodSuggestion -WhmcsValue $rawGateway
-    if ($amountValue -ne $null -and $amountValue -eq 0) {
+    if ($null -ne $amountValue -and $amountValue -eq 0) {
         $suggested = 'free'
     }
 
@@ -284,8 +374,8 @@ $out = foreach ($t in $transactions) {
     $date = Format-ZeffyDate -Value $t.date
 
     $canonical = @{
-        firstName           = if ($client) { $client.firstname } else { $null }
-        lastName            = if ($client) { $client.lastname } else { $null }
+        firstName           = $client.firstname
+        lastName            = $client.lastname
         amount              = $amountFormatted
         address             = $addr
         city                = $city
@@ -294,7 +384,7 @@ $out = foreach ($t in $transactions) {
         type                = $DefaultType
         formTitle           = $defaultFormTitle
         rateTitle           = $defaultFormTitle
-        email               = if ($client) { $client.email } else { $null }
+        email               = $client.email
         language            = $DefaultLanguage
         'date (MM/DD/YYYY)' = $date
         'state/province'    = $stateProv
@@ -302,7 +392,7 @@ $out = foreach ($t in $transactions) {
         receiptUrl          = $null
         ticketUrl           = $null
         receiptNumber       = $null
-        companyName         = if ($client) { $client.companyname } else { $null }
+        companyName         = $client.companyname
         note                = 'Imported from WHMCS'
         annotation          = (@(
                 if ($t.transactionid) { "whmcs_transactionid=$($t.transactionid)" }
@@ -311,6 +401,10 @@ $out = foreach ($t in $transactions) {
                 if ($rawGateway) { "gateway=$rawGateway" }
                 if ($t.description) { "desc=$($t.description)" }
             ) | Where-Object { $_ }) -join '; '
+    }
+
+    if ([string]::IsNullOrWhiteSpace($canonical.firstName) -or [string]::IsNullOrWhiteSpace($canonical.lastName)) {
+        continue
     }
 
     Convert-RowToHeaders -Canonical $canonical -Headers $headers

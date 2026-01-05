@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   export_domains:
@@ -75,3 +76,29 @@ jobs:
           name: whmcs_domains
           path: ${{ inputs.output_file }}
           if-no-files-found: error
+
+      - name: Add artifact page link to summary
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $repo = $env:GITHUB_REPOSITORY
+          $runId = $env:GITHUB_RUN_ID
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept        = "application/vnd.github+json"
+          }
+
+          $apiUrl = "https://api.github.com/repos/$repo/actions/runs/$runId/artifacts"
+          $resp = Invoke-RestMethod -Method Get -Uri $apiUrl -Headers $headers
+          $artifact = $resp.artifacts | Where-Object { $_.name -eq 'whmcs_domains' } | Select-Object -First 1
+
+          if ($null -eq $artifact) {
+            "- Artifact page: (artifact not found in run artifacts list)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            exit 0
+          }
+
+          $artifactUrl = "https://github.com/$repo/actions/runs/$runId/artifacts/$($artifact.id)"
+          "- Artifact page: $artifactUrl" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

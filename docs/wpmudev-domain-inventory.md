@@ -103,15 +103,15 @@ After the workflow completes successfully:
 
 The exported CSV contains one row per unique domain, with the following columns:
 
-| Column                 | Type    | Description                                                                      |
-| ---------------------- | ------- | -------------------------------------------------------------------------------- |
-| `domain`               | string  | Normalized domain (lowercase, extracted from `home_url` or `domain` API field)  |
-| `siteIds`              | string  | Semicolon-separated list of site IDs for this domain                            |
-| `siteNames`            | string  | Semicolon+space separated list of site names/titles (may be empty if no title)  |
-| `homeUrls`             | string  | Semicolon+space separated list of home URLs (may include path fragments)        |
-| `sitesCount`           | integer | Number of sites associated with this domain                                     |
-| `source`               | string  | Always `wpmudev` (for cross-source comparison)                                  |
-| `fetchedUtc`           | string  | ISO-8601 UTC timestamp when the data was fetched (e.g., `2026-01-05T12:34:56Z`) |
+| Column       | Type    | Description                                                                     |
+| ------------ | ------- | ------------------------------------------------------------------------------- |
+| `domain`     | string  | Normalized domain (lowercase, extracted from `home_url` or `domain` API field)  |
+| `siteIds`    | string  | Semicolon-separated list of site IDs for this domain                            |
+| `siteNames`  | string  | Semicolon+space separated list of site names/titles (may be empty if no title)  |
+| `homeUrls`   | string  | Semicolon+space separated list of home URLs (may include path fragments)        |
+| `sitesCount` | integer | Number of sites associated with this domain                                     |
+| `source`     | string  | Always `wpmudev` (for cross-source comparison)                                  |
+| `fetchedUtc` | string  | ISO-8601 UTC timestamp when the data was fetched (e.g., `2026-01-05T12:34:56Z`) |
 
 ### Example CSV rows
 

@@ -191,8 +191,8 @@ The output CSV includes domain names, site IDs, site names, home URLs, and site 
 
 **Use cases:**
 
-- **Domain reconciliation**: Compare WPMUDEV hosted sites with Cloudflare DNS zones and WHMCS billing
-  records to detect drift
+- **Domain reconciliation**: Compare WPMUDEV hosted sites with Cloudflare DNS zones and WHMCS
+  billing records to detect drift
 - **Hosting audit**: Verify which domains are actively hosted vs. only registered
 - **Migration planning**: Understand the full scope of hosted sites before infrastructure changes
 

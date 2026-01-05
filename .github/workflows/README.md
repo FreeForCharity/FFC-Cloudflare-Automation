@@ -56,8 +56,8 @@ domain configuration.
 - **12. M365 - Add Tenant Domain (Admin)**: add a domain to the M365 tenant (Graph) and print DNS
   verification records
 - **13. WPMUDEV - Export Sites/Domains (Read-only)**: export hosted sites inventory from WPMUDEV Hub
-  API for domain reconciliation. See [docs/wpmudev-domain-inventory.md](../../docs/wpmudev-domain-inventory.md)
-  for details.
+  API for domain reconciliation. See
+  [docs/wpmudev-domain-inventory.md](../../docs/wpmudev-domain-inventory.md) for details.
 
 ## ci.yml - Continuous Integration
 

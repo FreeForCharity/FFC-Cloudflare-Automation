@@ -151,7 +151,8 @@ You must configure the Entra application referenced by `FFC_AZURE_CLIENT_ID`:
 
 ## `wpmudev-prod`
 
-Used by the WPMUDEV domain/site inventory workflow in `.github/workflows/13-wpmudev-export-sites.yml`.
+Used by the WPMUDEV domain/site inventory workflow in
+`.github/workflows/13-wpmudev-export-sites.yml`.
 
 ### Environment secrets
 

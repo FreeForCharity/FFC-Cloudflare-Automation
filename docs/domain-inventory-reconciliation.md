@@ -8,8 +8,8 @@ Free For Charity (FFC) manages domains across three primary sources of truth:
 2. **WHMCS** - Domain billing and ownership records
 3. **WPMUDEV** - Hosted sites inventory
 
-This guide explains how to reconcile these three sources to detect drift, identify misconfigurations,
-and maintain a clean, consistent domain portfolio.
+This guide explains how to reconcile these three sources to detect drift, identify
+misconfigurations, and maintain a clean, consistent domain portfolio.
 
 ## Why Reconciliation Matters
 
@@ -172,15 +172,15 @@ Create a comparison table (in Excel, Google Sheets, or PowerShell) with these co
 
 | Column             | Description                                                |
 | ------------------ | ---------------------------------------------------------- |
-| `domain`           | Normalized domain name (lowercase, no trailing dot)       |
+| `domain`           | Normalized domain name (lowercase, no trailing dot)        |
 | `in_cloudflare`    | `TRUE` if domain exists in Cloudflare export, else `FALSE` |
 | `in_whmcs`         | `TRUE` if domain exists in WHMCS export, else `FALSE`      |
 | `in_wpmudev`       | `TRUE` if domain exists in WPMUDEV export, else `FALSE`    |
-| `cloudflare_ips`   | Apex A IPs from Cloudflare (if present)                   |
-| `whmcs_status`     | Status from WHMCS (e.g., Active, Expired)                 |
-| `wpmudev_sites`    | Number of sites from WPMUDEV (if present)                 |
-| `mismatch_pattern` | Short code describing the mismatch (see below)            |
-| `action_needed`    | Suggested next step                                       |
+| `cloudflare_ips`   | Apex A IPs from Cloudflare (if present)                    |
+| `whmcs_status`     | Status from WHMCS (e.g., Active, Expired)                  |
+| `wpmudev_sites`    | Number of sites from WPMUDEV (if present)                  |
+| `mismatch_pattern` | Short code describing the mismatch (see below)             |
+| `action_needed`    | Suggested next step                                        |
 
 ## Triage Playbook: Mismatch Patterns
 
@@ -223,8 +223,7 @@ Create a comparison table (in Excel, Google Sheets, or PowerShell) with these co
 
 1. Run workflow: **01. Domain - Status (Check)** to see current DNS
 2. Compare `apex_a_ips` with expected values:
-   - **GitHub Pages**: `185.199.108.153`, `185.199.109.153`, `185.199.110.153`,
-     `185.199.111.153`
+   - **GitHub Pages**: `185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`
    - **WPMUDEV hosting**: Check WPMUDEV documentation for current IPs
 3. Run workflow: **02. Domain - Enforce Standard (Fix)** to correct DNS
 4. Verify the site is accessible after DNS propagation

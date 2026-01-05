@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [Parameter()]
     [string]$ApiUrl,
@@ -368,12 +368,12 @@ try {
         $value = $o.value
         $suggested = Get-ZeffyPaymentMethodSuggestion -WhmcsValue $value
         [PSCustomObject]([ordered]@{
-                source                    = $o.source
-                value                     = $value
-                count                     = $o.count
-                example_ids               = ($o.example_ids -join ',')
+                source                        = $o.source
+                value                         = $value
+                count                         = $o.count
+                example_ids                   = ($o.example_ids -join ',')
                 suggested_zeffy_paymentMethod = $suggested
-                zeffy_allowed_values      = 'card,cash,cheque,transfer,unknown,free,manual,pad,ach,applePayOrGooglePay'
+                zeffy_allowed_values          = 'card,cash,cheque,transfer,unknown,free,manual,pad,ach,applePayOrGooglePay'
             })
     }
 

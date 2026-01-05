@@ -1,0 +1,33 @@
+name: '13. WPMUDEV - Export Sites/Domains (Read-only)'
+
+on:
+  workflow_dispatch:
+    inputs:
+      output_file:
+        description: 'CSV output filename'
+        required: false
+        default: 'wpmudev_domains.csv'
+
+jobs:
+  export:
+    name: Export WPMUDEV sites/domains
+    runs-on: ubuntu-latest
+    environment: wpmudev-prod
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run export
+        shell: pwsh
+        env:
+          WPMUDEV_API_TOKEN: ${{ secrets.FFC_WPMUDEV_GA_API_Token }}
+        run: |
+          $out = '${{ inputs.output_file }}'
+          pwsh -NoProfile -File scripts/wpmudev-sites-export.ps1 -OutputFile $out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wpmudev-domain-inventory
+          path: ${{ inputs.output_file }}

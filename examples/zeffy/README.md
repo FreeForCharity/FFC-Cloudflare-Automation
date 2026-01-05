@@ -1,6 +1,8 @@
-Place your Zeffy payments import template CSV here if you want the draft generator to emit the exact column headers Zeffy expects.
+Place your Zeffy payments import template CSV here if you want the draft generator to emit the exact
+column headers Zeffy expects.
 
 Example path:
+
 - `examples/zeffy/payments-import-template.csv`
 
 Then run:

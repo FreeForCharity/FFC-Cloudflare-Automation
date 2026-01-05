@@ -40,8 +40,8 @@ etc.) working on this repository.**
 
    ```yaml
    env:
-       CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
-       CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+     CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+     CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
    ```
 
 2. **Always validate secret presence BEFORE use**:
@@ -49,10 +49,10 @@ etc.) working on this repository.**
    ```yaml
    - name: Validate Secret Presence
      run: |
-          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ] && [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-             echo "::error::Cloudflare token secret(s) are not set"
-             exit 1
-          fi
+       if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ] && [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+          echo "::error::Cloudflare token secret(s) are not set"
+          exit 1
+       fi
    ```
 
 3. **NEVER echo or print secrets**:
@@ -119,8 +119,10 @@ etc.) working on this repository.**
 **DO:**
 
 - ✅ Use placeholder text: `"your-api-token-here"`
-- ✅ Reference GitHub Secrets: `${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}` / `${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}`
-- ✅ Use environment variables: `$CLOUDFLARE_API_TOKEN` / `$CLOUDFLARE_API_TOKEN_FFC` / `$CLOUDFLARE_API_TOKEN_CM`
+- ✅ Reference GitHub Secrets: `${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}` /
+  `${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}`
+- ✅ Use environment variables: `$CLOUDFLARE_API_TOKEN` / `$CLOUDFLARE_API_TOKEN_FFC` /
+  `$CLOUDFLARE_API_TOKEN_CM`
 - ✅ Instruct users to obtain secrets from official sources
 - ✅ Link to official credential management docs
 
@@ -137,7 +139,8 @@ etc.) working on this repository.**
 
 ```markdown
 1. Create a CloudFlare API token at https://dash.cloudflare.com/profile/api-tokens
-2. Add the token(s) to the `cloudflare-prod` Environment secrets as `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` and/or `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
+2. Add the token(s) to the `cloudflare-prod` Environment secrets as
+   `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` and/or `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
 3. The workflow will map them to env vars: `CLOUDFLARE_API_TOKEN_FFC` / `CLOUDFLARE_API_TOKEN_CM`
 ```
 
@@ -200,16 +203,16 @@ jobs:
       # STEP 1: Always validate secret presence first
       - name: Validate Secret Presence
         run: |
-               if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ] && [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-                  echo "::error::Cloudflare token secret(s) not set"
-                  exit 1
-               fi
+          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ] && [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+             echo "::error::Cloudflare token secret(s) not set"
+             exit 1
+          fi
 
       # STEP 2: Use secret via environment variables
       - name: Use Secret
         env:
-               CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
-               CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
           # Your commands here
           # Secret is available as environment variable
@@ -246,7 +249,8 @@ To configure your CloudFlare API token:
 2. Add Environment secrets:
    - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
    - `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
-3. Workflows map these to environment variables: `CLOUDFLARE_API_TOKEN_FFC` / `CLOUDFLARE_API_TOKEN_CM`
+3. Workflows map these to environment variables: `CLOUDFLARE_API_TOKEN_FFC` /
+   `CLOUDFLARE_API_TOKEN_CM`
 
 **For Local Development:**
 

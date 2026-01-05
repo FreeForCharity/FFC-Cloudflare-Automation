@@ -247,33 +247,33 @@ $out = foreach ($t in $transactions) {
     $date = Format-ZeffyDate -Value $t.date
 
     $canonical = @{
-        firstName       = if ($client) { $client.firstname } else { $null }
-        lastName        = if ($client) { $client.lastname } else { $null }
-        amount          = $amountFormatted
-        address         = $addr
-        city            = $city
-        postalCode      = $postal
-        country         = $country
-        type            = $DefaultType
-        formTitle       = $defaultFormTitle
-        rateTitle       = $defaultFormTitle
-        email           = if ($client) { $client.email } else { $null }
-        language        = $DefaultLanguage
+        firstName           = if ($client) { $client.firstname } else { $null }
+        lastName            = if ($client) { $client.lastname } else { $null }
+        amount              = $amountFormatted
+        address             = $addr
+        city                = $city
+        postalCode          = $postal
+        country             = $country
+        type                = $DefaultType
+        formTitle           = $defaultFormTitle
+        rateTitle           = $defaultFormTitle
+        email               = if ($client) { $client.email } else { $null }
+        language            = $DefaultLanguage
         'date (MM/DD/YYYY)' = $date
-        'state/province' = $stateProv
-        paymentMethod   = $suggested
-        receiptUrl      = $null
-        ticketUrl       = $null
-        receiptNumber   = $null
-        companyName     = if ($client) { $client.companyname } else { $null }
-        note            = 'Imported from WHMCS'
-        annotation      = (@(
-            if ($t.transactionid) { "whmcs_transactionid=$($t.transactionid)" }
-            if ($t.invoiceid) { "whmcs_invoiceid=$($t.invoiceid)" }
-            if ($t.transid) { "gateway_transid=$($t.transid)" }
-            if ($rawGateway) { "gateway=$rawGateway" }
-            if ($t.description) { "desc=$($t.description)" }
-        ) | Where-Object { $_ }) -join '; '
+        'state/province'    = $stateProv
+        paymentMethod       = $suggested
+        receiptUrl          = $null
+        ticketUrl           = $null
+        receiptNumber       = $null
+        companyName         = if ($client) { $client.companyname } else { $null }
+        note                = 'Imported from WHMCS'
+        annotation          = (@(
+                if ($t.transactionid) { "whmcs_transactionid=$($t.transactionid)" }
+                if ($t.invoiceid) { "whmcs_invoiceid=$($t.invoiceid)" }
+                if ($t.transid) { "gateway_transid=$($t.transid)" }
+                if ($rawGateway) { "gateway=$rawGateway" }
+                if ($t.description) { "desc=$($t.description)" }
+            ) | Where-Object { $_ }) -join '; '
     }
 
     Convert-RowToHeaders -Canonical $canonical -Headers $headers

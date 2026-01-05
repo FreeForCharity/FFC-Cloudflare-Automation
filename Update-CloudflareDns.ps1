@@ -713,7 +713,18 @@ try {
                         }
                     }
                     else {
-                        Write-Host "[DRY-RUN] PUT $recName" -ForegroundColor DarkGray
+                        if ($std.Type -eq 'SRV') {
+                            $d = $desiredData
+                            $details = "service=$($d.service) proto=$($d.proto) name=$($d.name) priority=$($d.priority) weight=$($d.weight) port=$($d.port) target=$($d.target)"
+                            Write-Host "[DRY-RUN] Would UPDATE record $($updateCandidate.id): $($std.Type) $recName -> $details" -ForegroundColor Yellow
+                        }
+                        else {
+                            $details = $stdContent
+                            if ($std.Type -in @('A', 'AAAA', 'CNAME') -and $null -ne $desiredProxied) {
+                                $details = "$details (Proxied: $desiredProxied)"
+                            }
+                            Write-Host "[DRY-RUN] Would UPDATE record $($updateCandidate.id): $($std.Type) $recName -> $details" -ForegroundColor Yellow
+                        }
                     }
                     continue
                 }
@@ -749,7 +760,18 @@ try {
                     }
                 }
                 else {
-                    Write-Host "[DRY-RUN] POST $recName" -ForegroundColor DarkGray
+                    if ($std.Type -eq 'SRV') {
+                        $d = $desiredData
+                        $details = "service=$($d.service) proto=$($d.proto) name=$($d.name) priority=$($d.priority) weight=$($d.weight) port=$($d.port) target=$($d.target)"
+                        Write-Host "[DRY-RUN] Would CREATE new record: $($std.Type) $recName -> $details" -ForegroundColor Yellow
+                    }
+                    else {
+                        $details = $stdContent
+                        if ($std.Type -in @('A', 'AAAA', 'CNAME') -and $null -ne $desiredProxied) {
+                            $details = "$details (Proxied: $desiredProxied)"
+                        }
+                        Write-Host "[DRY-RUN] Would CREATE new record: $($std.Type) $recName -> $details" -ForegroundColor Yellow
+                    }
                 }
             }
         }

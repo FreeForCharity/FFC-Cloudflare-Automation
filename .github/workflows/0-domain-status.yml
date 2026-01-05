@@ -342,8 +342,14 @@ jobs:
 
           $plannedChanges = @(
             $dryLines |
-              Where-Object { $_ -match '^Checking standard record:' -and $_ -match '\[(?:MISSING|MISSING/PARTIAL|DIFFERS)\]' }
+              Where-Object { $_ -match '^[[]DRY-RUN[]] Would (?:CREATE|UPDATE|DELETE)|^[[]DRY-RUN[]] Would (?:CREATE new record|UPDATE record|DELETE record)' }
           )
+          if ($plannedChanges.Count -eq 0) {
+            $plannedChanges = @(
+              $dryLines |
+                Where-Object { $_ -match '^Checking standard record:' -and $_ -match '\[(?:MISSING|MISSING/PARTIAL|DIFFERS)\]' }
+            )
+          }
           if ($plannedChanges.Count -eq 0) {
             $plannedChanges = @($dryLines | Where-Object { $_ -match '^[[]DRY-RUN[]]' })
           }

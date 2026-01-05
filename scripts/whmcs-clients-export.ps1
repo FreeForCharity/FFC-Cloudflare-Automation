@@ -172,20 +172,20 @@ try {
 
         foreach ($c in $batch) {
             $clients += [pscustomobject]@{
-                clientid     = Get-Text $c.id
-                firstname    = Get-Text $c.firstname
-                lastname     = Get-Text $c.lastname
-                companyname  = Get-Text $c.companyname
-                email        = Get-Text $c.email
-                address1     = Get-Text $c.address1
-                address2     = Get-Text $c.address2
-                city         = Get-Text $c.city
-                state        = Get-Text $c.state
-                postcode     = Get-Text $c.postcode
-                country      = Get-Text $c.country
-                phonenumber  = Get-Text $c.phonenumber
-                status       = Get-Text $c.status
-                datecreated  = Get-Text $c.datecreated
+                clientid    = Get-Text $c.id
+                firstname   = Get-Text $c.firstname
+                lastname    = Get-Text $c.lastname
+                companyname = Get-Text $c.companyname
+                email       = Get-Text $c.email
+                address1    = Get-Text $c.address1
+                address2    = Get-Text $c.address2
+                city        = Get-Text $c.city
+                state       = Get-Text $c.state
+                postcode    = Get-Text $c.postcode
+                country     = Get-Text $c.country
+                phonenumber = Get-Text $c.phonenumber
+                status      = Get-Text $c.status
+                datecreated = Get-Text $c.datecreated
             }
         }
 

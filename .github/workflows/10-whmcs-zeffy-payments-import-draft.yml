@@ -19,6 +19,11 @@ on:
         required: false
         type: string
         default: 'artifacts/whmcs/whmcs_transactions.csv'
+      invoices_output:
+        description: 'WHMCS invoices CSV output path (used to include $0 invoices)'
+        required: false
+        type: string
+        default: 'artifacts/whmcs/whmcs_invoices.csv'
       zeffy_output:
         description: 'Zeffy draft CSV output path'
         required: false
@@ -48,6 +53,12 @@ on:
         required: false
         type: string
         default: '10000'
+
+      include_zero_invoices:
+        description: "Include $0 invoices as 'free' payments (to capture contacts)"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -143,6 +154,47 @@ jobs:
             throw "Expected output file not found: $out"
           }
 
+      - name: Export invoices (read-only)
+        if: ${{ inputs.include_zero_invoices }}
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $out = "${{ inputs.invoices_output }}"
+          $dir = Split-Path -Parent $out
+          if (-not [string]::IsNullOrWhiteSpace($dir)) {
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          }
+
+          $args = @(
+            '-ApiUrl', $env:WHMCS_API_URL,
+            '-OutputFile', $out
+          )
+
+          $startDate = "${{ inputs.start_date }}".Trim()
+          if (-not [string]::IsNullOrWhiteSpace($startDate)) {
+            $args += @('-StartDate', $startDate)
+          }
+
+          $endDate = "${{ inputs.end_date }}".Trim()
+          if (-not [string]::IsNullOrWhiteSpace($endDate)) {
+            $args += @('-EndDate', $endDate)
+          }
+
+          & pwsh -NoProfile -File .\scripts\whmcs-invoices-export.ps1 @args
+          if ($LASTEXITCODE -ne 0) {
+            throw "WHMCS invoices export failed with exit code $LASTEXITCODE."
+          }
+
+          if (-not (Test-Path $out)) {
+            throw "Expected output file not found: $out"
+          }
+
       - name: Lookup invoices for deleted clients (userid=0)
         shell: pwsh
         env:
@@ -196,6 +248,7 @@ jobs:
 
           $clients = "${{ inputs.clients_output }}"
           $tx = "${{ inputs.transactions_output }}"
+          $invoices = "${{ inputs.invoices_output }}"
           $out = "${{ inputs.zeffy_output }}"
 
           function Get-ZeffyOutputFiles {
@@ -235,6 +288,11 @@ jobs:
             '-TransactionsCsv', $tx,
             '-OutputFile', $out
           )
+
+          $includeZeroInvoices = "${{ inputs.include_zero_invoices }}".Trim().ToLowerInvariant() -eq 'true'
+          if ($includeZeroInvoices -and (Test-Path -LiteralPath $invoices)) {
+            $genArgs += @('-InvoicesCsv', $invoices, '-IncludeZeroInvoices')
+          }
           if (-not [string]::IsNullOrWhiteSpace($maxRowsPerFile)) {
             $genArgs += @('-MaxRowsPerFile', $maxRowsPerFile)
           }
@@ -248,6 +306,55 @@ jobs:
           $files = Get-ZeffyOutputFiles -BaseOutputFile $out
           if (-not $files -or $files.Count -eq 0) {
             throw "Expected Zeffy output file(s) not found. Base: $out"
+          }
+
+          # Optional: summarize invoice-derived rows (e.g., $0 invoices) so it's obvious what was added.
+          if ($includeZeroInvoices -and (Test-Path -LiteralPath $invoices)) {
+            function Get-FirstNumber {
+              param([string]$Text)
+              if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+              $m = [regex]::Match($Text, '-?\d+(?:\.\d+)?')
+              if (-not $m.Success) { return $null }
+              return $m.Value
+            }
+
+            $txInvoiceIds = @{}
+            foreach ($r in (Import-Csv -LiteralPath $tx)) {
+              if ($r.invoiceid -and -not [string]::IsNullOrWhiteSpace($r.invoiceid)) {
+                $txInvoiceIds[$r.invoiceid.ToString().Trim()] = $true
+              }
+            }
+
+            $zeroTotal = 0
+            $zeroWithTx = 0
+            $zeroEligible = 0
+            foreach ($inv in (Import-Csv -LiteralPath $invoices)) {
+              if (-not $inv.invoiceid) { continue }
+              $n = Get-FirstNumber -Text $inv.total
+              if ($null -eq $n) { continue }
+              $v = $null
+              try { $v = [decimal]::Parse($n, [System.Globalization.NumberStyles]::Any, [System.Globalization.CultureInfo]::InvariantCulture) } catch { $v = $null }
+              if ($v -ne 0) { continue }
+              $zeroTotal++
+              $id = $inv.invoiceid.ToString().Trim()
+              if ($txInvoiceIds.ContainsKey($id)) {
+                $zeroWithTx++
+              }
+              else {
+                $zeroEligible++
+              }
+            }
+
+            "- include_zero_invoices: true" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "- $0 invoices found: $zeroTotal" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "- $0 invoices skipped (already had transaction): $zeroWithTx" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "- $0 invoices appended (invoice-only): $zeroEligible" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          elseif ($includeZeroInvoices) {
+            "- include_zero_invoices: true (invoices file missing; none added)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          else {
+            "- include_zero_invoices: false" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           }
 
           $envBlock = @()
@@ -313,6 +420,14 @@ jobs:
         with:
           name: whmcs_transactions
           path: ${{ inputs.transactions_output }}
+          if-no-files-found: error
+
+      - name: Upload WHMCS invoices
+        if: ${{ inputs.include_zero_invoices }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: whmcs_invoices
+          path: ${{ inputs.invoices_output }}
           if-no-files-found: error
 
       - name: Upload WHMCS deleted-client invoices

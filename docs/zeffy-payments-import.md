@@ -1,6 +1,7 @@
 # Zeffy payments import (draft generator)
 
-This repo includes scripts/workflows to generate a **first-draft** Zeffy payments import CSV from WHMCS (read-only).
+This repo includes scripts/workflows to generate a **first-draft** Zeffy payments import CSV from
+WHMCS (read-only).
 
 ## What it generates
 
@@ -16,9 +17,12 @@ This repo includes scripts/workflows to generate a **first-draft** Zeffy payment
 
 ## Mapping notes
 
-- Canonical output is aligned to Zeffy’s **Payments Import Template** fields described at https://support.zeffy.com/importing-payments.
-- `paymentMethod` is mapped from WHMCS `gateway` using Zeffy’s allowed values (card, cash, cheque, transfer, unknown, free, manual, pad, ach, applePayOrGooglePay).
-- Traceability back to WHMCS is included in Zeffy’s `annotation` field (transaction/invoice IDs, gateway, etc.).
+- Canonical output is aligned to Zeffy’s **Payments Import Template** fields described at
+  https://support.zeffy.com/importing-payments.
+- `paymentMethod` is mapped from WHMCS `gateway` using Zeffy’s allowed values (card, cash, cheque,
+  transfer, unknown, free, manual, pad, ach, applePayOrGooglePay).
+- Traceability back to WHMCS is included in Zeffy’s `annotation` field (transaction/invoice IDs,
+  gateway, etc.).
 
 ## Important: Zeffy template columns
 
@@ -26,8 +30,11 @@ Zeffy’s import template column names can differ depending on the template/vers
 
 The generator supports two output modes:
 
-- **canonical** (default): emits a Zeffy-template-shaped set of columns (including required address fields) using the exact Zeffy field names from the help article. Required fields that WHMCS may not have are defaulted to safe placeholders (for example `address/city/postalCode = "unknown"`).
-- **template**: if you provide a local template CSV (header row only is enough), the script will emit exactly those headers and fill what it can.
+- **canonical** (default): emits a Zeffy-template-shaped set of columns (including required address
+  fields) using the exact Zeffy field names from the help article. Required fields that WHMCS may
+  not have are defaulted to safe placeholders (for example `address/city/postalCode = "unknown"`).
+- **template**: if you provide a local template CSV (header row only is enough), the script will
+  emit exactly those headers and fill what it can.
 
 Current canonical header set matches the template header names:
 
@@ -44,4 +51,5 @@ pwsh -File .\scripts\zeffy-payments-import-draft.ps1 \
   -TemplatePath .\examples\zeffy\payments-import-template.csv
 ```
 
-If you paste/upload the exact Zeffy template header row you’re using, we can tune the alias mapping so the draft matches 1:1.
+If you paste/upload the exact Zeffy template header row you’re using, we can tune the alias mapping
+so the draft matches 1:1.

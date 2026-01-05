@@ -136,8 +136,8 @@ This repo also includes read-only WHMCS export workflows/scripts used for migrat
 - Workflow: `.github/workflows/8-whmcs-export-products.yml`
 - Script: `scripts/whmcs-products-export.ps1`
 
-This export is specifically useful to answer: “What products exist, and which are monthly vs yearly?”
-It also captures the raw WHMCS gateway/paymentmethod identifiers used by services.
+This export is specifically useful to answer: “What products exist, and which are monthly vs
+yearly?” It also captures the raw WHMCS gateway/paymentmethod identifiers used by services.
 
 ### What are “gateway strings”?
 

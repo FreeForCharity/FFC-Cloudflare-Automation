@@ -30,8 +30,8 @@ support all undefined use cases in the Issue Templates.
 - [ ] CRUD operations for **A**, **AAAA**, and **CNAME** records.
 - [ ] **Proxy Support**: Toggle `proxied` status (Orange/Grey cloud).
 - [ ] **Dry Run**: `WhatIf` support or explicit `-DryRun` switch.
-- [ ] **Authentication**: Support token via parameter and environment variable
-      (Cloudflare API token via `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_API_TOKEN_FFC` / `CLOUDFLARE_API_TOKEN_CM`).
+- [ ] **Authentication**: Support token via parameter and environment variable (Cloudflare API token
+      via `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_API_TOKEN_FFC` / `CLOUDFLARE_API_TOKEN_CM`).
 
 ### Expanded Features (New)
 

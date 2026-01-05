@@ -9,7 +9,8 @@ on:
         required: true
         type: string
       account:
-        description: 'Which Cloudflare account should own this zone? (required to prevent duplicates)'
+        description:
+          'Which Cloudflare account should own this zone? (required to prevent duplicates)'
         required: true
         type: choice
         options:

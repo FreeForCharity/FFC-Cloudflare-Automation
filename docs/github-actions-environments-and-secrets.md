@@ -36,8 +36,13 @@ Used by the numbered DNS workflows in `.github/workflows/`.
 
 Environment secrets:
 
-- `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` (required)
-- `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` (required)
+- `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` (recommended)
+- `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` (recommended)
+
+These are injected into workflow jobs as environment variables:
+
+- `CLOUDFLARE_API_TOKEN_FFC`
+- `CLOUDFLARE_API_TOKEN_CM`
 
 Repository variable (non-secret):
 
@@ -74,8 +79,7 @@ two jobs so secrets do not have to be duplicated across environments:
   - `FFC_AZURE_CLIENT_ID`
   - `FFC_AZURE_TENANT_ID`
 - **Cloudflare job** runs in `cloudflare-prod` and requires:
-  - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
-  - `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
+  - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` and/or `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
 
 Environment secrets (optional):
 

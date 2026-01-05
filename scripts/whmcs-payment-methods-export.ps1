@@ -215,9 +215,11 @@ function Get-ZeffyPaymentMethodSuggestion {
     $v = $WhmcsValue.ToLowerInvariant()
 
     if ($v -match 'apple|google') { return 'applePayOrGooglePay' }
+    if ($v -match 'echeck|authorizeecheck') { return 'ach' }
     if ($v -match '\bach\b') { return 'ach' }
     if ($v -match '\bpad\b') { return 'pad' }
     if ($v -match 'bank|wire|transfer') { return 'transfer' }
+    if ($v -match 'mailin') { return 'manual' }
     if ($v -match 'cheque|check') { return 'cheque' }
     if ($v -match 'cash') { return 'cash' }
 

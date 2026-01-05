@@ -6,15 +6,23 @@ param(
 
 # Shared Logic (Should ideally be in a module, but copying for standalone behavior within repo structure)
 function Get-AuthToken {
-    if ($Token) { return $Token }
-    if ($env:CLOUDFLARE_API_TOKEN_FFC -and -not $env:CLOUDFLARE_API_TOKEN_CM) { return $env:CLOUDFLARE_API_TOKEN_FFC }
-    if ($env:CLOUDFLARE_API_TOKEN_CM -and -not $env:CLOUDFLARE_API_TOKEN_FFC) { return $env:CLOUDFLARE_API_TOKEN_CM }
+    if ($Token) { return $Token.Trim() }
 
-    if ($env:CLOUDFLARE_API_TOKEN_FFC -and $env:CLOUDFLARE_API_TOKEN_CM) {
-        throw "Multiple Cloudflare tokens are set (CLOUDFLARE_API_TOKEN_FFC and CLOUDFLARE_API_TOKEN_CM). Pass -Token to choose which account to export."
+    if (-not [string]::IsNullOrWhiteSpace($env:CLOUDFLARE_API_TOKEN)) {
+        return $env:CLOUDFLARE_API_TOKEN.Trim()
     }
 
-    throw "No Cloudflare API token found. Pass -Token, or set CLOUDFLARE_API_TOKEN_FFC / CLOUDFLARE_API_TOKEN_CM."
+    $candidates = @(
+        $env:CLOUDFLARE_API_TOKEN_FFC,
+        $env:CLOUDFLARE_API_TOKEN_CM
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Select-Object -Unique
+
+    if ($candidates.Count -eq 1) { return $candidates[0] }
+    if ($candidates.Count -gt 1) {
+        throw 'Multiple Cloudflare tokens detected. Pass -Token or set CLOUDFLARE_API_TOKEN to select a single token.'
+    }
+
+    throw 'No Cloudflare API token found. Pass -Token or set CLOUDFLARE_API_TOKEN (or CLOUDFLARE_API_TOKEN_FFC / CLOUDFLARE_API_TOKEN_CM).'
 }
 
 function Invoke-CfApi {

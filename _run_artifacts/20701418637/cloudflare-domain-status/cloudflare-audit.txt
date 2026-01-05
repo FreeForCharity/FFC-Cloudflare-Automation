@@ -1,0 +1,22 @@
+Running Compliance Audit for Zone: ffcworkingsite1.org
+CNAME inventory:
+ - autodiscover.ffcworkingsite1.org -> autodiscover.outlook.com (proxied=False, ttl=3600)
+ - enterpriseenrollment.ffcworkingsite1.org -> enterpriseenrollment-s.manage.microsoft.com (proxied=False, ttl=3600)
+ - enterpriseregistration.ffcworkingsite1.org -> enterpriseregistration.windows.net (proxied=False, ttl=3600)
+ - lyncdiscover.ffcworkingsite1.org -> webdir.online.lync.com (proxied=False, ttl=3600)
+ - sip.ffcworkingsite1.org -> sipdir.online.lync.com (proxied=False, ttl=3600)
+ - www.ffcworkingsite1.org -> freeforcharity.github.io (proxied=True, ttl=1)
+[OK] Required CNAME present: autodiscover.ffcworkingsite1.org
+[OK] Required CNAME present: enterpriseenrollment.ffcworkingsite1.org
+[OK] Required CNAME present: enterpriseregistration.ffcworkingsite1.org
+[OK] Required CNAME present: lyncdiscover.ffcworkingsite1.org
+[OK] Required CNAME present: sip.ffcworkingsite1.org
+[OK] Required CNAME present: www.ffcworkingsite1.org
+[33;1mWARNING: [MISSING] Required SRV _sip._tls.ffcworkingsite1.org -> 100 1 443 sipdir.online.lync.com[0m
+[OK] Required SRV present: _sipfederationtls._tcp.ffcworkingsite1.org
+[OK] M365 MX Record found (ffcworkingsite1-org.mail.protection.outlook.com)
+[OK] M365 SPF Record found
+[OK] DMARC Record found (internal+Cloudflare rua)
+[33;1mWARNING: [MISSING/PARTIAL] GitHub Pages A Records. Missing: 185.199.110.153, 185.199.111.153[0m
+[33;1mWARNING: [MISSING/PARTIAL] GitHub Pages AAAA Records. Missing: 2606:50c0:8000::153, 2606:50c0:8001::153[0m
+[OK] WWW CNAME found (freeforcharity.github.io)

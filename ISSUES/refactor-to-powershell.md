@@ -31,7 +31,7 @@ support all undefined use cases in the Issue Templates.
 - [ ] **Proxy Support**: Toggle `proxied` status (Orange/Grey cloud).
 - [ ] **Dry Run**: `WhatIf` support or explicit `-DryRun` switch.
 - [ ] **Authentication**: Support token via parameter and environment variable
-      (`CLOUDFLARE_API_TOKEN_FFC` and `CLOUDFLARE_API_TOKEN_CM`).
+      (Cloudflare API token via `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_API_TOKEN_FFC` / `CLOUDFLARE_API_TOKEN_CM`).
 
 ### Expanded Features (New)
 

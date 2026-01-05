@@ -30,10 +30,10 @@
     Switch to enable Cloudflare Proxy (Orange Cloud). Default is DNS Only (Grey Cloud).
 
 .PARAMETER Token
-    Cloudflare API Token. If omitted, the script will try both account tokens from the environment
-    (recommended for GitHub Actions):
-    - $env:CLOUDFLARE_API_TOKEN_FFC
-    - $env:CLOUDFLARE_API_TOKEN_CM
+    Cloudflare API Token.
+    If omitted, the script will use one of:
+    - $env:CLOUDFLARE_API_TOKEN (single-token mode)
+    - $env:CLOUDFLARE_API_TOKEN_FFC / $env:CLOUDFLARE_API_TOKEN_CM (dual-token mode; auto-detects which can access the zone)
 
 .PARAMETER DryRun
     Preview changes without applying them.
@@ -114,30 +114,59 @@ $ErrorActionPreference = 'Stop'
 $ApiBase = 'https://api.cloudflare.com/client/v4'
 
 # --- Authenticate ---
-function Get-AuthTokens {
-    if ($Token) { return @($Token) }
+function Get-AuthToken {
+    param([AllowNull()][string]$ZoneName)
 
-    $tokens = @()
-    if ($env:CLOUDFLARE_API_TOKEN_FFC) { $tokens += @($env:CLOUDFLARE_API_TOKEN_FFC) }
-    if ($env:CLOUDFLARE_API_TOKEN_CM) { $tokens += @($env:CLOUDFLARE_API_TOKEN_CM) }
+    if ($Token) { return $Token.Trim() }
 
-    if ($tokens.Count -eq 0) {
-        throw "Cloudflare API token(s) not found. Set CLOUDFLARE_API_TOKEN_FFC and CLOUDFLARE_API_TOKEN_CM (recommended), or pass -Token."
+    $candidates = @(
+        $env:CLOUDFLARE_API_TOKEN,
+        $env:CLOUDFLARE_API_TOKEN_FFC,
+        $env:CLOUDFLARE_API_TOKEN_CM
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Select-Object -Unique
+
+    if ($candidates.Count -eq 0) {
+        throw 'Cloudflare API token not found. Pass -Token or set CLOUDFLARE_API_TOKEN, CLOUDFLARE_API_TOKEN_FFC, or CLOUDFLARE_API_TOKEN_CM.'
     }
 
-    return $tokens
+    if ($candidates.Count -eq 1 -or [string]::IsNullOrWhiteSpace($ZoneName)) {
+        return $candidates[0]
+    }
+
+    foreach ($cand in $candidates) {
+        if (Test-ZoneAccess -ZoneName $ZoneName -CandidateToken $cand) {
+            return $cand
+        }
+    }
+
+    throw "Cloudflare API token not found for zone '$ZoneName'. Pass -Token or set the correct CLOUDFLARE_API_TOKEN_* environment variable for that zone."
 }
 
-function New-CfHeaders {
-    param([Parameter(Mandatory = $true)][string]$AuthToken)
-    return @{
-        'Authorization' = "Bearer $AuthToken"
-        'Content-Type'  = 'application/json'
+function Test-ZoneAccess {
+    param(
+        [Parameter(Mandatory = $true)][string]$ZoneName,
+        [Parameter(Mandatory = $true)][string]$CandidateToken
+    )
+
+    try {
+        $headers = @{ Authorization = "Bearer $CandidateToken"; 'Content-Type' = 'application/json' }
+        $encoded = [uri]::EscapeDataString($ZoneName)
+        $uri = "$ApiBase/zones?name=$encoded"
+        $resp = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers -ErrorAction Stop -TimeoutSec 30
+        return ($resp.success -and $resp.result -and $resp.result.Count -gt 0)
+    }
+    catch {
+        return $false
     }
 }
 
-$AuthToken = $null
-$Headers = $null
+$AuthToken = Get-AuthToken -ZoneName $Zone
+if (-not $AuthToken) { Write-Error "No Cloudflare API Token provided."; exit 1 }
+
+$Headers = @{
+    'Authorization' = "Bearer $AuthToken"
+    'Content-Type'  = 'application/json'
+}
 
 # --- Helper Functions ---
 
@@ -193,34 +222,6 @@ function Get-ZoneId {
     $zones = $resp.result
     if ($zones.Count -eq 0) { throw "Zone '$ZoneName' not found." }
     return $zones[0].id
-}
-
-function Try-ResolveZoneContext {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$ZoneName,
-        [Parameter(Mandatory = $true)]
-        [string[]]$Tokens
-    )
-
-    foreach ($t in $Tokens) {
-        if ([string]::IsNullOrWhiteSpace($t)) { continue }
-        $script:AuthToken = $t
-        $script:Headers = New-CfHeaders -AuthToken $t
-
-        try {
-            $resp = Invoke-CfApi -Method 'GET' -Uri '/zones' -Params @{ name = $ZoneName }
-            $zones = @($resp.result)
-            if ($zones.Count -gt 0) {
-                return [pscustomobject]@{ Token = $t; ZoneId = $zones[0].id }
-            }
-        }
-        catch {
-            # Ignore and try next token
-        }
-    }
-
-    return $null
 }
 
 function Get-AllDnsRecords {
@@ -326,18 +327,9 @@ function Set-DmarcRuaMailtos {
 # --- Main Logic ---
 
 try {
-    # 1. Resolve which account owns the zone (tries both configured tokens)
-    $tokens = Get-AuthTokens
-    $ctx = Try-ResolveZoneContext -ZoneName $Zone -Tokens $tokens
-    if (-not $ctx) {
-        throw "Zone '$Zone' not found in any configured Cloudflare account (tokens tried: $($tokens.Count))."
-    }
-
-    $AuthToken = $ctx.Token
-    $Headers = New-CfHeaders -AuthToken $AuthToken
-    $ZoneId = $ctx.ZoneId
-
-    Write-Verbose "Resolved zone '$Zone' to Zone ID: $ZoneId"
+    # 1. Resolve Zone ID
+    $ZoneId = Get-ZoneId -ZoneName $Zone
+    Write-Verbose "Found Zone ID: $ZoneId"
 
     # 2. Resolve Full Record Name
     if ($Name -eq '@') {
@@ -721,7 +713,18 @@ try {
                         }
                     }
                     else {
-                        Write-Host "[DRY-RUN] PUT $recName" -ForegroundColor DarkGray
+                        if ($std.Type -eq 'SRV') {
+                            $d = $desiredData
+                            $details = "service=$($d.service) proto=$($d.proto) name=$($d.name) priority=$($d.priority) weight=$($d.weight) port=$($d.port) target=$($d.target)"
+                            Write-Host "[DRY-RUN] Would UPDATE record $($updateCandidate.id): $($std.Type) $recName -> $details" -ForegroundColor Yellow
+                        }
+                        else {
+                            $details = $stdContent
+                            if ($std.Type -in @('A', 'AAAA', 'CNAME') -and $null -ne $desiredProxied) {
+                                $details = "$details (Proxied: $desiredProxied)"
+                            }
+                            Write-Host "[DRY-RUN] Would UPDATE record $($updateCandidate.id): $($std.Type) $recName -> $details" -ForegroundColor Yellow
+                        }
                     }
                     continue
                 }
@@ -757,7 +760,18 @@ try {
                     }
                 }
                 else {
-                    Write-Host "[DRY-RUN] POST $recName" -ForegroundColor DarkGray
+                    if ($std.Type -eq 'SRV') {
+                        $d = $desiredData
+                        $details = "service=$($d.service) proto=$($d.proto) name=$($d.name) priority=$($d.priority) weight=$($d.weight) port=$($d.port) target=$($d.target)"
+                        Write-Host "[DRY-RUN] Would CREATE new record: $($std.Type) $recName -> $details" -ForegroundColor Yellow
+                    }
+                    else {
+                        $details = $stdContent
+                        if ($std.Type -in @('A', 'AAAA', 'CNAME') -and $null -ne $desiredProxied) {
+                            $details = "$details (Proxied: $desiredProxied)"
+                        }
+                        Write-Host "[DRY-RUN] Would CREATE new record: $($std.Type) $recName -> $details" -ForegroundColor Yellow
+                    }
                 }
             }
         }
@@ -772,19 +786,9 @@ try {
         }
         foreach ($rec in $existing) {
             # Safety: If Content is specified, only delete matching records
-            if ($Content) {
-                $matches = $false
-                if ($Type -eq 'TXT') {
-                    $matches = ((Normalize-TxtContent -Value $rec.content) -eq (Normalize-TxtContent -Value $Content))
-                }
-                else {
-                    $matches = ($rec.content -eq $Content)
-                }
-
-                if (-not $matches) {
-                    Write-Verbose "Skipping record $($rec.id) (Content mismatch: '$($rec.content)' != '$Content')"
-                    continue
-                }
+            if ($Content -and $rec.content -ne $Content) {
+                Write-Verbose "Skipping record $($rec.id) (Content mismatch: '$($rec.content)' != '$Content')"
+                continue
             }
 
             if ($DryRun) {
@@ -801,16 +805,11 @@ try {
 
     # --- SET (Create/Update) Operation ---
     
-    $desiredContent = $Content
-    if ($Type -eq 'TXT') {
-        $desiredContent = Quote-TxtContent -Value $Content
-    }
-
     # Prepare payload
     $payload = @{
         type    = $Type
         name    = $RecordName
-        content = $desiredContent
+        content = $Content
         ttl     = $Ttl
     }
 
@@ -831,68 +830,26 @@ try {
     # These types allow multiple records with the same name.
     # Logic: Ensure ONE record exists with this content. Do not overwrite others.
     if ($Type -in @('MX', 'TXT')) {
-        if ($Type -eq 'MX') {
-            $exactMatch = $existingSameType | Where-Object {
-                $_.content -eq $Content -and
-                $_.priority -eq $Priority
-            }
-
-            if ($exactMatch) {
-                Write-Verbose "Exact match found (ID: $($exactMatch[0].id))."
-                Write-Host "  [Skip] $Type $RecordName matches desired state." -ForegroundColor DarkGray
-            }
-            else {
-                # No exact match -> CREATE (Append)
-                if ($DryRun) {
-                    Write-Host "[DRY-RUN] Would CREATE new record: $Type $RecordName -> $Content" -ForegroundColor Yellow
-                }
-                else {
-                    Write-Host "Creating new record: $Type $RecordName -> $Content..." -NoNewline
-                    $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $payload
-                    Write-Host " DONE" -ForegroundColor Green
-                }
-            }
-
-            return
+        $exactMatch = $existingSameType | Where-Object { 
+            $_.content -eq $Content -and 
+            ($Type -ne 'MX' -or $_.priority -eq $Priority)
         }
 
-        # TXT: treat normalized content as authoritative; Cloudflare may normalize quoting.
-        $desiredNormalized = Normalize-TxtContent -Value $Content
-        $normalizedMatch = @($existingSameType | Where-Object {
-                (Normalize-TxtContent -Value $_.content) -eq $desiredNormalized
-            })
-
-        if ($normalizedMatch.Count -gt 0) {
-            $match = $normalizedMatch[0]
-
-            if (Is-TxtQuoted -Value $match.content) {
-                Write-Verbose "Normalized TXT match found (already quoted) (ID: $($match.id))."
-                Write-Host "  [Skip] $Type $RecordName matches desired state." -ForegroundColor DarkGray
-                return
-            }
-
-            if ($DryRun) {
-                Write-Host "[DRY-RUN] Would UPDATE TXT record $($match.id): $RecordName -> $desiredContent" -ForegroundColor Yellow
-            }
-            else {
-                Write-Host "Updating TXT record $($match.id) to quoted content..." -NoNewline
-                $null = Invoke-CfApi -Method 'PUT' -Uri "/zones/$ZoneId/dns_records/$($match.id)" -Body $payload
-                Write-Host " DONE" -ForegroundColor Green
-            }
-
-            return
-        }
-
-        # No normalized match -> CREATE
-        if ($DryRun) {
-            Write-Host "[DRY-RUN] Would CREATE new record: $Type $RecordName -> $desiredContent" -ForegroundColor Yellow
+        if ($exactMatch) {
+            Write-Verbose "Exact match found (ID: $($exactMatch[0].id))."
+            Write-Host "  [Skip] $Type $RecordName matches desired state." -ForegroundColor DarkGray
         }
         else {
-            Write-Host "Creating new record: $Type $RecordName -> $desiredContent..." -NoNewline
-            $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $payload
-            Write-Host " DONE" -ForegroundColor Green
+            # No exact match -> CREATE (Append)
+            if ($DryRun) {
+                Write-Host "[DRY-RUN] Would CREATE new record: $Type $RecordName -> $Content" -ForegroundColor Yellow
+            }
+            else {
+                Write-Host "Creating new record: $Type $RecordName -> $Content..." -NoNewline
+                $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $payload
+                Write-Host " DONE" -ForegroundColor Green
+            }
         }
-
         return
     }
 

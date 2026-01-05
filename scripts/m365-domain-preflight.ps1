@@ -150,47 +150,18 @@ function Try-GetMicrosoftDnsGuidance {
     }
 }
 
-function Get-CfTokens {
+function Get-CfToken {
     param([AllowNull()][string]$Provided)
 
-    if ($Provided) { return @($Provided) }
+    if ($Provided) { return $Provided }
+    if ($env:CLOUDFLARE_API_TOKEN) { return $env:CLOUDFLARE_API_TOKEN }
 
-    $tokens = @()
-    if ($env:CLOUDFLARE_API_TOKEN_FFC) { $tokens += @($env:CLOUDFLARE_API_TOKEN_FFC) }
-    if ($env:CLOUDFLARE_API_TOKEN_CM) { $tokens += @($env:CLOUDFLARE_API_TOKEN_CM) }
+    $candidates = @(
+        $env:CLOUDFLARE_API_TOKEN_FFC,
+        $env:CLOUDFLARE_API_TOKEN_CM
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Select-Object -Unique
 
-    # Preserve order, de-dupe
-    $seen = @{}
-    return @(
-        foreach ($t in $tokens) {
-            if ([string]::IsNullOrWhiteSpace($t)) { continue }
-            $key = $t.Trim()
-            if (-not $seen.ContainsKey($key)) {
-                $seen[$key] = $true
-                $key
-            }
-        }
-    )
-}
-
-function Resolve-CfTokenForZone {
-    param(
-        [Parameter(Mandatory = $true)][string]$Zone,
-        [AllowNull()][string]$ProvidedToken
-    )
-
-    $tokens = @(Get-CfTokens -Provided $ProvidedToken)
-    foreach ($t in $tokens) {
-        try {
-            $headers = @{ Authorization = "Bearer $t"; 'Content-Type' = 'application/json' }
-            $zones = (Invoke-CfApi -Method 'GET' -Uri '/zones' -Headers $headers -Params @{ name = $Zone }).result
-            if ($zones -and $zones.Count -gt 0) { return $t }
-        }
-        catch {
-            continue
-        }
-    }
-
+    if ($candidates.Count -eq 1) { return $candidates[0] }
     return $null
 }
 
@@ -351,10 +322,10 @@ try {
         Write-Host 'Cloudflare checks skipped (-SkipCloudflare)' -ForegroundColor DarkGray
     }
     else {
-        $cfToken = Resolve-CfTokenForZone -Zone $Domain -ProvidedToken $CloudflareToken
+        $cfToken = Get-CfToken -Provided $CloudflareToken
         if (-not $cfToken) {
             Write-Host 'Cloudflare token not set; skipping Cloudflare audit.' -ForegroundColor Yellow
-            Write-Host 'Set CLOUDFLARE_API_TOKEN_FFC and CLOUDFLARE_API_TOKEN_CM, or pass -CloudflareToken.' -ForegroundColor DarkGray
+            Write-Host 'Set CLOUDFLARE_API_TOKEN (or CLOUDFLARE_API_TOKEN_FFC / CLOUDFLARE_API_TOKEN_CM), or pass -CloudflareToken.' -ForegroundColor DarkGray
         }
         else {
             $audit = Run-CloudflareAudit -Zone $Domain -Token $cfToken
@@ -384,6 +355,13 @@ try {
 
                 Write-Kv -Key 'selector1 CNAME present' -Value $hasSel1
                 Write-Kv -Key 'selector2 CNAME present' -Value $hasSel2
+
+                if ($hasSel1) {
+                    Write-Kv -Key 'selector1 current target' -Value $dkim.Selector1.content
+                }
+                if ($hasSel2) {
+                    Write-Kv -Key 'selector2 current target' -Value $dkim.Selector2.content
+                }
 
                 if ($tenantDomain -and $graphToken) {
                     try {

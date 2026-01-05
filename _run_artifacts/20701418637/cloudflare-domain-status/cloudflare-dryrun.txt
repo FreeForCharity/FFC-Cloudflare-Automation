@@ -1,0 +1,25 @@
+Enforcing FFC Standard Configuration for Zone: ffcworkingsite1.org
+Checking standard record: MX @... [OK]
+Checking standard record: TXT @... [OK]
+Checking standard record: TXT _dmarc... [OK]
+Checking standard record: CNAME autodiscover... [OK]
+Checking standard record: CNAME enterpriseenrollment... [OK]
+Checking standard record: CNAME enterpriseregistration... [OK]
+Checking standard record: CNAME lyncdiscover... [OK]
+Checking standard record: CNAME sip... [OK]
+Checking standard record: SRV _sip._tls... [MISSING] -> Creating...
+[DRY-RUN] POST _sip._tls.ffcworkingsite1.org
+Checking standard record: SRV _sipfederationtls._tcp... [OK]
+Checking standard record: A @... [OK]
+Checking standard record: A @... [OK]
+Checking standard record: A @... [MISSING] -> Creating...
+[DRY-RUN] POST ffcworkingsite1.org
+Checking standard record: A @... [MISSING] -> Creating...
+[DRY-RUN] POST ffcworkingsite1.org
+Checking standard record: AAAA @... [MISSING] -> Creating...
+[DRY-RUN] POST ffcworkingsite1.org
+Checking standard record: AAAA @... [MISSING] -> Creating...
+[DRY-RUN] POST ffcworkingsite1.org
+Checking standard record: AAAA @... [OK]
+Checking standard record: AAAA @... [OK]
+Checking standard record: CNAME www... [OK]

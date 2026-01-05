@@ -70,12 +70,8 @@ jobs:
       - name: Validate required secrets
         shell: bash
         run: |
-          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
-            exit 1;
-          fi
-          if [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-            echo "::error::CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ] && [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::Cloudflare token secret(s) not set (environment: cloudflare-prod). Set FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS and/or CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS.";
             exit 1;
           fi
 

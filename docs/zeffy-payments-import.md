@@ -94,6 +94,7 @@ This file is for investigation/auditing, not automatic inclusion.
 Example successful run (2026-01-05):
 
 - Actions run: https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/runs/20708066676
+- Actions run: https://github.com/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/20708066676
 - Outputs observed in artifacts:
   - WHMCS clients: 343 rows
   - WHMCS transactions: 1064 rows

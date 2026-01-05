@@ -21,8 +21,9 @@
       <section class="info-card">
         <h2>About This Project</h2>
         <p>
-          This repository contains the documentation and automation utilities supporting
-          FreeForCharity's Cloudflare DNS management using Python scripts and the Cloudflare API.
+          This repository contains automation utilities and runbooks that help Free For Charity
+          manage domains across Cloudflare DNS, Microsoft 365, WHMCS billing exports, and WPMUDEV
+          Hub site inventory.
         </p>
         <div class="badge-container">
           <a
@@ -46,17 +47,38 @@
             </div>
           </div>
           <div class="status-item">
-            <div class="status-icon" role="img" aria-label="Python logo">🐍</div>
+            <div class="status-icon" role="img" aria-label="Toolbox">🧰</div>
             <div class="status-content">
-              <h3>Python Scripts</h3>
-              <p>DNS Management Tools</p>
+              <h3>Admin Workflows</h3>
+              <p>Runbook-driven domain operations</p>
             </div>
           </div>
           <div class="status-item">
             <div class="status-icon" role="img" aria-label="Cloud">☁️</div>
             <div class="status-content">
               <h3>Cloudflare</h3>
-              <p>CDN & Security</p>
+              <p>DNS status, audit, and standard enforcement</p>
+            </div>
+          </div>
+          <div class="status-item">
+            <div class="status-icon" role="img" aria-label="Office building">🏢</div>
+            <div class="status-content">
+              <h3>Microsoft 365</h3>
+              <p>Domain status and DKIM helpers</p>
+            </div>
+          </div>
+          <div class="status-item">
+            <div class="status-icon" role="img" aria-label="Receipt">🧾</div>
+            <div class="status-content">
+              <h3>WHMCS</h3>
+              <p>Read-only exports for billing and domain inventory</p>
+            </div>
+          </div>
+          <div class="status-item">
+            <div class="status-icon" role="img" aria-label="Globe">🌐</div>
+            <div class="status-content">
+              <h3>WPMUDEV Hub</h3>
+              <p>Read-only hosted site/domain inventory export</p>
             </div>
           </div>
         </div>
@@ -65,10 +87,12 @@
       <section class="info-card">
         <h2><span role="img" aria-label="Rocket">🚀</span> Key Features</h2>
         <ul class="features-list">
-          <li>Automated Cloudflare DNS management</li>
-          <li>Issue-based workflow for domain requests</li>
-          <li>Python scripts for flexible DNS operations</li>
-          <li>Reproducible deployment processes</li>
+          <li>Issue-based operational workflow for domain requests</li>
+          <li>Cloudflare DNS: status, compliance audit, and standard enforcement</li>
+          <li>Microsoft 365: domain status and DKIM helpers</li>
+          <li>WHMCS exports: read-only inventory to support migrations and auditing</li>
+          <li>WPMUDEV Hub export: read-only hosted sites/domains inventory</li>
+          <li>Artifact-based reporting for auditability</li>
         </ul>
       </section>
 
@@ -83,9 +107,21 @@
             <strong>GitHub Repository</strong>
             <span>View source code and documentation</span>
           </a>
-          <a href="https://docs.python.org/" target="_blank" class="resource-link">
-            <strong>Python Documentation</strong>
-            <span>Learn more about Python</span>
+          <a
+            href="https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/blob/main/.github/workflows/README.md"
+            target="_blank"
+            class="resource-link"
+          >
+            <strong>Workflow Catalog</strong>
+            <span>What each GitHub Action does and when to run it</span>
+          </a>
+          <a
+            href="https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/blob/main/docs/github-actions-environments-and-secrets.md"
+            target="_blank"
+            class="resource-link"
+          >
+            <strong>Environments &amp; Secrets</strong>
+            <span>How credentials are stored and gated for admin workflows</span>
           </a>
           <a href="https://developers.cloudflare.com/" target="_blank" class="resource-link">
             <strong>Cloudflare Docs</strong>

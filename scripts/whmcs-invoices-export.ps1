@@ -1,122 +1,301 @@
+[CmdletBinding(DefaultParameterSetName = 'Workflow')]
 param(
-    [Parameter(Mandatory)]
+    # Workflow-compatible parameters (used by .github/workflows/10-whmcs-zeffy-payments-import-draft.yml)
+    [Parameter(ParameterSetName = 'Workflow')]
+    [string]$ApiUrl,
+
+    [Parameter(ParameterSetName = 'Workflow')]
+    [string]$Identifier,
+
+    [Parameter(ParameterSetName = 'Workflow')]
+    [string]$Secret,
+
+    [Parameter(ParameterSetName = 'Workflow')]
+    [string]$AccessKey,
+
+    [Parameter(ParameterSetName = 'Workflow')]
+    [string]$OutputFile = 'whmcs_invoices.csv',
+
+    [Parameter(ParameterSetName = 'Workflow')]
+    [ValidateRange(1, 250)]
+    [int]$PageSize = 250,
+
+    [Parameter(ParameterSetName = 'Workflow')]
+    [ValidateRange(0, 1000000)]
+    [int]$MaxRows = 0,
+
+    [Parameter(ParameterSetName = 'Workflow')]
+    [datetime]$StartDate,
+
+    [Parameter(ParameterSetName = 'Workflow')]
+    [datetime]$EndDate,
+
+    # Backward-compatible parameters (older versions of this script)
+    [Parameter(Mandatory, ParameterSetName = 'Legacy')]
     [string]$WhmcsApiUrl,
 
-    [Parameter(Mandatory)]
+    [Parameter(Mandatory, ParameterSetName = 'Legacy')]
     [string]$WhmcsIdentifier,
 
-    [Parameter(Mandatory)]
+    [Parameter(Mandatory, ParameterSetName = 'Legacy')]
     [string]$WhmcsSecret,
 
-    [Parameter(Mandatory)]
+    [Parameter(Mandatory, ParameterSetName = 'Legacy')]
     [string]$OutCsv,
 
-    [Parameter()]
-    [string]$StartDate,
+    [Parameter(ParameterSetName = 'Legacy')]
+    [string]$StartDateLegacy,
 
-    [Parameter()]
-    [string]$EndDate,
+    [Parameter(ParameterSetName = 'Legacy')]
+    [string]$EndDateLegacy,
 
-    [Parameter()]
-    [ValidateRange(1, 1000000)]
-    [int]$Limit = 250,
-
-    [Parameter()]
-    [ValidateRange(0, 100000000)]
-    [int]$MaxRows = 0
+    [Parameter(ParameterSetName = 'Legacy')]
+    [ValidateRange(1, 250)]
+    [int]$Limit = 250
 )
 
-Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Invoke-WhmcsApi {
+function Resolve-WhmcsCredentials {
     param(
-        [Parameter(Mandatory)][string]$Url,
-        [Parameter(Mandatory)][string]$Identifier,
-        [Parameter(Mandatory)][string]$Secret,
-        [Parameter(Mandatory)][hashtable]$Body
+        [string]$IdentifierParam,
+        [string]$SecretParam
     )
 
-    $request = @{
-        identifier   = $Identifier
-        secret       = $Secret
-        responsetype = 'json'
-    } + $Body
+    $id = if ($IdentifierParam) { $IdentifierParam } else { $env:WHMCS_API_IDENTIFIER }
+    $sec = if ($SecretParam) { $SecretParam } else { $env:WHMCS_API_SECRET }
 
-    Invoke-RestMethod -Method Post -Uri $Url -Body $request -ContentType 'application/x-www-form-urlencoded'
-}
-
-function ConvertTo-WhmcsDate {
-    param([string]$Value)
-    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
-
-    # Accept yyyy-MM-dd; passthrough otherwise
-    return $Value
-}
-
-$start = ConvertTo-WhmcsDate -Value $StartDate
-$end = ConvertTo-WhmcsDate -Value $EndDate
-
-$all = New-Object System.Collections.Generic.List[object]
-
-$offset = 0
-$rows = 0
-
-while ($true) {
-    $body = @{
-        action     = 'GetInvoices'
-        limitstart = $offset
-        limitnum   = $Limit
+    if (-not [string]::IsNullOrWhiteSpace($id) -and -not [string]::IsNullOrWhiteSpace($sec)) {
+        return @{ Identifier = $id; Secret = $sec }
     }
 
-    if ($start) { $body['datecreated'] = $start }
-    if ($end) { $body['datecreatedend'] = $end }
+    throw 'Missing WHMCS credentials. Provide -Identifier/-Secret or set WHMCS_API_IDENTIFIER/WHMCS_API_SECRET.'
+}
 
-    $resp = Invoke-WhmcsApi -Url $WhmcsApiUrl -Identifier $WhmcsIdentifier -Secret $WhmcsSecret -Body $body
+function Resolve-WhmcsApiUrl {
+    param([string]$ApiUrlParam)
 
-    if (-not $resp) { break }
+    if ($ApiUrlParam) { return $ApiUrlParam }
+    if ($env:WHMCS_API_URL) { return $env:WHMCS_API_URL }
 
-    $result = $resp.result
-    if ($result -and $result -ne 'success') {
-        $msg = if ($resp.message) { $resp.message } else { 'Unknown WHMCS error' }
+    return 'https://freeforcharity.org/hub/includes/api.php'
+}
+
+function Resolve-WhmcsAccessKey {
+    param([string]$AccessKeyParam)
+
+    if ($AccessKeyParam) { return $AccessKeyParam }
+    if ($env:WHMCS_API_ACCESS_KEY) { return $env:WHMCS_API_ACCESS_KEY }
+
+    return $null
+}
+
+function New-DirectoryForFile {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    $dir = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($dir)) {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+}
+
+function ConvertFrom-WhmcsXml {
+    param([Parameter(Mandatory = $true)][string]$RawXml)
+
+    $clean = $RawXml -replace "[\x00-\x08\x0B\x0C\x0E-\x1F]", ''
+    try {
+        return [xml]$clean
+    }
+    catch {
+        $snippet = if ($clean.Length -gt 400) { $clean.Substring(0, 400) + '...' } else { $clean }
+        throw "Failed to parse WHMCS XML response. Snippet: $snippet"
+    }
+}
+
+function Invoke-WhmcsApiXml {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ResolvedApiUrl,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Body
+    )
+
+    $headers = @{
+        'Accept'     = '*/*'
+        'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+    }
+
+    $resp = Invoke-RestMethod -Method Post -Uri $ResolvedApiUrl -Headers $headers -Body $Body -ContentType 'application/x-www-form-urlencoded' -ErrorAction Stop
+
+    if ($resp -is [xml]) {
+        $xml = $resp
+    }
+    elseif ($resp -is [string]) {
+        $xml = ConvertFrom-WhmcsXml -RawXml $resp
+    }
+    else {
+        $raw = $resp | Out-String
+        $xml = ConvertFrom-WhmcsXml -RawXml $raw
+    }
+
+    $root = $xml.whmcsapi
+    if (-not $root) {
+        throw 'WHMCS API returned XML but did not contain <whmcsapi> root.'
+    }
+
+    if ($root.result -ne 'success') {
+        $msg = $null
+        if ($root.message) { $msg = [string]$root.message }
+        elseif ($root.errormessage) { $msg = [string]$root.errormessage }
+        if ([string]::IsNullOrWhiteSpace($msg)) { $msg = 'Unknown WHMCS API error.' }
         throw "WHMCS API error: $msg"
     }
 
-    $totalResults = 0
-    try { $totalResults = [int]$resp.totalresults } catch { $totalResults = 0 }
-
-    $items = @()
-    if ($resp.invoices -and $resp.invoices.invoice) {
-        $items = @($resp.invoices.invoice)
-    }
-
-    foreach ($inv in $items) {
-        $all.Add([pscustomobject]@{
-                invoiceid     = $inv.id
-                userid        = $inv.userid
-                status        = $inv.status
-                date          = $inv.date
-                duedate       = $inv.duedate
-                total         = $inv.total
-                paymentmethod = $inv.paymentmethod
-            })
-        $rows++
-        if ($MaxRows -gt 0 -and $rows -ge $MaxRows) { break }
-    }
-
-    if ($MaxRows -gt 0 -and $rows -ge $MaxRows) { break }
-
-    $offset += $Limit
-    if ($offset -ge $totalResults) { break }
-
-    Write-Host "Fetched invoices: $rows / $totalResults"
+    return $root
 }
 
-$dir = Split-Path -Parent $OutCsv
-if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-    New-Item -ItemType Directory -Path $dir | Out-Null
+function Get-Text {
+    param($Node)
+
+    if (-not $Node) { return $null }
+    if ($Node -is [System.Xml.XmlNode]) {
+        $s = $Node.InnerText
+    }
+    else {
+        $s = [string]$Node
+    }
+    if ([string]::IsNullOrWhiteSpace($s)) { return $null }
+    return $s
 }
 
-$all | Export-Csv -LiteralPath $OutCsv -NoTypeInformation -Encoding UTF8
+function Normalize-DateParam {
+    param([Nullable[datetime]]$Date)
 
-Write-Host "Wrote invoices CSV: $OutCsv ($($all.Count) rows)"
+    if ($null -eq $Date) { return $null }
+    if ($Date.Value -eq [datetime]::MinValue) { return $null }
+
+    return $Date.Value.ToString('yyyy-MM-dd')
+}
+
+function Try-ParseLegacyDate {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+
+    $dt = $null
+    try { $dt = [datetime]::Parse($Value) } catch { $dt = $null }
+    return $dt
+}
+
+try {
+    $resolvedApiUrl = $null
+    $creds = $null
+    $resolvedAccessKey = $null
+
+    $resolvedOutput = $null
+    $resolvedPageSize = $null
+    $resolvedMaxRows = $null
+    $resolvedStartDate = $null
+    $resolvedEndDate = $null
+
+    if ($PSCmdlet.ParameterSetName -eq 'Legacy') {
+        $resolvedApiUrl = Resolve-WhmcsApiUrl -ApiUrlParam $WhmcsApiUrl
+        $creds = Resolve-WhmcsCredentials -IdentifierParam $WhmcsIdentifier -SecretParam $WhmcsSecret
+        $resolvedAccessKey = Resolve-WhmcsAccessKey -AccessKeyParam $AccessKey
+
+        $resolvedOutput = $OutCsv
+        $resolvedPageSize = $Limit
+        $resolvedMaxRows = 0
+        $resolvedStartDate = Try-ParseLegacyDate -Value $StartDateLegacy
+        $resolvedEndDate = Try-ParseLegacyDate -Value $EndDateLegacy
+    }
+    else {
+        $resolvedApiUrl = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
+        $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret
+        $resolvedAccessKey = Resolve-WhmcsAccessKey -AccessKeyParam $AccessKey
+
+        $resolvedOutput = $OutputFile
+        $resolvedPageSize = $PageSize
+        $resolvedMaxRows = $MaxRows
+        $resolvedStartDate = $StartDate
+        $resolvedEndDate = $EndDate
+    }
+
+    New-DirectoryForFile -Path $resolvedOutput
+
+    $rows = @()
+
+    $start = 0
+    $total = $null
+
+    while ($true) {
+        if ($resolvedMaxRows -gt 0 -and $rows.Count -ge $resolvedMaxRows) {
+            Write-Warning "Reached MaxRows=$resolvedMaxRows; stopping export early."
+            break
+        }
+
+        $body = @{
+            identifier   = $creds.Identifier
+            secret       = $creds.Secret
+            action       = 'GetInvoices'
+            responsetype = 'xml'
+            limitstart   = $start
+            limitnum     = $resolvedPageSize
+        }
+
+        $sd = Normalize-DateParam -Date $resolvedStartDate
+        if ($sd) { $body.datecreated = $sd }
+
+        $ed = Normalize-DateParam -Date $resolvedEndDate
+        if ($ed) { $body.datecreatedend = $ed }
+
+        if ($resolvedAccessKey) { $body.accesskey = $resolvedAccessKey }
+
+        $resp = Invoke-WhmcsApiXml -ResolvedApiUrl $resolvedApiUrl -Body $body
+
+        if ($null -eq $total) {
+            $totalText = Get-Text -Node $resp.totalresults
+            if (-not [string]::IsNullOrWhiteSpace($totalText)) {
+                $total = [int]$totalText
+            }
+        }
+
+        $batch = @()
+        if ($resp.invoices -and $resp.invoices.invoice) {
+            $batch = @($resp.invoices.invoice)
+        }
+
+        if ($batch.Count -eq 0) { break }
+
+        foreach ($inv in $batch) {
+            $rows += [pscustomobject]@{
+                invoiceid     = Get-Text $inv.id
+                userid        = Get-Text $inv.userid
+                status        = Get-Text $inv.status
+                date          = Get-Text $inv.date
+                duedate       = Get-Text $inv.duedate
+                total         = Get-Text $inv.total
+                paymentmethod = Get-Text $inv.paymentmethod
+            }
+
+            if ($resolvedMaxRows -gt 0 -and $rows.Count -ge $resolvedMaxRows) { break }
+        }
+
+        if ($resolvedMaxRows -gt 0 -and $rows.Count -ge $resolvedMaxRows) { break }
+        if ($batch.Count -lt $resolvedPageSize) { break }
+
+        $start += $resolvedPageSize
+
+        if ($total -and $start -ge $total) { break }
+    }
+
+    $rows | Export-Csv -NoTypeInformation -Encoding utf8 -Path $resolvedOutput
+
+    Write-Host "Exported $($rows.Count) invoices to $resolvedOutput"
+}
+catch {
+    Write-Error $_
+    exit 1
+}

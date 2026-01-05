@@ -285,7 +285,8 @@ jobs:
             $issueLevel = Get-IssueLevel -Lines $auditLines -MatchText $IssueMatch
             if ($issueLevel) {
               $issueLine = $auditLines | Where-Object { $_ -match '^(?:WARNING:\s*)?\[(?:MISSING|MISSING/PARTIAL|DIFFERS)\]' -and $_ -like "*$IssueMatch*" } | Select-Object -First 1
-              return @{ Name = $Name; Status = $issueLevel; Value = ($issueLine?.Trim()) }
+              $issueVal = if ($issueLine) { $issueLine.Trim() } else { '' }
+              return @{ Name = $Name; Status = $issueLevel; Value = $issueVal }
             }
 
             return @{ Name = $Name; Status = 'UNKNOWN'; Value = '' }
@@ -325,8 +326,10 @@ jobs:
           # GitHub Pages apex records are reported as a combined check.
           $ghA = Get-IssueLevel -Lines $auditLines -MatchText 'GitHub Pages A Records'
           $ghAAAA = Get-IssueLevel -Lines $auditLines -MatchText 'GitHub Pages AAAA Records'
-          $checks += @{ Name = 'Cloudflare: GitHub Pages apex A records'; Status = ($ghA ?? 'PASS'); Value = ($auditLines | Where-Object { $_ -match 'GitHub Pages A Records' } | Select-Object -First 1).Trim() }
-          $checks += @{ Name = 'Cloudflare: GitHub Pages apex AAAA records'; Status = ($ghAAAA ?? 'PASS'); Value = ($auditLines | Where-Object { $_ -match 'GitHub Pages AAAA Records' } | Select-Object -First 1).Trim() }
+          $ghALine = $auditLines | Where-Object { $_ -match 'GitHub Pages A Records' } | Select-Object -First 1
+          $ghAAAALine = $auditLines | Where-Object { $_ -match 'GitHub Pages AAAA Records' } | Select-Object -First 1
+          $checks += @{ Name = 'Cloudflare: GitHub Pages apex A records'; Status = ($ghA ?? 'PASS'); Value = $(if ($ghALine) { $ghALine.Trim() } else { '' }) }
+          $checks += @{ Name = 'Cloudflare: GitHub Pages apex AAAA records'; Status = ($ghAAAA ?? 'PASS'); Value = $(if ($ghAAAALine) { $ghAAAALine.Trim() } else { '' }) }
 
           $plannedChanges = @(
             $dryLines |

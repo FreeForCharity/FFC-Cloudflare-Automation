@@ -92,8 +92,15 @@ jobs:
           }
 
           $apiUrl = "https://api.github.com/repos/$repo/actions/runs/$runId/artifacts"
-          $resp = Invoke-RestMethod -Method Get -Uri $apiUrl -Headers $headers
-          $artifact = $resp.artifacts | Where-Object { $_.name -eq 'whmcs_domains' } | Select-Object -First 1
+
+          $artifact = $null
+          for ($i = 0; $i -lt 8 -and $null -eq $artifact; $i++) {
+            $resp = Invoke-RestMethod -Method Get -Uri $apiUrl -Headers $headers
+            $artifact = $resp.artifacts | Where-Object { $_.name -eq 'whmcs_domains' } | Select-Object -First 1
+            if ($null -eq $artifact) {
+              Start-Sleep -Seconds 2
+            }
+          }
 
           if ($null -eq $artifact) {
             "- Artifact page: (artifact not found in run artifacts list)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

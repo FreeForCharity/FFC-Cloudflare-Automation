@@ -25,6 +25,7 @@ jobs:
 
     outputs:
       issues_count: ${{ steps.summary.outputs.issues_count }}
+      severe_issues_count: ${{ steps.summary.outputs.severe_issues_count }}
       changes_count: ${{ steps.summary.outputs.changes_count }}
 
     steps:
@@ -61,12 +62,14 @@ jobs:
           $dir = "${{ steps.run.outputs.out_dir }}"
 
           $auditLines = @(Get-Content -Path (Join-Path $dir 'cloudflare-audit.txt') -ErrorAction Stop)
-          $issues = @($auditLines | Where-Object { $_ -match '^(?:WARNING:\s*)?[(](?:MISSING|MISSING/PARTIAL|DIFFERS)[)]' -or $_ -match '^(?:WARNING:\s*)?[[](?:MISSING|MISSING/PARTIAL|DIFFERS)[]]' })
+          $issues = @($auditLines | Where-Object { $_ -match '^(?:WARNING:\s*)?[[](?:MISSING|MISSING/PARTIAL|DIFFERS)[]]' })
+          $severe = @($auditLines | Where-Object { $_ -match '^(?:WARNING:\s*)?[[](?:MISSING|DIFFERS)[]]' })
 
           $dryLines = @(Get-Content -Path (Join-Path $dir 'cloudflare-dryrun.txt') -ErrorAction Stop)
           $changes = @($dryLines | Where-Object { $_ -match '^[[]DRY-RUN[]]' })
 
           "issues_count=$($issues.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "severe_issues_count=$($severe.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "changes_count=$($changes.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload Cloudflare outputs
@@ -197,6 +200,7 @@ jobs:
           $domain = "${{ inputs.domain }}"
 
           $cfIssues = [int]"${{ needs.cloudflare.outputs.issues_count }}"
+          $cfSevere = [int]"${{ needs.cloudflare.outputs.severe_issues_count }}"
           $cfChanges = [int]"${{ needs.cloudflare.outputs.changes_count }}"
 
           $m365Exists = "${{ needs.m365.outputs.domain_exists }}"
@@ -208,7 +212,7 @@ jobs:
           $m365EmailBool = ($m365Email -eq 'True' -or $m365Email -eq 'true')
 
           $m365Status = if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }
-          $cfStatus = if ($cfIssues -eq 0) { 'PASS' } else { 'PARTIAL' }
+          $cfStatus = if ($cfIssues -eq 0) { 'PASS' } elseif ($cfSevere -gt 0) { 'FAIL' } else { 'PARTIAL' }
           $overall = if ($m365Status -eq 'PASS' -and $cfStatus -eq 'PASS') { 'PASS' } elseif ($m365Status -eq 'FAIL') { 'FAIL' } else { 'PARTIAL' }
 
           $auditPath = 'artifacts/cloudflare/cloudflare-audit.txt'
@@ -278,7 +282,7 @@ jobs:
           $summary += "# Domain status: $domain"
           $summary += ''
           $summary += "- Overall: **$overall**"
-          $summary += "- Cloudflare: **$cfStatus** ($cfIssues audit issues; $cfChanges planned changes)"
+          $summary += "- Cloudflare: **$cfStatus** ($cfIssues audit issues; $cfSevere severe; $cfChanges planned changes)"
           $summary += "- M365: **$m365Status** (exists=$m365ExistsBool, verified=$m365VerifiedBool, supportsEmail=$m365EmailBool)"
           $summary += ''
           $summary += '## Checks'
@@ -359,6 +363,7 @@ jobs:
             const domain = '${{ inputs.domain }}';
 
             const cfIssues = Number('${{ needs.cloudflare.outputs.issues_count }}');
+            const cfSevere = Number('${{ needs.cloudflare.outputs.severe_issues_count }}');
             const cfChanges = Number('${{ needs.cloudflare.outputs.changes_count }}');
 
             const m365Exists = String('${{ needs.m365.outputs.domain_exists }}');
@@ -371,7 +376,7 @@ jobs:
               ? ((m365Verified === 'True' || m365Verified === 'true') ? 'PASS' : 'PARTIAL')
               : 'FAIL';
 
-            const cfStatus = (cfIssues === 0) ? 'PASS' : 'PARTIAL';
+            const cfStatus = (cfIssues === 0) ? 'PASS' : ((cfSevere > 0) ? 'FAIL' : 'PARTIAL');
 
             const overall = (m365Status === 'PASS' && cfStatus === 'PASS')
               ? 'PASS'
@@ -385,7 +390,7 @@ jobs:
               `Domain status for **${domain}**`,
               '',
               `- Overall: **${overall}**`,
-              `- Cloudflare: **${cfStatus}** (${cfIssues} audit issues; ${cfChanges} planned changes)`,
+              `- Cloudflare: **${cfStatus}** (${cfIssues} audit issues; ${cfSevere} severe; ${cfChanges} planned changes)`,
               `- M365: **${m365Status}** (exists=${m365Exists}, verified=${m365Verified}, supportsEmail=${m365Email})`,
               `- Run: ${runUrl}`,
               '',

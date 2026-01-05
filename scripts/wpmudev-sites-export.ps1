@@ -48,22 +48,26 @@ function Invoke-WpmuDevGet {
         [Parameter(Mandatory = $true)]
         [string]$Url,
         [Parameter(Mandatory = $true)]
-        [string]$Token,
-        [ref]$ResponseHeaders
+        [string]$Token
     )
 
     $headersList = @(
+        # The Hub API swagger defines an API key header literally named "AUTHORIZATION".
+        # Some endpoints accept the raw key, not a Bearer token.
+        @{ AUTHORIZATION = $Token },
+        @{ AUTHORIZATION = "Bearer $Token" },
+        @{ Authorization = $Token },
         @{ Authorization = "Bearer $Token" },
         @{ 'X-Api-Key' = $Token },
         @{ 'X-WPMUDEV-API-Key' = $Token }
     )
 
     $lastError = $null
+    $lastHeaderLabel = $null
     foreach ($h in $headersList) {
         try {
-            $rh = $null
-            $result = Invoke-RestMethod -Method Get -Uri $Url -Headers $h -ResponseHeadersVariable rh -ErrorAction Stop
-            $ResponseHeaders.Value = $rh
+            $lastHeaderLabel = ($h.Keys | Select-Object -First 1)
+            $result = Invoke-RestMethod -Method Get -Uri $Url -Headers $h -ErrorAction Stop
             return $result
         }
         catch {
@@ -71,7 +75,23 @@ function Invoke-WpmuDevGet {
         }
     }
 
-    if ($lastError) { throw $lastError }
+    if ($lastError) {
+        $message = $lastError.Exception.Message
+        $statusCode = $null
+        try {
+            if ($lastError.Exception.Response -and $lastError.Exception.Response.StatusCode) {
+                $statusCode = [int]$lastError.Exception.Response.StatusCode
+            }
+        }
+        catch {
+        }
+
+        if ($statusCode) {
+            throw "Request failed ($statusCode) using header '$lastHeaderLabel': $message"
+        }
+
+        throw "Request failed using header '$lastHeaderLabel': $message"
+    }
     throw "Request failed: $Url"
 }
 
@@ -79,41 +99,21 @@ $token = Resolve-WpmuDevApiToken -ApiTokenParam $ApiToken
 
 $sites = @()
 $page = 1
-$totalPages = $null
 
 do {
     $query = "?per_page=$PerPage&page=$page"
     $url = (Join-Url -Base $BaseUrl -Path 'hub/v1/sites') + $query
 
-    $headers = $null
-    $batch = Invoke-WpmuDevGet -Url $url -Token $token -ResponseHeaders ([ref]$headers)
+    $batch = Invoke-WpmuDevGet -Url $url -Token $token
 
     if ($null -eq $batch) { $batch = @() }
     elseif ($batch -isnot [System.Collections.IEnumerable] -or $batch -is [string]) { $batch = @($batch) }
 
     $sites += $batch
 
-    if (-not $totalPages -and $headers) {
-        foreach ($name in @('X-WP-TotalPages', 'X-WP-Totalpages', 'X-WP-Total-Pages')) {
-            if ($headers.ContainsKey($name)) {
-                $raw = $headers[$name]
-                $parsed = 0
-                if ([int]::TryParse([string]$raw, [ref]$parsed) -and $parsed -ge 1) {
-                    $totalPages = $parsed
-                    break
-                }
-            }
-        }
-    }
-
-    if ($totalPages) {
-        $page++
-    }
-    else {
-        if ($batch.Count -lt $PerPage) { break }
-        $page++
-    }
-} while (-not $totalPages -or $page -le $totalPages)
+    if ($batch.Count -lt $PerPage) { break }
+    $page++
+} while ($true)
 
 $rows = foreach ($s in $sites) {
     $domain = $null
@@ -140,10 +140,7 @@ $rows = foreach ($s in $sites) {
     }
 }
 
-$rows
-| Where-Object { -not [string]::IsNullOrWhiteSpace($_.domain) }
-| Sort-Object -Property domain -Unique
-| Export-Csv -NoTypeInformation -Encoding UTF8 -Path $OutputFile
+$rows | Where-Object { -not [string]::IsNullOrWhiteSpace($_.domain) } | Sort-Object -Property domain -Unique | Export-Csv -NoTypeInformation -Encoding UTF8 -Path $OutputFile
 
 Write-Host "WPMUDEV export complete: $OutputFile" -ForegroundColor Green
 Write-Host "Sites exported: $((Import-Csv -Path $OutputFile).Count)" -ForegroundColor Cyan

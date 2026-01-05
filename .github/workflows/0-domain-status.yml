@@ -54,7 +54,15 @@ jobs:
 
           # DKIM quick check (Cloudflare selector records) using repo script.
           # This is Cloudflare-only (no Graph) and runs under cloudflare-prod where CF tokens are available.
-          $dkim = & pwsh -NoProfile -File .\scripts\m365-domain-preflight.ps1 -Domain $domain -SkipGraph *>&1
+          $cfToken = if (-not [string]::IsNullOrWhiteSpace($env:CLOUDFLARE_API_TOKEN_FFC)) {
+            $env:CLOUDFLARE_API_TOKEN_FFC
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:CLOUDFLARE_API_TOKEN_CM)) {
+            $env:CLOUDFLARE_API_TOKEN_CM
+          } else {
+            ''
+          }
+
+          $dkim = & pwsh -NoProfile -File .\scripts\m365-domain-preflight.ps1 -Domain $domain -SkipGraph -CloudflareToken $cfToken *>&1
           $dkimExit = $LASTEXITCODE
           $dkimPath = Join-Path $outDir 'cloudflare-dkim-check.txt'
           $dkim | Out-File -FilePath $dkimPath -Encoding utf8

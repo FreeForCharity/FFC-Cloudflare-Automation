@@ -41,12 +41,12 @@ Before contributing, ensure you have:
 1. Fork this repository to your GitHub account
 2. Clone your fork locally:
    ```bash
-   git clone https://github.com/YOUR-USERNAME/FFC-Cloudflare-Automation-.git
-   cd FFC-Cloudflare-Automation-
+   git clone https://github.com/YOUR-USERNAME/FFC-Cloudflare-Automation.git
+   cd FFC-Cloudflare-Automation
    ```
 3. Add the upstream repository:
    ```bash
-   git remote add upstream https://github.com/FreeForCharity/FFC-Cloudflare-Automation-.git
+   git remote add upstream https://github.com/FreeForCharity/FFC-Cloudflare-Automation.git
    ```
 
 ## How to Contribute

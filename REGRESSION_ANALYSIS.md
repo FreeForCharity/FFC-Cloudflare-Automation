@@ -7,7 +7,7 @@ the fixes applied to ensure all documentation accurately reflects the current Po
 implementation.
 
 **Date**: December 31, 2025  
-**Repository**: FFC-Cloudflare-Automation-  
+**Repository**: FFC-Cloudflare-Automation  
 **Issue**: Check for regressions of capability and update any documentation
 
 ## Regressions Identified

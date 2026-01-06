@@ -1,7 +1,7 @@
 # FFC-Cloudflare-Automation
 
-[![CodeQL](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/codeql-analysis.yml)
-[![CI](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/ci.yml/badge.svg)](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/codeql-analysis.yml)
+[![CI](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/ci.yml/badge.svg)](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 Automation utilities for Cloudflare tasks supporting Free For Charity.
@@ -9,7 +9,7 @@ Automation utilities for Cloudflare tasks supporting Free For Charity.
 ## 🌐 GitHub Pages
 
 View our automation tracking page:
-[FFC Cloudflare Automation Tracker](https://freeforcharity.github.io/FFC-Cloudflare-Automation-/)
+[FFC Cloudflare Automation Tracker](https://freeforcharity.github.io/FFC-Cloudflare-Automation/)
 
 The static site provides an overview of the automation, current status, key features, and helpful
 resources.
@@ -85,8 +85,8 @@ For the new “3 step” approach (tracked in issue #61), use these GitHub Actio
 
 To request a DNS change or domain operation:
 
-1. Go to the
-   [Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues/new/choose) page
+1. Go to the [Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/new/choose)
+   page
 2. Select the appropriate issue template:
    - **Purchase and Add New .org Domain** - For new domain acquisitions
    - **Add Existing Domain to Cloudflare** - For migrating domains
@@ -437,10 +437,10 @@ This project is licensed under the GNU Affero General Public License v3.0 - see 
 ## Support
 
 - **Domain Requests**: Use
-  [issue templates](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues/new/choose)
+  [issue templates](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/new/choose)
   for domain management
 - **Issues**: Report bugs or request features via
-  [GitHub Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation-/issues)
+  [GitHub Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues)
 - **Documentation**: Check the guides and issue templates for detailed help
 - **Security**: Report vulnerabilities via [SECURITY.md](SECURITY.md)
 

@@ -58,11 +58,11 @@ Before reconciling, export inventories from all three sources:
 
 ### 2. WHMCS Export
 
-**Workflow**: `07. WHMCS - Export Domains (Report)` (`.github/workflows/7-whmcs-export-domains.yml`)
+**Workflow**: `30. WHMCS - Export Domains (Report)` (`.github/workflows/7-whmcs-export-domains.yml`)
 
 **How to run:**
 
-1. Actions → **07. WHMCS - Export Domains (Report)**
+1. Actions → **30. WHMCS - Export Domains (Report)**
 2. Click **Run workflow**
 3. Download artifact: `whmcs_domains`
 
@@ -78,12 +78,12 @@ Before reconciling, export inventories from all three sources:
 
 ### 3. WPMUDEV Export
 
-**Workflow**: `13. WPMUDEV - Export Sites/Domains (Read-only)`
+**Workflow**: `40. WPMUDEV - Export Sites/Domains (Read-only)`
 (`.github/workflows/13-wpmudev-export-sites.yml`)
 
 **How to run:**
 
-1. Actions → **13. WPMUDEV - Export Sites/Domains (Read-only)**
+1. Actions → **40. WPMUDEV - Export Sites/Domains (Read-only)**
 2. Click **Run workflow**
 3. Download artifact: `wpmudev-domain-inventory`
 

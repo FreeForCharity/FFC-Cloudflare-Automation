@@ -30,7 +30,7 @@ on:
         type: string
         default: 'v=spf1 include:spf.protection.outlook.com -all'
   issues:
-    types: [opened, edited, labeled]
+    types: [labeled]
 
 permissions:
   contents: read
@@ -44,6 +44,7 @@ jobs:
       domain: ${{ steps.parse.outputs.domain }}
       dry_run: ${{ steps.parse.outputs.dry_run }}
       source: ${{ steps.parse.outputs.source }}
+      skip: ${{ steps.parse.outputs.skip }}
     steps:
       - name: Parse Input Source
         id: parse
@@ -53,6 +54,7 @@ jobs:
             let domain = '';
             let dry_run = 'true';
             let source = 'unknown';
+            let skip = 'false';
 
             // CASE 1: Manual Trigger (workflow_dispatch)
             if (context.eventName === 'workflow_dispatch') {
@@ -64,6 +66,20 @@ jobs:
 
             // CASE 2: Issue Trigger
             else if (context.eventName === 'issues') {
+              // Only proceed when an explicit label is applied.
+              // GitHub Actions can't filter issue triggers by label name, so we gate here.
+              const requiredLabel = 'run-dns-manage-record';
+              const appliedLabel = context.payload.label?.name || '';
+              if (appliedLabel !== requiredLabel) {
+                core.notice(`Issue label '${appliedLabel}' does not match required label '${requiredLabel}'. Skipping.`);
+                skip = 'true';
+                core.setOutput('domain', '');
+                core.setOutput('dry_run', dry_run);
+                core.setOutput('source', 'issue');
+                core.setOutput('skip', skip);
+                return;
+              }
+
               const body = context.payload.issue.body || '';
               source = 'issue';
               
@@ -91,11 +107,13 @@ jobs:
             core.setOutput('domain', domain);
             core.setOutput('dry_run', dry_run);
             core.setOutput('source', source);
+            core.setOutput('skip', skip);
 
   validate-zone:
     needs: resolve-context
     runs-on: windows-latest # Using Windows runner for PowerShell script
     environment: cloudflare-prod
+    if: needs.resolve-context.outputs.skip != 'true'
     env:
       CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
       CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
@@ -121,7 +139,9 @@ jobs:
     needs: resolve-context
     runs-on: windows-latest
     environment: cloudflare-prod
-    if: needs.resolve-context.outputs.dry_run == 'false'
+    if:
+      needs.resolve-context.outputs.skip != 'true' && needs.resolve-context.outputs.dry_run ==
+      'false'
     env:
       CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
       CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}

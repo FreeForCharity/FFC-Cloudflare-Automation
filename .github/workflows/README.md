@@ -42,20 +42,22 @@ domain configuration.
 - **05. DNS - Enforce Standard (Fix)**: apply standard DNS configuration (DNS-only).
 - **06. DNS - Export All Domains (Report)**: export summaries for review/audit.
 
-### 07–10 M365 workflows
+### 20–24 M365 workflows
 
-- **07. M365 - Domain Status + DKIM (Toolbox)**: mixed utilities for domain and DKIM.
-- **08. M365 - Enable DKIM (Exchange Online)**: focused DKIM enable.
-- **09. M365 - Domain Preflight (Read-only)**: onboarding checks.
-- **10. M365 - List Tenant Domains**: discovery/listing.
+- **20. M365 - List Tenant Domains**: discovery/listing.
+- **21. M365 - Domain Preflight (Read-only)**: onboarding checks.
+- **22. M365 - Domain Status + DKIM (Toolbox)**: mixed utilities for domain and DKIM.
+- **23. M365 - Enable DKIM (Exchange Online)**: focused DKIM enable.
+- **24. M365 - Add Tenant Domain (Admin)**: add a domain to the M365 tenant (Graph) and print DNS
+  verification records.
 
-### 11–13 Admin and Inventory workflows
+### Admin and inventory workflows
 
 - **11. DNS - Add Domain (Create Zone) (Admin)**: create a new Cloudflare zone (explicit account
   selection)
-- **12. M365 - Add Tenant Domain (Admin)**: add a domain to the M365 tenant (Graph) and print DNS
-  verification records
-- **13. WPMUDEV - Export Sites/Domains (Read-only)**: export hosted sites inventory from WPMUDEV Hub
+- **14. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin)**: create the zone, enforce the
+  baseline, and optionally update WHMCS nameservers.
+- **40. WPMUDEV - Export Sites/Domains (Read-only)**: export hosted sites inventory from WPMUDEV Hub
   API for domain reconciliation. See
   [docs/wpmudev-domain-inventory.md](../../docs/wpmudev-domain-inventory.md) for details.
 
@@ -191,13 +193,19 @@ These workflows are higher-blast-radius and should be tested with a domain you c
   - Zone ID
   - Assigned name servers
 
-### 12. M365 - Add Tenant Domain (Admin)
+### 24. M365 - Add Tenant Domain (Admin)
 
 - Ensure the `m365-prod` environment has:
   - `FFC_AZURE_CLIENT_ID`
   - `FFC_AZURE_TENANT_ID`
 - Run the workflow with `domain` set to a safe test domain.
 - Confirm output includes `verificationDnsRecords` and `serviceConfigurationRecords`.
+
+### 14. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin)
+
+- This is the highest-blast-radius workflow (Cloudflare + WHMCS).
+- Prefer testing with a domain you control; keep `enforce_dry_run=false` unless you explicitly want
+  enforcement changes.
 
 ### Legacy Cloudflare DNS update / run
 

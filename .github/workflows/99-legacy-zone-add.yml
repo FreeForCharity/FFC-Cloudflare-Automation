@@ -1,4 +1,4 @@
-name: '99. Deprecated - Cloudflare Zone Add (removed)'
+name: '98. Deprecated - Cloudflare Zone Add (removed)'
 
 permissions:
   contents: read

@@ -1,4 +1,4 @@
-name: Create GitHub Repo
+name: '89. Repo - Create GitHub Repo'
 
 on:
   workflow_dispatch:

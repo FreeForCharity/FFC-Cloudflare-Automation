@@ -1,4 +1,4 @@
-name: '99. Deprecated - Cloudflare DNS Run (legacy)'
+name: '96. Deprecated - Cloudflare DNS Run (legacy)'
 
 # NOTE:
 # This workflow previously contained the older "cloudflare-dns-run" automation.

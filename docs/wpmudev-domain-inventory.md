@@ -71,7 +71,7 @@ The API token needs:
 ### Step 1: Navigate to Actions
 
 1. Go to the repository **Actions** tab
-2. Select the workflow: **13. WPMUDEV - Export Sites/Domains (Read-only)**
+2. Select the workflow: **40. WPMUDEV - Export Sites/Domains (Read-only)**
 3. Click **Run workflow** (requires appropriate permissions)
 
 ### Step 2: Configure Inputs

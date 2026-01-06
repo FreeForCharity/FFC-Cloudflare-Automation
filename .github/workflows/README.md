@@ -38,6 +38,7 @@ domain configuration.
 ### 03–06 DNS workflows
 
 - **03. DNS - Manage Record (Manual)**: create/update/delete one record (best for one-off changes).
+  - Also supports an issue-triggered run when the label `run-dns-manage-record` is applied.
 - **04. DNS - Audit Compliance (Report)**: report-only compliance check.
 - **05. DNS - Enforce Standard (Fix)**: apply standard DNS configuration (DNS-only).
 - **06. DNS - Export All Domains (Report)**: export summaries for review/audit.
@@ -51,6 +52,13 @@ domain configuration.
 - **24. M365 - Add Tenant Domain (Admin)**: add a domain to the M365 tenant (Graph) and print DNS
   verification records.
 
+### 30–33 WHMCS workflows
+
+- **30. WHMCS - Export Domains (Report)**: export WHMCS domains for reconciliation.
+- **31. WHMCS - Export Products (Report)**: export WHMCS products.
+- **32. WHMCS - Export Payment Methods (Research)**: export WHMCS payment methods.
+- **33. WHMCS -> Zeffy Payments Import (Draft)**: build a draft import CSV from WHMCS transactions.
+
 ### Admin and inventory workflows
 
 - **11. DNS - Add Domain (Create Zone) (Admin)**: create a new Cloudflare zone (explicit account
@@ -60,6 +68,17 @@ domain configuration.
 - **40. WPMUDEV - Export Sites/Domains (Read-only)**: export hosted sites inventory from WPMUDEV Hub
   API for domain reconciliation. See
   [docs/wpmudev-domain-inventory.md](../../docs/wpmudev-domain-inventory.md) for details.
+
+### 89 Repo workflow
+
+- **89. Repo - Create GitHub Repo**: repo bootstrap helper.
+
+### 95–98 Deprecated workflow stubs
+
+- **95. Deprecated - Cloudflare DNS Update (legacy)**
+- **96. Deprecated - Cloudflare DNS Run (legacy)**
+- **97. Deprecated - DNS Summary Export (legacy)**
+- **98. Deprecated - Cloudflare Zone Add (removed)**
 
 ## ci.yml - Continuous Integration
 
@@ -151,7 +170,7 @@ This workflow helps identify security vulnerabilities early in the development p
 | 1-enforce-domain-standard.yml | Manual (workflow_dispatch)      | 02. Domain: Enforce standard (Cloudflare + M365; supports issue post-back)                                |
 | 1-audit-compliance.yml        | Manual (workflow_dispatch)      | Report: Check DNS compliance                                                                              |
 | 2-enforce-standard.yml        | Manual (workflow_dispatch)      | Fix: Enforce standard DNS configuration                                                                   |
-| 3-manage-record.yml           | Manual (workflow_dispatch)      | Manual: Manage a single DNS record                                                                        |
+| 3-manage-record.yml           | Manual + issue label            | Manual: Manage a single DNS record                                                                        |
 | 4-export-summary.yml          | Manual (workflow_dispatch)      | Report: Export all domains summary                                                                        |
 | 5-m365-domain-and-dkim.yml    | Manual (workflow_dispatch)      | M365: Domain status + DKIM helpers (Graph + Exchange Online)                                              |
 | 6-m365-list-domains.yml       | Manual (workflow_dispatch)      | M365: List tenant domains (Graph)                                                                         |

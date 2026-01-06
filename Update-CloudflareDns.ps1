@@ -288,11 +288,47 @@ function Enable-DmarcManagement {
     $candidates = @(
         @{ Method = 'POST'; Uri = "/zones/$ZoneId/dmarc_management/enable"; Body = @{} },
         @{ Method = 'POST'; Uri = "/zones/$ZoneId/dmarc_management"; Body = @{ enabled = $true } },
+        @{ Method = 'PUT'; Uri = "/zones/$ZoneId/dmarc_management"; Body = @{ enabled = $true } },
         @{ Method = 'PATCH'; Uri = "/zones/$ZoneId/dmarc_management"; Body = @{ enabled = $true } },
         @{ Method = 'POST'; Uri = "/zones/$ZoneId/email/dmarc_management/enable"; Body = @{} },
         @{ Method = 'POST'; Uri = "/zones/$ZoneId/email/dmarc_management"; Body = @{ enabled = $true } },
+        @{ Method = 'PUT'; Uri = "/zones/$ZoneId/email/dmarc_management"; Body = @{ enabled = $true } },
         @{ Method = 'PATCH'; Uri = "/zones/$ZoneId/email/dmarc_management"; Body = @{ enabled = $true } }
     )
+
+    $attemptSummaries = @()
+
+    function Get-CfHttpErrorDetails {
+        param([Parameter(Mandatory = $true)]$Exception)
+
+        $statusCode = $null
+        $errorBody = $null
+
+        try {
+            if ($Exception.Response) {
+                try { $statusCode = [int]$Exception.Response.StatusCode } catch { $statusCode = $null }
+                try {
+                    $stream = $Exception.Response.GetResponseStream()
+                    if ($stream) {
+                        $reader = [System.IO.StreamReader]::new($stream)
+                        $errorBody = $reader.ReadToEnd()
+                    }
+                }
+                catch {
+                    $errorBody = $null
+                }
+            }
+        }
+        catch {
+            $statusCode = $null
+            $errorBody = $null
+        }
+
+        return [pscustomobject]@{
+            StatusCode = $statusCode
+            ErrorBody  = $errorBody
+        }
+    }
 
     foreach ($candidate in $candidates) {
         try {
@@ -301,12 +337,27 @@ function Enable-DmarcManagement {
             return $true
         }
         catch {
+            $details = Get-CfHttpErrorDetails -Exception $_.Exception
+            $msg = $_.Exception.Message
+            if ($details.StatusCode) {
+                $attemptSummaries += "${($candidate.Method)} ${($candidate.Uri)} -> HTTP $($details.StatusCode): $msg"
+            }
+            else {
+                $attemptSummaries += "${($candidate.Method)} ${($candidate.Uri)} -> $msg"
+            }
+
             # Try next endpoint
             continue
         }
     }
 
-    Write-Warning "[OPTIONAL] Could not enable Cloudflare DMARC Management for $ZoneName via API. Enable in dashboard: Email > DMARC Management. (Token may need 'Dmarc Management Edit' permission.)"
+    $summaryText = ''
+    if ($attemptSummaries.Count -gt 0) {
+        $shown = $attemptSummaries | Select-Object -First 4
+        $summaryText = " Attempts (first $($shown.Count)): " + ($shown -join ' | ')
+    }
+
+    Write-Warning "[OPTIONAL] Could not enable Cloudflare DMARC Management for $ZoneName via API.$summaryText Enable in dashboard: Email > DMARC Management. (Token must include 'Dmarc Management Edit' permission.)"
     return $false
 }
 

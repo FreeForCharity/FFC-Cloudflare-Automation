@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       RepoName:
-        description: 'Name of the new repository'
+        description: 'Name of the new repository (Format: FFC-EX-<domainname>)'
         required: true
         type: string
       Description:

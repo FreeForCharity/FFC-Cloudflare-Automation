@@ -53,7 +53,7 @@
     If set, only prints the commands that would be executed.
 
 .EXAMPLE
-    .\Create-GitHubRepo.ps1 -RepoName "new-project" -TemplateRepo "FreeForCharity/FFC-IN-Single_Page_Template_Jekell" -EnablePages -DryRun
+    .\Create-GitHubRepo.ps1 -RepoName "FFC-EX-slopestohope.org" -TemplateRepo "FreeForCharity/FFC-IN-Single_Page_Template_Jekell" -EnablePages -DryRun
 #>
 
 [CmdletBinding()]
@@ -131,6 +131,12 @@ function Invoke-GhCommand {
 }
 
 Write-Host "Starting repository creation for '$RepoName' from template '$TemplateRepo'..." -ForegroundColor Green
+
+if ($RepoName -notmatch "^FFC-EX-") {
+    Write-Warning "The repository name '$RepoName' does not follow the recommended convention 'FFC-EX-<domainname>'."
+    Write-Warning "Example: 'FFC-EX-slopestohope.org'"
+    # We continue execution, assuming the user might intentionally want a different name.
+}
 
 # 1. Create Repo from Template
 # gh repo create <name> --template <template> --<visibility> --description <desc> --confirm

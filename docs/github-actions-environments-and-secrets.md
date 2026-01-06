@@ -39,6 +39,14 @@ Environment secrets:
 - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` (recommended)
 - `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` (recommended)
 
+Recommended Cloudflare API token permissions:
+
+- Zone: **Read**
+- DNS: **Edit**
+- DMARC Management: **Edit** (used by `Update-CloudflareDns.ps1 -EnforceStandard` to attempt to enable
+  Cloudflare DMARC Management; if unavailable the workflow will warn and you can enable it manually in
+  the dashboard: Email > DMARC Management)
+
 These are injected into workflow jobs as environment variables:
 
 - `CLOUDFLARE_API_TOKEN_FFC`

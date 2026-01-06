@@ -39,6 +39,8 @@ After completing this run for a domain:
 - Cloudflare API token with DNS edit permissions for the zone (GitHub Actions environment:
   `cloudflare-prod` / secrets: `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS` and/or
   `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`).
+  - Recommended additional permission: **DMARC Management: Edit** (so enforcement runs can attempt to
+    enable Cloudflare DMARC Management automatically).
 - Microsoft Entra app configured for app-only Exchange Online:
   - Graph application permission: `Domain.Read.All` (or `Directory.Read.All`) admin-consented
   - Exchange Online application role: `Exchange.ManageAsApp` admin-consented

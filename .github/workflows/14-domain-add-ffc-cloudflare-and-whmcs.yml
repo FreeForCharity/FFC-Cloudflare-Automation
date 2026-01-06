@@ -28,6 +28,11 @@ on:
         required: false
         type: boolean
         default: false
+      dmarc_mgmt_debug:
+        description: 'Debug: run DMARC Management API probe/attempts (noisy)'
+        required: false
+        type: boolean
+        default: false
       update_whmcs_nameservers:
         description: 'Update WHMCS nameservers to FFC custom nameservers'
         required: false
@@ -248,6 +253,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
           CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          FFC_CF_DMARCMGMT_DEBUG: ${{ inputs.dmarc_mgmt_debug && '1' || '0' }}
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = "${{ needs.cloudflare_zone_create.outputs.domain }}"

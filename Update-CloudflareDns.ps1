@@ -370,6 +370,18 @@ function Enable-DmarcManagement {
         [Parameter(Mandatory = $true)][string]$ZoneName
     )
 
+    # Cloudflare DMARC Management enablement appears to be a Dashboard-only action for this account.
+    # We previously attempted to discover/enable via several likely API endpoints, but the Cloudflare
+    # API consistently returned "Could not route" responses (even after enabling in the UI).
+    #
+    # To avoid noisy logs and unnecessary API calls during standard enforcement runs, we skip all
+    # DMARC Management API probing unless explicitly enabled for debugging.
+    $debugDmarcMgmt = ($env:FFC_CF_DMARCMGMT_DEBUG -eq '1')
+    if (-not $debugDmarcMgmt) {
+        Write-Warning "[OPTIONAL] Cloudflare DMARC Management cannot be enabled via API by this automation. Enable it manually in the dashboard: Email > DMARC Management. (Set FFC_CF_DMARCMGMT_DEBUG=1 to run the old API probe/attempts.)"
+        return $false
+    }
+
     function Get-DmarcManagementStatus {
         param(
             [Parameter(Mandatory = $true)][string]$ZoneId,
@@ -811,11 +823,15 @@ try {
         # IMPORTANT: Enforce needs a full record inventory. Without this, it will treat everything as missing.
         $allRecords = Get-AllDnsRecords -ZoneId $ZoneId
 
-        if ($DryRun) {
-            Write-Host "[DRY-RUN] Would enable Cloudflare DMARC Management for $Zone" -ForegroundColor Yellow
-        }
-        else {
-            $null = Enable-DmarcManagement -ZoneId $ZoneId -ZoneName $Zone
+        # DMARC Management API probing is intentionally disabled by default (too noisy and not routable).
+        # Set FFC_CF_DMARCMGMT_DEBUG=1 to run the probe/attempts.
+        if ($env:FFC_CF_DMARCMGMT_DEBUG -eq '1') {
+            if ($DryRun) {
+                Write-Host "[DRY-RUN] Would attempt DMARC Management API probe/enable for $Zone" -ForegroundColor Yellow
+            }
+            else {
+                $null = Enable-DmarcManagement -ZoneId $ZoneId -ZoneName $Zone
+            }
         }
 
         $m365MxTarget = (($Zone -replace '\.', '-') + '.mail.protection.outlook.com')

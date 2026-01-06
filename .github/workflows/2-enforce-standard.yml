@@ -12,6 +12,10 @@ on:
         description: 'Dry Run (Check before Fix)'
         type: boolean
         default: true
+      dmarc_mgmt_debug:
+        description: 'Debug: run DMARC Management API probe/attempts (noisy)'
+        type: boolean
+        default: false
 
 jobs:
   enforce_standard:
@@ -37,6 +41,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
           CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          FFC_CF_DMARCMGMT_DEBUG: ${{ inputs.dmarc_mgmt_debug && '1' || '0' }}
         run: |
           $Domain = "${{ inputs.domain }}"
           $DryRun = "${{ inputs.dry_run }}"

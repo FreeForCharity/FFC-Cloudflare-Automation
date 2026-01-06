@@ -47,13 +47,14 @@ on:
 jobs:
   create-repo:
     runs-on: windows-latest
+    environment: github-prod
     steps:
       - name: Checkout
         uses: actions/checkout@v3
 
       - name: Create Repository
         env:
-          GH_TOKEN: ${{ secrets.GH_ORG_ADMIN_TOKEN }} # Needs repo creation permissions
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }} # Needs repo creation permissions
         run: |
           $params = @{
               RepoName            = "${{ inputs.RepoName }}"

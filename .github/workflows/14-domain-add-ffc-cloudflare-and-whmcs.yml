@@ -1,0 +1,379 @@
+name: '14. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin)'
+run-name: 'Add Domain: ${{ inputs.domain }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain name to add (e.g., example.org)'
+        required: true
+        type: string
+        default: 'slopestohope.org'
+      zone_type:
+        description: 'Zone type'
+        required: true
+        type: choice
+        options:
+          - full
+          - partial
+        default: full
+      jump_start:
+        description:
+          'Attempt to auto-import DNS records from existing nameservers (Cloudflare jump_start)'
+        required: false
+        type: boolean
+        default: false
+      enforce_dry_run:
+        description: 'Dry run enforcement (preview only)'
+        required: false
+        type: boolean
+        default: false
+      update_whmcs_nameservers:
+        description: 'Update WHMCS nameservers to FFC custom nameservers'
+        required: false
+        type: boolean
+        default: true
+      require_whmcs_domain:
+        description: 'Fail fast if domain is not found in WHMCS'
+        required: false
+        type: boolean
+        default: true
+      issue_number:
+        description: 'Optional: issue number to comment results back to'
+        required: false
+        type: number
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  whmcs_preflight:
+    runs-on: windows-latest
+    environment: whmcs-prod
+    outputs:
+      domain: ${{ steps.meta.outputs.domain }}
+      found: ${{ steps.check.outputs.found }}
+      domain_id: ${{ steps.check.outputs.domain_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $d = "${{ inputs.domain }}".Trim().ToLowerInvariant().Trim('.')
+          "domain=$d" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Validate required WHMCS secrets
+        shell: pwsh
+        env:
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
+            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
+          }
+
+      - name: Check domain exists in WHMCS (smoke test)
+        id: check
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ steps.meta.outputs.domain }}"
+
+          $json = & pwsh -NoProfile -File .\scripts\whmcs-domain-exists.ps1 -Domain $domain
+          if ($LASTEXITCODE -ne 0) {
+            throw "WHMCS preflight check failed (exit $LASTEXITCODE)."
+          }
+
+          $r = $json | ConvertFrom-Json -ErrorAction Stop
+          $found = [bool]$r.found
+          $domainId = [string]$r.domainId
+
+          "found=$found" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "domain_id=$domainId" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          if (-not $found -and ('${{ inputs.require_whmcs_domain }}' -eq 'true')) {
+            throw "Domain '$domain' not found in WHMCS. Add it in WHMCS first (or rerun with require_whmcs_domain=false)."
+          }
+
+  cloudflare_preflight:
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod
+    needs: [whmcs_preflight]
+    outputs:
+      domain: ${{ steps.meta.outputs.domain }}
+      ns1: ${{ steps.meta.outputs.ns1 }}
+      ns2: ${{ steps.meta.outputs.ns2 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Metadata
+        id: meta
+        shell: bash
+        run: |
+          d="${{ needs.whmcs_preflight.outputs.domain }}"
+          if [ -z "$d" ]; then d=$(echo "${{ inputs.domain }}" | tr '[:upper:]' '[:lower:]' | xargs); fi
+          echo "domain=$d" >> "$GITHUB_OUTPUT"
+
+          # Custom account nameservers (preferred): store as variables on the cloudflare-prod environment.
+          # Fallback: use the known FFC custom nameservers.
+          ns1="${{ vars.FFC_CUSTOM_NAMESERVER_1 }}"
+          ns2="${{ vars.FFC_CUSTOM_NAMESERVER_2 }}"
+          if [ -z "$ns1" ]; then ns1='ns1.freeforcharity.org'; fi
+          if [ -z "$ns2" ]; then ns2='ns2.freeforcharity.org'; fi
+          echo "ns1=$ns1" >> "$GITHUB_OUTPUT"
+          echo "ns2=$ns2" >> "$GITHUB_OUTPUT"
+
+      - name: Validate required Cloudflare secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+
+      - name: Check zone exists in Cloudflare (smoke test)
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ steps.meta.outputs.domain }}"
+
+          $ffcJson = & pwsh -NoProfile -File scripts/cloudflare-zone-get.ps1 -Domain $domain -Account 'FFC'
+          if ($LASTEXITCODE -ne 0) { throw "Cloudflare preflight (FFC) failed (exit $LASTEXITCODE)." }
+          $ffc = $ffcJson | ConvertFrom-Json -ErrorAction Stop
+
+          $cmJson = & pwsh -NoProfile -File scripts/cloudflare-zone-get.ps1 -Domain $domain -Account 'CM'
+          if ($LASTEXITCODE -ne 0) { throw "Cloudflare preflight (CM) failed (exit $LASTEXITCODE)." }
+          $cm = $cmJson | ConvertFrom-Json -ErrorAction Stop
+
+          if ($cm.exists -and -not $ffc.exists) {
+            throw "Zone '$domain' already exists in the CM Cloudflare account. Refusing to create a duplicate in FFC."
+          }
+
+          if ($ffc.exists) {
+            Write-Host "[OK] Zone exists in FFC (zoneId=$($ffc.zoneId))." -ForegroundColor Green
+          } else {
+            Write-Host "[OK] Zone does not exist in FFC yet; will create." -ForegroundColor Yellow
+          }
+
+  cloudflare_zone_create:
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod
+    needs: [cloudflare_preflight]
+    outputs:
+      domain: ${{ steps.meta.outputs.domain }}
+      ns1: ${{ steps.meta.outputs.ns1 }}
+      ns2: ${{ steps.meta.outputs.ns2 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Metadata
+        id: meta
+        shell: bash
+        run: |
+          d="${{ needs.cloudflare_preflight.outputs.domain }}"
+          if [ -z "$d" ]; then d=$(echo "${{ inputs.domain }}" | tr '[:upper:]' '[:lower:]' | xargs); fi
+          echo "domain=$d" >> "$GITHUB_OUTPUT"
+
+          # Custom account nameservers (preferred): store as variables on the cloudflare-prod environment.
+          # Fallback: use the known FFC custom nameservers.
+          ns1="${{ needs.cloudflare_preflight.outputs.ns1 }}"
+          ns2="${{ needs.cloudflare_preflight.outputs.ns2 }}"
+          if [ -z "$ns1" ]; then ns1='ns1.freeforcharity.org'; fi
+          if [ -z "$ns2" ]; then ns2='ns2.freeforcharity.org'; fi
+          echo "ns1=$ns1" >> "$GITHUB_OUTPUT"
+          echo "ns2=$ns2" >> "$GITHUB_OUTPUT"
+
+      - name: Validate required Cloudflare secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+
+      - name: Create zone (FFC)
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ steps.meta.outputs.domain }}"
+
+          if ('${{ inputs.jump_start }}' -eq 'true') {
+            pwsh -NoProfile -File scripts/cloudflare-zone-create.ps1 `
+              -Domain $domain `
+              -Account 'FFC' `
+              -ZoneType "${{ inputs.zone_type }}" `
+              -JumpStart
+          }
+          else {
+            pwsh -NoProfile -File scripts/cloudflare-zone-create.ps1 `
+              -Domain $domain `
+              -Account 'FFC' `
+              -ZoneType "${{ inputs.zone_type }}"
+          }
+
+  cloudflare_enforce_standard:
+    runs-on: windows-latest
+    environment: cloudflare-prod
+    needs: [cloudflare_zone_create]
+    outputs:
+      issues_count: ${{ steps.summary.outputs.issues_count }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enforce Cloudflare standard (GitHub Pages + Microsoft 365)
+        id: enforce
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ needs.cloudflare_zone_create.outputs.domain }}"
+
+          $outDir = Join-Path $env:RUNNER_TEMP 'domain-add-cloudflare'
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          if ('${{ inputs.enforce_dry_run }}' -eq 'true') {
+            $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -DryRun *>&1
+          } else {
+            $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard *>&1
+          }
+
+          $outPath = Join-Path $outDir 'cloudflare-enforce.txt'
+          $out | Out-File -FilePath $outPath -Encoding utf8
+
+          $audit = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -Audit -ErrorAction Continue *>&1
+          $auditPath = Join-Path $outDir 'cloudflare-audit-after.txt'
+          $audit | Out-File -FilePath $auditPath -Encoding utf8
+
+          "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Summarize Cloudflare post-audit
+        id: summary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = "${{ steps.enforce.outputs.out_dir }}"
+          $auditLines = @(Get-Content -Path (Join-Path $dir 'cloudflare-audit-after.txt') -ErrorAction Stop)
+          $issues = @($auditLines | Where-Object { $_ -match '^[[](?:MISSING|MISSING/PARTIAL|DIFFERS)[]]' })
+          "issues_count=$($issues.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload Cloudflare outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: domain-add-cloudflare
+          path: ${{ steps.enforce.outputs.out_dir }}/*.txt
+          if-no-files-found: error
+
+  whmcs_update_nameservers:
+    runs-on: windows-latest
+    environment: whmcs-prod
+    needs: [whmcs_preflight, cloudflare_zone_create, cloudflare_enforce_standard]
+    if: ${{ inputs.update_whmcs_nameservers }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required WHMCS secrets
+        shell: pwsh
+        env:
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
+            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
+          }
+
+      - name: Update WHMCS nameservers to FFC custom nameservers
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ needs.cloudflare_zone_create.outputs.domain }}"
+
+          if ("${{ needs.whmcs_preflight.outputs.found }}" -ne 'true') {
+            throw "WHMCS preflight indicates domain '$domain' is not present. Add it in WHMCS first (or rerun with update_whmcs_nameservers=false)."
+          }
+
+          $ns1 = "${{ needs.cloudflare_zone_create.outputs.ns1 }}"
+          $ns2 = "${{ needs.cloudflare_zone_create.outputs.ns2 }}"
+
+          & pwsh -NoProfile -File .\scripts\whmcs-domain-nameservers-update.ps1 -Domain $domain -NameServer1 $ns1 -NameServer2 $ns2
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "WHMCS nameserver update failed with exit code $LASTEXITCODE."
+          }
+
+  post_back:
+    runs-on: ubuntu-latest
+    needs: [cloudflare_zone_create, cloudflare_enforce_standard]
+    if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
+
+    steps:
+      - name: Download Cloudflare artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: domain-add-cloudflare
+          path: artifacts/domain-add/cloudflare
+
+      - name: Comment results back to issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const issueNumber = Number('${{ inputs.issue_number }}');
+            const domain = '${{ needs.cloudflare_zone_create.outputs.domain }}';
+            const dryRun = String('${{ inputs.enforce_dry_run }}');
+            const cfIssues = Number('${{ needs.cloudflare_enforce_standard.outputs.issues_count }}');
+
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const enforce = fs.readFileSync('artifacts/domain-add/cloudflare/cloudflare-enforce.txt', 'utf8');
+            const auditAfter = fs.readFileSync('artifacts/domain-add/cloudflare/cloudflare-audit-after.txt', 'utf8');
+
+            const body = [
+              `Domain add workflow results for **${domain}**`,
+              '',
+              `- Enforcement mode: **${dryRun === 'true' ? 'DRY RUN' : 'LIVE'}**`,
+              `- Cloudflare post-audit issues: **${cfIssues}**`,
+              `- Run: ${runUrl}`,
+              '',
+              '<details><summary>Cloudflare enforce output</summary>\n\n```\n' + enforce.trim() + '\n```\n</details>',
+              '',
+              '<details><summary>Cloudflare audit (after)</summary>\n\n```\n' + auditAfter.trim() + '\n```\n</details>',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });

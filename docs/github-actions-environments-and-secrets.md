@@ -48,6 +48,27 @@ Repository variable (non-secret):
 
 - `ALLOWED_ACTORS` (optional guardrail; comma-separated GitHub usernames)
 
+Environment variables (non-secret):
+
+- `FFC_CUSTOM_NAMESERVER_1` (example: `ns1.freeforcharity.org`)
+- `FFC_CUSTOM_NAMESERVER_2` (example: `ns2.freeforcharity.org`)
+
+These are used by the domain add workflow to update WHMCS nameservers to the correct Cloudflare
+custom account nameservers.
+
+## `whmcs-prod`
+
+Used by the WHMCS export workflows and any automation that updates WHMCS domain settings.
+
+Environment secrets (required):
+
+- `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` (WHMCS API secret for identifier
+  `zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu`)
+
+Environment secrets (optional):
+
+- `WHMCS_API_ACCESS_KEY` (if your WHMCS API configuration requires an access key)
+
 ## `m365-prod`
 
 Used by:

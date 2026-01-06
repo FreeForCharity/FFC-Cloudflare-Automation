@@ -314,8 +314,11 @@ function Enable-DmarcManagement {
         $errorBody = $null
 
         try {
-            if ($Exception.Data -and $Exception.Data.Contains('CfErrorBody')) {
-                $errorBody = [string]$Exception.Data['CfErrorBody']
+            if ($Exception.Data) {
+                $preserved = $Exception.Data['CfErrorBody']
+                if (-not [string]::IsNullOrWhiteSpace([string]$preserved)) {
+                    $errorBody = [string]$preserved
+                }
             }
         }
         catch {

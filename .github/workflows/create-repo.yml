@@ -1,0 +1,74 @@
+name: Create GitHub Repo
+
+on:
+  workflow_dispatch:
+    inputs:
+      RepoName:
+        description: 'Name of the new repository'
+        required: true
+        type: string
+      Description:
+        description: 'Description of the repository'
+        required: false
+        default: 'Created via automation'
+        type: string
+      TemplateRepo:
+        description: 'Template repository (owner/repo)'
+        required: true
+        default: 'FreeForCharity/template-repo' # Change this to your actual template
+        type: string
+      Visibility:
+        description: 'Visibility'
+        required: true
+        default: 'public'
+        type: choice
+        options:
+          - public
+          - private
+          - internal
+      EnableIssues:
+        description: 'Enable Issues'
+        required: false
+        default: true
+        type: boolean
+      EnablePages:
+        description: 'Enable GitHub Pages'
+        required: false
+        default: false
+        type: boolean
+      CNAME:
+        description: 'Custom Domain (CNAME) for Pages'
+        required: false
+        type: string
+      DryRun:
+        description: 'Dry Run (Preview only)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  create-repo:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Create Repository
+        env:
+          GH_TOKEN: ${{ secrets.GH_ORG_ADMIN_TOKEN }} # Needs repo creation permissions
+        run: |
+          $params = @{
+              RepoName            = "${{ inputs.RepoName }}"
+              Description         = "${{ inputs.Description }}"
+              TemplateRepo        = "${{ inputs.TemplateRepo }}"
+              Visibility          = "${{ inputs.Visibility }}"
+              EnableIssues        = [System.Convert]::ToBoolean("${{ inputs.EnableIssues }}")
+              EnablePages         = [System.Convert]::ToBoolean("${{ inputs.EnablePages }}")
+              DryRun              = [System.Convert]::ToBoolean("${{ inputs.DryRun }}")
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace("${{ inputs.CNAME }}")) {
+              $params.Add("CNAME", "${{ inputs.CNAME }}")
+          }
+
+          ./scripts/Create-GitHubRepo.ps1 @params

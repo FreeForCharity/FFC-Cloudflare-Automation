@@ -8,14 +8,13 @@ management operations.
 Older workflows (including the legacy “Cloudflare DNS Run” and “Zone Add”) were created before the
 repository moved to a safer, issue-based process and the current PowerShell-first automation.
 
-We keep deprecated workflows as **stubs** for two reasons:
+We keep deprecated workflows as reference backups for two reasons:
 
 1. **Stale links**: old docs/bookmarks/runbooks may still point to the legacy workflow file.
 2. **Clarity**: the stub explains what replaced it and why.
 
-If you see a workflow named like `.github/workflows/...`, that typically means the workflow did not
-have a `name:` at the time it was created. GitHub uses the file path as the display name, which
-sorts to the top. Stubs exist to prevent that confusion.
+Deprecated workflows are stored in `.github/workflows-deprecated/` so they **do not** show up in the
+Actions UI and cannot be accidentally run.
 
 ## Operational workflows (DNS + M365)
 
@@ -73,12 +72,14 @@ domain configuration.
 
 - **89. Repo - Create GitHub Repo**: repo bootstrap helper.
 
-### 95–98 Deprecated workflow stubs
+### Deprecated workflow backups
 
-- **95. Deprecated - Cloudflare DNS Update (legacy)**
-- **96. Deprecated - Cloudflare DNS Run (legacy)**
-- **97. Deprecated - DNS Summary Export (legacy)**
-- **98. Deprecated - Cloudflare Zone Add (removed)**
+These are kept in `.github/workflows-deprecated/` for historical reference:
+
+- Cloudflare DNS Update (legacy)
+- Cloudflare DNS Run (legacy)
+- DNS Summary Export (legacy)
+- Cloudflare Zone Add (removed)
 
 ## ci.yml - Continuous Integration
 
@@ -179,7 +180,7 @@ This workflow helps identify security vulnerabilities early in the development p
 | 12-m365-add-tenant-domain.yml | Manual (workflow_dispatch)      | Admin: Add a domain to the M365 tenant (Graph) and print DNS verification records                         |
 | 13-wpmudev-export-sites.yml   | Manual (workflow_dispatch)      | Inventory: Export WPMUDEV hosted sites/domains for reconciliation with Cloudflare and WHMCS               |
 
-## Deprecated workflows (kept as stubs)
+## Deprecated workflows (backups only)
 
 These workflows are **not** needed anymore because the repo moved to:
 

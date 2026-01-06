@@ -275,6 +275,41 @@ function Quote-TxtContent {
     return '"' + $normalized + '"'
 }
 
+function Enable-DmarcManagement {
+    param(
+        [Parameter(Mandatory = $true)][string]$ZoneId,
+        [Parameter(Mandatory = $true)][string]$ZoneName
+    )
+
+    # Cloudflare DMARC Management enablement is primarily documented as a Dashboard action.
+    # Cloudflare exposes token permissions for "Dmarc Management Edit", but the public API
+    # surface for enablement is not clearly documented. We attempt a small set of likely
+    # endpoints used by the Dashboard. If all fail, we warn (do not fail enforcement).
+    $candidates = @(
+        @{ Method = 'POST'; Uri = "/zones/$ZoneId/dmarc_management/enable"; Body = @{} },
+        @{ Method = 'POST'; Uri = "/zones/$ZoneId/dmarc_management"; Body = @{ enabled = $true } },
+        @{ Method = 'PATCH'; Uri = "/zones/$ZoneId/dmarc_management"; Body = @{ enabled = $true } },
+        @{ Method = 'POST'; Uri = "/zones/$ZoneId/email/dmarc_management/enable"; Body = @{} },
+        @{ Method = 'POST'; Uri = "/zones/$ZoneId/email/dmarc_management"; Body = @{ enabled = $true } },
+        @{ Method = 'PATCH'; Uri = "/zones/$ZoneId/email/dmarc_management"; Body = @{ enabled = $true } }
+    )
+
+    foreach ($candidate in $candidates) {
+        try {
+            $null = Invoke-CfApi -Method $candidate.Method -Uri $candidate.Uri -Body $candidate.Body
+            Write-Host "[OK] DMARC Management enabled (or already enabled) for $ZoneName" -ForegroundColor Green
+            return $true
+        }
+        catch {
+            # Try next endpoint
+            continue
+        }
+    }
+
+    Write-Warning "[OPTIONAL] Could not enable Cloudflare DMARC Management for $ZoneName via API. Enable in dashboard: Email > DMARC Management. (Token may need 'Dmarc Management Edit' permission.)"
+    return $false
+}
+
 function Get-DmarcRuaMailtos {
     param([AllowNull()][string]$DmarcContent)
     $normalized = Normalize-TxtContent -Value $DmarcContent
@@ -508,6 +543,13 @@ try {
         # IMPORTANT: Enforce needs a full record inventory. Without this, it will treat everything as missing.
         $allRecords = Get-AllDnsRecords -ZoneId $ZoneId
 
+        if ($DryRun) {
+            Write-Host "[DRY-RUN] Would enable Cloudflare DMARC Management for $Zone" -ForegroundColor Yellow
+        }
+        else {
+            $null = Enable-DmarcManagement -ZoneId $ZoneId -ZoneName $Zone
+        }
+
         $m365MxTarget = (($Zone -replace '\.', '-') + '.mail.protection.outlook.com')
         $wwwTarget = 'freeforcharity.github.io'
         
@@ -682,6 +724,18 @@ try {
                 }
             }
 
+            # Cloudflare UI warns when TXT content isn't wrapped in quotes.
+            # Normalize-TxtContent already strips quotes for comparisons, so we can safely update
+            # existing TXT records into the quoted form without changing the normalized value.
+            if ($std.Type -eq 'TXT' -and $foundRecord) {
+                $existingTxt = $foundRecord | Select-Object -First 1
+                if ($existingTxt -and -not (Is-TxtQuoted -Value $existingTxt.content)) {
+                    $updateCandidate = $existingTxt
+                    $stdContent = Quote-TxtContent -Value $existingTxt.content
+                    $foundRecord = $null
+                }
+            }
+
             if ($foundRecord) {
                 Write-Host " [OK]" -ForegroundColor Green
             }
@@ -698,7 +752,12 @@ try {
                         $updatePayload['data'] = $desiredData
                     }
                     else {
-                        $updatePayload['content'] = $stdContent
+                        if ($std.Type -eq 'TXT') {
+                            $updatePayload['content'] = Quote-TxtContent -Value $stdContent
+                        }
+                        else {
+                            $updatePayload['content'] = $stdContent
+                        }
                     }
                     if ($std.Type -eq 'MX') { $updatePayload['priority'] = $std.Priority }
                     if ($std.Type -in @('A', 'AAAA', 'CNAME') -and $null -ne $desiredProxied) { $updatePayload['proxied'] = $desiredProxied }
@@ -740,7 +799,12 @@ try {
                     $newPayload['data'] = $desiredData
                 }
                 else {
-                    $newPayload['content'] = $stdContent
+                    if ($std.Type -eq 'TXT') {
+                        $newPayload['content'] = Quote-TxtContent -Value $stdContent
+                    }
+                    else {
+                        $newPayload['content'] = $stdContent
+                    }
                 }
                 if ($std.Type -eq 'MX') { $newPayload['priority'] = $std.Priority }
                 # Proxied? Standard FFC: Pages A/CNAME = Proxied? Usually Yes for SSL. 

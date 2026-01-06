@@ -99,7 +99,7 @@ jobs:
           "changes_count=$($changes.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload Cloudflare outputs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: cloudflare-domain-status
           path: ${{ steps.run.outputs.out_dir }}/*.txt
@@ -195,7 +195,7 @@ jobs:
           exit 0
 
       - name: Upload M365 outputs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: m365-domain-status
           path: ${{ steps.preflight.outputs.out_dir }}/*.txt

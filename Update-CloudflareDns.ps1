@@ -205,10 +205,30 @@ function Invoke-CfApi {
     catch {
         Write-Error "Request Failed: $($_.Exception.Message)"
         if ($_.Exception.Response) {
-            # Try to read the error stream
-            $stream = $_.Exception.Response.GetResponseStream()
-            $reader = [System.IO.StreamReader]::new($stream)
-            $body = $reader.ReadToEnd()
+            $body = $null
+
+            # PowerShell 7 often surfaces a System.Net.Http.HttpResponseMessage
+            # while Windows PowerShell 5.1 surfaces a WebResponse with a stream.
+            if ($_.Exception.Response -is [System.Net.Http.HttpResponseMessage]) {
+                try {
+                    $body = $_.Exception.Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                }
+                catch {
+                    $body = $null
+                }
+            }
+            else {
+                try {
+                    $stream = $_.Exception.Response.GetResponseStream()
+                    if ($stream) {
+                        $reader = [System.IO.StreamReader]::new($stream)
+                        $body = $reader.ReadToEnd()
+                    }
+                }
+                catch {
+                    $body = $null
+                }
+            }
             try {
                 # Preserve the body for downstream callers (e.g., diagnostics)
                 # Note: the response stream can only be read once.
@@ -218,7 +238,9 @@ function Invoke-CfApi {
                 # best-effort
             }
 
-            Write-Error "API Error Body: $body"
+            if (-not [string]::IsNullOrWhiteSpace([string]$body)) {
+                Write-Error "API Error Body: $body"
+            }
         }
         throw
     }
@@ -327,13 +349,28 @@ function Enable-DmarcManagement {
 
         try {
             if ($Exception.Response) {
-                try { $statusCode = [int]$Exception.Response.StatusCode } catch { $statusCode = $null }
+                try {
+                    if ($Exception.Response -is [System.Net.Http.HttpResponseMessage]) {
+                        $statusCode = [int]$Exception.Response.StatusCode
+                    }
+                    else {
+                        $statusCode = [int]$Exception.Response.StatusCode
+                    }
+                }
+                catch {
+                    $statusCode = $null
+                }
                 if ([string]::IsNullOrWhiteSpace($errorBody)) {
                     try {
-                        $stream = $Exception.Response.GetResponseStream()
-                        if ($stream) {
-                            $reader = [System.IO.StreamReader]::new($stream)
-                            $errorBody = $reader.ReadToEnd()
+                        if ($Exception.Response -is [System.Net.Http.HttpResponseMessage]) {
+                            $errorBody = $Exception.Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                        }
+                        else {
+                            $stream = $Exception.Response.GetResponseStream()
+                            if ($stream) {
+                                $reader = [System.IO.StreamReader]::new($stream)
+                                $errorBody = $reader.ReadToEnd()
+                            }
                         }
                     }
                     catch {

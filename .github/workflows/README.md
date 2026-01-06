@@ -49,6 +49,16 @@ domain configuration.
 - **09. M365 - Domain Preflight (Read-only)**: onboarding checks.
 - **10. M365 - List Tenant Domains**: discovery/listing.
 
+### 11–13 Admin and Inventory workflows
+
+- **11. DNS - Add Domain (Create Zone) (Admin)**: create a new Cloudflare zone (explicit account
+  selection)
+- **12. M365 - Add Tenant Domain (Admin)**: add a domain to the M365 tenant (Graph) and print DNS
+  verification records
+- **13. WPMUDEV - Export Sites/Domains (Read-only)**: export hosted sites inventory from WPMUDEV Hub
+  API for domain reconciliation. See
+  [docs/wpmudev-domain-inventory.md](../../docs/wpmudev-domain-inventory.md) for details.
+
 ## ci.yml - Continuous Integration
 
 Runs automated validation and security checks on all pull requests and pushes to main branch.
@@ -146,6 +156,7 @@ This workflow helps identify security vulnerabilities early in the development p
 | 7-m365-domain-preflight.yml   | Manual (workflow_dispatch)      | M365: Domain onboarding preflight (two jobs: Graph in `m365-prod`, Cloudflare audit in `cloudflare-prod`) |
 | 11-cloudflare-zone-create.yml | Manual (workflow_dispatch)      | Admin: Create a new Cloudflare zone (explicit account selection)                                          |
 | 12-m365-add-tenant-domain.yml | Manual (workflow_dispatch)      | Admin: Add a domain to the M365 tenant (Graph) and print DNS verification records                         |
+| 13-wpmudev-export-sites.yml   | Manual (workflow_dispatch)      | Inventory: Export WPMUDEV hosted sites/domains for reconciliation with Cloudflare and WHMCS               |
 
 ## Deprecated workflows (kept as stubs)
 

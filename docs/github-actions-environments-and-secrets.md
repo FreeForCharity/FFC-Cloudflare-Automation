@@ -9,6 +9,7 @@ This is used for:
 
 - `cloudflare-prod` (Cloudflare DNS workflows)
 - `m365-prod` (Microsoft 365 / Graph / Exchange Online workflows)
+- `wpmudev-prod` (WPMUDEV domain/site inventory workflows)
 
 ## Where to configure Environments
 
@@ -17,7 +18,8 @@ This is used for:
 3. Click **New environment**.
 4. Name it exactly (case-sensitive):
    - `cloudflare-prod` or
-   - `m365-prod`
+   - `m365-prod` or
+   - `wpmudev-prod`
 5. (Recommended) Add **Required reviewers** to gate any workflow jobs that reference that
    environment.
 6. Add **Environment secrets** for that environment.
@@ -175,3 +177,52 @@ You must configure the Entra application referenced by `FFC_AZURE_CLIENT_ID`:
 - DKIM steps fail:
   - Confirm the PFX secrets exist and import works.
   - Confirm the Entra app is allowed for EXO app-only and has the right EXO permissions.
+
+## `wpmudev-prod`
+
+Used by the WPMUDEV domain/site inventory workflow in
+`.github/workflows/13-wpmudev-export-sites.yml`.
+
+### Environment secrets
+
+- `FFC_WPMUDEV_GA_API_Token` (required)
+
+This is the WPMUDEV Hub API token used to authenticate read-only API requests.
+
+### How to obtain the WPMUDEV API token
+
+1. Log in to [WPMUDEV](https://wpmudev.com/)
+2. Navigate to **Hub** → **API**
+3. Generate a new API key or use an existing one
+4. The token must have at least **read access** to sites/domains
+
+### Required permissions
+
+The API token needs read access to:
+
+- `GET /api/hub/v1/account` (diagnostics check)
+- `GET /api/hub/v1/sites` (site listing, paginated)
+
+### Security notes
+
+- The workflow is **read-only**; no changes are made to WPMUDEV
+- The token is **never logged** in workflow output (only success/failure status)
+- The token is passed via environment variable `WPMUDEV_API_TOKEN` to the PowerShell script
+
+### Workflow behavior
+
+The workflow:
+
+1. Performs a diagnostics check to validate the API token
+2. Fetches all sites from WPMUDEV Hub API (paginated)
+3. Aggregates sites by domain (one row per domain)
+4. Exports to CSV: `wpmudev_domains.csv` (default)
+5. Uploads artifact: `wpmudev-domain-inventory`
+
+For full documentation, see [docs/wpmudev-domain-inventory.md](wpmudev-domain-inventory.md).
+
+### Troubleshooting
+
+- **401 Unauthorized**: Verify `FFC_WPMUDEV_GA_API_Token` is set and valid
+- **403 Forbidden**: Verify the token has read access to Hub API
+- **Incomplete results**: Check pagination logic in `scripts/wpmudev-sites-export.ps1`

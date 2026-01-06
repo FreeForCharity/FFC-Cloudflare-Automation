@@ -8,11 +8,13 @@ DNS configuration for a zone in Cloudflare.
 
 ## How it runs
 
-The workflow is triggered manually (`workflow_dispatch`) with two inputs:
+The workflow is triggered manually (`workflow_dispatch`) with these inputs:
 
 - `domain` (required): the Cloudflare zone name, e.g. `example.org`
 - `dry_run` (boolean): when `true`, the workflow prints proposed changes but does not write to
   Cloudflare
+- `dmarc_mgmt_debug` (boolean, optional): when `true`, runs the DMARC Management API probe/attempts
+  (noisy; normally disabled)
 
 The workflow performs two steps:
 
@@ -54,6 +56,8 @@ DMARC monitoring note:
 
 - If Cloudflare DMARC Management is enabled for a zone, Cloudflare may add a per-zone `rua`
   recipient like `mailto:<zone-specific>@dmarc-reports.cloudflare.net`.
+- DMARC Management enablement is a Cloudflare dashboard action (Email > DMARC Management). This repo
+  does not currently have a routable Cloudflare API surface to enable/inspect it.
 - The script always requires the internal `rua` recipient `mailto:dmarc-rua@freeforcharity.org`.
 - Cloudflare `rua` is optional: the audit warns if it’s not detected, but Enforce will not remove it
   when present. Note: for M365 MX, the expected target is computed as

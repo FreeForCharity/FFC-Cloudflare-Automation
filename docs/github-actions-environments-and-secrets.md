@@ -43,9 +43,9 @@ Recommended Cloudflare API token permissions:
 
 - Zone: **Read**
 - DNS: **Edit**
-- DMARC Management: **Edit** (used by `Update-CloudflareDns.ps1 -EnforceStandard` to attempt to enable
-  Cloudflare DMARC Management; if unavailable the workflow will warn and you can enable it manually in
-  the dashboard: Email > DMARC Management)
+- DMARC Management: **Edit** (optional; currently this repo does not have a routable Cloudflare API
+  surface to enable/inspect DMARC Management, so enabling is done manually in the dashboard: Email >
+  DMARC Management)
 
 These are injected into workflow jobs as environment variables:
 

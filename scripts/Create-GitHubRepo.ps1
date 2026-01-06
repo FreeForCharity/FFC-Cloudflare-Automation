@@ -62,6 +62,9 @@ param(
     [string]$RepoName,
 
     [Parameter(Mandatory = $false)]
+    [string]$Organization = "FreeForCharity",
+
+    [Parameter(Mandatory = $false)]
     [string]$Description = "Created via automation",
 
     [Parameter(Mandatory = $true)]
@@ -139,8 +142,16 @@ if ($RepoName -notmatch "^FFC-EX-") {
 }
 
 # 1. Create Repo from Template
+# Propagate Organization if not in RepoName
+if ($RepoName -notmatch "/") {
+    $TargetRepo = "$Organization/$RepoName"
+}
+else {
+    $TargetRepo = $RepoName
+}
+
 # gh repo create <name> --template <template> --<visibility> --description <desc> --confirm
-$createCmd = "repo create `"$RepoName`" --template `"$TemplateRepo`" --$Visibility --description `"$Description`""
+$createCmd = "repo create `"$TargetRepo`" --template `"$TemplateRepo`" --$Visibility --description `"$Description`""
 
 # Check if repo exists? (gh repo create might fail or prompt)
 # We assume it doesn't exist.
@@ -156,7 +167,7 @@ if (-not $DryRun) { Start-Sleep -Seconds 5 }
 # --allow-squash-merge, --allow-merge-commit, --allow-rebase-merge
 # --delete-branch-on-merge
 
-$editCmd = "repo edit `"$RepoName`""
+$editCmd = "repo edit `"$TargetRepo`""
 
 if ($EnableIssues) { $editCmd += " --enable-issues" } else { $editCmd += " --enable-issues=false" }
 if ($EnableProjects) { $editCmd += " --enable-projects" } else { $editCmd += " --enable-projects=false" }
@@ -188,14 +199,14 @@ if ($EnablePages) {
     # We will try to get the full name from `gh repo view` if not dry run.
     
     if ($DryRun) {
-        Write-Host "[DRY RUN] gh api repos/:owner/$RepoName/pages -X POST -F 'source[branch]=main' -F 'source[path]=/'" -ForegroundColor Cyan
+        Write-Host "[DRY RUN] gh api repos/:owner/$TargetRepo/pages -X POST -F 'source[branch]=main' -F 'source[path]=/'" -ForegroundColor Cyan
         if ($CNAME) {
-            Write-Host "[DRY RUN] gh api repos/:owner/$RepoName/pages -X PUT -F 'cname=$CNAME' -F 'https_enforced=true'" -ForegroundColor Cyan
+            Write-Host "[DRY RUN] gh api repos/:owner/$TargetRepo/pages -X PUT -F 'cname=$CNAME' -F 'https_enforced=true'" -ForegroundColor Cyan
         }
     }
     else {
         # Get full name (owner/repo)
-        $json = gh repo view "$RepoName" --json nameWithOwner | ConvertFrom-Json
+        $json = gh repo view "$TargetRepo" --json nameWithOwner | ConvertFrom-Json
         $fullRepoName = $json.nameWithOwner
         
         # Enable Pages (Source = Workflow)

@@ -198,11 +198,12 @@ if ($EnablePages) {
         $json = gh repo view "$RepoName" --json nameWithOwner | ConvertFrom-Json
         $fullRepoName = $json.nameWithOwner
         
-        # Enable Pages (Source = Branch main, Path /)
-        # Note: If you want to use GitHub Actions for Pages (build_type=workflow), you would use:
-        # -F "build_type=workflow" instead of source.
-        # For now, we stick to standard branch deployment for Jekyll compatibility unless specified.
-        $pagesCmd = "api repos/$fullRepoName/pages -X POST -F `"source[branch]=main`" -F `"source[path]=/`""
+        # Enable Pages (Source = Workflow)
+        # The template 'FreeForCharity/FFC-IN-Single_Page_Template_Jekell' uses GitHub Actions ('deploy.yml').
+        # So we must set build_type=workflow.
+        
+        Write-Host "Enabling Pages with build_type=workflow..."
+        $pagesCmd = "api repos/$fullRepoName/pages -X POST -F `"build_type=workflow`""
         Invoke-GhCommand $pagesCmd
         
         # Configure CNAME and Enforce HTTPS

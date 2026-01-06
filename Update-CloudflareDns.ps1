@@ -194,6 +194,64 @@ function Invoke-CfApi {
         $requestParams['Uri'] += "?$queryString"
     }
 
+    # In PowerShell 7+, we can use Invoke-WebRequest -SkipHttpErrorCheck to reliably capture
+    # HTTP status codes and the raw JSON error body from Cloudflare. This makes diagnostics
+    # (like DMARC Management enablement) much clearer.
+    $canSkipHttpErrors = $false
+    try {
+        $canSkipHttpErrors = (Get-Command Invoke-WebRequest -ErrorAction Stop).Parameters.ContainsKey('SkipHttpErrorCheck')
+    }
+    catch {
+        $canSkipHttpErrors = $false
+    }
+
+    if ($canSkipHttpErrors) {
+        $iwrParams = @{
+            Method      = $Method
+            Uri         = "$ApiBase$Uri"
+            Headers     = $Headers
+            ContentType = 'application/json'
+            TimeoutSec  = 30
+            SkipHttpErrorCheck = $true
+        }
+        if ($Body) { $iwrParams['Body'] = ($Body | ConvertTo-Json -Depth 10 -Compress) }
+
+        # Append Query Params
+        if ($Params) {
+            $queryString = ($Params.Keys | ForEach-Object { "$_=$($Params[$_])" }) -join '&'
+            $iwrParams['Uri'] += "?$queryString"
+        }
+
+        $resp = Invoke-WebRequest @iwrParams
+        $statusCode = [int]$resp.StatusCode
+        $raw = $resp.Content
+
+        $parsed = $null
+        try {
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+            }
+        }
+        catch {
+            $parsed = $null
+        }
+
+        if ($statusCode -ge 400 -or ($parsed -and ($parsed.PSObject.Properties.Name -contains 'success') -and (-not $parsed.success))) {
+            $ex = [System.Exception]::new("HTTP $statusCode from Cloudflare API")
+            try {
+                $ex.Data['CfStatusCode'] = $statusCode
+                $ex.Data['CfErrorBody'] = $raw
+            }
+            catch {
+                # best-effort
+            }
+            throw $ex
+        }
+
+        return $parsed
+    }
+
+    # Fallback path for environments without SkipHttpErrorCheck.
     try {
         $response = Invoke-RestMethod @requestParams
         if (-not $response.success) {
@@ -337,6 +395,16 @@ function Enable-DmarcManagement {
 
         try {
             if ($Exception.Data) {
+                try {
+                    $preservedStatus = $Exception.Data['CfStatusCode']
+                    if ($null -ne $preservedStatus) {
+                        $statusCode = [int]$preservedStatus
+                    }
+                }
+                catch {
+                    # best-effort
+                }
+
                 $preserved = $Exception.Data['CfErrorBody']
                 if (-not [string]::IsNullOrWhiteSpace([string]$preserved)) {
                     $errorBody = [string]$preserved

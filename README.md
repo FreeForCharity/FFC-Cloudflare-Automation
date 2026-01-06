@@ -85,8 +85,8 @@ For the new “3 step” approach (tracked in issue #61), use these GitHub Actio
 
 To request a DNS change or domain operation:
 
-1. Go to the
-   [Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/new/choose) page
+1. Go to the [Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/new/choose)
+   page
 2. Select the appropriate issue template:
    - **Purchase and Add New .org Domain** - For new domain acquisitions
    - **Add Existing Domain to Cloudflare** - For migrating domains

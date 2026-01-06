@@ -87,7 +87,7 @@ param(
     [bool]$AllowMergeCommit = $true,
 
     [Parameter(Mandatory = $false)]
-    [bool]$AllowRebaseMerge = $false,
+    [bool]$AllowRebaseMerge = $true,
 
     [Parameter(Mandatory = $false)]
     [bool]$DeleteBranchOnMerge = $true,
@@ -175,6 +175,14 @@ Invoke-GhCommand $editCmd
 if ($EnablePages) {
     Write-Host "Enabling GitHub Pages on 'main' branch, root folder..."
     
+    # 3a. Auto-detect CNAME if not provided
+    if ([string]::IsNullOrWhiteSpace($CNAME)) {
+        if ($RepoName -match "^FFC-EX-(.+)$") {
+            $CNAME = $matches[1]
+            Write-Host "Auto-detected properties custom domain (CNAME): $CNAME" -ForegroundColor Cyan
+        }
+    }
+
     # Need to know the owner. Assuming current user context or org from RepoName if "Org/Repo" format.
     # If RepoName is just "name", it's created under current auth context.
     # We will try to get the full name from `gh repo view` if not dry run.
@@ -182,7 +190,7 @@ if ($EnablePages) {
     if ($DryRun) {
         Write-Host "[DRY RUN] gh api repos/:owner/$RepoName/pages -X POST -F 'source[branch]=main' -F 'source[path]=/'" -ForegroundColor Cyan
         if ($CNAME) {
-            Write-Host "[DRY RUN] gh api repos/:owner/$RepoName/pages -X PUT -F 'cname=$CNAME'" -ForegroundColor Cyan
+            Write-Host "[DRY RUN] gh api repos/:owner/$RepoName/pages -X PUT -F 'cname=$CNAME' -F 'https_enforced=true'" -ForegroundColor Cyan
         }
     }
     else {
@@ -190,12 +198,18 @@ if ($EnablePages) {
         $json = gh repo view "$RepoName" --json nameWithOwner | ConvertFrom-Json
         $fullRepoName = $json.nameWithOwner
         
+        # Enable Pages (Source = Branch main, Path /)
+        # Note: If you want to use GitHub Actions for Pages (build_type=workflow), you would use:
+        # -F "build_type=workflow" instead of source.
+        # For now, we stick to standard branch deployment for Jekyll compatibility unless specified.
         $pagesCmd = "api repos/$fullRepoName/pages -X POST -F `"source[branch]=main`" -F `"source[path]=/`""
         Invoke-GhCommand $pagesCmd
         
+        # Configure CNAME and Enforce HTTPS
         if ($CNAME) {
-            Write-Host "Setting CNAME to $CNAME..."
-            $cnameCmd = "api repos/$fullRepoName/pages -X PUT -F `"cname=$CNAME`""
+            Write-Host "Setting CNAME to $CNAME and enforcing HTTPS..."
+            # We can often set these in the same or separate calls. The PUT endpoint updates settings.
+            $cnameCmd = "api repos/$fullRepoName/pages -X PUT -F `"cname=$CNAME`" -F `"https_enforced=true`""
             Invoke-GhCommand $cnameCmd
         }
     }

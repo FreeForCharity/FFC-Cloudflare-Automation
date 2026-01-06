@@ -24,8 +24,6 @@ on:
         type: choice
         options:
           - public
-          - private
-          - internal
       EnableIssues:
         description: 'Enable Issues'
         required: false
@@ -37,7 +35,7 @@ on:
         default: false
         type: boolean
       CNAME:
-        description: 'Custom Domain (CNAME) for Pages'
+        description: 'Custom Domain (CNAME) - Leave empty to auto-detect from FFC-EX-<domain>'
         required: false
         type: string
       DryRun:

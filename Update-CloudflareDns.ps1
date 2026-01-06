@@ -330,6 +330,34 @@ function Enable-DmarcManagement {
         }
     }
 
+    function Get-CfApiErrorMessage {
+        param([AllowNull()][string]$ErrorBody)
+
+        if ([string]::IsNullOrWhiteSpace($ErrorBody)) { return $null }
+
+        # Cloudflare error responses are typically JSON with an `errors` array.
+        # Keep output short (single line) so it is readable in Actions logs.
+        try {
+            $json = $ErrorBody | ConvertFrom-Json -ErrorAction Stop
+            if ($json -and $json.errors -and $json.errors.Count -gt 0) {
+                $msg = $json.errors[0].message
+                if ($msg) { return ($msg -replace "\r|\n", ' ').Trim() }
+            }
+            if ($json -and $json.messages -and $json.messages.Count -gt 0) {
+                $m = $json.messages[0]
+                if ($m) { return (($m | Out-String) -replace "\r|\n", ' ').Trim() }
+            }
+        }
+        catch {
+            # Not JSON; fall through
+        }
+
+        # Non-JSON: return a trimmed snippet
+        $snippet = ($ErrorBody -replace "\r|\n", ' ').Trim()
+        if ($snippet.Length -gt 180) { return $snippet.Substring(0, 180) + '…' }
+        return $snippet
+    }
+
     foreach ($candidate in $candidates) {
         try {
             $null = Invoke-CfApi -Method $candidate.Method -Uri $candidate.Uri -Body $candidate.Body
@@ -339,25 +367,34 @@ function Enable-DmarcManagement {
         catch {
             $details = Get-CfHttpErrorDetails -Exception $_.Exception
             $msg = $_.Exception.Message
+            $cfMsg = Get-CfApiErrorMessage -ErrorBody $details.ErrorBody
+
             if ($details.StatusCode) {
-                $attemptSummaries += "${($candidate.Method)} ${($candidate.Uri)} -> HTTP $($details.StatusCode): $msg"
+                $line = "$($candidate.Method) $($candidate.Uri) -> HTTP $($details.StatusCode): $msg"
             }
             else {
-                $attemptSummaries += "${($candidate.Method)} ${($candidate.Uri)} -> $msg"
+                $line = "$($candidate.Method) $($candidate.Uri) -> $msg"
             }
+
+            if (-not [string]::IsNullOrWhiteSpace($cfMsg)) {
+                $line += " | cf: $cfMsg"
+            }
+
+            $attemptSummaries += $line
 
             # Try next endpoint
             continue
         }
     }
 
-    $summaryText = ''
     if ($attemptSummaries.Count -gt 0) {
-        $shown = $attemptSummaries | Select-Object -First 4
-        $summaryText = " Attempts (first $($shown.Count)): " + ($shown -join ' | ')
+        Write-Warning "[OPTIONAL] Could not enable Cloudflare DMARC Management for $ZoneName via API. Enable in dashboard: Email > DMARC Management. (Token must include 'Dmarc Management Edit' permission.)"
+        Write-Host "DMARC Management enable attempts (first 6):" -ForegroundColor Yellow
+        $attemptSummaries | Select-Object -First 6 | ForEach-Object { Write-Host " - $_" -ForegroundColor Yellow }
     }
-
-    Write-Warning "[OPTIONAL] Could not enable Cloudflare DMARC Management for $ZoneName via API.$summaryText Enable in dashboard: Email > DMARC Management. (Token must include 'Dmarc Management Edit' permission.)"
+    else {
+        Write-Warning "[OPTIONAL] Could not enable Cloudflare DMARC Management for $ZoneName via API. Enable in dashboard: Email > DMARC Management. (Token must include 'Dmarc Management Edit' permission.)"
+    }
     return $false
 }
 

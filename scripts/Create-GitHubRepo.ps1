@@ -201,7 +201,8 @@ if ($EnablePages) {
     if ($DryRun) {
         Write-Host "[DRY RUN] gh api repos/:owner/$TargetRepo/pages -X POST -F 'source[branch]=main' -F 'source[path]=/'" -ForegroundColor Cyan
         if ($CNAME) {
-            Write-Host "[DRY RUN] gh api repos/:owner/$TargetRepo/pages -X PUT -F 'cname=$CNAME' -F 'https_enforced=true'" -ForegroundColor Cyan
+            Write-Host "[DRY RUN] gh api repos/:owner/$TargetRepo/pages -X PUT -F 'cname=$CNAME'" -ForegroundColor Cyan
+            Write-Host "[DRY RUN] gh api repos/:owner/$TargetRepo/pages -X PUT -F 'https_enforced=true'" -ForegroundColor Cyan
         }
     }
     else {
@@ -219,10 +220,28 @@ if ($EnablePages) {
         
         # Configure CNAME and Enforce HTTPS
         if ($CNAME) {
-            Write-Host "Setting CNAME to $CNAME and enforcing HTTPS..."
-            # We can often set these in the same or separate calls. The PUT endpoint updates settings.
-            $cnameCmd = "api repos/$fullRepoName/pages -X PUT -F `"cname=$CNAME`" -F `"https_enforced=true`""
+            Write-Host "Setting CNAME to $CNAME..."
+            # 1. Set CNAME first (without HTTPS enforcement to avoid 'Certificate not ready' errors)
+            $cnameCmd = "api repos/$fullRepoName/pages -X PUT -F `"cname=$CNAME`""
             Invoke-GhCommand $cnameCmd
+
+            # 2. Try to Enforce HTTPS (This often fails immediately after CNAME set due to cert provisioning)
+            Write-Host "Attempting to enforce HTTPS (may fail if cert is not yet provisioned)..."
+            if ($DryRun) {
+                Write-Host "[DRY RUN] gh api repos/$fullRepoName/pages -X PUT -F 'https_enforced=true'" -ForegroundColor Cyan
+            }
+            else {
+                # We use a try/catch equivalent logic or just allow it to fail non-fatally
+                # Since Invoke-GhCommand uses Invoke-Expression and script has $ErrorActionPreference = "Stop", 
+                # we need to be careful.
+                try {
+                    gh api repos/$fullRepoName/pages -X PUT -F "https_enforced=true" 2>&1 | Out-Null
+                    Write-Host "HTTPS Enforcement Enabled." -ForegroundColor Green
+                }
+                catch {
+                    Write-Warning "Could not enforce HTTPS immediately (Certificate likely provisioning). Please enable it later in Settings."
+                }
+            }
         }
     }
 }

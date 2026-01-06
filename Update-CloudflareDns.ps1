@@ -370,6 +370,58 @@ function Enable-DmarcManagement {
         [Parameter(Mandatory = $true)][string]$ZoneName
     )
 
+    function Get-DmarcManagementStatus {
+        param(
+            [Parameter(Mandatory = $true)][string]$ZoneId,
+            [Parameter(Mandatory = $true)][string]$ZoneName
+        )
+
+        $getCandidates = @(
+            @{ Uri = "/zones/$ZoneId/dmarc_management" },
+            @{ Uri = "/zones/$ZoneId/email/dmarc_management" }
+        )
+
+        foreach ($c in $getCandidates) {
+            try {
+                $resp = Invoke-CfApi -Method 'GET' -Uri $c.Uri
+
+                # Try to infer an 'enabled' flag from common shapes.
+                $enabled = $null
+                try {
+                    if ($resp -and ($resp.PSObject.Properties.Name -contains 'result') -and $resp.result) {
+                        if ($resp.result.PSObject.Properties.Name -contains 'enabled') { $enabled = [bool]$resp.result.enabled }
+                        elseif ($resp.result.PSObject.Properties.Name -contains 'is_enabled') { $enabled = [bool]$resp.result.is_enabled }
+                        elseif ($resp.result.PSObject.Properties.Name -contains 'status') { $enabled = ($resp.result.status -match '^(?i)enabled|active$') }
+                    }
+                }
+                catch {
+                    $enabled = $null
+                }
+
+                if ($null -ne $enabled) {
+                    Write-Host "[INFO] DMARC Management status via GET $($c.Uri): enabled=$enabled" -ForegroundColor Cyan
+                    return [pscustomobject]@{ Uri = $c.Uri; Enabled = $enabled }
+                }
+
+                Write-Host "[INFO] DMARC Management status via GET $($c.Uri): reachable (unable to infer enabled flag)" -ForegroundColor Cyan
+                return [pscustomobject]@{ Uri = $c.Uri; Enabled = $null }
+            }
+            catch {
+                # Try next
+                continue
+            }
+        }
+
+        Write-Host "[INFO] DMARC Management status GET not routable (no DMARC Management API surface detected)" -ForegroundColor Yellow
+        return $null
+    }
+
+    $status = Get-DmarcManagementStatus -ZoneId $ZoneId -ZoneName $ZoneName
+    if ($status -and $status.Enabled -eq $true) {
+        Write-Host "[OK] DMARC Management already enabled for $ZoneName (via $($status.Uri))" -ForegroundColor Green
+        return $true
+    }
+
     # Cloudflare DMARC Management enablement is primarily documented as a Dashboard action.
     # Cloudflare exposes token permissions for "Dmarc Management Edit", but the public API
     # surface for enablement is not clearly documented. We attempt a small set of likely

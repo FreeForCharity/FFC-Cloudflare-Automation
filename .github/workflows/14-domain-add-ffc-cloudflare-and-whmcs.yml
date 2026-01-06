@@ -287,7 +287,7 @@ jobs:
           "issues_count=$($issues.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload Cloudflare outputs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: domain-add-cloudflare
           path: ${{ steps.enforce.outputs.out_dir }}/*.txt

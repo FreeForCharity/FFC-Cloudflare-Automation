@@ -209,6 +209,15 @@ function Invoke-CfApi {
             $stream = $_.Exception.Response.GetResponseStream()
             $reader = [System.IO.StreamReader]::new($stream)
             $body = $reader.ReadToEnd()
+            try {
+                # Preserve the body for downstream callers (e.g., diagnostics)
+                # Note: the response stream can only be read once.
+                $_.Exception.Data['CfErrorBody'] = $body
+            }
+            catch {
+                # best-effort
+            }
+
             Write-Error "API Error Body: $body"
         }
         throw
@@ -305,23 +314,34 @@ function Enable-DmarcManagement {
         $errorBody = $null
 
         try {
+            if ($Exception.Data -and $Exception.Data.Contains('CfErrorBody')) {
+                $errorBody = [string]$Exception.Data['CfErrorBody']
+            }
+        }
+        catch {
+            $errorBody = $null
+        }
+
+        try {
             if ($Exception.Response) {
                 try { $statusCode = [int]$Exception.Response.StatusCode } catch { $statusCode = $null }
-                try {
-                    $stream = $Exception.Response.GetResponseStream()
-                    if ($stream) {
-                        $reader = [System.IO.StreamReader]::new($stream)
-                        $errorBody = $reader.ReadToEnd()
+                if ([string]::IsNullOrWhiteSpace($errorBody)) {
+                    try {
+                        $stream = $Exception.Response.GetResponseStream()
+                        if ($stream) {
+                            $reader = [System.IO.StreamReader]::new($stream)
+                            $errorBody = $reader.ReadToEnd()
+                        }
                     }
-                }
-                catch {
-                    $errorBody = $null
+                    catch {
+                        $errorBody = $null
+                    }
                 }
             }
         }
         catch {
             $statusCode = $null
-            $errorBody = $null
+            # keep any preserved $errorBody
         }
 
         return [pscustomobject]@{

@@ -1,4 +1,4 @@
-name: '03. DNS - Manage Record (Manual)'
+name: '03. DNS - Manage Record (Manual / Issue Label)'
 run-name:
   'Manage Record: ${{ inputs.domain }} (${{ inputs.record_type }} ${{ inputs.record_name }})'
 on:

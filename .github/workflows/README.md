@@ -36,7 +36,8 @@ domain configuration.
 
 ### 03–06 DNS workflows
 
-- **03. DNS - Manage Record (Manual)**: create/update/delete one record (best for one-off changes).
+- **03. DNS - Manage Record (Manual / Issue Label)**: create/update/delete one record (best for
+  one-off changes).
   - Also supports an issue-triggered run when the label `run-dns-manage-record` is applied.
 - **04. DNS - Audit Compliance (Report)**: report-only compliance check.
 - **05. DNS - Enforce Standard (Fix)**: apply standard DNS configuration (DNS-only).

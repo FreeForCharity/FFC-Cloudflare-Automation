@@ -162,9 +162,9 @@ if ($EnableIssues) { $editCmd += " --enable-issues" } else { $editCmd += " --ena
 if ($EnableProjects) { $editCmd += " --enable-projects" } else { $editCmd += " --enable-projects=false" }
 if ($EnableWiki) { $editCmd += " --enable-wiki" } else { $editCmd += " --enable-wiki=false" }
 
-if ($AllowSquashMerge) { $editCmd += " --allow-squash-merge" } else { $editCmd += " --allow-squash-merge=false" }
-if ($AllowMergeCommit) { $editCmd += " --allow-merge-commit" } else { $editCmd += " --allow-merge-commit=false" }
-if ($AllowRebaseMerge) { $editCmd += " --allow-rebase-merge" } else { $editCmd += " --allow-rebase-merge=false" }
+if ($AllowSquashMerge) { $editCmd += " --enable-squash-merge" } else { $editCmd += " --enable-squash-merge=false" }
+if ($AllowMergeCommit) { $editCmd += " --enable-merge-commit" } else { $editCmd += " --enable-merge-commit=false" }
+if ($AllowRebaseMerge) { $editCmd += " --enable-rebase-merge" } else { $editCmd += " --enable-rebase-merge=false" }
 
 if ($DeleteBranchOnMerge) { $editCmd += " --delete-branch-on-merge" } else { $editCmd += " --delete-branch-on-merge=false" }
 

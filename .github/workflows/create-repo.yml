@@ -15,7 +15,7 @@ on:
       TemplateRepo:
         description: 'Template repository (owner/repo)'
         required: true
-        default: 'FreeForCharity/template-repo' # Change this to your actual template
+        default: 'FreeForCharity/FFC-IN-Single_Page_Template_Jekell'
         type: string
       Visibility:
         description: 'Visibility'

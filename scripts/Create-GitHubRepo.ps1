@@ -53,7 +53,7 @@
     If set, only prints the commands that would be executed.
 
 .EXAMPLE
-    .\Create-GitHubRepo.ps1 -RepoName "new-project" -TemplateRepo "FreeForCharity/template-repo" -EnablePages -DryRun
+    .\Create-GitHubRepo.ps1 -RepoName "new-project" -TemplateRepo "FreeForCharity/FFC-IN-Single_Page_Template_Jekell" -EnablePages -DryRun
 #>
 
 [CmdletBinding()]

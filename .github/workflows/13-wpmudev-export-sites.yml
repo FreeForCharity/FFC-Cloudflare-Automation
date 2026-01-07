@@ -1,4 +1,4 @@
-name: '40. WPMUDEV - Export Sites/Domains (Read-only)'
+name: '40. WPMUDEV - Export Sites/Domains (Read-only) [WPMUDEV]'
 
 on:
   workflow_dispatch:

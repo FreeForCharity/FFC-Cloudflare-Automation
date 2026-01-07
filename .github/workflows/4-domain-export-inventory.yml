@@ -1,0 +1,298 @@
+name: '04. Domain - Export Inventory (All Sources) [CF+M365+WHMCS+WPMUDEV]'
+run-name: 'Domain Inventory Export (All Sources)'
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export_cloudflare:
+    name: Export Cloudflare zones
+    runs-on: windows-latest
+    environment: cloudflare-prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required Cloudflare secrets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}")) {
+            throw 'FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)'
+          }
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}")) {
+            throw 'CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)'
+          }
+
+      - name: Export zones (FFC)
+        shell: pwsh
+        env:
+          CF_TOKEN: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+        run: |
+          .\Export-CloudflareDns.ps1 -Token $env:CF_TOKEN -OutputFile "domain_summary_ffc.csv"
+
+      - name: Export zones (CM)
+        shell: pwsh
+        env:
+          CF_TOKEN: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+        run: |
+          .\Export-CloudflareDns.ps1 -Token $env:CF_TOKEN -OutputFile "domain_summary_cm.csv"
+
+      - name: Merge Cloudflare exports
+        shell: pwsh
+        run: |
+          $files = @('domain_summary_ffc.csv', 'domain_summary_cm.csv') | Where-Object { Test-Path $_ }
+          if ($files.Count -eq 0) { throw 'No export files were generated; cannot produce domain_summary.csv.' }
+
+          $rows = foreach ($f in $files) { Import-Csv $f }
+          $seen = @{}
+          $merged = foreach ($r in $rows) {
+            if (-not $r.zone) { continue }
+            $key = $r.zone.ToString().ToLowerInvariant()
+            if (-not $seen.ContainsKey($key)) {
+              $seen[$key] = $true
+              $r
+            }
+          }
+
+          $merged | Sort-Object zone | Export-Csv -Path 'domain_summary.csv' -NoTypeInformation -Encoding utf8
+          Write-Host "Merged $($merged.Count) unique zones into domain_summary.csv"
+
+      - name: Upload artifact (Cloudflare)
+        uses: actions/upload-artifact@v6
+        with:
+          name: domain-inventory-cloudflare
+          path: domain_summary.csv
+          if-no-files-found: error
+
+  export_m365:
+    name: Export M365 tenant domains
+    runs-on: windows-latest
+    environment: m365-prod
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Acquire Microsoft Graph token
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $token = (az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+          if (-not $token) { throw 'Failed to acquire Graph access token via Azure CLI.' }
+          "GRAPH_ACCESS_TOKEN=$token" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Export tenant domains (CSV)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $output = 'm365_domains.csv'
+          $lines = @(pwsh -NoProfile -File scripts/m365-domain-list.ps1)
+
+          if ($lines.Count -lt 2) {
+            throw 'm365-domain-list.ps1 did not return expected tab-separated output.'
+          }
+
+          # First line is a header with tab-separated column names.
+          $header = $lines[0]
+          $rows = @()
+          foreach ($line in $lines | Select-Object -Skip 1) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $parts = $line -split "`t"
+            if ($parts.Count -lt 1) { continue }
+
+            $rows += [PSCustomObject]@{
+              domain        = $parts[0]
+              isDefault     = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+              isVerified    = if ($parts.Count -gt 2) { $parts[2] } else { '' }
+              supportsEmail = if ($parts.Count -gt 3) { $parts[3] } else { '' }
+              source        = 'm365'
+            }
+          }
+
+          $rows | Export-Csv -Path $output -NoTypeInformation -Encoding utf8
+
+          "## M365 domain export" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Domains exported: $($rows.Count)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Output: $output" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload artifact (M365)
+        uses: actions/upload-artifact@v6
+        with:
+          name: domain-inventory-m365
+          path: m365_domains.csv
+          if-no-files-found: error
+
+  export_whmcs:
+    name: Export WHMCS domains
+    runs-on: windows-latest
+    environment: whmcs-prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required WHMCS secrets
+        shell: pwsh
+        env:
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
+            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
+          }
+
+      - name: Export domains (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = 'whmcs_domains.csv'
+          & pwsh -NoProfile -File .\scripts\whmcs-domain-export.ps1 -ApiUrl $env:WHMCS_API_URL -OutputFile $out
+          if ($LASTEXITCODE -ne 0) {
+            throw "WHMCS export script failed with exit code $LASTEXITCODE. See logs above."
+          }
+          if (-not (Test-Path $out)) {
+            throw "Expected output file not found: $out"
+          }
+
+      - name: Upload artifact (WHMCS)
+        uses: actions/upload-artifact@v6
+        with:
+          name: domain-inventory-whmcs
+          path: whmcs_domains.csv
+          if-no-files-found: error
+
+  export_wpmudev:
+    name: Export WPMUDEV domains
+    runs-on: ubuntu-latest
+    environment: wpmudev-prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Export domains
+        shell: pwsh
+        env:
+          WPMUDEV_API_TOKEN: ${{ secrets.FFC_WPMUDEV_GA_API_Token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = 'wpmudev_domains.csv'
+          pwsh -NoProfile -File scripts/wpmudev-sites-export.ps1 -OutputFile $out
+          if (-not (Test-Path $out)) {
+            throw "Expected output file not found: $out"
+          }
+
+      - name: Upload artifact (WPMUDEV)
+        uses: actions/upload-artifact@v6
+        with:
+          name: domain-inventory-wpmudev
+          path: wpmudev_domains.csv
+          if-no-files-found: error
+
+  combine:
+    name: Combine and normalize inventory
+    runs-on: ubuntu-latest
+    needs:
+      - export_cloudflare
+      - export_m365
+      - export_whmcs
+      - export_wpmudev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: inventory
+
+      - name: Build combined domain list
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $out = 'domain_inventory_all_sources.csv'
+
+          $items = @()
+
+          $cf = Get-ChildItem -Path 'inventory/domain-inventory-cloudflare' -Filter '*.csv' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($cf) {
+            $rows = Import-Csv -Path $cf.FullName
+            foreach ($r in $rows) {
+              if ($r.zone) {
+                $items += [PSCustomObject]@{ domain = ($r.zone.ToString().Trim().ToLowerInvariant()); source = 'cloudflare' }
+              }
+            }
+          }
+
+          $m365 = Get-ChildItem -Path 'inventory/domain-inventory-m365' -Filter '*.csv' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($m365) {
+            $rows = Import-Csv -Path $m365.FullName
+            foreach ($r in $rows) {
+              if ($r.domain) {
+                $items += [PSCustomObject]@{ domain = ($r.domain.ToString().Trim().ToLowerInvariant()); source = 'm365' }
+              }
+            }
+          }
+
+          $whmcs = Get-ChildItem -Path 'inventory/domain-inventory-whmcs' -Filter '*.csv' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($whmcs) {
+            $rows = Import-Csv -Path $whmcs.FullName
+            foreach ($r in $rows) {
+              if ($r.domain) {
+                $items += [PSCustomObject]@{ domain = ($r.domain.ToString().Trim().ToLowerInvariant()); source = 'whmcs' }
+              }
+            }
+          }
+
+          $wpmu = Get-ChildItem -Path 'inventory/domain-inventory-wpmudev' -Filter '*.csv' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($wpmu) {
+            $rows = Import-Csv -Path $wpmu.FullName
+            foreach ($r in $rows) {
+              if ($r.domain) {
+                $items += [PSCustomObject]@{ domain = ($r.domain.ToString().Trim().ToLowerInvariant()); source = 'wpmudev' }
+              }
+            }
+          }
+
+          $items = $items | Where-Object { -not [string]::IsNullOrWhiteSpace($_.domain) }
+
+          $unique = @{}
+          foreach ($i in $items) {
+            $k = "$($i.domain)|$($i.source)"
+            if (-not $unique.ContainsKey($k)) {
+              $unique[$k] = $true
+            }
+          }
+
+          $final = foreach ($k in ($unique.Keys | Sort-Object)) {
+            $parts = $k.Split('|', 2)
+            [PSCustomObject]@{ domain = $parts[0]; source = $parts[1] }
+          }
+
+          $final | Export-Csv -Path $out -NoTypeInformation -Encoding utf8
+
+          "## Domain inventory (all sources)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Rows (domain+source): $($final.Count)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Output: $out" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload artifact (combined)
+        uses: actions/upload-artifact@v6
+        with:
+          name: domain-inventory-all-sources
+          path: domain_inventory_all_sources.csv
+          if-no-files-found: error

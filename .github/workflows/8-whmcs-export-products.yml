@@ -1,4 +1,4 @@
-name: '31. WHMCS - Export Products (Report)'
+name: '31. WHMCS - Export Products (Report) [WHMCS]'
 run-name: 'WHMCS Export Products'
 
 on:

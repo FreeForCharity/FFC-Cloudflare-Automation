@@ -1,4 +1,4 @@
-name: '01. Domain - Status (Check)'
+name: '01. Domain - Status (All Sources) [CF+M365]'
 run-name: 'Domain Status: ${{ inputs.domain }}'
 
 on:

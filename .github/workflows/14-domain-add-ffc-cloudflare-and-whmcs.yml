@@ -1,4 +1,4 @@
-name: '14. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin)'
+name: '02. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS]'
 run-name: 'Add Domain: ${{ inputs.domain }}'
 
 on:

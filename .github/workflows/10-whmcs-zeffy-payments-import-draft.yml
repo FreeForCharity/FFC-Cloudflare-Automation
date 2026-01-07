@@ -1,4 +1,4 @@
-name: '33. WHMCS -> Zeffy Payments Import (Draft)'
+name: '33. WHMCS -> Zeffy Payments Import (Draft) [WHMCS]'
 run-name: 'WHMCS -> Zeffy Import Draft'
 
 on:

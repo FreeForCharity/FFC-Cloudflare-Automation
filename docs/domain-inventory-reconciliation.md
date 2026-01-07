@@ -2,11 +2,12 @@
 
 ## Overview
 
-Free For Charity (FFC) manages domains across three primary sources of truth:
+Free For Charity (FFC) manages domains across four primary sources of truth:
 
 1. **Cloudflare** - DNS zones and records (the source of truth for DNS configuration)
-2. **WHMCS** - Domain billing and ownership records
-3. **WPMUDEV** - Hosted sites inventory
+2. **Microsoft 365 (M365)** - Tenant domains and email enablement state
+3. **WHMCS** - Domain billing and ownership records
+4. **WPMUDEV** - Hosted sites inventory
 
 This guide explains how to reconcile these three sources to detect drift, identify
 misconfigurations, and maintain a clean, consistent domain portfolio.
@@ -35,15 +36,24 @@ By comparing inventories, administrators can:
 
 ## Prerequisites
 
-Before reconciling, export inventories from all three sources:
+Before reconciling, export inventories from all sources.
+
+If you want a single “one-click” export, run:
+
+- **04. Domain - Export Inventory (All Sources) [CF+M365+WHMCS+WPMUDEV]**
+
+It produces a combined CSV (`domain_inventory_all_sources.csv`) and also uploads per-source exports.
+
+Otherwise, you can export each source individually:
 
 ### 1. Cloudflare Export
 
-**Workflow**: `06. DNS - Export All Domains (Report)` (`.github/workflows/4-export-summary.yml`)
+**Workflow**: `08. DNS - Export Cloudflare Zones (Report) [CF]`
+(`.github/workflows/4-export-summary.yml`)
 
 **How to run:**
 
-1. Actions → **06. DNS - Export All Domains (Report)**
+1. Actions → **08. DNS - Export Cloudflare Zones (Report) [CF]**
 2. Click **Run workflow**
 3. Download artifact: `domain_summary`
 
@@ -56,13 +66,21 @@ Before reconciling, export inventories from all three sources:
 - `www_cname_target` (CNAME target for www subdomain)
 - `m365_compliant` (whether MX points to outlook.com)
 
-### 2. WHMCS Export
+### 2. M365 Export (optional but recommended)
 
-**Workflow**: `30. WHMCS - Export Domains (Report)` (`.github/workflows/7-whmcs-export-domains.yml`)
+If you want to include tenant domains (for email onboarding drift), use the all-sources inventory
+workflow above, or the M365 listing workflow:
+
+- **21. M365 - List Tenant Domains [M365]** (`.github/workflows/6-m365-list-domains.yml`)
+
+### 3. WHMCS Export
+
+**Workflow**: `30. WHMCS - Export Domains (Report) [WHMCS]`
+(`.github/workflows/7-whmcs-export-domains.yml`)
 
 **How to run:**
 
-1. Actions → **30. WHMCS - Export Domains (Report)**
+1. Actions → **30. WHMCS - Export Domains (Report) [WHMCS]**
 2. Click **Run workflow**
 3. Download artifact: `whmcs_domains`
 
@@ -76,14 +94,14 @@ Before reconciling, export inventories from all three sources:
 - `expirydate`
 - Additional billing/status fields
 
-### 3. WPMUDEV Export
+### 4. WPMUDEV Export
 
-**Workflow**: `40. WPMUDEV - Export Sites/Domains (Read-only)`
+**Workflow**: `40. WPMUDEV - Export Sites/Domains (Read-only) [WPMUDEV]`
 (`.github/workflows/13-wpmudev-export-sites.yml`)
 
 **How to run:**
 
-1. Actions → **40. WPMUDEV - Export Sites/Domains (Read-only)**
+1. Actions → **40. WPMUDEV - Export Sites/Domains (Read-only) [WPMUDEV]**
 2. Click **Run workflow**
 3. Download artifact: `wpmudev-domain-inventory`
 
@@ -198,9 +216,10 @@ Create a comparison table (in Excel, Google Sheets, or PowerShell) with these co
 
 **Action:**
 
-1. Run workflow: **01. Domain - Status (Check)** with the domain
+1. Run workflow: **01. Domain - Status (All Sources) [CF+M365]** with the domain
 2. Review the status output to confirm DNS is missing
-3. Run workflow: **02. Domain - Enforce Standard (Fix)** in dry-run mode to see what would change
+3. Run workflow: **03. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]** in dry-run mode to
+   see what would change
 4. If output looks correct, re-run with `dry_run=false` to apply DNS configuration
 5. Verify the site is accessible via the domain
 
@@ -221,11 +240,11 @@ Create a comparison table (in Excel, Google Sheets, or PowerShell) with these co
 
 **Action:**
 
-1. Run workflow: **01. Domain - Status (Check)** to see current DNS
+1. Run workflow: **01. Domain - Status (All Sources) [CF+M365]** to see current DNS
 2. Compare `apex_a_ips` with expected values:
    - **GitHub Pages**: `185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`
    - **WPMUDEV hosting**: Check WPMUDEV documentation for current IPs
-3. Run workflow: **02. Domain - Enforce Standard (Fix)** to correct DNS
+3. Run workflow: **03. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]** to correct DNS
 4. Verify the site is accessible after DNS propagation
 
 **Outcome:** Cloudflare DNS updated to match WPMUDEV hosting requirements.

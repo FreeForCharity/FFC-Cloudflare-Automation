@@ -1,4 +1,4 @@
-name: '04. DNS - Audit Compliance (Report)'
+name: '07. DNS - Audit Compliance (Report) [CF]'
 run-name: 'Check Compliance: ${{ inputs.domain }}'
 
 on:

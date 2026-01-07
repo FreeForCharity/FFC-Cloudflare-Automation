@@ -1,4 +1,4 @@
-name: '32. WHMCS - Export Payment Methods (Research)'
+name: '32. WHMCS - Export Payment Methods (Research) [WHMCS]'
 run-name: 'WHMCS Export Payment Methods'
 
 on:

@@ -1,4 +1,4 @@
-name: '20. M365 - List Tenant Domains'
+name: '21. M365 - List Tenant Domains [M365]'
 run-name: 'M365: List tenant domains'
 
 on:

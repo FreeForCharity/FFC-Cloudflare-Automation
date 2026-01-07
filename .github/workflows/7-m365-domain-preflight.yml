@@ -1,4 +1,4 @@
-name: '21. M365 - Domain Preflight (Read-only)'
+name: '20. M365 - Domain Preflight (Read-only) [M365+CF]'
 
 permissions:
   contents: read

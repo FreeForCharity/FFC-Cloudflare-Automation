@@ -1,4 +1,4 @@
-name: '02. Domain - Enforce Standard (Fix)'
+name: '03. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]'
 run-name: 'Enforce Domain Standard: ${{ inputs.domain }}'
 
 on:

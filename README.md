@@ -18,7 +18,7 @@ resources.
 
 This repository contains automation utilities and scripts for managing Free For Charity's Cloudflare
 DNS configuration. Administrators execute DNS changes based on structured issue requests, using
-either the Cloudflare Dashboard for manual updates or Python scripts and Cloudflare API tools for
+either the Cloudflare Dashboard for manual updates or PowerShell scripts and Cloudflare API tools for
 automated, consistent, and auditable domain management.
 
 For details on the GitHub Actions standard enforcement workflow (including required GitHub Pages
@@ -31,23 +31,27 @@ For the end-to-end runbook to align a domain across Cloudflare + Microsoft 365 (
 DKIM v2 validation), see
 [docs/end-to-end-testing-m365-cloudflare.md](docs/end-to-end-testing-m365-cloudflare.md).
 
-## Simplified 3-step domain workflow
+## Simplified domain workflow
 
-For the new “3 step” approach (tracked in issue #61), use these GitHub Actions:
+For the simplified approach (tracked in issue #61), use these GitHub Actions:
 
-1. **01. Domain - Status (Check)**
+1. **01. Domain - Status (All Sources) [CF+M365]**
 
 - Read-only report across Cloudflare + M365
 - Includes a Cloudflare “what will change” dry-run preview
 
-2. **02. Domain - Enforce Standard (Fix)**
+2. **03. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]**
 
 - Cloudflare standard enforcement + M365 DKIM enable flow (when run in LIVE mode)
 
-3. **Issue post-back (Step 3)**
+3. **Issue post-back (optional)**
 
-- Both workflows accept an optional `issue_number` input and will comment results back to that
-  issue.
+- Both workflows accept an optional `issue_number` input and will comment results back to that issue.
+
+Additional operational workflows:
+
+- **02. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS]**: common onboarding path.
+- **04. Domain - Export Inventory (All Sources) [CF+M365+WHMCS+WPMUDEV]**: inventory reconciliation.
 
 ## Features
 
@@ -306,10 +310,13 @@ correctly.
 
 See the issue templates for detailed configuration instructions.
 
-## DNS Summary Export
+## DNS Export (Cloudflare zones)
 
 Use `Export-CloudflareDns.ps1` to export a CSV summarizing apex A/AAAA and `www` CNAME details for
-specific zones.
+Cloudflare zones.
+
+In GitHub Actions, use **08. DNS - Export Cloudflare Zones (Report) [CF]** to run the export and
+download `domain_summary.csv` as an artifact.
 
 ### Usage
 
@@ -340,9 +347,8 @@ The script supports tokens with various permission levels via environment variab
 - Secrets (recommended as Environment secrets on `cloudflare-prod`):
   - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
   - `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
-- Workflow: `DNS Summary Export`.
-  - Provide `zones` input to target specific zones, or set `all_zones=true` to export everything
-    accessible to the token.
+- Workflow: `08. DNS - Export Cloudflare Zones (Report) [CF]`.
+  - Produces `domain_summary.csv` as an Actions artifact (`domain_summary`).
 
 ## Repository Structure
 
@@ -356,15 +362,15 @@ The script supports tokens with various permission levels via environment variab
 │   │   ├── 03-remove-domain.yml
 │   │   ├── 04-github-pages-apex.yml
 │   │   └── 05-github-pages-subdomain.yml
-│   ├── workflows/          # GitHub Actions workflows
-│   │   ├── ci.yml          # Continuous Integration
-│   │   ├── codeql-analysis.yml  # Security scanning
-│   │   ├── 1-audit-compliance.yml  # [DNS] Report - Check Compliance
-│   │   ├── 2-enforce-standard.yml  # [DNS] Fix - Enforce Standard
-│   │   ├── 3-manage-record.yml     # [DNS] Manual - Manage Record
-│   │   ├── 4-export-summary.yml    # [DNS] Report - Export All Domains
-│   │   ├── 99-legacy-zone-add.yml  # Legacy zone-add (kept for reference)
+│   ├── workflows/          # Active GitHub Actions workflows (numbered for Actions UI ordering)
+│   │   ├── 0-domain-status.yml
+│   │   ├── 1-enforce-domain-standard.yml
+│   │   ├── 4-export-summary.yml
+│   │   ├── 4-domain-export-inventory.yml
+│   │   ├── ci.yml
+│   │   ├── codeql-analysis.yml
 │   │   └── README.md       # Workflow documentation
+│   ├── workflows-deprecated/ # Deprecated workflow backups (not shown in Actions UI)
 │   └── dependabot.yml      # Dependency update configuration
 ├── CONTRIBUTING.md         # Contribution guidelines
 ├── LICENSE                 # GNU AGPL v3 license
@@ -434,7 +440,7 @@ This repository uses GitHub Actions for automation:
 
 - **CI Workflow**: Validates configurations and checks for security issues
 - **CodeQL Analysis**: Performs automated security scanning
-- **DNS Summary Export**: Exports DNS configurations for reporting
+- **08. DNS - Export Cloudflare Zones (Report) [CF]**: Exports Cloudflare zone summaries for reporting
 - **Dependabot**: Keeps dependencies up-to-date
 
 For more information, see [.github/workflows/README.md](.github/workflows/README.md).

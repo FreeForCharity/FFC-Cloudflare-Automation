@@ -1,4 +1,4 @@
-name: '06. DNS - Export All Domains (Report)'
+name: '08. DNS - Export Cloudflare Zones (Report) [CF]'
 run-name: 'Export Domain Summary'
 
 on:

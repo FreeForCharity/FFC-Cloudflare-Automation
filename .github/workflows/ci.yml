@@ -1,4 +1,4 @@
-name: '91. Repo - CI Validate and Test'
+name: '91. Repo - CI Validate and Test [Repo]'
 
 on:
   pull_request:
@@ -16,6 +16,54 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+
+      - name: Validate workflow name prefixes (Actions UI order)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          files=(.github/workflows/*.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No workflow files found under .github/workflows"
+            exit 1
+          fi
+
+          declare -A seen
+          has_error=false
+
+          for f in "${files[@]}"; do
+            # Extract the *first* top-level name: line.
+            # (We intentionally ignore job/step 'name:' occurrences deeper in the YAML.)
+            first_name_line=$(grep -m 1 -E '^name:\s*' "$f" || true)
+            if [ -z "$first_name_line" ]; then
+              echo "::error file=$f::Missing top-level workflow name (expected a 'name:' near top of file)."
+              has_error=true
+              continue
+            fi
+
+            # Expect a leading two-digit numeric prefix like "01." in the workflow name.
+            prefix=$(printf '%s' "$first_name_line" | sed -nE "s/^name:\s*['\"]?([0-9]{2})\..*/\1/p")
+            if [ -z "$prefix" ]; then
+              echo "::error file=$f::Workflow name must start with a two-digit numeric prefix like '01.'. Got: $first_name_line"
+              has_error=true
+              continue
+            fi
+
+            if [[ -n "${seen[$prefix]:-}" ]]; then
+              echo "::error::Duplicate workflow name prefix '$prefix' found in: ${seen[$prefix]} and $f"
+              has_error=true
+              continue
+            fi
+
+            seen[$prefix]="$f"
+          done
+
+          if [ "$has_error" = true ]; then
+            exit 1
+          fi
+
+          echo "✓ Workflow name prefixes are present and unique (${#seen[@]} workflows)"
 
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v6

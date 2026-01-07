@@ -1,4 +1,4 @@
-name: '93. Repo - Initialize Labels'
+name: '93. Repo - Initialize Labels [Repo]'
 
 on:
   workflow_dispatch:

@@ -1,4 +1,4 @@
-name: '94. Repo - Sync Labels'
+name: '94. Repo - Sync Labels [Repo]'
 
 on:
   push:

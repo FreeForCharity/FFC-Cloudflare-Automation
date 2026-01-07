@@ -1,4 +1,4 @@
-name: '05. DNS - Enforce Standard (Fix)'
+name: '06. DNS - Enforce Standard (DNS-only) [CF]'
 run-name: 'Enforce Standard: ${{ inputs.domain }}'
 
 on:

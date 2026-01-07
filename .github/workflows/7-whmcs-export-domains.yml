@@ -1,4 +1,4 @@
-name: '30. WHMCS - Export Domains (Report)'
+name: '30. WHMCS - Export Domains (Report) [WHMCS]'
 run-name: 'WHMCS Export Domains'
 
 on:

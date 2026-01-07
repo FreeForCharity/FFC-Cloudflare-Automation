@@ -48,7 +48,8 @@ Otherwise, you can export each source individually:
 
 ### 1. Cloudflare Export
 
-**Workflow**: `08. DNS - Export Cloudflare Zones (Report) [CF]` (`.github/workflows/4-export-summary.yml`)
+**Workflow**: `08. DNS - Export Cloudflare Zones (Report) [CF]`
+(`.github/workflows/4-export-summary.yml`)
 
 **How to run:**
 
@@ -74,7 +75,8 @@ workflow above, or the M365 listing workflow:
 
 ### 3. WHMCS Export
 
-**Workflow**: `30. WHMCS - Export Domains (Report) [WHMCS]` (`.github/workflows/7-whmcs-export-domains.yml`)
+**Workflow**: `30. WHMCS - Export Domains (Report) [WHMCS]`
+(`.github/workflows/7-whmcs-export-domains.yml`)
 
 **How to run:**
 
@@ -216,7 +218,8 @@ Create a comparison table (in Excel, Google Sheets, or PowerShell) with these co
 
 1. Run workflow: **01. Domain - Status (All Sources) [CF+M365]** with the domain
 2. Review the status output to confirm DNS is missing
-3. Run workflow: **03. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]** in dry-run mode to see what would change
+3. Run workflow: **03. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]** in dry-run mode to
+   see what would change
 4. If output looks correct, re-run with `dry_run=false` to apply DNS configuration
 5. Verify the site is accessible via the domain
 

@@ -66,15 +66,16 @@ domain configuration.
 - **21. M365 - List Tenant Domains [M365]**: discovery/listing.
 - **22. M365 - Domain Status + DKIM (Toolbox) [M365]**: mixed utilities for domain and DKIM.
 - **23. M365 - Enable DKIM (Exchange Online) [M365+CF]**: focused DKIM enable.
-- **24. M365 - Add Tenant Domain (Admin) [M365]**: add a domain to the M365 tenant (Graph) and print DNS
-  verification records.
+- **24. M365 - Add Tenant Domain (Admin) [M365]**: add a domain to the M365 tenant (Graph) and print
+  DNS verification records.
 
 ### 30–33 WHMCS workflows
 
 - **30. WHMCS - Export Domains (Report) [WHMCS]**: export WHMCS domains for reconciliation.
 - **31. WHMCS - Export Products (Report) [WHMCS]**: export WHMCS products.
 - **32. WHMCS - Export Payment Methods (Research) [WHMCS]**: export WHMCS payment methods.
-- **33. WHMCS -> Zeffy Payments Import (Draft) [WHMCS]**: build a draft import CSV from WHMCS transactions.
+- **33. WHMCS -> Zeffy Payments Import (Draft) [WHMCS]**: build a draft import CSV from WHMCS
+  transactions.
 
 ### 40. WPMUDEV - Export Sites/Domains (Read-only) [WPMUDEV]
 
@@ -182,33 +183,33 @@ This workflow helps identify security vulnerabilities early in the development p
 
 ## Workflow Summary
 
-| Workflow                                   | Trigger                                   | Purpose                                                                                        |
-| ------------------------------------------ | ----------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| 0-domain-status.yml                        | Manual (workflow_dispatch)                | 01. Domain: Status (all sources) [CF+M365]                                                     |
-| 14-domain-add-ffc-cloudflare-and-whmcs.yml | Manual (workflow_dispatch)                | 02. Domain: Add to FFC Cloudflare + WHMCS nameservers (admin) [CF+WHMCS]                       |
-| 1-enforce-domain-standard.yml              | Manual (workflow_dispatch)                | 03. Domain: Enforce standard (GitHub apex + M365) [CF+M365]                                    |
-| 4-domain-export-inventory.yml              | Manual (workflow_dispatch)                | 04. Domain: Export inventory (all sources) [CF+M365+WHMCS+WPMUDEV]                             |
-| 3-manage-record.yml                        | Manual + issue label                      | 05. DNS: Manage a single record (plus label-gated issue trigger) [CF]                          |
-| 2-enforce-standard.yml                     | Manual (workflow_dispatch)                | 06. DNS: Enforce standard (DNS-only) [CF]                                                      |
-| 1-audit-compliance.yml                     | Manual (workflow_dispatch)                | 07. DNS: Audit compliance (report-only) [CF]                                                   |
-| 4-export-summary.yml                       | Manual (workflow_dispatch)                | 08. DNS: Export Cloudflare zones [CF]                                                          |
-| 11-cloudflare-zone-create.yml              | Manual (workflow_dispatch)                | 09. DNS: Create zone (explicit account selection) [CF]                                         |
-| 7-m365-domain-preflight.yml                | Manual (workflow_dispatch)                | 20. M365: Domain preflight (Graph + Cloudflare audit)                                          |
-| 6-m365-list-domains.yml                    | Manual (workflow_dispatch)                | 21. M365: List tenant domains                                                                  |
-| 5-m365-domain-and-dkim.yml                 | Manual (workflow_dispatch)                | 22. M365: Domain status + DKIM helpers                                                         |
-| 8-m365-dkim-enable.yml                     | Manual (workflow_dispatch)                | 23. M365: Enable DKIM (Exchange Online)                                                        |
-| 12-m365-add-tenant-domain.yml              | Manual (workflow_dispatch)                | 24. M365: Add tenant domain and print verification DNS records                                 |
-| 7-whmcs-export-domains.yml                 | Manual (workflow_dispatch)                | 30. WHMCS: Export domains                                                                      |
-| 8-whmcs-export-products.yml                | Manual (workflow_dispatch)                | 31. WHMCS: Export products                                                                     |
-| 9-whmcs-export-payment-methods.yml         | Manual (workflow_dispatch)                | 32. WHMCS: Export payment methods                                                              |
-| 10-whmcs-zeffy-payments-import-draft.yml   | Manual (workflow_dispatch)                | 33. WHMCS -> Zeffy: Build draft import CSV                                                     |
-| 13-wpmudev-export-sites.yml                | Manual (workflow_dispatch)                | 40. WPMUDEV: Export sites/domains for reconciliation                                           |
-| create-repo.yml                            | Manual (workflow_dispatch)                | 89. Repo: Create GitHub repo                                                                   |
-| deploy-pages.yml                           | Pushes to `main` + manual                 | 90. Repo: Deploy GitHub Pages                                                                  |
-| ci.yml                                     | PRs and pushes to `main`                  | 91. Repo: Lint workflows, validate scripts, check formatting and sensitive files               |
-| codeql-analysis.yml                        | PRs, pushes to `main`, weekly, and manual | 92. Repo: CodeQL scanning                                                                      |
-| initialize-labels.yml                      | Manual (workflow_dispatch)                | 93. Repo: Initialize labels from `.github/labels.yml`                                          |
-| sync-labels.yml                            | Push to `main` (labels.yml) + manual      | 94. Repo: Sync labels when `.github/labels.yml` changes                                        |
+| Workflow                                   | Trigger                                   | Purpose                                                                          |
+| ------------------------------------------ | ----------------------------------------- | -------------------------------------------------------------------------------- |
+| 0-domain-status.yml                        | Manual (workflow_dispatch)                | 01. Domain: Status (all sources) [CF+M365]                                       |
+| 14-domain-add-ffc-cloudflare-and-whmcs.yml | Manual (workflow_dispatch)                | 02. Domain: Add to FFC Cloudflare + WHMCS nameservers (admin) [CF+WHMCS]         |
+| 1-enforce-domain-standard.yml              | Manual (workflow_dispatch)                | 03. Domain: Enforce standard (GitHub apex + M365) [CF+M365]                      |
+| 4-domain-export-inventory.yml              | Manual (workflow_dispatch)                | 04. Domain: Export inventory (all sources) [CF+M365+WHMCS+WPMUDEV]               |
+| 3-manage-record.yml                        | Manual + issue label                      | 05. DNS: Manage a single record (plus label-gated issue trigger) [CF]            |
+| 2-enforce-standard.yml                     | Manual (workflow_dispatch)                | 06. DNS: Enforce standard (DNS-only) [CF]                                        |
+| 1-audit-compliance.yml                     | Manual (workflow_dispatch)                | 07. DNS: Audit compliance (report-only) [CF]                                     |
+| 4-export-summary.yml                       | Manual (workflow_dispatch)                | 08. DNS: Export Cloudflare zones [CF]                                            |
+| 11-cloudflare-zone-create.yml              | Manual (workflow_dispatch)                | 09. DNS: Create zone (explicit account selection) [CF]                           |
+| 7-m365-domain-preflight.yml                | Manual (workflow_dispatch)                | 20. M365: Domain preflight (Graph + Cloudflare audit)                            |
+| 6-m365-list-domains.yml                    | Manual (workflow_dispatch)                | 21. M365: List tenant domains                                                    |
+| 5-m365-domain-and-dkim.yml                 | Manual (workflow_dispatch)                | 22. M365: Domain status + DKIM helpers                                           |
+| 8-m365-dkim-enable.yml                     | Manual (workflow_dispatch)                | 23. M365: Enable DKIM (Exchange Online)                                          |
+| 12-m365-add-tenant-domain.yml              | Manual (workflow_dispatch)                | 24. M365: Add tenant domain and print verification DNS records                   |
+| 7-whmcs-export-domains.yml                 | Manual (workflow_dispatch)                | 30. WHMCS: Export domains                                                        |
+| 8-whmcs-export-products.yml                | Manual (workflow_dispatch)                | 31. WHMCS: Export products                                                       |
+| 9-whmcs-export-payment-methods.yml         | Manual (workflow_dispatch)                | 32. WHMCS: Export payment methods                                                |
+| 10-whmcs-zeffy-payments-import-draft.yml   | Manual (workflow_dispatch)                | 33. WHMCS -> Zeffy: Build draft import CSV                                       |
+| 13-wpmudev-export-sites.yml                | Manual (workflow_dispatch)                | 40. WPMUDEV: Export sites/domains for reconciliation                             |
+| create-repo.yml                            | Manual (workflow_dispatch)                | 89. Repo: Create GitHub repo                                                     |
+| deploy-pages.yml                           | Pushes to `main` + manual                 | 90. Repo: Deploy GitHub Pages                                                    |
+| ci.yml                                     | PRs and pushes to `main`                  | 91. Repo: Lint workflows, validate scripts, check formatting and sensitive files |
+| codeql-analysis.yml                        | PRs, pushes to `main`, weekly, and manual | 92. Repo: CodeQL scanning                                                        |
+| initialize-labels.yml                      | Manual (workflow_dispatch)                | 93. Repo: Initialize labels from `.github/labels.yml`                            |
+| sync-labels.yml                            | Push to `main` (labels.yml) + manual      | 94. Repo: Sync labels when `.github/labels.yml` changes                          |
 
 ## Deprecated workflows (backups only)
 

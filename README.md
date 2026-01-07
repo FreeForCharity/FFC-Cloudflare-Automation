@@ -18,8 +18,8 @@ resources.
 
 This repository contains automation utilities and scripts for managing Free For Charity's Cloudflare
 DNS configuration. Administrators execute DNS changes based on structured issue requests, using
-either the Cloudflare Dashboard for manual updates or PowerShell scripts and Cloudflare API tools for
-automated, consistent, and auditable domain management.
+either the Cloudflare Dashboard for manual updates or PowerShell scripts and Cloudflare API tools
+for automated, consistent, and auditable domain management.
 
 For details on the GitHub Actions standard enforcement workflow (including required GitHub Pages
 AAAA records), see [docs/enforce-standard-workflow.md](docs/enforce-standard-workflow.md).
@@ -46,11 +46,13 @@ For the simplified approach (tracked in issue #61), use these GitHub Actions:
 
 3. **Issue post-back (optional)**
 
-- Both workflows accept an optional `issue_number` input and will comment results back to that issue.
+- Both workflows accept an optional `issue_number` input and will comment results back to that
+  issue.
 
 Additional operational workflows:
 
-- **02. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS]**: common onboarding path.
+- **02. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS]**: common onboarding
+  path.
 - **04. Domain - Export Inventory (All Sources) [CF+M365+WHMCS+WPMUDEV]**: inventory reconciliation.
 
 ## Features
@@ -440,7 +442,8 @@ This repository uses GitHub Actions for automation:
 
 - **CI Workflow**: Validates configurations and checks for security issues
 - **CodeQL Analysis**: Performs automated security scanning
-- **08. DNS - Export Cloudflare Zones (Report) [CF]**: Exports Cloudflare zone summaries for reporting
+- **08. DNS - Export Cloudflare Zones (Report) [CF]**: Exports Cloudflare zone summaries for
+  reporting
 - **Dependabot**: Keeps dependencies up-to-date
 
 For more information, see [.github/workflows/README.md](.github/workflows/README.md).

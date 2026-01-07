@@ -35,7 +35,7 @@ jobs:
           for f in "${files[@]}"; do
             # Extract the *first* top-level name: line.
             # (We intentionally ignore job/step 'name:' occurrences deeper in the YAML.)
-            first_name_line=$(grep -m 1 -E '^name:\s*' "$f" || true)
+            first_name_line=$(head -n 20 "$f" | sed '1s/^\xEF\xBB\xBF//' | grep -m 1 -E '^name:\s*' || true)
             if [ -z "$first_name_line" ]; then
               echo "::error file=$f::Missing top-level workflow name (expected a 'name:' near top of file)."
               has_error=true

@@ -51,15 +51,20 @@ jobs:
           $DryRun = "${{ inputs.dry_run }}"
           $PagesOnly = "${{ inputs.pages_only }}"
 
-          $pagesArg = @()
-          if ($PagesOnly -eq 'true') { $pagesArg = @('-GitHubPagesOnly') }
-
           if ($DryRun -eq "true") {
             Write-Host "--- DRY RUN MODE: PREVIEWING CHANGES ---"
-            .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard @pagesArg -DryRun
+            if ($PagesOnly -eq 'true') {
+              .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly -DryRun
+            } else {
+              .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -DryRun
+            }
           } else {
             Write-Host "--- LIVE MODE: APPLYING FIXES ---"
-            .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard @pagesArg
+            if ($PagesOnly -eq 'true') {
+              .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly
+            } else {
+              .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard
+            }
           }
 
       - name: Post-Enforce Compliance Audit

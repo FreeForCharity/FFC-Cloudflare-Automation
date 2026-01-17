@@ -12,6 +12,10 @@ on:
         description: 'Dry Run (Check before Fix)'
         type: boolean
         default: true
+      pages_only:
+        description: 'Only enforce GitHub Pages (apex A/AAAA + www CNAME). Does NOT touch MX/TXT/SRV/etc.'
+        type: boolean
+        default: false
       dmarc_mgmt_debug:
         description: 'Debug: run DMARC Management API probe/attempts (noisy)'
         type: boolean
@@ -45,13 +49,17 @@ jobs:
         run: |
           $Domain = "${{ inputs.domain }}"
           $DryRun = "${{ inputs.dry_run }}"
+          $PagesOnly = "${{ inputs.pages_only }}"
+
+          $pagesArg = @()
+          if ($PagesOnly -eq 'true') { $pagesArg = @('-GitHubPagesOnly') }
 
           if ($DryRun -eq "true") {
             Write-Host "--- DRY RUN MODE: PREVIEWING CHANGES ---"
-            .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -DryRun
+            .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard @pagesArg -DryRun
           } else {
             Write-Host "--- LIVE MODE: APPLYING FIXES ---"
-            .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard
+            .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard @pagesArg
           }
 
       - name: Post-Enforce Compliance Audit

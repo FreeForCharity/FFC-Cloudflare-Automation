@@ -105,6 +105,9 @@ param(
     [Parameter(ParameterSetName = 'Enforce', Mandatory = $true)]
     [switch]$EnforceStandard,
 
+    [Parameter(ParameterSetName = 'Enforce')]
+    [switch]$GitHubPagesOnly,
+
     [string]$Token,
 
     [switch]$DryRun
@@ -822,6 +825,169 @@ try {
 
         # IMPORTANT: Enforce needs a full record inventory. Without this, it will treat everything as missing.
         $allRecords = Get-AllDnsRecords -ZoneId $ZoneId
+
+        if ($GitHubPagesOnly) {
+            Write-Host "GitHubPagesOnly enabled: will only update apex A/AAAA + www CNAME. MX/TXT/SRV/etc will not be modified." -ForegroundColor Yellow
+
+            $desiredA = @(
+                '185.199.108.153',
+                '185.199.109.153',
+                '185.199.110.153',
+                '185.199.111.153'
+            )
+
+            $desiredAAAA = @(
+                '2606:50c0:8000::153',
+                '2606:50c0:8001::153',
+                '2606:50c0:8002::153',
+                '2606:50c0:8003::153'
+            )
+
+            $wwwTarget = 'freeforcharity.github.io'
+            $apexFqdn = $Zone
+            $wwwFqdn = "www.$Zone"
+            $pagesProxied = $true
+            $pagesTtl = 1
+
+            function Remove-RecordById {
+                param(
+                    [Parameter(Mandatory = $true)][string]$RecordId,
+                    [Parameter(Mandatory = $true)][string]$Type,
+                    [Parameter(Mandatory = $true)][string]$Name,
+                    [Parameter(Mandatory = $true)][string]$Content
+                )
+                if ($DryRun) {
+                    Write-Host "[DRY-RUN] Would DELETE record: $Type $Name -> $Content (ID: $RecordId)" -ForegroundColor Yellow
+                    return
+                }
+                Write-Host "Deleting record: $Type $Name -> $Content..." -NoNewline
+                $null = Invoke-CfApi -Method 'DELETE' -Uri "/zones/$ZoneId/dns_records/$RecordId"
+                Write-Host " DONE" -ForegroundColor Green
+            }
+
+            function Ensure-MultiValueRecordSet {
+                param(
+                    [Parameter(Mandatory = $true)][ValidateSet('A','AAAA')][string]$Type,
+                    [Parameter(Mandatory = $true)][string]$Fqdn,
+                    [Parameter(Mandatory = $true)][string[]]$DesiredContents,
+                    [Parameter(Mandatory = $true)][bool]$DesiredProxied,
+                    [Parameter(Mandatory = $true)][int]$DesiredTtl
+                )
+
+                $existingSet = @($allRecords | Where-Object { $_.type -eq $Type -and $_.name -eq $Fqdn })
+
+                # 1) Remove any records that are not part of the desired set
+                foreach ($rec in $existingSet) {
+                    if ($DesiredContents -notcontains $rec.content) {
+                        Remove-RecordById -RecordId $rec.id -Type $rec.type -Name $rec.name -Content $rec.content
+                    }
+                }
+
+                # Refresh view if we did deletes (Cloudflare API state changed)
+                if (-not $DryRun) {
+                    $allRecords = Get-AllDnsRecords -ZoneId $ZoneId
+                    $existingSet = @($allRecords | Where-Object { $_.type -eq $Type -and $_.name -eq $Fqdn })
+                }
+
+                # 2) Ensure each desired content exists, and matches proxied/ttl
+                foreach ($content in $DesiredContents) {
+                    $match = $existingSet | Where-Object { $_.content -eq $content } | Select-Object -First 1
+                    if (-not $match) {
+                        $payload = @{ type = $Type; name = $Fqdn; content = $content; ttl = $DesiredTtl; proxied = $DesiredProxied }
+                        if ($DryRun) {
+                            Write-Host "[DRY-RUN] Would CREATE new record: $Type $Fqdn -> $content (Proxied: $DesiredProxied)" -ForegroundColor Yellow
+                        }
+                        else {
+                            Write-Host "Creating new record: $Type $Fqdn -> $content..." -NoNewline
+                            $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $payload
+                            Write-Host " DONE" -ForegroundColor Green
+                        }
+                        continue
+                    }
+
+                    $needsUpdate = $false
+                    if ([bool]$match.proxied -ne $DesiredProxied) { $needsUpdate = $true }
+                    if ([int]$match.ttl -ne [int]$DesiredTtl) { $needsUpdate = $true }
+
+                    if ($needsUpdate) {
+                        $payload = @{ type = $Type; name = $Fqdn; content = $content; ttl = $DesiredTtl; proxied = $DesiredProxied }
+                        if ($DryRun) {
+                            Write-Host "[DRY-RUN] Would UPDATE record $($match.id): $Type $Fqdn -> $content (Proxied: $DesiredProxied)" -ForegroundColor Yellow
+                        }
+                        else {
+                            Write-Host "Updating record $($match.id)..." -NoNewline
+                            $null = Invoke-CfApi -Method 'PUT' -Uri "/zones/$ZoneId/dns_records/$($match.id)" -Body $payload
+                            Write-Host " DONE" -ForegroundColor Green
+                        }
+                    }
+                    else {
+                        Write-Host "  [Skip] $Type $Fqdn -> $content already matches." -ForegroundColor DarkGray
+                    }
+                }
+            }
+
+            function Ensure-WwwCname {
+                param(
+                    [Parameter(Mandatory = $true)][string]$Fqdn,
+                    [Parameter(Mandatory = $true)][string]$Target,
+                    [Parameter(Mandatory = $true)][bool]$DesiredProxied,
+                    [Parameter(Mandatory = $true)][int]$DesiredTtl
+                )
+
+                # Remove any A/AAAA records at www (avoid conflicts)
+                $wwwConflicts = @($allRecords | Where-Object { $_.name -eq $Fqdn -and $_.type -in @('A','AAAA') })
+                foreach ($rec in $wwwConflicts) {
+                    Remove-RecordById -RecordId $rec.id -Type $rec.type -Name $rec.name -Content $rec.content
+                }
+
+                if (-not $DryRun) {
+                    $allRecords = Get-AllDnsRecords -ZoneId $ZoneId
+                }
+
+                $existingCnames = @($allRecords | Where-Object { $_.name -eq $Fqdn -and $_.type -eq 'CNAME' })
+
+                if ($existingCnames.Count -eq 0) {
+                    $payload = @{ type = 'CNAME'; name = $Fqdn; content = $Target; ttl = $DesiredTtl; proxied = $DesiredProxied }
+                    if ($DryRun) {
+                        Write-Host "[DRY-RUN] Would CREATE new record: CNAME $Fqdn -> $Target (Proxied: $DesiredProxied)" -ForegroundColor Yellow
+                    }
+                    else {
+                        Write-Host "Creating new record: CNAME $Fqdn -> $Target..." -NoNewline
+                        $null = Invoke-CfApi -Method 'POST' -Uri "/zones/$ZoneId/dns_records" -Body $payload
+                        Write-Host " DONE" -ForegroundColor Green
+                    }
+                    return
+                }
+
+                foreach ($rec in $existingCnames) {
+                    $needsUpdate = $false
+                    if ($rec.content -ne $Target) { $needsUpdate = $true }
+                    if ([bool]$rec.proxied -ne $DesiredProxied) { $needsUpdate = $true }
+                    if ([int]$rec.ttl -ne [int]$DesiredTtl) { $needsUpdate = $true }
+
+                    if (-not $needsUpdate) {
+                        Write-Host "  [Skip] CNAME $Fqdn matches desired state." -ForegroundColor DarkGray
+                        continue
+                    }
+
+                    $payload = @{ type = 'CNAME'; name = $Fqdn; content = $Target; ttl = $DesiredTtl; proxied = $DesiredProxied }
+                    if ($DryRun) {
+                        Write-Host "[DRY-RUN] Would UPDATE record $($rec.id): CNAME $Fqdn -> $Target (Proxied: $DesiredProxied)" -ForegroundColor Yellow
+                    }
+                    else {
+                        Write-Host "Updating record $($rec.id)..." -NoNewline
+                        $null = Invoke-CfApi -Method 'PUT' -Uri "/zones/$ZoneId/dns_records/$($rec.id)" -Body $payload
+                        Write-Host " DONE" -ForegroundColor Green
+                    }
+                }
+            }
+
+            Ensure-MultiValueRecordSet -Type 'A' -Fqdn $apexFqdn -DesiredContents $desiredA -DesiredProxied $pagesProxied -DesiredTtl $pagesTtl
+            Ensure-MultiValueRecordSet -Type 'AAAA' -Fqdn $apexFqdn -DesiredContents $desiredAAAA -DesiredProxied $pagesProxied -DesiredTtl $pagesTtl
+            Ensure-WwwCname -Fqdn $wwwFqdn -Target $wwwTarget -DesiredProxied $pagesProxied -DesiredTtl $pagesTtl
+
+            return
+        }
 
         # DMARC Management API probing is intentionally disabled by default (too noisy and not routable).
         # Set FFC_CF_DMARCMGMT_DEBUG=1 to run the probe/attempts.

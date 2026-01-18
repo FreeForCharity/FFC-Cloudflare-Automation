@@ -108,6 +108,10 @@ param(
     [Parameter(ParameterSetName = 'Enforce')]
     [switch]$GitHubPagesOnly,
 
+    [Parameter(ParameterSetName = 'Enforce')]
+    [Parameter(ParameterSetName = 'Audit')]
+    [switch]$ProxyGitHubPages,
+
     [string]$Token,
 
     [switch]$DryRun
@@ -696,13 +700,14 @@ try {
         }
 
         # 0b. Required CNAMEs (M365/Teams/Intune + GitHub Pages)
+        $githubPagesProxied = [bool]$ProxyGitHubPages
         $requiredCnames = @(
             @{ Name = "autodiscover.$Zone"; Content = 'autodiscover.outlook.com'; Proxied = $false },
             @{ Name = "enterpriseenrollment.$Zone"; Content = 'enterpriseenrollment-s.manage.microsoft.com'; Proxied = $false },
             @{ Name = "enterpriseregistration.$Zone"; Content = 'enterpriseregistration.windows.net'; Proxied = $false },
             @{ Name = "lyncdiscover.$Zone"; Content = 'webdir.online.lync.com'; Proxied = $false },
             @{ Name = "sip.$Zone"; Content = 'sipdir.online.lync.com'; Proxied = $false },
-            @{ Name = "www.$Zone"; Content = 'freeforcharity.github.io'; Proxied = $true }
+            @{ Name = "www.$Zone"; Content = 'freeforcharity.github.io'; Proxied = $githubPagesProxied }
         )
 
         foreach ($req in $requiredCnames) {
@@ -846,7 +851,7 @@ try {
             $wwwTarget = 'freeforcharity.github.io'
             $apexFqdn = $Zone
             $wwwFqdn = "www.$Zone"
-            $pagesProxied = $true
+            $pagesProxied = [bool]$ProxyGitHubPages
             $pagesTtl = 1
 
             function Remove-RecordById {
@@ -1002,6 +1007,10 @@ try {
 
         $m365MxTarget = (($Zone -replace '\.', '-') + '.mail.protection.outlook.com')
         $wwwTarget = 'freeforcharity.github.io'
+
+        # GitHub Pages should be DNS-only by default to allow GitHub to validate and issue SSL.
+        # Use -ProxyGitHubPages to preserve the ability to orange-cloud these records if needed.
+        $githubPagesProxied = [bool]$ProxyGitHubPages
         
         # Define Standard Records
         $standards = @(
@@ -1024,19 +1033,19 @@ try {
             @{ Type = 'SRV'; Name = '_sipfederationtls._tcp'; Data = @{ service = '_sipfederationtls'; proto = '_tcp'; name = $Zone; priority = 100; weight = 1; port = 5061; target = 'sipfed.online.lync.com' } },
             
             # GitHub Pages (Apex)
-            @{ Type = 'A'; Name = '@'; Content = '185.199.108.153'; Proxied = $true },
-            @{ Type = 'A'; Name = '@'; Content = '185.199.109.153'; Proxied = $true },
-            @{ Type = 'A'; Name = '@'; Content = '185.199.110.153'; Proxied = $true },
-            @{ Type = 'A'; Name = '@'; Content = '185.199.111.153'; Proxied = $true },
+            @{ Type = 'A'; Name = '@'; Content = '185.199.108.153'; Proxied = $githubPagesProxied },
+            @{ Type = 'A'; Name = '@'; Content = '185.199.109.153'; Proxied = $githubPagesProxied },
+            @{ Type = 'A'; Name = '@'; Content = '185.199.110.153'; Proxied = $githubPagesProxied },
+            @{ Type = 'A'; Name = '@'; Content = '185.199.111.153'; Proxied = $githubPagesProxied },
 
             # GitHub Pages (Apex IPv6)
-            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8000::153'; Proxied = $true },
-            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8001::153'; Proxied = $true },
-            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8002::153'; Proxied = $true },
-            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8003::153'; Proxied = $true },
+            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8000::153'; Proxied = $githubPagesProxied },
+            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8001::153'; Proxied = $githubPagesProxied },
+            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8002::153'; Proxied = $githubPagesProxied },
+            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8003::153'; Proxied = $githubPagesProxied },
             
             # GitHub Pages (WWW)
-            @{ Type = 'CNAME'; Name = 'www'; Content = $wwwTarget; Proxied = $true }
+            @{ Type = 'CNAME'; Name = 'www'; Content = $wwwTarget; Proxied = $githubPagesProxied }
         )
 
         foreach ($std in $standards) {

@@ -16,6 +16,10 @@ on:
         description: 'Only enforce GitHub Pages (apex A/AAAA + www CNAME). Does NOT touch MX/TXT/SRV/etc.'
         type: boolean
         default: false
+      proxy_on:
+        description: 'Enable Cloudflare proxy (orange cloud) for GitHub Pages records. Default is OFF (DNS only) so GitHub can validate and issue SSL.'
+        type: boolean
+        default: false
       dmarc_mgmt_debug:
         description: 'Debug: run DMARC Management API probe/attempts (noisy)'
         type: boolean
@@ -50,20 +54,37 @@ jobs:
           $Domain = "${{ inputs.domain }}"
           $DryRun = "${{ inputs.dry_run }}"
           $PagesOnly = "${{ inputs.pages_only }}"
+          $ProxyOn = "${{ inputs.proxy_on }}"
 
           if ($DryRun -eq "true") {
             Write-Host "--- DRY RUN MODE: PREVIEWING CHANGES ---"
             if ($PagesOnly -eq 'true') {
-              .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly -DryRun
+              if ($ProxyOn -eq 'true') {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly -ProxyGitHubPages -DryRun
+              } else {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly -DryRun
+              }
             } else {
-              .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -DryRun
+              if ($ProxyOn -eq 'true') {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -ProxyGitHubPages -DryRun
+              } else {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -DryRun
+              }
             }
           } else {
             Write-Host "--- LIVE MODE: APPLYING FIXES ---"
             if ($PagesOnly -eq 'true') {
-              .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly
+              if ($ProxyOn -eq 'true') {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly -ProxyGitHubPages
+              } else {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly
+              }
             } else {
-              .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard
+              if ($ProxyOn -eq 'true') {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -ProxyGitHubPages
+              } else {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard
+              }
             }
           }
 
@@ -74,4 +95,9 @@ jobs:
           CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
           $Domain = "${{ inputs.domain }}"
-          .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ErrorAction Continue
+          $ProxyOn = "${{ inputs.proxy_on }}"
+          if ($ProxyOn -eq 'true') {
+            .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ProxyGitHubPages -ErrorAction Continue
+          } else {
+            .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ErrorAction Continue
+          }

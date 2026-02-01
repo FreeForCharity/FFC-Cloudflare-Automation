@@ -46,6 +46,15 @@ param(
     ,
     [Parameter()]
     [switch]$ExcludeUserIdZero = $true
+
+    ,
+    [Parameter()]
+    [switch]$FailOnValidationErrors
+
+    ,
+    [Parameter()]
+    [ValidateRange(1, 5000)]
+    [int]$MaxValidationErrorsToReport = 200
 )
 
 $ErrorActionPreference = 'Stop'
@@ -152,18 +161,144 @@ function Get-CanonicalHeaders {
     )
 }
 
+function Normalize-ZeffyCell {
+    param([string]$Value)
+
+    if ($null -eq $Value) { return $null }
+    $v = $Value.ToString()
+
+    # Avoid row breaks / odd parsing in downstream CSV importers.
+    $v = $v -replace "\r\n|\r|\n", ' '
+    $v = $v -replace "\t", ' '
+    $v = $v.Trim()
+    $v = $v -replace "\s{2,}", ' '
+
+    if ([string]::IsNullOrWhiteSpace($v)) { return $null }
+    return $v
+}
+
+function Test-ZeffyCompanyName {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $true }
+
+    # Conservative allowlist: letters/numbers/spaces and common company punctuation.
+    # NOTE: Zeffy may reject certain characters (e.g., '@'); we treat anything outside this set as invalid.
+    return ($Value -match "^[\p{L}\p{N} \-\.,&'\"""/()#:+]*$")
+}
+
+function Sanitize-ZeffyCompanyName {
+    param([string]$Value)
+
+    $v = Normalize-ZeffyCell -Value $Value
+    if ([string]::IsNullOrWhiteSpace($v)) { return $null }
+
+    # Common replacements
+    $v = $v -replace '@', 'At '
+    $v = $v -replace "\u2018|\u2019", "'"
+    $v = $v -replace "\u201C|\u201D", '"'
+    $v = $v -replace "\u2013|\u2014", '-'
+    $v = $v -replace "\u00A0", ' '
+
+    # Drop any remaining disallowed characters.
+    $v = [regex]::Replace($v, "[^\p{L}\p{N} \-\.,&'\"""/()#:+]", ' ')
+    $v = Normalize-ZeffyCell -Value $v
+    if ([string]::IsNullOrWhiteSpace($v)) { return $null }
+
+    return $v
+}
+
+function Get-InvalidCharacters {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Value,
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$IsAllowed
+    )
+
+    $bad = @{}
+    foreach ($ch in $Value.ToCharArray()) {
+        if (-not (& $IsAllowed $ch)) {
+            $bad[$ch] = $true
+        }
+    }
+    return @($bad.Keys | Sort-Object)
+}
+
+function Write-ValidationReport {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Errors,
+        [Parameter(Mandatory = $true)]
+        [int]$MaxRows,
+        [string]$ReportBasePath = 'artifacts/zeffy/zeffy_payments_import_draft.validation_errors'
+    )
+
+    if (-not $Errors -or $Errors.Count -eq 0) { return }
+
+    $reportCsv = "$ReportBasePath.csv"
+    $reportMd = "$ReportBasePath.md"
+
+    New-DirectoryForFile -Path $reportCsv
+    New-DirectoryForFile -Path $reportMd
+
+    $Errors | Export-Csv -NoTypeInformation -Encoding utf8 -Path $reportCsv
+
+    $top = @($Errors | Select-Object -First $MaxRows)
+    $md = @()
+    $md += '## Zeffy import validation errors'
+    $md += ''
+    $md += "- Total invalid rows: $($Errors.Count)"
+    $md += "- Showing first: $($top.Count)"
+    $md += ''
+    $md += '| csvRow | field | reason | value | firstName | lastName | email | whmcs_userid | whmcs_transactionid | whmcs_invoiceid |'
+    $md += '|---:|---|---|---|---|---|---|---|---|---|'
+    foreach ($e in $top) {
+        $v = if ($e.value) { $e.value.ToString() } else { '' }
+        $v = $v -replace '\|', '\\|'
+        $md += "| $($e.csvRow) | $($e.field) | $($e.reason) | $v | $($e.firstName) | $($e.lastName) | $($e.email) | $($e.whmcs_userid) | $($e.whmcs_transactionid) | $($e.whmcs_invoiceid) |"
+    }
+    $md -join "`n" | Out-File -FilePath $reportMd -Encoding utf8
+
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+        $md -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+        '' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+        "- Validation report files: $reportCsv ; $reportMd" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+    }
+    else {
+        Write-Host ($md -join "`n")
+        Write-Host "Validation report files: $reportCsv ; $reportMd"
+    }
+}
+
 function Format-ZeffyDate {
     param([string]$Value)
 
     if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
-    try {
-        $dt = [datetime]::Parse($Value, [System.Globalization.CultureInfo]::InvariantCulture)
-        return $dt.ToString('MM/dd/yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
+
+    $v = $Value.Trim()
+    $culture = [System.Globalization.CultureInfo]::InvariantCulture
+
+    # 1) General parsing (handles many ISO and locale-neutral forms).
+    $dto = [datetimeoffset]::MinValue
+    $styles = [System.Globalization.DateTimeStyles]::AllowWhiteSpaces
+    if ([datetimeoffset]::TryParse($v, $culture, $styles, [ref]$dto)) {
+        return $dto.Date.ToString('MM/dd/yyyy', $culture)
     }
-    catch {
-        # If parsing fails, pass through (caller may choose to default)
-        return $Value
+
+    # 2) Unix epoch (seconds or milliseconds).
+    if ($v -match '^\d{10,13}$') {
+        try {
+            $n = [int64]$v
+            $epoch = if ($v.Length -ge 13) { [datetimeoffset]::FromUnixTimeMilliseconds($n) } else { [datetimeoffset]::FromUnixTimeSeconds($n) }
+            return $epoch.Date.ToString('MM/dd/yyyy', $culture)
+        }
+        catch {
+            return $null
+        }
     }
+
+    return $null
 }
 
 function Format-ZeffyAmount {
@@ -324,7 +459,11 @@ $headers = if ($Mode -eq 'template') { Get-TemplateHeaders -Path $TemplatePath }
 $importDate = (Get-Date).ToString('MM/dd/yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
 $defaultFormTitle = "Import - $importDate"
 
-$out = foreach ($t in $transactions) {
+$validationErrors = New-Object System.Collections.Generic.List[object]
+$companyNameTransforms = New-Object System.Collections.Generic.List[object]
+$rowsList = New-Object System.Collections.Generic.List[object]
+
+foreach ($t in $transactions) {
     if ($ExcludeUserIdZero) {
         if ([string]::IsNullOrWhiteSpace($t.userid) -or $t.userid -eq '0') {
             continue
@@ -366,25 +505,51 @@ $out = foreach ($t in $transactions) {
     $country = if ($client) { $client.country } else { $null }
     $stateProv = if ($client) { $client.state } else { $null }
 
+    $addr = Normalize-ZeffyCell -Value $addr
+    $city = Normalize-ZeffyCell -Value $city
+    $postal = Normalize-ZeffyCell -Value $postal
+    $country = Normalize-ZeffyCell -Value $country
+    $stateProv = Normalize-ZeffyCell -Value $stateProv
+
     if ([string]::IsNullOrWhiteSpace($addr)) { $addr = 'unknown' }
     if ([string]::IsNullOrWhiteSpace($city)) { $city = 'unknown' }
     if ([string]::IsNullOrWhiteSpace($postal)) { $postal = 'unknown' }
     if ([string]::IsNullOrWhiteSpace($country)) { $country = $DefaultCountry }
 
-    $date = Format-ZeffyDate -Value $t.date
+    $rawDate = Normalize-ZeffyCell -Value $t.date
+    $date = Format-ZeffyDate -Value $rawDate
+    $dateValid = -not [string]::IsNullOrWhiteSpace($date)
+    if ($dateValid -and $date -match '^\d{2}/\d{2}/\d{4}$') {
+        $dt = [datetime]::MinValue
+        if (-not [datetime]::TryParseExact($date, 'MM/dd/yyyy', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$dt)) {
+            $dateValid = $false
+        }
+    }
+    else {
+        $dateValid = $false
+    }
+
+    if (-not $dateValid) {
+        if ($FailOnValidationErrors) {
+            $date = $null
+        }
+        else {
+            $date = $importDate
+        }
+    }
 
     $canonical = @{
-        firstName           = $client.firstname
-        lastName            = $client.lastname
+        firstName           = Normalize-ZeffyCell -Value $client.firstname
+        lastName            = Normalize-ZeffyCell -Value $client.lastname
         amount              = $amountFormatted
         address             = $addr
         city                = $city
         postalCode          = $postal
         country             = $country
         type                = $DefaultType
-        formTitle           = $defaultFormTitle
-        rateTitle           = $defaultFormTitle
-        email               = $client.email
+        formTitle           = Normalize-ZeffyCell -Value $defaultFormTitle
+        rateTitle           = Normalize-ZeffyCell -Value $defaultFormTitle
+        email               = Normalize-ZeffyCell -Value $client.email
         language            = $DefaultLanguage
         'date (MM/DD/YYYY)' = $date
         'state/province'    = $stateProv
@@ -392,8 +557,8 @@ $out = foreach ($t in $transactions) {
         receiptUrl          = $null
         ticketUrl           = $null
         receiptNumber       = $null
-        companyName         = $client.companyname
-        note                = 'Imported from WHMCS'
+        companyName         = Normalize-ZeffyCell -Value $client.companyname
+        note                = Normalize-ZeffyCell -Value 'Imported from WHMCS'
         annotation          = (@(
                 if ($t.transactionid) { "whmcs_transactionid=$($t.transactionid)" }
                 if ($t.invoiceid) { "whmcs_invoiceid=$($t.invoiceid)" }
@@ -403,14 +568,112 @@ $out = foreach ($t in $transactions) {
             ) | Where-Object { $_ }) -join '; '
     }
 
+    $canonical.annotation = Normalize-ZeffyCell -Value $canonical.annotation
+
+    # Build output row now so we can report accurate CSV row numbers.
+    $csvRowNumber = $rowsList.Count + 2
+
+    $originalCompanyName = $canonical.companyName
+    $sanitizedCompanyName = Sanitize-ZeffyCompanyName -Value $originalCompanyName
+    if ($originalCompanyName -ne $sanitizedCompanyName) {
+        $companyNameTransforms.Add([pscustomobject]@{
+                csvRow              = $csvRowNumber
+                field               = 'companyName'
+                original            = $originalCompanyName
+                sanitized           = $sanitizedCompanyName
+                firstName           = $canonical.firstName
+                lastName            = $canonical.lastName
+                email               = $canonical.email
+                whmcs_userid        = $t.userid
+                whmcs_transactionid = $t.transactionid
+                whmcs_invoiceid     = $t.invoiceid
+            })
+    }
+    $canonical.companyName = $sanitizedCompanyName
+
+    if (-not $dateValid) {
+        $validationErrors.Add([pscustomobject]@{
+                csvRow             = $csvRowNumber
+                field              = 'date (MM/DD/YYYY)'
+                reason             = "unparseable or invalid date (raw='$rawDate')"
+                value              = $t.date
+                firstName          = $canonical.firstName
+                lastName           = $canonical.lastName
+                email              = $canonical.email
+                whmcs_userid       = $t.userid
+                whmcs_transactionid = $t.transactionid
+                whmcs_invoiceid    = $t.invoiceid
+            })
+    }
+
+    $cn = $canonical.companyName
+    if (-not (Test-ZeffyCompanyName -Value $cn)) {
+        $invalidChars = Get-InvalidCharacters -Value $cn -IsAllowed {
+            param($ch)
+            # Same allowlist as Test-ZeffyCompanyName
+            return ($ch -match "[\p{L}\p{N} \-\.,&'\"""/()#:+]")
+        }
+        $validationErrors.Add([pscustomobject]@{
+                csvRow             = $csvRowNumber
+                field              = 'companyName'
+                reason             = "contains disallowed character(s): $($invalidChars -join '')"
+                value              = $cn
+                firstName          = $canonical.firstName
+                lastName           = $canonical.lastName
+                email              = $canonical.email
+                whmcs_userid       = $t.userid
+                whmcs_transactionid = $t.transactionid
+                whmcs_invoiceid    = $t.invoiceid
+            })
+    }
+
     if ([string]::IsNullOrWhiteSpace($canonical.firstName) -or [string]::IsNullOrWhiteSpace($canonical.lastName)) {
         continue
     }
 
-    Convert-RowToHeaders -Canonical $canonical -Headers $headers
+    $rowObj = Convert-RowToHeaders -Canonical $canonical -Headers $headers
+    if ($null -ne $rowObj) {
+        $rowsList.Add($rowObj) | Out-Null
+    }
 }
 
-$rows = @($out)
+$rows = @($rowsList)
+
+if ($companyNameTransforms.Count -gt 0) {
+    $base = 'artifacts/zeffy/zeffy_payments_import_draft.transforms_companyName'
+    $csvPath = "$base.csv"
+    $mdPath = "$base.md"
+    New-DirectoryForFile -Path $csvPath
+    New-DirectoryForFile -Path $mdPath
+    @($companyNameTransforms) | Export-Csv -NoTypeInformation -Encoding utf8 -Path $csvPath
+
+    $top = @($companyNameTransforms | Select-Object -First 50)
+    $md = @()
+    $md += '## Zeffy companyName transforms'
+    $md += ''
+    $md += "- Total transformed rows: $($companyNameTransforms.Count)"
+    $md += "- Showing first: $($top.Count)"
+    $md += ''
+    $md += '| csvRow | original | sanitized | firstName | lastName | email | whmcs_userid | whmcs_transactionid | whmcs_invoiceid |'
+    $md += '|---:|---|---|---|---|---|---|---|---|'
+    foreach ($e in $top) {
+        $o = if ($e.original) { $e.original.ToString() } else { '' }
+        $s = if ($e.sanitized) { $e.sanitized.ToString() } else { '' }
+        $o = $o -replace '\|', '\\|'
+        $s = $s -replace '\|', '\\|'
+        $md += "| $($e.csvRow) | $o | $s | $($e.firstName) | $($e.lastName) | $($e.email) | $($e.whmcs_userid) | $($e.whmcs_transactionid) | $($e.whmcs_invoiceid) |"
+    }
+    $md -join "`n" | Out-File -FilePath $mdPath -Encoding utf8
+
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+        $md -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+    }
+}
+
+if ($FailOnValidationErrors -and $validationErrors.Count -gt 0) {
+    Write-ValidationReport -Errors @($validationErrors) -MaxRows $MaxValidationErrorsToReport
+    throw "Zeffy validation failed ($($validationErrors.Count) row(s)). Fix the source data or mapping, then re-run."
+}
 
 Remove-StalePartFiles -BaseOutputFile $OutputFile
 

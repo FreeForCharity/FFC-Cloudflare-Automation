@@ -54,3 +54,4 @@ Thumbs.db
 # Local workflow outputs
 artifacts/
 _run_artifacts/
+_run_*/

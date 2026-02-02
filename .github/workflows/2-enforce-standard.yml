@@ -13,11 +13,14 @@ on:
         type: boolean
         default: true
       pages_only:
-        description: 'Only enforce GitHub Pages (apex A/AAAA + www CNAME). Does NOT touch MX/TXT/SRV/etc.'
+        description:
+          'Only enforce GitHub Pages (apex A/AAAA + www CNAME). Does NOT touch MX/TXT/SRV/etc.'
         type: boolean
         default: false
       proxy_on:
-        description: 'Enable Cloudflare proxy (orange cloud) for GitHub Pages records. Default is OFF (DNS only) so GitHub can validate and issue SSL.'
+        description:
+          'Enable Cloudflare proxy (orange cloud) for GitHub Pages records. Default is OFF (DNS
+          only) so GitHub can validate and issue SSL.'
         type: boolean
         default: false
       dmarc_mgmt_debug:

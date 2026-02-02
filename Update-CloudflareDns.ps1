@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Cloudflare DNS Management Tool (PowerShell Edition)
 
@@ -553,7 +553,7 @@ function Enable-DmarcManagement {
 
         # Non-JSON: return a trimmed snippet
         $snippet = ($ErrorBody -replace "\r|\n", ' ').Trim()
-        if ($snippet.Length -gt 180) { return $snippet.Substring(0, 180) + '…' }
+        if ($snippet.Length -gt 180) { return $snippet.Substring(0, 180) + 'â€¦' }
         return $snippet
     }
 
@@ -872,7 +872,7 @@ try {
 
             function Ensure-MultiValueRecordSet {
                 param(
-                    [Parameter(Mandatory = $true)][ValidateSet('A','AAAA')][string]$Type,
+                    [Parameter(Mandatory = $true)][ValidateSet('A', 'AAAA')][string]$Type,
                     [Parameter(Mandatory = $true)][string]$Fqdn,
                     [Parameter(Mandatory = $true)][string[]]$DesiredContents,
                     [Parameter(Mandatory = $true)][bool]$DesiredProxied,
@@ -940,7 +940,7 @@ try {
                 )
 
                 # Remove any A/AAAA records at www (avoid conflicts)
-                $wwwConflicts = @($allRecords | Where-Object { $_.name -eq $Fqdn -and $_.type -in @('A','AAAA') })
+                $wwwConflicts = @($allRecords | Where-Object { $_.name -eq $Fqdn -and $_.type -in @('A', 'AAAA') })
                 foreach ($rec in $wwwConflicts) {
                     Remove-RecordById -RecordId $rec.id -Type $rec.type -Name $rec.name -Content $rec.content
                 }
@@ -1423,3 +1423,4 @@ catch {
     Write-Error $_
     exit 1
 }
+

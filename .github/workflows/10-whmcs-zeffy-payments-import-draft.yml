@@ -286,7 +286,8 @@ jobs:
           $genArgs = @(
             '-ClientsCsv', $clients,
             '-TransactionsCsv', $tx,
-            '-OutputFile', $out
+            '-OutputFile', $out,
+            '-FailOnValidationErrors'
           )
 
           $includeZeroInvoices = "${{ inputs.include_zero_invoices }}".Trim().ToLowerInvariant() -eq 'true'
@@ -409,39 +410,63 @@ jobs:
           "- Artifacts: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)/artifacts" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload WHMCS clients
+        if: ${{ always() }}
         uses: actions/upload-artifact@v6
         with:
           name: whmcs_clients
           path: ${{ inputs.clients_output }}
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Upload WHMCS transactions
+        if: ${{ always() }}
         uses: actions/upload-artifact@v6
         with:
           name: whmcs_transactions
           path: ${{ inputs.transactions_output }}
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Upload WHMCS invoices
-        if: ${{ inputs.include_zero_invoices }}
+        if: ${{ always() && inputs.include_zero_invoices }}
         uses: actions/upload-artifact@v6
         with:
           name: whmcs_invoices
           path: ${{ inputs.invoices_output }}
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Upload WHMCS deleted-client invoices
+        if: ${{ always() }}
         uses: actions/upload-artifact@v6
         with:
           name: whmcs_invoices_deleted_clients
           path: artifacts/whmcs/whmcs_invoices_deleted_clients.csv
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Upload Zeffy draft
+        if: ${{ always() }}
         uses: actions/upload-artifact@v6
         with:
           name: zeffy_payments_import_draft
           path: |
             ${{ inputs.zeffy_output }}
             artifacts/zeffy/*-part*.csv
-          if-no-files-found: error
+          if-no-files-found: warn
+
+      - name: Upload Zeffy validation report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: zeffy_validation_report
+          path: |
+            artifacts/zeffy/zeffy_payments_import_draft.validation_errors.csv
+            artifacts/zeffy/zeffy_payments_import_draft.validation_errors.md
+          if-no-files-found: warn
+
+      - name: Upload Zeffy transforms report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: zeffy_transforms_report
+          path: |
+            artifacts/zeffy/zeffy_payments_import_draft.transforms_companyName.csv
+            artifacts/zeffy/zeffy_payments_import_draft.transforms_companyName.md
+          if-no-files-found: warn

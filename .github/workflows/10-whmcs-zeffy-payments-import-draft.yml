@@ -30,6 +30,12 @@ on:
         type: string
         default: 'artifacts/zeffy/zeffy_payments_import_draft.csv'
 
+      zeffy_output_xlsx:
+        description: 'Zeffy draft XLSX output path (for Zeffy import)'
+        required: false
+        type: string
+        default: 'artifacts/zeffy/zeffy_payments_import_draft.xlsx'
+
       start_date:
         description: 'Optional start date filter for WHMCS transactions (YYYY-MM-DD)'
         required: false
@@ -241,6 +247,13 @@ jobs:
           $count = (Import-Csv -LiteralPath $out | Where-Object { $_.invoiceid -and $_.status -ne 'ERROR' }).Count
           "- Deleted-client invoices looked up: $count" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
+      - name: Install ImportExcel (for .xlsx output)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module ImportExcel -Scope CurrentUser -Force
+
       - name: Generate Zeffy payments import draft
         shell: pwsh
         run: |
@@ -250,6 +263,7 @@ jobs:
           $tx = "${{ inputs.transactions_output }}"
           $invoices = "${{ inputs.invoices_output }}"
           $out = "${{ inputs.zeffy_output }}"
+          $outXlsx = "${{ inputs.zeffy_output_xlsx }}"
 
           function Get-ZeffyOutputFiles {
             param([string]$BaseOutputFile)
@@ -287,7 +301,9 @@ jobs:
             '-ClientsCsv', $clients,
             '-TransactionsCsv', $tx,
             '-OutputFile', $out,
-            '-FailOnValidationErrors'
+            '-FailOnValidationErrors',
+            '-WriteXlsx',
+            '-XlsxOutputFile', $outXlsx
           )
 
           $includeZeroInvoices = "${{ inputs.include_zero_invoices }}".Trim().ToLowerInvariant() -eq 'true'
@@ -448,7 +464,9 @@ jobs:
           name: zeffy_payments_import_draft
           path: |
             ${{ inputs.zeffy_output }}
+            ${{ inputs.zeffy_output_xlsx }}
             artifacts/zeffy/*-part*.csv
+            artifacts/zeffy/*-part*.xlsx
           if-no-files-found: warn
 
       - name: Upload Zeffy validation report

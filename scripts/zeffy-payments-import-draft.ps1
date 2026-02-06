@@ -53,6 +53,14 @@ param(
 
     ,
     [Parameter()]
+    [switch]$WriteXlsx
+
+    ,
+    [Parameter()]
+    [string]$XlsxOutputFile
+
+    ,
+    [Parameter()]
     [ValidateRange(1, 5000)]
     [int]$MaxValidationErrorsToReport = 200
 )
@@ -95,10 +103,50 @@ function Remove-StalePartFiles {
     if ([string]::IsNullOrWhiteSpace($dir)) { $dir = '.' }
 
     $baseName = [System.IO.Path]::GetFileNameWithoutExtension($BaseOutputFile)
-    $pattern = "$baseName-part*.csv"
+    $ext = [System.IO.Path]::GetExtension($BaseOutputFile)
+    if ([string]::IsNullOrWhiteSpace($ext)) { $ext = '.csv' }
+
+    $pattern = "$baseName-part*${ext}"
 
     Get-ChildItem -Path $dir -Filter $pattern -File -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue
+}
+
+function Export-ZeffyRowsToExcel {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Rows,
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [string]$WorksheetName = 'Zeffy'
+    )
+
+    if ($Rows.Count -eq 0) {
+        throw "Refusing to write empty Excel file: $Path"
+    }
+
+    try {
+        Import-Module ImportExcel -ErrorAction Stop
+    }
+    catch {
+        throw "ImportExcel module is required to write .xlsx output. Install it with: Install-Module ImportExcel -Scope CurrentUser"
+    }
+
+    New-DirectoryForFile -Path $Path
+    if (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path -Force
+    }
+
+    # Keep these columns as text so Excel does not auto-convert (e.g., leading zeros, date-like strings).
+    $noConvert = @(
+        'date (MM/DD/YYYY)',
+        'postalCode',
+        'receiptNumber'
+    )
+
+    $Rows |
+        Export-Excel -Path $Path -WorksheetName $WorksheetName -FreezeTopRow -AutoSize -NoNumberConversion $noConvert |
+        Out-Null
 }
 
 function Get-ZeffyPaymentMethodSuggestion {
@@ -381,6 +429,17 @@ if (-not (Test-Path $ClientsCsv)) { throw "Clients CSV not found: $ClientsCsv" }
 if (-not (Test-Path $TransactionsCsv)) { throw "Transactions CSV not found: $TransactionsCsv" }
 
 New-DirectoryForFile -Path $OutputFile
+
+$resolvedXlsxOutputFile = $null
+if ($WriteXlsx) {
+    if ([string]::IsNullOrWhiteSpace($XlsxOutputFile)) {
+        $resolvedXlsxOutputFile = [System.IO.Path]::ChangeExtension($OutputFile, '.xlsx')
+    }
+    else {
+        $resolvedXlsxOutputFile = $XlsxOutputFile
+    }
+    New-DirectoryForFile -Path $resolvedXlsxOutputFile
+}
 
 $clients = Import-Csv -LiteralPath $ClientsCsv
 $transactions = Import-Csv -LiteralPath $TransactionsCsv
@@ -680,11 +739,19 @@ if ($FailOnValidationErrors -and $validationErrors.Count -gt 0) {
 }
 
 Remove-StalePartFiles -BaseOutputFile $OutputFile
+if ($WriteXlsx -and -not [string]::IsNullOrWhiteSpace($resolvedXlsxOutputFile)) {
+    Remove-StalePartFiles -BaseOutputFile $resolvedXlsxOutputFile
+}
 
 if ($rows.Count -le $MaxRowsPerFile) {
     $rows | Export-Csv -NoTypeInformation -Encoding utf8 -Path $OutputFile
     Write-Host "Generated Zeffy import draft: $OutputFile"
     Write-Host "Mode=$Mode; Rows=$($rows.Count)"
+
+    if ($WriteXlsx -and -not [string]::IsNullOrWhiteSpace($resolvedXlsxOutputFile)) {
+        Export-ZeffyRowsToExcel -Rows $rows -Path $resolvedXlsxOutputFile
+        Write-Host "Generated Zeffy import draft (xlsx): $resolvedXlsxOutputFile"
+    }
 }
 else {
     $part = 1
@@ -695,6 +762,12 @@ else {
         $partPath = Get-OutputPartPath -BaseOutputFile $OutputFile -PartNumber $part
         $chunk | Export-Csv -NoTypeInformation -Encoding utf8 -Path $partPath
         Write-Host "Generated Zeffy import draft part: $partPath (Rows=$($chunk.Count))"
+
+        if ($WriteXlsx -and -not [string]::IsNullOrWhiteSpace($resolvedXlsxOutputFile)) {
+            $xlsxPartPath = Get-OutputPartPath -BaseOutputFile $resolvedXlsxOutputFile -PartNumber $part
+            Export-ZeffyRowsToExcel -Rows $chunk -Path $xlsxPartPath
+            Write-Host "Generated Zeffy import draft part (xlsx): $xlsxPartPath (Rows=$($chunk.Count))"
+        }
         $part++
     }
 

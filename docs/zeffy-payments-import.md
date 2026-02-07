@@ -21,9 +21,12 @@ The workflow produces these files and uploads them as artifacts:
 
 Reports (uploaded as separate artifacts):
 
-- `artifacts/zeffy/zeffy_payments_import_draft.validation_errors.csv` / `.md` (row-level validation failures)
-- `artifacts/zeffy/zeffy_payments_import_draft.transforms_companyName.csv` / `.md` (companyName sanitization audit)
-- `artifacts/zeffy/zeffy_payments_import_draft.transforms_personName.csv` / `.md` (first/last name sanitization audit)
+- `artifacts/zeffy/zeffy_payments_import_draft.validation_errors.csv` / `.md` (row-level validation
+  failures)
+- `artifacts/zeffy/zeffy_payments_import_draft.transforms_companyName.csv` / `.md` (companyName
+  sanitization audit)
+- `artifacts/zeffy/zeffy_payments_import_draft.transforms_personName.csv` / `.md` (first/last name
+  sanitization audit)
 
 When output is split, `*-part*.xlsx` files are also produced.
 
@@ -50,7 +53,8 @@ Artifact names (download from the Actions run page):
 Notes:
 
 - Zeffy requires `.xlsx` (not just `.csv`). Use the `.xlsx` output from the artifact.
-- The generator writes key fields as text in Excel (including `date (MM/DD/YYYY)`) so leading zeros are preserved.
+- The generator writes key fields as text in Excel (including `date (MM/DD/YYYY)`) so leading zeros
+  are preserved.
 
 ### Workflow inputs
 
@@ -100,10 +104,13 @@ a contact name).
 
 To satisfy Zeffy “Invalid format” validation:
 
-- `companyName` has double quotes removed (e.g., `FRC Team 1726 "Nifty..."` becomes `FRC Team 1726 Nifty...`).
-- `firstName` / `lastName` are sanitized to remove digits and unsupported characters (e.g., `Post245` becomes `Post`).
+- `companyName` has double quotes removed (e.g., `FRC Team 1726 "Nifty..."` becomes
+  `FRC Team 1726 Nifty...`).
+- `firstName` / `lastName` are sanitized to remove digits and unsupported characters (e.g.,
+  `Post245` becomes `Post`).
 
-If you want to review what changed, see the transforms reports in the `zeffy_transforms_report` artifact.
+If you want to review what changed, see the transforms reports in the `zeffy_transforms_report`
+artifact.
 
 The workflow also emits a separate export (`whmcs_invoices_deleted_clients`) that looks up invoice
 details (including contact fields) for any `userid=0` transactions that still have an `invoiceid`.

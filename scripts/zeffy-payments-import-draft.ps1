@@ -231,8 +231,8 @@ function Test-ZeffyCompanyName {
     if ([string]::IsNullOrWhiteSpace($Value)) { return $true }
 
     # Conservative allowlist: letters/numbers/spaces and common company punctuation.
-    # NOTE: Zeffy may reject certain characters (e.g., '@'); we treat anything outside this set as invalid.
-    $allowedPattern = '^[\p{L}\p{N} \-\.,&''"/()#:+]*$'
+    # Zeffy rejects double quotes in companyName, so we treat them as invalid.
+    $allowedPattern = '^[\p{L}\p{N} \-\.,&''/()#:+]*$'
     return ($Value -match $allowedPattern)
 }
 
@@ -245,17 +245,47 @@ function Sanitize-ZeffyCompanyName {
     # Common replacements
     $v = $v -replace '@', 'At '
     $v = $v -replace "\u2018|\u2019", "'"
-    $v = $v -replace "\u201C|\u201D", '"'
+    # Remove double quotes entirely (Zeffy companyName validation rejects them).
+    $v = $v -replace "\u201C|\u201D", ''
+    $v = $v -replace '"', ''
     $v = $v -replace "\u2013|\u2014", '-'
     $v = $v -replace "\u00A0", ' '
 
     # Drop any remaining disallowed characters.
-    $disallowedPattern = '[^\p{L}\p{N} \-\.,&''"/()#:+]'
+    $disallowedPattern = '[^\p{L}\p{N} \-\.,&''/()#:+]'
     $v = [regex]::Replace($v, $disallowedPattern, ' ')
 
     $v = Normalize-ZeffyCell -Value $v
     if ([string]::IsNullOrWhiteSpace($v)) { return $null }
 
+    return $v
+}
+
+function Test-ZeffyPersonName {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
+
+    # Zeffy rejects digits in names (e.g., lastName=Post245). Keep this conservative.
+    $allowedPattern = '^[\p{L}][\p{L} \-''’]*$'
+    return ($Value -match $allowedPattern)
+}
+
+function Sanitize-ZeffyPersonName {
+    param([string]$Value)
+
+    $v = Normalize-ZeffyCell -Value $Value
+    if ([string]::IsNullOrWhiteSpace($v)) { return $null }
+
+    $v = $v -replace "\u2018|\u2019", "'"
+    $v = $v -replace "\u2013|\u2014", '-'
+    $v = $v -replace "\u00A0", ' '
+
+    # Drop digits and any other unsupported characters.
+    $disallowedPattern = "[^\p{L} \-']"
+    $v = [regex]::Replace($v, $disallowedPattern, ' ')
+    $v = Normalize-ZeffyCell -Value $v
+    if ([string]::IsNullOrWhiteSpace($v)) { return $null }
     return $v
 }
 
@@ -523,6 +553,7 @@ $defaultFormTitle = "Import - $importDate"
 
 $validationErrors = New-Object System.Collections.Generic.List[object]
 $companyNameTransforms = New-Object System.Collections.Generic.List[object]
+$personNameTransforms = New-Object System.Collections.Generic.List[object]
 $rowsList = New-Object System.Collections.Generic.List[object]
 
 foreach ($t in $transactions) {
@@ -601,8 +632,8 @@ foreach ($t in $transactions) {
     }
 
     $canonical = @{
-        firstName           = Normalize-ZeffyCell -Value $client.firstname
-        lastName            = Normalize-ZeffyCell -Value $client.lastname
+        firstName           = Sanitize-ZeffyPersonName -Value $client.firstname
+        lastName            = Sanitize-ZeffyPersonName -Value $client.lastname
         amount              = $amountFormatted
         address             = $addr
         city                = $city
@@ -634,6 +665,34 @@ foreach ($t in $transactions) {
 
     # Build output row now so we can report accurate CSV row numbers.
     $csvRowNumber = $rowsList.Count + 2
+
+    # Track name transforms (helps debug Zeffy validation like lastName containing digits).
+    $originalFirstName = Normalize-ZeffyCell -Value $client.firstname
+    $originalLastName = Normalize-ZeffyCell -Value $client.lastname
+    if ($originalFirstName -ne $canonical.firstName) {
+        $personNameTransforms.Add([pscustomobject]@{
+                csvRow              = $csvRowNumber
+                field               = 'firstName'
+                original            = $originalFirstName
+                sanitized           = $canonical.firstName
+                email               = $canonical.email
+                whmcs_userid        = $t.userid
+                whmcs_transactionid = $t.transactionid
+                whmcs_invoiceid     = $t.invoiceid
+            })
+    }
+    if ($originalLastName -ne $canonical.lastName) {
+        $personNameTransforms.Add([pscustomobject]@{
+                csvRow              = $csvRowNumber
+                field               = 'lastName'
+                original            = $originalLastName
+                sanitized           = $canonical.lastName
+                email               = $canonical.email
+                whmcs_userid        = $t.userid
+                whmcs_transactionid = $t.transactionid
+                whmcs_invoiceid     = $t.invoiceid
+            })
+    }
 
     $originalCompanyName = $canonical.companyName
     $sanitizedCompanyName = Sanitize-ZeffyCompanyName -Value $originalCompanyName
@@ -673,7 +732,7 @@ foreach ($t in $transactions) {
         $invalidChars = Get-InvalidCharacters -Value $cn -IsAllowed {
             param($ch)
             # Same allowlist as Test-ZeffyCompanyName
-            return ($ch -match '[\p{L}\p{N} \-\.,&''"/()#:+]')
+            return ($ch -match '[\p{L}\p{N} \-\.,&''/()#:+]')
         }
 
         $validationErrors.Add([pscustomobject]@{
@@ -692,6 +751,35 @@ foreach ($t in $transactions) {
 
     if ([string]::IsNullOrWhiteSpace($canonical.firstName) -or [string]::IsNullOrWhiteSpace($canonical.lastName)) {
         continue
+    }
+
+    if (-not (Test-ZeffyPersonName -Value $canonical.firstName)) {
+        $validationErrors.Add([pscustomobject]@{
+                csvRow              = $csvRowNumber
+                field               = 'firstName'
+                reason              = 'invalid format after sanitization'
+                value               = $canonical.firstName
+                firstName           = $canonical.firstName
+                lastName            = $canonical.lastName
+                email               = $canonical.email
+                whmcs_userid        = $t.userid
+                whmcs_transactionid = $t.transactionid
+                whmcs_invoiceid     = $t.invoiceid
+            })
+    }
+    if (-not (Test-ZeffyPersonName -Value $canonical.lastName)) {
+        $validationErrors.Add([pscustomobject]@{
+                csvRow              = $csvRowNumber
+                field               = 'lastName'
+                reason              = 'invalid format after sanitization'
+                value               = $canonical.lastName
+                firstName           = $canonical.firstName
+                lastName            = $canonical.lastName
+                email               = $canonical.email
+                whmcs_userid        = $t.userid
+                whmcs_transactionid = $t.transactionid
+                whmcs_invoiceid     = $t.invoiceid
+            })
     }
 
     $rowObj = Convert-RowToHeaders -Canonical $canonical -Headers $headers
@@ -725,6 +813,37 @@ if ($companyNameTransforms.Count -gt 0) {
         $o = $o -replace '\|', '\\|'
         $s = $s -replace '\|', '\\|'
         $md += "| $($e.csvRow) | $o | $s | $($e.firstName) | $($e.lastName) | $($e.email) | $($e.whmcs_userid) | $($e.whmcs_transactionid) | $($e.whmcs_invoiceid) |"
+    }
+    $md -join "`n" | Out-File -FilePath $mdPath -Encoding utf8
+
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+        $md -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+    }
+}
+
+if ($personNameTransforms.Count -gt 0) {
+    $base = 'artifacts/zeffy/zeffy_payments_import_draft.transforms_personName'
+    $csvPath = "$base.csv"
+    $mdPath = "$base.md"
+    New-DirectoryForFile -Path $csvPath
+    New-DirectoryForFile -Path $mdPath
+    @($personNameTransforms.ToArray()) | Export-Csv -NoTypeInformation -Encoding utf8 -Path $csvPath
+
+    $top = @($personNameTransforms | Select-Object -First 50)
+    $md = @()
+    $md += '## Zeffy person name transforms'
+    $md += ''
+    $md += "- Total transformed rows: $($personNameTransforms.Count)"
+    $md += "- Showing first: $($top.Count)"
+    $md += ''
+    $md += '| csvRow | field | original | sanitized | email | whmcs_userid | whmcs_transactionid | whmcs_invoiceid |'
+    $md += '|---:|---|---|---|---|---|---|---|'
+    foreach ($e in $top) {
+        $o = if ($e.original) { $e.original.ToString() } else { '' }
+        $s = if ($e.sanitized) { $e.sanitized.ToString() } else { '' }
+        $o = $o -replace '\|', '\\|'
+        $s = $s -replace '\|', '\\|'
+        $md += "| $($e.csvRow) | $($e.field) | $o | $s | $($e.email) | $($e.whmcs_userid) | $($e.whmcs_transactionid) | $($e.whmcs_invoiceid) |"
     }
     $md -join "`n" | Out-File -FilePath $mdPath -Encoding utf8
 

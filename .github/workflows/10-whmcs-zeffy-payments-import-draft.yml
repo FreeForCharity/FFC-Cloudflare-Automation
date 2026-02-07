@@ -422,6 +422,32 @@ jobs:
           foreach ($f in $files) {
             "  - $f" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           }
+
+          $xlsxBase = "${{ inputs.zeffy_output_xlsx }}"
+          $xlsxDir = Split-Path -Parent $xlsxBase
+          if ([string]::IsNullOrWhiteSpace($xlsxDir)) { $xlsxDir = '.' }
+          $xlsxBaseName = [System.IO.Path]::GetFileNameWithoutExtension($xlsxBase)
+          $xlsxSingle = @()
+          if (Test-Path -LiteralPath $xlsxBase) {
+            $xlsxSingle = @($xlsxBase)
+          }
+          $xlsxParts = @(Get-ChildItem -Path $xlsxDir -Filter "$xlsxBaseName-part*.xlsx" -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+          $xlsxFiles = @($xlsxSingle + $xlsxParts)
+
+          if ($xlsxFiles.Count -gt 0) {
+            "- Zeffy .xlsx files: $($xlsxFiles.Count)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            foreach ($x in ($xlsxFiles | Sort-Object)) {
+              "  - $x" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            }
+          }
+
+          "- Sanitization: companyName strips double-quotes; person names strip digits/unsupported chars" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          if (Test-Path -LiteralPath 'artifacts/zeffy/zeffy_payments_import_draft.transforms_companyName.md') {
+            "- Transforms report: artifacts/zeffy/zeffy_payments_import_draft.transforms_companyName.md" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          if (Test-Path -LiteralPath 'artifacts/zeffy/zeffy_payments_import_draft.transforms_personName.md') {
+            "- Transforms report: artifacts/zeffy/zeffy_payments_import_draft.transforms_personName.md" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
           "- Download: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "- Artifacts: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)/artifacts" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
@@ -487,4 +513,6 @@ jobs:
           path: |
             artifacts/zeffy/zeffy_payments_import_draft.transforms_companyName.csv
             artifacts/zeffy/zeffy_payments_import_draft.transforms_companyName.md
+            artifacts/zeffy/zeffy_payments_import_draft.transforms_personName.csv
+            artifacts/zeffy/zeffy_payments_import_draft.transforms_personName.md
           if-no-files-found: warn

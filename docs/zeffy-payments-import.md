@@ -15,8 +15,11 @@ The workflow produces these files and uploads them as artifacts:
   `include_zero_invoices=true`)
 - `artifacts/whmcs/whmcs_invoices_deleted_clients.csv` (invoice lookups for `userid=0` transactions)
 - `artifacts/zeffy/zeffy_payments_import_draft.csv` (Zeffy import draft)
+- `artifacts/zeffy/zeffy_payments_import_draft.xlsx` (Zeffy import draft, preferred for Zeffy UI)
 - `artifacts/zeffy/zeffy_payments_import_draft-part*.csv` (only when split due to
   `max_rows_per_file`)
+
+When output is split, `*-part*.xlsx` files are also produced.
 
 Artifact names (download from the Actions run page):
 
@@ -77,6 +80,11 @@ Zeffy output so imports do not break on missing/unknown contact data.
 
 The generator also skips rows where the resolved client is missing a first/last name (Zeffy requires
 a contact name).
+
+To satisfy Zeffy “Invalid format” validation:
+
+- `companyName` has double quotes removed (e.g., `FRC Team 1726 "Nifty..."` becomes `FRC Team 1726 Nifty...`).
+- `firstName` / `lastName` are sanitized to remove digits and unsupported characters (e.g., `Post245` becomes `Post`).
 
 The workflow also emits a separate export (`whmcs_invoices_deleted_clients`) that looks up invoice
 details (including contact fields) for any `userid=0` transactions that still have an `invoiceid`.

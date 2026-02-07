@@ -19,6 +19,12 @@ The workflow produces these files and uploads them as artifacts:
 - `artifacts/zeffy/zeffy_payments_import_draft-part*.csv` (only when split due to
   `max_rows_per_file`)
 
+Reports (uploaded as separate artifacts):
+
+- `artifacts/zeffy/zeffy_payments_import_draft.validation_errors.csv` / `.md` (row-level validation failures)
+- `artifacts/zeffy/zeffy_payments_import_draft.transforms_companyName.csv` / `.md` (companyName sanitization audit)
+- `artifacts/zeffy/zeffy_payments_import_draft.transforms_personName.csv` / `.md` (first/last name sanitization audit)
+
 When output is split, `*-part*.xlsx` files are also produced.
 
 Artifact names (download from the Actions run page):
@@ -34,6 +40,17 @@ Artifact names (download from the Actions run page):
 1. Go to Actions → **"33. WHMCS -> Zeffy Payments Import (Draft)"**
 2. Run workflow (defaults should work)
 3. Download the artifact `zeffy_payments_import_draft`
+
+## Manual upload into Zeffy
+
+1. Download the `zeffy_payments_import_draft` artifact from the Actions run.
+2. Extract it and locate `zeffy_payments_import_draft.xlsx`.
+3. In Zeffy: Payments import → upload the `.xlsx`.
+
+Notes:
+
+- Zeffy requires `.xlsx` (not just `.csv`). Use the `.xlsx` output from the artifact.
+- The generator writes key fields as text in Excel (including `date (MM/DD/YYYY)`) so leading zeros are preserved.
 
 ### Workflow inputs
 
@@ -86,6 +103,8 @@ To satisfy Zeffy “Invalid format” validation:
 - `companyName` has double quotes removed (e.g., `FRC Team 1726 "Nifty..."` becomes `FRC Team 1726 Nifty...`).
 - `firstName` / `lastName` are sanitized to remove digits and unsupported characters (e.g., `Post245` becomes `Post`).
 
+If you want to review what changed, see the transforms reports in the `zeffy_transforms_report` artifact.
+
 The workflow also emits a separate export (`whmcs_invoices_deleted_clients`) that looks up invoice
 details (including contact fields) for any `userid=0` transactions that still have an `invoiceid`.
 This file is for investigation/auditing, not automatic inclusion.
@@ -99,15 +118,13 @@ This file is for investigation/auditing, not automatic inclusion.
 
 ## Verified example run
 
-Example successful run (2026-01-05):
+Verified successful import run (2026-02-07):
 
-- Actions run: https://github.com/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/20708066676
-- Outputs observed in artifacts:
-  - WHMCS clients: 343 rows
-  - WHMCS transactions: 1064 rows
-  - WHMCS invoices: 8055 rows
-  - Zeffy output: 7941 rows
-  - Deleted-client invoice lookups: 0 rows (no `userid=0` invoice IDs present in transactions)
+- Actions run: https://github.com/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/21782782643
+- Key outcomes:
+  - Zeffy import succeeded using `zeffy_payments_import_draft.xlsx`
+  - `companyName` contains no double quotes
+  - `firstName`/`lastName` contain no digits
 
 These counts are expected to vary over time.
 

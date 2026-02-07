@@ -267,7 +267,8 @@ function Test-ZeffyPersonName {
     if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
 
     # Zeffy rejects digits in names (e.g., lastName=Post245). Keep this conservative.
-    $allowedPattern = '^[\p{L}][\p{L} \-''’]*$'
+    # NOTE: Sanitization normalizes curly apostrophes to ASCII ', so we only allow ASCII here.
+    $allowedPattern = "^[\p{L}][\p{L} \-']*$"
     return ($Value -match $allowedPattern)
 }
 

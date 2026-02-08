@@ -31,6 +31,9 @@ For the end-to-end runbook to align a domain across Cloudflare + Microsoft 365 (
 DKIM v2 validation), see
 [docs/end-to-end-testing-m365-cloudflare.md](docs/end-to-end-testing-m365-cloudflare.md).
 
+For a comprehensive guide on automating GitHub Pages setup with custom domains using GitHub Actions,
+see [docs/automation-guide-github-pages.md](docs/automation-guide-github-pages.md).
+
 ## Simplified domain workflow
 
 For the simplified approach (tracked in issue #61), use these GitHub Actions:

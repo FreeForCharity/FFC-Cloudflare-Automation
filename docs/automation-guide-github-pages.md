@@ -58,7 +58,7 @@ This is the fully automated approach using the web interface.
 3. Fill in the workflow inputs:
    - **RepoName**: `ffc-ex-<domainname>` (e.g., `ffc-ex-example.org`)
    - **Description**: Short description of the site
-   - **TemplateRepo**: `FreeForCharity/FFC-IN-Single_Page_Template_Jekell`
+   - **TemplateRepo**: `FreeForCharity/FFC-IN-Single_Page_Template_Jekell` (Note: "Jekell" is the actual repository name)
    - **Visibility**: `public`
    - **EnableIssues**: `true`
    - **EnablePages**: `true`
@@ -167,6 +167,8 @@ $env:GH_TOKEN = "your-github-token"
     -EnablePages `
     -CNAME "example.org" `
     -DryRun  # Remove -DryRun to execute
+
+# Note: "Jekell" in the template repository name is intentional, not a typo
 ```
 
 #### Step 2: Configure DNS Using PowerShell Script

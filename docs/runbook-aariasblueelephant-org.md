@@ -10,7 +10,7 @@ This runbook documents the setup process for configuring the apex domain `aarias
 - **GitHub Organization**: FreeForCharity
 - **Repository Name**: ffc-ex-aariasblueelephant.org
 - **GitHub Pages URL**: freeforcharity.github.io/ffc-ex-aariasblueelephant.org
-- **Repository Type**: Organization/User Pages (username.github.io)
+- **Repository Type**: Project Pages (project repository with GitHub Pages enabled)
 - **Current Status**: Domain already in Cloudflare account
 
 ## Requirements
@@ -38,7 +38,7 @@ Use the existing GitHub Actions workflow to create the repository from template.
 **Inputs**:
 - **RepoName**: `ffc-ex-aariasblueelephant.org`
 - **Description**: `GitHub Pages site for aariasblueelephant.org`
-- **TemplateRepo**: `FreeForCharity/FFC-IN-Single_Page_Template_Jekell`
+- **TemplateRepo**: `FreeForCharity/FFC-IN-Single_Page_Template_Jekell` (Note: "Jekell" is the actual repository name, not a typo)
 - **Visibility**: `public`
 - **EnableIssues**: `true`
 - **EnablePages**: `true`

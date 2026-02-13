@@ -23,7 +23,7 @@ jobs:
       charity_name: ${{ steps.parse.outputs.charity_name }}
       footer_email: ${{ steps.parse.outputs.footer_email }}
       footer_phone: ${{ steps.parse.outputs.footer_phone }}
-      footer_address: ${{ steps.parse.outputs.footer_address }}
+      footer_address_json: ${{ steps.parse.outputs.footer_address_json }}
       footer_ein: ${{ steps.parse.outputs.footer_ein }}
       footer_social_json: ${{ steps.parse.outputs.footer_social_json }}
       leadership_json: ${{ steps.parse.outputs.leadership_json }}
@@ -114,7 +114,7 @@ jobs:
             core.setOutput('charity_name', charityName);
             core.setOutput('footer_email', footerEmail);
             core.setOutput('footer_phone', footerPhone);
-            core.setOutput('footer_address', footerAddress);
+            core.setOutput('footer_address_json', JSON.stringify(footerAddress));
             core.setOutput('footer_ein', footerEin);
             core.setOutput('footer_social_json', JSON.stringify(footerSocialLinks));
             core.setOutput('leadership_json', JSON.stringify(leadershipLines));
@@ -285,9 +285,7 @@ jobs:
 
           $footerEmail = "${{ needs.resolve.outputs.footer_email }}"
           $footerPhone = "${{ needs.resolve.outputs.footer_phone }}"
-          $footerAddress = @'
-${{ needs.resolve.outputs.footer_address }}
-'@.Trim()
+          $footerAddress = '${{ needs.resolve.outputs.footer_address_json }}' | ConvertFrom-Json
           $footerEin = "${{ needs.resolve.outputs.footer_ein }}"
 
           $footerSocial = '${{ needs.resolve.outputs.footer_social_json }}' | ConvertFrom-Json

@@ -1,0 +1,109 @@
+name: Request New Website (Footer + Leadership)
+description: Charity-facing request for a new website provisioned from the FFC template (DNS + repo + content)
+title: '[WEBSITE REQUEST] {apex_domain}'
+labels: ['website-request', 'github-pages', 'cloudflare']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If you have trouble creating the request, contact Clarke Moyer by text at 520-222-8104.
+
+  - type: markdown
+    attributes:
+      value: |
+        ## New Website Request
+
+        This form asks only for information that will be copied directly into the website template:
+        - Footer content
+        - Board / leadership section content
+
+        After you submit this issue, an administrator will assign it to an automation agent.
+        **No other action is required from you.**
+
+  - type: input
+    id: apex_domain
+    attributes:
+      label: Apex Domain
+      description: The root domain for the website (no subdomain).
+      placeholder: 'example.org'
+    validations:
+      required: true
+
+  - type: input
+    id: charity_name
+    attributes:
+      label: Charity / Organization Name
+      description: Display name for the footer and leadership section.
+      placeholder: 'Example Charity'
+    validations:
+      required: true
+
+  - type: input
+    id: footer_email
+    attributes:
+      label: Public Contact Email
+      description: Email to show in the site footer.
+      placeholder: 'info@example.org'
+    validations:
+      required: true
+
+  - type: input
+    id: footer_phone
+    attributes:
+      label: Public Contact Phone (optional)
+      description: Phone number to show in the footer.
+      placeholder: '+1 (555) 555-1212'
+    validations:
+      required: false
+
+  - type: textarea
+    id: footer_address
+    attributes:
+      label: Public Mailing Address (optional)
+      description: Address to show in the footer (if you want it displayed).
+      placeholder: |
+        123 Main St
+        City, ST 12345
+    validations:
+      required: false
+
+  - type: input
+    id: footer_ein
+    attributes:
+      label: EIN / Tax ID (optional)
+      description: EIN to display in the footer (if applicable).
+      placeholder: '12-3456789'
+    validations:
+      required: false
+
+  - type: textarea
+    id: footer_social
+    attributes:
+      label: Social Links (optional)
+      description: One URL per line. Include only the platforms you want displayed.
+      placeholder: |
+        https://www.facebook.com/YourPage
+        https://www.instagram.com/YourOrg
+        https://www.linkedin.com/company/YourOrg
+    validations:
+      required: false
+
+  - type: textarea
+    id: leadership
+    attributes:
+      label: Board / Leadership
+      description: |
+        Provide the names and roles you want displayed. Use one person per line.
+        Format: Role - Name (optional: Title/Notes)
+      placeholder: |
+        President - Jane Doe
+        Treasurer - John Smith
+        Board Member - Alex Lee
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        **For admins:** Assignment of this issue should trigger the provisioning workflow.

@@ -1,0 +1,366 @@
+name: '15. Website - Provision (Issue Assigned) [CF+Repo]'
+
+on:
+  issues:
+    types: [assigned]
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+env:
+  WEBSITE_TARGET_ORG: ${{ vars.FFC_WEBSITE_TARGET_ORG || 'FreeForCharity' }}
+  WEBSITE_TEMPLATE_REPO: ${{ vars.FFC_WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC-IN-Single_Page_Template_Jekell' }}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.parse.outputs.skip }}
+      issue_number: ${{ steps.parse.outputs.issue_number }}
+      domain: ${{ steps.parse.outputs.domain }}
+      charity_name: ${{ steps.parse.outputs.charity_name }}
+      footer_email: ${{ steps.parse.outputs.footer_email }}
+      footer_phone: ${{ steps.parse.outputs.footer_phone }}
+      footer_address: ${{ steps.parse.outputs.footer_address }}
+      footer_ein: ${{ steps.parse.outputs.footer_ein }}
+      footer_social_json: ${{ steps.parse.outputs.footer_social_json }}
+      leadership_json: ${{ steps.parse.outputs.leadership_json }}
+      repo_name: ${{ steps.parse.outputs.repo_name }}
+      repo_full: ${{ steps.parse.outputs.repo_full }}
+      template_repo: ${{ steps.parse.outputs.template_repo }}
+      run_url: ${{ steps.parse.outputs.run_url }}
+    steps:
+      - name: Parse Website Request
+        id: parse
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body || '';
+            const title = issue.title || '';
+            const labels = (issue.labels || [])
+              .map(l => (typeof l === 'string' ? l : l.name))
+              .filter(Boolean);
+
+            // Gate: only act on website requests.
+            const isWebsiteRequest = title.startsWith('[WEBSITE REQUEST]') || labels.includes('website-request');
+            if (!isWebsiteRequest) {
+              core.notice('Not a website request issue; skipping.');
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            // Idempotency: skip if already completed.
+            const marker = '<!-- website-provision:completed -->';
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              per_page: 100,
+            });
+            if (comments.some(c => (c.body || '').includes(marker))) {
+              core.notice('Provisioning already completed for this issue; skipping.');
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            function escapeRegExp(str) {
+              return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            }
+
+            function extractSection(heading) {
+              const re = new RegExp(`###\\s+${escapeRegExp(heading)}\\s+([\\s\\S]*?)(?=\\n###\\s+|$)`, 'i');
+              const m = body.match(re);
+              if (!m) return '';
+              return String(m[1] || '').trim();
+            }
+
+            const domain = extractSection('Apex Domain');
+            const charityName = extractSection('Charity / Organization Name');
+            const footerEmail = extractSection('Public Contact Email');
+            const footerPhone = extractSection('Public Contact Phone (optional)');
+            const footerAddress = extractSection('Public Mailing Address (optional)');
+            const footerEin = extractSection('EIN / Tax ID (optional)');
+            const footerSocial = extractSection('Social Links (optional)');
+            const leadership = extractSection('Board / Leadership');
+
+            if (!domain || !charityName || !footerEmail || !leadership) {
+              core.setFailed('Missing required fields: Apex Domain, Charity / Organization Name, Public Contact Email, and Board / Leadership are required.');
+              return;
+            }
+
+            const footerSocialLinks = footerSocial
+              .split(/\r?\n/)
+              .map(s => s.trim())
+              .filter(Boolean);
+
+            const leadershipLines = leadership
+              .split(/\r?\n/)
+              .map(s => s.trim())
+              .filter(Boolean);
+
+            const repoName = `FFC-EX-${domain}`;
+            const org = process.env.WEBSITE_TARGET_ORG || 'FreeForCharity';
+            const repoFull = `${org}/${repoName}`;
+
+            const templateRepo = process.env.WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC-IN-Single_Page_Template_Jekell';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            core.setOutput('skip', 'false');
+            core.setOutput('issue_number', String(issue.number));
+            core.setOutput('domain', domain);
+            core.setOutput('charity_name', charityName);
+            core.setOutput('footer_email', footerEmail);
+            core.setOutput('footer_phone', footerPhone);
+            core.setOutput('footer_address', footerAddress);
+            core.setOutput('footer_ein', footerEin);
+            core.setOutput('footer_social_json', JSON.stringify(footerSocialLinks));
+            core.setOutput('leadership_json', JSON.stringify(leadershipLines));
+            core.setOutput('repo_name', repoName);
+            core.setOutput('repo_full', repoFull);
+            core.setOutput('template_repo', templateRepo);
+            core.setOutput('run_url', runUrl);
+
+  announce:
+    runs-on: ubuntu-latest
+    needs: [resolve]
+    if: needs.resolve.outputs.skip != 'true'
+    steps:
+      - name: Comment start
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issueNumber = Number('${{ needs.resolve.outputs.issue_number }}');
+            const domain = '${{ needs.resolve.outputs.domain }}';
+            const repoFull = '${{ needs.resolve.outputs.repo_full }}';
+            const templateRepo = '${{ needs.resolve.outputs.template_repo }}';
+            const runUrl = '${{ needs.resolve.outputs.run_url }}';
+
+            const body = [
+              `Provisioning started for **${domain}**`,
+              '',
+              `- Target repo: **${repoFull}**`,
+              `- Template: **${templateRepo}**`,
+              `- Run: ${runUrl}`,
+              '',
+              'Steps:',
+              '1) Configure DNS for GitHub Pages (Cloudflare)',
+              '2) Create repo from template + enable Pages',
+              '3) Apply footer + leadership content',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });
+
+  dns:
+    runs-on: windows-latest
+    environment: cloudflare-prod
+    needs: [resolve, announce]
+    if: needs.resolve.outputs.skip != 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required Cloudflare secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+
+      - name: Enforce GitHub Pages DNS (apex + www)
+        id: enforce
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ needs.resolve.outputs.domain }}"
+
+          $outDir = Join-Path $env:RUNNER_TEMP 'website-provision-dns'
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -GitHubPagesOnly *>&1
+          $outPath = Join-Path $outDir 'dns-enforce.txt'
+          $out | Out-File -FilePath $outPath -Encoding utf8
+
+          $audit = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -Audit -ErrorAction Continue *>&1
+          $auditPath = Join-Path $outDir 'dns-audit-after.txt'
+          $audit | Out-File -FilePath $auditPath -Encoding utf8
+
+          "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload DNS outputs
+        uses: actions/upload-artifact@v6
+        with:
+          name: website-provision-dns
+          path: ${{ steps.enforce.outputs.out_dir }}/*.txt
+          if-no-files-found: error
+
+  repo:
+    runs-on: windows-latest
+    environment: github-prod
+    needs: [resolve, dns]
+    if: needs.resolve.outputs.skip != 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required GitHub token
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.CBM_TOKEN }}")) {
+            throw 'CBM_TOKEN secret is not set (environment: github-prod).'
+          }
+
+      - name: Create repo from template + enable Pages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repoFull = "${{ needs.resolve.outputs.repo_full }}"
+          $repoName = "${{ needs.resolve.outputs.repo_name }}"
+          $domain = "${{ needs.resolve.outputs.domain }}"
+          $charityName = "${{ needs.resolve.outputs.charity_name }}"
+          $templateRepo = "${{ needs.resolve.outputs.template_repo }}"
+
+          # Best-effort check: if repo already exists, skip creation.
+          $exists = $false
+          try {
+            gh repo view $repoFull --json nameWithOwner 1>$null
+            $exists = $true
+          } catch {
+            $exists = $false
+          }
+
+          if ($exists) {
+            Write-Host "Repo already exists: $repoFull. Skipping creation." -ForegroundColor Yellow
+            return
+          }
+
+          ./scripts/Create-GitHubRepo.ps1 `
+            -RepoName $repoName `
+            -Organization "${{ env.WEBSITE_TARGET_ORG }}" `
+            -Description "Website for $charityName ($domain)" `
+            -TemplateRepo $templateRepo `
+            -Visibility public `
+            -EnableIssues $true `
+            -EnablePages `
+            -CNAME $domain
+
+  content:
+    runs-on: windows-latest
+    environment: github-prod
+    needs: [resolve, repo]
+    if: needs.resolve.outputs.skip != 'true'
+    steps:
+      - name: Validate required GitHub token
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.CBM_TOKEN }}")) {
+            throw 'CBM_TOKEN secret is not set (environment: github-prod).'
+          }
+
+      - name: Apply footer + leadership content (best-effort)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $repoFull = "${{ needs.resolve.outputs.repo_full }}"
+          $domain = "${{ needs.resolve.outputs.domain }}"
+          $charityName = "${{ needs.resolve.outputs.charity_name }}"
+
+          $footerEmail = "${{ needs.resolve.outputs.footer_email }}"
+          $footerPhone = "${{ needs.resolve.outputs.footer_phone }}"
+          $footerAddress = @'
+${{ needs.resolve.outputs.footer_address }}
+'@.Trim()
+          $footerEin = "${{ needs.resolve.outputs.footer_ein }}"
+
+          $footerSocial = '${{ needs.resolve.outputs.footer_social_json }}' | ConvertFrom-Json
+          $leadership = '${{ needs.resolve.outputs.leadership_json }}' | ConvertFrom-Json
+
+          $workDir = Join-Path $env:RUNNER_TEMP 'website-provision-repo'
+          if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir }
+          New-Item -ItemType Directory -Force -Path $workDir | Out-Null
+
+          $cloneDir = Join-Path $workDir 'repo'
+          gh repo clone $repoFull $cloneDir
+          Set-Location $cloneDir
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+
+          $content = [ordered]@{
+            domain = $domain
+            charityName = $charityName
+            footer = [ordered]@{
+              email = $footerEmail
+              phone = $footerPhone
+              address = $footerAddress
+              ein = $footerEin
+              socialLinks = @($footerSocial)
+            }
+            leadership = @($leadership)
+            generatedUtc = (Get-Date).ToUniversalTime().ToString('o')
+          }
+
+          $json = $content | ConvertTo-Json -Depth 8
+          $json | Out-File -FilePath 'ffc-content.json' -Encoding utf8
+
+          git add ffc-content.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "chore: apply footer + leadership content" | Out-Null
+            git push origin HEAD:main
+          } else {
+            Write-Host "No content changes detected; skipping commit." -ForegroundColor Yellow
+          }
+
+  finalize:
+    runs-on: ubuntu-latest
+    needs: [resolve, dns, repo, content]
+    if: needs.resolve.outputs.skip != 'true'
+    steps:
+      - name: Comment completion
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issueNumber = Number('${{ needs.resolve.outputs.issue_number }}');
+            const domain = '${{ needs.resolve.outputs.domain }}';
+            const repoFull = '${{ needs.resolve.outputs.repo_full }}';
+            const repoUrl = `${context.serverUrl}/${repoFull}`;
+            const runUrl = '${{ needs.resolve.outputs.run_url }}';
+
+            const marker = '<!-- website-provision:completed -->';
+            const body = [
+              marker,
+              `Provisioning completed for **${domain}**`,
+              '',
+              `- Repo: ${repoUrl}`,
+              `- Run: ${runUrl}`,
+              '',
+              'Notes:',
+              '- DNS enforcement used the standard GitHub Pages-only enforcement (apex + www).',
+              '- Content was written to `ffc-content.json` in the target repo (template wiring may require a follow-up once the React template file locations are confirmed).',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });

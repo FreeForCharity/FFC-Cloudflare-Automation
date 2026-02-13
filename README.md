@@ -84,6 +84,7 @@ Additional operational workflows:
 3. **Remove domains** from the Cloudflare account
 4. **Configure GitHub Pages** for apex domains (e.g., example.org)
 5. **Configure GitHub Pages** for subdomains (e.g., staging.example.org)
+6. **Provision a new website** from the standard template (DNS + repo + minimal content)
 
 ## Quick Start
 
@@ -97,6 +98,7 @@ To request a DNS change or domain operation:
    - **Purchase and Add New .org Domain** - For new domain acquisitions
    - **Add Existing Domain to Cloudflare** - For migrating domains
    - **Remove Domain from Cloudflare** - For domain removal
+  - **Request New Website (Footer + Leadership)** - For new charity sites (DNS + repo provisioning)
    - **Configure Apex Domain for GitHub Pages** - For root domain setup
    - **Configure Subdomain for GitHub Pages** - For subdomain setup
 3. Fill out all required information in the template

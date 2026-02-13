@@ -11,7 +11,7 @@ permissions:
 
 env:
   WEBSITE_TARGET_ORG: ${{ vars.FFC_WEBSITE_TARGET_ORG || 'FreeForCharity' }}
-  WEBSITE_TEMPLATE_REPO: ${{ vars.FFC_WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC-IN-Single_Page_Template_Jekell' }}
+  WEBSITE_TEMPLATE_REPO: ${{ vars.FFC_WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC_Single_Page_Template' }}
 
 jobs:
   resolve:
@@ -105,7 +105,7 @@ jobs:
             const org = process.env.WEBSITE_TARGET_ORG || 'FreeForCharity';
             const repoFull = `${org}/${repoName}`;
 
-            const templateRepo = process.env.WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC-IN-Single_Page_Template_Jekell';
+            const templateRepo = process.env.WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC_Single_Page_Template';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
             core.setOutput('skip', 'false');
@@ -265,6 +265,8 @@ jobs:
     needs: [resolve, repo]
     if: needs.resolve.outputs.skip != 'true'
     steps:
+      - uses: actions/checkout@v4
+
       - name: Validate required GitHub token
         shell: pwsh
         run: |
@@ -272,7 +274,7 @@ jobs:
             throw 'CBM_TOKEN secret is not set (environment: github-prod).'
           }
 
-      - name: Apply footer + leadership content (best-effort)
+      - name: Apply footer + leadership content
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.CBM_TOKEN }}
@@ -319,7 +321,24 @@ jobs:
           $json = $content | ConvertTo-Json -Depth 8
           $json | Out-File -FilePath 'ffc-content.json' -Encoding utf8
 
-          git add ffc-content.json
+          # Patch the actual React template files in the newly provisioned repo.
+          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts/Apply-WebsiteReactTemplate.ps1'
+          if (-not (Test-Path $scriptPath)) {
+            throw "Customization script not found: $scriptPath"
+          }
+
+          & $scriptPath `
+            -RepoPath $cloneDir `
+            -Domain $domain `
+            -CharityName $charityName `
+            -FooterEmail $footerEmail `
+            -FooterPhone $footerPhone `
+            -FooterAddress $footerAddress `
+            -FooterEin $footerEin `
+            -FooterSocial @($footerSocial) `
+            -LeadershipLines @($leadership)
+
+          git add -A
           git diff --cached --quiet
           if ($LASTEXITCODE -ne 0) {
             git commit -m "chore: apply footer + leadership content" | Out-Null
@@ -353,7 +372,7 @@ jobs:
               '',
               'Notes:',
               '- DNS enforcement used the standard GitHub Pages-only enforcement (apex + www).',
-              '- Content was written to `ffc-content.json` in the target repo (template wiring may require a follow-up once the React template file locations are confirmed).',
+              '- Content was applied directly to the React template footer + leadership sections (and recorded in `ffc-content.json`).',
             ].join('\n');
 
             await github.rest.issues.createComment({

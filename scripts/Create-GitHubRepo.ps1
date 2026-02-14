@@ -199,7 +199,13 @@ Invoke-GhCommand $editCmd
 if ($EnablePages) {
     Write-Host "Enabling GitHub Pages on 'main' branch, root folder..."
     
-    # 3a. Auto-detect CNAME if not provided based on PagesDomainType
+    # 3a. Validate PagesDomainType and CNAME compatibility
+    if ($PagesDomainType -eq "github-default" -and -not [string]::IsNullOrWhiteSpace($CNAME)) {
+        Write-Warning "PagesDomainType is set to 'github-default' (no custom domain), but CNAME parameter was provided. Ignoring CNAME and using GitHub-provided URL."
+        $CNAME = $null
+    }
+    
+    # 3b. Auto-detect CNAME if not provided based on PagesDomainType
     if ([string]::IsNullOrWhiteSpace($CNAME)) {
         if ($PagesDomainType -eq "github-default") {
             # No custom domain needed

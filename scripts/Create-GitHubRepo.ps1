@@ -218,6 +218,12 @@ if ($EnablePages) {
                 Write-Host "Auto-detected apex domain (CNAME): $CNAME" -ForegroundColor Cyan
             }
         }
+        else {
+            # Repo name doesn't match expected pattern for auto-detection
+            if ($PagesDomainType -ne "github-default") {
+                Write-Warning "Cannot auto-detect domain: repository name '$RepoName' does not match 'FFC-EX-<domain>' pattern. No custom domain will be configured. Please provide a manual CNAME or use 'github-default' PagesDomainType."
+            }
+        }
     }
 
     # Need to know the owner. Assuming current user context or org from RepoName if "Org/Repo" format.

@@ -101,10 +101,9 @@ the standard FFC React/Next.js template.
 
 - **DNS**: Enforces standard GitHub Pages DNS for the apex domain (apex + `www`) via
   `Update-CloudflareDns.ps1` using `-EnforceStandard -GitHubPagesOnly`.
-- **Repo + Pages**: Creates a new repo from the template and enables GitHub Pages with `CNAME`
-  set to the apex domain.
-- **Template content**: Clones the new repo and applies the request data directly into the
-  template:
+- **Repo + Pages**: Creates a new repo from the template and enables GitHub Pages with `CNAME` set
+  to the apex domain.
+- **Template content**: Clones the new repo and applies the request data directly into the template:
   - Footer content (email/phone/address/EIN/social)
   - Leadership/team section via JSON content (`src/data/team/*.json` + `src/data/team.ts`)
   - Also writes `ffc-content.json` into the new repo for traceability.
@@ -119,8 +118,8 @@ If the marker is present, subsequent assignments will skip provisioning.
 
 ### Required environments / secrets
 
-This workflow uses GitHub Actions **environments** (so secrets should be set on the environment,
-not globally):
+This workflow uses GitHub Actions **environments** (so secrets should be set on the environment, not
+globally):
 
 - Environment: `cloudflare-prod`
   - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
@@ -145,9 +144,11 @@ To request a DNS change or domain operation:
    - **Purchase and Add New .org Domain** - For new domain acquisitions
    - **Add Existing Domain to Cloudflare** - For migrating domains
    - **Remove Domain from Cloudflare** - For domain removal
-  - **Request New Website (Footer + Leadership)** - For new charity sites (DNS + repo provisioning)
-   - **Configure Apex Domain for GitHub Pages** - For root domain setup
-   - **Configure Subdomain for GitHub Pages** - For subdomain setup
+
+- **Request New Website (Footer + Leadership)** - For new charity sites (DNS + repo provisioning)
+- **Configure Apex Domain for GitHub Pages** - For root domain setup
+- **Configure Subdomain for GitHub Pages** - For subdomain setup
+
 3. Fill out all required information in the template
 4. Submit the issue
 5. An administrator will review and execute the request

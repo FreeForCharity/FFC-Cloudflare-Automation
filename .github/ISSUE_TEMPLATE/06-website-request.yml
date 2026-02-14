@@ -1,5 +1,6 @@
 name: Request New Website (Footer + Leadership)
-description: Charity-facing request for a new website provisioned from the FFC template (DNS + repo + content)
+description:
+  Charity-facing request for a new website provisioned from the FFC template (DNS + repo + content)
 title: '[WEBSITE REQUEST] {apex_domain}'
 labels: ['website-request', 'github-pages', 'cloudflare']
 body:

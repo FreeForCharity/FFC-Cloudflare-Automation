@@ -32,4 +32,3 @@ body:
       placeholder: 'example.org'
     validations:
       required: true
-

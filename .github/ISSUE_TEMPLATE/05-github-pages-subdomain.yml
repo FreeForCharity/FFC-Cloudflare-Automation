@@ -1,12 +1,21 @@
-name: Configure Subdomain for GitHub Pages
-description: Point the fixed subdomain staging.<base_domain> to GitHub Pages
-title: '[GITHUB PAGES SUBDOMAIN] staging.{base_domain}'
+name: 'DEPRECATED: Configure Subdomain for GitHub Pages'
+description: Deprecated. Use "Request New Website (Footer + Leadership)" for charity requests.
+title: '[DEPRECATED GITHUB PAGES SUBDOMAIN] staging.{base_domain}'
 labels: ['github-pages', 'dns-config', 'subdomain', 'cloudflare']
 body:
   - type: markdown
     attributes:
       value: |
         If you have trouble creating the issue, contact Clarke Moyer by text at 520-222-8104.
+  - type: markdown
+    attributes:
+      value: |
+        ## Deprecated
+        This template asked requestors for admin/internal details.
+
+        For new charity website requests, use:
+        **Request New Website (Footer + Leadership)**
+
   - type: markdown
     attributes:
       value: |
@@ -23,185 +32,3 @@ body:
       placeholder: 'example.org'
     validations:
       required: true
-
-  - type: input
-    id: github_org
-    attributes:
-      label: GitHub Organization/User
-      description: GitHub organization or username
-      placeholder: 'FreeForCharity'
-    validations:
-      required: true
-
-  - type: input
-    id: repository_name
-    attributes:
-      label: Repository Name
-      description: Name of the GitHub repository
-      placeholder: 'ffc-staging-site'
-    validations:
-      required: true
-
-  - type: input
-    id: github_pages_url
-    attributes:
-      label: GitHub Pages URL
-      description: Current GitHub Pages URL (before custom domain)
-      placeholder: 'freeforcharity.github.io/staging-site'
-    validations:
-      required: true
-
-  - type: dropdown
-    id: use_case
-    attributes:
-      label: Use Case
-      description: What is the purpose of this subdomain?
-      options:
-        - Staging/development environment
-        - Preview environment
-        - Project-specific site
-        - Documentation site
-        - Other (specify in notes)
-    validations:
-      required: true
-
-  - type: textarea
-    id: purpose
-    attributes:
-      label: Purpose Description
-      description: Explain the purpose of this subdomain
-    validations:
-      required: true
-
-  - type: dropdown
-    id: domain_status
-    attributes:
-      label: Current Base Domain Status
-      options:
-        - Base domain is already in Cloudflare account
-        - Base domain needs to be added to Cloudflare first (will create separate issue)
-    validations:
-      required: true
-
-  - type: checkboxes
-    id: dns_config
-    attributes:
-      label: DNS Configuration Requirements
-      options:
-        - label: Create CNAME record for `staging` pointing to GitHub Pages
-          required: true
-
-  - type: checkboxes
-    id: ssl_requirements
-    attributes:
-      label: SSL/TLS Requirements
-      options:
-        - label: Enable HTTPS
-          required: true
-        - label: Enforce HTTPS
-          required: true
-
-  - type: input
-    id: timeline
-    attributes:
-      label: Timeline
-      description: When is this configuration needed?
-      placeholder: 'ASAP or specific date'
-    validations:
-      required: true
-
-  - type: textarea
-    id: additional_notes
-    attributes:
-      label: Additional Notes
-      description: Any special requirements or considerations
-
-  - type: markdown
-    attributes:
-      value: |
-        ---
-        ## For Administrator Use
-
-        ### Prerequisites
-        - [ ] Base domain is in Cloudflare account
-        - [ ] GitHub repository exists and has content
-        - [ ] GitHub Pages is enabled in repository settings
-
-        ### DNS Configuration (Cloudflare Dashboard)
-        1. [ ] Login to Cloudflare Dashboard
-        2. [ ] Navigate to DNS → Records
-        3. [ ] Create CNAME record:
-           - Type: CNAME
-            - Name: staging
-           - Target: [username].github.io
-           - TTL: Auto
-           - Proxy status: DNS only (gray cloud) ⚠️ Important!
-
-          ### DNS Configuration (PowerShell Script)
-          ```powershell
-          $env:CLOUDFLARE_API_TOKEN = "your-token-here"
-
-          # Create CNAME record for subdomain
-          # Example: .\Update-CloudflareDns.ps1 -Zone example.org -Name staging -Type CNAME -Content freeforcharity.github.io
-          .\Update-CloudflareDns.ps1 -Zone [base-domain] -Name staging -Type CNAME -Content [username].github.io
-          ```
-
-          ### GitHub Pages Configuration
-          1. [ ] Navigate to repository Settings → Pages
-          2. [ ] Under "Custom domain", enter the full subdomain
-          3. [ ] Click Save and wait for DNS check
-          4. [ ] Once verified (green checkmark), enable "Enforce HTTPS"
-
-          ### CNAME File
-          ```bash
-          # GitHub usually creates this automatically
-          # If needed, create manually in repository root:
-          echo "staging.[domain.org]" > CNAME
-          ```
-
-          ### Verification
-          ```bash
-          # Check DNS propagation
-          dig staging.[domain.org] CNAME +short
-
-          # Test HTTPS
-          curl -I https://staging.[domain.org]
-          ```
-
-          ### Cloudflare Settings (Recommended)
-          - [ ] SSL/TLS Mode: Full (not Full Strict)
-          - [ ] Always Use HTTPS: On
-          - [ ] Automatic HTTPS Rewrites: On
-          - [ ] Minimum TLS Version: 1.2+
-          - [ ] **Proxy Status: DNS Only (gray cloud)** ⚠️ Critical!
-
-          ### Common Issues
-          - **DNS check fails**: Verify CNAME exists, wait 15-30 min for propagation, ensure proxy disabled
-          - **SSL errors**: Ensure proxy disabled, wait up to 24 hours for GitHub certificate
-          - **404 errors**: Verify CNAME file in repo, check GitHub Pages enabled, verify branch/folder
-
-          ### Migration from Production to Staging
-          If this is for migrating a live site to GitHub Pages:
-          1. [ ] Set up staging subdomain first (this issue)
-          2. [ ] Deploy site content to GitHub Pages
-          3. [ ] Test thoroughly on staging
-          4. [ ] Once verified, migrate apex domain (create separate issue)
-          5. [ ] Keep staging subdomain for future development
-
-          ### Verification Checklist
-          - [ ] CNAME record created in Cloudflare
-          - [ ] Cloudflare proxy disabled (DNS only - gray cloud)
-          - [ ] DNS propagation verified
-          - [ ] Custom domain configured in GitHub Pages
-          - [ ] DNS check passed (green checkmark)
-          - [ ] CNAME file present in repository
-          - [ ] HTTPS enabled and enforced
-          - [ ] Website loads at https://[subdomain.domain.org]
-          - [ ] SSL certificate valid
-          - [ ] Content displays correctly
-
-          ### Timeline
-          - DNS configuration: ~2 minutes
-          - DNS propagation: 5-15 minutes
-          - GitHub DNS verification: 5-15 minutes
-          - SSL certificate: 1-24 hours

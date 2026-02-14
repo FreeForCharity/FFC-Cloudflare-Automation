@@ -43,6 +43,11 @@
   description: Subdomain configuration
   color: 'c5def5'
 
+# Website Provisioning - Charity-facing requests
+- name: website-request
+  description: Request to provision a new website from the template (DNS + repo + content)
+  color: '0aa7a7'
+
 # General Labels
 - name: bug
   description: Something isn't working

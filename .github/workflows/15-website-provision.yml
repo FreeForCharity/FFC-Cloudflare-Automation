@@ -3,6 +3,12 @@ name: '15. Website - Provision (Issue Assigned) [CF+Repo]'
 on:
   issues:
     types: [assigned]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to process (must be a website request issue)'
+        required: true
+        type: number
 
 permissions:
   contents: read
@@ -43,7 +49,26 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const issue = context.payload.issue;
+            // Handle both issue assignment trigger and manual workflow_dispatch trigger
+            let issue;
+            if (context.eventName === 'workflow_dispatch') {
+              // Manual trigger: fetch the issue by number from inputs
+              const issueNumber = context.payload.inputs.issue_number;
+              if (!issueNumber) {
+                core.setFailed('Invalid issue number provided for manual run');
+                return;
+              }
+              const issueResponse = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+              });
+              issue = issueResponse.data;
+            } else {
+              // Automatic trigger from issue assignment
+              issue = context.payload.issue;
+            }
+
             const body = issue.body || '';
             const title = issue.title || '';
             const requesterGitHubUsername = String(issue.user?.login || '').trim();

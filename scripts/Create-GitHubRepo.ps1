@@ -49,6 +49,15 @@
 .PARAMETER EnablePages
     Switch to enable GitHub Pages on the default branch (usually 'main') and root ('/') folder.
 
+.PARAMETER PagesDomainType
+    Specifies how to configure the custom domain for GitHub Pages:
+    - "apex": Uses the domain as-is (e.g., example.org)
+    - "staging": Adds 'staging.' prefix (e.g., staging.example.org)
+    - "github-default": No custom domain, uses GitHub-provided URL
+
+.PARAMETER CNAME
+    Custom domain (CNAME) for GitHub Pages. If not provided, will be auto-detected based on PagesDomainType.
+
 .PARAMETER DryRun
     If set, only prints the commands that would be executed.
 
@@ -97,6 +106,10 @@ param(
 
     [Parameter(Mandatory = $false)]
     [switch]$EnablePages,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("apex", "staging", "github-default")]
+    [string]$PagesDomainType = "apex",
 
     [Parameter(Mandatory = $false)]
     [string]$CNAME,
@@ -186,11 +199,24 @@ Invoke-GhCommand $editCmd
 if ($EnablePages) {
     Write-Host "Enabling GitHub Pages on 'main' branch, root folder..."
     
-    # 3a. Auto-detect CNAME if not provided
+    # 3a. Auto-detect CNAME if not provided based on PagesDomainType
     if ([string]::IsNullOrWhiteSpace($CNAME)) {
-        if ($RepoName -match "^FFC-EX-(.+)$") {
-            $CNAME = $matches[1]
-            Write-Host "Auto-detected properties custom domain (CNAME): $CNAME" -ForegroundColor Cyan
+        if ($PagesDomainType -eq "github-default") {
+            # No custom domain needed
+            Write-Host "Using GitHub-provided URL (no custom domain)" -ForegroundColor Cyan
+        }
+        elseif ($RepoName -match "^FFC-EX-(.+)$") {
+            $detectedDomain = $matches[1]
+            
+            if ($PagesDomainType -eq "staging") {
+                $CNAME = "staging.$detectedDomain"
+                Write-Host "Auto-detected staging subdomain (CNAME): $CNAME" -ForegroundColor Cyan
+            }
+            else {
+                # apex domain
+                $CNAME = $detectedDomain
+                Write-Host "Auto-detected apex domain (CNAME): $CNAME" -ForegroundColor Cyan
+            }
         }
     }
 

@@ -49,6 +49,15 @@
 .PARAMETER EnablePages
     Switch to enable GitHub Pages on the default branch (usually 'main') and root ('/') folder.
 
+.PARAMETER PagesDomainType
+    Specifies how to configure the custom domain for GitHub Pages:
+    - "apex": Uses the domain as-is (e.g., example.org)
+    - "staging": Adds 'staging.' prefix (e.g., staging.example.org)
+    - "github-default": No custom domain, uses GitHub-provided URL
+
+.PARAMETER CNAME
+    Custom domain (CNAME) for GitHub Pages. If not provided, will be auto-detected based on PagesDomainType.
+
 .PARAMETER DryRun
     If set, only prints the commands that would be executed.
 
@@ -99,10 +108,11 @@ param(
     [switch]$EnablePages,
 
     [Parameter(Mandatory = $false)]
-    [string]$CNAME,
+    [ValidateSet("apex", "staging", "github-default")]
+    [string]$PagesDomainType = "apex",
 
     [Parameter(Mandatory = $false)]
-    [switch]$SkipPagesCustomDomain,
+    [string]$CNAME,
 
     [Parameter(Mandatory = $false)]
     [switch]$DryRun
@@ -189,11 +199,36 @@ Invoke-GhCommand $editCmd
 if ($EnablePages) {
     Write-Host "Enabling GitHub Pages on 'main' branch, root folder..."
     
-    # 3a. Auto-detect CNAME if not provided
-    if (-not $SkipPagesCustomDomain -and [string]::IsNullOrWhiteSpace($CNAME)) {
-        if ($RepoName -match "^FFC-EX-(.+)$") {
-            $CNAME = $matches[1]
-            Write-Host "Auto-detected properties custom domain (CNAME): $CNAME" -ForegroundColor Cyan
+    # 3a. Validate PagesDomainType and CNAME compatibility
+    if ($PagesDomainType -eq "github-default" -and -not [string]::IsNullOrWhiteSpace($CNAME)) {
+        Write-Warning "PagesDomainType is set to 'github-default' (no custom domain), but CNAME parameter was provided. Ignoring CNAME and using GitHub-provided URL."
+        $CNAME = $null
+    }
+    
+    # 3b. Auto-detect CNAME if not provided based on PagesDomainType
+    if ([string]::IsNullOrWhiteSpace($CNAME)) {
+        if ($PagesDomainType -eq "github-default") {
+            # No custom domain needed
+            Write-Host "Using GitHub-provided URL (no custom domain)" -ForegroundColor Cyan
+        }
+        elseif ($RepoName -match "^FFC-EX-(.+)$") {
+            $detectedDomain = $matches[1]
+            
+            if ($PagesDomainType -eq "staging") {
+                $CNAME = "staging.$detectedDomain"
+                Write-Host "Auto-detected staging subdomain (CNAME): $CNAME" -ForegroundColor Cyan
+            }
+            else {
+                # apex domain
+                $CNAME = $detectedDomain
+                Write-Host "Auto-detected apex domain (CNAME): $CNAME" -ForegroundColor Cyan
+            }
+        }
+        else {
+            # Repo name doesn't match expected pattern for auto-detection
+            if ($PagesDomainType -ne "github-default") {
+                Write-Warning "Cannot auto-detect domain: repository name '$RepoName' does not match 'FFC-EX-<domain>' pattern. No custom domain will be configured. Please provide a manual CNAME or use 'github-default' PagesDomainType."
+            }
         }
     }
 
@@ -222,7 +257,7 @@ if ($EnablePages) {
         Invoke-GhCommand $pagesCmd
         
         # Configure CNAME and Enforce HTTPS
-        if (-not $SkipPagesCustomDomain -and $CNAME) {
+        if ($CNAME) {
             Write-Host "Setting CNAME to $CNAME..."
             # 1. Set CNAME first (without HTTPS enforcement to avoid 'Certificate not ready' errors)
             $cnameCmd = "api repos/$fullRepoName/pages -X PUT -F `"cname=$CNAME`""

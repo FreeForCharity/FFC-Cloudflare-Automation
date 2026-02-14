@@ -463,7 +463,7 @@ jobs:
             if ($zoneControlled) {
               $createParams.CNAME = $domain
             } else {
-              $createParams.SkipPagesCustomDomain = $true
+              $createParams.PagesDomainType = 'github-default'
             }
 
             ./scripts/Create-GitHubRepo.ps1 @createParams

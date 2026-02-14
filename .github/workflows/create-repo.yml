@@ -13,10 +13,13 @@ on:
         default: 'Created via automation'
         type: string
       TemplateRepo:
-        description: 'Template repository (owner/repo)'
+        description: 'Template repository to use'
         required: true
-        default: 'FreeForCharity/FFC-IN-Single_Page_Template_Jekell'
-        type: string
+        default: 'FreeForCharity/FFC_Single_Page_Template'
+        type: choice
+        options:
+          - FreeForCharity/FFC_Single_Page_Template
+          - FreeForCharity/FFC-IN-Single_Page_Template_Jekell
       Visibility:
         description: 'Visibility'
         required: true
@@ -34,8 +37,17 @@ on:
         required: false
         default: false
         type: boolean
+      PagesDomainType:
+        description: 'GitHub Pages domain configuration'
+        required: false
+        default: 'apex'
+        type: choice
+        options:
+          - apex
+          - staging
+          - github-default
       CNAME:
-        description: 'Custom Domain (CNAME) - Leave empty to auto-detect from FFC-EX-<domain>'
+        description: 'Custom Domain (CNAME) - Leave empty to auto-detect based on PagesDomainType'
         required: false
         type: string
       DryRun:
@@ -63,6 +75,7 @@ jobs:
               Visibility          = "${{ inputs.Visibility }}"
               EnableIssues        = [System.Convert]::ToBoolean("${{ inputs.EnableIssues }}")
               EnablePages         = [System.Convert]::ToBoolean("${{ inputs.EnablePages }}")
+              PagesDomainType     = "${{ inputs.PagesDomainType }}"
               DryRun              = [System.Convert]::ToBoolean("${{ inputs.DryRun }}")
           }
 

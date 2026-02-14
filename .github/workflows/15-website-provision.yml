@@ -23,7 +23,6 @@ jobs:
       dns_controlled: ${{ steps.parse.outputs.dns_controlled }}
       website_situation: ${{ steps.parse.outputs.website_situation }}
       current_website_url: ${{ steps.parse.outputs.current_website_url }}
-      domain_in_ffc_cloudflare_hint: ${{ steps.parse.outputs.domain_in_ffc_cloudflare_hint }}
       requester_github_username: ${{ steps.parse.outputs.requester_github_username }}
       technical_poc_github_username: ${{ steps.parse.outputs.technical_poc_github_username }}
       domain: ${{ steps.parse.outputs.domain }}
@@ -136,8 +135,6 @@ jobs:
 
             const websiteSituation = normalizeInput(extractSection('Website Situation'));
             const currentWebsiteUrl = normalizeInput(extractSection('Current Website URL (if any)'));
-            const domainInFfcCloudflareHint = normalizeInput(extractSection('Is the domain currently in Free For Charity Cloudflare?'));
-
             let technicalPocGitHubUsername = normalizeInput(extractSection('Technical POC GitHub Username'));
             technicalPocGitHubUsername = technicalPocGitHubUsername.replace(/^@/, '');
 
@@ -235,7 +232,6 @@ jobs:
             core.setOutput('dns_controlled', dnsControlled ? 'true' : 'false');
             core.setOutput('website_situation', websiteSituation);
             core.setOutput('current_website_url', currentWebsiteUrl);
-            core.setOutput('domain_in_ffc_cloudflare_hint', domainInFfcCloudflareHint);
             core.setOutput('requester_github_username', requesterGitHubUsername);
             core.setOutput('technical_poc_github_username', technicalPocGitHubUsername);
             core.setOutput('domain', domain);
@@ -325,7 +321,6 @@ jobs:
             const runUrl = '${{ needs.resolve.outputs.run_url }}';
             const zoneControlled = '${{ needs.zone_check.outputs.zone_controlled }}' === 'true';
             const zoneAccount = '${{ needs.zone_check.outputs.zone_account }}';
-            const hint = '${{ needs.resolve.outputs.domain_in_ffc_cloudflare_hint }}';
             const websiteSituation = '${{ needs.resolve.outputs.website_situation }}';
             const requester = '${{ needs.resolve.outputs.requester_github_username }}';
             const technicalPoc = '${{ needs.resolve.outputs.technical_poc_github_username }}';
@@ -341,14 +336,6 @@ jobs:
                   '2) Apply footer + leadership content',
                 ];
 
-            const mismatchLine = (() => {
-              const normalizedHint = String(hint || '').toLowerCase();
-              if (!normalizedHint || normalizedHint === 'not sure') return null;
-              const hintYes = normalizedHint === 'yes';
-              if (hintYes === zoneControlled) return null;
-              return `- Note: form indicates Cloudflare=${hint}, but Cloudflare source-of-truth indicates controlled=${zoneControlled ? 'Yes' : 'No'}.`; 
-            })();
-
             const body = [
               `Provisioning started for **${domain}**`,
               '',
@@ -359,7 +346,6 @@ jobs:
               requester ? `- Requester: @${requester}` : null,
               technicalPoc ? `- Technical POC: @${technicalPoc}` : null,
               `- Cloudflare source-of-truth: **${zoneControlled ? 'Controlled (will set custom domain)' : 'Not controlled (no custom domain)'}**${zoneAccount ? ` (account: ${zoneAccount})` : ''}`,
-              mismatchLine,
               '',
               'Steps:',
               ...steps,

@@ -27,9 +27,11 @@ body:
         All fields are required so automation can run reliably.
         If a field does not apply to your organization, enter `N/A`.
 
-        **Domain note:** We will build the repo first.
-        - If the domain is already in Free For Charity Cloudflare, automation will also point GitHub Pages at the apex domain.
-        - If the domain is not in Free For Charity Cloudflare, automation will build the repo but will NOT point GitHub Pages at the apex domain.
+        **Domain policy:** We require all domain names to be in the Free For Charity Cloudflare account for management.
+
+        **What this ticket does:** We will build the repo first.
+        - If the domain is already in FFC-controlled Cloudflare, automation will also point GitHub Pages at the apex domain.
+        - If the domain is not in FFC-controlled Cloudflare yet, automation will build the repo but will NOT point GitHub Pages at the apex domain.
 
         **GitHub access note:** The GitHub user who creates this issue will be added as a **maintainer** on the new repo.
         You must also provide the charity's Technical POC GitHub username so they can be added as a maintainer as well.
@@ -89,20 +91,6 @@ body:
         Not: `https://example.org/`
         Not: `www.example.org`
       placeholder: example.org
-    validations:
-      required: true
-
-  - type: dropdown
-    id: domain_in_ffc_cloudflare
-    attributes:
-      label: Is the domain currently in Free For Charity Cloudflare?
-      description: |
-        This is a best-effort indicator.
-        Automation will still verify using Cloudflare as the source of truth.
-      options:
-        - 'Yes'
-        - 'No'
-        - 'Not sure'
     validations:
       required: true
 

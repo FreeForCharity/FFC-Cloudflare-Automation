@@ -53,8 +53,8 @@ jobs:
             let issue;
             if (context.eventName === 'workflow_dispatch') {
               // Manual trigger: fetch the issue by number from inputs
-              const issueNumber = parseInt(context.payload.inputs.issue_number);
-              if (!issueNumber || isNaN(issueNumber)) {
+              const issueNumber = context.payload.inputs.issue_number;
+              if (!issueNumber) {
                 core.setFailed('Invalid issue number provided for manual run');
                 return;
               }

@@ -178,16 +178,43 @@ function Update-FooterComponent {
 function Parse-LeadershipLine {
   param([Parameter(Mandatory = $true)][string]$Line)
 
-  # Expected: Name | Title | Email | Phone | LinkedIn
   $clean = ($Line.Trim() -replace '^[\*-]\s+', '')
-  $parts = $clean.Split('|') | ForEach-Object { $_.Trim() }
-  $name = if ($parts.Count -ge 1) { $parts[0] } else { '' }
-  $title = if ($parts.Count -ge 2) { $parts[1] } else { '' }
-  $linkedin = if ($parts.Count -ge 5) { $parts[4] } else { '' }
+
+  $name = ''
+  $title = ''
+  $linkedin = ''
+
+  if ($clean -match '\|') {
+    # Supported pipe-delimited formats:
+    # - Name | Title
+    # - Name | Title | LinkedIn
+    # - Name | Title | Email | Phone | LinkedIn   (legacy)
+    $parts = $clean.Split('|') | ForEach-Object { $_.Trim() }
+    $name = if ($parts.Count -ge 1) { $parts[0] } else { '' }
+    $title = if ($parts.Count -ge 2) { $parts[1] } else { '' }
+    if ($parts.Count -ge 5) {
+      $linkedin = $parts[4]
+    } elseif ($parts.Count -ge 3) {
+      $linkedin = $parts[2]
+    }
+  } else {
+    # Supported dash format (matches issue template guidance):
+    # Role - Name (optional: notes)
+    $m = [regex]::Match($clean, '^(?<t>[^-]+?)\s*-\s*(?<n>.+)$')
+    if ($m.Success) {
+      $title = $m.Groups['t'].Value.Trim()
+      $name = $m.Groups['n'].Value.Trim()
+    } else {
+      $name = $clean
+    }
+  }
 
   if ([string]::IsNullOrWhiteSpace($name)) { return $null }
   if ([string]::IsNullOrWhiteSpace($title)) { $title = 'Board Member' }
-  if ([string]::IsNullOrWhiteSpace($linkedin)) { $linkedin = 'https://www.linkedin.com' }
+
+  if ([string]::IsNullOrWhiteSpace($linkedin) -or ($linkedin -notmatch '^https?://')) {
+    $linkedin = 'https://www.linkedin.com'
+  }
 
   return [pscustomobject]@{
     Name = $name
@@ -201,14 +228,63 @@ function Escape-TsxString {
   return $Value.Replace('\\', '\\\\').Replace('"', '\\"')
 }
 
+function Convert-ToKebabCase {
+  param([Parameter(Mandatory = $true)][string]$Value)
+  $v = $Value.ToLowerInvariant()
+  # Replace non-alphanumerics with hyphen
+  $v = [regex]::Replace($v, '[^a-z0-9]+', '-')
+  # Collapse and trim
+  $v = [regex]::Replace($v, '-{2,}', '-')
+  $v = $v.Trim('-')
+  if ([string]::IsNullOrWhiteSpace($v)) { return 'member' }
+  return $v
+}
+
+function New-TeamTs {
+  param(
+    [Parameter(Mandatory = $true)][pscustomobject[]]$Members
+  )
+
+  $imports = New-Object System.Collections.Generic.List[string]
+  $vars = New-Object System.Collections.Generic.List[string]
+
+  for ($i = 0; $i -lt $Members.Count; $i++) {
+    $var = 'teamMember{0}' -f ($i + 1)
+    $file = $Members[$i].File
+    $imports.Add("import $var from './team/$file'")
+    $vars.Add($var)
+  }
+
+  $importsText = ($imports -join "`n")
+  $varsText = ($vars -join ', ')
+
+  return @"
+// Team member data
+// This file imports team member data from JSON files in ./team/ directory
+// To edit team members, edit the JSON files directly in src/data/team/
+
+$importsText
+
+export const team = [$varsText]
+"@
+}
+
 function Update-LeadershipSection {
   param(
-    [Parameter(Mandatory = $true)][string]$TeamSectionFile,
+    [Parameter(Mandatory = $true)][string]$RepoRoot,
     [Parameter(Mandatory = $true)][string]$CharityName,
     [string[]]$LeadershipLines
   )
 
-  Assert-FileExists -Path $TeamSectionFile
+  $teamSectionFile = Join-Path $RepoRoot 'src/components/home-page/TheFreeForCharityTeam/index.tsx'
+  $teamDataDir = Join-Path $RepoRoot 'src/data/team'
+  $teamIndexFile = Join-Path $RepoRoot 'src/data/team.ts'
+
+  Assert-FileExists -Path $teamSectionFile
+  Assert-FileExists -Path $teamIndexFile
+  if (-not (Test-Path -LiteralPath $teamDataDir)) {
+    throw "Required folder not found: $teamDataDir"
+  }
 
   $members = @()
   foreach ($line in ($LeadershipLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
@@ -221,34 +297,52 @@ function Update-LeadershipSection {
     return
   }
 
+  # Generate JSON data files + regenerate src/data/team.ts
   $images = @('/Images/member1.webp', '/Images/member2.webp', '/Images/member3.webp', '/Images/member4.webp', '/Images/member5.webp')
+  $usedSlugs = @{}
 
-  $cards = New-Object System.Collections.Generic.List[string]
+  $generated = @()
   for ($i = 0; $i -lt $members.Count; $i++) {
-    $img = $images[$i % $images.Count]
-    $nm = Escape-TsxString -Value $members[$i].Name
-    $tt = Escape-TsxString -Value $members[$i].Title
-    $li = Escape-TsxString -Value $members[$i].LinkedIn
+    $baseSlug = Convert-ToKebabCase -Value $members[$i].Name
+    $slug = $baseSlug
+    $n = 2
+    while ($usedSlugs.ContainsKey($slug)) {
+      $slug = "{0}-{1}" -f $baseSlug, $n
+      $n++
+    }
+    $usedSlugs[$slug] = $true
 
-    $cards.Add((@'
-          <TeamMemberCard
-            imageUrl="{0}"
-            name="{1}"
-            title="{2}"
-            linkedinUrl="{3}"
-          />
-'@) -f $img, $nm, $tt, $li)
+    $fileName = "$slug.json"
+    $img = $images[$i % $images.Count]
+
+    $obj = [ordered]@{
+      name = $members[$i].Name
+      title = $members[$i].Title
+      imageUrl = $img
+      linkedinUrl = $members[$i].LinkedIn
+    }
+
+    $jsonPath = Join-Path $teamDataDir $fileName
+    $json = ($obj | ConvertTo-Json -Depth 5)
+    Set-Content -LiteralPath $jsonPath -Value $json -Encoding utf8
+
+    $generated += [pscustomobject]@{ File = $fileName }
   }
 
-  $cardsText = ($cards -join "`n")
+  $teamTs = New-TeamTs -Members $generated
+  Set-Content -LiteralPath $teamIndexFile -Value $teamTs -Encoding utf8
 
+  # Update team section component to render from JSON-driven data
   $newHeading = (Escape-TsxString -Value ("$CharityName Leadership"))
-
-  $newFile = @"
+  $teamComponent = @"
 import React from 'react'
 import TeamMemberCard from '@/components/ui/TeamMemberCard'
+import { team } from '@/data/team'
 
 const index = () => {
+  const topRow = team.slice(0, 3)
+  const bottomRow = team.slice(3)
+
   return (
     <div id="team" className="py-[50px]">
       <h1
@@ -260,8 +354,30 @@ const index = () => {
 
       <div className="w-[90%] mx-auto py-[40px]">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3  items-stretch justify-center mb-[50px] gap-[30px]">
-$cardsText
+          {topRow.map((m) => (
+            <TeamMemberCard
+              key={m.name}
+              imageUrl={m.imageUrl}
+              name={m.name}
+              title={m.title}
+              linkedinUrl={m.linkedinUrl}
+            />
+          ))}
         </div>
+
+        {bottomRow.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 items-center justify-center mt-[40px] gap-[30px]">
+            {bottomRow.map((m) => (
+              <TeamMemberCard
+                key={m.name}
+                imageUrl={m.imageUrl}
+                name={m.name}
+                title={m.title}
+                linkedinUrl={m.linkedinUrl}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -270,14 +386,13 @@ $cardsText
 export default index
 "@
 
-  Set-Content -LiteralPath $TeamSectionFile -Value $newFile -Encoding utf8
+  Set-Content -LiteralPath $teamSectionFile -Value $teamComponent -Encoding utf8
 }
 
 # ---- Main ----
 $repoRoot = (Resolve-Path -LiteralPath $RepoPath).Path
 
 $footerFile = Join-Path $repoRoot 'src/components/footer/index.tsx'
-$teamSectionFile = Join-Path $repoRoot 'src/components/home-page/TheFreeForCharityTeam/index.tsx'
 
 Update-FooterComponent `
   -FooterFile $footerFile `
@@ -290,7 +405,7 @@ Update-FooterComponent `
   -CharityName $CharityName
 
 Update-LeadershipSection `
-  -TeamSectionFile $teamSectionFile `
+  -RepoRoot $repoRoot `
   -CharityName $CharityName `
   -LeadershipLines $LeadershipLines
 

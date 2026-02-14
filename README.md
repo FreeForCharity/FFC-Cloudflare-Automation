@@ -86,6 +86,53 @@ Additional operational workflows:
 5. **Configure GitHub Pages** for subdomains (e.g., staging.example.org)
 6. **Provision a new website** from the standard template (DNS + repo + minimal content)
 
+## Automated website provisioning (DNS + repo + content)
+
+This repo includes a **no-touch (after assignment)** workflow to provision a charity website from
+the standard FFC React/Next.js template.
+
+### How it works
+
+1. Create a request using the issue form **Request New Website (Footer + Leadership)**.
+2. An admin assigns the issue.
+3. The assignment triggers the workflow **15. Website - Provision (Issue Assigned) [CF+Repo]**.
+
+### What gets automated
+
+- **DNS**: Enforces standard GitHub Pages DNS for the apex domain (apex + `www`) via
+  `Update-CloudflareDns.ps1` using `-EnforceStandard -GitHubPagesOnly`.
+- **Repo + Pages**: Creates a new repo from the template and enables GitHub Pages with `CNAME`
+  set to the apex domain.
+- **Template content**: Clones the new repo and applies the request data directly into the
+  template:
+  - Footer content (email/phone/address/EIN/social)
+  - Leadership/team section via JSON content (`src/data/team/*.json` + `src/data/team.ts`)
+  - Also writes `ffc-content.json` into the new repo for traceability.
+
+### Idempotency
+
+The provisioning workflow posts a completion marker comment:
+
+- `<!-- website-provision:completed -->`
+
+If the marker is present, subsequent assignments will skip provisioning.
+
+### Required environments / secrets
+
+This workflow uses GitHub Actions **environments** (so secrets should be set on the environment,
+not globally):
+
+- Environment: `cloudflare-prod`
+  - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
+  - `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
+- Environment: `github-prod`
+  - `CBM_TOKEN` (GitHub token used for repo creation, cloning, and pushing content)
+
+### Optional repository variables
+
+- `FFC_WEBSITE_TARGET_ORG` (default: `FreeForCharity`)
+- `FFC_WEBSITE_TEMPLATE_REPO` (default: `FreeForCharity/FFC_Single_Page_Template`)
+
 ## Quick Start
 
 ### Requesting DNS Changes

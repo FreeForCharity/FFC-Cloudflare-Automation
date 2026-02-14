@@ -212,6 +212,55 @@ This workflow helps identify security vulnerabilities early in the development p
 | initialize-labels.yml                      | Manual (workflow_dispatch)                | 93. Repo: Initialize labels from `.github/labels.yml`                            |
 | sync-labels.yml                            | Push to `main` (labels.yml) + manual      | 94. Repo: Sync labels when `.github/labels.yml` changes                          |
 
+## 15-website-provision.yml - Website provisioning (DNS + repo + content)
+
+Provisions a charity website end-to-end after a website request issue is assigned.
+
+### When it runs
+
+- Trigger: `issues.assigned`
+- Gate: issue title starts with `[WEBSITE REQUEST]` **or** the issue has the `website-request`
+  label.
+
+### What it does
+
+1. **Parse issue** body sections written by the issue form.
+2. **Comment start** on the issue (includes run URL + target repo).
+3. **DNS enforcement** in `cloudflare-prod`:
+   - Runs `Update-CloudflareDns.ps1 -Zone <domain> -EnforceStandard -GitHubPagesOnly`
+   - Uploads enforcement + audit outputs as artifacts.
+4. **Repo provisioning** in `github-prod`:
+   - Creates a new repo from the configured template and enables GitHub Pages with `CNAME`.
+5. **Content application** in `github-prod`:
+   - Clones the new repo.
+   - Writes `ffc-content.json` (audit/traceability record).
+   - Runs `scripts/Apply-WebsiteReactTemplate.ps1` to patch the React template:
+     - Footer component content
+     - Leadership/team section via JSON (`src/data/team/*.json` + `src/data/team.ts`)
+   - Commits + pushes to the new repo’s `main` branch.
+6. **Comment completion** with a marker for idempotency.
+
+### Idempotency
+
+The workflow writes a completion marker comment:
+
+- `<!-- website-provision:completed -->`
+
+If the marker is already present, the workflow skips provisioning.
+
+### Required environments / secrets
+
+- Environment: `cloudflare-prod`
+  - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
+  - `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
+- Environment: `github-prod`
+  - `CBM_TOKEN`
+
+### Optional repository variables
+
+- `FFC_WEBSITE_TARGET_ORG` (default: `FreeForCharity`)
+- `FFC_WEBSITE_TEMPLATE_REPO` (default: `FreeForCharity/FFC_Single_Page_Template`)
+
 ## Deprecated workflows (backups only)
 
 These workflows are **not** needed anymore because the repo moved to:

@@ -94,10 +94,11 @@ body:
       label: Board / Leadership
       description: |
         Provide the names and roles you want displayed. Use one person per line.
-        Format: Role - Name (optional: Title/Notes)
+        Recommended format: Name | Role/Title | LinkedIn URL (optional)
+        Also accepted: Role - Name
       placeholder: |
-        President - Jane Doe
-        Treasurer - John Smith
+        Jane Doe | President | https://www.linkedin.com/in/janedoe
+        John Smith | Treasurer
         Board Member - Alex Lee
     validations:
       required: true

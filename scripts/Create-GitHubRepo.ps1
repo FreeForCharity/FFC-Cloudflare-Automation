@@ -115,9 +115,6 @@ param(
     [string]$CNAME,
 
     [Parameter(Mandatory = $false)]
-    [switch]$SkipPagesCustomDomain,
-
-    [Parameter(Mandatory = $false)]
     [switch]$DryRun
 )
 
@@ -220,11 +217,6 @@ if ($EnablePages) {
                 $CNAME = $detectedDomain
                 Write-Host "Auto-detected apex domain (CNAME): $CNAME" -ForegroundColor Cyan
             }
-    # 3a. Auto-detect CNAME if not provided
-    if (-not $SkipPagesCustomDomain -and [string]::IsNullOrWhiteSpace($CNAME)) {
-        if ($RepoName -match "^FFC-EX-(.+)$") {
-            $CNAME = $matches[1]
-            Write-Host "Auto-detected properties custom domain (CNAME): $CNAME" -ForegroundColor Cyan
         }
     }
 
@@ -253,7 +245,7 @@ if ($EnablePages) {
         Invoke-GhCommand $pagesCmd
         
         # Configure CNAME and Enforce HTTPS
-        if (-not $SkipPagesCustomDomain -and $CNAME) {
+        if ($CNAME) {
             Write-Host "Setting CNAME to $CNAME..."
             # 1. Set CNAME first (without HTTPS enforcement to avoid 'Certificate not ready' errors)
             $cnameCmd = "api repos/$fullRepoName/pages -X PUT -F `"cname=$CNAME`""

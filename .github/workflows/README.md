@@ -225,20 +225,30 @@ Provisions a charity website end-to-end after a website request issue is assigne
 ### What it does
 
 1. **Parse issue** body sections written by the issue form.
-2. **Comment start** on the issue (includes run URL + target repo).
-3. **DNS enforcement** in `cloudflare-prod`:
-   - Runs `Update-CloudflareDns.ps1 -Zone <domain> -EnforceStandard -GitHubPagesOnly`
-   - Uploads enforcement + audit outputs as artifacts.
-4. **Repo provisioning** in `github-prod`:
-   - Creates a new repo from the configured template and enables GitHub Pages with `CNAME`.
-5. **Content application** in `github-prod`:
+2. **Cloudflare source-of-truth check** in `cloudflare-prod` to determine whether the domain is in
+   FFC-controlled Cloudflare (FFC/CM accounts).
+3. **Comment start** on the issue (includes run URL + target repo + Cloudflare check result).
+4. **DNS enforcement (conditional)** in `cloudflare-prod` (only when the Cloudflare check indicates
+   the zone is in FFC-controlled Cloudflare):
+
+- Runs `Update-CloudflareDns.ps1 -Zone <domain> -EnforceStandard -GitHubPagesOnly`
+- Uploads enforcement + audit outputs as artifacts.
+
+5. **Repo provisioning** in `github-prod`:
+
+- Creates a new repo from the configured template and enables GitHub Pages.
+- If the zone is controlled in Cloudflare, sets the Pages custom domain (`CNAME`) to the apex
+  domain.
+- Adds the issue requester and Technical POC GitHub username as repo maintainers.
+
+6. **Content application** in `github-prod`:
    - Clones the new repo.
    - Writes `ffc-content.json` (audit/traceability record).
    - Runs `scripts/Apply-WebsiteReactTemplate.ps1` to patch the React template:
      - Footer component content
      - Leadership/team section via JSON (`src/data/team/*.json` + `src/data/team.ts`)
    - Commits + pushes to the new repo’s `main` branch.
-6. **Comment completion** with a marker for idempotency.
+7. **Comment completion** with a marker for idempotency.
 
 ### Idempotency
 
@@ -250,7 +260,7 @@ If the marker is already present, the workflow skips provisioning.
 
 ### Required environments / secrets
 
-- Environment: `cloudflare-prod`
+- Environment: `cloudflare-prod` (required only when DNS is controlled in Cloudflare)
   - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
   - `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
 - Environment: `github-prod`

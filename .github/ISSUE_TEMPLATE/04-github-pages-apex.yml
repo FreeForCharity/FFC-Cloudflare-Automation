@@ -1,21 +1,13 @@
-name: 'DEPRECATED: Configure Apex Domain for GitHub Pages'
-description: Deprecated. Use "Request New Website (Footer + Leadership)" for charity requests.
-title: '[DEPRECATED GITHUB PAGES APEX] {apex_domain}'
+name: Configure Apex Domain for GitHub Pages (Specialized)
+description: |
+  Specialized request: configure a root/apex domain to point to GitHub Pages.
+title: '[GITHUB PAGES APEX] {apex_domain}'
 labels: ['github-pages', 'dns-config', 'cloudflare']
 body:
   - type: markdown
     attributes:
       value: |
         If you have trouble creating the issue, contact Clarke Moyer by text at 520-222-8104.
-  - type: markdown
-    attributes:
-      value: |
-        ## Deprecated
-        This template asked requestors for admin/internal details.
-
-        For new charity website requests, use:
-        **Request New Website (Footer + Leadership)**
-
   - type: markdown
     attributes:
       value: |
@@ -28,7 +20,12 @@ body:
     id: apex_domain
     attributes:
       label: Apex Domain
-      description: Enter the apex/root domain name
-      placeholder: 'example.org'
+      description: |
+        The root domain (no subdomain).
+
+        Example: `example.org`
+        Not: `https://example.org/`
+        Not: `www.example.org`
+      placeholder: example.org
     validations:
       required: true

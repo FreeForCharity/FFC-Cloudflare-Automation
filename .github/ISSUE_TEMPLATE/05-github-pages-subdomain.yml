@@ -1,21 +1,13 @@
-name: 'DEPRECATED: Configure Subdomain for GitHub Pages'
-description: Deprecated. Use "Request New Website (Footer + Leadership)" for charity requests.
-title: '[DEPRECATED GITHUB PAGES SUBDOMAIN] staging.{base_domain}'
+name: Configure Subdomain for GitHub Pages (Specialized)
+description: |
+  Specialized request: configure the fixed `staging` subdomain to point to GitHub Pages.
+title: '[GITHUB PAGES SUBDOMAIN] staging.{base_domain}'
 labels: ['github-pages', 'dns-config', 'subdomain', 'cloudflare']
 body:
   - type: markdown
     attributes:
       value: |
         If you have trouble creating the issue, contact Clarke Moyer by text at 520-222-8104.
-  - type: markdown
-    attributes:
-      value: |
-        ## Deprecated
-        This template asked requestors for admin/internal details.
-
-        For new charity website requests, use:
-        **Request New Website (Footer + Leadership)**
-
   - type: markdown
     attributes:
       value: |
@@ -28,7 +20,10 @@ body:
     id: base_domain
     attributes:
       label: Base Domain
-      description: The root domain
-      placeholder: 'example.org'
+      description: |
+        The root/base domain.
+
+        Example: `example.org`
+      placeholder: example.org
     validations:
       required: true

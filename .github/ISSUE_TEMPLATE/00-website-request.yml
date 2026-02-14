@@ -1,0 +1,381 @@
+name: Request New Website (Primary)
+description: |
+  Primary workflow: create a new charity website repo from the FFC template and apply footer + leadership content.
+  If FFC controls DNS in Cloudflare, DNS is automated; otherwise it will skip DNS and only do the GitHub/repo work.
+title: '[WEBSITE REQUEST] {domain}'
+labels: ['website-request', 'github-pages', 'cloudflare']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If you have trouble creating the request, contact Clarke Moyer by text at 520-222-8104.
+
+  - type: markdown
+    attributes:
+      value: |
+        ## New Website Request (Primary)
+
+        This form collects only information that will be copied directly into the website template:
+        - Footer content
+        - Leadership section content
+
+        After you submit this issue, an administrator will assign it.
+        **Assignment triggers automation. No other action is required from you.**
+
+        ### Important
+
+        All fields are required so automation can run reliably.
+        If a field does not apply to your organization, enter `N/A`.
+
+  - type: dropdown
+    id: dns_control
+    attributes:
+      label: DNS Control (Cloudflare)
+      description: |
+        Do we control DNS for this domain inside FFC's Cloudflare?
+
+        - If **Yes**, automation will configure DNS for GitHub Pages (apex + www) in Cloudflare.
+        - If **No**, automation will create the GitHub repo and apply content, but will **not** change DNS.
+          You (or your domain provider) must add the DNS records for GitHub Pages manually.
+      options:
+        - 'Yes — FFC controls DNS in Cloudflare'
+        - 'No — DNS is managed outside FFC Cloudflare'
+    validations:
+      required: true
+
+  - type: input
+    id: domain
+    attributes:
+      label: Website Domain (no http://)
+      description: |
+        The domain name that people will type into a browser.
+
+        Example: `example.org`
+        Not: `https://example.org/`
+        Not: `www.example.org`
+      placeholder: example.org
+    validations:
+      required: true
+
+  - type: input
+    id: org_name
+    attributes:
+      label: Organization Name (as displayed)
+      description: The public display name that should appear in the footer and leadership section.
+      placeholder: Example Charity
+    validations:
+      required: true
+
+  - type: input
+    id: footer_email
+    attributes:
+      label: Footer Contact Email
+      description: Public email address to show in the site footer (for visitors to contact you).
+      placeholder: info@example.org
+    validations:
+      required: true
+
+  - type: input
+    id: footer_phone
+    attributes:
+      label: Footer Contact Phone
+      description:
+        Public phone number to show in the site footer. If you do not want a phone number displayed,
+        enter `N/A`.
+      placeholder: +1 (555) 555-1212
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Footer Mailing Address
+        This address is displayed in the footer.
+        If you do not want an address displayed, enter `N/A` for every address field below.
+
+  - type: input
+    id: address_line1
+    attributes:
+      label: Footer Mailing Address Line 1
+      description: Street address or PO Box (line 1).
+      placeholder: 123 Main St
+    validations:
+      required: true
+
+  - type: input
+    id: address_line2
+    attributes:
+      label: Footer Mailing Address Line 2
+      description: Apartment / suite / unit (line 2). If not applicable, enter `N/A`.
+      placeholder: Suite 200
+    validations:
+      required: true
+
+  - type: input
+    id: address_city
+    attributes:
+      label: Footer Mailing City
+      description: City for the footer address.
+      placeholder: Phoenix
+    validations:
+      required: true
+
+  - type: input
+    id: address_state
+    attributes:
+      label: Footer Mailing State/Province
+      description: State or province for the footer address.
+      placeholder: AZ
+    validations:
+      required: true
+
+  - type: input
+    id: address_postal
+    attributes:
+      label: Footer Mailing Postal Code
+      description: ZIP or postal code.
+      placeholder: 85001
+    validations:
+      required: true
+
+  - type: input
+    id: address_country
+    attributes:
+      label: Footer Mailing Country
+      description: |
+        Country name (example: United States). If not applicable, enter `N/A`.
+      placeholder: United States
+    validations:
+      required: true
+
+  - type: input
+    id: ein
+    attributes:
+      label: EIN / Tax ID
+      description:
+        EIN/Tax ID to display in the footer. If you do not want this displayed, enter `N/A`.
+      placeholder: 12-3456789
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Social Links
+        Provide only the platforms you want displayed.
+        If a platform does not apply, enter `N/A`.
+
+  - type: input
+    id: facebook
+    attributes:
+      label: Facebook URL
+      description: Full URL to your Facebook page (or `N/A`).
+      placeholder: https://www.facebook.com/YourPage
+    validations:
+      required: true
+
+  - type: input
+    id: x
+    attributes:
+      label: X / Twitter URL
+      description: Full URL to your X/Twitter profile (or `N/A`).
+      placeholder: https://x.com/YourOrg
+    validations:
+      required: true
+
+  - type: input
+    id: linkedin
+    attributes:
+      label: LinkedIn URL
+      description: Full URL to your LinkedIn page (or `N/A`).
+      placeholder: https://www.linkedin.com/company/YourOrg
+    validations:
+      required: true
+
+  - type: input
+    id: github
+    attributes:
+      label: GitHub URL
+      description: Full URL to your GitHub profile/org (or `N/A`).
+      placeholder: https://github.com/YourOrg
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Leadership
+        These names and titles are displayed in the leadership section.
+
+        - Use the exact capitalization/spelling you want shown.
+        - LinkedIn URL can be `N/A` if they do not have one.
+        - If you have fewer leaders than the fields below, enter `N/A` for that leader's name.
+
+  - type: input
+    id: leader_1_name
+    attributes:
+      label: Leader 1 Name
+      description: |
+        The primary leader to display (example: President/Chair).
+      placeholder: Jane Doe
+    validations:
+      required: true
+
+  - type: input
+    id: leader_1_title
+    attributes:
+      label: Leader 1 Role/Title
+      description: Role/title to display under the name.
+      placeholder: President
+    validations:
+      required: true
+
+  - type: input
+    id: leader_1_linkedin
+    attributes:
+      label: Leader 1 LinkedIn URL
+      description: Full LinkedIn profile URL (or `N/A`).
+      placeholder: https://www.linkedin.com/in/janedoe
+    validations:
+      required: true
+
+  - type: input
+    id: leader_2_name
+    attributes:
+      label: Leader 2 Name
+      description: Enter `N/A` if not applicable.
+      placeholder: John Smith
+    validations:
+      required: true
+
+  - type: input
+    id: leader_2_title
+    attributes:
+      label: Leader 2 Role/Title
+      description: Enter `N/A` if not applicable.
+      placeholder: Treasurer
+    validations:
+      required: true
+
+  - type: input
+    id: leader_2_linkedin
+    attributes:
+      label: Leader 2 LinkedIn URL
+      description: Full LinkedIn profile URL (or `N/A`).
+      placeholder: https://www.linkedin.com/in/johnsmith
+    validations:
+      required: true
+
+  - type: input
+    id: leader_3_name
+    attributes:
+      label: Leader 3 Name
+      description: Enter `N/A` if not applicable.
+      placeholder: Alex Lee
+    validations:
+      required: true
+
+  - type: input
+    id: leader_3_title
+    attributes:
+      label: Leader 3 Role/Title
+      description: Enter `N/A` if not applicable.
+      placeholder: Secretary
+    validations:
+      required: true
+
+  - type: input
+    id: leader_3_linkedin
+    attributes:
+      label: Leader 3 LinkedIn URL
+      description: Full LinkedIn profile URL (or `N/A`).
+      placeholder: https://www.linkedin.com/in/alexlee
+    validations:
+      required: true
+
+  - type: input
+    id: leader_4_name
+    attributes:
+      label: Leader 4 Name
+      description: Enter `N/A` if not applicable.
+      placeholder: Morgan Taylor
+    validations:
+      required: true
+
+  - type: input
+    id: leader_4_title
+    attributes:
+      label: Leader 4 Role/Title
+      description: Enter `N/A` if not applicable.
+      placeholder: Board Member
+    validations:
+      required: true
+
+  - type: input
+    id: leader_4_linkedin
+    attributes:
+      label: Leader 4 LinkedIn URL
+      description: Full LinkedIn profile URL (or `N/A`).
+      placeholder: https://www.linkedin.com/in/morgantaylor
+    validations:
+      required: true
+
+  - type: input
+    id: leader_5_name
+    attributes:
+      label: Leader 5 Name
+      description: Enter `N/A` if not applicable.
+      placeholder: Sam Rivera
+    validations:
+      required: true
+
+  - type: input
+    id: leader_5_title
+    attributes:
+      label: Leader 5 Role/Title
+      description: Enter `N/A` if not applicable.
+      placeholder: Board Member
+    validations:
+      required: true
+
+  - type: input
+    id: leader_5_linkedin
+    attributes:
+      label: Leader 5 LinkedIn URL
+      description: Full LinkedIn profile URL (or `N/A`).
+      placeholder: https://www.linkedin.com/in/samrivera
+    validations:
+      required: true
+
+  - type: input
+    id: leader_6_name
+    attributes:
+      label: Leader 6 Name
+      description: Enter `N/A` if not applicable.
+      placeholder: Taylor Kim
+    validations:
+      required: true
+
+  - type: input
+    id: leader_6_title
+    attributes:
+      label: Leader 6 Role/Title
+      description: Enter `N/A` if not applicable.
+      placeholder: Board Member
+    validations:
+      required: true
+
+  - type: input
+    id: leader_6_linkedin
+    attributes:
+      label: Leader 6 LinkedIn URL
+      description: Full LinkedIn profile URL (or `N/A`).
+      placeholder: https://www.linkedin.com/in/taylorkim
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        **For admins:** assignment of this issue triggers the provisioning workflow.

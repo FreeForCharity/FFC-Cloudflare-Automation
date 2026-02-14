@@ -93,14 +93,17 @@ the standard FFC React/Next.js template.
 
 ### How it works
 
-1. Create a request using the issue form **Request New Website (Footer + Leadership)**.
+1. Create a request using the issue form **Request New Website (Primary)**.
 2. An admin assigns the issue.
 3. The assignment triggers the workflow **15. Website - Provision (Issue Assigned) [CF+Repo]**.
 
 ### What gets automated
 
-- **DNS**: Enforces standard GitHub Pages DNS for the apex domain (apex + `www`) via
-  `Update-CloudflareDns.ps1` using `-EnforceStandard -GitHubPagesOnly`.
+- **DNS (optional)**: If the request indicates FFC controls DNS in Cloudflare, enforces standard
+  GitHub Pages DNS for the apex domain (apex + `www`) via `Update-CloudflareDns.ps1` using
+  `-EnforceStandard -GitHubPagesOnly`.
+- **GitHub-only mode**: If the request indicates DNS is managed outside FFC Cloudflare, the workflow
+  skips DNS changes and only performs repo + Pages + content steps.
 - **Repo + Pages**: Creates a new repo from the template and enables GitHub Pages with `CNAME` set
   to the apex domain.
 - **Template content**: Clones the new repo and applies the request data directly into the template:
@@ -121,7 +124,7 @@ If the marker is present, subsequent assignments will skip provisioning.
 This workflow uses GitHub Actions **environments** (so secrets should be set on the environment, not
 globally):
 
-- Environment: `cloudflare-prod`
+- Environment: `cloudflare-prod` (required only when DNS is controlled in Cloudflare)
   - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
   - `CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
 - Environment: `github-prod`
@@ -145,7 +148,8 @@ To request a DNS change or domain operation:
    - **Add Existing Domain to Cloudflare** - For migrating domains
    - **Remove Domain from Cloudflare** - For domain removal
 
-- **Request New Website (Footer + Leadership)** - For new charity sites (DNS + repo provisioning)
+- **Request New Website (Primary)** - Primary path for new charity sites (repo + Pages + content;
+  DNS optional)
 - **Configure Apex Domain for GitHub Pages** - For root domain setup
 - **Configure Subdomain for GitHub Pages** - For subdomain setup
 

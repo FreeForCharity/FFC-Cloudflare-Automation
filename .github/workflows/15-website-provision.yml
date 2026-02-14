@@ -21,6 +21,11 @@ jobs:
       skip: ${{ steps.parse.outputs.skip }}
       issue_number: ${{ steps.parse.outputs.issue_number }}
       dns_controlled: ${{ steps.parse.outputs.dns_controlled }}
+      website_situation: ${{ steps.parse.outputs.website_situation }}
+      current_website_url: ${{ steps.parse.outputs.current_website_url }}
+      domain_in_ffc_cloudflare_hint: ${{ steps.parse.outputs.domain_in_ffc_cloudflare_hint }}
+      requester_github_username: ${{ steps.parse.outputs.requester_github_username }}
+      technical_poc_github_username: ${{ steps.parse.outputs.technical_poc_github_username }}
       domain: ${{ steps.parse.outputs.domain }}
       charity_name: ${{ steps.parse.outputs.charity_name }}
       footer_email: ${{ steps.parse.outputs.footer_email }}
@@ -42,6 +47,7 @@ jobs:
             const issue = context.payload.issue;
             const body = issue.body || '';
             const title = issue.title || '';
+            const requesterGitHubUsername = String(issue.user?.login || '').trim();
             const labels = (issue.labels || [])
               .map(l => (typeof l === 'string' ? l : l.name))
               .filter(Boolean);
@@ -124,13 +130,23 @@ jobs:
             }
 
             // Primary (current) issue form fields
-            const dnsControlRaw = extractSection('DNS Control (Cloudflare)');
-            let dnsControlled = /^(yes|y)/i.test((dnsControlRaw || '').trim());
+            // DNS + domain registration/transfer are handled in a separate ticket.
+            // Keep dnsControlled for backward compatibility with older website request issues.
+            let dnsControlled = false;
+
+            const websiteSituation = normalizeInput(extractSection('Website Situation'));
+            const currentWebsiteUrl = normalizeInput(extractSection('Current Website URL (if any)'));
+            const domainInFfcCloudflareHint = normalizeInput(extractSection('Is the domain currently in Free For Charity Cloudflare?'));
+
+            let technicalPocGitHubUsername = normalizeInput(extractSection('Technical POC GitHub Username'));
+            technicalPocGitHubUsername = technicalPocGitHubUsername.replace(/^@/, '');
 
             let domain = normalizeDomain(extractSection('Website Domain (no http://)'));
             let charityName = normalizeInput(extractSection('Organization Name (as displayed)'));
             let footerEmail = normalizeInput(extractSection('Footer Contact Email'));
             let footerPhone = normalizeInput(extractSection('Footer Contact Phone'));
+
+            const usingPrimaryForm = !!domain;
 
             let footerAddress = buildAddress({
               line1: extractSection('Footer Mailing Address Line 1'),
@@ -197,6 +213,11 @@ jobs:
               return;
             }
 
+            if (usingPrimaryForm && !technicalPocGitHubUsername) {
+              core.setFailed('Missing required fields: Technical POC GitHub Username is required.');
+              return;
+            }
+
             if (leadershipLines.length < 1) {
               core.setFailed('Missing required fields: at least one leader must be provided (Leader 1 Name must not be N/A).');
               return;
@@ -212,6 +233,11 @@ jobs:
             core.setOutput('skip', 'false');
             core.setOutput('issue_number', String(issue.number));
             core.setOutput('dns_controlled', dnsControlled ? 'true' : 'false');
+            core.setOutput('website_situation', websiteSituation);
+            core.setOutput('current_website_url', currentWebsiteUrl);
+            core.setOutput('domain_in_ffc_cloudflare_hint', domainInFfcCloudflareHint);
+            core.setOutput('requester_github_username', requesterGitHubUsername);
+            core.setOutput('technical_poc_github_username', technicalPocGitHubUsername);
             core.setOutput('domain', domain);
             core.setOutput('charity_name', charityName);
             core.setOutput('footer_email', footerEmail);
@@ -225,9 +251,67 @@ jobs:
             core.setOutput('template_repo', templateRepo);
             core.setOutput('run_url', runUrl);
 
+  zone_check:
+    runs-on: windows-latest
+    environment: cloudflare-prod
+    needs: [resolve]
+    if: needs.resolve.outputs.skip != 'true'
+    outputs:
+      zone_controlled: ${{ steps.check.outputs.zone_controlled }}
+      zone_account: ${{ steps.check.outputs.zone_account }}
+      zone_exists_ffc: ${{ steps.check.outputs.zone_exists_ffc }}
+      zone_exists_cm: ${{ steps.check.outputs.zone_exists_cm }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required Cloudflare secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+
+      - name: Cloudflare source-of-truth zone check
+        id: check
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ needs.resolve.outputs.domain }}"
+
+          $ffc = (& pwsh -NoProfile -File .\scripts\cloudflare-zone-get.ps1 -Domain $domain -Account FFC) | ConvertFrom-Json
+          $cm  = (& pwsh -NoProfile -File .\scripts\cloudflare-zone-get.ps1 -Domain $domain -Account CM)  | ConvertFrom-Json
+
+          $existsFfc = [bool]$ffc.exists
+          $existsCm  = [bool]$cm.exists
+          $controlled = ($existsFfc -or $existsCm)
+
+          $account = ''
+          if ($existsFfc) { $account = 'FFC' }
+          elseif ($existsCm) { $account = 'CM' }
+
+          $toFlag = {
+            param([string]$Name, [bool]$Value)
+            $v = if ($Value) { 'true' } else { 'false' }
+            "$Name=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+          & $toFlag -Name 'zone_exists_ffc' -Value $existsFfc
+          & $toFlag -Name 'zone_exists_cm' -Value $existsCm
+          & $toFlag -Name 'zone_controlled' -Value $controlled
+
+          "zone_account=$account" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
   announce:
     runs-on: ubuntu-latest
-    needs: [resolve]
+    needs: [resolve, zone_check]
     if: needs.resolve.outputs.skip != 'true'
     steps:
       - name: Comment start
@@ -239,19 +323,31 @@ jobs:
             const repoFull = '${{ needs.resolve.outputs.repo_full }}';
             const templateRepo = '${{ needs.resolve.outputs.template_repo }}';
             const runUrl = '${{ needs.resolve.outputs.run_url }}';
-            const dnsControlled = '${{ needs.resolve.outputs.dns_controlled }}' === 'true';
+            const zoneControlled = '${{ needs.zone_check.outputs.zone_controlled }}' === 'true';
+            const zoneAccount = '${{ needs.zone_check.outputs.zone_account }}';
+            const hint = '${{ needs.resolve.outputs.domain_in_ffc_cloudflare_hint }}';
+            const websiteSituation = '${{ needs.resolve.outputs.website_situation }}';
+            const requester = '${{ needs.resolve.outputs.requester_github_username }}';
+            const technicalPoc = '${{ needs.resolve.outputs.technical_poc_github_username }}';
 
-            const steps = dnsControlled
+            const steps = zoneControlled
               ? [
                   '1) Configure DNS for GitHub Pages (Cloudflare)',
-                  '2) Create repo from template + enable Pages',
+                  '2) Create repo from template + enable Pages + set custom domain',
                   '3) Apply footer + leadership content',
                 ]
               : [
-                  '1) Skip DNS (domain is managed outside FFC Cloudflare)',
-                  '2) Create repo from template + enable Pages',
-                  '3) Apply footer + leadership content',
+                  '1) Create repo from template + enable Pages (no custom domain)',
+                  '2) Apply footer + leadership content',
                 ];
+
+            const mismatchLine = (() => {
+              const normalizedHint = String(hint || '').toLowerCase();
+              if (!normalizedHint || normalizedHint === 'not sure') return null;
+              const hintYes = normalizedHint === 'yes';
+              if (hintYes === zoneControlled) return null;
+              return `- Note: form indicates Cloudflare=${hint}, but Cloudflare source-of-truth indicates controlled=${zoneControlled ? 'Yes' : 'No'}.`; 
+            })();
 
             const body = [
               `Provisioning started for **${domain}**`,
@@ -259,10 +355,15 @@ jobs:
               `- Target repo: **${repoFull}**`,
               `- Template: **${templateRepo}**`,
               `- Run: ${runUrl}`,
+              websiteSituation ? `- Website situation: **${websiteSituation}**` : null,
+              requester ? `- Requester: @${requester}` : null,
+              technicalPoc ? `- Technical POC: @${technicalPoc}` : null,
+              `- Cloudflare source-of-truth: **${zoneControlled ? 'Controlled (will set custom domain)' : 'Not controlled (no custom domain)'}**${zoneAccount ? ` (account: ${zoneAccount})` : ''}`,
+              mismatchLine,
               '',
               'Steps:',
               ...steps,
-            ].join('\n');
+            ].filter(Boolean).join('\n');
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -274,8 +375,8 @@ jobs:
   dns:
     runs-on: windows-latest
     environment: cloudflare-prod
-    needs: [resolve, announce]
-    if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.dns_controlled == 'true'
+    needs: [resolve, zone_check, announce]
+    if: needs.resolve.outputs.skip != 'true' && needs.zone_check.outputs.zone_controlled == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -324,7 +425,7 @@ jobs:
   repo:
     runs-on: windows-latest
     environment: github-prod
-    needs: [resolve, dns]
+    needs: [resolve, zone_check, dns]
     if: >-
       always() && needs.resolve.outputs.skip != 'true' && (needs.dns.result == 'success' ||
       needs.dns.result == 'skipped')
@@ -349,6 +450,7 @@ jobs:
           $domain = "${{ needs.resolve.outputs.domain }}"
           $charityName = "${{ needs.resolve.outputs.charity_name }}"
           $templateRepo = "${{ needs.resolve.outputs.template_repo }}"
+          $zoneControlled = "${{ needs.zone_check.outputs.zone_controlled }}" -eq 'true'
 
           # Best-effort check: if repo already exists, skip creation.
           $exists = $false
@@ -361,23 +463,49 @@ jobs:
 
           if ($exists) {
             Write-Host "Repo already exists: $repoFull. Skipping creation." -ForegroundColor Yellow
-            return
+          } else {
+            $createParams = @{
+              RepoName      = $repoName
+              Organization  = "${{ env.WEBSITE_TARGET_ORG }}"
+              Description   = "Website for $charityName ($domain)"
+              TemplateRepo  = $templateRepo
+              Visibility    = 'public'
+              EnableIssues  = $true
+              EnablePages   = $true
+            }
+
+            if ($zoneControlled) {
+              $createParams.CNAME = $domain
+            } else {
+              $createParams.SkipPagesCustomDomain = $true
+            }
+
+            ./scripts/Create-GitHubRepo.ps1 @createParams
           }
 
-          ./scripts/Create-GitHubRepo.ps1 `
-            -RepoName $repoName `
-            -Organization "${{ env.WEBSITE_TARGET_ORG }}" `
-            -Description "Website for $charityName ($domain)" `
-            -TemplateRepo $templateRepo `
-            -Visibility public `
-            -EnableIssues $true `
-            -EnablePages `
-            -CNAME $domain
+      - name: Add maintainers (requester + technical POC)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $repoFull = "${{ needs.resolve.outputs.repo_full }}"
+          $requester = "${{ needs.resolve.outputs.requester_github_username }}".Trim()
+          $technicalPoc = "${{ needs.resolve.outputs.technical_poc_github_username }}".Trim().TrimStart('@')
+
+          $users = @($requester, $technicalPoc)
+          $users = $users | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+          foreach ($u in $users) {
+            Write-Host "Adding maintainer: $u" -ForegroundColor Cyan
+            gh api -X PUT "repos/$repoFull/collaborators/$u" -f permission=maintain 1>$null
+          }
 
   content:
     runs-on: windows-latest
     environment: github-prod
-    needs: [resolve, repo]
+    needs: [resolve, zone_check, repo]
     if: needs.resolve.outputs.skip != 'true'
     steps:
       - uses: actions/checkout@v4
@@ -399,6 +527,11 @@ jobs:
           $repoFull = "${{ needs.resolve.outputs.repo_full }}"
           $domain = "${{ needs.resolve.outputs.domain }}"
           $charityName = "${{ needs.resolve.outputs.charity_name }}"
+          $websiteSituation = "${{ needs.resolve.outputs.website_situation }}"
+          $currentWebsiteUrl = "${{ needs.resolve.outputs.current_website_url }}"
+          $requester = "${{ needs.resolve.outputs.requester_github_username }}"
+          $technicalPoc = "${{ needs.resolve.outputs.technical_poc_github_username }}"
+          $zoneControlled = "${{ needs.zone_check.outputs.zone_controlled }}" -eq 'true'
 
           $footerEmail = "${{ needs.resolve.outputs.footer_email }}"
           $footerPhone = "${{ needs.resolve.outputs.footer_phone }}"
@@ -422,6 +555,11 @@ jobs:
           $content = [ordered]@{
             domain = $domain
             charityName = $charityName
+            websiteSituation = $websiteSituation
+            currentWebsiteUrl = $currentWebsiteUrl
+            requesterGitHubUsername = $requester
+            technicalPocGitHubUsername = $technicalPoc
+            cloudflareZoneControlled = $zoneControlled
             footer = [ordered]@{
               email = $footerEmail
               phone = $footerPhone
@@ -464,7 +602,7 @@ jobs:
 
   finalize:
     runs-on: ubuntu-latest
-    needs: [resolve, dns, repo, content]
+    needs: [resolve, zone_check, dns, repo, content]
     if: >-
       always() && needs.resolve.outputs.skip != 'true' && (needs.dns.result == 'success' ||
       needs.dns.result == 'skipped') && needs.repo.result == 'success' && needs.content.result ==
@@ -479,18 +617,19 @@ jobs:
             const repoFull = '${{ needs.resolve.outputs.repo_full }}';
             const repoUrl = `${context.serverUrl}/${repoFull}`;
             const runUrl = '${{ needs.resolve.outputs.run_url }}';
-            const dnsControlled = '${{ needs.resolve.outputs.dns_controlled }}' === 'true';
+            const zoneControlled = '${{ needs.zone_check.outputs.zone_controlled }}' === 'true';
 
             const marker = '<!-- website-provision:completed -->';
-            const dnsNote = dnsControlled
+            const dnsNote = zoneControlled
               ? '- DNS enforcement used the standard GitHub Pages-only enforcement (apex + www).'
-              : '- DNS was NOT changed because the request indicated DNS is managed outside FFC Cloudflare.';
-            const dnsManual = dnsControlled
+              : '- DNS was NOT changed and GitHub Pages custom domain was NOT set (domain is not in FFC-controlled Cloudflare yet).';
+            const dnsManual = zoneControlled
               ? []
               : [
                   '',
-                  'Next steps (external DNS):',
-                  '- Configure the domain DNS records for GitHub Pages (apex + www) using GitHub documentation:',
+                  'Next steps:',
+                  '- Create a follow-up ticket to add/transfer the domain into FFC Cloudflare, then point DNS to GitHub Pages and set the Pages custom domain.',
+                  '- GitHub custom domain docs (for reference):',
                   '  https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site',
                 ];
             const body = [

@@ -1,7 +1,7 @@
 name: Request New Website (Primary)
 description: |
   Primary workflow: create a new charity website repo from the FFC template and apply footer + leadership content.
-  If FFC controls DNS in Cloudflare, DNS is automated; otherwise it will skip DNS and only do the GitHub/repo work.
+  This workflow builds the GitHub repo + applies content. Domain registration/transfer and DNS setup happen in a separate ticket.
 title: '[WEBSITE REQUEST] {domain}'
 labels: ['website-request', 'github-pages', 'cloudflare']
 body:
@@ -27,19 +27,54 @@ body:
         All fields are required so automation can run reliably.
         If a field does not apply to your organization, enter `N/A`.
 
-  - type: dropdown
-    id: dns_control
-    attributes:
-      label: DNS Control (Cloudflare)
-      description: |
-        Do we control DNS for this domain inside FFC's Cloudflare?
+        **Domain note:** We will build the repo first.
+        - If the domain is already in Free For Charity Cloudflare, automation will also point GitHub Pages at the apex domain.
+        - If the domain is not in Free For Charity Cloudflare, automation will build the repo but will NOT point GitHub Pages at the apex domain.
 
-        - If **Yes**, automation will configure DNS for GitHub Pages (apex + www) in Cloudflare.
-        - If **No**, automation will create the GitHub repo and apply content, but will **not** change DNS.
-          You (or your domain provider) must add the DNS records for GitHub Pages manually.
+        **GitHub access note:** The GitHub user who creates this issue will be added as a **maintainer** on the new repo.
+        You must also provide the charity's Technical POC GitHub username so they can be added as a maintainer as well.
+
+  - type: dropdown
+    id: website_situation
+    attributes:
+      label: Website Situation
+      description: |
+        Pick the closest match.
+
+        This helps us understand what content already exists today, and what we may need to migrate later.
       options:
-        - 'Yes — FFC controls DNS in Cloudflare'
-        - 'No — DNS is managed outside FFC Cloudflare'
+        - 'New charity domain name and new charity website'
+        - 'New charity domain name but existing charity site (Wix / Squarespace / etc)'
+        - 'Existing domain name and existing website (WordPress / formal hosting)'
+    validations:
+      required: true
+
+  - type: input
+    id: current_website
+    attributes:
+      label: Current Website URL (if any)
+      description: |
+        If you already have a website, paste the full URL so we can reference/scrape content later.
+
+        Examples:
+        - `https://example.org/`
+        - `https://www.example.org/`
+
+        If you do not have a current website, enter `N/A`.
+      placeholder: https://example.org/
+    validations:
+      required: true
+
+  - type: input
+    id: technical_poc_github
+    attributes:
+      label: Technical POC GitHub Username
+      description: |
+        GitHub username of the charity's technical point-of-contact.
+
+        This user will be added as a **maintainer** to the new repo.
+        Example: `octocat`
+      placeholder: octocat
     validations:
       required: true
 
@@ -54,6 +89,20 @@ body:
         Not: `https://example.org/`
         Not: `www.example.org`
       placeholder: example.org
+    validations:
+      required: true
+
+  - type: dropdown
+    id: domain_in_ffc_cloudflare
+    attributes:
+      label: Is the domain currently in Free For Charity Cloudflare?
+      description: |
+        This is a best-effort indicator.
+        Automation will still verify using Cloudflare as the source of truth.
+      options:
+        - 'Yes'
+        - 'No'
+        - 'Not sure'
     validations:
       required: true
 

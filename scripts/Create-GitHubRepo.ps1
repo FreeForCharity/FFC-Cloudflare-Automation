@@ -102,6 +102,9 @@ param(
     [string]$CNAME,
 
     [Parameter(Mandatory = $false)]
+    [switch]$SkipPagesCustomDomain,
+
+    [Parameter(Mandatory = $false)]
     [switch]$DryRun
 )
 
@@ -187,7 +190,7 @@ if ($EnablePages) {
     Write-Host "Enabling GitHub Pages on 'main' branch, root folder..."
     
     # 3a. Auto-detect CNAME if not provided
-    if ([string]::IsNullOrWhiteSpace($CNAME)) {
+    if (-not $SkipPagesCustomDomain -and [string]::IsNullOrWhiteSpace($CNAME)) {
         if ($RepoName -match "^FFC-EX-(.+)$") {
             $CNAME = $matches[1]
             Write-Host "Auto-detected properties custom domain (CNAME): $CNAME" -ForegroundColor Cyan
@@ -219,7 +222,7 @@ if ($EnablePages) {
         Invoke-GhCommand $pagesCmd
         
         # Configure CNAME and Enforce HTTPS
-        if ($CNAME) {
+        if (-not $SkipPagesCustomDomain -and $CNAME) {
             Write-Host "Setting CNAME to $CNAME..."
             # 1. Set CNAME first (without HTTPS enforcement to avoid 'Certificate not ready' errors)
             $cnameCmd = "api repos/$fullRepoName/pages -X PUT -F `"cname=$CNAME`""

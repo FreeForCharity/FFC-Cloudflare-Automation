@@ -99,13 +99,17 @@ the standard FFC React/Next.js template.
 
 ### What gets automated
 
-- **DNS (optional)**: If the request indicates FFC controls DNS in Cloudflare, enforces standard
-  GitHub Pages DNS for the apex domain (apex + `www`) via `Update-CloudflareDns.ps1` using
+- **Cloudflare source-of-truth check**: Verifies whether the domain exists in FFC-controlled
+  Cloudflare (FFC/CM accounts) before making any DNS or GitHub Pages custom-domain changes.
+- **DNS (conditional)**: If the domain is in FFC-controlled Cloudflare, enforces standard GitHub
+  Pages DNS for the apex domain (apex + `www`) via `Update-CloudflareDns.ps1` using
   `-EnforceStandard -GitHubPagesOnly`.
-- **GitHub-only mode**: If the request indicates DNS is managed outside FFC Cloudflare, the workflow
-  skips DNS changes and only performs repo + Pages + content steps.
-- **Repo + Pages**: Creates a new repo from the template and enables GitHub Pages with `CNAME` set
-  to the apex domain.
+- **Repo + Pages**: Creates a new repo from the template and enables GitHub Pages.
+  - If the domain is in FFC-controlled Cloudflare, sets the Pages custom domain (`CNAME`) to the
+    apex domain.
+  - If not, enables Pages without setting a custom domain.
+- **Repo access**: Adds the issue requester and the Technical POC GitHub username as repo
+  maintainers.
 - **Template content**: Clones the new repo and applies the request data directly into the template:
   - Footer content (email/phone/address/EIN/social)
   - Leadership/team section via JSON content (`src/data/team/*.json` + `src/data/team.ts`)

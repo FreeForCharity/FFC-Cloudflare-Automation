@@ -488,6 +488,37 @@ jobs:
                 core.setFailed('Board / Leadership is required. Provide at least one leader line.');
                 return;
               }
+
+              // Required leadership roles for primary website requests.
+              // We require President, Secretary, and Treasurer (others optional).
+              const requiredRolePatterns = [
+                { role: 'President', re: /\bpresident\b/i },
+                { role: 'Secretary', re: /\bsecretary\b/i },
+                { role: 'Treasurer', re: /\btreasurer\b/i },
+              ];
+
+              const rolesFound = new Set();
+              for (const line of leadershipLines || []) {
+                const cleaned = String(line || '').trim().replace(/^[\*-]\s+/, '');
+                if (!cleaned) continue;
+                if (!cleaned.includes('|')) continue;
+                const parts = cleaned.split('|').map(p => String(p || '').trim());
+                if (parts.length < 2) continue;
+                const role = parts[1] || '';
+                for (const { role: requiredRole, re } of requiredRolePatterns) {
+                  if (re.test(role)) rolesFound.add(requiredRole);
+                }
+              }
+
+              const missingRoles = requiredRolePatterns
+                .map(r => r.role)
+                .filter(r => !rolesFound.has(r));
+              if (missingRoles.length > 0) {
+                core.setFailed(
+                  `Board / Leadership must include these roles: President, Secretary, Treasurer. Missing: ${missingRoles.join(', ')}.`,
+                );
+                return;
+              }
             }
 
             // Disallow N/A anywhere in leadership content (manual or issue).

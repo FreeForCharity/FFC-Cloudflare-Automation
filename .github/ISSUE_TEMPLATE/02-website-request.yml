@@ -241,8 +241,18 @@ body:
       description: |
         One leader per line. Format: Name | Role/Title | LinkedIn URL
         If you include a LinkedIn URL, it must start with https://
+
+        Required roles (must include at least these 3 leaders):
+        - President
+        - Secretary
+        - Treasurer
+
+        Other leaders are optional.
       placeholder: |
-        Clarke Moyer | Executive Director | https://www.linkedin.com/company/freeforcharity/
+        Example (format only; uses Free For Charity links):
+        Your President Name | President | https://www.linkedin.com/company/freeforcharity/
+        Your Secretary Name | Secretary |
+        Your Treasurer Name | Treasurer |
     validations:
       required: true
 

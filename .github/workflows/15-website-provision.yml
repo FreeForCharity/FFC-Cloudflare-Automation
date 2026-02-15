@@ -269,6 +269,8 @@ jobs:
 
             const hasUsZip = (value) => /\b\d{5}(?:-\d{4})?\b/.test(String(value || ''));
 
+            const isHttpsUrl = (value) => /^https:\/\//i.test(String(value || '').trim());
+
             if (isManual) {
               websiteSituation = normalizeInput(manualInputs.website_situation);
               currentWebsiteUrl = normalizeInput(manualInputs.current_website_url);
@@ -419,6 +421,12 @@ jobs:
             if (failIfNAProvided('EIN / Tax ID', footerEin)) return;
             if (failIfNAProvided('Technical POC GitHub Username', technicalPocGitHubUsername)) return;
 
+            // Optional current website URL: must be https:// if provided.
+            if (currentWebsiteUrl && !isHttpsUrl(currentWebsiteUrl)) {
+              core.setFailed('Current Website URL (if any) must start with https://.');
+              return;
+            }
+
             // Address requirement: must map to a real location (issue form).
             // Require Street/PO Box + City/State/ZIP and a valid US ZIP format.
             if (!isManual) {
@@ -466,6 +474,26 @@ jobs:
             if (leadershipLines && leadershipLines.some(line => /\bn\/?a\b/i.test(line))) {
               core.setFailed('Board / Leadership cannot include N/A. Use real values; leave fields empty only where the format supports it (e.g., blank LinkedIn URL).');
               return;
+            }
+
+            // Leadership LinkedIn URLs: if provided, must be https://
+            if (leadershipLines && leadershipLines.length > 0) {
+              for (const line of leadershipLines) {
+                const cleaned = String(line || '').trim().replace(/^[\*-]\s+/, '');
+                if (!cleaned) continue;
+
+                // Only validate pipe-delimited formats where a LinkedIn URL field is present.
+                if (!cleaned.includes('|')) continue;
+                const parts = cleaned.split('|').map(p => String(p || '').trim());
+                if (parts.length < 3) continue;
+
+                const linkedinUrl = parts[parts.length - 1];
+                if (!linkedinUrl) continue;
+                if (!isHttpsUrl(linkedinUrl)) {
+                  core.setFailed('Leadership LinkedIn URLs must start with https:// (leave blank if not available).');
+                  return;
+                }
+              }
             }
 
             // Social URLs: issue-based runs require all 4; manual runs are best-effort.

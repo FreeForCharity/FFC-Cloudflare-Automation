@@ -215,8 +215,11 @@ function Parse-LeadershipLine {
     if ([string]::IsNullOrWhiteSpace($name)) { return $null }
     if ([string]::IsNullOrWhiteSpace($title)) { $title = 'Board Member' }
 
-    if ([string]::IsNullOrWhiteSpace($linkedin) -or ($linkedin -notmatch '^https?://')) {
-        $linkedin = 'https://www.linkedin.com'
+    if ([string]::IsNullOrWhiteSpace($linkedin)) {
+        $linkedin = ''
+    }
+    elseif ($linkedin -notmatch '^https://') {
+        $linkedin = ''
     }
 
     return [pscustomobject]@{

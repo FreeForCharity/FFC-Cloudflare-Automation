@@ -161,6 +161,7 @@ body:
       label: Board / Leadership
       description: |
         One leader per line. Format: Name | Role/Title | LinkedIn URL
+        If you include a LinkedIn URL, it must start with https://
       placeholder: |
         Jane Doe | President | https://www.linkedin.com/in/janedoe
         John Smith | Treasurer |

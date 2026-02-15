@@ -170,8 +170,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        ## Social Links (Optional)
-        If provided, these URLs will be used for footer/social icons.
+        ## Social Links
+        These URLs are used for the social icons in the footer.
 
   - type: input
     id: social_facebook
@@ -180,7 +180,7 @@ body:
       description: Full URL (must start with https://).
       placeholder: https://www.facebook.com/example
     validations:
-      required: false
+      required: true
 
   - type: input
     id: social_x
@@ -189,7 +189,7 @@ body:
       description: Full URL (must start with https://).
       placeholder: https://x.com/example
     validations:
-      required: false
+      required: true
 
   - type: input
     id: social_linkedin
@@ -198,7 +198,7 @@ body:
       description: Full URL (must start with https://).
       placeholder: https://www.linkedin.com/company/example
     validations:
-      required: false
+      required: true
 
   - type: input
     id: social_github
@@ -207,7 +207,7 @@ body:
       description: Full URL (must start with https://).
       placeholder: https://github.com/example
     validations:
-      required: false
+      required: true
 
   - type: markdown
     attributes:

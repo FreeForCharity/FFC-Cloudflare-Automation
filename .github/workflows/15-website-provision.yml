@@ -220,6 +220,19 @@ jobs:
               return u;
             }
 
+            function validateRequiredUrl(label, url) {
+              const u = normalizeInput(url);
+              if (isDisallowedValue(u)) {
+                core.setFailed(`Invalid value for required field: ${label}. Please provide a real URL (not N/A).`);
+                return null;
+              }
+              if (!/^https?:\/\//i.test(u)) {
+                core.setFailed(`Invalid value for required field: ${label}. URL must start with https:// (or http://).`);
+                return null;
+              }
+              return u;
+            }
+
             // Primary (current) issue form fields
             // DNS + domain registration/transfer are handled in a separate ticket.
             // Keep dnsControlled for backward compatibility with older website request issues.
@@ -297,15 +310,21 @@ jobs:
 
               footerEin = normalizeInput(extractSection('EIN / Tax ID'));
 
-              footerSocialLinks = [];
-              for (const entry of [
-                buildUrlLine('facebook', extractSection('Facebook URL')),
-                buildUrlLine('x', extractSection('X / Twitter URL')),
-                buildUrlLine('linkedin', extractSection('LinkedIn URL')),
-                buildUrlLine('github', extractSection('GitHub URL')),
-              ]) {
-                if (entry) footerSocialLinks.push(entry);
-              }
+              const facebookUrl = validateRequiredUrl('Facebook URL', extractSection('Facebook URL'));
+              if (facebookUrl === null) return;
+              const xUrl = validateRequiredUrl('X / Twitter URL', extractSection('X / Twitter URL'));
+              if (xUrl === null) return;
+              const linkedinUrl = validateRequiredUrl('LinkedIn URL', extractSection('LinkedIn URL'));
+              if (linkedinUrl === null) return;
+              const githubUrl = validateRequiredUrl('GitHub URL', extractSection('GitHub URL'));
+              if (githubUrl === null) return;
+
+              footerSocialLinks = [
+                `facebook: ${facebookUrl}`,
+                `x: ${xUrl}`,
+                `linkedin: ${linkedinUrl}`,
+                `github: ${githubUrl}`,
+              ];
 
               // Leadership can be provided either as a single multiline block (preferred)
               // or as individual leader fields (legacy primary form).
@@ -449,17 +468,8 @@ jobs:
               return;
             }
 
-            // Social URLs are optional but must be valid if provided.
-            if (!isManual) {
-              const facebookUrl = validateOptionalUrl('Facebook URL', extractSection('Facebook URL'));
-              if (facebookUrl === null) return;
-              const xUrl = validateOptionalUrl('X / Twitter URL', extractSection('X / Twitter URL'));
-              if (xUrl === null) return;
-              const linkedinUrl = validateOptionalUrl('LinkedIn URL', extractSection('LinkedIn URL'));
-              if (linkedinUrl === null) return;
-              const githubUrl = validateOptionalUrl('GitHub URL', extractSection('GitHub URL'));
-              if (githubUrl === null) return;
-            } else {
+            // Social URLs: issue-based runs require all 4; manual runs are best-effort.
+            if (isManual) {
               for (const line of footerSocialLinks || []) {
                 if (/\bn\/?a\b/i.test(line)) {
                   core.setFailed('Social links cannot include N/A. Provide a real URL or leave it blank.');
@@ -812,13 +822,31 @@ jobs:
           $json | Out-File -FilePath 'ffc-content.json' -Encoding utf8
 
           # Patch the actual React template files in the newly provisioned repo.
+          function Test-SocialLinksPresent {
+            param([string[]]$Links)
+            if (-not $Links -or $Links.Count -eq 0) { return $false }
+            $map = @{}
+            foreach ($line in $Links) {
+              if ([string]::IsNullOrWhiteSpace($line)) { continue }
+              $m = [regex]::Match($line.Trim(), '^(?<k>[A-Za-z ]+)\s*:\s*(?<v>https?://\S+)$')
+              if (-not $m.Success) { continue }
+              $k = $m.Groups['k'].Value.Trim().ToLowerInvariant()
+              $map[$k] = $m.Groups['v'].Value.Trim()
+            }
+            foreach ($k in @('facebook', 'x', 'linkedin', 'github')) {
+              if (-not $map.ContainsKey($k)) { return $false }
+            }
+            return $true
+          }
+
           $canApplyTemplate = (
             -not [string]::IsNullOrWhiteSpace($charityName) -and
             -not [string]::IsNullOrWhiteSpace($footerEmail) -and
             -not [string]::IsNullOrWhiteSpace($footerPhone) -and
             -not [string]::IsNullOrWhiteSpace($footerEin) -and
             -not [string]::IsNullOrWhiteSpace($footerAddress) -and
-            ($leadership.Count -gt 0)
+            ($leadership.Count -gt 0) -and
+            (Test-SocialLinksPresent -Links @($footerSocial))
           )
           if ($canApplyTemplate) {
             $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts/Apply-WebsiteReactTemplate.ps1'

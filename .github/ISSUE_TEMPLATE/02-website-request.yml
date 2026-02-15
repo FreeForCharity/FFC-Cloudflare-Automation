@@ -1,8 +1,8 @@
 name: 02. Request New Website (Primary)
 description: |
-  Primary workflow: create a new charity website repo from the FFC template and apply footer + leadership content.
-  This workflow builds the GitHub repo + applies content. Domain registration/transfer and DNS setup happen in a separate ticket.
-title: '[WEBSITE REQUEST] {domain}'
+  Primary workflow: build a new charity website repo from the FFC template.
+  Assignment triggers automation.
+title: '[WEBSITE REQUEST]'
 labels: ['website-request', 'github-pages', 'cloudflare']
 body:
   - type: markdown
@@ -15,55 +15,17 @@ body:
       value: |
         ## New Website Request (Primary)
 
-        This form collects only information that will be copied directly into the website template:
-        - Footer content
-        - Leadership section content
-
+        This form is temporarily minimal while we resolve a GitHub UI issue.
         After you submit this issue, an administrator will assign it.
-        **Assignment triggers automation. No other action is required from you.**
-
-        ### Important
-
-        All fields are required so automation can run reliably.
-        If a field does not apply to your organization, enter `N/A`.
-
-        **Domain policy:** We require all domain names to be in the Free For Charity Cloudflare account for management.
-
-        **What this ticket does:** We will build the repo first.
-        - If the domain is already in FFC-controlled Cloudflare, automation will also point GitHub Pages at the apex domain.
-        - If the domain is not in FFC-controlled Cloudflare yet, automation will build the repo but will NOT point GitHub Pages at the apex domain.
-
-        **GitHub access note:** The GitHub user who creates this issue will be added as a **maintainer** on the new repo.
-        You must also provide the charity's Technical POC GitHub username so they can be added as a maintainer as well.
-
-  - type: dropdown
-    id: website_situation
-    attributes:
-      label: Website Situation
-      description: |
-        Pick the closest match.
-
-        This helps us understand what content already exists today, and what we may need to migrate later.
-      options:
-        - 'New charity domain name and new charity website'
-        - 'New charity domain name but existing charity site (Wix / Squarespace / etc)'
-        - 'Existing domain name and existing website (WordPress / formal hosting)'
-    validations:
-      required: true
 
   - type: input
-    id: current_website
+    id: domain
     attributes:
-      label: Current Website URL (if any)
+      label: Website Domain (no http://)
       description: |
-        If you already have a website, paste the full URL so we can reference/scrape content later.
-
-        Examples:
-        - `https://example.org/`
-        - `https://www.example.org/`
-
-        If you do not have a current website, enter `N/A`.
-      placeholder: https://example.org/
+        The apex/root domain name (example: `example.org`).
+        Do not include `https://` and do not use `www`.
+      placeholder: example.org
     validations:
       required: true
 
@@ -72,25 +34,9 @@ body:
     attributes:
       label: Technical POC GitHub Username
       description: |
-        GitHub username of the charity's technical point-of-contact.
-
-        This user will be added as a **maintainer** to the new repo.
+        GitHub username for the charity technical point-of-contact.
         Example: `octocat`
       placeholder: octocat
-    validations:
-      required: true
-
-  - type: input
-    id: domain
-    attributes:
-      label: Website Domain (no http://)
-      description: |
-        The domain name that people will type into a browser.
-
-        Example: `example.org`
-        Not: `https://example.org/`
-        Not: `www.example.org`
-      placeholder: example.org
     validations:
       required: true
 
@@ -98,169 +44,33 @@ body:
     id: org_name
     attributes:
       label: Organization Name (as displayed)
-      description: The public display name that should appear in the footer and leadership section.
+      description: Public display name for the website.
       placeholder: Example Charity
     validations:
       required: true
 
-  - type: input
-    id: footer_email
-    attributes:
-      label: Footer Contact Email
-      description: Public email address to show in the site footer (for visitors to contact you).
-      placeholder: info@example.org
-    validations:
-      required: true
-
-  - type: input
-    id: footer_phone
-    attributes:
-      label: Footer Contact Phone
-      description: |
-        Public phone number to show in the site footer. If you do not want a phone number displayed,
-        enter `N/A`.
-      placeholder: +1 (555) 555-1212
-    validations:
-      required: true
-
-  - type: markdown
-    attributes:
-      value: |
-        ## Footer Mailing Address
-        This address is displayed in the footer.
-        If you do not want an address displayed, enter `N/A` for every address field below.
-
-  - type: input
-    id: address_line1
-    attributes:
-      label: Footer Mailing Address Line 1
-      description: Street address or PO Box (line 1).
-      placeholder: 123 Main St
-    validations:
-      required: true
-
-  - type: input
-    id: address_line2
-    attributes:
-      label: Footer Mailing Address Line 2
-      description: Apartment / suite / unit (line 2). If not applicable, enter `N/A`.
-      placeholder: Suite 200
-    validations:
-      required: true
-
-  - type: input
-    id: address_city
-    attributes:
-      label: Footer Mailing City
-      description: City for the footer address.
-      placeholder: Phoenix
-    validations:
-      required: true
-
-  - type: input
-    id: address_state
-    attributes:
-      label: Footer Mailing State/Province
-      description: State or province for the footer address.
-      placeholder: AZ
-    validations:
-      required: true
-
-  - type: input
-    id: address_postal
-    attributes:
-      label: Footer Mailing Postal Code
-      description: ZIP or postal code.
-      placeholder: '85001'
-    validations:
-      required: true
-
-  - type: input
-    id: address_country
-    attributes:
-      label: Footer Mailing Country
-      description: |
-        Country name (example: United States). If not applicable, enter `N/A`.
-      placeholder: United States
-    validations:
-      required: true
-
-  - type: input
-    id: ein
-    attributes:
-      label: EIN / Tax ID
-      description: |
-        EIN/Tax ID to display in the footer. If you do not want this displayed, enter `N/A`.
-      placeholder: 12-3456789
-    validations:
-      required: true
-
-  - type: markdown
-    attributes:
-      value: |
-        ## Social Links
-        Provide only the platforms you want displayed.
-        If a platform does not apply, enter `N/A`.
-
-  - type: input
-    id: facebook
-    attributes:
-      label: Facebook URL
-      description: Full URL to your Facebook page (or `N/A`).
-      placeholder: https://www.facebook.com/YourPage
-    validations:
-      required: true
-
-  - type: input
-    id: twitter
-    attributes:
-      label: X / Twitter URL
-      description: Full URL to your X/Twitter profile (or `N/A`).
-      placeholder: https://x.com/YourOrg
-    validations:
-      required: true
-
-  - type: input
-    id: linkedin
-    attributes:
-      label: LinkedIn URL
-      description: Full URL to your LinkedIn page (or `N/A`).
-      placeholder: https://www.linkedin.com/company/YourOrg
-    validations:
-      required: true
-
-  - type: input
-    id: github_url
-    attributes:
-      label: GitHub URL
-      description: Full URL to your GitHub profile/org (or `N/A`).
-      placeholder: https://github.com/YourOrg
-    validations:
-      required: true
-
-  - type: markdown
-    attributes:
-      value: |
-        ## Leadership
-        These names and titles are displayed in the leadership section.
-
-        - Use the exact capitalization/spelling you want shown.
-        - LinkedIn URL can be `N/A` if they do not have one.
-        - One leader per line, using this format:
-          `Name | Role/Title | LinkedIn URL`
-
   - type: textarea
     id: leadership_lines
     attributes:
-      label: Board / Leadership
+      label: Board / Leadership (optional for now)
       description: |
         One leader per line. Format: Name | Role/Title | LinkedIn URL
-        LinkedIn URL can be `N/A`.
       placeholder: |
         Jane Doe | President | https://www.linkedin.com/in/janedoe
         John Smith | Treasurer | N/A
     validations:
-      required: true
+      required: false
+
+  - type: textarea
+    id: additional_notes
+    attributes:
+      label: Additional Notes
+      description: Any extra context or links.
+      placeholder: |
+        Current website (if any): https://example.org/
+        Anything else we should know.
+    validations:
+      required: false
 
   - type: markdown
     attributes:

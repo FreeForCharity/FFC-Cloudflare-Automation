@@ -1,4 +1,4 @@
-name: Purchase and Add New .org Domain
+name: 01. Purchase and Add New .org Domain
 description: Request to purchase and add a new .org domain to the Cloudflare account
 title: '[DOMAIN PURCHASE REQUEST] {domain_name}'
 labels: ['domain-purchase', 'cloudflare']
@@ -48,9 +48,7 @@ body:
       label: Mandatory Settings Acknowledgement
       description: Confirm all mandatory settings will be configured
       options:
-        - label:
-            I acknowledge these mandatory settings (GitHub Pages, Microsoft 365 Email, DMARC, SPF)
-            will be configured
+        - label: I acknowledge these mandatory settings (GitHub Pages, Microsoft 365 Email, DMARC, SPF) will be configured
           required: true
 
   - type: checkboxes
@@ -233,7 +231,7 @@ body:
     id: icann_ack
     attributes:
       label: ICANN Accuracy Acknowledgment
-      description:
+      description: |
         Confirm all registrant details are accurate and kept up to date per ICANN requirements
       options:
         - label: I confirm registrant information is accurate

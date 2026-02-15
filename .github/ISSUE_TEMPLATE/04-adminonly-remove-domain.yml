@@ -1,5 +1,5 @@
-name: Remove Domain from Cloudflare
-description: Request to remove a domain from the Cloudflare account
+name: 04. [ADMIN ONLY] Remove Domain from Cloudflare
+description: ADMIN ONLY. Request to remove a domain from the Cloudflare account.
 title: '[REMOVE DOMAIN] {domain_name}'
 labels: ['domain-remove', 'cloudflare']
 body:

@@ -1,5 +1,5 @@
-name: Add Existing Domain to Cloudflare
-description: Request to add an existing domain to the Cloudflare account
+name: 03. [ADMIN ONLY] Add Existing Domain to Cloudflare
+description: ADMIN ONLY. Request to add an existing domain to the Cloudflare account.
 title: '[ADD DOMAIN] {domain_name}'
 labels: ['domain-add', 'cloudflare']
 body:
@@ -164,7 +164,7 @@ body:
     id: desired_nameservers
     attributes:
       label: Desired Nameservers After Transfer
-      description:
+      description: |
         If transferring registrar, specify target nameservers or confirm Cloudflare nameservers will
         be used
       placeholder: |

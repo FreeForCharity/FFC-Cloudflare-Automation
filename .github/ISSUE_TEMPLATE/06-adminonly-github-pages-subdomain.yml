@@ -1,6 +1,6 @@
-name: Configure Subdomain for GitHub Pages (Specialized)
+name: 06. [ADMIN ONLY] Configure Subdomain for GitHub Pages (Specialized)
 description: |
-  Specialized request: configure the fixed `staging` subdomain to point to GitHub Pages.
+  ADMIN ONLY. Specialized request: configure the fixed `staging` subdomain to point to GitHub Pages.
 title: '[GITHUB PAGES SUBDOMAIN] staging.{base_domain}'
 labels: ['github-pages', 'dns-config', 'subdomain', 'cloudflare']
 body:

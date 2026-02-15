@@ -258,6 +258,10 @@ body:
         - Copy the main profile URL (example format: `https://www.guidestar.org/profile/<EIN>`)
         - Then find/copy the “shared” direct link (example format: `https://www.guidestar.org/profile/shared/<id>`)
 
+        **Important: URLs and embed code can change**
+        - Candid/GuideStar occasionally changes link formats and embed/badge code.
+        - Please take the time to find the *current* URLs for your organization and **test both links** in a browser before submitting this form.
+
         **Free For Charity GuideStar explainer (full page)**
         - https://freeforcharity.org/free-for-charity-just-earned-the-platinum-seal-of-transparency/
 

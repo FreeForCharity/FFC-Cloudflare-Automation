@@ -146,7 +146,7 @@ function Update-FooterComponent {
         foreach ($line in $Social) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
             $clean = ($line.Trim() -replace '^[\*-]\s+', '')
-            $m = [regex]::Match($clean, '^(?<k>[A-Za-z ]+)\s*:\s*(?<v>https?://\S+)$')
+            $m = [regex]::Match($clean, '^(?<k>[A-Za-z ]+)\s*:\s*(?<v>https://\S+)$')
             if (-not $m.Success) { continue }
             $key = $m.Groups['k'].Value.Trim().ToLowerInvariant()
             $val = $m.Groups['v'].Value.Trim()

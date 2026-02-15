@@ -18,6 +18,61 @@ body:
         After you submit this issue, an administrator will assign it.
         Assignment triggers automation.
 
+        Please read carefully before filling this out:
+        - Do not enter `N/A` in any field.
+        - We use automation + volunteers. Support is **best effort**.
+        - Primary hosting is **GitHub Pages** (static site).
+        - We only support US charities; address is displayed and must map.
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Attestations (Required)
+        These acknowledgements are required for Free For Charity provisioning.
+
+        Policies and references:
+        - Security policy: https://github.com/FreeForCharity/FFC-Cloudflare-Automation/blob/main/SECURITY.md
+        - Contribution / automation process: https://github.com/FreeForCharity/FFC-Cloudflare-Automation/blob/main/CONTRIBUTING.md
+        - Standard workflow expectations: https://github.com/FreeForCharity/FFC-Cloudflare-Automation/blob/main/docs/enforce-standard-workflow.md
+
+  - type: checkboxes
+    id: attest_nonprofit
+    attributes:
+      label: Nonprofit / charitable use
+      description: Required
+      options:
+        - label: I attest this website and its content are for charitable/nonprofit purposes.
+          required: true
+
+  - type: checkboxes
+    id: attest_policies
+    attributes:
+      label: Policies read
+      description: Required
+      options:
+        - label: I have read the linked FFC policies and agree to follow them.
+          required: true
+
+  - type: checkboxes
+    id: attest_support
+    attributes:
+      label: Support expectations
+      description: Required
+      options:
+        - label:
+            I understand support is best effort and provided by volunteers (no guaranteed
+            timelines).
+          required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Key Limitations (FYI)
+        - **Hosting**: GitHub Pages (static). No server-side apps or databases in this workflow.
+        - **DNS**: This workflow can create the repo even if DNS is not yet controlled by FFC Cloudflare.
+        - **Address**: Displayed in the footer and used for map links. Must be a real US mailing address.
+        - **Links**: Footer social links must use **https://**.
+
   - type: input
     id: domain
     attributes:
@@ -25,6 +80,11 @@ body:
       description: |
         The apex/root domain name (example: `example.org`).
         Do not include `https://` and do not use `www`.
+
+        Examples:
+        - ✅ `example.org`
+        - ❌ `https://example.org`
+        - ❌ `www.example.org`
       placeholder: example.org
     validations:
       required: true
@@ -35,6 +95,8 @@ body:
       label: Technical POC GitHub Username
       description: |
         GitHub username for the charity technical point-of-contact.
+        This person will be added as a maintainer of the provisioned repo.
+
         Example: `octocat`
       placeholder: octocat
     validations:
@@ -75,7 +137,7 @@ body:
     id: org_name
     attributes:
       label: Organization Name (as displayed)
-      description: Public display name for the website.
+      description: Public display name for the website (how visitors will see it).
       placeholder: Example Charity
     validations:
       required: true
@@ -133,7 +195,7 @@ body:
     attributes:
       label: Footer Mailing State/Province
       description: State or province for the footer address.
-      placeholder: AZ
+      placeholder: AZ (2-letter)
     validations:
       required: true
 
@@ -141,7 +203,7 @@ body:
     id: address_postal
     attributes:
       label: Footer Mailing Postal Code
-      description: US ZIP code.
+      description: US ZIP code (e.g., 85001 or 85001-1234).
       placeholder: '85001'
     validations:
       required: true

@@ -80,6 +80,26 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: footer_email
+    attributes:
+      label: Footer Contact Email
+      description: Public email address to show in the site footer (for visitors to contact you).
+      placeholder: info@example.org
+    validations:
+      required: true
+
+  - type: input
+    id: footer_phone
+    attributes:
+      label: Footer Contact Phone
+      description: |
+        Public phone number to show in the site footer. If you do not want a phone number displayed,
+        enter `N/A`.
+      placeholder: +1 (555) 555-1212
+    validations:
+      required: true
+
   - type: textarea
     id: leadership_lines
     attributes:

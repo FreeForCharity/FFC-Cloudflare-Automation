@@ -194,7 +194,7 @@ This workflow helps identify security vulnerabilities early in the development p
 | 1-audit-compliance.yml                     | Manual (workflow_dispatch)                | 07. DNS: Audit compliance (report-only) [CF]                                     |
 | 4-export-summary.yml                       | Manual (workflow_dispatch)                | 08. DNS: Export Cloudflare zones [CF]                                            |
 | 11-cloudflare-zone-create.yml              | Manual (workflow_dispatch)                | 09. DNS: Create zone (explicit account selection) [CF]                           |
-| 15-website-provision.yml                   | Issue assigned                            | 15. Website: Provision (DNS + repo + content) [CF+Repo]                          |
+| 15-website-provision.yml                   | Issue assigned + manual                   | 15. Website: Provision (DNS + repo + content) [CF+Repo]                          |
 | 7-m365-domain-preflight.yml                | Manual (workflow_dispatch)                | 20. M365: Domain preflight (Graph + Cloudflare audit)                            |
 | 6-m365-list-domains.yml                    | Manual (workflow_dispatch)                | 21. M365: List tenant domains                                                    |
 | 5-m365-domain-and-dkim.yml                 | Manual (workflow_dispatch)                | 22. M365: Domain status + DKIM helpers                                           |
@@ -219,17 +219,24 @@ Provisions a charity website end-to-end after a website request issue is assigne
 ### When it runs
 
 - Trigger: `issues.assigned`
-- Gate: issue title starts with `[WEBSITE REQUEST]` **or** the issue has the `website-request`
-  label.
+  - Gate: issue title starts with `[WEBSITE REQUEST]` **or** the issue has the `website-request` label.
+- Trigger: `workflow_dispatch` (manual)
+  - This supports “best-effort” provisioning when only a domain is known.
 
 ### What it does
 
-1. **Parse issue** body sections written by the issue form.
-2. **Cloudflare source-of-truth check** in `cloudflare-prod` to determine whether the domain is in
-   FFC-controlled Cloudflare (FFC/CM accounts).
-3. **Comment start** on the issue (includes run URL + target repo + Cloudflare check result).
-4. **DNS enforcement (conditional)** in `cloudflare-prod` (only when the Cloudflare check indicates
-   the zone is in FFC-controlled Cloudflare):
+1. **Resolve inputs**
+  - Issue mode: parses the issue form sections.
+  - Manual mode: reads `workflow_dispatch` inputs.
+
+2. **Cloudflare source-of-truth check (best-effort)** in `cloudflare-prod`
+  - Determines whether the domain is in FFC-controlled Cloudflare (FFC/CM accounts).
+  - If Cloudflare tokens are missing, the workflow treats the domain as **not controlled** and continues.
+
+3. **Comment start (issue mode only)**
+  - Includes run URL + target repo + Cloudflare check result.
+
+4. **DNS enforcement (conditional)** in `cloudflare-prod` (only when the zone is controlled):
 
 - Runs `Update-CloudflareDns.ps1 -Zone <domain> -EnforceStandard -GitHubPagesOnly`
 - Uploads enforcement + audit outputs as artifacts.
@@ -244,11 +251,38 @@ Provisions a charity website end-to-end after a website request issue is assigne
 6. **Content application** in `github-prod`:
    - Clones the new repo.
    - Writes `ffc-content.json` (audit/traceability record).
-   - Runs `scripts/Apply-WebsiteReactTemplate.ps1` to patch the React template:
+   - Runs `scripts/Apply-WebsiteReactTemplate.ps1` (best-effort) to patch the React template when
+     enough information is provided:
      - Footer component content
      - Leadership/team section via JSON (`src/data/team/*.json` + `src/data/team.ts`)
    - Commits + pushes to the new repo’s `main` branch.
-7. **Comment completion** with a marker for idempotency.
+
+7. **Comment completion (issue mode only)** with a marker for idempotency.
+
+### Manual run inputs (workflow_dispatch)
+
+- Required
+  - `domain`
+- Optional (best-effort)
+  - `charity_name`, `footer_email`, `footer_phone`, `footer_address`, `footer_ein`
+  - `website_situation`, `current_website_url`
+  - `requester_github_username`, `technical_poc_github_username`
+  - `social_links` (one per line: `platform: https://...`)
+  - `leadership_lines` (one per line: `Name | Title | LinkedIn URL`)
+
+Manual runs do not post issue comments (there is no issue to attach to).
+
+### Best-effort behavior
+
+- Repo creation always runs as long as `domain` is provided.
+- If Cloudflare zone is not controlled (or Cloudflare tokens are missing):
+  - DNS enforcement is skipped
+  - GitHub Pages is enabled without setting a custom domain
+- If `charity_name` or `footer_email` is missing:
+  - `ffc-content.json` is still written
+  - React template patching is skipped
+- If requester/POC GitHub usernames are missing:
+  - Collaborator addition skips missing values (repo still provisions)
 
 ### Idempotency
 
@@ -266,10 +300,12 @@ If the marker is already present, the workflow skips provisioning.
 - Environment: `github-prod`
   - `CBM_TOKEN`
 
-### Optional repository variables
+### Hardcoded configuration
 
-- `FFC_WEBSITE_TARGET_ORG` (default: `FreeForCharity`)
-- `FFC_WEBSITE_TEMPLATE_REPO` (default: `FreeForCharity/FFC_Single_Page_Template`)
+For simplicity, this workflow currently hardcodes:
+
+- Target org: `FreeForCharity`
+- Template repo: `FreeForCharity/FFC_Single_Page_Template`
 
 ## Deprecated workflows (backups only)
 

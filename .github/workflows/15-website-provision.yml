@@ -271,6 +271,14 @@ jobs:
 
             const isHttpsUrl = (value) => /^https:\/\//i.test(String(value || '').trim());
 
+            const phoneDigits = (value) => String(value || '').replace(/\D/g, '');
+            const isValidUsPhone = (value) => {
+              const d = phoneDigits(value);
+              if (d.length === 10) return true;
+              if (d.length === 11 && d.startsWith('1')) return true;
+              return false;
+            };
+
             if (isManual) {
               websiteSituation = normalizeInput(manualInputs.website_situation);
               currentWebsiteUrl = normalizeInput(manualInputs.current_website_url);
@@ -420,6 +428,15 @@ jobs:
             if (failIfNAProvided('Footer Contact Phone', footerPhone)) return;
             if (failIfNAProvided('EIN / Tax ID', footerEin)) return;
             if (failIfNAProvided('Technical POC GitHub Username', technicalPocGitHubUsername)) return;
+
+            // Footer phone: must be a valid US phone number (10 digits, or 11 digits starting with 1).
+            // Required for issue-based runs; manual runs validate only if provided.
+            if (!isManual || !isDisallowedValue(footerPhone)) {
+              if (!isValidUsPhone(footerPhone)) {
+                core.setFailed('Footer Contact Phone must be a valid US phone number (10 digits, or 11 digits starting with 1).');
+                return;
+              }
+            }
 
             // Optional current website URL: must be https:// if provided.
             if (currentWebsiteUrl && !isHttpsUrl(currentWebsiteUrl)) {

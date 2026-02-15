@@ -36,8 +36,9 @@ function Get-TelDigits {
     param([string]$Phone)
     if ([string]::IsNullOrWhiteSpace($Phone)) { return $null }
     $digits = ($Phone -replace '[^0-9]', '')
-    if ($digits.Length -lt 7) { return $null }
-    return $digits
+    if ($digits.Length -eq 10) { return ('1' + $digits) }
+    if ($digits.Length -eq 11 -and $digits.StartsWith('1')) { return $digits }
+    return $null
 }
 
 function Convert-AddressToHtml {

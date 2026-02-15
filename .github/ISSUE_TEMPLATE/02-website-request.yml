@@ -94,8 +94,9 @@ body:
     attributes:
       label: Footer Contact Phone
       description: |
-        Public phone number to show in the site footer.
-      placeholder: +1 (555) 555-1212
+        Public US phone number to show in the site footer.
+        Must be a valid US number (10 digits, or 11 digits starting with 1).
+      placeholder: (555) 555-1212
     validations:
       required: true
 

@@ -103,6 +103,12 @@ Manual option:
   is the only required field and the workflow will do “as much as it can” with whatever optional
   fields are provided.
 
+Manual run quick examples:
+
+- Minimal (domain-only): set `domain=example.org`
+- More complete (also applies the React template footer): set `domain=example.org`,
+  `charity_name=Example Charity`, `footer_email=info@example.org`
+
 ### What gets automated
 
 - **Cloudflare source-of-truth check**: Verifies whether the domain exists in FFC-controlled

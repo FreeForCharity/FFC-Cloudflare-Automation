@@ -272,6 +272,19 @@ Provisions a charity website end-to-end after a website request issue is assigne
 
 Manual runs do not post issue comments (there is no issue to attach to).
 
+### Manual run quick examples
+
+Minimal (domain-only) run:
+
+- `domain`: `example.org`
+
+More complete run (also applies the React template footer):
+
+- `domain`: `example.org`
+- `charity_name`: `Example Charity`
+- `footer_email`: `info@example.org`
+- `technical_poc_github_username`: `some-user`
+
 ### Best-effort behavior
 
 - Repo creation always runs as long as `domain` is provided.

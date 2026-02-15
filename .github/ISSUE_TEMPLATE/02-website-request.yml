@@ -65,7 +65,7 @@ body:
         Examples:
         - `https://example.org/`
         - `https://www.example.org/`
-      
+
         If you do not have a current website, leave this blank.
       placeholder: https://example.org/
     validations:

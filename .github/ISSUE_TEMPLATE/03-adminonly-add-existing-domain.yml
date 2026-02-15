@@ -164,7 +164,7 @@ body:
     id: desired_nameservers
     attributes:
       label: Desired Nameservers After Transfer
-      description:
+      description: |
         If transferring registrar, specify target nameservers or confirm Cloudflare nameservers will
         be used
       placeholder: |

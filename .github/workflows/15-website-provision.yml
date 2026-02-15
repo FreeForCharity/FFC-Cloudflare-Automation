@@ -53,11 +53,14 @@ on:
         required: false
         type: string
       social_links:
-        description: "Social links (optional). One per line as 'platform: https://...'. Must use https://."
+        description:
+          "Social links (optional). One per line as 'platform: https://...'. Must use https://."
         required: false
         type: string
       leadership_lines:
-        description: "Leadership lines (optional). One per line as 'Name | Title | LinkedIn URL'. LinkedIn URL must be https:// if provided."
+        description:
+          "Leadership lines (optional). One per line as 'Name | Title | LinkedIn URL'. LinkedIn URL
+          must be https:// if provided."
         required: false
         type: string
 

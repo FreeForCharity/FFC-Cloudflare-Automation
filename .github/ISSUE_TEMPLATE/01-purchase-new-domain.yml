@@ -1,4 +1,4 @@
-name: Purchase and Add New .org Domain
+name: 01. Purchase and Add New .org Domain
 description: Request to purchase and add a new .org domain to the Cloudflare account
 title: '[DOMAIN PURCHASE REQUEST] {domain_name}'
 labels: ['domain-purchase', 'cloudflare']

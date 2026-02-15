@@ -1,6 +1,6 @@
-name: Configure Apex Domain for GitHub Pages (Specialized)
+name: 05. [ADMIN ONLY] Configure Apex Domain for GitHub Pages (Specialized)
 description: |
-  Specialized request: configure a root/apex domain to point to GitHub Pages.
+  ADMIN ONLY. Specialized request: configure a root/apex domain to point to GitHub Pages.
 title: '[GITHUB PAGES APEX] {apex_domain}'
 labels: ['github-pages', 'dns-config', 'cloudflare']
 body:

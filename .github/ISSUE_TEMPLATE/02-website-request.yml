@@ -1,4 +1,4 @@
-name: Request New Website (Primary)
+name: 02. Request New Website (Primary)
 description: |
   Primary workflow: create a new charity website repo from the FFC template and apply footer + leadership content.
   This workflow builds the GitHub repo + applies content. Domain registration/transfer and DNS setup happen in a separate ticket.

@@ -93,7 +93,8 @@ the standard FFC React/Next.js template.
 
 ### How it works
 
-1. Create a request using the issue form **Request New Website (Primary)**.
+1. Create a request using the issue form **Request New Website (Primary)**:
+   https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/new?template=02-website-request.yml
 2. An admin assigns the issue.
 3. The assignment triggers the workflow **15. Website - Provision (Issue Assigned) [CF+Repo]**.
 
@@ -168,14 +169,14 @@ To request a DNS change or domain operation:
 1. Go to the [Issues](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/new/choose)
    page
 2. Select the appropriate issue template:
-   - **Purchase and Add New .org Domain** - For new domain acquisitions
-   - **Add Existing Domain to Cloudflare** - For migrating domains
-   - **Remove Domain from Cloudflare** - For domain removal
 
+- **Purchase and Add New .org Domain** - For new domain acquisitions
 - **Request New Website (Primary)** - Primary path for new charity sites (repo + Pages + content;
   DNS optional)
-- **Configure Apex Domain for GitHub Pages** - For root domain setup
-- **Configure Subdomain for GitHub Pages** - For subdomain setup
+- **[ADMIN ONLY] Add Existing Domain to Cloudflare** - For migrating domains
+- **[ADMIN ONLY] Remove Domain from Cloudflare** - For domain removal
+- **[ADMIN ONLY] Configure Apex Domain for GitHub Pages (Specialized)** - For root domain setup
+- **[ADMIN ONLY] Configure Subdomain for GitHub Pages (Specialized)** - For subdomain setup
 
 3. Fill out all required information in the template
 4. Submit the issue

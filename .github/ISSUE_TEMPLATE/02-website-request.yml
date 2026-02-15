@@ -40,6 +40,37 @@ body:
     validations:
       required: true
 
+  - type: dropdown
+    id: website_situation
+    attributes:
+      label: Website Situation
+      description: |
+        Pick the closest match.
+
+        This helps us understand what content already exists today, and what we may need to migrate later.
+      options:
+        - 'New charity domain name and new charity website'
+        - 'New charity domain name but existing charity site (Wix / Squarespace / etc)'
+        - 'Existing domain name and existing website (WordPress / formal hosting)'
+    validations:
+      required: true
+
+  - type: input
+    id: current_website
+    attributes:
+      label: Current Website URL (if any)
+      description: |
+        If you already have a website, paste the full URL so we can reference/scrape content later.
+
+        Examples:
+        - `https://example.org/`
+        - `https://www.example.org/`
+
+        If you do not have a current website, enter `N/A`.
+      placeholder: https://example.org/
+    validations:
+      required: true
+
   - type: input
     id: org_name
     attributes:

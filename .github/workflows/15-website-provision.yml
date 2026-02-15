@@ -270,15 +270,25 @@ jobs:
                 if (entry) footerSocialLinks.push(entry);
               }
 
-              leadershipLines = [];
-              for (let i = 1; i <= 6; i++) {
-                const name = normalizeInput(extractSection(`Leader ${i} Name`));
-                const title = normalizeInput(extractSection(`Leader ${i} Role/Title`));
-                const linkedin = normalizeInput(extractSection(`Leader ${i} LinkedIn URL`));
+              // Leadership can be provided either as a single multiline block (preferred)
+              // or as individual leader fields (legacy primary form).
+              const leadershipBlock = normalizeInput(extractSection('Board / Leadership'));
+              if (leadershipBlock && !/^n\/?a$/i.test(leadershipBlock.trim())) {
+                leadershipLines = leadershipBlock
+                  .split(/\r?\n/)
+                  .map(s => s.trim())
+                  .filter(s => s && !/^n\/?a$/i.test(s));
+              } else {
+                leadershipLines = [];
+                for (let i = 1; i <= 6; i++) {
+                  const name = normalizeInput(extractSection(`Leader ${i} Name`));
+                  const title = normalizeInput(extractSection(`Leader ${i} Role/Title`));
+                  const linkedin = normalizeInput(extractSection(`Leader ${i} LinkedIn URL`));
 
-                if (!name) continue;
-                if (!title) leadershipLines.push(`${name} | Board Member | ${linkedin}`);
-                else leadershipLines.push(`${name} | ${title} | ${linkedin}`);
+                  if (!name) continue;
+                  if (!title) leadershipLines.push(`${name} | Board Member | ${linkedin}`);
+                  else leadershipLines.push(`${name} | ${title} | ${linkedin}`);
+                }
               }
             }
 

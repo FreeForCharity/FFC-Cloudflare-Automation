@@ -246,168 +246,19 @@ body:
 
         - Use the exact capitalization/spelling you want shown.
         - LinkedIn URL can be `N/A` if they do not have one.
-        - If you have fewer leaders than the fields below, enter `N/A` for that leader's name.
+        - One leader per line, using this format:
+          `Name | Role/Title | LinkedIn URL`
 
-  - type: input
-    id: leader_1_name
+  - type: textarea
+    id: leadership_lines
     attributes:
-      label: Leader 1 Name
+      label: Board / Leadership
       description: |
-        The primary leader to display (example: President/Chair).
-      placeholder: Jane Doe
-    validations:
-      required: true
-
-  - type: input
-    id: leader_1_title
-    attributes:
-      label: Leader 1 Role/Title
-      description: Role/title to display under the name.
-      placeholder: President
-    validations:
-      required: true
-
-  - type: input
-    id: leader_1_linkedin
-    attributes:
-      label: Leader 1 LinkedIn URL
-      description: Full LinkedIn profile URL (or `N/A`).
-      placeholder: https://www.linkedin.com/in/janedoe
-    validations:
-      required: true
-
-  - type: input
-    id: leader_2_name
-    attributes:
-      label: Leader 2 Name
-      description: Enter `N/A` if not applicable.
-      placeholder: John Smith
-    validations:
-      required: true
-
-  - type: input
-    id: leader_2_title
-    attributes:
-      label: Leader 2 Role/Title
-      description: Enter `N/A` if not applicable.
-      placeholder: Treasurer
-    validations:
-      required: true
-
-  - type: input
-    id: leader_2_linkedin
-    attributes:
-      label: Leader 2 LinkedIn URL
-      description: Full LinkedIn profile URL (or `N/A`).
-      placeholder: https://www.linkedin.com/in/johnsmith
-    validations:
-      required: true
-
-  - type: input
-    id: leader_3_name
-    attributes:
-      label: Leader 3 Name
-      description: Enter `N/A` if not applicable.
-      placeholder: Alex Lee
-    validations:
-      required: true
-
-  - type: input
-    id: leader_3_title
-    attributes:
-      label: Leader 3 Role/Title
-      description: Enter `N/A` if not applicable.
-      placeholder: Secretary
-    validations:
-      required: true
-
-  - type: input
-    id: leader_3_linkedin
-    attributes:
-      label: Leader 3 LinkedIn URL
-      description: Full LinkedIn profile URL (or `N/A`).
-      placeholder: https://www.linkedin.com/in/alexlee
-    validations:
-      required: true
-
-  - type: input
-    id: leader_4_name
-    attributes:
-      label: Leader 4 Name
-      description: Enter `N/A` if not applicable.
-      placeholder: Morgan Taylor
-    validations:
-      required: true
-
-  - type: input
-    id: leader_4_title
-    attributes:
-      label: Leader 4 Role/Title
-      description: Enter `N/A` if not applicable.
-      placeholder: Board Member
-    validations:
-      required: true
-
-  - type: input
-    id: leader_4_linkedin
-    attributes:
-      label: Leader 4 LinkedIn URL
-      description: Full LinkedIn profile URL (or `N/A`).
-      placeholder: https://www.linkedin.com/in/morgantaylor
-    validations:
-      required: true
-
-  - type: input
-    id: leader_5_name
-    attributes:
-      label: Leader 5 Name
-      description: Enter `N/A` if not applicable.
-      placeholder: Sam Rivera
-    validations:
-      required: true
-
-  - type: input
-    id: leader_5_title
-    attributes:
-      label: Leader 5 Role/Title
-      description: Enter `N/A` if not applicable.
-      placeholder: Board Member
-    validations:
-      required: true
-
-  - type: input
-    id: leader_5_linkedin
-    attributes:
-      label: Leader 5 LinkedIn URL
-      description: Full LinkedIn profile URL (or `N/A`).
-      placeholder: https://www.linkedin.com/in/samrivera
-    validations:
-      required: true
-
-  - type: input
-    id: leader_6_name
-    attributes:
-      label: Leader 6 Name
-      description: Enter `N/A` if not applicable.
-      placeholder: Taylor Kim
-    validations:
-      required: true
-
-  - type: input
-    id: leader_6_title
-    attributes:
-      label: Leader 6 Role/Title
-      description: Enter `N/A` if not applicable.
-      placeholder: Board Member
-    validations:
-      required: true
-
-  - type: input
-    id: leader_6_linkedin
-    attributes:
-      label: Leader 6 LinkedIn URL
-      description: Full LinkedIn profile URL (or `N/A`).
-      placeholder: https://www.linkedin.com/in/taylorkim
+        One leader per line. Format: Name | Role/Title | LinkedIn URL
+        LinkedIn URL can be `N/A`.
+      placeholder: |
+        Jane Doe | President | https://www.linkedin.com/in/janedoe
+        John Smith | Treasurer | N/A
     validations:
       required: true
 

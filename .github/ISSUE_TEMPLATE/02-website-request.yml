@@ -239,8 +239,27 @@ body:
       value: |
         ## Candid / GuideStar Endorsements
 
-        If your organization is a verified **501(c)(3)**, these links are required.
-        We use them in the footer "Endorsements" section.
+        **What is this?**
+        - GuideStar (by Candid) is a widely used nonprofit profile/verification directory.
+        - Many donors, foundations, and partners use your GuideStar/Candid profile as a quick way to confirm your nonprofit status and review transparency information.
+        - Our website footer includes an "Endorsements" section so visitors can verify your organization from a trusted source.
+
+        **Why we require it (for 501(c)(3) orgs)**
+        - If you are an approved **501(c)(3)**, we require the GuideStar links so your website does not accidentally show Free For Charity’s endorsement links.
+        - These links help establish credibility and reduce donor friction.
+
+        **What you need to provide (no embed code needed)**
+        - `Profile URL` (public profile page on `guidestar.org`)
+        - `Direct profile link` (the "shared" link used for a button like “Direct GuideStar Profile Link”)
+
+        **How to find these URLs**
+        - Go to https://www.guidestar.org/
+        - Search for your nonprofit by name or EIN
+        - Copy the main profile URL (example format: `https://www.guidestar.org/profile/<EIN>`)
+        - Then find/copy the “shared” direct link (example format: `https://www.guidestar.org/profile/shared/<id>`)
+
+        **Free For Charity GuideStar explainer (full page)**
+        - https://freeforcharity.org/free-for-charity-just-earned-the-platinum-seal-of-transparency/
 
         Example (Free For Charity):
         - Profile URL: https://www.guidestar.org/profile/46-2471893

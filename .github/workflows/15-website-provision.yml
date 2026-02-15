@@ -269,14 +269,13 @@ jobs:
               footerPhone = normalizeInput(extractSection('Footer Contact Phone'));
 
               const addressLine1 = normalizeInput(extractSection('Footer Mailing Address Line 1'));
-              const addressLine2 = normalizeInput(extractSection('Footer Mailing Address Line 2'));
               const addressCity = normalizeInput(extractSection('Footer Mailing City'));
               const addressState = normalizeInput(extractSection('Footer Mailing State/Province'));
               const addressPostal = normalizeInput(extractSection('Footer Mailing Postal Code'));
 
               footerAddress = buildAddress({
                 line1: addressLine1,
-                line2: addressLine2,
+                line2: '',
                 city: addressCity,
                 state: addressState,
                 postal: addressPostal,
@@ -359,6 +358,8 @@ jobs:
               ['domain', domain],
               ['Organization Name (as displayed)', charityName],
               ['Footer Contact Email', footerEmail],
+              ['Footer Contact Phone', footerPhone],
+              ['EIN / Tax ID', footerEin],
               ['Technical POC GitHub Username', technicalPocGitHubUsername],
             ];
 
@@ -370,24 +371,19 @@ jobs:
             }
 
             // Optional fields: blank is allowed, but N/A is not.
-            for (const [label, value] of [
-              ['Current Website URL (if any)', currentWebsiteUrl],
-              ['Footer Contact Phone', footerPhone],
-              ['Footer Mailing Address Line 1', !isManual ? normalizeInput(extractSection('Footer Mailing Address Line 1')) : ''],
-              ['Footer Mailing Address Line 2', !isManual ? normalizeInput(extractSection('Footer Mailing Address Line 2')) : ''],
-              ['EIN / Tax ID', footerEin],
-            ]) {
-              if (failIfNAProvided(label, value)) return;
-            }
+            // Only Current Website is intentionally optional.
+            if (failIfNAProvided('Current Website URL (if any)', currentWebsiteUrl)) return;
 
             // Address requirement: must map to a real location.
-            // At minimum, require City/State/ZIP and a valid US ZIP format.
+            // Require Street/PO Box + City/State/ZIP and a valid US ZIP format.
             if (!isManual) {
+              const line1 = normalizeInput(extractSection('Footer Mailing Address Line 1'));
               const city = normalizeInput(extractSection('Footer Mailing City'));
               const state = normalizeInput(extractSection('Footer Mailing State/Province'));
               const postal = normalizeInput(extractSection('Footer Mailing Postal Code'));
 
               for (const [label, value] of [
+                ['Footer Mailing Address Line 1', line1],
                 ['Footer Mailing City', city],
                 ['Footer Mailing State/Province', state],
                 ['Footer Mailing Postal Code', postal],
@@ -408,6 +404,18 @@ jobs:
                 core.setFailed('Footer address must include a real US address with a ZIP code (e.g., 85001 or 85001-1234).');
                 return;
               }
+            }
+
+            // Leadership is displayed on the site; require at least one leader line.
+            if (!leadershipLines || leadershipLines.length === 0) {
+              core.setFailed('Board / Leadership is required. Provide at least one leader line.');
+              return;
+            }
+
+            // Disallow N/A anywhere in leadership content.
+            if (leadershipLines.some(line => /\bn\/?a\b/i.test(line))) {
+              core.setFailed('Board / Leadership cannot include N/A. Use real values; leave fields empty only where the format supports it (e.g., blank LinkedIn URL).');
+              return;
             }
 
             const repoName = `FFC-EX-${domain}`;

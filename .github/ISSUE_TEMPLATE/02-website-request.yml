@@ -15,8 +15,8 @@ body:
       value: |
         ## New Website Request (Primary)
 
-        This form is temporarily minimal while we resolve a GitHub UI issue.
         After you submit this issue, an administrator will assign it.
+        Assignment triggers automation.
 
   - type: input
     id: domain
@@ -95,11 +95,9 @@ body:
       label: Footer Contact Phone
       description: |
         Public phone number to show in the site footer.
-
-        If you do not want a phone number displayed, leave this blank.
       placeholder: +1 (555) 555-1212
     validations:
-      required: false
+      required: true
 
   - type: markdown
     attributes:
@@ -115,19 +113,10 @@ body:
     id: address_line1
     attributes:
       label: Footer Mailing Address Line 1
-      description: Street address or PO Box (line 1). Recommended.
+      description: Street address or PO Box. Include suite/unit here if applicable.
       placeholder: 123 Main St
     validations:
-      required: false
-
-  - type: input
-    id: address_line2
-    attributes:
-      label: Footer Mailing Address Line 2
-      description: Apartment / suite / unit (line 2). Optional.
-      placeholder: Suite 200
-    validations:
-      required: false
+      required: true
 
   - type: input
     id: address_city
@@ -162,34 +151,21 @@ body:
       label: EIN / Tax ID
       description: |
         EIN/Tax ID to display in the footer.
-
-        If you do not want this displayed, leave this blank.
       placeholder: 12-3456789
     validations:
-      required: false
+      required: true
 
   - type: textarea
     id: leadership_lines
     attributes:
-      label: Board / Leadership (optional for now)
+      label: Board / Leadership
       description: |
         One leader per line. Format: Name | Role/Title | LinkedIn URL
       placeholder: |
         Jane Doe | President | https://www.linkedin.com/in/janedoe
         John Smith | Treasurer |
     validations:
-      required: false
-
-  - type: textarea
-    id: additional_notes
-    attributes:
-      label: Additional Notes
-      description: Any extra context or links.
-      placeholder: |
-        Current website (if any): https://example.org/
-        Anything else we should know.
-    validations:
-      required: false
+      required: true
 
   - type: markdown
     attributes:

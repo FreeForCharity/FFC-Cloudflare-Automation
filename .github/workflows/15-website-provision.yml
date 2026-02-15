@@ -157,7 +157,6 @@ jobs:
             function normalizeInput(value) {
               const v = String(value || '').trim();
               if (!v) return '';
-              if (/^(n\/a|na|none|not applicable|n\.a\.)$/i.test(v)) return '';
               return v;
             }
 
@@ -207,6 +206,20 @@ jobs:
               return `${key}: ${u}`;
             }
 
+            function validateOptionalUrl(label, url) {
+              const u = normalizeInput(url);
+              if (!u) return '';
+              if (isNA(u)) {
+                core.setFailed(`Invalid value: ${label} cannot be N/A.`);
+                return null;
+              }
+              if (!/^https?:\/\//i.test(u)) {
+                core.setFailed(`Invalid value: ${label} must start with https:// (or http://).`);
+                return null;
+              }
+              return u;
+            }
+
             // Primary (current) issue form fields
             // DNS + domain registration/transfer are handled in a separate ticket.
             // Keep dnsControlled for backward compatibility with older website request issues.
@@ -235,7 +248,7 @@ jobs:
 
             const failIfNAProvided = (label, value) => {
               if (isNA(value)) {
-                core.setFailed(`Invalid value: ${label} cannot be N/A. Leave it blank if it does not apply.`);
+                core.setFailed(`Invalid value: ${label} cannot be N/A.`);
                 return true;
               }
               return false;
@@ -354,27 +367,40 @@ jobs:
             // Enforce non-placeholder values for required fields.
             // We cannot prevent users from typing `N/A` into a required field in GitHub Issue Forms,
             // so we block the workflow if it happens.
-            const requiredChecks = [
-              ['domain', domain],
-              ['Organization Name (as displayed)', charityName],
-              ['Footer Contact Email', footerEmail],
-              ['Footer Contact Phone', footerPhone],
-              ['EIN / Tax ID', footerEin],
-              ['Technical POC GitHub Username', technicalPocGitHubUsername],
-            ];
+            if (!isManual) {
+              const requiredChecks = [
+                ['domain', domain],
+                ['Organization Name (as displayed)', charityName],
+                ['Footer Contact Email', footerEmail],
+                ['Footer Contact Phone', footerPhone],
+                ['EIN / Tax ID', footerEin],
+                ['Technical POC GitHub Username', technicalPocGitHubUsername],
+              ];
 
-            for (const [label, value] of requiredChecks) {
-              if (isDisallowedValue(value)) {
-                core.setFailed(`Invalid value for required field: ${label}. Please provide a real value (not N/A).`);
+              for (const [label, value] of requiredChecks) {
+                if (isDisallowedValue(value)) {
+                  core.setFailed(`Invalid value for required field: ${label}. Please provide a real value (not N/A).`);
+                  return;
+                }
+              }
+            } else {
+              // Manual dispatch: best-effort mode.
+              // Domain is required; everything else is optional (but N/A is never allowed).
+              if (isDisallowedValue(domain)) {
+                core.setFailed('Invalid value for required field: domain. Please provide a real value (not N/A).');
                 return;
               }
             }
 
             // Optional fields: blank is allowed, but N/A is not.
-            // Only Current Website is intentionally optional.
             if (failIfNAProvided('Current Website URL (if any)', currentWebsiteUrl)) return;
+            if (failIfNAProvided('Organization Name (as displayed)', charityName)) return;
+            if (failIfNAProvided('Footer Contact Email', footerEmail)) return;
+            if (failIfNAProvided('Footer Contact Phone', footerPhone)) return;
+            if (failIfNAProvided('EIN / Tax ID', footerEin)) return;
+            if (failIfNAProvided('Technical POC GitHub Username', technicalPocGitHubUsername)) return;
 
-            // Address requirement: must map to a real location.
+            // Address requirement: must map to a real location (issue form).
             // Require Street/PO Box + City/State/ZIP and a valid US ZIP format.
             if (!isManual) {
               const line1 = normalizeInput(extractSection('Footer Mailing Address Line 1'));
@@ -399,23 +425,47 @@ jobs:
                 return;
               }
             } else {
-              // Manual dispatch uses a freeform address input; require it to at least include a US ZIP.
-              if (isDisallowedValue(footerAddress) || !hasUsZip(footerAddress)) {
-                core.setFailed('Footer address must include a real US address with a ZIP code (e.g., 85001 or 85001-1234).');
+              // Manual dispatch uses a freeform address input.
+              // If provided, require it to at least include a US ZIP.
+              if (!isDisallowedValue(footerAddress)) {
+                if (!hasUsZip(footerAddress)) {
+                  core.setFailed('Footer address must include a valid US ZIP code (e.g., 85001 or 85001-1234).');
+                  return;
+                }
+              }
+            }
+
+            // Leadership is displayed on the site. Require at least one leader line for issue-based runs.
+            if (!isManual) {
+              if (!leadershipLines || leadershipLines.length === 0) {
+                core.setFailed('Board / Leadership is required. Provide at least one leader line.');
                 return;
               }
             }
 
-            // Leadership is displayed on the site; require at least one leader line.
-            if (!leadershipLines || leadershipLines.length === 0) {
-              core.setFailed('Board / Leadership is required. Provide at least one leader line.');
+            // Disallow N/A anywhere in leadership content (manual or issue).
+            if (leadershipLines && leadershipLines.some(line => /\bn\/?a\b/i.test(line))) {
+              core.setFailed('Board / Leadership cannot include N/A. Use real values; leave fields empty only where the format supports it (e.g., blank LinkedIn URL).');
               return;
             }
 
-            // Disallow N/A anywhere in leadership content.
-            if (leadershipLines.some(line => /\bn\/?a\b/i.test(line))) {
-              core.setFailed('Board / Leadership cannot include N/A. Use real values; leave fields empty only where the format supports it (e.g., blank LinkedIn URL).');
-              return;
+            // Social URLs are optional but must be valid if provided.
+            if (!isManual) {
+              const facebookUrl = validateOptionalUrl('Facebook URL', extractSection('Facebook URL'));
+              if (facebookUrl === null) return;
+              const xUrl = validateOptionalUrl('X / Twitter URL', extractSection('X / Twitter URL'));
+              if (xUrl === null) return;
+              const linkedinUrl = validateOptionalUrl('LinkedIn URL', extractSection('LinkedIn URL'));
+              if (linkedinUrl === null) return;
+              const githubUrl = validateOptionalUrl('GitHub URL', extractSection('GitHub URL'));
+              if (githubUrl === null) return;
+            } else {
+              for (const line of footerSocialLinks || []) {
+                if (/\bn\/?a\b/i.test(line)) {
+                  core.setFailed('Social links cannot include N/A. Provide a real URL or leave it blank.');
+                  return;
+                }
+              }
             }
 
             const repoName = `FFC-EX-${domain}`;
@@ -762,7 +812,14 @@ jobs:
           $json | Out-File -FilePath 'ffc-content.json' -Encoding utf8
 
           # Patch the actual React template files in the newly provisioned repo.
-          $canApplyTemplate = -not [string]::IsNullOrWhiteSpace($charityName) -and -not [string]::IsNullOrWhiteSpace($footerEmail)
+          $canApplyTemplate = (
+            -not [string]::IsNullOrWhiteSpace($charityName) -and
+            -not [string]::IsNullOrWhiteSpace($footerEmail) -and
+            -not [string]::IsNullOrWhiteSpace($footerPhone) -and
+            -not [string]::IsNullOrWhiteSpace($footerEin) -and
+            -not [string]::IsNullOrWhiteSpace($footerAddress) -and
+            ($leadership.Count -gt 0)
+          )
           if ($canApplyTemplate) {
             $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts/Apply-WebsiteReactTemplate.ps1'
             if (-not (Test-Path $scriptPath)) {
@@ -780,7 +837,7 @@ jobs:
               -FooterSocial @($footerSocial) `
               -LeadershipLines @($leadership)
           } else {
-            Write-Host 'Skipping React template patch: missing Charity Name and/or Footer Email.' -ForegroundColor Yellow
+            Write-Host 'Skipping React template patch: missing required footer/leadership inputs.' -ForegroundColor Yellow
           }
 
           git add -A

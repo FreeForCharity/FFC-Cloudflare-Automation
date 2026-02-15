@@ -170,5 +170,47 @@ body:
   - type: markdown
     attributes:
       value: |
+        ## Social Links (Optional)
+        If provided, these URLs will be used for footer/social icons.
+
+  - type: input
+    id: social_facebook
+    attributes:
+      label: Facebook URL
+      description: Full URL (must start with https://).
+      placeholder: https://www.facebook.com/example
+    validations:
+      required: false
+
+  - type: input
+    id: social_x
+    attributes:
+      label: X / Twitter URL
+      description: Full URL (must start with https://).
+      placeholder: https://x.com/example
+    validations:
+      required: false
+
+  - type: input
+    id: social_linkedin
+    attributes:
+      label: LinkedIn URL
+      description: Full URL (must start with https://).
+      placeholder: https://www.linkedin.com/company/example
+    validations:
+      required: false
+
+  - type: input
+    id: social_github
+    attributes:
+      label: GitHub URL
+      description: Full URL (must start with https://).
+      placeholder: https://github.com/example
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
         ---
         **For admins:** assignment of this issue triggers the provisioning workflow.

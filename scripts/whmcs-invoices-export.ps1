@@ -170,7 +170,7 @@ function Get-Text {
     return $s
 }
 
-function Normalize-DateParam {
+function ConvertTo-WhmcsDateParam {
     param([Nullable[datetime]]$Date)
 
     if ($null -eq $Date) { return $null }
@@ -179,7 +179,7 @@ function Normalize-DateParam {
     return $Date.Value.ToString('yyyy-MM-dd')
 }
 
-function Try-ParseLegacyDate {
+function ConvertTo-WhmcsLegacyDate {
     param([string]$Value)
 
     if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
@@ -208,8 +208,8 @@ try {
         $resolvedOutput = $OutCsv
         $resolvedPageSize = $Limit
         $resolvedMaxRows = 0
-        $resolvedStartDate = Try-ParseLegacyDate -Value $StartDateLegacy
-        $resolvedEndDate = Try-ParseLegacyDate -Value $EndDateLegacy
+        $resolvedStartDate = ConvertTo-WhmcsLegacyDate -Value $StartDateLegacy
+        $resolvedEndDate = ConvertTo-WhmcsLegacyDate -Value $EndDateLegacy
     }
     else {
         $resolvedApiUrl = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
@@ -245,10 +245,10 @@ try {
             limitnum     = $resolvedPageSize
         }
 
-        $sd = Normalize-DateParam -Date $resolvedStartDate
+        $sd = ConvertTo-WhmcsDateParam -Date $resolvedStartDate
         if ($sd) { $body.datecreated = $sd }
 
-        $ed = Normalize-DateParam -Date $resolvedEndDate
+        $ed = ConvertTo-WhmcsDateParam -Date $resolvedEndDate
         if ($ed) { $body.datecreatedend = $ed }
 
         if ($resolvedAccessKey) { $body.accesskey = $resolvedAccessKey }

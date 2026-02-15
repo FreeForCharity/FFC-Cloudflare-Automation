@@ -97,10 +97,24 @@ the standard FFC React/Next.js template.
 2. An admin assigns the issue.
 3. The assignment triggers the workflow **15. Website - Provision (Issue Assigned) [CF+Repo]**.
 
+Manual option:
+
+- Admins can also run the same workflow manually (Actions → Run workflow). In manual mode, `domain`
+  is the only required field and the workflow will do “as much as it can” with whatever optional
+  fields are provided.
+
+Manual run quick examples:
+
+- Minimal (domain-only): set `domain=example.org`
+- More complete (also applies the React template footer): set `domain=example.org`,
+  `charity_name=Example Charity`, `footer_email=info@example.org`
+
 ### What gets automated
 
 - **Cloudflare source-of-truth check**: Verifies whether the domain exists in FFC-controlled
   Cloudflare (FFC/CM accounts) before making any DNS or GitHub Pages custom-domain changes.
+  - Best-effort: if Cloudflare tokens are missing, the workflow treats the domain as not controlled
+    and continues (repo still provisions).
 - **DNS (conditional)**: If the domain is in FFC-controlled Cloudflare, enforces standard GitHub
   Pages DNS for the apex domain (apex + `www`) via `Update-CloudflareDns.ps1` using
   `-EnforceStandard -GitHubPagesOnly`.
@@ -114,6 +128,8 @@ the standard FFC React/Next.js template.
   - Footer content (email/phone/address/EIN/social)
   - Leadership/team section via JSON content (`src/data/team/*.json` + `src/data/team.ts`)
   - Also writes `ffc-content.json` into the new repo for traceability.
+  - Best-effort: if `charityName` or `footerEmail` is missing, `ffc-content.json` is still written
+    but React template patching is skipped.
 
 ### Idempotency
 
@@ -122,6 +138,8 @@ The provisioning workflow posts a completion marker comment:
 - `<!-- website-provision:completed -->`
 
 If the marker is present, subsequent assignments will skip provisioning.
+
+Manual runs do not post issue comments and do not use the idempotency marker.
 
 ### Required environments / secrets
 
@@ -134,10 +152,12 @@ globally):
 - Environment: `github-prod`
   - `CBM_TOKEN` (GitHub token used for repo creation, cloning, and pushing content)
 
-### Optional repository variables
+### Hardcoded configuration
 
-- `FFC_WEBSITE_TARGET_ORG` (default: `FreeForCharity`)
-- `FFC_WEBSITE_TEMPLATE_REPO` (default: `FreeForCharity/FFC_Single_Page_Template`)
+This workflow currently hardcodes:
+
+- Target org: `FreeForCharity`
+- Template repo: `FreeForCharity/FFC_Single_Page_Template`
 
 ## Quick Start
 

@@ -65,9 +65,8 @@ permissions:
   actions: read
 
 env:
-  WEBSITE_TARGET_ORG: ${{ vars.FFC_WEBSITE_TARGET_ORG || 'FreeForCharity' }}
-  WEBSITE_TEMPLATE_REPO:
-    ${{ vars.FFC_WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC_Single_Page_Template' }}
+  WEBSITE_TARGET_ORG: FreeForCharity
+  WEBSITE_TEMPLATE_REPO: FreeForCharity/FFC_Single_Page_Template
 
 jobs:
   resolve:

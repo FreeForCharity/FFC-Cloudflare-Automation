@@ -156,6 +156,18 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: ein
+    attributes:
+      label: EIN / Tax ID
+      description: |
+        EIN/Tax ID to display in the footer.
+
+        If you do not want this displayed, leave this blank.
+      placeholder: 12-3456789
+    validations:
+      required: false
+
   - type: textarea
     id: leadership_lines
     attributes:

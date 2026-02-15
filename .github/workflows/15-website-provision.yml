@@ -231,6 +231,16 @@ jobs:
               return /^n\/?a$/i.test(trimmed);
             };
 
+            const isNA = (value) => /^n\/?a$/i.test(String(value || '').trim());
+
+            const failIfNAProvided = (label, value) => {
+              if (isNA(value)) {
+                core.setFailed(`Invalid value: ${label} cannot be N/A. Leave it blank if it does not apply.`);
+                return true;
+              }
+              return false;
+            };
+
             const hasUsZip = (value) => /\b\d{5}(?:-\d{4})?\b/.test(String(value || ''));
 
             if (isManual) {
@@ -357,6 +367,17 @@ jobs:
                 core.setFailed(`Invalid value for required field: ${label}. Please provide a real value (not N/A).`);
                 return;
               }
+            }
+
+            // Optional fields: blank is allowed, but N/A is not.
+            for (const [label, value] of [
+              ['Current Website URL (if any)', currentWebsiteUrl],
+              ['Footer Contact Phone', footerPhone],
+              ['Footer Mailing Address Line 1', !isManual ? normalizeInput(extractSection('Footer Mailing Address Line 1')) : ''],
+              ['Footer Mailing Address Line 2', !isManual ? normalizeInput(extractSection('Footer Mailing Address Line 2')) : ''],
+              ['EIN / Tax ID', footerEin],
+            ]) {
+              if (failIfNAProvided(label, value)) return;
             }
 
             // Address requirement: must map to a real location.

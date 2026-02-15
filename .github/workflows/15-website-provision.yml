@@ -527,7 +527,9 @@ jobs:
             // Leadership is displayed on the site. Require at least one leader line for issue-based runs.
             if (!isManual) {
               if (!leadershipLines || leadershipLines.length === 0) {
-                core.setFailed('Board / Leadership is required. Provide at least one leader line.');
+                core.setFailed(
+                  'Board / Leadership is required. Provide at least Board President, Board Secretary, and Board Treasurer (or fill out the legacy Board / Leadership block).',
+                );
                 return;
               }
 
@@ -557,7 +559,7 @@ jobs:
                 .filter(r => !rolesFound.has(r));
               if (missingRoles.length > 0) {
                 core.setFailed(
-                  `Board / Leadership must include these roles: President, Secretary, Treasurer. Missing: ${missingRoles.join(', ')}.`,
+                  `Missing required board roles: ${missingRoles.join(', ')}. Please fill out Board President, Board Secretary, and Board Treasurer (or include these roles in the legacy Board / Leadership block).`,
                 );
                 return;
               }
@@ -565,7 +567,9 @@ jobs:
 
             // Disallow N/A anywhere in leadership content (manual or issue).
             if (leadershipLines && leadershipLines.some(line => /\bn\/?a\b/i.test(line))) {
-              core.setFailed('Board / Leadership cannot include N/A. Use real values; leave fields empty only where the format supports it (e.g., blank LinkedIn URL).');
+              core.setFailed(
+                'Board / Leadership cannot include N/A. Use real values; leave optional fields blank where allowed (e.g., blank LinkedIn URL).',
+              );
               return;
             }
 

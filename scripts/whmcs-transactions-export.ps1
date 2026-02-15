@@ -141,7 +141,7 @@ function Get-Text {
     return $s
 }
 
-function Normalize-DateParam {
+function ConvertTo-WhmcsDateParam {
     param([Nullable[datetime]]$Date)
 
     if ($null -eq $Date) { return $null }
@@ -178,10 +178,10 @@ try {
             limitnum     = $PageSize
         }
 
-        $sd = Normalize-DateParam -Date $StartDate
+        $sd = ConvertTo-WhmcsDateParam -Date $StartDate
         if ($sd) { $body.date = $sd }
 
-        $ed = Normalize-DateParam -Date $EndDate
+        $ed = ConvertTo-WhmcsDateParam -Date $EndDate
         if ($ed) { $body.enddate = $ed }
 
         if ($accessKey) { $body.accesskey = $accessKey }

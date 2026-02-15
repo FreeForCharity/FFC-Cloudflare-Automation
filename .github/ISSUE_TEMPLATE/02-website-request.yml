@@ -237,6 +237,47 @@ body:
   - type: markdown
     attributes:
       value: |
+        ## Candid / GuideStar Endorsements
+
+        If your organization is a verified **501(c)(3)**, these links are required.
+        We use them in the footer "Endorsements" section.
+
+        Example (Free For Charity):
+        - Profile URL: https://www.guidestar.org/profile/46-2471893
+        - Direct profile link: https://www.guidestar.org/profile/shared/bbbe173a-87b9-4af9-a8a2-cae255a95742
+
+  - type: dropdown
+    id: irs_status
+    attributes:
+      label: IRS 501(c)(3) Status
+      description: Required. This controls whether GuideStar/Candid endorsement links are required.
+      options:
+        - 501(c)(3) (approved)
+        - Not yet / pending (pre-501(c)(3))
+    validations:
+      required: true
+
+  - type: input
+    id: guidestar_profile_url
+    attributes:
+      label: Candid / GuideStar Profile URL
+      description: Required if 501(c)(3). Full URL (must start with https://).
+      placeholder: https://www.guidestar.org/profile/46-2471893
+    validations:
+      required: false
+
+  - type: input
+    id: guidestar_direct_profile_url
+    attributes:
+      label: Candid / GuideStar Direct Profile Link
+      description: Required if 501(c)(3). Full URL (must start with https://).
+      placeholder: https://www.guidestar.org/profile/shared/bbbe173a-87b9-4af9-a8a2-cae255a95742
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
         ## Board / Leadership
 
         We show up to 5 board members on the site.

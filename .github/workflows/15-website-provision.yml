@@ -32,6 +32,24 @@ on:
         description: 'EIN / Tax ID (optional).'
         required: false
         type: string
+      irs_status:
+        description: 'IRS status (optional; if 501(c)(3), provide GuideStar links as well).'
+        required: false
+        type: choice
+        options:
+          - 501(c)(3) (approved)
+          - Not yet / pending (pre-501(c)(3))
+      guidestar_profile_url:
+        description:
+          'Candid/GuideStar profile URL (optional; required if 501(c)(3); must start with https://).'
+        required: false
+        type: string
+      guidestar_direct_profile_url:
+        description:
+          'Candid/GuideStar direct profile link (optional; required if 501(c)(3); must start with
+          https://).'
+        required: false
+        type: string
       website_situation:
         description: 'Which common scenario matches? (optional)'
         required: false
@@ -91,6 +109,9 @@ jobs:
       footer_phone: ${{ steps.parse.outputs.footer_phone }}
       footer_address_json: ${{ steps.parse.outputs.footer_address_json }}
       footer_ein: ${{ steps.parse.outputs.footer_ein }}
+      irs_status: ${{ steps.parse.outputs.irs_status }}
+      guidestar_profile_url: ${{ steps.parse.outputs.guidestar_profile_url }}
+      guidestar_direct_profile_url: ${{ steps.parse.outputs.guidestar_direct_profile_url }}
       footer_social_json: ${{ steps.parse.outputs.footer_social_json }}
       leadership_json: ${{ steps.parse.outputs.leadership_json }}
       repo_name: ${{ steps.parse.outputs.repo_name }}
@@ -250,6 +271,9 @@ jobs:
             let footerPhone = '';
             let footerAddress = '';
             let footerEin = '';
+            let irsStatus = '';
+            let guideStarProfileUrl = '';
+            let guideStarDirectProfileUrl = '';
             let footerSocialLinks = [];
             let leadershipLines = [];
 
@@ -293,6 +317,9 @@ jobs:
               footerPhone = normalizeInput(manualInputs.footer_phone);
               footerAddress = normalizeInput(manualInputs.footer_address);
               footerEin = normalizeInput(manualInputs.footer_ein);
+              irsStatus = normalizeInput(manualInputs.irs_status);
+              guideStarProfileUrl = normalizeInput(manualInputs.guidestar_profile_url);
+              guideStarDirectProfileUrl = normalizeInput(manualInputs.guidestar_direct_profile_url);
 
               footerSocialLinks = parseMultiline(manualInputs.social_links);
               leadershipLines = parseMultiline(manualInputs.leadership_lines);
@@ -322,6 +349,10 @@ jobs:
               });
 
               footerEin = normalizeInput(extractSection('EIN / Tax ID'));
+
+              irsStatus = normalizeInput(extractSection('IRS 501(c)(3) Status'));
+              guideStarProfileUrl = normalizeInput(extractSection('Candid / GuideStar Profile URL'));
+              guideStarDirectProfileUrl = normalizeInput(extractSection('Candid / GuideStar Direct Profile Link'));
 
               const facebookUrl = validateRequiredUrl('Facebook URL', extractSection('Facebook URL'));
               if (facebookUrl === null) return;
@@ -472,7 +503,38 @@ jobs:
             if (failIfNAProvided('Footer Contact Email', footerEmail)) return;
             if (failIfNAProvided('Footer Contact Phone', footerPhone)) return;
             if (failIfNAProvided('EIN / Tax ID', footerEin)) return;
+            if (failIfNAProvided('IRS 501(c)(3) Status', irsStatus)) return;
+            if (failIfNAProvided('Candid / GuideStar Profile URL', guideStarProfileUrl)) return;
+            if (failIfNAProvided('Candid / GuideStar Direct Profile Link', guideStarDirectProfileUrl)) return;
             if (failIfNAProvided('Technical POC GitHub Username', technicalPocGitHubUsername)) return;
+
+            const is501c3 = /\b501\s*\(c\)\s*3\b/i.test(irsStatus);
+            if (!isManual && isDisallowedValue(irsStatus)) {
+              core.setFailed('Missing required field: IRS 501(c)(3) Status.');
+              return;
+            }
+
+            // If org is a verified 501(c)(3), GuideStar/Candid links are required.
+            if (is501c3) {
+              if (isDisallowedValue(guideStarProfileUrl) || !isHttpsUrl(guideStarProfileUrl)) {
+                core.setFailed('Candid / GuideStar Profile URL is required for 501(c)(3) and must start with https://.');
+                return;
+              }
+              if (isDisallowedValue(guideStarDirectProfileUrl) || !isHttpsUrl(guideStarDirectProfileUrl)) {
+                core.setFailed('Candid / GuideStar Direct Profile Link is required for 501(c)(3) and must start with https://.');
+                return;
+              }
+            } else {
+              // If provided anyway, enforce https.
+              if (guideStarProfileUrl && !isHttpsUrl(guideStarProfileUrl)) {
+                core.setFailed('Candid / GuideStar Profile URL must start with https://.');
+                return;
+              }
+              if (guideStarDirectProfileUrl && !isHttpsUrl(guideStarDirectProfileUrl)) {
+                core.setFailed('Candid / GuideStar Direct Profile Link must start with https://.');
+                return;
+              }
+            }
 
             // Footer phone: must be a valid US phone number (10 digits, or 11 digits starting with 1).
             // Required for issue-based runs; manual runs validate only if provided.
@@ -633,6 +695,9 @@ jobs:
             core.setOutput('footer_phone', footerPhone);
             core.setOutput('footer_address_json', JSON.stringify(footerAddress));
             core.setOutput('footer_ein', footerEin);
+            core.setOutput('irs_status', irsStatus);
+            core.setOutput('guidestar_profile_url', guideStarProfileUrl);
+            core.setOutput('guidestar_direct_profile_url', guideStarDirectProfileUrl);
             core.setOutput('footer_social_json', JSON.stringify(footerSocialLinks));
             core.setOutput('leadership_json', JSON.stringify(leadershipLines));
             core.setOutput('repo_name', repoName);
@@ -919,6 +984,10 @@ jobs:
           $footerAddress = '${{ needs.resolve.outputs.footer_address_json }}' | ConvertFrom-Json
           $footerEin = "${{ needs.resolve.outputs.footer_ein }}"
 
+          $irsStatus = "${{ needs.resolve.outputs.irs_status }}"
+          $guideStarProfileUrl = "${{ needs.resolve.outputs.guidestar_profile_url }}"
+          $guideStarDirectProfileUrl = "${{ needs.resolve.outputs.guidestar_direct_profile_url }}"
+
           $footerSocial = '${{ needs.resolve.outputs.footer_social_json }}' | ConvertFrom-Json
           $leadership = '${{ needs.resolve.outputs.leadership_json }}' | ConvertFrom-Json
 
@@ -946,6 +1015,9 @@ jobs:
               phone = $footerPhone
               address = $footerAddress
               ein = $footerEin
+              irsStatus = $irsStatus
+              guideStarProfileUrl = $guideStarProfileUrl
+              guideStarDirectProfileUrl = $guideStarDirectProfileUrl
               socialLinks = @($footerSocial)
             }
             leadership = @($leadership)
@@ -982,6 +1054,13 @@ jobs:
             ($leadership.Count -gt 0) -and
             (Test-SocialLinksPresent -Links @($footerSocial))
           )
+
+          $is501c3 = $irsStatus -match '501\(c\)3|501\s*\(c\)\s*3'
+          if ($is501c3) {
+            $canApplyTemplate = $canApplyTemplate -and
+              -not [string]::IsNullOrWhiteSpace($guideStarProfileUrl) -and
+              -not [string]::IsNullOrWhiteSpace($guideStarDirectProfileUrl)
+          }
           if ($canApplyTemplate) {
             $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts/Apply-WebsiteReactTemplate.ps1'
             if (-not (Test-Path $scriptPath)) {
@@ -996,6 +1075,8 @@ jobs:
               -FooterPhone $footerPhone `
               -FooterAddress $footerAddress `
               -FooterEin $footerEin `
+              -GuideStarProfileUrl $guideStarProfileUrl `
+              -GuideStarDirectProfileUrl $guideStarDirectProfileUrl `
               -FooterSocial @($footerSocial) `
               -LeadershipLines @($leadership)
           } else {

@@ -18,6 +18,10 @@ param(
 
     [string]$FooterEin,
 
+    [string]$GuideStarProfileUrl,
+
+    [string]$GuideStarDirectProfileUrl,
+
     [string[]]$FooterSocial = @(),
 
     [string[]]$LeadershipLines = @()
@@ -70,6 +74,8 @@ function Update-FooterComponent {
         [string]$Phone,
         [string]$Address,
         [string]$Ein,
+        [string]$GuideStarProfileUrl,
+        [string]$GuideStarDirectProfileUrl,
         [string[]]$Social,
         [Parameter(Mandatory = $true)][string]$Domain,
         [Parameter(Mandatory = $true)][string]$CharityName
@@ -140,6 +146,53 @@ function Update-FooterComponent {
             1
         )
     }
+
+    # GuideStar / Candid endorsements
+    # Template contains Free For Charity's links. For partner sites:
+    # - If URLs provided, replace them.
+    # - If URLs blank, remove the endorsement link/button to avoid wrong links.
+    if ([string]::IsNullOrWhiteSpace($GuideStarProfileUrl)) {
+        $text = [regex]::Replace(
+            $text,
+            '(?s)<a\s+[^>]*href="https://www\.guidestar\.org/profile/[^\"]+"[^>]*>.*?</a>\s*',
+            '',
+            1
+        )
+    }
+    else {
+        $text = [regex]::Replace(
+            $text,
+            'href="https://www\.guidestar\.org/profile/[^\"]+"',
+            ('href="{0}"' -f $GuideStarProfileUrl),
+            1
+        )
+        $text = [regex]::Replace(
+            $text,
+            'aria-label="View [^\"]* GuideStar Profile"',
+            ('aria-label="View {0} GuideStar Profile"' -f $CharityName),
+            1
+        )
+    }
+
+    if ([string]::IsNullOrWhiteSpace($GuideStarDirectProfileUrl)) {
+        $text = [regex]::Replace(
+            $text,
+            '(?s)<Link\s+[^>]*href="https://www\.guidestar\.org/profile/shared/[^\"]+"[^>]*>.*?</Link>\s*',
+            '',
+            1
+        )
+    }
+    else {
+        $text = [regex]::Replace(
+            $text,
+            'href="https://www\.guidestar\.org/profile/shared/[^\"]+"',
+            ('href="{0}"' -f $GuideStarDirectProfileUrl),
+            1
+        )
+    }
+
+    # Make the seal alt text generic (avoid hard-coding a seal level).
+    $text = $text -replace 'alt="GuideStar Platinum Seal of Transparency"', 'alt="Candid / GuideStar Seal of Transparency"'
 
     # Social links (best-effort: parse "platform: url")
     if ($Social -and $Social.Count -gt 0) {
@@ -407,6 +460,8 @@ Update-FooterComponent `
     -Phone $FooterPhone `
     -Address $FooterAddress `
     -Ein $FooterEin `
+    -GuideStarProfileUrl $GuideStarProfileUrl `
+    -GuideStarDirectProfileUrl $GuideStarDirectProfileUrl `
     -Social $FooterSocial `
     -Domain $Domain `
     -CharityName $CharityName

@@ -4,6 +4,61 @@ on:
   issues:
     types: [assigned]
 
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Apex domain (example: example.org). This is the only required field.'
+        required: true
+        type: string
+      charity_name:
+        description: 'Organization display name (optional; required only to apply the React template footer).'
+        required: false
+        type: string
+      footer_email:
+        description: 'Public footer contact email (optional; required only to apply the React template footer).'
+        required: false
+        type: string
+      footer_phone:
+        description: 'Public footer contact phone (optional).'
+        required: false
+        type: string
+      footer_address:
+        description: 'Footer mailing address (optional; you can paste multi-line text).'
+        required: false
+        type: string
+      footer_ein:
+        description: 'EIN / Tax ID (optional).'
+        required: false
+        type: string
+      website_situation:
+        description: 'Which common scenario matches? (optional)'
+        required: false
+        type: choice
+        options:
+          - 'New charity domain name and new charity website'
+          - 'New charity domain name but existing charity site (Wix / Squarespace / etc)'
+          - 'Existing domain name and existing website (WordPress / formal hosting)'
+      current_website_url:
+        description: 'Current website URL (optional; for future scraping/reference).'
+        required: false
+        type: string
+      requester_github_username:
+        description: 'GitHub username to add as maintainer (optional; defaults to the actor).'
+        required: false
+        type: string
+      technical_poc_github_username:
+        description: 'GitHub username to add as maintainer (optional).'
+        required: false
+        type: string
+      social_links:
+        description: "Social links (optional). One per line as 'platform: https://...'."
+        required: false
+        type: string
+      leadership_lines:
+        description: "Leadership lines (optional). One per line as 'Name | Title | LinkedIn URL'."
+        required: false
+        type: string
+
 permissions:
   contents: read
   issues: write
@@ -20,6 +75,7 @@ jobs:
     outputs:
       skip: ${{ steps.parse.outputs.skip }}
       issue_number: ${{ steps.parse.outputs.issue_number }}
+      post_comments: ${{ steps.parse.outputs.post_comments }}
       dns_controlled: ${{ steps.parse.outputs.dns_controlled }}
       website_situation: ${{ steps.parse.outputs.website_situation }}
       current_website_url: ${{ steps.parse.outputs.current_website_url }}
@@ -43,34 +99,47 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const issue = context.payload.issue;
-            const body = issue.body || '';
-            const title = issue.title || '';
-            const requesterGitHubUsername = String(issue.user?.login || '').trim();
+            const isManual = context.eventName === 'workflow_dispatch';
+            const manualInputs = context.payload.inputs || {};
+            const issue = context.payload.issue || {};
+            const body = isManual ? '' : (issue.body || '');
+            const title = isManual ? '' : (issue.title || '');
+            const requesterFromIssue = String(issue?.user?.login || '').trim();
             const labels = (issue.labels || [])
               .map(l => (typeof l === 'string' ? l : l.name))
               .filter(Boolean);
 
             // Gate: only act on website requests.
-            const isWebsiteRequest = title.startsWith('[WEBSITE REQUEST]') || labels.includes('website-request');
+            const isWebsiteRequest = isManual || title.startsWith('[WEBSITE REQUEST]') || labels.includes('website-request');
             if (!isWebsiteRequest) {
               core.notice('Not a website request issue; skipping.');
               core.setOutput('skip', 'true');
+              core.setOutput('post_comments', 'false');
               return;
             }
 
+            const requesterGitHubUsername = (
+              String(manualInputs.requester_github_username || '').trim().replace(/^@/, '') ||
+              requesterFromIssue ||
+              String(context.actor || '').trim()
+            );
+
             // Idempotency: skip if already completed.
             const marker = '<!-- website-provision:completed -->';
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue.number,
-              per_page: 100,
-            });
-            if (comments.some(c => (c.body || '').includes(marker))) {
-              core.notice('Provisioning already completed for this issue; skipping.');
-              core.setOutput('skip', 'true');
-              return;
+            if (!isManual) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                per_page: 100,
+              });
+              if (comments.some(c => (c.body || '').includes(marker))) {
+                core.notice('Provisioning already completed for this issue; skipping.');
+                core.setOutput('skip', 'true');
+                core.setOutput('post_comments', 'true');
+                core.setOutput('issue_number', String(issue.number));
+                return;
+              }
             }
 
             function escapeRegExp(str) {
@@ -98,6 +167,15 @@ jobs:
               v = v.replace(/\/$/, '');
               v = v.replace(/^www\./i, '');
               return v;
+            }
+
+            function parseMultiline(value) {
+              const v = String(value || '').trim();
+              if (!v) return [];
+              return v
+                .split(/\r?\n/)
+                .map(s => String(s || '').trim())
+                .filter(Boolean);
             }
 
             function buildAddress(parts) {
@@ -133,49 +211,77 @@ jobs:
             // Keep dnsControlled for backward compatibility with older website request issues.
             let dnsControlled = false;
 
-            const websiteSituation = normalizeInput(extractSection('Website Situation'));
-            const currentWebsiteUrl = normalizeInput(extractSection('Current Website URL (if any)'));
-            let technicalPocGitHubUsername = normalizeInput(extractSection('Technical POC GitHub Username'));
-            technicalPocGitHubUsername = technicalPocGitHubUsername.replace(/^@/, '');
+            let websiteSituation = '';
+            let currentWebsiteUrl = '';
+            let technicalPocGitHubUsername = '';
+            let domain = '';
+            let charityName = '';
+            let footerEmail = '';
+            let footerPhone = '';
+            let footerAddress = '';
+            let footerEin = '';
+            let footerSocialLinks = [];
+            let leadershipLines = [];
 
-            let domain = normalizeDomain(extractSection('Website Domain (no http://)'));
-            let charityName = normalizeInput(extractSection('Organization Name (as displayed)'));
-            let footerEmail = normalizeInput(extractSection('Footer Contact Email'));
-            let footerPhone = normalizeInput(extractSection('Footer Contact Phone'));
+            if (isManual) {
+              websiteSituation = normalizeInput(manualInputs.website_situation);
+              currentWebsiteUrl = normalizeInput(manualInputs.current_website_url);
+              technicalPocGitHubUsername = normalizeInput(manualInputs.technical_poc_github_username).replace(/^@/, '');
+
+              domain = normalizeDomain(manualInputs.domain);
+              charityName = normalizeInput(manualInputs.charity_name);
+              footerEmail = normalizeInput(manualInputs.footer_email);
+              footerPhone = normalizeInput(manualInputs.footer_phone);
+              footerAddress = normalizeInput(manualInputs.footer_address);
+              footerEin = normalizeInput(manualInputs.footer_ein);
+
+              footerSocialLinks = parseMultiline(manualInputs.social_links);
+              leadershipLines = parseMultiline(manualInputs.leadership_lines);
+            } else {
+              websiteSituation = normalizeInput(extractSection('Website Situation'));
+              currentWebsiteUrl = normalizeInput(extractSection('Current Website URL (if any)'));
+              technicalPocGitHubUsername = normalizeInput(extractSection('Technical POC GitHub Username'));
+              technicalPocGitHubUsername = technicalPocGitHubUsername.replace(/^@/, '');
+
+              domain = normalizeDomain(extractSection('Website Domain (no http://)'));
+              charityName = normalizeInput(extractSection('Organization Name (as displayed)'));
+              footerEmail = normalizeInput(extractSection('Footer Contact Email'));
+              footerPhone = normalizeInput(extractSection('Footer Contact Phone'));
+
+              footerAddress = buildAddress({
+                line1: extractSection('Footer Mailing Address Line 1'),
+                line2: extractSection('Footer Mailing Address Line 2'),
+                city: extractSection('Footer Mailing City'),
+                state: extractSection('Footer Mailing State/Province'),
+                postal: extractSection('Footer Mailing Postal Code'),
+                country: extractSection('Footer Mailing Country'),
+              });
+
+              footerEin = normalizeInput(extractSection('EIN / Tax ID'));
+
+              footerSocialLinks = [];
+              for (const entry of [
+                buildUrlLine('facebook', extractSection('Facebook URL')),
+                buildUrlLine('x', extractSection('X / Twitter URL')),
+                buildUrlLine('linkedin', extractSection('LinkedIn URL')),
+                buildUrlLine('github', extractSection('GitHub URL')),
+              ]) {
+                if (entry) footerSocialLinks.push(entry);
+              }
+
+              leadershipLines = [];
+              for (let i = 1; i <= 6; i++) {
+                const name = normalizeInput(extractSection(`Leader ${i} Name`));
+                const title = normalizeInput(extractSection(`Leader ${i} Role/Title`));
+                const linkedin = normalizeInput(extractSection(`Leader ${i} LinkedIn URL`));
+
+                if (!name) continue;
+                if (!title) leadershipLines.push(`${name} | Board Member | ${linkedin}`);
+                else leadershipLines.push(`${name} | ${title} | ${linkedin}`);
+              }
+            }
 
             const usingPrimaryForm = !!domain;
-
-            let footerAddress = buildAddress({
-              line1: extractSection('Footer Mailing Address Line 1'),
-              line2: extractSection('Footer Mailing Address Line 2'),
-              city: extractSection('Footer Mailing City'),
-              state: extractSection('Footer Mailing State/Province'),
-              postal: extractSection('Footer Mailing Postal Code'),
-              country: extractSection('Footer Mailing Country'),
-            });
-
-            let footerEin = normalizeInput(extractSection('EIN / Tax ID'));
-
-            let footerSocialLinks = [];
-            for (const entry of [
-              buildUrlLine('facebook', extractSection('Facebook URL')),
-              buildUrlLine('x', extractSection('X / Twitter URL')),
-              buildUrlLine('linkedin', extractSection('LinkedIn URL')),
-              buildUrlLine('github', extractSection('GitHub URL')),
-            ]) {
-              if (entry) footerSocialLinks.push(entry);
-            }
-
-            let leadershipLines = [];
-            for (let i = 1; i <= 6; i++) {
-              const name = normalizeInput(extractSection(`Leader ${i} Name`));
-              const title = normalizeInput(extractSection(`Leader ${i} Role/Title`));
-              const linkedin = normalizeInput(extractSection(`Leader ${i} LinkedIn URL`));
-
-              if (!name) continue;
-              if (!title) leadershipLines.push(`${name} | Board Member | ${linkedin}`);
-              else leadershipLines.push(`${name} | ${title} | ${linkedin}`);
-            }
 
             // Backward-compat: previous website request form fields
             // If the new headings are not present, fall back to the older headings.
@@ -205,18 +311,8 @@ jobs:
               }
             }
 
-            if (!domain || !charityName || !footerEmail) {
-              core.setFailed('Missing required fields: Website Domain, Organization Name, and Footer Contact Email are required.');
-              return;
-            }
-
-            if (usingPrimaryForm && !technicalPocGitHubUsername) {
-              core.setFailed('Missing required fields: Technical POC GitHub Username is required.');
-              return;
-            }
-
-            if (leadershipLines.length < 1) {
-              core.setFailed('Missing required fields: at least one leader must be provided (Leader 1 Name must not be N/A).');
+            if (!domain) {
+              core.setFailed('Missing required field: domain.');
               return;
             }
 
@@ -228,7 +324,8 @@ jobs:
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
             core.setOutput('skip', 'false');
-            core.setOutput('issue_number', String(issue.number));
+            core.setOutput('issue_number', isManual ? '' : String(issue.number));
+            core.setOutput('post_comments', isManual ? 'false' : 'true');
             core.setOutput('dns_controlled', dnsControlled ? 'true' : 'false');
             core.setOutput('website_situation', websiteSituation);
             core.setOutput('current_website_url', currentWebsiteUrl);
@@ -260,18 +357,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate required Cloudflare secrets
-        shell: bash
-        run: |
-          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
-            exit 1;
-          fi
-          if [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-            echo "::error::CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
-            exit 1;
-          fi
-
       - name: Cloudflare source-of-truth zone check
         id: check
         shell: pwsh
@@ -281,6 +366,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = "${{ needs.resolve.outputs.domain }}"
+
+          # Best-effort: if secrets are missing, treat as not controlled and continue.
+          if ([string]::IsNullOrWhiteSpace($env:CLOUDFLARE_API_TOKEN_FFC) -or [string]::IsNullOrWhiteSpace($env:CLOUDFLARE_API_TOKEN_CM)) {
+            Write-Host 'Cloudflare tokens missing; skipping zone check and treating domain as not controlled.' -ForegroundColor Yellow
+            "zone_exists_ffc=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            "zone_exists_cm=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            "zone_controlled=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            "zone_account=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
 
           $ffc = (& pwsh -NoProfile -File .\scripts\cloudflare-zone-get.ps1 -Domain $domain -Account FFC) | ConvertFrom-Json
           $cm  = (& pwsh -NoProfile -File .\scripts\cloudflare-zone-get.ps1 -Domain $domain -Account CM)  | ConvertFrom-Json
@@ -308,7 +403,7 @@ jobs:
   announce:
     runs-on: ubuntu-latest
     needs: [resolve, zone_check]
-    if: needs.resolve.outputs.skip != 'true'
+    if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.post_comments == 'true'
     steps:
       - name: Comment start
         uses: actions/github-script@v8
@@ -361,7 +456,7 @@ jobs:
   dns:
     runs-on: windows-latest
     environment: cloudflare-prod
-    needs: [resolve, zone_check, announce]
+    needs: [resolve, zone_check]
     if: needs.resolve.outputs.skip != 'true' && needs.zone_check.outputs.zone_controlled == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -437,6 +532,10 @@ jobs:
           $charityName = "${{ needs.resolve.outputs.charity_name }}"
           $templateRepo = "${{ needs.resolve.outputs.template_repo }}"
           $zoneControlled = "${{ needs.zone_check.outputs.zone_controlled }}" -eq 'true'
+
+          if ([string]::IsNullOrWhiteSpace($charityName)) {
+            $charityName = $domain
+          }
 
           # Best-effort check: if repo already exists, skip creation.
           $exists = $false
@@ -561,21 +660,26 @@ jobs:
           $json | Out-File -FilePath 'ffc-content.json' -Encoding utf8
 
           # Patch the actual React template files in the newly provisioned repo.
-          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts/Apply-WebsiteReactTemplate.ps1'
-          if (-not (Test-Path $scriptPath)) {
-            throw "Customization script not found: $scriptPath"
-          }
+          $canApplyTemplate = -not [string]::IsNullOrWhiteSpace($charityName) -and -not [string]::IsNullOrWhiteSpace($footerEmail)
+          if ($canApplyTemplate) {
+            $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts/Apply-WebsiteReactTemplate.ps1'
+            if (-not (Test-Path $scriptPath)) {
+              throw "Customization script not found: $scriptPath"
+            }
 
-          & $scriptPath `
-            -RepoPath $cloneDir `
-            -Domain $domain `
-            -CharityName $charityName `
-            -FooterEmail $footerEmail `
-            -FooterPhone $footerPhone `
-            -FooterAddress $footerAddress `
-            -FooterEin $footerEin `
-            -FooterSocial @($footerSocial) `
-            -LeadershipLines @($leadership)
+            & $scriptPath `
+              -RepoPath $cloneDir `
+              -Domain $domain `
+              -CharityName $charityName `
+              -FooterEmail $footerEmail `
+              -FooterPhone $footerPhone `
+              -FooterAddress $footerAddress `
+              -FooterEin $footerEin `
+              -FooterSocial @($footerSocial) `
+              -LeadershipLines @($leadership)
+          } else {
+            Write-Host 'Skipping React template patch: missing Charity Name and/or Footer Email.' -ForegroundColor Yellow
+          }
 
           git add -A
           git diff --cached --quiet
@@ -590,9 +694,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [resolve, zone_check, dns, repo, content]
     if: >-
-      always() && needs.resolve.outputs.skip != 'true' && (needs.dns.result == 'success' ||
-      needs.dns.result == 'skipped') && needs.repo.result == 'success' && needs.content.result ==
-      'success'
+      always() && needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.post_comments ==
+      'true' && (needs.dns.result == 'success' || needs.dns.result == 'skipped') &&
+      needs.repo.result == 'success' && needs.content.result == 'success'
     steps:
       - name: Comment completion
         uses: actions/github-script@v8

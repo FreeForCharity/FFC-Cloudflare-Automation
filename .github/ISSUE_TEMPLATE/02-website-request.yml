@@ -212,7 +212,7 @@ body:
       required: true
 
   - type: input
-    id: x
+    id: twitter
     attributes:
       label: X / Twitter URL
       description: Full URL to your X/Twitter profile (or `N/A`).
@@ -230,7 +230,7 @@ body:
       required: true
 
   - type: input
-    id: github
+    id: github_url
     attributes:
       label: GitHub URL
       description: Full URL to your GitHub profile/org (or `N/A`).

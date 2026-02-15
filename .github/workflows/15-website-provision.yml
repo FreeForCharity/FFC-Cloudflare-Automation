@@ -11,11 +11,13 @@ on:
         required: true
         type: string
       charity_name:
-        description: 'Organization display name (optional; required only to apply the React template footer).'
+        description:
+          'Organization display name (optional; required only to apply the React template footer).'
         required: false
         type: string
       footer_email:
-        description: 'Public footer contact email (optional; required only to apply the React template footer).'
+        description:
+          'Public footer contact email (optional; required only to apply the React template footer).'
         required: false
         type: string
       footer_phone:

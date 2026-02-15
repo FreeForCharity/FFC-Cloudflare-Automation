@@ -219,22 +219,27 @@ Provisions a charity website end-to-end after a website request issue is assigne
 ### When it runs
 
 - Trigger: `issues.assigned`
-  - Gate: issue title starts with `[WEBSITE REQUEST]` **or** the issue has the `website-request` label.
+  - Gate: issue title starts with `[WEBSITE REQUEST]` **or** the issue has the `website-request`
+    label.
 - Trigger: `workflow_dispatch` (manual)
   - This supports “best-effort” provisioning when only a domain is known.
 
 ### What it does
 
 1. **Resolve inputs**
-  - Issue mode: parses the issue form sections.
-  - Manual mode: reads `workflow_dispatch` inputs.
+
+- Issue mode: parses the issue form sections.
+- Manual mode: reads `workflow_dispatch` inputs.
 
 2. **Cloudflare source-of-truth check (best-effort)** in `cloudflare-prod`
-  - Determines whether the domain is in FFC-controlled Cloudflare (FFC/CM accounts).
-  - If Cloudflare tokens are missing, the workflow treats the domain as **not controlled** and continues.
+
+- Determines whether the domain is in FFC-controlled Cloudflare (FFC/CM accounts).
+- If Cloudflare tokens are missing, the workflow treats the domain as **not controlled** and
+  continues.
 
 3. **Comment start (issue mode only)**
-  - Includes run URL + target repo + Cloudflare check result.
+
+- Includes run URL + target repo + Cloudflare check result.
 
 4. **DNS enforcement (conditional)** in `cloudflare-prod` (only when the zone is controlled):
 
@@ -249,6 +254,7 @@ Provisions a charity website end-to-end after a website request issue is assigne
 - Adds the issue requester and Technical POC GitHub username as repo maintainers.
 
 6. **Content application** in `github-prod`:
+
    - Clones the new repo.
    - Writes `ffc-content.json` (audit/traceability record).
    - Runs `scripts/Apply-WebsiteReactTemplate.ps1` (best-effort) to patch the React template when

@@ -18,6 +18,16 @@ body:
         After you submit this issue, an administrator will assign it.
         Assignment triggers automation.
 
+        **Issue title requirement (IMPORTANT):**
+        - Keep the prefix exactly as-is: `[WEBSITE REQUEST]`
+        - Append the apex domain (no `https://`, no `www`)
+
+        Examples:
+        - ✅ `[WEBSITE REQUEST] freeforcharity.org`
+        - ❌ `[WEBSITE REQUEST] https://freeforcharity.org`
+        - ❌ `[WEBSITE REQUEST] www.freeforcharity.org`
+        - ❌ `Website request for freeforcharity.org` (missing required prefix)
+
         Please read carefully before filling this out:
         - Do not enter `N/A` in any field.
         - We use automation + volunteers. Support is **best effort**.
@@ -84,14 +94,14 @@ body:
     attributes:
       label: Website Domain (no http://)
       description: |
-        The apex/root domain name (example: `example.org`).
+        The apex/root domain name (example: `freeforcharity.org`).
         Do not include `https://` and do not use `www`.
 
         Examples:
-        - ✅ `example.org`
-        - ❌ `https://example.org`
-        - ❌ `www.example.org`
-      placeholder: example.org
+        - ✅ `freeforcharity.org`
+        - ❌ `https://freeforcharity.org`
+        - ❌ `www.freeforcharity.org`
+      placeholder: freeforcharity.org
     validations:
       required: true
 
@@ -103,8 +113,8 @@ body:
         GitHub username for the charity technical point-of-contact.
         This person will be added as a maintainer of the provisioned repo.
 
-        Example: `octocat`
-      placeholder: octocat
+        Example: `FreeForCharity`
+      placeholder: FreeForCharity
     validations:
       required: true
 
@@ -131,11 +141,11 @@ body:
         If you already have a website, paste the full URL so we can reference/scrape content later.
 
         Examples:
-        - `https://example.org/`
-        - `https://www.example.org/`
+        - `https://freeforcharity.org/`
+        - `https://www.freeforcharity.org/`
 
         If you do not have a current website, leave this blank.
-      placeholder: https://example.org/
+      placeholder: https://freeforcharity.org/
     validations:
       required: false
 
@@ -144,7 +154,7 @@ body:
     attributes:
       label: Organization Name (as displayed)
       description: Public display name for the website (how visitors will see it).
-      placeholder: Example Charity
+      placeholder: Free For Charity
     validations:
       required: true
 
@@ -153,7 +163,7 @@ body:
     attributes:
       label: Footer Contact Email
       description: Public email address to show in the site footer (for visitors to contact you).
-      placeholder: info@example.org
+      placeholder: clarkemoyer@freeforcharity.org
     validations:
       required: true
 
@@ -164,7 +174,7 @@ body:
       description: |
         Public US phone number to show in the site footer.
         Must be a valid US number (10 digits, or 11 digits starting with 1).
-      placeholder: (555) 555-1212
+      placeholder: (520) 222-8104
     validations:
       required: true
 
@@ -183,7 +193,7 @@ body:
     attributes:
       label: Footer Mailing Address Line 1
       description: Street address or PO Box. Include suite/unit here if applicable.
-      placeholder: 123 Main St
+      placeholder: 4030 Wake Forrest Road Suite 349
     validations:
       required: true
 
@@ -192,7 +202,7 @@ body:
     attributes:
       label: Footer Mailing City
       description: City for the footer address.
-      placeholder: Phoenix
+      placeholder: Raleigh
     validations:
       required: true
 
@@ -201,7 +211,7 @@ body:
     attributes:
       label: Footer Mailing State/Province
       description: State or province for the footer address.
-      placeholder: AZ (2-letter)
+      placeholder: NC (2-letter)
     validations:
       required: true
 
@@ -210,7 +220,7 @@ body:
     attributes:
       label: Footer Mailing Postal Code
       description: US ZIP code (e.g., 85001 or 85001-1234).
-      placeholder: '85001'
+      placeholder: '27609'
     validations:
       required: true
 
@@ -220,7 +230,7 @@ body:
       label: EIN / Tax ID
       description: |
         EIN/Tax ID to display in the footer.
-      placeholder: 12-3456789
+      placeholder: 46-2471893
     validations:
       required: true
 
@@ -232,8 +242,7 @@ body:
         One leader per line. Format: Name | Role/Title | LinkedIn URL
         If you include a LinkedIn URL, it must start with https://
       placeholder: |
-        Jane Doe | President | https://www.linkedin.com/in/janedoe
-        John Smith | Treasurer |
+        Clarke Moyer | Executive Director | https://www.linkedin.com/company/freeforcharity/
     validations:
       required: true
 
@@ -248,7 +257,7 @@ body:
     attributes:
       label: Facebook URL
       description: Full URL (must start with https://).
-      placeholder: https://www.facebook.com/example
+      placeholder: https://www.facebook.com/freeforcharity
     validations:
       required: true
 
@@ -257,7 +266,7 @@ body:
     attributes:
       label: X / Twitter URL
       description: Full URL (must start with https://).
-      placeholder: https://x.com/example
+      placeholder: https://twitter.com/freeforcharity1
     validations:
       required: true
 
@@ -266,7 +275,7 @@ body:
     attributes:
       label: LinkedIn URL
       description: Full URL (must start with https://).
-      placeholder: https://www.linkedin.com/company/example
+      placeholder: https://www.linkedin.com/company/freeforcharity/
     validations:
       required: true
 
@@ -275,7 +284,7 @@ body:
     attributes:
       label: GitHub URL
       description: Full URL (must start with https://).
-      placeholder: https://github.com/example
+      placeholder: https://github.com/FreeForCharity
     validations:
       required: true
 

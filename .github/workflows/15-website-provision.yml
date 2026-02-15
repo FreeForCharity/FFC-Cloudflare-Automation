@@ -339,8 +339,10 @@ jobs:
                 `github: ${githubUrl}`,
               ];
 
-              // Leadership can be provided either as a single multiline block (preferred)
-              // or as individual leader fields (legacy primary form).
+              // Leadership can be provided as:
+              // 1) A single multiline block ("Board / Leadership")
+              // 2) Role-specific board fields (current form)
+              // 3) Numbered leader fields (older legacy form)
               const leadershipBlock = normalizeInput(extractSection('Board / Leadership'));
               if (leadershipBlock && !/^n\/?a$/i.test(leadershipBlock.trim())) {
                 leadershipLines = leadershipBlock
@@ -348,15 +350,55 @@ jobs:
                   .map(s => s.trim())
                   .filter(s => s && !/^n\/?a$/i.test(s));
               } else {
-                leadershipLines = [];
-                for (let i = 1; i <= 6; i++) {
-                  const name = normalizeInput(extractSection(`Leader ${i} Name`));
-                  const title = normalizeInput(extractSection(`Leader ${i} Role/Title`));
-                  const linkedin = normalizeInput(extractSection(`Leader ${i} LinkedIn URL`));
+                const boardPresident = normalizeInput(extractSection('Board President'));
+                const boardVicePresident = normalizeInput(extractSection('Board Vice President'));
+                const boardSecretary = normalizeInput(extractSection('Board Secretary'));
+                const boardTreasurer = normalizeInput(extractSection('Board Treasurer'));
+                const boardMemberAtLarge = normalizeInput(extractSection('Board Member at Large'));
 
-                  if (!name) continue;
-                  if (!title) leadershipLines.push(`${name} | Board Member | ${linkedin}`);
-                  else leadershipLines.push(`${name} | ${title} | ${linkedin}`);
+                const anyBoardFieldsProvided = !!(
+                  boardPresident ||
+                  boardVicePresident ||
+                  boardSecretary ||
+                  boardTreasurer ||
+                  boardMemberAtLarge
+                );
+
+                const parseNameAndLinkedIn = (value) => {
+                  const raw = String(value || '').trim();
+                  if (!raw) return { name: '', linkedin: '' };
+
+                  // Expected: "Name | https://..." (LinkedIn optional)
+                  const parts = raw.split('|').map(p => String(p || '').trim());
+                  const name = parts[0] || '';
+                  const linkedin = parts.length >= 2 ? (parts[1] || '') : '';
+                  return { name, linkedin };
+                };
+
+                leadershipLines = [];
+                if (anyBoardFieldsProvided) {
+                  for (const [role, raw] of [
+                    ['President', boardPresident],
+                    ['Vice President', boardVicePresident],
+                    ['Secretary', boardSecretary],
+                    ['Treasurer', boardTreasurer],
+                    ['Member at Large', boardMemberAtLarge],
+                  ]) {
+                    if (!raw) continue;
+                    const { name, linkedin } = parseNameAndLinkedIn(raw);
+                    if (!name) continue;
+                    leadershipLines.push(`${name} | ${role} | ${linkedin}`);
+                  }
+                } else {
+                  for (let i = 1; i <= 6; i++) {
+                    const name = normalizeInput(extractSection(`Leader ${i} Name`));
+                    const title = normalizeInput(extractSection(`Leader ${i} Role/Title`));
+                    const linkedin = normalizeInput(extractSection(`Leader ${i} LinkedIn URL`));
+
+                    if (!name) continue;
+                    if (!title) leadershipLines.push(`${name} | Board Member | ${linkedin}`);
+                    else leadershipLines.push(`${name} | ${title} | ${linkedin}`);
+                  }
                 }
               }
             }

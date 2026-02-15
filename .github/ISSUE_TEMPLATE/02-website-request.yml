@@ -234,29 +234,68 @@ body:
     validations:
       required: true
 
-  - type: textarea
-    id: leadership_lines
+  - type: markdown
     attributes:
-      label: Board / Leadership
-      description: |
-        One leader per line. Format: Name | Role/Title | LinkedIn URL
-        If you include a LinkedIn URL, it must start with https://
+      value: |
+        ## Board / Leadership
 
-        Required roles (must include at least these 3 leaders):
+        We show up to 5 board members on the site.
+
+        Required roles:
         - President
         - Secretary
         - Treasurer
 
-        Use the exact words "President", "Secretary", and "Treasurer" for those required roles (automation checks for them).
+        Optional roles:
+        - Vice President
+        - Member at Large
 
-        Other leaders are optional.
-      placeholder: |
-        Example (from the FFC template site):
-        Clarke Moyer | President | https://www.linkedin.com/in/clarkemoyer/
-        Tyler Carlotto | Secretary | https://www.linkedin.com/in/tylercarlotto/
-        Brennan Darling | Treasurer | https://www.linkedin.com/in/brennon-darling-80953038/
+        Format for each field: `Full Name | https://www.linkedin.com/in/...` (LinkedIn URL optional, but if provided it must start with `https://`).
+
+  - type: input
+    id: board_president
+    attributes:
+      label: Board President
+      description: 'Required. Format: Full Name | LinkedIn URL (https://)'
+      placeholder: 'Clarke Moyer | https://www.linkedin.com/in/clarkemoyer/'
     validations:
       required: true
+
+  - type: input
+    id: board_vice_president
+    attributes:
+      label: Board Vice President
+      description: 'Optional. Format: Full Name | LinkedIn URL (https://)'
+      placeholder: 'Chris Rae | https://www.linkedin.com/in/christopher-rae-540493a5/'
+    validations:
+      required: false
+
+  - type: input
+    id: board_secretary
+    attributes:
+      label: Board Secretary
+      description: 'Required. Format: Full Name | LinkedIn URL (https://)'
+      placeholder: 'Tyler Carlotto | https://www.linkedin.com/in/tylercarlotto/'
+    validations:
+      required: true
+
+  - type: input
+    id: board_treasurer
+    attributes:
+      label: Board Treasurer
+      description: 'Required. Format: Full Name | LinkedIn URL (https://)'
+      placeholder: 'Brennan Darling | https://www.linkedin.com/in/brennon-darling-80953038/'
+    validations:
+      required: true
+
+  - type: input
+    id: board_member_at_large
+    attributes:
+      label: Board Member at Large
+      description: 'Optional. Format: Full Name | LinkedIn URL (https://)'
+      placeholder: 'Rebecca Cook | https://www.linkedin.com/in/rebecca-cook-a91599265/'
+    validations:
+      required: false
 
   - type: markdown
     attributes:

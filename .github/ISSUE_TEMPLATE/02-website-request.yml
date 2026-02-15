@@ -30,8 +30,14 @@ body:
         ## Attestations (Required)
         These acknowledgements are required for Free For Charity provisioning.
 
-        Policies and references:
-        - Security policy: https://github.com/FreeForCharity/FFC-Cloudflare-Automation/blob/main/SECURITY.md
+        FreeForCharity.org policies (live):
+        - Donation Policy: https://freeforcharity.org/free-for-charity-donation-policy/
+        - Privacy Policy: https://freeforcharity.org/privacy-policy/
+        - Terms of Service: https://freeforcharity.org/free-for-charity-terms-of-service/
+        - Vulnerability Disclosure Policy: https://freeforcharity.org/vulnerability-disclosure-policy/
+        - Security Acknowledgements: https://freeforcharity.org/security-acknowledgements
+
+        Automation references (GitHub repo):
         - Contribution / automation process: https://github.com/FreeForCharity/FFC-Cloudflare-Automation/blob/main/CONTRIBUTING.md
         - Standard workflow expectations: https://github.com/FreeForCharity/FFC-Cloudflare-Automation/blob/main/docs/enforce-standard-workflow.md
 
@@ -50,7 +56,7 @@ body:
       label: Policies read
       description: Required
       options:
-        - label: I have read the linked FFC policies and agree to follow them.
+        - label: I have read the linked FreeForCharity.org policies and agree to follow them.
           required: true
 
   - type: checkboxes

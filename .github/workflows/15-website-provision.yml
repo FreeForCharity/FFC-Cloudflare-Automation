@@ -224,6 +224,15 @@ jobs:
             let footerSocialLinks = [];
             let leadershipLines = [];
 
+            const isDisallowedValue = (value) => {
+              if (value === undefined || value === null) return true;
+              const trimmed = String(value).trim();
+              if (!trimmed) return true;
+              return /^n\/?a$/i.test(trimmed);
+            };
+
+            const hasUsZip = (value) => /\b\d{5}(?:-\d{4})?\b/.test(String(value || ''));
+
             if (isManual) {
               websiteSituation = normalizeInput(manualInputs.website_situation);
               currentWebsiteUrl = normalizeInput(manualInputs.current_website_url);
@@ -249,13 +258,19 @@ jobs:
               footerEmail = normalizeInput(extractSection('Footer Contact Email'));
               footerPhone = normalizeInput(extractSection('Footer Contact Phone'));
 
+              const addressLine1 = normalizeInput(extractSection('Footer Mailing Address Line 1'));
+              const addressLine2 = normalizeInput(extractSection('Footer Mailing Address Line 2'));
+              const addressCity = normalizeInput(extractSection('Footer Mailing City'));
+              const addressState = normalizeInput(extractSection('Footer Mailing State/Province'));
+              const addressPostal = normalizeInput(extractSection('Footer Mailing Postal Code'));
+
               footerAddress = buildAddress({
-                line1: extractSection('Footer Mailing Address Line 1'),
-                line2: extractSection('Footer Mailing Address Line 2'),
-                city: extractSection('Footer Mailing City'),
-                state: extractSection('Footer Mailing State/Province'),
-                postal: extractSection('Footer Mailing Postal Code'),
-                country: extractSection('Footer Mailing Country'),
+                line1: addressLine1,
+                line2: addressLine2,
+                city: addressCity,
+                state: addressState,
+                postal: addressPostal,
+                country: 'United States',
               });
 
               footerEin = normalizeInput(extractSection('EIN / Tax ID'));
@@ -325,6 +340,53 @@ jobs:
             if (!domain) {
               core.setFailed('Missing required field: domain.');
               return;
+            }
+
+            // Enforce non-placeholder values for required fields.
+            // We cannot prevent users from typing `N/A` into a required field in GitHub Issue Forms,
+            // so we block the workflow if it happens.
+            const requiredChecks = [
+              ['domain', domain],
+              ['Organization Name (as displayed)', charityName],
+              ['Footer Contact Email', footerEmail],
+              ['Technical POC GitHub Username', technicalPocGitHubUsername],
+            ];
+
+            for (const [label, value] of requiredChecks) {
+              if (isDisallowedValue(value)) {
+                core.setFailed(`Invalid value for required field: ${label}. Please provide a real value (not N/A).`);
+                return;
+              }
+            }
+
+            // Address requirement: must map to a real location.
+            // At minimum, require City/State/ZIP and a valid US ZIP format.
+            if (!isManual) {
+              const city = normalizeInput(extractSection('Footer Mailing City'));
+              const state = normalizeInput(extractSection('Footer Mailing State/Province'));
+              const postal = normalizeInput(extractSection('Footer Mailing Postal Code'));
+
+              for (const [label, value] of [
+                ['Footer Mailing City', city],
+                ['Footer Mailing State/Province', state],
+                ['Footer Mailing Postal Code', postal],
+              ]) {
+                if (isDisallowedValue(value)) {
+                  core.setFailed(`Invalid value for required address field: ${label}. Please provide a real value (not N/A).`);
+                  return;
+                }
+              }
+
+              if (!hasUsZip(postal)) {
+                core.setFailed('Footer Mailing Postal Code must be a valid US ZIP code (e.g., 85001 or 85001-1234).');
+                return;
+              }
+            } else {
+              // Manual dispatch uses a freeform address input; require it to at least include a US ZIP.
+              if (isDisallowedValue(footerAddress) || !hasUsZip(footerAddress)) {
+                core.setFailed('Footer address must include a real US address with a ZIP code (e.g., 85001 or 85001-1234).');
+                return;
+              }
             }
 
             const repoName = `FFC-EX-${domain}`;

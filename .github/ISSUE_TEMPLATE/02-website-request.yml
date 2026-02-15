@@ -65,11 +65,11 @@ body:
         Examples:
         - `https://example.org/`
         - `https://www.example.org/`
-
-        If you do not have a current website, enter `N/A`.
+      
+        If you do not have a current website, leave this blank.
       placeholder: https://example.org/
     validations:
-      required: true
+      required: false
 
   - type: input
     id: org_name
@@ -94,36 +94,40 @@ body:
     attributes:
       label: Footer Contact Phone
       description: |
-        Public phone number to show in the site footer. If you do not want a phone number displayed,
-        enter `N/A`.
+        Public phone number to show in the site footer.
+
+        If you do not want a phone number displayed, leave this blank.
       placeholder: +1 (555) 555-1212
     validations:
-      required: true
+      required: false
 
   - type: markdown
     attributes:
       value: |
         ## Footer Mailing Address
         This address is displayed in the footer.
-        If you do not want an address displayed, enter `N/A` for every address field below.
+
+        We require an address that maps to a real location.
+        At minimum, you must provide a real **City**, **State**, and **ZIP code**.
+        We only support US charities; **Country is hard-coded to United States**.
 
   - type: input
     id: address_line1
     attributes:
       label: Footer Mailing Address Line 1
-      description: Street address or PO Box (line 1).
+      description: Street address or PO Box (line 1). Recommended.
       placeholder: 123 Main St
     validations:
-      required: true
+      required: false
 
   - type: input
     id: address_line2
     attributes:
       label: Footer Mailing Address Line 2
-      description: Apartment / suite / unit (line 2). If not applicable, enter `N/A`.
+      description: Apartment / suite / unit (line 2). Optional.
       placeholder: Suite 200
     validations:
-      required: true
+      required: false
 
   - type: input
     id: address_city
@@ -147,18 +151,8 @@ body:
     id: address_postal
     attributes:
       label: Footer Mailing Postal Code
-      description: ZIP or postal code.
+      description: US ZIP code.
       placeholder: '85001'
-    validations:
-      required: true
-
-  - type: input
-    id: address_country
-    attributes:
-      label: Footer Mailing Country
-      description: |
-        Country name (example: United States). If not applicable, enter `N/A`.
-      placeholder: United States
     validations:
       required: true
 
@@ -170,7 +164,7 @@ body:
         One leader per line. Format: Name | Role/Title | LinkedIn URL
       placeholder: |
         Jane Doe | President | https://www.linkedin.com/in/janedoe
-        John Smith | Treasurer | N/A
+        John Smith | Treasurer |
     validations:
       required: false
 

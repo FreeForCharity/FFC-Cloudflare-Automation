@@ -100,6 +100,68 @@ body:
     validations:
       required: true
 
+  - type: markdown
+    attributes:
+      value: |
+        ## Footer Mailing Address
+        This address is displayed in the footer.
+        If you do not want an address displayed, enter `N/A` for every address field below.
+
+  - type: input
+    id: address_line1
+    attributes:
+      label: Footer Mailing Address Line 1
+      description: Street address or PO Box (line 1).
+      placeholder: 123 Main St
+    validations:
+      required: true
+
+  - type: input
+    id: address_line2
+    attributes:
+      label: Footer Mailing Address Line 2
+      description: Apartment / suite / unit (line 2). If not applicable, enter `N/A`.
+      placeholder: Suite 200
+    validations:
+      required: true
+
+  - type: input
+    id: address_city
+    attributes:
+      label: Footer Mailing City
+      description: City for the footer address.
+      placeholder: Phoenix
+    validations:
+      required: true
+
+  - type: input
+    id: address_state
+    attributes:
+      label: Footer Mailing State/Province
+      description: State or province for the footer address.
+      placeholder: AZ
+    validations:
+      required: true
+
+  - type: input
+    id: address_postal
+    attributes:
+      label: Footer Mailing Postal Code
+      description: ZIP or postal code.
+      placeholder: '85001'
+    validations:
+      required: true
+
+  - type: input
+    id: address_country
+    attributes:
+      label: Footer Mailing Country
+      description: |
+        Country name (example: United States). If not applicable, enter `N/A`.
+      placeholder: United States
+    validations:
+      required: true
+
   - type: textarea
     id: leadership_lines
     attributes:

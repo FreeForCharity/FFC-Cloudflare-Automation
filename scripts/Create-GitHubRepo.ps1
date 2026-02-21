@@ -171,13 +171,28 @@ else {
 # gh repo create <name> --template <template> --<visibility> --description <desc> --confirm
 $createCmd = "repo create `"$TargetRepo`" --template `"$TemplateRepo`" --$Visibility --description `"$Description`""
 
-# Check if repo exists? (gh repo create might fail or prompt)
-# We assume it doesn't exist.
+$repoExists = $false
+if ($DryRun) {
+    Write-Host "[DRY RUN] would check whether repo exists: $TargetRepo" -ForegroundColor Cyan
+}
+else {
+    # gh repo view returns exit code 1 if missing; do not treat as fatal.
+    gh repo view "$TargetRepo" --json nameWithOwner 1>$null 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $repoExists = $true
+    }
+    $global:LASTEXITCODE = 0
+}
 
-Invoke-GhCommand $createCmd
+if ($repoExists) {
+    Write-Host "Repo already exists: $TargetRepo. Skipping creation." -ForegroundColor Yellow
+}
+else {
+    Invoke-GhCommand $createCmd
 
-# Wait a moment for propagation if not dry run
-if (-not $DryRun) { Start-Sleep -Seconds 5 }
+    # Wait a moment for propagation if not dry run
+    if (-not $DryRun) { Start-Sleep -Seconds 5 }
+}
 
 # 2. Configure General Settings (Issues, Projects, Wiki, Merge Types, Auto-Delete)
 # We use `gh repo edit` for some, `gh api` for others.
@@ -258,8 +273,18 @@ if ($EnablePages) {
         # So we must set build_type=workflow.
         
         Write-Host "Enabling Pages with build_type=workflow..."
-        $pagesCmd = "api repos/$fullRepoName/pages -X POST -F `"build_type=workflow`""
-        Invoke-GhCommand $pagesCmd
+        $pagesOutput = gh api "repos/$fullRepoName/pages" -X POST -F "build_type=workflow" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            # Idempotency: GitHub returns conflict when Pages is already enabled.
+            $pagesText = [string]($pagesOutput | Out-String)
+            if ($pagesText -match '(?i)already\s+enabled|already\s+exists|conflict') {
+                Write-Warning "GitHub Pages appears to already be enabled for $fullRepoName. Continuing."
+                $global:LASTEXITCODE = 0
+            }
+            else {
+                throw "Failed to enable GitHub Pages for $fullRepoName. Output: $pagesText"
+            }
+        }
         
         # Configure CNAME and Enforce HTTPS
         if ($CNAME) {

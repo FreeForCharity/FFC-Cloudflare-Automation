@@ -38,6 +38,12 @@ When both a `.com` and `.org` exist for the same base name (e.g., `example.com` 
 - The `.com` should be a redirect to the `.org`.
 - For repo naming, we use the convention `FFC-EX-<domain>` and create repos only for the `.org` apex.
 
+## Repo provisioning
+
+- **Single repo**: GitHub Actions: `89. Repo - Create GitHub Repo [Repo]` (or run `scripts/Create-GitHubRepo.ps1`).
+- **Batch ensure** (Live/Redirect/Error from the authoritative sites list): GitHub Actions: `90. Repo - Ensure GitHub Repos [Repo]`.
+   - Defaults are intentionally conservative (`DryRun=true`, `Limit=25`). Rerun with `DryRun=false` when ready.
+
 ## Recommended workflow (repeatable)
 
 1. **Export all-source inventory** (Cloudflare + WHMCS + WPMUDEV)

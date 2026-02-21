@@ -1,0 +1,67 @@
+name: '90. Repo - Ensure GitHub Repos [Repo]'
+
+on:
+  workflow_dispatch:
+    inputs:
+      HealthCsv:
+        description: 'Comma-separated health values to include (e.g., Live,Redirect,Error)'
+        required: true
+        default: 'Live,Redirect,Error'
+        type: string
+      Limit:
+        description: 'Max repos to create this run (0 = no limit)'
+        required: true
+        default: 25
+        type: number
+      DryRun:
+        description: 'Dry Run (preview only)'
+        required: true
+        default: true
+        type: boolean
+      TemplateRepo:
+        description: 'Template repository to use'
+        required: true
+        default: 'FreeForCharity/FFC_Single_Page_Template'
+        type: choice
+        options:
+          - FreeForCharity/FFC_Single_Page_Template
+          - FreeForCharity/FFC-IN-Single_Page_Template_Jekell
+      PagesDomainType:
+        description: 'GitHub Pages domain configuration'
+        required: true
+        default: 'apex'
+        type: choice
+        options:
+          - apex
+          - staging
+          - github-default
+
+jobs:
+  ensure-repos:
+    runs-on: windows-latest
+    environment: github-prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure Repos
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+        run: |
+          $params = @{
+              HealthCsv        = "${{ inputs.HealthCsv }}"
+              Limit            = [int]"${{ inputs.Limit }}"
+              TemplateRepo     = "${{ inputs.TemplateRepo }}"
+              PagesDomainType  = "${{ inputs.PagesDomainType }}"
+              DryRun           = [System.Convert]::ToBoolean("${{ inputs.DryRun }}")
+              OutputFile       = "_run_artifacts/ensure_github_repos_results.csv"
+          }
+
+          ./scripts/Ensure-GitHubRepos.ps1 @params
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ensure-github-repos-results
+          path: _run_artifacts/ensure_github_repos_results.csv

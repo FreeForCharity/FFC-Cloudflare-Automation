@@ -87,10 +87,10 @@ param(
     [bool]$EnableIssues = $true,
 
     [Parameter(Mandatory = $false)]
-    [bool]$EnableProjects = $false,
+    [bool]$EnableProjects = $true,
 
     [Parameter(Mandatory = $false)]
-    [bool]$EnableWiki = $false,
+    [bool]$EnableWiki = $true,
 
     [Parameter(Mandatory = $false)]
     [bool]$AllowSquashMerge = $true,
@@ -142,7 +142,103 @@ function Invoke-GhCommand {
         
         # We'll rely on the shell execution.
         $result = Invoke-Expression "gh $CommandStr"
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "gh command failed with exit code $($LASTEXITCODE): gh $CommandStr"
+        }
+
         return $result
+    }
+}
+
+function Copy-RepoScopedRulesetsFromTemplate {
+    param(
+        [string]$TemplateRepoNameWithOwner,
+        [string]$TargetRepoNameWithOwner
+    )
+
+    if ($DryRun) {
+        Write-Host "[DRY RUN] would copy repo-scoped rulesets from $TemplateRepoNameWithOwner to $TargetRepoNameWithOwner" -ForegroundColor Cyan
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($TemplateRepoNameWithOwner) -or [string]::IsNullOrWhiteSpace($TargetRepoNameWithOwner)) {
+        Write-Warning "Ruleset sync skipped (missing template or target repo nameWithOwner)."
+        return
+    }
+
+    Write-Host "Syncing repo-scoped rulesets from template..." -ForegroundColor Gray
+
+    $tplRulesets = $null
+    $tgtRulesets = $null
+    try {
+        $tplRulesets = gh api "repos/$TemplateRepoNameWithOwner/rulesets" --paginate 2>&1 | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0) { throw "gh api template rulesets failed" }
+    }
+    catch {
+        Write-Warning "Could not list template rulesets for $TemplateRepoNameWithOwner. Skipping ruleset sync."
+        $global:LASTEXITCODE = 0
+        return
+    }
+
+    try {
+        $tgtRulesets = gh api "repos/$TargetRepoNameWithOwner/rulesets" --paginate 2>&1 | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0) { throw "gh api target rulesets failed" }
+    }
+    catch {
+        Write-Warning "Could not list target rulesets for $TargetRepoNameWithOwner. Skipping ruleset sync."
+        $global:LASTEXITCODE = 0
+        return
+    }
+
+    $tgtNames = @{}
+    foreach ($r in $tgtRulesets) {
+        if ($r.name -and -not $tgtNames.ContainsKey($r.name)) { $tgtNames[$r.name] = $true }
+    }
+
+    $tplRepoScoped = @($tplRulesets | Where-Object { $_.source_type -eq 'Repository' })
+    foreach ($rs in $tplRepoScoped) {
+        if ($tgtNames.ContainsKey($rs.name)) {
+            Write-Host "Ruleset already present: $($rs.name)" -ForegroundColor Gray
+            continue
+        }
+
+        $details = $null
+        try {
+            $details = gh api "repos/$TemplateRepoNameWithOwner/rulesets/$($rs.id)" 2>&1 | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "gh api ruleset details failed" }
+        }
+        catch {
+            Write-Warning "Could not fetch template ruleset $($rs.id). Skipping."
+            $global:LASTEXITCODE = 0
+            continue
+        }
+
+        # Some rule types may not be creatable via REST API for all repos/tokens.
+        $rulesFiltered = @($details.rules | Where-Object { $_.type -ne 'copilot_code_review_analysis_tools' })
+        if ($rulesFiltered.Count -ne @($details.rules).Count) {
+            Write-Warning "Template ruleset '$($details.name)' contains rule type 'copilot_code_review_analysis_tools' which is not creatable via this API; omitting it on creation."
+        }
+
+        $payload = [ordered]@{
+            name = $details.name
+            target = $details.target
+            enforcement = $details.enforcement
+            bypass_actors = $details.bypass_actors
+            conditions = $details.conditions
+            rules = $rulesFiltered
+        }
+
+        $payloadJson = $payload | ConvertTo-Json -Depth 80
+        try {
+            $payloadJson | gh api -X POST "repos/$TargetRepoNameWithOwner/rulesets" --input - 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "gh api create ruleset failed" }
+            Write-Host "Created ruleset: $($details.name)" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "Failed to create ruleset '$($details.name)' on $TargetRepoNameWithOwner."
+            $global:LASTEXITCODE = 0
+        }
     }
 }
 
@@ -166,13 +262,28 @@ else {
 # gh repo create <name> --template <template> --<visibility> --description <desc> --confirm
 $createCmd = "repo create `"$TargetRepo`" --template `"$TemplateRepo`" --$Visibility --description `"$Description`""
 
-# Check if repo exists? (gh repo create might fail or prompt)
-# We assume it doesn't exist.
+$repoExists = $false
+if ($DryRun) {
+    Write-Host "[DRY RUN] would check whether repo exists: $TargetRepo" -ForegroundColor Cyan
+}
+else {
+    # gh repo view returns exit code 1 if missing; do not treat as fatal.
+    gh repo view "$TargetRepo" --json nameWithOwner 1>$null 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $repoExists = $true
+    }
+    $global:LASTEXITCODE = 0
+}
 
-Invoke-GhCommand $createCmd
+if ($repoExists) {
+    Write-Host "Repo already exists: $TargetRepo. Skipping creation." -ForegroundColor Yellow
+}
+else {
+    Invoke-GhCommand $createCmd
 
-# Wait a moment for propagation if not dry run
-if (-not $DryRun) { Start-Sleep -Seconds 5 }
+    # Wait a moment for propagation if not dry run
+    if (-not $DryRun) { Start-Sleep -Seconds 5 }
+}
 
 # 2. Configure General Settings (Issues, Projects, Wiki, Merge Types, Auto-Delete)
 # We use `gh repo edit` for some, `gh api` for others.
@@ -193,6 +304,19 @@ if ($AllowRebaseMerge) { $editCmd += " --enable-rebase-merge" } else { $editCmd 
 if ($DeleteBranchOnMerge) { $editCmd += " --delete-branch-on-merge" } else { $editCmd += " --delete-branch-on-merge=false" }
 
 Invoke-GhCommand $editCmd
+
+# 2b. Sync template repo-scoped rulesets (branch protection, merge queue, etc.)
+if (-not $DryRun) {
+    try {
+        $tplJson = gh repo view "$TemplateRepo" --json nameWithOwner | ConvertFrom-Json
+        $tgtJson = gh repo view "$TargetRepo" --json nameWithOwner | ConvertFrom-Json
+        Copy-RepoScopedRulesetsFromTemplate -TemplateRepoNameWithOwner $tplJson.nameWithOwner -TargetRepoNameWithOwner $tgtJson.nameWithOwner
+    }
+    catch {
+        Write-Warning "Ruleset sync skipped due to an error resolving repo names."
+        $global:LASTEXITCODE = 0
+    }
+}
 
 # 3. Configure GitHub Pages
 # gh api repos/{owner}/{repo}/pages -X POST -f "source[branch]=main" -f "source[path]=/"
@@ -253,8 +377,18 @@ if ($EnablePages) {
         # So we must set build_type=workflow.
         
         Write-Host "Enabling Pages with build_type=workflow..."
-        $pagesCmd = "api repos/$fullRepoName/pages -X POST -F `"build_type=workflow`""
-        Invoke-GhCommand $pagesCmd
+        $pagesOutput = gh api "repos/$fullRepoName/pages" -X POST -F "build_type=workflow" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            # Idempotency: GitHub returns conflict when Pages is already enabled.
+            $pagesText = [string]($pagesOutput | Out-String)
+            if ($pagesText -match '(?i)already\s+enabled|already\s+exists|conflict') {
+                Write-Warning "GitHub Pages appears to already be enabled for $fullRepoName. Continuing."
+                $global:LASTEXITCODE = 0
+            }
+            else {
+                throw "Failed to enable GitHub Pages for $fullRepoName. Output: $pagesText"
+            }
+        }
         
         # Configure CNAME and Enforce HTTPS
         if ($CNAME) {
@@ -274,10 +408,17 @@ if ($EnablePages) {
                 # we need to be careful.
                 try {
                     gh api repos/$fullRepoName/pages -X PUT -F "https_enforced=true" 2>&1 | Out-Null
-                    Write-Host "HTTPS Enforcement Enabled." -ForegroundColor Green
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warning "Could not enforce HTTPS immediately (Certificate likely provisioning). Please enable it later in Settings."
+                        $global:LASTEXITCODE = 0
+                    }
+                    else {
+                        Write-Host "HTTPS Enforcement Enabled." -ForegroundColor Green
+                    }
                 }
                 catch {
                     Write-Warning "Could not enforce HTTPS immediately (Certificate likely provisioning). Please enable it later in Settings."
+                    $global:LASTEXITCODE = 0
                 }
             }
         }
@@ -285,3 +426,6 @@ if ($EnablePages) {
 }
 
 Write-Host "Repository setup complete!" -ForegroundColor Green
+
+# Avoid leaking a non-fatal native exit code (e.g., from HTTPS enforcement)
+$global:LASTEXITCODE = 0

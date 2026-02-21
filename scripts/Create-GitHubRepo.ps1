@@ -144,7 +144,7 @@ function Invoke-GhCommand {
         $result = Invoke-Expression "gh $CommandStr"
 
         if ($LASTEXITCODE -ne 0) {
-            throw "gh command failed with exit code $LASTEXITCODE: gh $CommandStr"
+            throw "gh command failed with exit code $($LASTEXITCODE): gh $CommandStr"
         }
 
         return $result

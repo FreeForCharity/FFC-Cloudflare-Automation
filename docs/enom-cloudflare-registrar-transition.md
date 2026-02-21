@@ -32,6 +32,12 @@ Most critical domains are those that return:
 
 These should be migrated first.
 
+## Repo rule (.com/.org pairs)
+When both a `.com` and `.org` exist for the same base name (e.g., `example.com` and `example.org`), only the **`.org`** gets a GitHub repo.
+
+- The `.com` should be a redirect to the `.org`.
+- For repo naming, we use the convention `FFC-EX-<domain>` and create repos only for the `.org` apex.
+
 ## Recommended workflow (repeatable)
 
 1. **Export all-source inventory** (Cloudflare + WHMCS + WPMUDEV)

@@ -3,6 +3,10 @@ param(
     [Parameter()]
     [string]$InventoryFile = '_run_artifacts/enom_cloudflare_transition_inventory.csv',
 
+    [Parameter()]
+    [ValidateSet('Live', 'Redirect', 'Error', 'Unreachable')]
+    [string[]]$Health = @('Live', 'Redirect'),
+
     [Parameter(Mandatory = $true)]
     [int]$Cat1EpicIssue,
 
@@ -48,6 +52,31 @@ function ConvertTo-Bool {
     }
 }
 
+function Normalize-Domain {
+    param([string]$Domain)
+    if ([string]::IsNullOrWhiteSpace($Domain)) { return $null }
+    return $Domain.Trim().ToLowerInvariant().TrimEnd('.')
+}
+
+function Get-RepoTargetDomain {
+    param(
+        [string]$Domain,
+        [hashtable]$AllDomains
+    )
+
+    $d = Normalize-Domain -Domain $Domain
+    if (-not $d) { return $null }
+
+    if ($d.EndsWith('.com')) {
+        $org = $d.Substring(0, $d.Length - 4) + '.org'
+        if ($AllDomains.ContainsKey($org)) {
+            return $org
+        }
+    }
+
+    return $d
+}
+
 function Get-EpicIssueNumber {
     param([string]$Category)
 
@@ -67,26 +96,52 @@ if (-not (Test-Path -Path $InventoryFile)) {
 
 $inventory = Import-Csv -Path $InventoryFile
 
+$allDomains = @{}
+foreach ($r in $inventory) {
+    $d = Normalize-Domain -Domain $r.domain
+    if ($d -and -not $allDomains.ContainsKey($d)) { $allDomains[$d] = $true }
+}
+
+$alreadyCreated = @{}
+Get-ChildItem -Path (Split-Path -Parent $InventoryFile) -Filter 'created_*_domain_issues.csv' -ErrorAction SilentlyContinue |
+    ForEach-Object {
+        try {
+            Import-Csv -Path $_.FullName | ForEach-Object {
+                $d = Normalize-Domain -Domain $_.domain
+                if ($d -and -not $alreadyCreated.ContainsKey($d)) { $alreadyCreated[$d] = $true }
+            }
+        }
+        catch { }
+    }
+
 $targets = @(
     $inventory |
-        Where-Object { ConvertTo-Bool -Value $_.http_is_critical } |
+        Where-Object { $_.http_health -in $Health } |
         Where-Object { $_.category -in @('cat1', 'cat2', 'cat3') } |
         Sort-Object category, http_health, domain
 )
 
-Write-Host "Creating issues for $($targets.Count) critical domains..." -ForegroundColor Cyan
+$healthLabel = ($Health -join ',')
+Write-Host "Creating issues for $($targets.Count) domains (health in: $healthLabel)..." -ForegroundColor Cyan
 
 $created = @()
 
 foreach ($r in $targets) {
-    $domain = ([string]$r.domain).Trim().ToLowerInvariant()
+    $domain = Normalize-Domain -Domain ([string]$r.domain)
     if ([string]::IsNullOrWhiteSpace($domain)) { continue }
+
+    if ($alreadyCreated.ContainsKey($domain)) {
+        continue
+    }
 
     $cat = ([string]$r.category).Trim().ToLowerInvariant()
     $health = ([string]$r.http_health).Trim()
     $registrar = ([string]$r.whmcs_registrar).Trim()
     $action = ([string]$r.action).Trim()
     $epic = Get-EpicIssueNumber -Category $cat
+
+    $repoTargetDomain = Get-RepoTargetDomain -Domain $domain -AllDomains $allDomains
+    $repoName = if ($repoTargetDomain) { "FFC-EX-$repoTargetDomain" } else { '' }
 
     if (-not $epic) {
         Write-Warning "Skipping domain '$domain' due to unknown category: $cat"
@@ -103,12 +158,14 @@ foreach ($r in $targets) {
         "WHMCS: $($r.in_whmcs)",
         "Cloudflare: $($r.in_cloudflare)",
         "Registrar (WHMCS): $registrar",
+        "Repo target domain: $repoTargetDomain",
+        "Expected repo name (org only): $repoName",
         '',
         "Action: $action",
         '',
         "Checklist:",
         "- [ ] Confirm zone presence + account (FFC)",
-        "- [ ] Ensure website repo exists (expected naming: FFC-EX-$domain)",
+        "- [ ] Ensure website repo exists (org-only rule; expected: $repoName)",
         "- [ ] Transfer registrar to Cloudflare Registrar (FFC account)",
         "- [ ] Verify site still Live/Redirect"
     )
@@ -129,7 +186,8 @@ foreach ($r in $targets) {
 }
 
 if (-not $DryRun) {
-    $outFile = Join-Path -Path (Split-Path -Parent $InventoryFile) -ChildPath 'created_critical_domain_issues.csv'
+    $healthTag = ($Health -join '_')
+    $outFile = Join-Path -Path (Split-Path -Parent $InventoryFile) -ChildPath "created_domain_issues_$healthTag.csv"
     $created | Export-Csv -Path $outFile -NoTypeInformation -Encoding utf8
     Write-Host "Wrote created issue list to $outFile" -ForegroundColor Green
 }

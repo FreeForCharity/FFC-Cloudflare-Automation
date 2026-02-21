@@ -142,6 +142,11 @@ function Invoke-GhCommand {
         
         # We'll rely on the shell execution.
         $result = Invoke-Expression "gh $CommandStr"
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "gh command failed with exit code $LASTEXITCODE: gh $CommandStr"
+        }
+
         return $result
     }
 }
@@ -274,10 +279,17 @@ if ($EnablePages) {
                 # we need to be careful.
                 try {
                     gh api repos/$fullRepoName/pages -X PUT -F "https_enforced=true" 2>&1 | Out-Null
-                    Write-Host "HTTPS Enforcement Enabled." -ForegroundColor Green
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warning "Could not enforce HTTPS immediately (Certificate likely provisioning). Please enable it later in Settings."
+                        $global:LASTEXITCODE = 0
+                    }
+                    else {
+                        Write-Host "HTTPS Enforcement Enabled." -ForegroundColor Green
+                    }
                 }
                 catch {
                     Write-Warning "Could not enforce HTTPS immediately (Certificate likely provisioning). Please enable it later in Settings."
+                    $global:LASTEXITCODE = 0
                 }
             }
         }
@@ -285,3 +297,6 @@ if ($EnablePages) {
 }
 
 Write-Host "Repository setup complete!" -ForegroundColor Green
+
+# Avoid leaking a non-fatal native exit code (e.g., from HTTPS enforcement)
+$global:LASTEXITCODE = 0

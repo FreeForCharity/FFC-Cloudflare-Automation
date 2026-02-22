@@ -18,6 +18,11 @@ on:
         required: true
         default: true
         type: boolean
+      EnsureSettingsOnExisting:
+        description: 'If true, also apply settings/rulesets to repos that already exist'
+        required: true
+        default: false
+        type: boolean
       TemplateRepo:
         description: 'Template repository to use'
         required: true
@@ -54,6 +59,7 @@ jobs:
               TemplateRepo     = "${{ inputs.TemplateRepo }}"
               PagesDomainType  = "${{ inputs.PagesDomainType }}"
               DryRun           = [System.Convert]::ToBoolean("${{ inputs.DryRun }}")
+              EnsureSettingsOnExisting = [System.Convert]::ToBoolean("${{ inputs.EnsureSettingsOnExisting }}")
               OutputFile       = "_run_artifacts/ensure_github_repos_results.csv"
           }
 

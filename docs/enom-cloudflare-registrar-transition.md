@@ -44,6 +44,15 @@ When both a `.com` and `.org` exist for the same base name (e.g., `example.com` 
 - **Batch ensure** (Live/Redirect/Error from the authoritative sites list): GitHub Actions: `90. Repo - Ensure GitHub Repos [Repo]`.
    - Defaults are intentionally conservative (`DryRun=true`, `Limit=25`). Rerun with `DryRun=false` when ready.
 
+### Copilot reviews (automatic)
+
+All created repos should have a **repo-scoped ruleset** named **“Copilot Review - All Branches”** that applies to `refs/heads/*` and enables Copilot reviews:
+
+- `review_on_push=true`
+- `review_draft_pull_requests=true`
+
+To retrofit this onto repos that already exist, run the batch ensure workflow with `EnsureSettingsOnExisting=true` (or run `scripts/Ensure-GitHubRepos.ps1 -EnsureSettingsOnExisting`).
+
 ## Recommended workflow (repeatable)
 
 1. **Export all-source inventory** (Cloudflare + WHMCS + WPMUDEV)

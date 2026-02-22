@@ -181,7 +181,8 @@ else {
 $lines.Add('')
 
 $lines.Add('## Copilot')
-$lines.Add('Repo-level Copilot settings are not readable via the probed REST endpoints (returned 404). If Copilot is required for all repos, it is typically enforced at the Organization/Enterprise level rather than per-repo.')
+$lines.Add('Repo-level Copilot settings are not readable via the probed REST endpoints (returned 404).')
+$lines.Add('For this project, Copilot review enforcement is implemented via a **repo-scoped ruleset** (expected name: "Copilot Review - All Branches") targeting `refs/heads/*` with the `copilot_code_review` rule enabled.')
 $lines.Add('')
 
 $lines.Add('## Focused delta summary')

@@ -36,6 +36,9 @@ param(
     [switch]$DryRun,
 
     [Parameter()]
+    [switch]$EnsureSettingsOnExisting,
+
+    [Parameter()]
     [string]$OutputFile = '_run_artifacts/ensure_github_repos_results.csv'
 )
 
@@ -158,37 +161,18 @@ $targets = @(
         Sort-Object priority, repoDomain
 )
 
-if ($Limit -gt 0 -and $targets.Count -gt $Limit) {
-    $targets = $targets | Select-Object -First $Limit
+if ($Limit -gt 0 -and @($targets).Count -gt $Limit) {
+    $targets = @($targets | Select-Object -First $Limit)
 }
 
-Write-Host "Repo targets: $($targets.Count) (health: $HealthCsv, limit: $Limit)" -ForegroundColor Cyan
+Write-Host "Repo targets: $(@($targets).Count) (health: $HealthCsv, limit: $Limit)" -ForegroundColor Cyan
 
 $results = @()
 
-foreach ($t in $targets) {
+foreach ($t in @($targets)) {
     $repoDomain = [string]$t.repoDomain
     $repoName = "FFC-EX-$repoDomain"
     $fullRepo = "$Organization/$repoName"
-
-    $exists = $false
-    if (-not $DryRun) {
-        gh repo view "$fullRepo" --json nameWithOwner 1>$null 2>$null
-        if ($LASTEXITCODE -eq 0) { $exists = $true }
-        $global:LASTEXITCODE = 0
-    }
-
-    if ($exists) {
-        Write-Host "Exists: $fullRepo" -ForegroundColor Gray
-        $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'exists'; health = $t.health; sourceDomain = $t.sourceDomain }
-        continue
-    }
-
-    if ($DryRun) {
-        Write-Host "DRY RUN: would create $fullRepo" -ForegroundColor Yellow
-        $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'would_create'; health = $t.health; sourceDomain = $t.sourceDomain }
-        continue
-    }
 
     $desc = "Website for $repoDomain (ensure-repos)"
 
@@ -203,6 +187,39 @@ foreach ($t in $targets) {
         CNAME           = $repoDomain
     }
     if ($EnablePages) { $createParams.EnablePages = $true }
+
+    $exists = $false
+    if (-not $DryRun) {
+        gh repo view "$fullRepo" --json nameWithOwner 1>$null 2>$null
+        if ($LASTEXITCODE -eq 0) { $exists = $true }
+        $global:LASTEXITCODE = 0
+    }
+
+    if ($exists) {
+        Write-Host "Exists: $fullRepo" -ForegroundColor Gray
+        if ($EnsureSettingsOnExisting) {
+            if ($DryRun) {
+                Write-Host "DRY RUN: would ensure settings/rulesets for $fullRepo" -ForegroundColor Yellow
+                $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'would_ensure_settings'; health = $t.health; sourceDomain = $t.sourceDomain }
+            }
+            else {
+                Write-Host "Ensuring settings/rulesets: $fullRepo" -ForegroundColor Cyan
+                ./scripts/Create-GitHubRepo.ps1 @createParams
+                $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'ensured_settings'; health = $t.health; sourceDomain = $t.sourceDomain }
+            }
+        }
+        else {
+            $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'exists'; health = $t.health; sourceDomain = $t.sourceDomain }
+        }
+
+        continue
+    }
+
+    if ($DryRun) {
+        Write-Host "DRY RUN: would create $fullRepo" -ForegroundColor Yellow
+        $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'would_create'; health = $t.health; sourceDomain = $t.sourceDomain }
+        continue
+    }
 
     Write-Host "Creating: $fullRepo" -ForegroundColor Green
     ./scripts/Create-GitHubRepo.ps1 @createParams

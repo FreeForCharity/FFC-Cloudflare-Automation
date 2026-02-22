@@ -151,6 +151,40 @@ function Invoke-GhCommand {
     }
 }
 
+function Invoke-NativeNonTerminating {
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$ScriptBlock
+    )
+
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    $hadNativePref = $false
+    $oldNativePref = $null
+    try {
+        $nativePrefVar = Get-Variable -Name 'PSNativeCommandUseErrorActionPreference' -Scope Global -ErrorAction SilentlyContinue
+        if ($null -ne $nativePrefVar) {
+            $hadNativePref = $true
+            $oldNativePref = $global:PSNativeCommandUseErrorActionPreference
+            $global:PSNativeCommandUseErrorActionPreference = $false
+        }
+    }
+    catch {
+        # best-effort; continue
+    }
+
+    try {
+        & $ScriptBlock
+    }
+    finally {
+        $ErrorActionPreference = $oldEap
+        if ($hadNativePref) {
+            $global:PSNativeCommandUseErrorActionPreference = $oldNativePref
+        }
+    }
+}
+
 function Copy-RepoScopedRulesetsFromTemplate {
     param(
         [string]$TemplateRepoNameWithOwner,
@@ -242,6 +276,76 @@ function Copy-RepoScopedRulesetsFromTemplate {
     }
 }
 
+function Ensure-CopilotReviewAllBranchesRuleset {
+    param(
+        [string]$TargetRepoNameWithOwner
+    )
+
+    if ($DryRun) {
+        Write-Host "[DRY RUN] would ensure Copilot review ruleset on $TargetRepoNameWithOwner" -ForegroundColor Cyan
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($TargetRepoNameWithOwner)) {
+        Write-Warning "Copilot ruleset ensure skipped (missing target repo nameWithOwner)."
+        return
+    }
+
+    $rulesetName = 'Copilot Review - All Branches'
+
+    $existing = $null
+    try {
+        $existing = gh api "repos/$TargetRepoNameWithOwner/rulesets" --paginate 2>&1 | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0) { throw "gh api rulesets list failed" }
+    }
+    catch {
+        Write-Warning "Could not list rulesets for $TargetRepoNameWithOwner. Skipping Copilot ruleset ensure."
+        $global:LASTEXITCODE = 0
+        return
+    }
+
+    $match = $existing | Where-Object { $_.source_type -eq 'Repository' -and $_.target -eq 'branch' -and $_.name -eq $rulesetName } | Select-Object -First 1
+
+    $payload = [ordered]@{
+        name = $rulesetName
+        target = 'branch'
+        enforcement = 'active'
+        bypass_actors = @()
+        conditions = @{ ref_name = @{ include = @('refs/heads/*'); exclude = @() } }
+        rules = @(
+            @{ type = 'copilot_code_review'; parameters = @{ review_on_push = $true; review_draft_pull_requests = $true } }
+        )
+    }
+
+    $payloadJson = $payload | ConvertTo-Json -Depth 20
+
+    if ($null -eq $match) {
+        try {
+            Write-Host "Creating ruleset: $rulesetName" -ForegroundColor Gray
+            $payloadJson | gh api -X POST "repos/$TargetRepoNameWithOwner/rulesets" --input - 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "gh api create ruleset failed" }
+            Write-Host "Created ruleset: $rulesetName" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "Failed to create Copilot ruleset '$rulesetName' on $TargetRepoNameWithOwner."
+            $global:LASTEXITCODE = 0
+        }
+    }
+    else {
+        # Best-effort update: GitHub supports updating rulesets via REST, but if it fails we keep the existing.
+        try {
+            Write-Host "Updating ruleset: $rulesetName" -ForegroundColor Gray
+            $payloadJson | gh api -X PUT "repos/$TargetRepoNameWithOwner/rulesets/$($match.id)" --input - 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "gh api update ruleset failed" }
+            Write-Host "Updated ruleset: $rulesetName" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "Could not update existing Copilot ruleset '$rulesetName' on $TargetRepoNameWithOwner."
+            $global:LASTEXITCODE = 0
+        }
+    }
+}
+
 Write-Host "Starting repository creation for '$RepoName' from template '$TemplateRepo'..." -ForegroundColor Green
 
 if ($RepoName -notmatch "^FFC-EX-") {
@@ -268,7 +372,7 @@ if ($DryRun) {
 }
 else {
     # gh repo view returns exit code 1 if missing; do not treat as fatal.
-    gh repo view "$TargetRepo" --json nameWithOwner 1>$null 2>$null
+    Invoke-NativeNonTerminating { gh repo view "$TargetRepo" --json nameWithOwner 1>$null 2>$null }
     if ($LASTEXITCODE -eq 0) {
         $repoExists = $true
     }
@@ -311,6 +415,9 @@ if (-not $DryRun) {
         $tplJson = gh repo view "$TemplateRepo" --json nameWithOwner | ConvertFrom-Json
         $tgtJson = gh repo view "$TargetRepo" --json nameWithOwner | ConvertFrom-Json
         Copy-RepoScopedRulesetsFromTemplate -TemplateRepoNameWithOwner $tplJson.nameWithOwner -TargetRepoNameWithOwner $tgtJson.nameWithOwner
+
+        # 2c. Ensure Copilot review runs on all branches and draft PRs
+        Ensure-CopilotReviewAllBranchesRuleset -TargetRepoNameWithOwner $tgtJson.nameWithOwner
     }
     catch {
         Write-Warning "Ruleset sync skipped due to an error resolving repo names."
@@ -377,7 +484,7 @@ if ($EnablePages) {
         # So we must set build_type=workflow.
         
         Write-Host "Enabling Pages with build_type=workflow..."
-        $pagesOutput = gh api "repos/$fullRepoName/pages" -X POST -F "build_type=workflow" 2>&1
+        $pagesOutput = Invoke-NativeNonTerminating { gh api "repos/$fullRepoName/pages" -X POST -F "build_type=workflow" 2>&1 }
         if ($LASTEXITCODE -ne 0) {
             # Idempotency: GitHub returns conflict when Pages is already enabled.
             $pagesText = [string]($pagesOutput | Out-String)

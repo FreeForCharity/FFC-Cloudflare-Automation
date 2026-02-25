@@ -10,29 +10,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$utilsPath = Join-Path -Path $PSScriptRoot -ChildPath 'ffc-utils.psm1'
+Import-Module $utilsPath -Force
+
 # The sites list is a Next.js page, but the key table data is present in the initial
 # HTML payload. We parse the tables to export structured per-domain rows.
-
-function Normalize-Domain {
-    param([string]$Domain)
-    if ([string]::IsNullOrWhiteSpace($Domain)) { return $null }
-
-    $s = $Domain.Trim()
-    # Some rows include paths like "bhakthinivedana.com/sandbox".
-    if ($s -match '^(https?://)') {
-        try {
-            $u = [Uri]$s
-            $s = $u.Host
-        }
-        catch {
-        }
-    }
-    if ($s -match '^([^/]+)') {
-        $s = $Matches[1]
-    }
-
-    return $s.ToLowerInvariant().TrimEnd('.')
-}
 
 function Parse-YesNo {
     param([string]$Text)
@@ -42,9 +24,21 @@ function Parse-YesNo {
 }
 
 Write-Host "Downloading: $Url" -ForegroundColor Gray
-$html = (Invoke-WebRequest -Uri $Url -UseBasicParsing -MaximumRedirection 5).Content
 
-$tr = [regex]::Matches($html, '<tr[^>]*>(.*?)</tr>', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+$invokeWebRequestParams = @{
+    Uri                = $Url
+    MaximumRedirection = 5
+}
+if ((Get-Command Invoke-WebRequest).Parameters.ContainsKey('UseBasicParsing')) {
+    $invokeWebRequestParams['UseBasicParsing'] = $true
+}
+
+$html = (Invoke-WebRequest @invokeWebRequestParams).Content
+
+$regexTimeout = [TimeSpan]::FromSeconds(2)
+$trRegex = [regex]::new('<tr[^>]*>(.*?)</tr>', [System.Text.RegularExpressions.RegexOptions]::Singleline, $regexTimeout)
+$tdRegex = [regex]::new('<td[^>]*>(.*?)</td>', [System.Text.RegularExpressions.RegexOptions]::Singleline, $regexTimeout)
+$tr = $trRegex.Matches($html)
 $rows = New-Object System.Collections.Generic.List[object]
 
 foreach ($m in $tr) {
@@ -52,7 +46,7 @@ foreach ($m in $tr) {
     if ($inner -notmatch '<td') { continue }
     if ($inner -match '<th') { continue }
 
-    $td = [regex]::Matches($inner, '<td[^>]*>(.*?)</td>', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    $td = $tdRegex.Matches($inner)
     if ($td.Count -lt 4) { continue }
 
     $cells = @()
@@ -63,25 +57,27 @@ foreach ($m in $tr) {
         $cells += $txt
     }
 
-    # Expected schema (as of 2026-02):
+    # Expected schema (as of February 2026):
     # Category | Domain | Health | Status | WHMCS | Cloudflare | WPMUDEV | Server | Notes
     if ($cells.Count -lt 9) { continue }
 
     $domainRaw = $cells[1]
-    $domain = Normalize-Domain $domainRaw
+    $domain = Normalize-Domain -Domain $domainRaw
     if (-not $domain) { continue }
 
+    $health = if ([string]::IsNullOrWhiteSpace($cells[2])) { '' } else { $cells[2].Trim().ToLowerInvariant() }
+
     $rows.Add([PSCustomObject]@{
-            domain         = $domain
-            domain_raw     = $domainRaw
-            category       = $cells[0]
-            health         = $cells[2]
-            status         = $cells[3]
+            domain         = (Protect-CsvCell -Value $domain)
+            domain_raw     = (Protect-CsvCell -Value $domainRaw)
+            category       = (Protect-CsvCell -Value $cells[0])
+            health         = (Protect-CsvCell -Value $health)
+            status         = (Protect-CsvCell -Value $cells[3])
             whmcs          = Parse-YesNo $cells[4]
             cloudflare     = Parse-YesNo $cells[5]
             wpmudev        = Parse-YesNo $cells[6]
-            server         = $cells[7]
-            notes          = $cells[8]
+            server         = (Protect-CsvCell -Value $cells[7])
+            notes          = (Protect-CsvCell -Value $cells[8])
             source         = 'ffcadmin'
             source_url     = $Url
             extractedAtUtc = (Get-Date).ToUniversalTime().ToString('o')

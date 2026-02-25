@@ -29,10 +29,10 @@
     Switch to enable Issues. Default: $true.
 
 .PARAMETER EnableProjects
-    Switch to enable Projects. Default: $false.
+    Switch to enable Projects. Default: $true.
 
 .PARAMETER EnableWiki
-    Switch to enable Wiki. Default: $false.
+    Switch to enable Wiki. Default: $true.
 
 .PARAMETER AllowSquashMerge
     Switch to allow squash merging. Default: $true.
@@ -220,7 +220,7 @@ function Copy-RepoScopedRulesetsFromTemplate {
     $tplRulesets = $null
     $tgtRulesets = $null
     try {
-        $tplRulesets = gh api "repos/$TemplateRepoNameWithOwner/rulesets" --paginate 2>&1 | ConvertFrom-Json
+        $tplRulesets = gh api "repos/$TemplateRepoNameWithOwner/rulesets?per_page=100" 2>&1 | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0) { throw "gh api template rulesets failed" }
     }
     catch {
@@ -230,7 +230,7 @@ function Copy-RepoScopedRulesetsFromTemplate {
     }
 
     try {
-        $tgtRulesets = gh api "repos/$TargetRepoNameWithOwner/rulesets" --paginate 2>&1 | ConvertFrom-Json
+        $tgtRulesets = gh api "repos/$TargetRepoNameWithOwner/rulesets?per_page=100" 2>&1 | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0) { throw "gh api target rulesets failed" }
     }
     catch {
@@ -309,7 +309,7 @@ function Ensure-CopilotReviewAllBranchesRuleset {
 
     $existing = $null
     try {
-        $existing = gh api "repos/$TargetRepoNameWithOwner/rulesets" --paginate 2>&1 | ConvertFrom-Json
+        $existing = gh api "repos/$TargetRepoNameWithOwner/rulesets?per_page=100" 2>&1 | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0) { throw "gh api rulesets list failed" }
     }
     catch {

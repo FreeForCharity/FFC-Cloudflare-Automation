@@ -41,6 +41,9 @@ on:
           - staging
           - github-default
 
+permissions:
+  contents: read
+
 jobs:
   ensure-repos:
     runs-on: windows-latest

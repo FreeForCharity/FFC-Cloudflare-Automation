@@ -45,17 +45,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$utilsPath = Join-Path -Path $PSScriptRoot -ChildPath 'ffc-utils.psm1'
+Import-Module $utilsPath -Force
+
 function Require-Command {
     param([string]$Name)
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
         throw "Required command not found on PATH: $Name"
     }
-}
-
-function Normalize-Domain {
-    param([string]$Domain)
-    if ([string]::IsNullOrWhiteSpace($Domain)) { return $null }
-    return $Domain.Trim().ToLowerInvariant().TrimEnd('.')
 }
 
 function Get-RepoTargetDomain {
@@ -191,7 +188,17 @@ foreach ($t in @($targets)) {
     $exists = $false
     if (-not $DryRun) {
         gh repo view "$fullRepo" --json nameWithOwner 1>$null 2>$null
-        if ($LASTEXITCODE -eq 0) { $exists = $true }
+        $exit = $LASTEXITCODE
+        if ($exit -eq 0) {
+            $exists = $true
+        }
+        elseif ($exit -eq 1) {
+            $exists = $false
+        }
+        else {
+            throw "gh repo view failed with exit code $exit for $fullRepo"
+        }
+
         $global:LASTEXITCODE = 0
     }
 
@@ -204,9 +211,16 @@ foreach ($t in @($targets)) {
             }
             else {
                 Write-Host "Ensuring settings/rulesets: $fullRepo" -ForegroundColor Cyan
-                ./scripts/Create-GitHubRepo.ps1 @createParams
-                $global:LASTEXITCODE = 0
-                $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'ensured_settings'; health = $t.health; sourceDomain = $t.sourceDomain }
+                try {
+                    ./scripts/Create-GitHubRepo.ps1 @createParams
+                    $global:LASTEXITCODE = 0
+                    $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'ensured_settings'; health = $t.health; sourceDomain = $t.sourceDomain }
+                }
+                catch {
+                    Write-Error "Ensure settings failed for $fullRepo: $($_.Exception.Message)"
+                    $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'ensure_settings_failed'; health = $t.health; sourceDomain = $t.sourceDomain }
+                    $global:LASTEXITCODE = 0
+                }
             }
         }
         else {
@@ -223,9 +237,16 @@ foreach ($t in @($targets)) {
     }
 
     Write-Host "Creating: $fullRepo" -ForegroundColor Green
-    ./scripts/Create-GitHubRepo.ps1 @createParams
-    $global:LASTEXITCODE = 0
-    $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'created'; health = $t.health; sourceDomain = $t.sourceDomain }
+    try {
+        ./scripts/Create-GitHubRepo.ps1 @createParams
+        $global:LASTEXITCODE = 0
+        $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'created'; health = $t.health; sourceDomain = $t.sourceDomain }
+    }
+    catch {
+        Write-Error "Create failed for $fullRepo: $($_.Exception.Message)"
+        $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'create_failed'; health = $t.health; sourceDomain = $t.sourceDomain }
+        $global:LASTEXITCODE = 0
+    }
 }
 
 $results | Export-Csv -Path $OutputFile -NoTypeInformation -Encoding utf8

@@ -4,8 +4,8 @@ param(
     [string]$InventoryFile = '_run_artifacts/enom_cloudflare_transition_inventory.csv',
 
     [Parameter()]
-    [ValidateSet('Live', 'Redirect', 'Error', 'Unreachable')]
-    [string[]]$Health = @('Live', 'Redirect'),
+    [ValidateSet('live', 'redirect', 'error', 'unreachable')]
+    [string[]]$Health = @('live', 'redirect'),
 
     [Parameter(Mandatory = $true)]
     [int]$Cat1EpicIssue,
@@ -26,36 +26,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$utilsPath = Join-Path -Path $PSScriptRoot -ChildPath 'ffc-utils.psm1'
+Import-Module $utilsPath -Force
+
 function Require-Command {
     param([string]$Name)
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
         throw "Required command not found on PATH: $Name"
     }
-}
-
-function ConvertTo-Bool {
-    param([object]$Value)
-    if ($null -eq $Value) { return $false }
-    if ($Value -is [bool]) { return [bool]$Value }
-
-    $s = ([string]$Value).Trim().ToLowerInvariant()
-    if ([string]::IsNullOrWhiteSpace($s)) { return $false }
-
-    switch ($s) {
-        'true' { return $true }
-        'false' { return $false }
-        'yes' { return $true }
-        'no' { return $false }
-        '1' { return $true }
-        '0' { return $false }
-        default { return $false }
-    }
-}
-
-function Normalize-Domain {
-    param([string]$Domain)
-    if ([string]::IsNullOrWhiteSpace($Domain)) { return $null }
-    return $Domain.Trim().ToLowerInvariant().TrimEnd('.')
 }
 
 function Get-RepoTargetDomain {
@@ -103,7 +81,7 @@ foreach ($r in $inventory) {
 }
 
 $alreadyCreated = @{}
-Get-ChildItem -Path (Split-Path -Parent $InventoryFile) -Filter 'created_*_domain_issues.csv' -ErrorAction SilentlyContinue |
+Get-ChildItem -Path (Split-Path -Parent $InventoryFile) -Filter 'created_domain_issues_*.csv' -ErrorAction SilentlyContinue |
     ForEach-Object {
         try {
             Import-Csv -Path $_.FullName | ForEach-Object {
@@ -116,7 +94,7 @@ Get-ChildItem -Path (Split-Path -Parent $InventoryFile) -Filter 'created_*_domai
 
 $targets = @(
     $inventory |
-        Where-Object { $_.http_health -in $Health } |
+        Where-Object { ([string]$_.http_health).Trim().ToLowerInvariant() -in $Health } |
         Where-Object { $_.category -in @('cat1', 'cat2', 'cat3') } |
         Sort-Object category, http_health, domain
 )
@@ -188,6 +166,12 @@ foreach ($r in $targets) {
 if (-not $DryRun) {
     $healthTag = ($Health -join '_')
     $outFile = Join-Path -Path (Split-Path -Parent $InventoryFile) -ChildPath "created_domain_issues_$healthTag.csv"
+
+    $dir = Split-Path -Parent $outFile
+    if (-not [string]::IsNullOrWhiteSpace($dir)) {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+
     $created | Export-Csv -Path $outFile -NoTypeInformation -Encoding utf8
     Write-Host "Wrote created issue list to $outFile" -ForegroundColor Green
 }

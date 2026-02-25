@@ -19,36 +19,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Normalize-Domain {
-    param([string]$Domain)
-    if ([string]::IsNullOrWhiteSpace($Domain)) { return $null }
-    return $Domain.Trim().ToLowerInvariant().TrimEnd('.')
-}
+$utilsPath = Join-Path -Path $PSScriptRoot -ChildPath 'ffc-utils.psm1'
+Import-Module $utilsPath -Force
 
 function Test-IsSubdomain {
     param([string]$Domain)
     if ([string]::IsNullOrWhiteSpace($Domain)) { return $false }
     # Heuristic: 3+ labels => subdomain. Not perfect for public suffixes, but good enough for triage.
     return ($Domain.Split('.').Count -ge 3)
-}
-
-function ConvertTo-Bool {
-    param([object]$Value)
-    if ($null -eq $Value) { return $false }
-    if ($Value -is [bool]) { return [bool]$Value }
-
-    $s = ([string]$Value).Trim().ToLowerInvariant()
-    if ([string]::IsNullOrWhiteSpace($s)) { return $false }
-
-    switch ($s) {
-        'true' { return $true }
-        'false' { return $false }
-        'yes' { return $true }
-        'no' { return $false }
-        '1' { return $true }
-        '0' { return $false }
-        default { return $false }
-    }
 }
 
 if (-not (Test-Path $SitesDomainsFile)) { throw "SitesDomainsFile not found: $SitesDomainsFile" }
@@ -70,7 +48,7 @@ foreach ($r in $sites) {
 $cfZones = @{}
 if (Test-Path $CloudflareZonesFile) {
     $cf = Import-Csv -Path $CloudflareZonesFile
-    $zoneCol = if ($cf -and ($cf[0].PSObject.Properties.Name -contains 'zone')) { 'zone' } elseif ($cf -and ($cf[0].PSObject.Properties.Name -contains 'domain')) { 'domain' } else { $null }
+    $zoneCol = if ($cf -and $cf.Count -gt 0 -and ($cf[0].PSObject.Properties.Name -contains 'zone')) { 'zone' } elseif ($cf -and $cf.Count -gt 0 -and ($cf[0].PSObject.Properties.Name -contains 'domain')) { 'domain' } else { $null }
 
     if ($zoneCol) {
         foreach ($r in $cf) {
@@ -127,11 +105,19 @@ $rowsOut = foreach ($d in $allDomains) {
     $status = if ($wh -and $wh.status) { [string]$wh.status } else { '' }
 
     $isEnom = ($registrarNorm -match 'enom')
-    $isRegistrarCloudflare = ($registrarNorm -match '^cloudflare$' -or $registrarNorm -match 'cloudflare')
+    $isRegistrarCloudflare = ($registrarNorm -eq 'cloudflare')
 
     $probe = if ($httpByDomain.ContainsKey($d)) { $httpByDomain[$d] } else { $null }
-    $health = if ($probe -and $probe.health) { [string]$probe.health } elseif ($siteRow -and $siteRow.health) { [string]$siteRow.health } else { '' }
-    $isCritical = if ($probe -and $probe.isCritical) { [string]$probe.isCritical } elseif ($health -match '^(Live|Redirect)$') { 'True' } else { '' }
+    $healthRaw = if ($probe -and $probe.health) { [string]$probe.health } elseif ($siteRow -and $siteRow.health) { [string]$siteRow.health } else { '' }
+    $health = if ([string]::IsNullOrWhiteSpace($healthRaw)) { '' } else { $healthRaw.Trim().ToLowerInvariant() }
+
+    $isCritical = $null
+    if ($probe -and ($probe.PSObject.Properties.Name -contains 'isCritical')) {
+        $isCritical = ConvertTo-Bool -Value $probe.isCritical
+    }
+    elseif ($health -match '^(live|redirect)$') {
+        $isCritical = $true
+    }
 
     $category = ''
     $action = ''
@@ -172,6 +158,11 @@ $rowsOut = foreach ($d in $allDomains) {
         category                = $category
         action                  = $action
     }
+}
+
+$outputDirectory = Split-Path -Path $OutputFile -Parent
+if ($outputDirectory -and -not (Test-Path -LiteralPath $outputDirectory)) {
+    New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 }
 
 $rowsOut | Export-Csv -Path $OutputFile -NoTypeInformation -Encoding utf8

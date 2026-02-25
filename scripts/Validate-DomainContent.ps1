@@ -89,14 +89,14 @@ function Try-Fetch {
         }
 
         return [PSCustomObject]@{
-            ok            = $true
-            statusCode    = if ($null -ne $resp.StatusCode) { [int]$resp.StatusCode } else { $null }
-            finalUrl      = $finalUrl
-            contentType   = [string]$resp.Headers.'Content-Type'
-            rawLength     = if ($null -ne $resp.RawContentLength) { [int]$resp.RawContentLength } else { 0 }
-            content       = [string]$resp.Content
-            errorType     = $null
-            errorMessage  = $null
+            ok           = $true
+            statusCode   = if ($null -ne $resp.StatusCode) { [int]$resp.StatusCode } else { $null }
+            finalUrl     = $finalUrl
+            contentType  = [string]$resp.Headers.'Content-Type'
+            rawLength    = if ($null -ne $resp.RawContentLength) { [int]$resp.RawContentLength } else { 0 }
+            content      = [string]$resp.Content
+            errorType    = $null
+            errorMessage = $null
         }
     }
     catch {
@@ -120,14 +120,14 @@ function Try-Fetch {
         }
 
         return [PSCustomObject]@{
-            ok            = $false
-            statusCode    = $statusCode
-            finalUrl      = $finalUrl
-            contentType   = $null
-            rawLength     = 0
-            content       = ''
-            errorType     = $ex.GetType().FullName
-            errorMessage  = $ex.Message
+            ok           = $false
+            statusCode   = $statusCode
+            finalUrl     = $finalUrl
+            contentType  = $null
+            rawLength    = 0
+            content      = ''
+            errorType    = $ex.GetType().FullName
+            errorMessage = $ex.Message
         }
     }
 }
@@ -232,7 +232,7 @@ if (-not (Test-Path -Path $InputCsv)) {
 }
 
 $rows = Import-Csv -Path $InputCsv
-if (-not ($rows | Get-Member -Name $DomainColumn -MemberType NoteProperty,Property)) {
+if (-not ($rows | Get-Member -Name $DomainColumn -MemberType NoteProperty, Property)) {
     throw "Column '$DomainColumn' not found in $InputCsv"
 }
 
@@ -254,7 +254,7 @@ foreach ($d in $domains) {
     Write-Host ("[{0}/{1}] {2}" -f $i, $domains.Count, $d) -ForegroundColor Gray
 
     $httpsUrl = "https://$d/"
-    $httpUrl  = "http://$d/"
+    $httpUrl = "http://$d/"
 
     $fetch = Try-Fetch -Url $httpsUrl -TimeoutSec $TimeoutSec -MaxRedirect $MaxRedirect
     $schemeUsed = 'https'
@@ -270,28 +270,28 @@ foreach ($d in $domains) {
     $looksGood = ($is200 -and -not $classification.isPlaceholder -and -not $classification.isBlank)
 
     $results.Add([PSCustomObject]@{
-        domain         = $d
-        schemeUsed     = $schemeUsed
-        ok             = $fetch.ok
-        statusCode     = $fetch.statusCode
-        finalUrl       = $fetch.finalUrl
-        contentType    = $fetch.contentType
-        rawLength      = $fetch.rawLength
-        title          = $title
-        is200          = $is200
-        isBlank        = $classification.isBlank
-        isPlaceholder  = $classification.isPlaceholder
-        looksGood      = $looksGood
-        reasons        = [string]::Join(';', @($classification.reasons))
-        errorType      = $fetch.errorType
-        errorMessage   = $fetch.errorMessage
-    })
+            domain        = $d
+            schemeUsed    = $schemeUsed
+            ok            = $fetch.ok
+            statusCode    = $fetch.statusCode
+            finalUrl      = $fetch.finalUrl
+            contentType   = $fetch.contentType
+            rawLength     = $fetch.rawLength
+            title         = $title
+            is200         = $is200
+            isBlank       = $classification.isBlank
+            isPlaceholder = $classification.isPlaceholder
+            looksGood     = $looksGood
+            reasons       = [string]::Join(';', @($classification.reasons))
+            errorType     = $fetch.errorType
+            errorMessage  = $fetch.errorMessage
+        })
 }
 
 $results | Export-Csv -Path $OutputFile -NoTypeInformation -Encoding utf8
 
 $good = @($results | Where-Object { $_.looksGood })
-$bad  = @($results | Where-Object { -not $_.looksGood })
+$bad = @($results | Where-Object { -not $_.looksGood })
 Write-Host "Looks good (200 + non-placeholder): $($good.Count)" -ForegroundColor Green
 Write-Host "Not good (non-200 / placeholder / blank / error): $($bad.Count)" -ForegroundColor Yellow
 Write-Host "Wrote: $OutputFile" -ForegroundColor Green

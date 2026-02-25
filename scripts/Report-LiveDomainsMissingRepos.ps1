@@ -163,14 +163,14 @@ $results = foreach ($t in $targets | Sort-Object repoDomain) {
     $exists = Test-RepoExists -FullRepo $fullRepo
 
     [PSCustomObject]@{
-        repoDomain    = $t.repoDomain
-        sourceDomain  = $t.domain
-        repo          = $fullRepo
-        repoExists    = $exists
-        health        = $t.health
-        status        = $t.status
-        category      = $t.category
-        notes         = $t.notes
+        repoDomain   = $t.repoDomain
+        sourceDomain = $t.domain
+        repo         = $fullRepo
+        repoExists   = $exists
+        health       = $t.health
+        status       = $t.status
+        category     = $t.category
+        notes        = $t.notes
     }
 }
 

@@ -269,12 +269,12 @@ function Copy-RepoScopedRulesetsFromTemplate {
         }
 
         $payload = [ordered]@{
-            name = $details.name
-            target = $details.target
-            enforcement = $details.enforcement
+            name          = $details.name
+            target        = $details.target
+            enforcement   = $details.enforcement
             bypass_actors = $details.bypass_actors
-            conditions = $details.conditions
-            rules = $rulesFiltered
+            conditions    = $details.conditions
+            rules         = $rulesFiltered
         }
 
         $payloadJson = $payload | ConvertTo-Json -Depth 80
@@ -321,12 +321,12 @@ function Ensure-CopilotReviewAllBranchesRuleset {
     $match = $existing | Where-Object { $_.source_type -eq 'Repository' -and $_.target -eq 'branch' -and $_.name -eq $rulesetName } | Select-Object -First 1
 
     $payload = [ordered]@{
-        name = $rulesetName
-        target = 'branch'
-        enforcement = 'active'
+        name          = $rulesetName
+        target        = 'branch'
+        enforcement   = 'active'
         bypass_actors = @()
-        conditions = @{ ref_name = @{ include = @('refs/heads/*'); exclude = @() } }
-        rules = @(
+        conditions    = @{ ref_name = @{ include = @('refs/heads/*'); exclude = @() } }
+        rules         = @(
             @{ type = 'copilot_code_review'; parameters = @{ review_on_push = $true; review_draft_pull_requests = $true } }
         )
     }

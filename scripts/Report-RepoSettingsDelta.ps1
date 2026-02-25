@@ -36,11 +36,11 @@ function Pages-Summary {
     if ($Pages.PSObject.Properties.Name -contains 'error') { return [PSCustomObject]@{ error = $Pages.error } }
 
     return [PSCustomObject]@{
-        html_url = $Pages.html_url
-        cname = $Pages.cname
-        status = $Pages.status
+        html_url       = $Pages.html_url
+        cname          = $Pages.cname
+        status         = $Pages.status
         https_enforced = $Pages.https_enforced
-        build_type = $Pages.build_type
+        build_type     = $Pages.build_type
     }
 }
 

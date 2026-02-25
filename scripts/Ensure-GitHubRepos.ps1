@@ -108,9 +108,9 @@ foreach ($h in ($HealthCsv -split ',')) {
 }
 
 $healthPriority = @{
-    'live'       = 1
-    'redirect'   = 2
-    'error'      = 3
+    'live'        = 1
+    'redirect'    = 2
+    'error'       = 3
     'unreachable' = 4
 }
 
@@ -135,22 +135,22 @@ foreach ($r in $rows) {
 
     if (-not $targetsByRepoDomain.ContainsKey($repoDomain)) {
         $targetsByRepoDomain[$repoDomain] = [PSCustomObject]@{
-            repoDomain    = $repoDomain
-            sourceDomain  = $domain
-            health        = ([string]$r.health)
-            category      = ([string]$r.category)
-            priority      = $priority
+            repoDomain   = $repoDomain
+            sourceDomain = $domain
+            health       = ([string]$r.health)
+            category     = ([string]$r.category)
+            priority     = $priority
         }
     }
     else {
         # Prefer the best health (Live > Redirect > Error)
         if ($priority -lt [int]$targetsByRepoDomain[$repoDomain].priority) {
             $targetsByRepoDomain[$repoDomain] = [PSCustomObject]@{
-                repoDomain    = $repoDomain
-                sourceDomain  = $domain
-                health        = ([string]$r.health)
-                category      = ([string]$r.category)
-                priority      = $priority
+                repoDomain   = $repoDomain
+                sourceDomain = $domain
+                health       = ([string]$r.health)
+                category     = ([string]$r.category)
+                priority     = $priority
             }
         }
     }

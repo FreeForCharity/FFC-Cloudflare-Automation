@@ -72,19 +72,19 @@ foreach ($m in $tr) {
     if (-not $domain) { continue }
 
     $rows.Add([PSCustomObject]@{
-            domain          = $domain
-            domain_raw      = $domainRaw
-            category        = $cells[0]
-            health          = $cells[2]
-            status          = $cells[3]
-            whmcs           = Parse-YesNo $cells[4]
-            cloudflare      = Parse-YesNo $cells[5]
-            wpmudev         = Parse-YesNo $cells[6]
-            server          = $cells[7]
-            notes           = $cells[8]
-            source          = 'ffcadmin'
-            source_url      = $Url
-            extractedAtUtc  = (Get-Date).ToUniversalTime().ToString('o')
+            domain         = $domain
+            domain_raw     = $domainRaw
+            category       = $cells[0]
+            health         = $cells[2]
+            status         = $cells[3]
+            whmcs          = Parse-YesNo $cells[4]
+            cloudflare     = Parse-YesNo $cells[5]
+            wpmudev        = Parse-YesNo $cells[6]
+            server         = $cells[7]
+            notes          = $cells[8]
+            source         = 'ffcadmin'
+            source_url     = $Url
+            extractedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
         }) | Out-Null
 }
 

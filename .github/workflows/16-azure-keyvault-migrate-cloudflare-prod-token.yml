@@ -1,4 +1,4 @@
-name: "16 — Azure Key Vault Migrate Cloudflare Token (Central KV)"
+name: "16. Azure Key Vault Migrate Cloudflare Token (Central KV)"
 
 on:
   workflow_dispatch:

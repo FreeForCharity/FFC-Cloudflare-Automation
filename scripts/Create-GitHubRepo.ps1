@@ -127,6 +127,8 @@ function Invoke-GhCommand {
         [string[]]$Args
     )
 
+    # Invoke the GitHub CLI using an argument array (no Invoke-Expression).
+
     function Format-GhArgs {
         param(
             [Parameter(Mandatory = $true)]

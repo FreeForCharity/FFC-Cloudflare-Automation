@@ -927,6 +927,7 @@ jobs:
             }
 
             ./scripts/Create-GitHubRepo.ps1 @createParams
+            $global:LASTEXITCODE = 0
           }
 
       - name: Add maintainers (requester + technical POC)

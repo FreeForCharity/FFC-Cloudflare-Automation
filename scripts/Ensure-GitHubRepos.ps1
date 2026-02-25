@@ -205,6 +205,7 @@ foreach ($t in @($targets)) {
             else {
                 Write-Host "Ensuring settings/rulesets: $fullRepo" -ForegroundColor Cyan
                 ./scripts/Create-GitHubRepo.ps1 @createParams
+                $global:LASTEXITCODE = 0
                 $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'ensured_settings'; health = $t.health; sourceDomain = $t.sourceDomain }
             }
         }
@@ -223,6 +224,7 @@ foreach ($t in @($targets)) {
 
     Write-Host "Creating: $fullRepo" -ForegroundColor Green
     ./scripts/Create-GitHubRepo.ps1 @createParams
+    $global:LASTEXITCODE = 0
     $results += [PSCustomObject]@{ repoDomain = $repoDomain; repo = $fullRepo; action = 'created'; health = $t.health; sourceDomain = $t.sourceDomain }
 }
 

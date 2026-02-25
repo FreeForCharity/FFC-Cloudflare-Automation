@@ -1,22 +1,22 @@
-name: "16. Azure Key Vault Migrate Cloudflare Token (Central KV)"
+name: '16. Azure Key Vault Migrate Cloudflare Token (Central KV)'
 
 on:
   workflow_dispatch:
     inputs:
       keyvault_name:
-        description: "Central Key Vault name"
+        description: 'Central Key Vault name'
         required: true
-        default: "kv-ffc-admin-prod-cbm"
+        default: 'kv-ffc-admin-prod-cbm'
         type: string
       ffc_kv_secret_name:
-        description: "Key Vault secret name to write the FFC Cloudflare token into"
+        description: 'Key Vault secret name to write the FFC Cloudflare token into'
         required: true
-        default: "wr-all-ffc-cloudflare-api-token-zone-and-dns"
+        default: 'wr-all-ffc-cloudflare-api-token-zone-and-dns'
         type: string
       cm_kv_secret_name:
-        description: "Key Vault secret name to write the CM Cloudflare token into"
+        description: 'Key Vault secret name to write the CM Cloudflare token into'
         required: true
-        default: "wr-all-cm-cloudflare-api-token-zone-and-dns"
+        default: 'wr-all-cm-cloudflare-api-token-zone-and-dns'
         type: string
 
 permissions:
@@ -25,7 +25,7 @@ permissions:
 
 jobs:
   migrate:
-    name: "Copy Cloudflare token(s) → Central Key Vault"
+    name: 'Copy Cloudflare token(s) → Central Key Vault'
     runs-on: ubuntu-latest
     environment: cloudflare-prod
 

@@ -123,32 +123,44 @@ $ErrorActionPreference = "Stop"
 
 function Invoke-GhCommand {
     param(
-        [string]$CommandStr
+        [Parameter(Mandatory = $true)]
+        [string[]]$Args
     )
-    
+
+    function Format-GhArgs {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string[]]$Args
+        )
+
+        return (
+            $Args |
+                ForEach-Object {
+                    if ($_ -match '\s|["'']') {
+                        '"' + ($_ -replace '"', '``"') + '"'
+                    }
+                    else {
+                        $_
+                    }
+                }
+        ) -join ' '
+    }
+
+    $formatted = Format-GhArgs -Args $Args
+
     if ($DryRun) {
-        Write-Host "[DRY RUN] gh $CommandStr" -ForegroundColor Cyan
+        Write-Host "[DRY RUN] gh $formatted" -ForegroundColor Cyan
         return $null
     }
-    else {
-        Write-Host "Running: gh $CommandStr" -ForegroundColor Gray
-        # Split command string safely for Invoke-Expression or just run directly
-        # Note: In PowerShell, handling complex arguments in a single string can be tricky.
-        # We will use Start-Process or direct invocation if possible, 
-        # but for simplicity in this wrapper we use Invoke-Expression for the constructed string
-        # which requires careful quoting.
-        # A safer way is to just print it for the user if this is mainly for automation/doc,
-        # but we want it to work.
-        
-        # We'll rely on the shell execution.
-        $result = Invoke-Expression "gh $CommandStr"
 
-        if ($LASTEXITCODE -ne 0) {
-            throw "gh command failed with exit code $($LASTEXITCODE): gh $CommandStr"
-        }
+    Write-Host "Running: gh $formatted" -ForegroundColor Gray
+    $result = & gh @Args
 
-        return $result
+    if ($LASTEXITCODE -ne 0) {
+        throw "gh command failed with exit code $($LASTEXITCODE): gh $formatted"
     }
+
+    return $result
 }
 
 function Invoke-NativeNonTerminating {
@@ -363,8 +375,15 @@ else {
     $TargetRepo = $RepoName
 }
 
-# gh repo create <name> --template <template> --<visibility> --description <desc> --confirm
-$createCmd = "repo create `"$TargetRepo`" --template `"$TemplateRepo`" --$Visibility --description `"$Description`""
+# gh repo create <name> --template <template> --<visibility> --description <desc>
+$visibilityArg = "--$Visibility"
+$createArgs = @(
+    'repo', 'create',
+    $TargetRepo,
+    '--template', $TemplateRepo,
+    $visibilityArg,
+    '--description', $Description
+)
 
 $repoExists = $false
 if ($DryRun) {
@@ -383,7 +402,7 @@ if ($repoExists) {
     Write-Host "Repo already exists: $TargetRepo. Skipping creation." -ForegroundColor Yellow
 }
 else {
-    Invoke-GhCommand $createCmd
+    Invoke-GhCommand -Args $createArgs
 
     # Wait a moment for propagation if not dry run
     if (-not $DryRun) { Start-Sleep -Seconds 5 }
@@ -395,19 +414,19 @@ else {
 # --allow-squash-merge, --allow-merge-commit, --allow-rebase-merge
 # --delete-branch-on-merge
 
-$editCmd = "repo edit `"$TargetRepo`""
+$editArgs = @('repo', 'edit', $TargetRepo)
 
-if ($EnableIssues) { $editCmd += " --enable-issues" } else { $editCmd += " --enable-issues=false" }
-if ($EnableProjects) { $editCmd += " --enable-projects" } else { $editCmd += " --enable-projects=false" }
-if ($EnableWiki) { $editCmd += " --enable-wiki" } else { $editCmd += " --enable-wiki=false" }
+if ($EnableIssues) { $editArgs += '--enable-issues' } else { $editArgs += '--enable-issues=false' }
+if ($EnableProjects) { $editArgs += '--enable-projects' } else { $editArgs += '--enable-projects=false' }
+if ($EnableWiki) { $editArgs += '--enable-wiki' } else { $editArgs += '--enable-wiki=false' }
 
-if ($AllowSquashMerge) { $editCmd += " --enable-squash-merge" } else { $editCmd += " --enable-squash-merge=false" }
-if ($AllowMergeCommit) { $editCmd += " --enable-merge-commit" } else { $editCmd += " --enable-merge-commit=false" }
-if ($AllowRebaseMerge) { $editCmd += " --enable-rebase-merge" } else { $editCmd += " --enable-rebase-merge=false" }
+if ($AllowSquashMerge) { $editArgs += '--enable-squash-merge' } else { $editArgs += '--enable-squash-merge=false' }
+if ($AllowMergeCommit) { $editArgs += '--enable-merge-commit' } else { $editArgs += '--enable-merge-commit=false' }
+if ($AllowRebaseMerge) { $editArgs += '--enable-rebase-merge' } else { $editArgs += '--enable-rebase-merge=false' }
 
-if ($DeleteBranchOnMerge) { $editCmd += " --delete-branch-on-merge" } else { $editCmd += " --delete-branch-on-merge=false" }
+if ($DeleteBranchOnMerge) { $editArgs += '--delete-branch-on-merge' } else { $editArgs += '--delete-branch-on-merge=false' }
 
-Invoke-GhCommand $editCmd
+Invoke-GhCommand -Args $editArgs
 
 # 2b. Sync template repo-scoped rulesets (branch protection, merge queue, etc.)
 if (-not $DryRun) {
@@ -501,8 +520,8 @@ if ($EnablePages) {
         if ($CNAME) {
             Write-Host "Setting CNAME to $CNAME..."
             # 1. Set CNAME first (without HTTPS enforcement to avoid 'Certificate not ready' errors)
-            $cnameCmd = "api repos/$fullRepoName/pages -X PUT -F `"cname=$CNAME`""
-            Invoke-GhCommand $cnameCmd
+            $cnameArgs = @('api', "repos/$fullRepoName/pages", '-X', 'PUT', '-F', "cname=$CNAME")
+            Invoke-GhCommand -Args $cnameArgs
 
             # 2. Try to Enforce HTTPS (This often fails immediately after CNAME set due to cert provisioning)
             Write-Host "Attempting to enforce HTTPS (may fail if cert is not yet provisioned)..."
@@ -511,8 +530,6 @@ if ($EnablePages) {
             }
             else {
                 # We use a try/catch equivalent logic or just allow it to fail non-fatally
-                # Since Invoke-GhCommand uses Invoke-Expression and script has $ErrorActionPreference = "Stop", 
-                # we need to be careful.
                 try {
                     gh api repos/$fullRepoName/pages -X PUT -F "https_enforced=true" 2>&1 | Out-Null
                     if ($LASTEXITCODE -ne 0) {

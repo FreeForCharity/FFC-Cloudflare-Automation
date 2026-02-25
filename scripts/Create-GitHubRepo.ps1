@@ -29,10 +29,10 @@
     Switch to enable Issues. Default: $true.
 
 .PARAMETER EnableProjects
-    Switch to enable Projects. Default: $false.
+    Switch to enable Projects. Default: $true.
 
 .PARAMETER EnableWiki
-    Switch to enable Wiki. Default: $false.
+    Switch to enable Wiki. Default: $true.
 
 .PARAMETER AllowSquashMerge
     Switch to allow squash merging. Default: $true.
@@ -87,10 +87,10 @@ param(
     [bool]$EnableIssues = $true,
 
     [Parameter(Mandatory = $false)]
-    [bool]$EnableProjects = $false,
+    [bool]$EnableProjects = $true,
 
     [Parameter(Mandatory = $false)]
-    [bool]$EnableWiki = $false,
+    [bool]$EnableWiki = $true,
 
     [Parameter(Mandatory = $false)]
     [bool]$AllowSquashMerge = $true,
@@ -123,26 +123,240 @@ $ErrorActionPreference = "Stop"
 
 function Invoke-GhCommand {
     param(
-        [string]$CommandStr
+        [Parameter(Mandatory = $true)]
+        [string[]]$Args
     )
-    
+
+    # Invoke the GitHub CLI using an argument array (no Invoke-Expression).
+
+    function Format-GhArgs {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string[]]$Args
+        )
+
+        return (
+            $Args |
+                ForEach-Object {
+                    if ($_ -match '\s|["'']') {
+                        '"' + ($_ -replace '"', '``"') + '"'
+                    }
+                    else {
+                        $_
+                    }
+                }
+        ) -join ' '
+    }
+
+    $formatted = Format-GhArgs -Args $Args
+
     if ($DryRun) {
-        Write-Host "[DRY RUN] gh $CommandStr" -ForegroundColor Cyan
+        Write-Host "[DRY RUN] gh $formatted" -ForegroundColor Cyan
         return $null
     }
+
+    Write-Host "Running: gh $formatted" -ForegroundColor Gray
+    $result = & gh @Args
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "gh command failed with exit code $($LASTEXITCODE): gh $formatted"
+    }
+
+    return $result
+}
+
+function Invoke-NativeNonTerminating {
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$ScriptBlock
+    )
+
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    $hadNativePref = $false
+    $oldNativePref = $null
+    try {
+        $nativePrefVar = Get-Variable -Name 'PSNativeCommandUseErrorActionPreference' -Scope Global -ErrorAction SilentlyContinue
+        if ($null -ne $nativePrefVar) {
+            $hadNativePref = $true
+            $oldNativePref = $global:PSNativeCommandUseErrorActionPreference
+            $global:PSNativeCommandUseErrorActionPreference = $false
+        }
+    }
+    catch {
+        # best-effort; continue
+    }
+
+    try {
+        & $ScriptBlock
+    }
+    finally {
+        $ErrorActionPreference = $oldEap
+        if ($hadNativePref) {
+            $global:PSNativeCommandUseErrorActionPreference = $oldNativePref
+        }
+    }
+}
+
+function Copy-RepoScopedRulesetsFromTemplate {
+    param(
+        [string]$TemplateRepoNameWithOwner,
+        [string]$TargetRepoNameWithOwner
+    )
+
+    if ($DryRun) {
+        Write-Host "[DRY RUN] would copy repo-scoped rulesets from $TemplateRepoNameWithOwner to $TargetRepoNameWithOwner" -ForegroundColor Cyan
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($TemplateRepoNameWithOwner) -or [string]::IsNullOrWhiteSpace($TargetRepoNameWithOwner)) {
+        Write-Warning "Ruleset sync skipped (missing template or target repo nameWithOwner)."
+        return
+    }
+
+    Write-Host "Syncing repo-scoped rulesets from template..." -ForegroundColor Gray
+
+    $tplRulesets = $null
+    $tgtRulesets = $null
+    try {
+        $tplRulesets = gh api "repos/$TemplateRepoNameWithOwner/rulesets?per_page=100" 2>&1 | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0) { throw "gh api template rulesets failed" }
+    }
+    catch {
+        Write-Warning "Could not list template rulesets for $TemplateRepoNameWithOwner. Skipping ruleset sync."
+        $global:LASTEXITCODE = 0
+        return
+    }
+
+    try {
+        $tgtRulesets = gh api "repos/$TargetRepoNameWithOwner/rulesets?per_page=100" 2>&1 | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0) { throw "gh api target rulesets failed" }
+    }
+    catch {
+        Write-Warning "Could not list target rulesets for $TargetRepoNameWithOwner. Skipping ruleset sync."
+        $global:LASTEXITCODE = 0
+        return
+    }
+
+    $tgtNames = @{}
+    foreach ($r in $tgtRulesets) {
+        if ($r.name -and -not $tgtNames.ContainsKey($r.name)) { $tgtNames[$r.name] = $true }
+    }
+
+    $tplRepoScoped = @($tplRulesets | Where-Object { $_.source_type -eq 'Repository' })
+    foreach ($rs in $tplRepoScoped) {
+        if ($tgtNames.ContainsKey($rs.name)) {
+            Write-Host "Ruleset already present: $($rs.name)" -ForegroundColor Gray
+            continue
+        }
+
+        $details = $null
+        try {
+            $details = gh api "repos/$TemplateRepoNameWithOwner/rulesets/$($rs.id)" 2>&1 | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "gh api ruleset details failed" }
+        }
+        catch {
+            Write-Warning "Could not fetch template ruleset $($rs.id). Skipping."
+            $global:LASTEXITCODE = 0
+            continue
+        }
+
+        # Some rule types may not be creatable via REST API for all repos/tokens.
+        $rulesFiltered = @($details.rules | Where-Object { $_.type -ne 'copilot_code_review_analysis_tools' })
+        if ($rulesFiltered.Count -ne @($details.rules).Count) {
+            Write-Warning "Template ruleset '$($details.name)' contains rule type 'copilot_code_review_analysis_tools' which is not creatable via this API; omitting it on creation."
+        }
+
+        $payload = [ordered]@{
+            name          = $details.name
+            target        = $details.target
+            enforcement   = $details.enforcement
+            bypass_actors = $details.bypass_actors
+            conditions    = $details.conditions
+            rules         = $rulesFiltered
+        }
+
+        $payloadJson = $payload | ConvertTo-Json -Depth 80
+        try {
+            $payloadJson | gh api -X POST "repos/$TargetRepoNameWithOwner/rulesets" --input - 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "gh api create ruleset failed" }
+            Write-Host "Created ruleset: $($details.name)" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "Failed to create ruleset '$($details.name)' on $TargetRepoNameWithOwner."
+            $global:LASTEXITCODE = 0
+        }
+    }
+}
+
+function Ensure-CopilotReviewAllBranchesRuleset {
+    param(
+        [string]$TargetRepoNameWithOwner
+    )
+
+    if ($DryRun) {
+        Write-Host "[DRY RUN] would ensure Copilot review ruleset on $TargetRepoNameWithOwner" -ForegroundColor Cyan
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($TargetRepoNameWithOwner)) {
+        Write-Warning "Copilot ruleset ensure skipped (missing target repo nameWithOwner)."
+        return
+    }
+
+    $rulesetName = 'Copilot Review - All Branches'
+
+    $existing = $null
+    try {
+        $existing = gh api "repos/$TargetRepoNameWithOwner/rulesets?per_page=100" 2>&1 | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0) { throw "gh api rulesets list failed" }
+    }
+    catch {
+        Write-Warning "Could not list rulesets for $TargetRepoNameWithOwner. Skipping Copilot ruleset ensure."
+        $global:LASTEXITCODE = 0
+        return
+    }
+
+    $match = $existing | Where-Object { $_.source_type -eq 'Repository' -and $_.target -eq 'branch' -and $_.name -eq $rulesetName } | Select-Object -First 1
+
+    $payload = [ordered]@{
+        name          = $rulesetName
+        target        = 'branch'
+        enforcement   = 'active'
+        bypass_actors = @()
+        conditions    = @{ ref_name = @{ include = @('refs/heads/*'); exclude = @() } }
+        rules         = @(
+            @{ type = 'copilot_code_review'; parameters = @{ review_on_push = $true; review_draft_pull_requests = $true } }
+        )
+    }
+
+    $payloadJson = $payload | ConvertTo-Json -Depth 20
+
+    if ($null -eq $match) {
+        try {
+            Write-Host "Creating ruleset: $rulesetName" -ForegroundColor Gray
+            $payloadJson | gh api -X POST "repos/$TargetRepoNameWithOwner/rulesets" --input - 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "gh api create ruleset failed" }
+            Write-Host "Created ruleset: $rulesetName" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "Failed to create Copilot ruleset '$rulesetName' on $TargetRepoNameWithOwner."
+            $global:LASTEXITCODE = 0
+        }
+    }
     else {
-        Write-Host "Running: gh $CommandStr" -ForegroundColor Gray
-        # Split command string safely for Invoke-Expression or just run directly
-        # Note: In PowerShell, handling complex arguments in a single string can be tricky.
-        # We will use Start-Process or direct invocation if possible, 
-        # but for simplicity in this wrapper we use Invoke-Expression for the constructed string
-        # which requires careful quoting.
-        # A safer way is to just print it for the user if this is mainly for automation/doc,
-        # but we want it to work.
-        
-        # We'll rely on the shell execution.
-        $result = Invoke-Expression "gh $CommandStr"
-        return $result
+        # Best-effort update: GitHub supports updating rulesets via REST, but if it fails we keep the existing.
+        try {
+            Write-Host "Updating ruleset: $rulesetName" -ForegroundColor Gray
+            $payloadJson | gh api -X PUT "repos/$TargetRepoNameWithOwner/rulesets/$($match.id)" --input - 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "gh api update ruleset failed" }
+            Write-Host "Updated ruleset: $rulesetName" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "Could not update existing Copilot ruleset '$rulesetName' on $TargetRepoNameWithOwner."
+            $global:LASTEXITCODE = 0
+        }
     }
 }
 
@@ -163,16 +377,38 @@ else {
     $TargetRepo = $RepoName
 }
 
-# gh repo create <name> --template <template> --<visibility> --description <desc> --confirm
-$createCmd = "repo create `"$TargetRepo`" --template `"$TemplateRepo`" --$Visibility --description `"$Description`""
+# gh repo create <name> --template <template> --<visibility> --description <desc>
+$visibilityArg = "--$Visibility"
+$createArgs = @(
+    'repo', 'create',
+    $TargetRepo,
+    '--template', $TemplateRepo,
+    $visibilityArg,
+    '--description', $Description
+)
 
-# Check if repo exists? (gh repo create might fail or prompt)
-# We assume it doesn't exist.
+$repoExists = $false
+if ($DryRun) {
+    Write-Host "[DRY RUN] would check whether repo exists: $TargetRepo" -ForegroundColor Cyan
+}
+else {
+    # gh repo view returns exit code 1 if missing; do not treat as fatal.
+    Invoke-NativeNonTerminating { gh repo view "$TargetRepo" --json nameWithOwner 1>$null 2>$null }
+    if ($LASTEXITCODE -eq 0) {
+        $repoExists = $true
+    }
+    $global:LASTEXITCODE = 0
+}
 
-Invoke-GhCommand $createCmd
+if ($repoExists) {
+    Write-Host "Repo already exists: $TargetRepo. Skipping creation." -ForegroundColor Yellow
+}
+else {
+    Invoke-GhCommand -Args $createArgs
 
-# Wait a moment for propagation if not dry run
-if (-not $DryRun) { Start-Sleep -Seconds 5 }
+    # Wait a moment for propagation if not dry run
+    if (-not $DryRun) { Start-Sleep -Seconds 5 }
+}
 
 # 2. Configure General Settings (Issues, Projects, Wiki, Merge Types, Auto-Delete)
 # We use `gh repo edit` for some, `gh api` for others.
@@ -180,19 +416,35 @@ if (-not $DryRun) { Start-Sleep -Seconds 5 }
 # --allow-squash-merge, --allow-merge-commit, --allow-rebase-merge
 # --delete-branch-on-merge
 
-$editCmd = "repo edit `"$TargetRepo`""
+$editArgs = @('repo', 'edit', $TargetRepo)
 
-if ($EnableIssues) { $editCmd += " --enable-issues" } else { $editCmd += " --enable-issues=false" }
-if ($EnableProjects) { $editCmd += " --enable-projects" } else { $editCmd += " --enable-projects=false" }
-if ($EnableWiki) { $editCmd += " --enable-wiki" } else { $editCmd += " --enable-wiki=false" }
+if ($EnableIssues) { $editArgs += '--enable-issues' } else { $editArgs += '--enable-issues=false' }
+if ($EnableProjects) { $editArgs += '--enable-projects' } else { $editArgs += '--enable-projects=false' }
+if ($EnableWiki) { $editArgs += '--enable-wiki' } else { $editArgs += '--enable-wiki=false' }
 
-if ($AllowSquashMerge) { $editCmd += " --enable-squash-merge" } else { $editCmd += " --enable-squash-merge=false" }
-if ($AllowMergeCommit) { $editCmd += " --enable-merge-commit" } else { $editCmd += " --enable-merge-commit=false" }
-if ($AllowRebaseMerge) { $editCmd += " --enable-rebase-merge" } else { $editCmd += " --enable-rebase-merge=false" }
+if ($AllowSquashMerge) { $editArgs += '--enable-squash-merge' } else { $editArgs += '--enable-squash-merge=false' }
+if ($AllowMergeCommit) { $editArgs += '--enable-merge-commit' } else { $editArgs += '--enable-merge-commit=false' }
+if ($AllowRebaseMerge) { $editArgs += '--enable-rebase-merge' } else { $editArgs += '--enable-rebase-merge=false' }
 
-if ($DeleteBranchOnMerge) { $editCmd += " --delete-branch-on-merge" } else { $editCmd += " --delete-branch-on-merge=false" }
+if ($DeleteBranchOnMerge) { $editArgs += '--delete-branch-on-merge' } else { $editArgs += '--delete-branch-on-merge=false' }
 
-Invoke-GhCommand $editCmd
+Invoke-GhCommand -Args $editArgs
+
+# 2b. Sync template repo-scoped rulesets (branch protection, merge queue, etc.)
+if (-not $DryRun) {
+    try {
+        $tplJson = gh repo view "$TemplateRepo" --json nameWithOwner | ConvertFrom-Json
+        $tgtJson = gh repo view "$TargetRepo" --json nameWithOwner | ConvertFrom-Json
+        Copy-RepoScopedRulesetsFromTemplate -TemplateRepoNameWithOwner $tplJson.nameWithOwner -TargetRepoNameWithOwner $tgtJson.nameWithOwner
+
+        # 2c. Ensure Copilot review runs on all branches and draft PRs
+        Ensure-CopilotReviewAllBranchesRuleset -TargetRepoNameWithOwner $tgtJson.nameWithOwner
+    }
+    catch {
+        Write-Warning "Ruleset sync skipped due to an error resolving repo names."
+        $global:LASTEXITCODE = 0
+    }
+}
 
 # 3. Configure GitHub Pages
 # gh api repos/{owner}/{repo}/pages -X POST -f "source[branch]=main" -f "source[path]=/"
@@ -253,15 +505,25 @@ if ($EnablePages) {
         # So we must set build_type=workflow.
         
         Write-Host "Enabling Pages with build_type=workflow..."
-        $pagesCmd = "api repos/$fullRepoName/pages -X POST -F `"build_type=workflow`""
-        Invoke-GhCommand $pagesCmd
+        $pagesOutput = Invoke-NativeNonTerminating { gh api "repos/$fullRepoName/pages" -X POST -F "build_type=workflow" 2>&1 }
+        if ($LASTEXITCODE -ne 0) {
+            # Idempotency: GitHub returns conflict when Pages is already enabled.
+            $pagesText = [string]($pagesOutput | Out-String)
+            if ($pagesText -match '(?i)already\s+enabled|already\s+exists|conflict') {
+                Write-Warning "GitHub Pages appears to already be enabled for $fullRepoName. Continuing."
+                $global:LASTEXITCODE = 0
+            }
+            else {
+                throw "Failed to enable GitHub Pages for $fullRepoName. Output: $pagesText"
+            }
+        }
         
         # Configure CNAME and Enforce HTTPS
         if ($CNAME) {
             Write-Host "Setting CNAME to $CNAME..."
             # 1. Set CNAME first (without HTTPS enforcement to avoid 'Certificate not ready' errors)
-            $cnameCmd = "api repos/$fullRepoName/pages -X PUT -F `"cname=$CNAME`""
-            Invoke-GhCommand $cnameCmd
+            $cnameArgs = @('api', "repos/$fullRepoName/pages", '-X', 'PUT', '-F', "cname=$CNAME")
+            Invoke-GhCommand -Args $cnameArgs
 
             # 2. Try to Enforce HTTPS (This often fails immediately after CNAME set due to cert provisioning)
             Write-Host "Attempting to enforce HTTPS (may fail if cert is not yet provisioned)..."
@@ -270,14 +532,19 @@ if ($EnablePages) {
             }
             else {
                 # We use a try/catch equivalent logic or just allow it to fail non-fatally
-                # Since Invoke-GhCommand uses Invoke-Expression and script has $ErrorActionPreference = "Stop", 
-                # we need to be careful.
                 try {
                     gh api repos/$fullRepoName/pages -X PUT -F "https_enforced=true" 2>&1 | Out-Null
-                    Write-Host "HTTPS Enforcement Enabled." -ForegroundColor Green
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warning "Could not enforce HTTPS immediately (Certificate likely provisioning). Please enable it later in Settings."
+                        $global:LASTEXITCODE = 0
+                    }
+                    else {
+                        Write-Host "HTTPS Enforcement Enabled." -ForegroundColor Green
+                    }
                 }
                 catch {
                     Write-Warning "Could not enforce HTTPS immediately (Certificate likely provisioning). Please enable it later in Settings."
+                    $global:LASTEXITCODE = 0
                 }
             }
         }
@@ -285,3 +552,6 @@ if ($EnablePages) {
 }
 
 Write-Host "Repository setup complete!" -ForegroundColor Green
+
+# Avoid leaking a non-fatal native exit code (e.g., from HTTPS enforcement)
+$global:LASTEXITCODE = 0

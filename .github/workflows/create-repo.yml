@@ -84,3 +84,4 @@ jobs:
           }
 
           ./scripts/Create-GitHubRepo.ps1 @params
+          $global:LASTEXITCODE = 0

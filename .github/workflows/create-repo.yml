@@ -65,9 +65,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Create Repository
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.CBM_TOKEN }} # Needs repo creation permissions
         run: |
+          $ErrorActionPreference = 'Stop'
           $params = @{
               RepoName            = "${{ inputs.RepoName }}"
               Description         = "${{ inputs.Description }}"
@@ -84,4 +86,6 @@ jobs:
           }
 
           ./scripts/Create-GitHubRepo.ps1 @params
-          $global:LASTEXITCODE = 0
+          if ($LASTEXITCODE -ne 0) {
+            throw "Create-GitHubRepo.ps1 failed with exit code $LASTEXITCODE"
+          }

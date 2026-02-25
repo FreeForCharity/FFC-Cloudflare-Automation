@@ -927,7 +927,9 @@ jobs:
             }
 
             ./scripts/Create-GitHubRepo.ps1 @createParams
-            $global:LASTEXITCODE = 0
+            if ($LASTEXITCODE -ne 0) {
+              throw "Create-GitHubRepo.ps1 failed with exit code $LASTEXITCODE"
+            }
           }
 
       - name: Add maintainers (requester + technical POC)

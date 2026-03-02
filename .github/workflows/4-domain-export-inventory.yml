@@ -61,7 +61,7 @@ jobs:
           Write-Host "Merged $($merged.Count) unique zones into domain_summary.csv"
 
       - name: Upload artifact (Cloudflare)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain-inventory-cloudflare
           path: domain_summary.csv
@@ -129,7 +129,7 @@ jobs:
           "- Output: $output" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload artifact (M365)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain-inventory-m365
           path: m365_domains.csv
@@ -171,7 +171,7 @@ jobs:
           }
 
       - name: Upload artifact (WHMCS)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain-inventory-whmcs
           path: whmcs_domains.csv
@@ -197,7 +197,7 @@ jobs:
           }
 
       - name: Upload artifact (WPMUDEV)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain-inventory-wpmudev
           path: wpmudev_domains.csv
@@ -291,7 +291,7 @@ jobs:
           "- Output: $out" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload artifact (combined)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain-inventory-all-sources
           path: domain_inventory_all_sources.csv

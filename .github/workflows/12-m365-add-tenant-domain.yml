@@ -1,4 +1,4 @@
-﻿name: '24. M365 - Add Tenant Domain (Admin) [M365]'
+name: '24. M365 - Add Tenant Domain (Admin) [M365]'
 run-name: 'M365: Add domain ${{ inputs.domain }}'
 
 on:
@@ -29,7 +29,7 @@ jobs:
           if (-not "${{ secrets.FFC_AZURE_TENANT_ID }}") { throw 'FFC_AZURE_TENANT_ID secret is not set (environment: m365-prod)' }
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}

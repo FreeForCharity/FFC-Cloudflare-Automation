@@ -1,0 +1,85 @@
+name: "16 — Azure Key Vault Migrate Cloudflare Token (Central KV)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      keyvault_name:
+        description: "Central Key Vault name"
+        required: true
+        default: "kv-ffc-admin-prod-cbm"
+        type: string
+      ffc_kv_secret_name:
+        description: "Key Vault secret name to write the FFC Cloudflare token into"
+        required: true
+        default: "wr-all-ffc-cloudflare-api-token-zone-and-dns"
+        type: string
+      cm_kv_secret_name:
+        description: "Key Vault secret name to write the CM Cloudflare token into"
+        required: true
+        default: "wr-all-cm-cloudflare-api-token-zone-and-dns"
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  migrate:
+    name: "Copy Cloudflare token(s) → Central Key Vault"
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod
+
+    steps:
+      - name: Validate required secrets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}")) {
+            throw 'WR_ALL_FFC_AZURE_KV_CLIENT_ID secret is not set (environment: cloudflare-prod).'
+          }
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}")) {
+            throw 'WR_ALL_FFC_AZURE_TENANT_ID secret is not set (environment: cloudflare-prod).'
+          }
+
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}")) {
+            throw 'FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod).'
+          }
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}")) {
+            throw 'CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod).'
+          }
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Write Cloudflare secrets into Central Key Vault (masked)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $vaultName = "${{ inputs.keyvault_name }}".Trim()
+          $ffcSecretName = "${{ inputs.ffc_kv_secret_name }}".Trim()
+          $cmSecretName = "${{ inputs.cm_kv_secret_name }}".Trim()
+
+          if ([string]::IsNullOrWhiteSpace($vaultName)) { throw 'Missing input: keyvault_name' }
+          if ([string]::IsNullOrWhiteSpace($ffcSecretName)) { throw 'Missing input: ffc_kv_secret_name' }
+          if ([string]::IsNullOrWhiteSpace($cmSecretName)) { throw 'Missing input: cm_kv_secret_name' }
+
+          $ffcToken = "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}".Trim().Trim('"')
+          $cmToken = "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}".Trim().Trim('"')
+
+          echo "::add-mask::$ffcToken"
+          echo "::add-mask::$cmToken"
+
+          az keyvault secret set --vault-name $vaultName --name $ffcSecretName --value "$ffcToken" -o none
+          az keyvault secret set --vault-name $vaultName --name $cmSecretName --value "$cmToken" -o none
+
+          $id1 = az keyvault secret show --vault-name $vaultName --name $ffcSecretName --query id -o tsv
+          $id2 = az keyvault secret show --vault-name $vaultName --name $cmSecretName --query id -o tsv
+          if ([string]::IsNullOrWhiteSpace($id1) -or [string]::IsNullOrWhiteSpace($id2)) { throw 'Verification failed.' }
+
+          Write-Host "✅ Wrote Cloudflare token secrets into central Key Vault '$vaultName' (values masked, not printed)."

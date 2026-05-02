@@ -23,6 +23,10 @@
   description: Request to purchase a new domain
   color: '1d76db'
 
+- name: domain-purchase-approved
+  description: Admin has approved this domain purchase request (triggers Workflow 10)
+  color: '0075ca'
+
 - name: domain-remove
   description: Request to remove a domain
   color: 'd93f0b'

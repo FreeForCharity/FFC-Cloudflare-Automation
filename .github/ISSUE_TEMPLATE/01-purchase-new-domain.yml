@@ -349,14 +349,19 @@ body:
         - [ ] Domain aligns with FFC mission and policies
         - [ ] No trademark or legal concerns
 
-        ### Purchase Steps
-        1. [ ] Purchase domain from registrar (e.g., Namecheap, Google Domains)
-        2. [ ] Add domain to Cloudflare account
-        3. [ ] Update nameservers at registrar to Cloudflare's nameservers
-        4. [ ] Configure DNS records as requested
-        5. [ ] Enable security settings (SSL/TLS, DNSSEC)
-        6. [ ] Verify domain is working correctly
-        7. [ ] Document domain in inventory
+        ### Purchase Steps (Automated via Cloudflare Registrar API)
+        1. [ ] Run **Workflow 10** with `dry_run=true` to confirm availability and price
+        2. [ ] Apply label `domain-purchase-approved` to trigger automated purchase (or run Workflow 10 with `dry_run=false`)
+        3. [ ] Confirm purchase result comment on this issue
+        4. [ ] Run **Workflow 02** to create Cloudflare zone + update WHMCS nameservers
+        5. [ ] Run **Workflow 03** to enforce DNS standard (GitHub Pages + M365)
+        6. [ ] Run **Workflow 24** to add domain to M365 tenant
+        7. [ ] Run **Workflow 23** to enable DKIM
+        8. [ ] Run **Workflow 15** or assign **Website Request** issue to provision site
+        9. [ ] Document domain in inventory (Workflow 04)
+
+        > **Manual fallback** (if TLD is not supported by the Registrar API):
+        > Purchase via Cloudflare dashboard or external registrar, then continue from step 4.
 
         ### Verification
         - [ ] Domain added to Cloudflare

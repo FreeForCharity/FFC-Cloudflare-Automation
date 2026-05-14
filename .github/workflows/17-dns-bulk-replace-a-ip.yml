@@ -1,5 +1,6 @@
 name: '17. DNS - Bulk Replace A-record IP (All Zones) [CF]'
-run-name: 'Bulk Replace A IP: ${{ inputs.old_ip }} -> ${{ inputs.new_ip }} (dry_run=${{ inputs.dry_run }})'
+run-name:
+  'Bulk Replace A IP: ${{ inputs.old_ip }} -> ${{ inputs.new_ip }} (dry_run=${{ inputs.dry_run }})'
 
 on:
   workflow_dispatch:

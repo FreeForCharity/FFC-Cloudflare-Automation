@@ -6,8 +6,7 @@ on:
     inputs:
       domains:
         description:
-          'Comma-separated root domains. Leave blank to use the default FFC-EX 13-domain
-          list.'
+          'Comma-separated root domains. Leave blank to use the default FFC-EX 13-domain list.'
         required: false
         type: string
         default: ''

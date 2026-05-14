@@ -1,0 +1,42 @@
+name: '17. DNS - Bulk Replace A-record IP (All Zones) [CF]'
+run-name: 'Bulk Replace A IP: ${{ inputs.old_ip }} -> ${{ inputs.new_ip }} (dry_run=${{ inputs.dry_run }})'
+
+on:
+  workflow_dispatch:
+    inputs:
+      old_ip:
+        description: 'Old IP address (e.g. 204.44.192.77)'
+        required: true
+        type: string
+      new_ip:
+        description: 'New IP address (e.g. 216.222.200.253)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry-run (discover only, no changes). Default: true.'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  bulk-replace:
+    runs-on: windows-latest
+    environment: cloudflare-prod
+    env:
+      CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+      CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run bulk A-record replacement
+        shell: pwsh
+        run: |
+          $params = @{
+            OldIp = '${{ inputs.old_ip }}'
+            NewIp = '${{ inputs.new_ip }}'
+          }
+          if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun = $true }
+          ./scripts/bulk-replace-a-record-ip.ps1 @params

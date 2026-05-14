@@ -119,21 +119,22 @@ foreach ($t in $tokens) {
     foreach ($z in $zones) {
         try {
             $matches = Get-MatchingARecords -ZoneId $z.id -Token $t.token -Ip $OldIp
-        } catch {
+        }
+        catch {
             Write-Warning "[$($t.name) :: $($z.name)] List failed: $($_.Exception.Message)"
             continue
         }
         foreach ($r in $matches) {
             $plan += [pscustomobject]@{
-                Account  = $t.name
-                Token    = $t.token
-                Zone     = $z.name
-                ZoneId   = $z.id
-                RecordId = $r.id
-                Name     = $r.name
+                Account    = $t.name
+                Token      = $t.token
+                Zone       = $z.name
+                ZoneId     = $z.id
+                RecordId   = $r.id
+                Name       = $r.name
                 OldContent = $r.content
-                Proxied  = [bool]$r.proxied
-                Ttl      = $r.ttl
+                Proxied    = [bool]$r.proxied
+                Ttl        = $r.ttl
             }
         }
     }
@@ -191,12 +192,14 @@ foreach ($p in $plan) {
         if ($resp.success) {
             Write-Host "OK   [$($p.Account)] $($p.Zone) :: $($p.Name) -> $NewIp"
             $succeeded += $p
-        } else {
+        }
+        else {
             $msg = ($resp.errors | ConvertTo-Json -Depth 4 -Compress)
             Write-Warning "FAIL [$($p.Account)] $($p.Zone) :: $($p.Name) -> $msg"
             $failed += $p
         }
-    } catch {
+    }
+    catch {
         Write-Warning "FAIL [$($p.Account)] $($p.Zone) :: $($p.Name) -> $($_.Exception.Message)"
         $failed += $p
     }

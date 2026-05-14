@@ -85,9 +85,9 @@ function Resolve-Zone {
             $resp = Invoke-Cf -Method GET -Token $t.token -Path "/zones?name=$encoded"
             if ($resp.success -and $resp.result -and $resp.result.Count -gt 0) {
                 return [pscustomobject]@{
-                    Account = $t.name
-                    Token   = $t.token
-                    ZoneId  = $resp.result[0].id
+                    Account  = $t.name
+                    Token    = $t.token
+                    ZoneId   = $resp.result[0].id
                     ZoneName = $resp.result[0].name
                 }
             }
@@ -145,10 +145,10 @@ foreach ($domain in $domainList) {
     if (-not $zone) {
         Write-Warning "[$domain] Zone not found via any available token. Skipping."
         $results += [pscustomobject]@{
-            Domain = $domain
-            Fqdn   = $fqdn
-            Status = 'SKIP'
-            Detail = 'Zone not found'
+            Domain  = $domain
+            Fqdn    = $fqdn
+            Status  = 'SKIP'
+            Detail  = 'Zone not found'
             Deleted = 0
             Created = $false
         }
@@ -162,10 +162,10 @@ foreach ($domain in $domainList) {
     catch {
         Write-Warning "[$domain] List failed: $($_.Exception.Message)"
         $results += [pscustomobject]@{
-            Domain = $domain
-            Fqdn   = $fqdn
-            Status = 'FAIL'
-            Detail = "List error: $($_.Exception.Message)"
+            Domain  = $domain
+            Fqdn    = $fqdn
+            Status  = 'FAIL'
+            Detail  = "List error: $($_.Exception.Message)"
             Deleted = 0
             Created = $false
         }
@@ -188,10 +188,10 @@ foreach ($domain in $domainList) {
     if ($alreadyCorrect -and $existing.Count -eq 1) {
         Write-Host "[$domain] Already correct: CNAME -> $Target (proxied=false). No action."
         $results += [pscustomobject]@{
-            Domain = $domain
-            Fqdn   = $fqdn
-            Status = 'OK'
-            Detail = 'Already correct'
+            Domain  = $domain
+            Fqdn    = $fqdn
+            Status  = 'OK'
+            Detail  = 'Already correct'
             Deleted = 0
             Created = $false
         }
@@ -227,10 +227,10 @@ foreach ($domain in $domainList) {
 
     if ($deleteErrors.Count -gt 0) {
         $results += [pscustomobject]@{
-            Domain = $domain
-            Fqdn   = $fqdn
-            Status = 'FAIL'
-            Detail = "Delete errors: $($deleteErrors -join ' | ')"
+            Domain  = $domain
+            Fqdn    = $fqdn
+            Status  = 'FAIL'
+            Detail  = "Delete errors: $($deleteErrors -join ' | ')"
             Deleted = $deletedCount
             Created = $false
         }
@@ -247,10 +247,10 @@ foreach ($domain in $domainList) {
     if ($DryRun) {
         Write-Host "  [DRY-RUN] Would CREATE CNAME $fqdn -> $Target (proxied=false)"
         $results += [pscustomobject]@{
-            Domain = $domain
-            Fqdn   = $fqdn
-            Status = 'DRY-RUN'
-            Detail = "Would delete $($existing.Count), create CNAME"
+            Domain  = $domain
+            Fqdn    = $fqdn
+            Status  = 'DRY-RUN'
+            Detail  = "Would delete $($existing.Count), create CNAME"
             Deleted = 0
             Created = $false
         }
@@ -262,10 +262,10 @@ foreach ($domain in $domainList) {
         if ($resp.success) {
             Write-Host "  Created CNAME $fqdn -> $Target (proxied=false)"
             $results += [pscustomobject]@{
-                Domain = $domain
-                Fqdn   = $fqdn
-                Status = 'OK'
-                Detail = 'CNAME created'
+                Domain  = $domain
+                Fqdn    = $fqdn
+                Status  = 'OK'
+                Detail  = 'CNAME created'
                 Deleted = $deletedCount
                 Created = $true
             }
@@ -274,10 +274,10 @@ foreach ($domain in $domainList) {
             $msg = ($resp.errors | ConvertTo-Json -Depth 4 -Compress)
             Write-Warning "  CREATE failed: $msg"
             $results += [pscustomobject]@{
-                Domain = $domain
-                Fqdn   = $fqdn
-                Status = 'FAIL'
-                Detail = "Create error: $msg"
+                Domain  = $domain
+                Fqdn    = $fqdn
+                Status  = 'FAIL'
+                Detail  = "Create error: $msg"
                 Deleted = $deletedCount
                 Created = $false
             }
@@ -286,10 +286,10 @@ foreach ($domain in $domainList) {
     catch {
         Write-Warning "  CREATE error: $($_.Exception.Message)"
         $results += [pscustomobject]@{
-            Domain = $domain
-            Fqdn   = $fqdn
-            Status = 'FAIL'
-            Detail = "Create exception: $($_.Exception.Message)"
+            Domain  = $domain
+            Fqdn    = $fqdn
+            Status  = 'FAIL'
+            Detail  = "Create exception: $($_.Exception.Message)"
             Deleted = $deletedCount
             Created = $false
         }

@@ -31,20 +31,29 @@ For the end-to-end runbook to align a domain across Cloudflare + Microsoft 365 (
 DKIM v2 validation), see
 [docs/end-to-end-testing-m365-cloudflare.md](docs/end-to-end-testing-m365-cloudflare.md).
 
+For the Cloudflare Registrar API assessment and operational guide (programmatic domain purchase),
+see [docs/cloudflare-domain-registration-api.md](docs/cloudflare-domain-registration-api.md).
+
 ## Simplified domain workflow
 
 For the simplified approach (tracked in issue #61), use these GitHub Actions:
 
-1. **01. Domain - Status (All Sources) [CF+M365]**
+1. **10. Domain - Purchase via Cloudflare Registrar API (Admin) [CF]** _(new)_
+
+- Programmatically purchase a domain via the Cloudflare Registrar API
+- Label-triggered (`domain-purchase-approved`) or manual dispatch
+- Always dry-run first to check availability and price
+
+2. **01. Domain - Status (All Sources) [CF+M365]**
 
 - Read-only report across Cloudflare + M365
 - Includes a Cloudflare “what will change” dry-run preview
 
-2. **03. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]**
+3. **03. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]**
 
 - Cloudflare standard enforcement + M365 DKIM enable flow (when run in LIVE mode)
 
-3. **Issue post-back (optional)**
+4. **Issue post-back (optional)**
 
 - Both workflows accept an optional `issue_number` input and will comment results back to that
   issue.

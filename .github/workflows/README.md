@@ -31,6 +31,18 @@ domain configuration.
 - **When**: use first for any domain request or troubleshooting.
 - **How**: run with `domain`, optionally provide `issue_number` to post results back.
 
+### 10. Domain - Purchase via Cloudflare Registrar API (Admin) [CF]
+
+- **Why**: automates the previously manual domain purchase step using the Cloudflare Registrar API.
+- **When**: after an admin reviews and approves a domain purchase request (Issue Template 01).
+- **How**:
+  - **Issue-triggered**: apply the `domain-purchase-approved` label to a domain purchase issue.
+  - **Manual**: run with `domain`; set `dry_run=true` first to confirm availability and price.
+- **Requires**: `cloudflare-registrar` environment with `CLOUDFLARE_REGISTRAR_API_TOKEN` secret and
+  `CLOUDFLARE_ACCOUNT_ID` variable. See
+  [docs/cloudflare-domain-registration-api.md](../../docs/cloudflare-domain-registration-api.md) for
+  full setup and assessment.
+
 ### 02. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS]
 
 - **Why**: common onboarding path (Cloudflare zone + optional WHMCS nameserver update).
@@ -186,6 +198,7 @@ This workflow helps identify security vulnerabilities early in the development p
 | Workflow                                   | Trigger                                   | Purpose                                                                          |
 | ------------------------------------------ | ----------------------------------------- | -------------------------------------------------------------------------------- |
 | 0-domain-status.yml                        | Manual (workflow_dispatch)                | 01. Domain: Status (all sources) [CF+M365]                                       |
+| 10-cloudflare-domain-purchase.yml          | Issue label + manual                      | 10. Domain: Purchase via Cloudflare Registrar API (admin) [CF]                   |
 | 14-domain-add-ffc-cloudflare-and-whmcs.yml | Manual (workflow_dispatch)                | 02. Domain: Add to FFC Cloudflare + WHMCS nameservers (admin) [CF+WHMCS]         |
 | 1-enforce-domain-standard.yml              | Manual (workflow_dispatch)                | 03. Domain: Enforce standard (GitHub apex + M365) [CF+M365]                      |
 | 4-domain-export-inventory.yml              | Manual (workflow_dispatch)                | 04. Domain: Export inventory (all sources) [CF+M365+WHMCS+WPMUDEV]               |

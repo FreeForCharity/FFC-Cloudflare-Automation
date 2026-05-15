@@ -67,6 +67,8 @@ param(
 
     [switch]$SkipDns,
 
+    [switch]$SkipCname,
+
     [string[]]$GhPagesIps = @(
         '185.199.108.153',
         '185.199.109.153',
@@ -96,11 +98,14 @@ if ($env:CLOUDFLARE_API_TOKEN_FFC) { $cfTokens += @{ name = 'FFC'; token = $env:
 if ($env:CLOUDFLARE_API_TOKEN_CM) { $cfTokens += @{ name = 'CM'; token = $env:CLOUDFLARE_API_TOKEN_CM } }
 
 $ghToken = $env:GH_TOKEN
-if ([string]::IsNullOrWhiteSpace($ghToken)) {
-    throw 'GH_TOKEN environment variable is not set. Required for GitHub API calls (CNAME flip).'
+if (-not $SkipCname -and [string]::IsNullOrWhiteSpace($ghToken)) {
+    throw 'GH_TOKEN environment variable is not set. Required for GitHub API calls (CNAME flip). Or run with -SkipCname.'
 }
 if (-not $SkipDns -and $cfTokens.Count -eq 0) {
     throw 'No Cloudflare tokens found. Set CLOUDFLARE_API_TOKEN_FFC and/or CLOUDFLARE_API_TOKEN_CM, or run with -SkipDns.'
+}
+if ($SkipCname -and $SkipDns) {
+    throw 'Both -SkipCname and -SkipDns are set — nothing to do.'
 }
 
 # ---------------------------------------------------------------------------
@@ -276,6 +281,12 @@ foreach ($domain in $domainList) {
     # ===================================================================
     # STEP 1: CNAME flip in FFC-EX GitHub repo
     # ===================================================================
+    if ($SkipCname) {
+        Write-Host "[$domain] STEP 1 — CNAME flip SKIPPED (-SkipCname)"
+        $result.CnameStatus = 'SKIP'
+        $result.CnameDetail = 'Skipped (-SkipCname)'
+    }
+    else {
     $repo = "FreeForCharity/FFC-EX-$domain"
     Write-Host "[$domain] STEP 1 — CNAME flip in $repo"
 
@@ -328,6 +339,7 @@ catch {
     $result.CnameStatus = 'FAIL'
     $result.CnameDetail = $_.Exception.Message
 }
+    }  # end else (SkipCname)
 
 # ===================================================================
 # STEP 2: DNS flip in Cloudflare

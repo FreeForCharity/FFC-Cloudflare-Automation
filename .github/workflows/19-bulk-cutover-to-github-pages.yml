@@ -1,5 +1,5 @@
 name: '19. DNS + GH Pages - Bulk Cutover staging -> Apex (FFC-EX) [CF+GH]'
-run-name: 'Bulk cutover staging->apex (dry_run=${{ inputs.dry_run }}, skip_dns=${{ inputs.skip_dns }})'
+run-name: 'Bulk cutover staging->apex (dry_run=${{ inputs.dry_run }}, skip_dns=${{ inputs.skip_dns }}, skip_cname=${{ inputs.skip_cname }})'
 
 on:
   workflow_dispatch:
@@ -25,77 +25,108 @@ on:
         required: false
         type: boolean
         default: false
+      skip_cname:
+        description: >-
+          Skip the GitHub public/CNAME flip entirely. Only flip Cloudflare DNS.
+          Useful if you already updated CNAME via another path.
+        required: false
+        type: boolean
+        default: false
 
-# ---------------------------------------------------------------------------
-# Minimal permissions. The CNAME commit uses GH_TOKEN from secrets (PAT);
-# the default GITHUB_TOKEN has read-only contents on foreign repos.
-# ---------------------------------------------------------------------------
 permissions:
   contents: read
 
 jobs:
-  bulk-cutover:
+  # ---------------------------------------------------------------------------
+  # JOB 1: Flip public/CNAME in each FFC-EX repo (uses github-prod env's CBM_TOKEN).
+  # Skipped entirely if skip_cname=true.
+  # ---------------------------------------------------------------------------
+  cname-flip:
+    if: ${{ inputs.skip_cname != true }}
+    runs-on: windows-latest
+    environment: github-prod
+    env:
+      GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate CBM_TOKEN
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.CBM_TOKEN }}" ]; then
+            echo "::error::CBM_TOKEN secret is not set in environment github-prod."
+            echo "::error::Add a PAT with repo:contents:write scope to that env, or re-run with skip_cname=true."
+            exit 1
+          fi
+
+      - name: Flip public/CNAME (skip DNS in this job)
+        shell: pwsh
+        run: |
+          $defaultDomains = @(
+            'aprilhansen.com', 'armstrongacesbaseball.org',
+            'coronadonationalforestheritagesociety.org',
+            'falloutshelterecovillage.org', 'nj4israel.org',
+            'savewatersaveplanet.org', 'bucktownbullsbaseball.org',
+            'bulldogztowing.com', 'browncanyonranch.org',
+            'instituteofforgiveness.org', 'americanlegionpost64.org',
+            'southamptonfriends.org', 'foxtrotenterprises.com'
+          ) -join ','
+          $domainsInput = '${{ inputs.domains }}'
+          if ([string]::IsNullOrWhiteSpace($domainsInput)) { $domainsInput = $defaultDomains }
+
+          $params = @{
+            Domains = $domainsInput
+            SkipDns = $true   # this job only flips CNAME
+          }
+          if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun = $true }
+
+          ./scripts/bulk-cutover-to-github-pages.ps1 @params
+
+  # ---------------------------------------------------------------------------
+  # JOB 2: Flip Cloudflare apex DNS (uses cloudflare-prod env's CF tokens).
+  # Depends on cname-flip success (unless skipped). Skipped entirely if skip_dns=true.
+  # ---------------------------------------------------------------------------
+  dns-flip:
+    needs: [cname-flip]
+    if: ${{ always() && inputs.skip_dns != true && (needs.cname-flip.result == 'success' || needs.cname-flip.result == 'skipped') }}
     runs-on: windows-latest
     environment: cloudflare-prod
     env:
       CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
       CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
-      # GH_TOKEN must be a PAT with repo write access to FreeForCharity/FFC-EX-* repos
-      GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+      # GH_TOKEN set to a dummy so the script doesn't error on missing var;
+      # the script uses SkipCname switch below to avoid GitHub API calls.
+      GH_TOKEN: 'skipped-cname-phase'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate required secrets
+      - name: Validate Cloudflare token
         shell: bash
         run: |
-          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ] && \
-             [ "${{ inputs.skip_dns }}" != "true" ]; then
-            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)."
-            echo "::error::Either set the secret or re-run with skip_dns=true."
-            exit 1
-          fi
-          if [ -z "${{ secrets.CBM_TOKEN }}" ]; then
-            echo "::error::CBM_TOKEN secret is not set (required to commit public/CNAME in FFC-EX repos)."
-            echo "::error::This is the same PAT used by workflow create-repo.yml — it should already exist at repo level."
+          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
+            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set in environment cloudflare-prod."
             exit 1
           fi
 
-      - name: Run bulk cutover
+      - name: Flip Cloudflare apex DNS (skip CNAME in this job)
         shell: pwsh
         run: |
-          # ---------------------------------------------------------------------------
-          # Default 13-domain FFC-EX list for live cutover.
-          # amargraves.org is EXCLUDED (placeholder site — keep staging CNAME or apex
-          # as-is; do NOT cut over with this workflow).
-          # nj4israel.org and americanlegionpost64.org are included — the script will
-          # detect that their CF zones are not accessible and emit manual instructions.
-          # ---------------------------------------------------------------------------
           $defaultDomains = @(
-            'aprilhansen.com',
-            'armstrongacesbaseball.org',
+            'aprilhansen.com', 'armstrongacesbaseball.org',
             'coronadonationalforestheritagesociety.org',
-            'falloutshelterecovillage.org',
-            'nj4israel.org',
-            'savewatersaveplanet.org',
-            'bucktownbullsbaseball.org',
-            'bulldogztowing.com',
-            'browncanyonranch.org',
-            'instituteofforgiveness.org',
-            'americanlegionpost64.org',
-            'southamptonfriends.org',
-            'foxtrotenterprises.com'
+            'falloutshelterecovillage.org', 'nj4israel.org',
+            'savewatersaveplanet.org', 'bucktownbullsbaseball.org',
+            'bulldogztowing.com', 'browncanyonranch.org',
+            'instituteofforgiveness.org', 'americanlegionpost64.org',
+            'southamptonfriends.org', 'foxtrotenterprises.com'
           ) -join ','
-
           $domainsInput = '${{ inputs.domains }}'
-          if ([string]::IsNullOrWhiteSpace($domainsInput)) {
-            $domainsInput = $defaultDomains
-            Write-Host "No 'domains' input provided — using default 13-domain FFC-EX cutover list."
-          }
+          if ([string]::IsNullOrWhiteSpace($domainsInput)) { $domainsInput = $defaultDomains }
 
           $params = @{
-            Domains = $domainsInput
+            Domains   = $domainsInput
+            SkipCname = $true   # this job only does DNS
           }
-          if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun  = $true }
-          if ('${{ inputs.skip_dns }}' -eq 'true') { $params.SkipDns = $true }
+          if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun = $true }
 
           ./scripts/bulk-cutover-to-github-pages.ps1 @params

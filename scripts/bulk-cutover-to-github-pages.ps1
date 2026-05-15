@@ -335,9 +335,27 @@ else {
 }
 }
 catch {
-    Write-Warning "[$domain]   CNAME step error: $($_.Exception.Message)"
+    $errMsg = $_.Exception.Message
+    # Capture HTTP response body for diagnostics (PowerShell hides it by default)
+    $respBody = ''
+    if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+        $respBody = $_.ErrorDetails.Message
+    }
+    elseif ($_.Exception.Response) {
+        try {
+            $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+            $respBody = $reader.ReadToEnd()
+        }
+        catch { }
+    }
+    # Token diagnostics (length only — never print value)
+    $tokLen = if ($ghToken) { $ghToken.Length } else { 0 }
+    $tokPrefix = if ($ghToken -and $ghToken.Length -ge 4) { $ghToken.Substring(0, 4) } else { '' }
+    Write-Warning "[$domain]   CNAME step error: $errMsg"
+    if ($respBody) { Write-Warning "[$domain]   Response body: $respBody" }
+    Write-Warning "[$domain]   GH_TOKEN length=$tokLen prefix=$tokPrefix (prefix tells PAT type: ghp_=classic, github_pat_=fine-grained)"
     $result.CnameStatus = 'FAIL'
-    $result.CnameDetail = $_.Exception.Message
+    $result.CnameDetail = if ($respBody) { "$errMsg | $respBody" } else { $errMsg }
 }
     }  # end else (SkipCname)
 

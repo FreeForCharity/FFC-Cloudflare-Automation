@@ -16,6 +16,10 @@ on:
         description: 'Debug: run DMARC Management API probe/attempts (noisy)'
         type: boolean
         default: false
+      github_pages_only:
+        description: 'Only manage apex A/AAAA + www CNAME; do not touch MX/TXT/SRV/M365 records'
+        type: boolean
+        default: false
       issue_number:
         description: 'Optional: issue number to comment results back to'
         required: false
@@ -48,15 +52,15 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $domain = "${{ inputs.domain }}"
           $dryRun = "${{ inputs.dry_run }}"
+          $pagesOnly = "${{ inputs.github_pages_only }}"
 
           $outDir = Join-Path $env:RUNNER_TEMP 'domain-enforce-cloudflare'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-          if ($dryRun -eq 'true') {
-            $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -DryRun *>&1
-          } else {
-            $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard *>&1
-          }
+          $enforceArgs = @('-Zone', $domain, '-EnforceStandard')
+          if ($dryRun -eq 'true') { $enforceArgs += '-DryRun' }
+          if ($pagesOnly -eq 'true') { $enforceArgs += '-GitHubPagesOnly' }
+          $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 @enforceArgs *>&1
 
           $outPath = Join-Path $outDir 'cloudflare-enforce.txt'
           $out | Out-File -FilePath $outPath -Encoding utf8

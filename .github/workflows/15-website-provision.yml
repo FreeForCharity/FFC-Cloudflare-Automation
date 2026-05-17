@@ -858,7 +858,7 @@ jobs:
           "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload DNS outputs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: website-provision-dns
           path: ${{ steps.enforce.outputs.out_dir }}/*.txt

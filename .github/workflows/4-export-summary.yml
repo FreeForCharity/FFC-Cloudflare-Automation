@@ -57,7 +57,7 @@ jobs:
           Write-Host "Merged $($merged.Count) unique zones into domain_summary.csv"
 
       - name: Upload CSV Artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain_summary
           path: domain_summary.csv

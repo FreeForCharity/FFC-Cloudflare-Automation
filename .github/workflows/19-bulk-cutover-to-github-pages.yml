@@ -130,3 +130,104 @@ jobs:
           if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun = $true }
 
           ./scripts/bulk-cutover-to-github-pages.ps1 @params
+
+  # ---------------------------------------------------------------------------
+  # JOB 3: Trigger Post-Deploy Smoke Test in each FFC-EX repo after DNS flip,
+  # then wait for each to complete. Surfaces apex/DNS regressions that the
+  # in-repo smoke would otherwise miss because smoke triggers only on Deploy
+  # workflow events (and a DNS flip does not produce a Deploy event).
+  #
+  # Skipped on dry-run (no DNS actually flipped) and on dns-flip failure.
+  # ---------------------------------------------------------------------------
+  post-cutover-smoke:
+    needs: [cname-flip, dns-flip]
+    if: ${{ always() && inputs.dry_run != true && needs.dns-flip.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: github-prod
+    env:
+      GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+    steps:
+      - name: Validate CBM_TOKEN
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.CBM_TOKEN }}" ]; then
+            echo "::error::CBM_TOKEN secret is not set in environment github-prod."
+            echo "::error::Required to dispatch Post-Deploy Smoke Test in each FFC-EX repo."
+            exit 1
+          fi
+
+      - name: Wait for DNS propagation and Pages re-bind
+        shell: bash
+        run: |
+          # Apex DNS just flipped; give resolvers ~60s and GH Pages a moment
+          # to detect the new A/AAAA records before probing.
+          sleep 60
+
+      - name: Dispatch Post-Deploy Smoke Test in each FFC-EX repo and wait
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # Same default list as the cname-flip and dns-flip jobs above.
+          default_domains="aprilhansen.com armstrongacesbaseball.org coronadonationalforestheritagesociety.org falloutshelterecovillage.org nj4israel.org savewatersaveplanet.org bucktownbullsbaseball.org bulldogztowing.com browncanyonranch.org instituteofforgiveness.org americanlegionpost64.org southamptonfriends.org foxtrotenterprises.com"
+
+          domains_input="${{ inputs.domains }}"
+          if [ -z "$domains_input" ]; then
+            domains="$default_domains"
+          else
+            domains=$(echo "$domains_input" | tr ',' ' ')
+          fi
+
+          fails=0
+          for d in $domains; do
+            repo="FreeForCharity/FFC-EX-${d}"
+            echo "::group::Smoke: $repo"
+
+            # Dispatch the smoke workflow. The smoke reads public/CNAME from
+            # the target repo, which is now the apex post-cutover.
+            if ! gh workflow run "Post-Deploy Smoke Test" --repo "$repo" --ref main 2>&1; then
+              echo "::warning::Could not dispatch smoke for $repo (workflow may not exist on this repo)"
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Brief settle so the dispatched run is registered.
+            sleep 8
+
+            # Latest workflow_dispatch run for the smoke workflow.
+            run_id=$(gh run list --repo "$repo" --workflow "Post-Deploy Smoke Test" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || echo "")
+            if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+              echo "::warning::Could not locate dispatched smoke run for $repo"
+              echo "::endgroup::"
+              continue
+            fi
+            echo "Smoke run: https://github.com/${repo}/actions/runs/${run_id}"
+
+            # Poll until the run reaches a terminal state (max 5 min per repo).
+            deadline=$(( $(date +%s) + 300 ))
+            status="unknown"
+            while [ "$(date +%s)" -lt "$deadline" ]; do
+              status=$(gh run view "$run_id" --repo "$repo" --json status,conclusion --jq '.status + ":" + (.conclusion // "null")' 2>/dev/null || echo "error:null")
+              case "$status" in
+                in_progress:*|queued:*|waiting:*) ;;
+                *) break ;;
+              esac
+              sleep 15
+            done
+
+            if [[ "$status" == *":success" ]]; then
+              echo "✓ $d smoke passed"
+            else
+              echo "::error::$d smoke FAILED — final state: $status"
+              echo "::error::See https://github.com/${repo}/actions/runs/${run_id}"
+              fails=$(( fails + 1 ))
+            fi
+            echo "::endgroup::"
+          done
+
+          echo ""
+          if [ "$fails" -gt 0 ]; then
+            echo "::error::$fails of N smoke tests failed after DNS cutover. Investigate before considering the cutover done."
+            exit 1
+          fi
+          echo "All smoke tests passed post-cutover."

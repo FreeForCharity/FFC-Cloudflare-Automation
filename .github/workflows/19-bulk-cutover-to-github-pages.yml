@@ -156,14 +156,17 @@ jobs:
             exit 1
           fi
 
-      - name: Wait for DNS propagation and Pages re-bind
+      - name: Wait for DNS propagation
         shell: bash
         run: |
-          # Apex DNS just flipped; give resolvers ~60s and GH Pages a moment
-          # to detect the new A/AAAA records before probing.
-          sleep 60
+          # Apex DNS just flipped; give resolvers ~2 min before kicking the
+          # smokes. The smokes themselves do a cert-aware retry (~20 min)
+          # for the Let'\''s Encrypt provisioning window, so we don'\''t need
+          # to wait for cert here.
+          sleep 120
 
-      - name: Dispatch Post-Deploy Smoke Test in each FFC-EX repo and wait
+      - name: Dispatch Post-Deploy Smoke Test in each FFC-EX repo
+        id: dispatch
         shell: bash
         run: |
           set -uo pipefail
@@ -178,33 +181,59 @@ jobs:
             domains=$(echo "$domains_input" | tr ',' ' ')
           fi
 
-          fails=0
+          # Dispatch ALL smokes upfront so they run in parallel on GHA.
+          # We collect (domain, run_id) pairs then poll sequentially in the
+          # next step — the actual wait converges to the slowest single
+          # smoke (~20 min worst case for cert provisioning), not N * 20 min.
+          : > /tmp/smoke-dispatched.tsv
           for d in $domains; do
             repo="FreeForCharity/FFC-EX-${d}"
-            echo "::group::Smoke: $repo"
-
-            # Dispatch the smoke workflow. The smoke reads public/CNAME from
-            # the target repo, which is now the apex post-cutover.
+            echo "Dispatching smoke for $repo ..."
             if ! gh workflow run "Post-Deploy Smoke Test" --repo "$repo" --ref main 2>&1; then
               echo "::warning::Could not dispatch smoke for $repo (workflow may not exist on this repo)"
-              echo "::endgroup::"
+              printf '%s\tDISPATCH_FAILED\n' "$d" >> /tmp/smoke-dispatched.tsv
               continue
             fi
-
-            # Brief settle so the dispatched run is registered.
-            sleep 8
-
-            # Latest workflow_dispatch run for the smoke workflow.
+            # Settle a few seconds so the run is registered before we grab its id.
+            sleep 5
             run_id=$(gh run list --repo "$repo" --workflow "Post-Deploy Smoke Test" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || echo "")
             if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
               echo "::warning::Could not locate dispatched smoke run for $repo"
+              printf '%s\tNO_RUN_ID\n' "$d" >> /tmp/smoke-dispatched.tsv
+              continue
+            fi
+            echo "  -> run $run_id (https://github.com/${repo}/actions/runs/${run_id})"
+            printf '%s\t%s\n' "$d" "$run_id" >> /tmp/smoke-dispatched.tsv
+          done
+
+          echo ""
+          echo "Dispatched:"
+          cat /tmp/smoke-dispatched.tsv
+
+      - name: Poll each smoke to completion
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # Per-repo deadline matches the smoke'\''s internal cert-retry budget
+          # (20 min) plus Playwright install + screenshot (~3 min) plus slack.
+          per_repo_deadline_seconds=1500   # 25 min
+
+          fails=0
+          dispatched=0
+          while IFS=$'\t' read -r d run_id; do
+            dispatched=$(( dispatched + 1 ))
+            repo="FreeForCharity/FFC-EX-${d}"
+            echo "::group::Smoke wait: $d"
+
+            if [ "$run_id" = "DISPATCH_FAILED" ] || [ "$run_id" = "NO_RUN_ID" ]; then
+              echo "::error::$d smoke could not be dispatched ($run_id) — treating as failure"
+              fails=$(( fails + 1 ))
               echo "::endgroup::"
               continue
             fi
-            echo "Smoke run: https://github.com/${repo}/actions/runs/${run_id}"
 
-            # Poll until the run reaches a terminal state (max 5 min per repo).
-            deadline=$(( $(date +%s) + 300 ))
+            deadline=$(( $(date +%s) + per_repo_deadline_seconds ))
             status="unknown"
             while [ "$(date +%s)" -lt "$deadline" ]; do
               status=$(gh run view "$run_id" --repo "$repo" --json status,conclusion --jq '.status + ":" + (.conclusion // "null")' 2>/dev/null || echo "error:null")
@@ -212,22 +241,24 @@ jobs:
                 in_progress:*|queued:*|waiting:*) ;;
                 *) break ;;
               esac
-              sleep 15
+              sleep 20
             done
 
             if [[ "$status" == *":success" ]]; then
-              echo "✓ $d smoke passed"
+              echo "✓ $d smoke passed (https://github.com/${repo}/actions/runs/${run_id})"
             else
               echo "::error::$d smoke FAILED — final state: $status"
               echo "::error::See https://github.com/${repo}/actions/runs/${run_id}"
+              echo "::error::Download the smoke-visual-* artifact from that run for screenshots."
               fails=$(( fails + 1 ))
             fi
             echo "::endgroup::"
-          done
+          done < /tmp/smoke-dispatched.tsv
 
           echo ""
           if [ "$fails" -gt 0 ]; then
-            echo "::error::$fails of N smoke tests failed after DNS cutover. Investigate before considering the cutover done."
+            echo "::error::$fails of $dispatched smoke tests failed after DNS cutover."
+            echo "::error::Each failed smoke uploaded screenshots as 'smoke-visual-<run>' artifacts — inspect those."
             exit 1
           fi
-          echo "All smoke tests passed post-cutover."
+          echo "All $dispatched smoke tests passed post-cutover."

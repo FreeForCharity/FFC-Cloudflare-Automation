@@ -51,7 +51,6 @@ on:
 permissions:
   contents: read
   issues: write
-  id-token: write
 
 jobs:
   whmcs_preflight:
@@ -114,6 +113,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: cloudflare-prod
     needs: [whmcs_preflight]
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       domain: ${{ steps.meta.outputs.domain }}
       ns1: ${{ steps.meta.outputs.ns1 }}
@@ -174,6 +176,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: cloudflare-prod
     needs: [cloudflare_preflight]
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       domain: ${{ steps.meta.outputs.domain }}
       ns1: ${{ steps.meta.outputs.ns1 }}
@@ -230,6 +235,9 @@ jobs:
     runs-on: windows-latest
     environment: cloudflare-prod
     needs: [cloudflare_zone_create]
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       issues_count: ${{ steps.summary.outputs.issues_count }}
 

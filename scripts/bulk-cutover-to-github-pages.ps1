@@ -287,83 +287,83 @@ foreach ($domain in $domainList) {
         $result.CnameDetail = 'Skipped (-SkipCname)'
     }
     else {
-    $repo = "FreeForCharity/FFC-EX-$domain"
-    Write-Host "[$domain] STEP 1 — CNAME flip in $repo"
+        $repo = "FreeForCharity/FFC-EX-$domain"
+        Write-Host "[$domain] STEP 1 — CNAME flip in $repo"
 
-    try {
-        $fileInfo = Get-GhFileInfo -Repo $repo -FilePath 'public/CNAME'
+        try {
+            $fileInfo = Get-GhFileInfo -Repo $repo -FilePath 'public/CNAME'
 
-        if ($null -eq $fileInfo) {
-            Write-Warning "[$domain] public/CNAME not found in $repo — skipping CNAME step."
-    $result.CnameStatus = 'SKIP'
-    $result.CnameDetail = 'public/CNAME not found in repo'
-}
-else {
-    $currentContent = $fileInfo.Content
-    $apexContent = $domain
-    $stagingContent = "staging.$domain"
-
-    Write-Host "[$domain]   Current CNAME content: '$currentContent'"
-
-    if ($currentContent -eq $apexContent) {
-        Write-Host "[$domain]   Already apex — no CNAME change needed."
-                $result.CnameStatus = 'OK'
-                $result.CnameDetail = 'Already apex'
-            }
-            elseif ($currentContent -ne $stagingContent) {
-                Write-Warning "[$domain]   Unexpected CNAME content '$currentContent' (expected '$stagingContent' or '$apexContent'). Skipping."
+            if ($null -eq $fileInfo) {
+                Write-Warning "[$domain] public/CNAME not found in $repo — skipping CNAME step."
                 $result.CnameStatus = 'SKIP'
-                $result.CnameDetail = "Unexpected content: '$currentContent'"
+                $result.CnameDetail = 'public/CNAME not found in repo'
             }
             else {
-                # Current is staging.<domain> — flip to apex
-        if ($DryRun) {
-            Write-Host "[$domain]   [DRY-RUN] Would commit public/CNAME: '$currentContent' -> '$apexContent'"
-            $result.CnameStatus = 'DRY-RUN'
-            $result.CnameDetail = "Would update: '$currentContent' -> '$apexContent'"
+                $currentContent = $fileInfo.Content
+                $apexContent = $domain
+                $stagingContent = "staging.$domain"
+
+                Write-Host "[$domain]   Current CNAME content: '$currentContent'"
+
+                if ($currentContent -eq $apexContent) {
+                    Write-Host "[$domain]   Already apex — no CNAME change needed."
+                    $result.CnameStatus = 'OK'
+                    $result.CnameDetail = 'Already apex'
+                }
+                elseif ($currentContent -ne $stagingContent) {
+                    Write-Warning "[$domain]   Unexpected CNAME content '$currentContent' (expected '$stagingContent' or '$apexContent'). Skipping."
+                    $result.CnameStatus = 'SKIP'
+                    $result.CnameDetail = "Unexpected content: '$currentContent'"
+                }
+                else {
+                    # Current is staging.<domain> — flip to apex
+                    if ($DryRun) {
+                        Write-Host "[$domain]   [DRY-RUN] Would commit public/CNAME: '$currentContent' -> '$apexContent'"
+                        $result.CnameStatus = 'DRY-RUN'
+                        $result.CnameDetail = "Would update: '$currentContent' -> '$apexContent'"
+                    }
+                    else {
+                        Write-Host "[$domain]   Committing public/CNAME: '$stagingContent' -> '$apexContent'"
+                        $commitMsg = "chore: flip GH Pages custom domain to apex $domain`n`n[automated cutover]"
+                        $null = Set-GhFileContent -Repo $repo -FilePath 'public/CNAME' `
+                            -NewContent $apexContent -Sha $fileInfo.Sha -CommitMessage $commitMsg
+                        Write-Host "[$domain]   CNAME commit OK."
+                        $result.CnameStatus = 'OK'
+                        $result.CnameDetail = "Updated: '$stagingContent' -> '$apexContent'"
+                    }
+                }
+            }
         }
-        else {
-            Write-Host "[$domain]   Committing public/CNAME: '$stagingContent' -> '$apexContent'"
-            $commitMsg = "chore: flip GH Pages custom domain to apex $domain`n`n[automated cutover]"
-            $null = Set-GhFileContent -Repo $repo -FilePath 'public/CNAME' `
-                -NewContent $apexContent -Sha $fileInfo.Sha -CommitMessage $commitMsg
-            Write-Host "[$domain]   CNAME commit OK."
-            $result.CnameStatus = 'OK'
-            $result.CnameDetail = "Updated: '$stagingContent' -> '$apexContent'"
+        catch {
+            $errMsg = $_.Exception.Message
+            # Capture HTTP response body for diagnostics (PowerShell hides it by default)
+            $respBody = ''
+            if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                $respBody = $_.ErrorDetails.Message
+            }
+            elseif ($_.Exception.Response) {
+                try {
+                    $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+                    $respBody = $reader.ReadToEnd()
+                }
+                catch { }
+            }
+            # Token diagnostics (length only — never print value)
+            $tokLen = if ($ghToken) { $ghToken.Length } else { 0 }
+            $tokPrefix = if ($ghToken -and $ghToken.Length -ge 4) { $ghToken.Substring(0, 4) } else { '' }
+            Write-Warning "[$domain]   CNAME step error: $errMsg"
+            if ($respBody) { Write-Warning "[$domain]   Response body: $respBody" }
+            Write-Warning "[$domain]   GH_TOKEN length=$tokLen prefix=$tokPrefix (prefix tells PAT type: ghp_=classic, github_pat_=fine-grained)"
+            $result.CnameStatus = 'FAIL'
+            $result.CnameDetail = if ($respBody) { "$errMsg | $respBody" } else { $errMsg }
         }
-    }
-}
-}
-catch {
-    $errMsg = $_.Exception.Message
-    # Capture HTTP response body for diagnostics (PowerShell hides it by default)
-    $respBody = ''
-    if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
-        $respBody = $_.ErrorDetails.Message
-    }
-    elseif ($_.Exception.Response) {
-        try {
-            $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-            $respBody = $reader.ReadToEnd()
-        }
-        catch { }
-    }
-    # Token diagnostics (length only — never print value)
-    $tokLen = if ($ghToken) { $ghToken.Length } else { 0 }
-    $tokPrefix = if ($ghToken -and $ghToken.Length -ge 4) { $ghToken.Substring(0, 4) } else { '' }
-    Write-Warning "[$domain]   CNAME step error: $errMsg"
-    if ($respBody) { Write-Warning "[$domain]   Response body: $respBody" }
-    Write-Warning "[$domain]   GH_TOKEN length=$tokLen prefix=$tokPrefix (prefix tells PAT type: ghp_=classic, github_pat_=fine-grained)"
-    $result.CnameStatus = 'FAIL'
-    $result.CnameDetail = if ($respBody) { "$errMsg | $respBody" } else { $errMsg }
-}
     }  # end else (SkipCname)
 
-# ===================================================================
-# STEP 2: DNS flip in Cloudflare
-# ===================================================================
-if ($SkipDns) {
-    Write-Host "[$domain] STEP 2 — DNS skipped (-SkipDns flag set)"
+    # ===================================================================
+    # STEP 2: DNS flip in Cloudflare
+    # ===================================================================
+    if ($SkipDns) {
+        Write-Host "[$domain] STEP 2 — DNS skipped (-SkipDns flag set)"
         $result.DnsStatus = 'SKIP'
         $result.DnsDetail = '-SkipDns flag'
     }
@@ -373,139 +373,139 @@ if ($SkipDns) {
     else {
         Write-Host "[$domain] STEP 2 — DNS flip in Cloudflare"
 
-try {
-    $zone = Resolve-CfZone -Domain $domain
-    if (-not $zone) {
-        Write-Warning "[$domain]   Zone not found via any available CF token."
-        $result.DnsStatus = 'SKIP'
-        $result.DnsDetail = 'CF zone not found'
-    }
-    else {
-        Write-Host "[$domain]   Zone resolved via $($zone.Account) token (id $($zone.ZoneId))"
-
-        $apexRecords = @(Get-ApexARecords -ZoneId $zone.ZoneId -Token $zone.Token -Domain $domain)
-        Write-Host "[$domain]   Found $($apexRecords.Count) apex A record(s):"
-        foreach ($r in $apexRecords) {
-            Write-Host ("    - A {0} -> {1} (proxied={2}, ttl={3}, id={4})" -f $r.name, $r.content, $r.proxied, $r.ttl, $r.id)
-        }
-
-        # --- Idempotency check ---
-        $hostPapaRecords = @($apexRecords | Where-Object { $_.content -eq $HostPapaIp })
-        $ghPagesRecords = @($apexRecords | Where-Object { $GhPagesIps -contains $_.content })
-        $otherRecords = @($apexRecords | Where-Object { $_.content -ne $HostPapaIp -and $GhPagesIps -notcontains $_.content })
-
-        $allGhPagesPresent = ($GhPagesIps | Where-Object {
-                $ip = $_
-                $ghPagesRecords | Where-Object { $_.content -eq $ip }
-            }).Count -eq $GhPagesIps.Count
-
-        if ($hostPapaRecords.Count -eq 0 -and $allGhPagesPresent -and $otherRecords.Count -eq 0) {
-            Write-Host "[$domain]   Already correct: 4 GH Pages A records, no HostPapa IP. No DNS change needed."
-            $result.DnsStatus = 'OK'
-            $result.DnsDetail = 'Already correct (4 GH Pages IPs, no HostPapa IP)'
-        }
-        else {
-            # Report what we'll do
-            $toDelete = @($apexRecords | Where-Object { $_.content -eq $HostPapaIp })
-            $ipsAlreadyPresent = @($ghPagesRecords | ForEach-Object { $_.content })
-            $toCreate = @($GhPagesIps | Where-Object { $ipsAlreadyPresent -notcontains $_ })
-
-            if ($toDelete.Count -gt 0) {
-                foreach ($r in $toDelete) {
-                    Write-Host "[$domain]   Would DELETE apex A -> $($r.content) (id=$($r.id))"
-                }
-            }
-            if ($toCreate.Count -gt 0) {
-                Write-Host "[$domain]   Would CREATE apex A -> $($toCreate -join ', ') (proxied=false)"
-            }
-            if ($otherRecords.Count -gt 0) {
-                Write-Warning "[$domain]   WARNING: $($otherRecords.Count) apex A record(s) with unexpected IPs will be left untouched:"
-                foreach ($r in $otherRecords) {
-                    Write-Warning "    - A -> $($r.content) (id=$($r.id))"
-                }
-            }
-
-            if ($DryRun) {
-                $dnsDetail = @()
-                if ($toDelete.Count -gt 0) { $dnsDetail += "Would DELETE $($toDelete.Count) HostPapa A record(s)" }
-                if ($toCreate.Count -gt 0) { $dnsDetail += "Would CREATE $($toCreate.Count) GH Pages A record(s) ($($toCreate -join ', '))" }
-                if ($otherRecords.Count -gt 0) { $dnsDetail += "$($otherRecords.Count) unexpected A record(s) left untouched" }
-                $result.DnsStatus = 'DRY-RUN'
-                $result.DnsDetail = $dnsDetail -join '; '
+        try {
+            $zone = Resolve-CfZone -Domain $domain
+            if (-not $zone) {
+                Write-Warning "[$domain]   Zone not found via any available CF token."
+                $result.DnsStatus = 'SKIP'
+                $result.DnsDetail = 'CF zone not found'
             }
             else {
-                $dnsErrors = @()
+                Write-Host "[$domain]   Zone resolved via $($zone.Account) token (id $($zone.ZoneId))"
 
-                # Delete HostPapa record(s)
-                foreach ($r in $toDelete) {
-                    Write-Host "[$domain]   Deleting A -> $($r.content) (id=$($r.id))..."
-                    try {
-                        $delResp = Invoke-Cf -Method DELETE -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records/$($r.id)"
-                        if ($delResp.success) {
-                            Write-Host "[$domain]   Deleted A -> $($r.content)"
-                        }
-                        else {
-                            $msg = ($delResp.errors | ConvertTo-Json -Depth 4 -Compress)
-                            Write-Warning "[$domain]   DELETE failed: $msg"
-                            $dnsErrors += "DELETE $($r.content): $msg"
-                        }
-                    }
-                    catch {
-                        Write-Warning "[$domain]   DELETE error: $($_.Exception.Message)"
-                        $dnsErrors += "DELETE $($r.content): $($_.Exception.Message)"
-                    }
+                $apexRecords = @(Get-ApexARecords -ZoneId $zone.ZoneId -Token $zone.Token -Domain $domain)
+                Write-Host "[$domain]   Found $($apexRecords.Count) apex A record(s):"
+                foreach ($r in $apexRecords) {
+                    Write-Host ("    - A {0} -> {1} (proxied={2}, ttl={3}, id={4})" -f $r.name, $r.content, $r.proxied, $r.ttl, $r.id)
                 }
 
-                # Create missing GH Pages A records
-                foreach ($ip in $toCreate) {
-                    Write-Host "[$domain]   Creating A -> $ip (proxied=false)..."
-                    $body = @{
-                        type    = 'A'
-                        name    = $domain
-                        content = $ip
-                        ttl     = 1
-                        proxied = $false
-                    }
-                    try {
-                        $createResp = Invoke-Cf -Method POST -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records" -Body $body
-                        if ($createResp.success) {
-                            Write-Host "[$domain]   Created A -> $ip"
-                        }
-                        else {
-                            $msg = ($createResp.errors | ConvertTo-Json -Depth 4 -Compress)
-                            Write-Warning "[$domain]   CREATE failed for $ip : $msg"
-                            $dnsErrors += "CREATE $ip : $msg"
-                        }
-                    }
-                    catch {
-                        Write-Warning "[$domain]   CREATE error for $ip : $($_.Exception.Message)"
-                        $dnsErrors += "CREATE $ip : $($_.Exception.Message)"
-                    }
-                }
+                # --- Idempotency check ---
+                $hostPapaRecords = @($apexRecords | Where-Object { $_.content -eq $HostPapaIp })
+                $ghPagesRecords = @($apexRecords | Where-Object { $GhPagesIps -contains $_.content })
+                $otherRecords = @($apexRecords | Where-Object { $_.content -ne $HostPapaIp -and $GhPagesIps -notcontains $_.content })
 
-                if ($dnsErrors.Count -gt 0) {
-                    $result.DnsStatus = 'FAIL'
-                    $result.DnsDetail = $dnsErrors -join ' | '
+                $allGhPagesPresent = ($GhPagesIps | Where-Object {
+                        $ip = $_
+                        $ghPagesRecords | Where-Object { $_.content -eq $ip }
+                    }).Count -eq $GhPagesIps.Count
+
+                if ($hostPapaRecords.Count -eq 0 -and $allGhPagesPresent -and $otherRecords.Count -eq 0) {
+                    Write-Host "[$domain]   Already correct: 4 GH Pages A records, no HostPapa IP. No DNS change needed."
+                    $result.DnsStatus = 'OK'
+                    $result.DnsDetail = 'Already correct (4 GH Pages IPs, no HostPapa IP)'
                 }
                 else {
-                    $result.DnsStatus = 'OK'
-                    $deletedMsg = if ($toDelete.Count -gt 0) { "Deleted $($toDelete.Count) HostPapa record(s); " } else { '' }
-                    $createdMsg = if ($toCreate.Count -gt 0) { "Created $($toCreate.Count) GH Pages record(s)" } else { '' }
-                    $result.DnsDetail = "$deletedMsg$createdMsg".TrimEnd(' ;')
+                    # Report what we'll do
+                    $toDelete = @($apexRecords | Where-Object { $_.content -eq $HostPapaIp })
+                    $ipsAlreadyPresent = @($ghPagesRecords | ForEach-Object { $_.content })
+                    $toCreate = @($GhPagesIps | Where-Object { $ipsAlreadyPresent -notcontains $_ })
+
+                    if ($toDelete.Count -gt 0) {
+                        foreach ($r in $toDelete) {
+                            Write-Host "[$domain]   Would DELETE apex A -> $($r.content) (id=$($r.id))"
+                        }
+                    }
+                    if ($toCreate.Count -gt 0) {
+                        Write-Host "[$domain]   Would CREATE apex A -> $($toCreate -join ', ') (proxied=false)"
+                    }
+                    if ($otherRecords.Count -gt 0) {
+                        Write-Warning "[$domain]   WARNING: $($otherRecords.Count) apex A record(s) with unexpected IPs will be left untouched:"
+                        foreach ($r in $otherRecords) {
+                            Write-Warning "    - A -> $($r.content) (id=$($r.id))"
+                        }
+                    }
+
+                    if ($DryRun) {
+                        $dnsDetail = @()
+                        if ($toDelete.Count -gt 0) { $dnsDetail += "Would DELETE $($toDelete.Count) HostPapa A record(s)" }
+                        if ($toCreate.Count -gt 0) { $dnsDetail += "Would CREATE $($toCreate.Count) GH Pages A record(s) ($($toCreate -join ', '))" }
+                        if ($otherRecords.Count -gt 0) { $dnsDetail += "$($otherRecords.Count) unexpected A record(s) left untouched" }
+                        $result.DnsStatus = 'DRY-RUN'
+                        $result.DnsDetail = $dnsDetail -join '; '
+                    }
+                    else {
+                        $dnsErrors = @()
+
+                        # Delete HostPapa record(s)
+                        foreach ($r in $toDelete) {
+                            Write-Host "[$domain]   Deleting A -> $($r.content) (id=$($r.id))..."
+                            try {
+                                $delResp = Invoke-Cf -Method DELETE -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records/$($r.id)"
+                                if ($delResp.success) {
+                                    Write-Host "[$domain]   Deleted A -> $($r.content)"
+                                }
+                                else {
+                                    $msg = ($delResp.errors | ConvertTo-Json -Depth 4 -Compress)
+                                    Write-Warning "[$domain]   DELETE failed: $msg"
+                                    $dnsErrors += "DELETE $($r.content): $msg"
+                                }
+                            }
+                            catch {
+                                Write-Warning "[$domain]   DELETE error: $($_.Exception.Message)"
+                                $dnsErrors += "DELETE $($r.content): $($_.Exception.Message)"
+                            }
+                        }
+
+                        # Create missing GH Pages A records
+                        foreach ($ip in $toCreate) {
+                            Write-Host "[$domain]   Creating A -> $ip (proxied=false)..."
+                            $body = @{
+                                type    = 'A'
+                                name    = $domain
+                                content = $ip
+                                ttl     = 1
+                                proxied = $false
+                            }
+                            try {
+                                $createResp = Invoke-Cf -Method POST -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records" -Body $body
+                                if ($createResp.success) {
+                                    Write-Host "[$domain]   Created A -> $ip"
+                                }
+                                else {
+                                    $msg = ($createResp.errors | ConvertTo-Json -Depth 4 -Compress)
+                                    Write-Warning "[$domain]   CREATE failed for $ip : $msg"
+                                    $dnsErrors += "CREATE $ip : $msg"
+                                }
+                            }
+                            catch {
+                                Write-Warning "[$domain]   CREATE error for $ip : $($_.Exception.Message)"
+                                $dnsErrors += "CREATE $ip : $($_.Exception.Message)"
+                            }
+                        }
+
+                        if ($dnsErrors.Count -gt 0) {
+                            $result.DnsStatus = 'FAIL'
+                            $result.DnsDetail = $dnsErrors -join ' | '
+                        }
+                        else {
+                            $result.DnsStatus = 'OK'
+                            $deletedMsg = if ($toDelete.Count -gt 0) { "Deleted $($toDelete.Count) HostPapa record(s); " } else { '' }
+                            $createdMsg = if ($toCreate.Count -gt 0) { "Created $($toCreate.Count) GH Pages record(s)" } else { '' }
+                            $result.DnsDetail = "$deletedMsg$createdMsg".TrimEnd(' ;')
+                        }
+                    }
                 }
             }
         }
+        catch {
+            Write-Warning "[$domain]   DNS step error: $($_.Exception.Message)"
+            $result.DnsStatus = 'FAIL'
+            $result.DnsDetail = $_.Exception.Message
+        }
     }
-}
-catch {
-    Write-Warning "[$domain]   DNS step error: $($_.Exception.Message)"
-    $result.DnsStatus = 'FAIL'
-    $result.DnsDetail = $_.Exception.Message
-}
-}
 
-$results += $result
-Write-Host ''
+    $results += $result
+    Write-Host ''
 }
 
 # ---------------------------------------------------------------------------
@@ -565,7 +565,7 @@ if ($env:GITHUB_STEP_SUMMARY) {
     )
     foreach ($r in $results) {
         $cd = ($r.CnameDetail -replace '\|', '\\|')
-        $dd = ($r.DnsDetail   -replace '\|', '\\|')
+        $dd = ($r.DnsDetail -replace '\|', '\\|')
         $lines += "| $($r.Domain) | $($r.CnameStatus) | $($r.DnsStatus) | $cd | $dd | "
     }
 
@@ -578,17 +578,17 @@ if ($env:GITHUB_STEP_SUMMARY) {
         foreach ($r in ($results | Where-Object { $_.DnsStatus -eq 'SKIP-MANUAL' })) {
             $lines += "### $($r.Domain) — $($ManualCfZones[$r.Domain])"
             $lines += '```'
-        $lines += 'DELETE : A @ 216.222.200.253'
-        $lines += 'CREATE : A @ 185.199.108.153  (proxied=false)'
-        $lines += '         A @ 185.199.109.153'
-        $lines += '         A @ 185.199.110.153'
-        $lines += '         A @ 185.199.111.153'
-        $lines += '```'
-        $lines += ''
+            $lines += 'DELETE : A @ 216.222.200.253'
+            $lines += 'CREATE : A @ 185.199.108.153  (proxied=false)'
+            $lines += '         A @ 185.199.109.153'
+            $lines += '         A @ 185.199.110.153'
+            $lines += '         A @ 185.199.111.153'
+            $lines += '```'
+            $lines += ''
+        }
     }
-}
 
-Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ($lines -join "`n")
+    Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ($lines -join "`n")
 }
 
 # Exit 1 if any hard failures

@@ -25,24 +25,26 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Validate scope input
+    - name: Validate inputs
       shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+        INPUT_AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        INPUT_AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
       run: |
         $ErrorActionPreference = 'Stop'
-        $scope = '${{ inputs.scope }}'
+        $scope = $env:INPUT_SCOPE
         if ($scope -notin @('read', 'write')) {
           throw "Invalid scope '$scope'. Expected 'read' or 'write'."
         }
-        $vaultName = '${{ inputs.vault-name }}'
-        if ([string]::IsNullOrWhiteSpace($vaultName)) {
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_VAULT_NAME)) {
           throw "Input 'vault-name' is empty."
         }
-        $clientId = '${{ inputs.azure-client-id }}'
-        if ([string]::IsNullOrWhiteSpace($clientId)) {
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_CLIENT_ID)) {
           throw "Input 'azure-client-id' is empty. Pass secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID from the caller."
         }
-        $tenantId = '${{ inputs.azure-tenant-id }}'
-        if ([string]::IsNullOrWhiteSpace($tenantId)) {
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_TENANT_ID)) {
           throw "Input 'azure-tenant-id' is empty. Pass secrets.WR_ALL_FFC_AZURE_TENANT_ID from the caller."
         }
 
@@ -55,21 +57,33 @@ runs:
 
     - name: Fetch Cloudflare tokens from Key Vault
       shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
       run: |
         $ErrorActionPreference = 'Stop'
 
-        $scope = '${{ inputs.scope }}'
-        $vaultName = '${{ inputs.vault-name }}'
+        $scope = $env:INPUT_SCOPE
+        $vaultName = $env:INPUT_VAULT_NAME
         $prefix = if ($scope -eq 'write') { 'wr-all' } else { 'read-all' }
 
         $ffcName = "$prefix-ffc-cloudflare-api-token-zone-and-dns"
-        $cmName  = "$prefix-cm-cloudflare-api-token-zone-and-dns"
+        $cmName = "$prefix-cm-cloudflare-api-token-zone-and-dns"
 
+        # az is an external command — $ErrorActionPreference does NOT cause it to throw
+        # on non-zero exit. Check $LASTEXITCODE explicitly after each az invocation so a
+        # KV permission/auth failure surfaces as a step failure instead of an empty value.
         $ffcRaw = az keyvault secret show --vault-name $vaultName --name $ffcName --query value -o tsv
-        $cmRaw  = az keyvault secret show --vault-name $vaultName --name $cmName  --query value -o tsv
+        if ($LASTEXITCODE -ne 0) {
+          throw "az keyvault secret show for '$ffcName' failed (exit $LASTEXITCODE). Check managed-identity 'Get' permission on vault '$vaultName' and that the secret exists."
+        }
+        $cmRaw = az keyvault secret show --vault-name $vaultName --name $cmName --query value -o tsv
+        if ($LASTEXITCODE -ne 0) {
+          throw "az keyvault secret show for '$cmName' failed (exit $LASTEXITCODE). Check managed-identity 'Get' permission on vault '$vaultName' and that the secret exists."
+        }
 
         $ffc = ([string]$ffcRaw).Trim().Trim('"')
-        $cm  = ([string]$cmRaw ).Trim().Trim('"')
+        $cm = ([string]$cmRaw).Trim().Trim('"')
 
         if ([string]::IsNullOrWhiteSpace($ffc)) {
           throw "Key Vault secret '$ffcName' returned empty from vault '$vaultName'."

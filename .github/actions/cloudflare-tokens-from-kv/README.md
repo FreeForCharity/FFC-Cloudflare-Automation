@@ -23,7 +23,7 @@ This action makes KV the single source of truth. Workflows authenticate to Azure
 password ever stored in GitHub), pull the current token value from KV at runtime, and expose it to
 downstream steps with the same env-var names downstream scripts already expect.
 
-See also: `docs/runbooks/github-actions-environments-and-secrets.md` and the
+See also `docs/github-actions-environments-and-secrets.md` in CBMadmin and the
 [F1 refactor tracking issue](https://github.com/FreeForCharity/FFC-IN-ClarkeMoyerAdmin/issues/105).
 
 ## Inputs
@@ -105,13 +105,21 @@ The managed identity must also have a federated credential trust on
 
 ## Rotation flow
 
-To rotate a Cloudflare token (either FFC or CM):
+To rotate a Cloudflare token, open its Key Vault entry, click **+ New Version**, paste the new
+token, and save. The next workflow dispatch picks up the new value automatically.
 
-1. Generate a new token in the Cloudflare dashboard with the same scope set as the old one
-2. Open KV:
-   https://portal.azure.com/#@/asset/Microsoft_Azure_KeyVault/Secret/https://kv-ffc-admin-prod-cbm.vault.azure.net/secrets/wr-all-{ffc,cm}-cloudflare-api-token-zone-and-dns
-3. `+ New Version` → paste new token → Create
-4. (Optional) re-dispatch any consumer workflow to validate
+Direct Key Vault links:
+
+- FFC (read-write):
+  https://portal.azure.com/#@/asset/Microsoft_Azure_KeyVault/Secret/https://kv-ffc-admin-prod-cbm.vault.azure.net/secrets/wr-all-ffc-cloudflare-api-token-zone-and-dns
+- CM (read-write):
+  https://portal.azure.com/#@/asset/Microsoft_Azure_KeyVault/Secret/https://kv-ffc-admin-prod-cbm.vault.azure.net/secrets/wr-all-cm-cloudflare-api-token-zone-and-dns
+- FFC (read-only):
+  https://portal.azure.com/#@/asset/Microsoft_Azure_KeyVault/Secret/https://kv-ffc-admin-prod-cbm.vault.azure.net/secrets/read-all-ffc-cloudflare-api-token-zone-and-dns
+- CM (read-only):
+  https://portal.azure.com/#@/asset/Microsoft_Azure_KeyVault/Secret/https://kv-ffc-admin-prod-cbm.vault.azure.net/secrets/read-all-cm-cloudflare-api-token-zone-and-dns
+
+After updating KV, re-dispatch any consumer workflow to validate.
 
 No GitHub Environment Secret updates needed. No additional sync workflow needed.
 

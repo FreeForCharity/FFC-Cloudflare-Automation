@@ -37,12 +37,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # F1 refactor: Cloudflare tokens now sourced from Key Vault at runtime via OIDC.
-      # The composite action sets CLOUDFLARE_API_TOKEN_{FFC,CM} for subsequent steps.
-      # SHA pinned to the head of FFC-IN-ClarkeMoyerAdmin#106 branch; update after that PR merges.
-      - uses: FreeForCharity/FFC-IN-ClarkeMoyerAdmin/.github/actions/cloudflare-tokens-from-kv@28b0df4e1ee17715379a1882b91315548d71c4f3
+      - name: Validate required Azure secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::WR_ALL_FFC_AZURE_KV_CLIENT_ID secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::WR_ALL_FFC_AZURE_TENANT_ID secret is not set (environment: cloudflare-prod)";
+            exit 1;
+          fi
+
+      # F1 refactor: CF tokens from Key Vault at runtime via OIDC. Workflow is
+      # read-only (audit + dry-run-preview), so scope: read loads READ_ALL tokens.
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
         with:
-          scope: write
+          scope: read
           azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 

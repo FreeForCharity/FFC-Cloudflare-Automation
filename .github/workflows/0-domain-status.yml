@@ -37,12 +37,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # F1 refactor: Cloudflare tokens now sourced from Key Vault at runtime via OIDC.
+      # The composite action sets CLOUDFLARE_API_TOKEN_{FFC,CM} for subsequent steps.
+      # Ref pinned to the PR branch until PR #106 in CBMadmin merges; update to @<sha> then.
+      - uses: FreeForCharity/FFC-IN-ClarkeMoyerAdmin/.github/actions/cloudflare-tokens-from-kv@feat/f1-composite-cf-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+
       - name: Cloudflare audit + dry-run preview
         id: run
         shell: pwsh
         env:
-          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
-          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
           FFC_CF_DMARCMGMT_DEBUG: ${{ inputs.dmarc_mgmt_debug && '1' || '0' }}
         run: |
           $ErrorActionPreference = 'Stop'

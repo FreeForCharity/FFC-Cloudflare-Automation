@@ -67,18 +67,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate required secrets
-        shell: bash
-        run: |
-          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ] && [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-            echo "::error::Cloudflare token secret(s) not set (environment: cloudflare-prod). Set FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS and/or CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS.";
-            exit 1;
-          fi
+      # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Run Cloudflare audit portion
         shell: pwsh
-        env:
-          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
-          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
           pwsh -NoProfile -File scripts/m365-domain-preflight.ps1 -Domain "${{ inputs.domain }}" -SkipGraph

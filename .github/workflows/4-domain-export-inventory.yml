@@ -6,13 +6,15 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   export_cloudflare:
     name: Export Cloudflare zones
     runs-on: windows-latest
     environment: cloudflare-prod
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 

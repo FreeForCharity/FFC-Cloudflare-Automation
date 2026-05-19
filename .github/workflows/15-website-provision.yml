@@ -86,7 +86,6 @@ permissions:
   contents: read
   issues: write
   actions: read
-  id-token: write
 
 env:
   WEBSITE_TARGET_ORG: FreeForCharity
@@ -711,6 +710,9 @@ jobs:
     environment: cloudflare-prod
     needs: [resolve]
     if: needs.resolve.outputs.skip != 'true'
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       zone_controlled: ${{ steps.check.outputs.zone_controlled }}
       zone_account: ${{ steps.check.outputs.zone_account }}
@@ -719,12 +721,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
+      # F1 refactor: CF tokens from Key Vault at runtime via OIDC. zone_check
+      # only does GETs (cloudflare-zone-get.ps1), so use scope: read.
       # continue-on-error preserves the original best-effort behavior: if OIDC/KV fails,
       # the next step's existing "missing tokens" fallback marks the zone as not controlled.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
         with:
-          scope: write
+          scope: read
           azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
         continue-on-error: true
@@ -827,6 +830,9 @@ jobs:
     environment: cloudflare-prod
     needs: [resolve, zone_check]
     if: needs.resolve.outputs.skip != 'true' && needs.zone_check.outputs.zone_controlled == 'true'
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 

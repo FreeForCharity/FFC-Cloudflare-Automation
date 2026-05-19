@@ -39,11 +39,11 @@ runs:
         }
         $clientId = '${{ inputs.azure-client-id }}'
         if ([string]::IsNullOrWhiteSpace($clientId)) {
-          throw "Input 'azure-client-id' is empty. Pass `${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }} from the caller."
+          throw "Input 'azure-client-id' is empty. Pass secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID from the caller."
         }
         $tenantId = '${{ inputs.azure-tenant-id }}'
         if ([string]::IsNullOrWhiteSpace($tenantId)) {
-          throw "Input 'azure-tenant-id' is empty. Pass `${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }} from the caller."
+          throw "Input 'azure-tenant-id' is empty. Pass secrets.WR_ALL_FFC_AZURE_TENANT_ID from the caller."
         }
 
     - name: Azure login (OIDC)

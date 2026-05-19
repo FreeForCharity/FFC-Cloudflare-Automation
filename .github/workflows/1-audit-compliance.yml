@@ -23,7 +23,7 @@ jobs:
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
         with:
-          scope: write
+          scope: read
           azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 

@@ -86,6 +86,7 @@ permissions:
   contents: read
   issues: write
   actions: read
+  id-token: write
 
 env:
   WEBSITE_TARGET_ORG: FreeForCharity
@@ -718,12 +719,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
+      # continue-on-error preserves the original best-effort behavior: if OIDC/KV fails,
+      # the next step's existing "missing tokens" fallback marks the zone as not controlled.
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+        continue-on-error: true
+
       - name: Cloudflare source-of-truth zone check
         id: check
         shell: pwsh
-        env:
-          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
-          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = "${{ needs.resolve.outputs.domain }}"
@@ -822,24 +830,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate required Cloudflare secrets
-        shell: bash
-        run: |
-          if [ -z "${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-            echo "::error::FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
-            exit 1;
-          fi
-          if [ -z "${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}" ]; then
-            echo "::error::CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)";
-            exit 1;
-          fi
+      # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Enforce GitHub Pages DNS (apex + www)
         id: enforce
         shell: pwsh
-        env:
-          CLOUDFLARE_API_TOKEN_FFC: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
-          CLOUDFLARE_API_TOKEN_CM: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = "${{ needs.resolve.outputs.domain }}"

@@ -27,7 +27,7 @@ permissions:
 jobs:
   cloudflare:
     runs-on: windows-latest
-    environment: cloudflare-prod
+    environment: cloudflare-prod-read
 
     outputs:
       issues_count: ${{ steps.summary.outputs.issues_count }}
@@ -40,12 +40,12 @@ jobs:
       - name: Validate required Azure secrets
         shell: bash
         run: |
-          if [ -z "${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
-            echo "::error::WR_ALL_FFC_AZURE_KV_CLIENT_ID secret is not set (environment: cloudflare-prod)";
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID secret is not set (environment: cloudflare-prod-read)";
             exit 1;
           fi
-          if [ -z "${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}" ]; then
-            echo "::error::WR_ALL_FFC_AZURE_TENANT_ID secret is not set (environment: cloudflare-prod)";
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID secret is not set (environment: cloudflare-prod-read)";
             exit 1;
           fi
 
@@ -54,8 +54,8 @@ jobs:
       - uses: ./.github/actions/cloudflare-tokens-from-kv
         with:
           scope: read
-          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Cloudflare audit + dry-run preview
         id: run

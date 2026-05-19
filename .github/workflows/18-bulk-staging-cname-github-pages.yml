@@ -28,7 +28,7 @@ permissions:
 jobs:
   bulk-staging-cname:
     runs-on: windows-latest
-    environment: cloudflare-prod
+    environment: cloudflare-prod-write
     steps:
       - uses: actions/checkout@v4
 

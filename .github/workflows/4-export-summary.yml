@@ -11,16 +11,16 @@ permissions:
 jobs:
   export_summary:
     runs-on: windows-latest
-    environment: cloudflare-prod
+    environment: cloudflare-prod-read
     steps:
       - uses: actions/checkout@v4
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
         with:
-          scope: write
-          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Run DNS Export (FFC)
         shell: pwsh

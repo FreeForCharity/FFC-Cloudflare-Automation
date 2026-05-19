@@ -33,7 +33,7 @@ permissions:
 jobs:
   cloudflare_enforce:
     runs-on: windows-latest
-    environment: cloudflare-prod
+    environment: cloudflare-prod-write
 
     outputs:
       issues_count: ${{ steps.summary.outputs.issues_count }}
@@ -140,7 +140,7 @@ jobs:
 
   cloudflare_set_dkim:
     runs-on: ubuntu-latest
-    environment: cloudflare-prod
+    environment: cloudflare-prod-write
     needs: [exo_check]
     if: ${{ inputs.dry_run == false }}
 

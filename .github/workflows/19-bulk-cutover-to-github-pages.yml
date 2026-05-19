@@ -95,7 +95,7 @@ jobs:
       ${{ always() && inputs.skip_dns != true && (needs.cname-flip.result == 'success' ||
       needs.cname-flip.result == 'skipped') }}
     runs-on: windows-latest
-    environment: cloudflare-prod
+    environment: cloudflare-prod-write
     env:
       # GH_TOKEN set to a dummy so the script doesn't error on missing var;
       # the script uses SkipCname switch below to avoid GitHub API calls.

@@ -37,7 +37,7 @@ permissions:
 jobs:
   create-zone:
     runs-on: ubuntu-latest
-    environment: cloudflare-prod
+    environment: cloudflare-prod-write
 
     steps:
       - uses: actions/checkout@v4

@@ -111,7 +111,7 @@ jobs:
 
   cloudflare_preflight:
     runs-on: ubuntu-latest
-    environment: cloudflare-prod
+    environment: cloudflare-prod-read
     needs: [whmcs_preflight]
     permissions:
       contents: read
@@ -142,11 +142,12 @@ jobs:
           echo "ns2=$ns2" >> "$GITHUB_OUTPUT"
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
+      # Read-only operation (just zone-get), so scope: read loads READ_ALL tokens.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
         with:
-          scope: write
-          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Check zone exists in Cloudflare (smoke test)
         shell: pwsh
@@ -174,7 +175,7 @@ jobs:
 
   cloudflare_zone_create:
     runs-on: ubuntu-latest
-    environment: cloudflare-prod
+    environment: cloudflare-prod-write
     needs: [cloudflare_preflight]
     permissions:
       contents: read
@@ -233,7 +234,7 @@ jobs:
 
   cloudflare_enforce_standard:
     runs-on: windows-latest
-    environment: cloudflare-prod
+    environment: cloudflare-prod-write
     needs: [cloudflare_zone_create]
     permissions:
       contents: read

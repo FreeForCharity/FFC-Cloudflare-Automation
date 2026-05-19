@@ -16,7 +16,7 @@ permissions:
 jobs:
   audit_zone:
     runs-on: windows-latest
-    environment: cloudflare-prod
+    environment: cloudflare-prod-read
     steps:
       - uses: actions/checkout@v4
 
@@ -24,8 +24,8 @@ jobs:
       - uses: ./.github/actions/cloudflare-tokens-from-kv
         with:
           scope: read
-          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Run DNS Compliance Audit
         shell: pwsh

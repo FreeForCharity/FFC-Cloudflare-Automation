@@ -36,7 +36,6 @@ permissions:
   contents: read
   issues: read
   actions: read
-  id-token: write
 
 jobs:
   resolve-context:
@@ -115,13 +114,17 @@ jobs:
     runs-on: windows-latest # Using Windows runner for PowerShell script
     environment: cloudflare-prod
     if: needs.resolve-context.outputs.skip != 'true'
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
-      # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
+      # F1 refactor: CF tokens from Key Vault at runtime via OIDC. Read-only
+      # operation (just -List), so use scope: read to load READ_ALL tokens.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
         with:
-          scope: write
+          scope: read
           azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 
@@ -147,6 +150,9 @@ jobs:
     if:
       needs.resolve-context.outputs.skip != 'true' && needs.resolve-context.outputs.dry_run ==
       'false'
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 

@@ -67,14 +67,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
+      # F1 refactor: CF tokens from Key Vault at runtime via OIDC. Workflow is
+      # read-only (audit + preflight), so scope: read loads READ_ALL tokens.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
         with:
-          scope: write
+          scope: read
           azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Run Cloudflare audit portion
         shell: pwsh
         run: |
-          pwsh -NoProfile -File scripts/m365-domain-preflight.ps1 -Domain "${{ inputs.domain }}" -SkipGraph
+          # The composite action populates BOTH CLOUDFLARE_API_TOKEN_FFC and
+          # CLOUDFLARE_API_TOKEN_CM. scripts/m365-domain-preflight.ps1's
+          # Get-CfToken returns null when it finds multiple distinct candidates,
+          # which would silently skip the audit. Pass -CloudflareToken
+          # explicitly (prefer FFC, fall back to CM) to bypass that.
+          $cfToken = if (-not [string]::IsNullOrWhiteSpace($env:CLOUDFLARE_API_TOKEN_FFC)) {
+            $env:CLOUDFLARE_API_TOKEN_FFC
+          } else {
+            $env:CLOUDFLARE_API_TOKEN_CM
+          }
+          pwsh -NoProfile -File scripts/m365-domain-preflight.ps1 -Domain "${{ inputs.domain }}" -SkipGraph -CloudflareToken $cfToken

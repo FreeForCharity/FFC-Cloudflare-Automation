@@ -1,9 +1,9 @@
 name: 'Cloudflare tokens from Key Vault'
 description: >-
-  Authenticate to Azure via OIDC, fetch FFC and CM Cloudflare API tokens from
-  Azure Key Vault, mask them, and expose them to subsequent steps as the env
-  vars CLOUDFLARE_API_TOKEN_FFC and CLOUDFLARE_API_TOKEN_CM. Replaces direct
-  consumption of GH Environment Secret copies of those tokens.
+  Authenticate to Azure via OIDC, fetch FFC and CM Cloudflare API tokens from Azure Key Vault, mask
+  them, and expose them to subsequent steps as the env vars CLOUDFLARE_API_TOKEN_FFC and
+  CLOUDFLARE_API_TOKEN_CM. Replaces direct consumption of GH Environment Secret copies of those
+  tokens.
 
 author: 'Free For Charity'
 

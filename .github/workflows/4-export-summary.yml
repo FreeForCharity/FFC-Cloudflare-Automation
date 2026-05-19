@@ -4,6 +4,10 @@ run-name: 'Export Domain Summary'
 on:
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   export_summary:
     runs-on: windows-latest
@@ -11,30 +15,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate required Cloudflare secrets
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ([string]::IsNullOrWhiteSpace("${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}")) {
-            throw 'FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)'
-          }
-          if ([string]::IsNullOrWhiteSpace("${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}")) {
-            throw 'CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS secret is not set (environment: cloudflare-prod)'
-          }
+      # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Run DNS Export (FFC)
         shell: pwsh
-        env:
-          CF_TOKEN: ${{ secrets.FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
-          .\Export-CloudflareDns.ps1 -Token $env:CF_TOKEN -OutputFile "domain_summary_ffc.csv"
+          .\Export-CloudflareDns.ps1 -Token $env:CLOUDFLARE_API_TOKEN_FFC -OutputFile "domain_summary_ffc.csv"
 
       - name: Run DNS Export (CM)
         shell: pwsh
-        env:
-          CF_TOKEN: ${{ secrets.CM_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS }}
         run: |
-          .\Export-CloudflareDns.ps1 -Token $env:CF_TOKEN -OutputFile "domain_summary_cm.csv"
+          .\Export-CloudflareDns.ps1 -Token $env:CLOUDFLARE_API_TOKEN_CM -OutputFile "domain_summary_cm.csv"
 
       - name: Merge exports
         shell: pwsh

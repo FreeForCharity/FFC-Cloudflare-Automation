@@ -46,7 +46,7 @@ jobs:
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}

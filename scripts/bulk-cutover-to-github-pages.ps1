@@ -290,11 +290,11 @@ foreach ($domain in $domainList) {
     $repo = "FreeForCharity/FFC-EX-$domain"
     Write-Host "[$domain] STEP 1 — CNAME flip in $repo"
 
-        try {
-            $fileInfo = Get-GhFileInfo -Repo $repo -FilePath 'public/CNAME'
+    try {
+        $fileInfo = Get-GhFileInfo -Repo $repo -FilePath 'public/CNAME'
 
-            if ($null -eq $fileInfo) {
-                Write-Warning "[$domain] public/CNAME not found in $repo — skipping CNAME step."
+        if ($null -eq $fileInfo) {
+            Write-Warning "[$domain] public/CNAME not found in $repo — skipping CNAME step."
     $result.CnameStatus = 'SKIP'
     $result.CnameDetail = 'public/CNAME not found in repo'
 }
@@ -317,47 +317,47 @@ else {
             }
             else {
                 # Current is staging.<domain> — flip to apex
-                if ($DryRun) {
-                    Write-Host "[$domain]   [DRY-RUN] Would commit public/CNAME: '$currentContent' -> '$apexContent'"
-                    $result.CnameStatus = 'DRY-RUN'
-                    $result.CnameDetail = "Would update: '$currentContent' -> '$apexContent'"
-                }
-                else {
-                    Write-Host "[$domain]   Committing public/CNAME: '$stagingContent' -> '$apexContent'"
-                    $commitMsg = "chore: flip GH Pages custom domain to apex $domain`n`n[automated cutover]"
-                    $null = Set-GhFileContent -Repo $repo -FilePath 'public/CNAME' `
-                        -NewContent $apexContent -Sha $fileInfo.Sha -CommitMessage $commitMsg
-                    Write-Host "[$domain]   CNAME commit OK."
-                    $result.CnameStatus = 'OK'
-                    $result.CnameDetail = "Updated: '$stagingContent' -> '$apexContent'"
-                }
-            }
+        if ($DryRun) {
+            Write-Host "[$domain]   [DRY-RUN] Would commit public/CNAME: '$currentContent' -> '$apexContent'"
+            $result.CnameStatus = 'DRY-RUN'
+            $result.CnameDetail = "Would update: '$currentContent' -> '$apexContent'"
+        }
+        else {
+            Write-Host "[$domain]   Committing public/CNAME: '$stagingContent' -> '$apexContent'"
+            $commitMsg = "chore: flip GH Pages custom domain to apex $domain`n`n[automated cutover]"
+            $null = Set-GhFileContent -Repo $repo -FilePath 'public/CNAME' `
+                -NewContent $apexContent -Sha $fileInfo.Sha -CommitMessage $commitMsg
+            Write-Host "[$domain]   CNAME commit OK."
+            $result.CnameStatus = 'OK'
+            $result.CnameDetail = "Updated: '$stagingContent' -> '$apexContent'"
         }
     }
-    catch {
-        $errMsg = $_.Exception.Message
-        # Capture HTTP response body for diagnostics (PowerShell hides it by default)
-        $respBody = ''
-        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
-            $respBody = $_.ErrorDetails.Message
-        }
-        elseif ($_.Exception.Response) {
-            try {
-                $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-                $respBody = $reader.ReadToEnd()
-            }
-            catch { }
-        }
-        # Token diagnostics (length only — never print value)
-        $tokLen = if ($ghToken) { $ghToken.Length } else { 0 }
-        $tokPrefix = if ($ghToken -and $ghToken.Length -ge 4) { $ghToken.Substring(0, 4) } else { '' }
-        Write-Warning "[$domain]   CNAME step error: $errMsg"
-        if ($respBody) { Write-Warning "[$domain]   Response body: $respBody" }
-        Write-Warning "[$domain]   GH_TOKEN length=$tokLen prefix=$tokPrefix (prefix tells PAT type: ghp_=classic, github_pat_=fine-grained)"
-        $result.CnameStatus = 'FAIL'
-        $result.CnameDetail = if ($respBody) { "$errMsg | $respBody" } else { $errMsg }
+}
+}
+catch {
+    $errMsg = $_.Exception.Message
+    # Capture HTTP response body for diagnostics (PowerShell hides it by default)
+    $respBody = ''
+    if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+        $respBody = $_.ErrorDetails.Message
     }
-}  # end else (SkipCname)
+    elseif ($_.Exception.Response) {
+        try {
+            $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+            $respBody = $reader.ReadToEnd()
+        }
+        catch { }
+    }
+    # Token diagnostics (length only — never print value)
+    $tokLen = if ($ghToken) { $ghToken.Length } else { 0 }
+    $tokPrefix = if ($ghToken -and $ghToken.Length -ge 4) { $ghToken.Substring(0, 4) } else { '' }
+    Write-Warning "[$domain]   CNAME step error: $errMsg"
+    if ($respBody) { Write-Warning "[$domain]   Response body: $respBody" }
+    Write-Warning "[$domain]   GH_TOKEN length=$tokLen prefix=$tokPrefix (prefix tells PAT type: ghp_=classic, github_pat_=fine-grained)"
+    $result.CnameStatus = 'FAIL'
+    $result.CnameDetail = if ($respBody) { "$errMsg | $respBody" } else { $errMsg }
+}
+    }  # end else (SkipCname)
 
 # ===================================================================
 # STEP 2: DNS flip in Cloudflare

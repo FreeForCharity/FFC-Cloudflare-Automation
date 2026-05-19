@@ -1,0 +1,94 @@
+name: 'Cloudflare tokens from Key Vault'
+description: >-
+  Authenticate to Azure via OIDC, fetch FFC and CM Cloudflare API tokens from
+  Azure Key Vault, mask them, and expose them to subsequent steps as the env
+  vars CLOUDFLARE_API_TOKEN_FFC and CLOUDFLARE_API_TOKEN_CM. Replaces direct
+  consumption of GH Environment Secret copies of those tokens.
+
+author: 'Free For Charity'
+
+inputs:
+  scope:
+    description: "Token scope: 'read' loads READ_ALL_* tokens, 'write' loads WR_ALL_* tokens."
+    required: true
+  vault-name:
+    description: 'Azure Key Vault name that holds the tokens.'
+    required: false
+    default: 'kv-ffc-admin-prod-cbm'
+  azure-client-id:
+    description: 'OIDC client ID for the managed identity that has Get permission on the vault.'
+    required: true
+  azure-tenant-id:
+    description: 'Azure tenant ID for OIDC federation.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Validate scope input
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $scope = '${{ inputs.scope }}'
+        if ($scope -notin @('read', 'write')) {
+          throw "Invalid scope '$scope'. Expected 'read' or 'write'."
+        }
+        $vaultName = '${{ inputs.vault-name }}'
+        if ([string]::IsNullOrWhiteSpace($vaultName)) {
+          throw "Input 'vault-name' is empty."
+        }
+        $clientId = '${{ inputs.azure-client-id }}'
+        if ([string]::IsNullOrWhiteSpace($clientId)) {
+          throw "Input 'azure-client-id' is empty. Pass `${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }} from the caller."
+        }
+        $tenantId = '${{ inputs.azure-tenant-id }}'
+        if ([string]::IsNullOrWhiteSpace($tenantId)) {
+          throw "Input 'azure-tenant-id' is empty. Pass `${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }} from the caller."
+        }
+
+    - name: Azure login (OIDC)
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        allow-no-subscriptions: true
+
+    - name: Fetch Cloudflare tokens from Key Vault
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        $scope = '${{ inputs.scope }}'
+        $vaultName = '${{ inputs.vault-name }}'
+        $prefix = if ($scope -eq 'write') { 'wr-all' } else { 'read-all' }
+
+        $ffcName = "$prefix-ffc-cloudflare-api-token-zone-and-dns"
+        $cmName  = "$prefix-cm-cloudflare-api-token-zone-and-dns"
+
+        $ffcRaw = az keyvault secret show --vault-name $vaultName --name $ffcName --query value -o tsv
+        $cmRaw  = az keyvault secret show --vault-name $vaultName --name $cmName  --query value -o tsv
+
+        $ffc = ([string]$ffcRaw).Trim().Trim('"')
+        $cm  = ([string]$cmRaw ).Trim().Trim('"')
+
+        if ([string]::IsNullOrWhiteSpace($ffc)) {
+          throw "Key Vault secret '$ffcName' returned empty from vault '$vaultName'."
+        }
+        if ([string]::IsNullOrWhiteSpace($cm)) {
+          throw "Key Vault secret '$cmName' returned empty from vault '$vaultName'."
+        }
+
+        # Mask before any further use so they cannot appear in logs.
+        Write-Host "::add-mask::$ffc"
+        Write-Host "::add-mask::$cm"
+
+        # Export to GITHUB_ENV so subsequent steps see them as plain env vars,
+        # matching the pre-refactor interface (CLOUDFLARE_API_TOKEN_FFC / _CM).
+        Add-Content -Path $env:GITHUB_ENV -Value "CLOUDFLARE_API_TOKEN_FFC=$ffc"
+        Add-Content -Path $env:GITHUB_ENV -Value "CLOUDFLARE_API_TOKEN_CM=$cm"
+
+        Write-Host "Loaded $scope-scope Cloudflare tokens from KV vault '$vaultName' (values masked)."
+
+branding:
+  icon: 'cloud'
+  color: 'orange'

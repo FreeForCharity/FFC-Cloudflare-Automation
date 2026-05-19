@@ -39,8 +39,8 @@ jobs:
 
       # F1 refactor: Cloudflare tokens now sourced from Key Vault at runtime via OIDC.
       # The composite action sets CLOUDFLARE_API_TOKEN_{FFC,CM} for subsequent steps.
-      # Ref pinned to the PR branch until PR #106 in CBMadmin merges; update to @<sha> then.
-      - uses: FreeForCharity/FFC-IN-ClarkeMoyerAdmin/.github/actions/cloudflare-tokens-from-kv@feat/f1-composite-cf-tokens-from-kv
+      # SHA pinned to the head of FFC-IN-ClarkeMoyerAdmin#106 branch; update after that PR merges.
+      - uses: FreeForCharity/FFC-IN-ClarkeMoyerAdmin/.github/actions/cloudflare-tokens-from-kv@28b0df4e1ee17715379a1882b91315548d71c4f3
         with:
           scope: write
           azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}

@@ -21,7 +21,9 @@ on:
         type: boolean
         default: false
       skip_m365:
-        description: 'Skip Microsoft 365 jobs (DKIM check, set, enable). Use for CF-only domains with no M365 tenant.'
+        description:
+          'Skip Microsoft 365 jobs (DKIM check, set, enable). Use for CF-only domains with no M365
+          tenant.'
         type: boolean
         default: false
       issue_number:

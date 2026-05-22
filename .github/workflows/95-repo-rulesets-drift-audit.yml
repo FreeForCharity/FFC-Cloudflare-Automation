@@ -36,7 +36,7 @@ jobs:
           {
             echo "# Ruleset / Settings Drift Audit"
             echo ""
-            echo "Generated $(date -u +%Y-%m-%dT%H:%M:%SZ) by workflow #20."
+            echo "Generated $(date -u +%Y-%m-%dT%H:%M:%SZ) by workflow #95."
             echo ""
           } > "$REPORT"
 
@@ -129,5 +129,5 @@ jobs:
             gh issue edit "$existing" --repo "$repo" --body "$body" || echo "::warning::Failed to update issue"
           else
             echo "Creating new tracking issue"
-            gh issue create --repo "$repo" --title "$title" --body "$body" --label "audit" 2>&1 || echo "::warning::Failed to create issue"
+            gh issue create --repo "$repo" --title "$title" --body "$body" 2>&1 || echo "::warning::Failed to create issue"
           fi

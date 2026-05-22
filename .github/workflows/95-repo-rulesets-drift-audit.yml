@@ -41,23 +41,24 @@ jobs:
           } > "$REPORT"
 
           for org in "${ORGS[@]}"; do
-            echo "## Org: $org" >> "$REPORT"
-            echo "" >> "$REPORT"
-
             # Check org-level rulesets present
             org_rs=$(gh api "orgs/$org/rulesets" --jq '[.[] | select(.target=="branch")] | length' 2>/dev/null || echo "0")
+            {
+              echo "## Org: $org"
+              echo ""
+              if [ "$org_rs" = "0" ]; then
+                echo "- ❌ Missing org-level branch ruleset"
+              else
+                echo "- ✓ Org-level branch ruleset present ($org_rs)"
+              fi
+              echo ""
+              echo "| Repo | squash=off | auto-merge | del-branch | upd-branch | merge_queue | issues |"
+              echo "|---|---|---|---|---|---|---|"
+            } >> "$REPORT"
             if [ "$org_rs" = "0" ]; then
               echo "::error::$org: missing org-level branch ruleset"
-              echo "- ❌ Missing org-level branch ruleset" >> "$REPORT"
               DRIFT=$((DRIFT + 1))
-            else
-              echo "- ✓ Org-level branch ruleset present ($org_rs)" >> "$REPORT"
             fi
-            echo "" >> "$REPORT"
-
-            # For each repo, check settings + ruleset presence
-            echo "| Repo | squash=off | auto-merge | del-branch | upd-branch | merge_queue | issues |" >> "$REPORT"
-            echo "|---|---|---|---|---|---|---|" >> "$REPORT"
 
             gh repo list "$org" --limit 200 --json name,isArchived,visibility,defaultBranchRef \
               --jq '.[] | select(.isArchived==false) | "\(.name)\t\(.visibility)\t\(.defaultBranchRef.name // "")"' \
@@ -106,7 +107,7 @@ jobs:
             echo "## Drift report"
             echo ""
             cat "$REPORT"
-          } >> $GITHUB_STEP_SUMMARY
+          } >> "$GITHUB_STEP_SUMMARY"
 
           # Save report for the issue step
           cp "$REPORT" /tmp/drift-report.md

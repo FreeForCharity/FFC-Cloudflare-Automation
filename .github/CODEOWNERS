@@ -1,0 +1,15 @@
+# CODEOWNERS for FFC-Cloudflare-Automation
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything in the repository
+*       @clarkemoyer
+
+# Governance + security
+/SECURITY.md            @clarkemoyer
+/.github/               @clarkemoyer
+/.github/workflows/     @clarkemoyer
+/.github/actions/       @clarkemoyer
+
+# Scripts that touch DNS or Pages
+/scripts/               @clarkemoyer
+/Update-CloudflareDns.ps1   @clarkemoyer

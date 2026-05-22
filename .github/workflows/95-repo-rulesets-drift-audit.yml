@@ -1,4 +1,4 @@
-name: '20. Repo - Rulesets + Settings Drift Audit [Org]'
+name: '95. Repo - Rulesets + Settings Drift Audit [Org]'
 run-name: 'Drift Audit'
 
 on:

@@ -1,4 +1,4 @@
-name: Phantom Revert Guard
+name: '96. Repo - Phantom Revert Guard [Repo]'
 
 # Detects PRs that would silently revert work that landed on main while the PR
 # was open. The classic failure mode (we hit it twice on 2026-05-03) is:

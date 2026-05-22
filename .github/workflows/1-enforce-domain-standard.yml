@@ -20,6 +20,10 @@ on:
         description: 'Only manage apex A/AAAA + www CNAME; do not touch MX/TXT/SRV/M365 records'
         type: boolean
         default: false
+      skip_m365:
+        description: 'Skip Microsoft 365 jobs (DKIM check, set, enable). Use for CF-only domains with no M365 tenant.'
+        type: boolean
+        default: false
       issue_number:
         description: 'Optional: issue number to comment results back to'
         required: false
@@ -97,6 +101,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: m365-prod
     needs: [cloudflare_enforce]
+    if: ${{ inputs.skip_m365 != true }}
 
     outputs:
       organization: ${{ steps.org.outputs.organization }}
@@ -142,7 +147,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: cloudflare-prod-write
     needs: [exo_check]
-    if: ${{ inputs.dry_run == false }}
+    if: ${{ inputs.dry_run == false && inputs.skip_m365 != true }}
 
     steps:
       - uses: actions/checkout@v4
@@ -172,7 +177,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: m365-prod
     needs: [cloudflare_set_dkim, exo_check]
-    if: ${{ inputs.dry_run == false }}
+    if: ${{ inputs.dry_run == false && inputs.skip_m365 != true }}
 
     steps:
       - uses: actions/checkout@v4
@@ -195,7 +200,9 @@ jobs:
   post_back:
     runs-on: ubuntu-latest
     needs: [cloudflare_enforce, exo_check]
-    if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
+    if:
+      ${{ always() && needs.cloudflare_enforce.result == 'success' && inputs.issue_number != '' &&
+      inputs.issue_number != 0 }}
 
     steps:
       - name: Download Cloudflare artifacts

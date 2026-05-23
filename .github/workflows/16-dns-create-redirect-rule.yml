@@ -1,0 +1,109 @@
+name: '10. DNS - Create Redirect Rule (Admin) [CF]'
+run-name: 'Redirect Rule: ${{ inputs.source_domain }} → ${{ inputs.target_domain }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_domain:
+        description: 'Source domain (the zone that will redirect) e.g. ffcsites.org'
+        required: true
+        type: string
+      target_domain:
+        description: 'Target domain (where traffic should land) e.g. ffcadmin.org'
+        required: true
+        type: string
+      status_code:
+        description: 'HTTP redirect status code'
+        type: choice
+        options:
+          - '301'
+          - '302'
+          - '307'
+          - '308'
+        default: '301'
+      include_www:
+        description: 'Also redirect www.<source> (in addition to apex)'
+        type: boolean
+        default: true
+      preserve_query_string:
+        description: 'Forward query string through to target'
+        type: boolean
+        default: true
+      dry_run:
+        description: 'Dry Run (preview the rule payload, no changes applied)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod-read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Preview redirect rule (always runs)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/Set-CloudflareRedirectRule.ps1 `
+            -SourceDomain "${{ inputs.source_domain }}" `
+            -TargetDomain "${{ inputs.target_domain }}" `
+            -StatusCode ${{ inputs.status_code }} `
+            -IncludeWww $${{ inputs.include_www }} `
+            -PreserveQueryString $${{ inputs.preserve_query_string }} `
+            -DryRun
+
+  apply:
+    needs: preview
+    if: inputs.dry_run == false
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod-write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Apply redirect rule
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/Set-CloudflareRedirectRule.ps1 `
+            -SourceDomain "${{ inputs.source_domain }}" `
+            -TargetDomain "${{ inputs.target_domain }}" `
+            -StatusCode ${{ inputs.status_code }} `
+            -IncludeWww $${{ inputs.include_www }} `
+            -PreserveQueryString $${{ inputs.preserve_query_string }}
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $src = "${{ inputs.source_domain }}"
+          $tgt = "${{ inputs.target_domain }}"
+          $expected = ${{ inputs.status_code }}
+          Write-Host "Probing https://$src ..."
+          # Sleep briefly to let CF propagate the rule
+          Start-Sleep -Seconds 5
+          $resp = Invoke-WebRequest -Method Head -Uri "https://$src" -MaximumRedirection 0 -SkipHttpErrorCheck -TimeoutSec 30
+          Write-Host "  status: $($resp.StatusCode)"
+          Write-Host "  location: $($resp.Headers.Location)"
+          if ($resp.StatusCode -ne $expected) {
+            Write-Warning "Expected HTTP $expected, got $($resp.StatusCode). Cloudflare may still be propagating; retry the smoke test in a minute."
+            exit 0
+          }
+          if ($resp.Headers.Location -notlike "https://$tgt*") {
+            Write-Warning "Location header does not start with https://$tgt (got: $($resp.Headers.Location))."
+            exit 0
+          }
+          Write-Host "OK: redirect verified." -ForegroundColor Green

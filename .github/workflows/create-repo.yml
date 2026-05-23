@@ -85,16 +85,18 @@ jobs:
 
           ./scripts/Create-GitHubRepo.ps1 @params
 
-      - name: Grant FFC-ORGWIDE-* tier teams default access
-        if: ${{ inputs.DryRun != true }}
+      - name: Grant FFC-ORGWIDE-* tier teams default access (PUBLIC repos only)
+        if: ${{ inputs.DryRun != true && inputs.Visibility == 'public' }}
         env:
           GH_TOKEN: ${{ secrets.CBM_TOKEN }}
         shell: pwsh
         run: |
-          # Every new FFC repo automatically inherits the 5 org-wide tier teams.
-          # This ensures members of those teams don't need manual per-repo grants.
-          # Mirrors the canonical tier ladder; drift-audit workflow #95 will surface
-          # any repo where these grants drift out of compliance.
+          # Auto-grant FFC-ORGWIDE-* tier teams on PUBLIC repos only.
+          # Private repos start with zero team grants — by design (Option C
+          # defensive isolation). Explicit team access on private repos must
+          # be granted out-of-band by an Owner, ensuring conscious decision
+          # about who can see sensitive internal/admin/payment data.
+          # See: FFC-IN-Zeffy-Management, FFC-IN-ClarkeMoyerAdmin, etc.
           $repo = "${{ inputs.RepoName }}"
           $teams = @(
             @{ slug = 'ffc-orgwide-admins';      permission = 'admin'    },
@@ -123,3 +125,11 @@ jobs:
           if ($fails -gt 0) {
             Write-Host "::warning::$fails team grants failed; drift-audit will catch on next run."
           }
+
+      - name: Skip team grants for PRIVATE repo (Option C policy)
+        if: ${{ inputs.DryRun != true && inputs.Visibility != 'public' }}
+        shell: bash
+        run: |
+          echo "::notice::Repo is ${{ inputs.Visibility }} — skipping FFC-ORGWIDE-* tier team grants."
+          echo "::notice::Private repos require explicit team grants by an Owner. Manage at:"
+          echo "::notice::  https://github.com/FreeForCharity/${{ inputs.RepoName }}/settings/access"

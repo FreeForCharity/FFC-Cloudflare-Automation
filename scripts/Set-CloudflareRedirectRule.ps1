@@ -181,17 +181,38 @@ Write-Host ""
 Write-Host "Ruleset will have $($newRules.Count) total rule(s) after apply." -ForegroundColor Cyan
 
 if ($DryRun) {
-    Write-Host ""
-    Write-Host "DRY RUN: payload that would be PUT to $phaseUri" -ForegroundColor Yellow
+    if ($existingRuleset) {
+        Write-Host ""
+        Write-Host "DRY RUN: would PUT to $phaseUri" -ForegroundColor Yellow
+    } else {
+        Write-Host ""
+        Write-Host "DRY RUN: would POST to $ApiBase/zones/$zoneId/rulesets (no existing entrypoint)" -ForegroundColor Yellow
+    }
     $payload | ConvertTo-Json -Depth 10
     return
 }
 
-# --- PUT the updated ruleset ---
+# --- Apply: PUT if the phase entrypoint already exists, POST otherwise ---
 Write-Host ""
 Write-Host "Applying ruleset..." -ForegroundColor Green
-$body = $payload | ConvertTo-Json -Depth 10 -Compress
-$applyResp = Invoke-RestMethod -Method Put -Uri $phaseUri -Headers $Headers -Body $body -TimeoutSec 30
+
+if ($existingRuleset) {
+    # Update existing entrypoint with the new rules list
+    $body = $payload | ConvertTo-Json -Depth 10 -Compress
+    $applyResp = Invoke-RestMethod -Method Put -Uri $phaseUri -Headers $Headers -Body $body -TimeoutSec 30
+} else {
+    # Create a new entrypoint ruleset for this phase. CF requires kind+phase+name on POST.
+    $createPayload = [ordered]@{
+        name        = "default"
+        description = "Entrypoint ruleset for http_request_dynamic_redirect phase"
+        kind        = "zone"
+        phase       = "http_request_dynamic_redirect"
+        rules       = $newRules
+    }
+    $createUri = "$ApiBase/zones/$zoneId/rulesets"
+    $body = $createPayload | ConvertTo-Json -Depth 10 -Compress
+    $applyResp = Invoke-RestMethod -Method Post -Uri $createUri -Headers $Headers -Body $body -TimeoutSec 30
+}
 
 if (-not $applyResp.success) {
     Write-Error ("Cloudflare API returned failure: " + ($applyResp.errors | ConvertTo-Json -Depth 5))

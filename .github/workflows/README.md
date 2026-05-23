@@ -59,6 +59,10 @@ domain configuration.
 - **07. DNS - Audit Compliance (Report) [CF]**: report-only compliance check.
 - **08. DNS - Export Cloudflare Zones (Report) [CF]**: export zone summaries for review/audit.
 - **09. DNS - Create Zone (Admin) [CF]**: create a new Cloudflare zone (explicit account selection).
+- **10. DNS - Create Redirect Rule (Admin) [CF]**: configure a 301/302/307/308 Cloudflare Single
+  Redirect rule on a source zone, pointing at a target domain. Idempotent — re-running updates the
+  same rule. Defaults to `dry_run=true`; flip it off to actually apply, which gates on
+  `cloudflare-prod-write`.
 
 ### 20–24 M365 workflows
 

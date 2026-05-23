@@ -84,3 +84,42 @@ jobs:
           }
 
           ./scripts/Create-GitHubRepo.ps1 @params
+
+      - name: Grant FFC-ORGWIDE-* tier teams default access
+        if: ${{ inputs.DryRun != true }}
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+        shell: pwsh
+        run: |
+          # Every new FFC repo automatically inherits the 5 org-wide tier teams.
+          # This ensures members of those teams don't need manual per-repo grants.
+          # Mirrors the canonical tier ladder; drift-audit workflow #95 will surface
+          # any repo where these grants drift out of compliance.
+          $repo = "${{ inputs.RepoName }}"
+          $teams = @(
+            @{ slug = 'ffc-orgwide-admins';      permission = 'admin'    },
+            @{ slug = 'ffc-orgwide-maintainers'; permission = 'maintain' },
+            @{ slug = 'ffc-orgwide-writers';     permission = 'push'     },
+            @{ slug = 'ffc-orgwide-triagers';    permission = 'triage'   },
+            @{ slug = 'ffc-orgwide-readers';     permission = 'pull'     }
+          )
+          $fails = 0
+          foreach ($t in $teams) {
+            $slug = $t.slug
+            $perm = $t.permission
+            try {
+              gh api -X PUT "orgs/FreeForCharity/teams/$slug/repos/FreeForCharity/$repo" -f "permission=$perm" | Out-Null
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "  [OK] $slug -> $perm on $repo"
+              } else {
+                Write-Host "  [WARN] $slug grant returned exit $LASTEXITCODE"
+                $fails++
+              }
+            } catch {
+              Write-Host "  [FAIL] $slug : $_"
+              $fails++
+            }
+          }
+          if ($fails -gt 0) {
+            Write-Host "::warning::$fails team grants failed; drift-audit will catch on next run."
+          }

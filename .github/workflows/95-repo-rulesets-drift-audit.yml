@@ -71,6 +71,19 @@ jobs:
               upd=$(echo "$settings" | cut -d'|' -f4)
               has_mq=$(gh api "repos/$org/$repo/rules/branches/$default" --jq '[.[] | select(.type=="merge_queue")] | length' 2>/dev/null || echo "0")
 
+              # Team-tier drift: the 5 FFC-ORGWIDE-* tier teams should be granted on every FFC repo.
+              # (Only check FFC org; KCCF and other orgs don't have this convention.)
+              missing_teams=""
+              if [ "$org" = "FreeForCharity" ]; then
+                team_grants=$(gh api "repos/$org/$repo/teams" --jq '[.[] | .slug] | join(",")' 2>/dev/null || echo "")
+                for required in ffc-orgwide-admins ffc-orgwide-maintainers ffc-orgwide-writers ffc-orgwide-triagers ffc-orgwide-readers; do
+                  case ",$team_grants," in
+                    *,$required,*) ;;
+                    *) missing_teams="${missing_teams}${required#ffc-orgwide-} ";;
+                  esac
+                done
+              fi
+
               issues=()
               [ "$squash" = "true" ] && issues+=("squash-enabled")
               [ "$auto" != "true" ] && issues+=("auto-merge-off")
@@ -79,6 +92,9 @@ jobs:
               # For public repos, expect merge_queue
               if [ "$vis" = "public" ] && [ "$has_mq" = "0" ]; then
                 issues+=("no-merge-queue")
+              fi
+              if [ -n "$missing_teams" ]; then
+                issues+=("missing-teams:${missing_teams% }")
               fi
 
               issue_str="-"

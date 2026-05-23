@@ -51,12 +51,15 @@ param(
     [Parameter(Mandatory = $true)][string]$SourceDomain,
     [Parameter(Mandatory = $true)][string]$TargetDomain,
     [ValidateSet(301, 302, 307, 308)][int]$StatusCode = 301,
-    [bool]$IncludeWww = $true,
-    [bool]$PreserveQueryString = $true,
+    [switch]$ApexOnly,
+    [switch]$NoPreserveQueryString,
     [string]$Description,
     [string]$Token,
     [switch]$DryRun
 )
+
+$IncludeWww = -not $ApexOnly.IsPresent
+$PreserveQueryString = -not $NoPreserveQueryString.IsPresent
 
 $ErrorActionPreference = 'Stop'
 $ApiBase = 'https://api.cloudflare.com/client/v4'

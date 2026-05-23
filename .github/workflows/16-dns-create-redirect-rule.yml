@@ -53,14 +53,22 @@ jobs:
 
       - name: Preview redirect rule (always runs)
         shell: pwsh
+        env:
+          INPUT_SOURCE: ${{ inputs.source_domain }}
+          INPUT_TARGET: ${{ inputs.target_domain }}
+          INPUT_STATUS: ${{ inputs.status_code }}
+          INPUT_INCLUDE_WWW: ${{ inputs.include_www }}
+          INPUT_PRESERVE_QS: ${{ inputs.preserve_query_string }}
         run: |
-          pwsh -NoProfile -File scripts/Set-CloudflareRedirectRule.ps1 `
-            -SourceDomain "${{ inputs.source_domain }}" `
-            -TargetDomain "${{ inputs.target_domain }}" `
-            -StatusCode ${{ inputs.status_code }} `
-            -IncludeWww $${{ inputs.include_www }} `
-            -PreserveQueryString $${{ inputs.preserve_query_string }} `
-            -DryRun
+          $args = @(
+            '-SourceDomain', $env:INPUT_SOURCE,
+            '-TargetDomain', $env:INPUT_TARGET,
+            '-StatusCode',   [int]$env:INPUT_STATUS,
+            '-DryRun'
+          )
+          if ($env:INPUT_INCLUDE_WWW -ne 'true') { $args += '-ApexOnly' }
+          if ($env:INPUT_PRESERVE_QS  -ne 'true') { $args += '-NoPreserveQueryString' }
+          pwsh -NoProfile -File scripts/Set-CloudflareRedirectRule.ps1 @args
 
   apply:
     needs: preview
@@ -78,13 +86,21 @@ jobs:
 
       - name: Apply redirect rule
         shell: pwsh
+        env:
+          INPUT_SOURCE: ${{ inputs.source_domain }}
+          INPUT_TARGET: ${{ inputs.target_domain }}
+          INPUT_STATUS: ${{ inputs.status_code }}
+          INPUT_INCLUDE_WWW: ${{ inputs.include_www }}
+          INPUT_PRESERVE_QS: ${{ inputs.preserve_query_string }}
         run: |
-          pwsh -NoProfile -File scripts/Set-CloudflareRedirectRule.ps1 `
-            -SourceDomain "${{ inputs.source_domain }}" `
-            -TargetDomain "${{ inputs.target_domain }}" `
-            -StatusCode ${{ inputs.status_code }} `
-            -IncludeWww $${{ inputs.include_www }} `
-            -PreserveQueryString $${{ inputs.preserve_query_string }}
+          $args = @(
+            '-SourceDomain', $env:INPUT_SOURCE,
+            '-TargetDomain', $env:INPUT_TARGET,
+            '-StatusCode',   [int]$env:INPUT_STATUS
+          )
+          if ($env:INPUT_INCLUDE_WWW -ne 'true') { $args += '-ApexOnly' }
+          if ($env:INPUT_PRESERVE_QS  -ne 'true') { $args += '-NoPreserveQueryString' }
+          pwsh -NoProfile -File scripts/Set-CloudflareRedirectRule.ps1 @args
 
       - name: Smoke test
         shell: pwsh

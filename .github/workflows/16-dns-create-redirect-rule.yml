@@ -104,22 +104,30 @@ jobs:
 
       - name: Smoke test
         shell: pwsh
+        env:
+          INPUT_SOURCE: ${{ inputs.source_domain }}
+          INPUT_TARGET: ${{ inputs.target_domain }}
+          INPUT_STATUS: ${{ inputs.status_code }}
         run: |
-          $src = "${{ inputs.source_domain }}"
-          $tgt = "${{ inputs.target_domain }}"
-          $expected = ${{ inputs.status_code }}
+          $src = $env:INPUT_SOURCE
+          $tgt = $env:INPUT_TARGET
+          $expected = [int]$env:INPUT_STATUS
           Write-Host "Probing https://$src ..."
           # Sleep briefly to let CF propagate the rule
           Start-Sleep -Seconds 5
-          $resp = Invoke-WebRequest -Method Head -Uri "https://$src" -MaximumRedirection 0 -SkipHttpErrorCheck -TimeoutSec 30
-          Write-Host "  status: $($resp.StatusCode)"
-          Write-Host "  location: $($resp.Headers.Location)"
-          if ($resp.StatusCode -ne $expected) {
-            Write-Warning "Expected HTTP $expected, got $($resp.StatusCode). Cloudflare may still be propagating; retry the smoke test in a minute."
+          # Use curl over Invoke-WebRequest: PS7's Invoke-WebRequest throws on 3xx with
+          # -MaximumRedirection 0 instead of returning the response, even with -SkipHttpErrorCheck.
+          $raw = (curl.exe -sS -o /dev/null -w "status=%{http_code}`nlocation=%{redirect_url}`n" --max-time 30 "https://$src") -join "`n"
+          $status = ([regex]::Match($raw, 'status=(\d+)').Groups[1].Value) -as [int]
+          $location = ([regex]::Match($raw, 'location=(\S*)').Groups[1].Value).Trim()
+          Write-Host "  status:   $status"
+          Write-Host "  location: $location"
+          if ($status -ne $expected) {
+            Write-Warning "Expected HTTP $expected, got $status. Cloudflare may still be propagating; retry the smoke test in a minute."
             exit 0
           }
-          if ($resp.Headers.Location -notlike "https://$tgt*") {
-            Write-Warning "Location header does not start with https://$tgt (got: $($resp.Headers.Location))."
+          if ($location -notlike "https://$tgt*") {
+            Write-Warning "Location header does not start with https://$tgt (got: $location)."
             exit 0
           }
           Write-Host "OK: redirect verified." -ForegroundColor Green

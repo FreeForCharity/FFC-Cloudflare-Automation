@@ -48,6 +48,13 @@ Recommended Cloudflare API token permissions:
 - DMARC Management: **Edit** (optional; currently this repo does not have a routable Cloudflare API
   surface to enable/inspect DMARC Management, so enabling is done manually in the dashboard: Email >
   DMARC Management)
+- Account Rulesets: **Write** (required by workflow 10 — DNS - Create Redirect Rule)
+- Zone WAF: **Write** (required by workflow 10)
+- Dynamic URL Redirects: **Write** (required by workflow 10)
+
+Without the Rulesets/WAF/Dynamic-URL-Redirects permissions, workflow 10's apply step fails with
+Cloudflare error code `10000 "Authentication error"`. The dry-run / preview job still works because
+GET on the entrypoint URL doesn't require write scope.
 
 These are injected into workflow jobs as environment variables:
 

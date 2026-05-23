@@ -54,6 +54,9 @@ Additional operational workflows:
 - **02. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS]**: common onboarding
   path.
 - **04. Domain - Export Inventory (All Sources) [CF+M365+WHMCS+WPMUDEV]**: inventory reconciliation.
+- **10. DNS - Create Redirect Rule (Admin) [CF]**: configure a Cloudflare Single Redirect (301/302/
+  307/308) on a source zone, pointing at a target domain. Idempotent and dry-run-by-default. See
+  [docs/redirect-rules.md](docs/redirect-rules.md).
 
 ## Features
 

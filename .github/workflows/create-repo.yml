@@ -12,14 +12,6 @@ on:
         required: false
         default: 'Created via automation'
         type: string
-      TemplateRepo:
-        description: 'Template repository to use'
-        required: true
-        default: 'FreeForCharity/FFC_Single_Page_Template'
-        type: choice
-        options:
-          - FreeForCharity/FFC_Single_Page_Template
-          - FreeForCharity/FFC-IN-Single_Page_Template_Jekell
       Visibility:
         description: 'Visibility'
         required: true
@@ -71,7 +63,7 @@ jobs:
           $params = @{
               RepoName            = "${{ inputs.RepoName }}"
               Description         = "${{ inputs.Description }}"
-              TemplateRepo        = "${{ inputs.TemplateRepo }}"
+              TemplateRepo        = "FreeForCharity/FFC-IN-FFC_Single_Page_Template"
               Visibility          = "${{ inputs.Visibility }}"
               EnableIssues        = [System.Convert]::ToBoolean("${{ inputs.EnableIssues }}")
               EnablePages         = [System.Convert]::ToBoolean("${{ inputs.EnablePages }}")

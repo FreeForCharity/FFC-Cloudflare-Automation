@@ -89,7 +89,7 @@ permissions:
 
 env:
   WEBSITE_TARGET_ORG: FreeForCharity
-  WEBSITE_TEMPLATE_REPO: FreeForCharity/FFC_Single_Page_Template
+  WEBSITE_TEMPLATE_REPO: FreeForCharity/FFC-IN-FFC_Single_Page_Template
 
 jobs:
   resolve:
@@ -678,7 +678,7 @@ jobs:
             const org = process.env.WEBSITE_TARGET_ORG || 'FreeForCharity';
             const repoFull = `${org}/${repoName}`;
 
-            const templateRepo = process.env.WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC_Single_Page_Template';
+            const templateRepo = process.env.WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC-IN-FFC_Single_Page_Template';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
             core.setOutput('skip', 'false');

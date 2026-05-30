@@ -161,7 +161,7 @@ globally):
 This workflow currently hardcodes:
 
 - Target org: `FreeForCharity`
-- Template repo: `FreeForCharity/FFC_Single_Page_Template`
+- Template repo: `FreeForCharity/FFC-IN-FFC_Single_Page_Template`
 
 ## Quick Start
 

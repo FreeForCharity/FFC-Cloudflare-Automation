@@ -328,7 +328,7 @@ If the marker is already present, the workflow skips provisioning.
 For simplicity, this workflow currently hardcodes:
 
 - Target org: `FreeForCharity`
-- Template repo: `FreeForCharity/FFC_Single_Page_Template`
+- Template repo: `FreeForCharity/FFC-IN-FFC_Single_Page_Template`
 
 ## Deprecated workflows (backups only)
 

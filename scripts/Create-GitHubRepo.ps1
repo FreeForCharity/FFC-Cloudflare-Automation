@@ -62,7 +62,7 @@
     If set, only prints the commands that would be executed.
 
 .EXAMPLE
-    .\Create-GitHubRepo.ps1 -RepoName "FFC-EX-slopestohope.org" -TemplateRepo "FreeForCharity/FFC-IN-Single_Page_Template_Jekell" -EnablePages -DryRun
+    .\Create-GitHubRepo.ps1 -RepoName "FFC-EX-slopestohope.org" -EnablePages -DryRun
 #>
 
 [CmdletBinding()]
@@ -76,8 +76,8 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$Description = "Created via automation",
 
-    [Parameter(Mandatory = $true)]
-    [string]$TemplateRepo,
+    [Parameter(Mandatory = $false)]
+    [string]$TemplateRepo = "FreeForCharity/FFC-IN-FFC_Single_Page_Template",
 
     [Parameter(Mandatory = $false)]
     [ValidateSet("public", "private", "internal")]
@@ -249,7 +249,7 @@ if ($EnablePages) {
         $fullRepoName = $json.nameWithOwner
         
         # Enable Pages (Source = Workflow)
-        # The template 'FreeForCharity/FFC-IN-Single_Page_Template_Jekell' uses GitHub Actions ('deploy.yml').
+        # The template 'FreeForCharity/FFC-IN-FFC_Single_Page_Template' uses GitHub Actions ('deploy.yml').
         # So we must set build_type=workflow.
         
         Write-Host "Enabling Pages with build_type=workflow..."

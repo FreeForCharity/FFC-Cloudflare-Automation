@@ -25,7 +25,6 @@ Actions tab → **Run workflow**, with these inputs:
 | ----------------- | ----------------------------------------------- |
 | `RepoName`        | `FFC-EX-hclwellness.org`                        |
 | `Description`     | `Website for HCL Wellness (hclwellness.org)`    |
-| `TemplateRepo`    | `FreeForCharity/FFC_Single_Page_Template`       |
 | `Visibility`      | `public`                                        |
 | `EnableIssues`    | `true`                                          |
 | `EnablePages`     | `true`                                          |
@@ -35,6 +34,9 @@ Actions tab → **Run workflow**, with these inputs:
 
 Notes:
 
+- The template is fixed to `FreeForCharity/FFC-IN-FFC_Single_Page_Template` (the core FFC
+  single-page charity template). There is no template picker — every FFC-EX repo clones this one
+  template.
 - The job runs in the `github-prod` environment and authenticates with the `CBM_TOKEN` secret (needs
   org repo-creation rights).
 - `github-default` intentionally ignores `CNAME`; if one is supplied the script warns and drops it.

@@ -84,7 +84,7 @@ async function checkSiteAvailability(domain) {
 // considered "stalled" rather than under active development.
 const ACTIVE_DAYS = 45;
 const daysSince = (iso) =>
-  iso ? Math.round((Date.now() - new Date(iso).getTime()) / 86400000) : null;
+  iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86400000) : null;
 
 // Enrich domains with GitHub development activity. The FreeForCharity org names
 // site repos by convention (FFC-EX-<domain>, FFC-IN-<domain>, or <domain>), so
@@ -116,10 +116,12 @@ async function fetchRepoActivity(domains) {
   };
 
   let repos = [];
-  for (let pg = 1; pg <= 5; pg++) {
+  const MAX_REPO_PAGES = 20; // safety cap (2000 repos)
+  for (let pg = 1; pg <= MAX_REPO_PAGES; pg++) {
     const page = await ghGet(`/orgs/FreeForCharity/repos?per_page=100&page=${pg}`);
     if (!page || !page.length) break;
     repos = repos.concat(page);
+    if (page.length < 100) break; // last page
   }
   console.log(`Fetched ${repos.length} FreeForCharity repos for matching.`);
 
@@ -141,13 +143,19 @@ async function fetchRepoActivity(domains) {
         const closed = await ghGet(
           `/repos/${repo.full_name}/pulls?state=closed&sort=updated&direction=desc&per_page=1`,
         );
-        const open = await ghGet(`/repos/${repo.full_name}/pulls?state=open&per_page=100`);
+        // Use search total_count for an accurate open-PR count (not capped at 100).
+        const openSearch = await ghGet(
+          `/search/issues?q=${encodeURIComponent(`repo:${repo.full_name} is:pr is:open`)}&per_page=1`,
+        );
         const lastPR = closed && closed[0] ? closed[0].merged_at || closed[0].closed_at : '';
         result.set(d, {
           repoUrl: repo.html_url,
           archived: repo.archived ? 'Yes' : 'No',
           lastPR: lastPR ? lastPR.slice(0, 10) : '',
-          openPRs: open ? String(open.length) : '0',
+          openPRs:
+            openSearch && typeof openSearch.total_count === 'number'
+              ? String(openSearch.total_count)
+              : '0',
           lastCommit: repo.pushed_at ? repo.pushed_at.slice(0, 10) : '',
         });
       }),
@@ -161,13 +169,19 @@ async function fetchRepoActivity(domains) {
 function workTier({ devStatus, status, server }) {
   const s = (status || '').toLowerCase();
   const srv = (server || '').toLowerCase();
-  const dead = ['expired', 'cancelled', 'fraud', 'terminated', 'transferred away'].includes(s);
+  // Hard-dead lifecycle states are never worth volunteer effort, even if a repo
+  // shows recent (often bot-generated) activity -> always Tier 6.
+  const hardDead = ['expired', 'cancelled', 'fraud', 'terminated'].includes(s);
+  const transferred = s === 'transferred away';
   const ghPages = srv === 'github pages';
   const legacy = ['hostpapa', 'interserver', 'hostinger', 'krystal', 'cloudflare proxy'].some((x) =>
     srv.includes(x),
   );
+  if (hardDead) return '6 - Inactive / Archive';
+  // Active development wins over a transferred-registration status, since the
+  // site itself may still be live and worked on (e.g. the main FFC site).
   if (devStatus === 'Active') return '1 - Active Development';
-  if (dead) return '6 - Inactive / Archive';
+  if (transferred) return '6 - Inactive / Archive';
   if (devStatus === 'Stalled') return '2 - Has Repo, Stalled';
   if (ghPages) return '4 - Done / Stable';
   if (legacy) return '3 - Needs Migration';

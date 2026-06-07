@@ -1,0 +1,117 @@
+name: '50. Sites List - Generate (CSV + JSON) [GH]'
+run-name: 'Generate Sites List'
+
+# Generates the merged FFC sites list from the WHMCS / Cloudflare / WPMUDEV
+# exports plus the curated base list, runs per-domain health checks, and
+# commits both sites-list/sites_list.csv and sites-list/sites_list.json.
+#
+# This repo owns the export environments (whmcs-prod, cloudflare-prod-read,
+# wpmudev-prod) and the GitHub PAT (CBM_TOKEN in github-prod) needed to
+# dispatch the sibling export workflows, so generation lives here. Downstream
+# consumers (e.g. ffcadmin.org) pull the published files from this repo.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * 1' # Weekly on Mondays at 08:00 UTC
+
+permissions:
+  contents: write
+
+# Prevent a manual run and the scheduled run from regenerating / pushing to main
+# at the same time.
+concurrency:
+  group: sites-list-generate
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    environment: github-prod
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate CBM_TOKEN
+        env:
+          CBM_TOKEN: ${{ secrets.CBM_TOKEN }}
+        run: |
+          if [ -z "$CBM_TOKEN" ]; then
+            echo "::error::Missing secret CBM_TOKEN in environment 'github-prod'."
+            exit 1
+          fi
+          echo "CBM_TOKEN is present."
+
+      - name: Trigger export workflows and download artifacts
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Dispatch the three read-only export workflows by stable file name
+          # (display names are renumbered periodically; file names are stable).
+          for wf in 7-whmcs-export-domains.yml 4-export-summary.yml 13-wpmudev-export-sites.yml; do
+            echo "Dispatching $wf ..."
+            gh workflow run "$wf" --repo "$REPO"
+          done
+
+          # Give the dispatched runs time to register before querying them.
+          sleep 30
+
+          # Wait for each run and download its artifact. A failed export is a
+          # warning, not a hard failure: the generator preserves existing
+          # membership flags when a source artifact is absent.
+          download_latest () {
+            local wf="$1" artifact="$2" dir="$3" run_id
+            # Only consider workflow_dispatch runs (the ones we just triggered),
+            # to avoid picking up a concurrent scheduled or older run.
+            run_id=$(gh run list --workflow "$wf" --repo "$REPO" --event workflow_dispatch \
+              --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+            if [ -z "$run_id" ]; then
+              echo "::warning::No workflow_dispatch run found for $wf; continuing without its data."
+              return 0
+            fi
+            echo "Waiting for $wf run $run_id ..."
+            if ! gh run watch "$run_id" --repo "$REPO" --exit-status; then
+              echo "::warning::$wf run $run_id did not succeed; continuing without its data."
+              return 0
+            fi
+            gh run download "$run_id" --repo "$REPO" --name "$artifact" --dir "$dir" \
+              || echo "::warning::Could not download artifact '$artifact' from $wf."
+          }
+
+          download_latest 7-whmcs-export-domains.yml  whmcs_domains            tmp_data/whmcs_domains
+          download_latest 4-export-summary.yml        domain_summary           tmp_data/domain_summary
+          download_latest 13-wpmudev-export-sites.yml wpmudev-domain-inventory tmp_data/wpmudev-domain-inventory
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 'lts/*'
+
+      - name: Install dependencies
+        # Pin major versions to avoid surprise breakage from new majors.
+        run: npm install csv-parse@^6 csv-stringify@^6
+
+      - name: Generate sites list (CSV + JSON)
+        run: node scripts/update-sites-data.mjs
+
+      - name: Commit updated sites list
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+        run: |
+          # Only ever publish from main, even if dispatched from another ref,
+          # so a feature-branch dispatch can't push that branch's tree to main.
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::warning::Not on refs/heads/main (${GITHUB_REF}); skipping commit/push."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add sites-list/sites_list.csv sites-list/sites_list.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(sites-list): automated regeneration (CSV + JSON)"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main

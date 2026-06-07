@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import { parse } from 'csv-parse/sync';
 import { stringify } from 'csv-stringify/sync';
 
@@ -11,56 +12,89 @@ import { stringify } from 'csv-stringify/sync';
 // Curated base list (preserves Section / Server In Use / Notes / Priority, etc.)
 const SITES_LIST_PATH = 'sites-list/sites_list.csv';
 
-// Per-source export artifacts, downloaded by the workflow into tmp_data/<artifact-name>/
-const WHMCS_PATH = 'tmp_data/whmcs_domains/whmcs_domains.csv';
-const CF_PATH = 'tmp_data/domain_summary/domain_summary.csv';
-const WPMUDEV_PATH = 'tmp_data/wpmudev-domain-inventory/wpmudev_domains.csv';
+// Per-source export artifacts are downloaded by the workflow into
+// tmp_data/<artifact-name>/. The exact nesting depends on the upload path, so we
+// resolve each file by name under its directory rather than assuming a fixed path.
+const WHMCS_DIR = 'tmp_data/whmcs_domains';
+const CF_DIR = 'tmp_data/domain_summary';
+const WPMUDEV_DIR = 'tmp_data/wpmudev-domain-inventory';
 
 const OUTPUT_CSV_PATH = 'sites-list/sites_list.csv';
 const OUTPUT_JSON_PATH = 'sites-list/sites_list.json';
 
-function readCSV(path) {
-  if (!fs.existsSync(path)) return [];
-  const content = fs.readFileSync(path, 'utf-8');
+// Find a file by name anywhere under dir (the export artifact may be nested under
+// the original upload path, e.g. artifacts/whmcs/whmcs_domains.csv). Returns the
+// first match or null.
+function resolveSource(dir, filename) {
+  if (!fs.existsSync(dir)) return null;
+  const stack = [dir];
+  while (stack.length) {
+    const cur = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(cur, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const full = path.join(cur, e.name);
+      if (e.isDirectory()) stack.push(full);
+      else if (e.name === filename) return full;
+    }
+  }
+  return null;
+}
+
+function readCSV(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return [];
+  const content = fs.readFileSync(filePath, 'utf-8');
   return parse(content, { columns: true, skip_empty_lines: true, trim: true });
 }
+
+// WHMCS exports a normalized `domain` column (always present) plus `domainname`.
+const whmcsKey = (d) => (d.domain || d.domainname || '').toLowerCase();
 
 // Health check: probe each domain over HTTPS, classifying the response.
 async function checkSiteAvailability(domain) {
   if (!domain) return 'Unknown';
   const url = `https://${domain}`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
     const response = await fetch(url, {
       method: 'GET',
       signal: controller.signal,
       redirect: 'manual', // detect redirects rather than following them
     });
-    clearTimeout(timeoutId);
     if (response.status === 200) return 'Live';
     if (response.status >= 300 && response.status < 400) return 'Redirect';
     if (response.status >= 400) return 'Error';
     return 'Unknown';
-  } catch (error) {
+  } catch {
     return 'Unreachable'; // timeout or connection error
+  } finally {
+    clearTimeout(timeoutId); // always clear, even on throw/abort
   }
 }
 
 async function main() {
   console.log('Reading data...');
+  const whmcsPath = resolveSource(WHMCS_DIR, 'whmcs_domains.csv');
+  const cfPath = resolveSource(CF_DIR, 'domain_summary.csv');
+  const wpmudevPath = resolveSource(WPMUDEV_DIR, 'wpmudev_domains.csv');
+
   const currentSites = readCSV(SITES_LIST_PATH);
-  const whmcsData = readCSV(WHMCS_PATH);
-  const cfData = readCSV(CF_PATH);
-  const wpmudevData = readCSV(WPMUDEV_PATH);
+  const whmcsData = readCSV(whmcsPath);
+  const cfData = readCSV(cfPath);
+  const wpmudevData = readCSV(wpmudevPath);
 
   // Track which upstream exports are actually present. When a source is missing
   // (an export workflow failed, or a local run without artifacts) we PRESERVE the
   // existing membership flags rather than overwrite every domain with "No" and
   // silently wipe the WHMCS / Cloudflare / WPMUDEV columns.
-  const hasWhmcs = fs.existsSync(WHMCS_PATH);
-  const hasCf = fs.existsSync(CF_PATH);
-  const hasWpmudev = fs.existsSync(WPMUDEV_PATH);
+  const hasWhmcs = !!whmcsPath;
+  const hasCf = !!cfPath;
+  const hasWpmudev = !!wpmudevPath;
   console.log(
     `Sources detected -> WHMCS: ${hasWhmcs}, Cloudflare: ${hasCf}, WPMUDEV: ${hasWpmudev}`,
   );
@@ -68,10 +102,11 @@ async function main() {
     console.log('No upstream exports found: preserving membership flags, refreshing health only.');
   }
 
-  // Indexing for fast lookup
-  const whmcsMap = new Map(
-    whmcsData.filter((d) => d.domainname).map((d) => [d.domainname.toLowerCase(), d]),
+  // Indexing for O(1) lookup (keyed by normalized domain).
+  const manualMap = new Map(
+    currentSites.filter((s) => s['Domain']).map((s) => [s['Domain'].toLowerCase(), s]),
   );
+  const whmcsMap = new Map(whmcsData.filter(whmcsKey).map((d) => [whmcsKey(d), d]));
   const cfMap = new Map(cfData.filter((d) => d.zone).map((d) => [d.zone.toLowerCase(), d]));
   const wpmudevMap = new Map(
     wpmudevData.filter((d) => d.domain).map((d) => [d.domain.toLowerCase(), d]),
@@ -80,7 +115,7 @@ async function main() {
   const allDomains = new Set(
     [
       ...currentSites.map((s) => s['Domain']),
-      ...whmcsData.map((d) => d.domainname),
+      ...whmcsData.map(whmcsKey),
       ...cfData.map((d) => d.zone),
       ...wpmudevData.map((d) => d.domain),
     ]
@@ -97,7 +132,7 @@ async function main() {
     const chunk = domainsArray.slice(i, i + chunkSize);
     await Promise.all(
       chunk.map(async (domain) => {
-        const manualEntry = currentSites.find((s) => s['Domain']?.toLowerCase() === domain) || {};
+        const manualEntry = manualMap.get(domain) || {};
         const whmcsEntry = whmcsMap.get(domain);
         const cfEntry = cfMap.get(domain);
         const wpmudevEntry = wpmudevMap.get(domain);

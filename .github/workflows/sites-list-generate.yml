@@ -18,6 +18,12 @@ on:
 permissions:
   contents: write
 
+# Prevent a manual run and the scheduled run from regenerating / pushing to main
+# at the same time.
+concurrency:
+  group: sites-list-generate
+  cancel-in-progress: false
+
 jobs:
   generate:
     runs-on: ubuntu-latest
@@ -57,7 +63,14 @@ jobs:
           # membership flags when a source artifact is absent.
           download_latest () {
             local wf="$1" artifact="$2" dir="$3" run_id
-            run_id=$(gh run list --workflow "$wf" --repo "$REPO" --limit 1 --json databaseId --jq '.[0].databaseId')
+            # Only consider workflow_dispatch runs (the ones we just triggered),
+            # to avoid picking up a concurrent scheduled or older run.
+            run_id=$(gh run list --workflow "$wf" --repo "$REPO" --event workflow_dispatch \
+              --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+            if [ -z "$run_id" ]; then
+              echo "::warning::No workflow_dispatch run found for $wf; continuing without its data."
+              return 0
+            fi
             echo "Waiting for $wf run $run_id ..."
             if ! gh run watch "$run_id" --repo "$REPO" --exit-status; then
               echo "::warning::$wf run $run_id did not succeed; continuing without its data."

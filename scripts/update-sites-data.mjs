@@ -66,6 +66,9 @@ async function checkSiteAvailability(domain) {
       signal: controller.signal,
       redirect: 'manual', // detect redirects rather than following them
     });
+    // We only need the status line; release the socket promptly instead of
+    // leaving the streamed body open across hundreds of checks.
+    response.body?.cancel?.().catch(() => {});
     if (response.status === 200) return 'Live';
     if (response.status >= 300 && response.status < 400) return 'Redirect';
     if (response.status >= 400) return 'Error';

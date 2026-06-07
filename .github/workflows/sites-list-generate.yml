@@ -90,7 +90,8 @@ jobs:
           node-version: 'lts/*'
 
       - name: Install dependencies
-        run: npm install csv-parse csv-stringify
+        # Pin major versions to avoid surprise breakage from new majors.
+        run: npm install csv-parse@^6 csv-stringify@^6
 
       - name: Generate sites list (CSV + JSON)
         run: node scripts/update-sites-data.mjs
@@ -99,6 +100,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CBM_TOKEN }}
         run: |
+          # Only ever publish from main, even if dispatched from another ref,
+          # so a feature-branch dispatch can't push that branch's tree to main.
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::warning::Not on refs/heads/main (${GITHUB_REF}); skipping commit/push."
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add sites-list/sites_list.csv sites-list/sites_list.json

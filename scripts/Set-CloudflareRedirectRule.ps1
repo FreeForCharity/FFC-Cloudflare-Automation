@@ -184,7 +184,8 @@ if ($DryRun) {
     if ($existingRuleset) {
         Write-Host ""
         Write-Host "DRY RUN: would PUT to $phaseUri" -ForegroundColor Yellow
-    } else {
+    }
+    else {
         Write-Host ""
         Write-Host "DRY RUN: would POST to $ApiBase/zones/$zoneId/rulesets (no existing entrypoint)" -ForegroundColor Yellow
     }
@@ -200,7 +201,8 @@ if ($existingRuleset) {
     # Update existing entrypoint with the new rules list
     $body = $payload | ConvertTo-Json -Depth 10 -Compress
     $applyResp = Invoke-RestMethod -Method Put -Uri $phaseUri -Headers $Headers -Body $body -TimeoutSec 30
-} else {
+}
+else {
     # Create a new entrypoint ruleset for this phase. CF requires kind+phase+name on POST.
     $createPayload = [ordered]@{
         name        = "default"

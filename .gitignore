@@ -55,3 +55,7 @@ Thumbs.db
 artifacts/
 _run_artifacts/
 _run_*/
+
+# Node / sites-list generator runtime
+node_modules/
+tmp_data/

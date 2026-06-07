@@ -80,6 +80,100 @@ async function checkSiteAvailability(domain) {
   }
 }
 
+// Number of days a repo can go without a closed PR / push before it is
+// considered "stalled" rather than under active development.
+const ACTIVE_DAYS = 45;
+const daysSince = (iso) =>
+  iso ? Math.round((Date.now() - new Date(iso).getTime()) / 86400000) : null;
+
+// Enrich domains with GitHub development activity. The FreeForCharity org names
+// site repos by convention (FFC-EX-<domain>, FFC-IN-<domain>, or <domain>), so
+// we can auto-link most domains to a repo and read its PR/commit activity. This
+// is what drives the volunteer-facing "Work Tier" (active dev > stalled >
+// needs-migration > done > triage > inactive). Skipped gracefully without a token.
+async function fetchRepoActivity(domains) {
+  const result = new Map();
+  const token = process.env.GH_TOKEN || process.env.CBM_TOKEN || process.env.GITHUB_TOKEN;
+  if (!token) {
+    console.log('No GitHub token: skipping dev-activity enrichment.');
+    return result;
+  }
+  const opts = {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'ffc-sites-list',
+    },
+  };
+  const ghGet = async (path) => {
+    try {
+      const r = await fetch('https://api.github.com' + path, opts);
+      if (!r.ok) return null;
+      return await r.json();
+    } catch {
+      return null;
+    }
+  };
+
+  let repos = [];
+  for (let pg = 1; pg <= 5; pg++) {
+    const page = await ghGet(`/orgs/FreeForCharity/repos?per_page=100&page=${pg}`);
+    if (!page || !page.length) break;
+    repos = repos.concat(page);
+  }
+  console.log(`Fetched ${repos.length} FreeForCharity repos for matching.`);
+
+  // Map a normalized domain key -> repo (strip FFC-EX-/FFC-IN- prefix).
+  const byKey = new Map();
+  for (const r of repos) {
+    const m = r.name.match(/^FFC-(?:EX|IN)-(.+)$/i);
+    byKey.set((m ? m[1] : r.name).toLowerCase(), r);
+  }
+
+  const matched = [...new Set(domains.map((d) => d.toLowerCase()))].filter((d) => byKey.has(d));
+  console.log(`Matched ${matched.length} domains to repos; fetching PR activity...`);
+
+  const CHUNK = 8;
+  for (let i = 0; i < matched.length; i += CHUNK) {
+    await Promise.all(
+      matched.slice(i, i + CHUNK).map(async (d) => {
+        const repo = byKey.get(d);
+        const closed = await ghGet(
+          `/repos/${repo.full_name}/pulls?state=closed&sort=updated&direction=desc&per_page=1`,
+        );
+        const open = await ghGet(`/repos/${repo.full_name}/pulls?state=open&per_page=100`);
+        const lastPR = closed && closed[0] ? closed[0].merged_at || closed[0].closed_at : '';
+        result.set(d, {
+          repoUrl: repo.html_url,
+          archived: repo.archived ? 'Yes' : 'No',
+          lastPR: lastPR ? lastPR.slice(0, 10) : '',
+          openPRs: open ? String(open.length) : '0',
+          lastCommit: repo.pushed_at ? repo.pushed_at.slice(0, 10) : '',
+        });
+      }),
+    );
+  }
+  return result;
+}
+
+// Derive the volunteer-facing work tier from dev activity, lifecycle status,
+// and hosting. Lower tier number = more worth a volunteer's attention.
+function workTier({ devStatus, status, server }) {
+  const s = (status || '').toLowerCase();
+  const srv = (server || '').toLowerCase();
+  const dead = ['expired', 'cancelled', 'fraud', 'terminated', 'transferred away'].includes(s);
+  const ghPages = srv === 'github pages';
+  const legacy = ['hostpapa', 'interserver', 'hostinger', 'krystal', 'cloudflare proxy'].some((x) =>
+    srv.includes(x),
+  );
+  if (devStatus === 'Active') return '1 - Active Development';
+  if (dead) return '6 - Inactive / Archive';
+  if (devStatus === 'Stalled') return '2 - Has Repo, Stalled';
+  if (ghPages) return '4 - Done / Stable';
+  if (legacy) return '3 - Needs Migration';
+  return '5 - Needs Triage';
+}
+
 async function main() {
   console.log('Reading data...');
   const whmcsPath = resolveSource(WHMCS_DIR, 'whmcs_domains.csv');
@@ -125,6 +219,9 @@ async function main() {
       .filter(Boolean)
       .map((d) => d.toLowerCase()),
   );
+
+  // GitHub dev-activity enrichment (repo match + PR/commit recency).
+  const repoActivity = await fetchRepoActivity(Array.from(allDomains));
 
   let mergedData = [];
   console.log(`Processing ${allDomains.size} domains including health checks...`);
@@ -172,6 +269,31 @@ async function main() {
         };
         newItem['Priority'] = manualEntry['Priority'] || 'Standard';
 
+        // Dev-activity columns + derived Work Tier.
+        const act = repoActivity.get(domain);
+        if (act?.repoUrl && !newItem['Repo URL']) newItem['Repo URL'] = act.repoUrl;
+        newItem['Repo Archived'] = act?.archived || '';
+        newItem['Last PR Closed'] = act?.lastPR || '';
+        newItem['Open PRs'] = act?.openPRs || '';
+        newItem['Last Commit'] = act?.lastCommit || '';
+        const recent = [daysSince(act?.lastPR), daysSince(act?.lastCommit)].filter(
+          (x) => x !== null,
+        );
+        const lastActDays = recent.length ? Math.min(...recent) : null;
+        const devStatus = !act
+          ? 'None'
+          : act.archived === 'Yes'
+            ? 'Archived'
+            : lastActDays !== null && lastActDays <= ACTIVE_DAYS
+              ? 'Active'
+              : 'Stalled';
+        newItem['Dev Status'] = devStatus;
+        newItem['Work Tier'] = workTier({
+          devStatus,
+          status: newItem['Status'],
+          server: newItem['Server In Use'],
+        });
+
         mergedData.push(newItem);
       }),
     );
@@ -206,11 +328,16 @@ async function main() {
     }
   });
 
-  const priorityOrder = { Highest: 1, High: 2, Standard: 3, Low: 4 };
+  // Order by Work Tier (most actionable first), then most-recent activity, then
+  // keep .org/.com pairs together by lead domain.
+  const tierNum = (d) => parseInt(d['Work Tier'], 10) || 9;
   mergedData.sort((a, b) => {
-    const pA = priorityOrder[a['Priority']] || 99;
-    const pB = priorityOrder[b['Priority']] || 99;
-    if (pA !== pB) return pA - pB;
+    const tA = tierNum(a);
+    const tB = tierNum(b);
+    if (tA !== tB) return tA - tB;
+    const rA = a['Last PR Closed'] || '';
+    const rB = b['Last PR Closed'] || '';
+    if (rA !== rB) return rB.localeCompare(rA); // newer PR date first
     if (a._leadDomain < b._leadDomain) return -1;
     if (a._leadDomain > b._leadDomain) return 1;
     if (a._isFollower !== b._isFollower) return a._isFollower ? 1 : -1;

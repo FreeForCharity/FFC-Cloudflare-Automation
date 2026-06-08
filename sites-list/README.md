@@ -10,7 +10,10 @@ Canonical, machine-generated inventory of Free For Charity domains.
 | `sites_list.json` | Structured form for programmatic consumers                          |
 
 Both files contain the same records and columns:
-`Section, Domain, Status, In WHMCS, In Cloudflare, In WPMUDEV, Server In Use, Old Server Abandoned?, Notes, Cloudflare IP, Is In Cloudflare, Repo URL, Site Health, Priority`.
+`Section, Domain, Status, In WHMCS, In Cloudflare, In WPMUDEV, Server In Use, Old Server Abandoned?, Notes, Cloudflare IP, Is In Cloudflare, Repo URL, Site Health, Priority, Repo Archived, Last PR Closed, Open PRs, Last Commit, Dev Status, Left FFC, Host Category, Is Staging, Domain Age, Expiry, Recurring, Work Tier, Migration Score, Maintenance Score, Dev Score`.
+
+The later columns are derived enrichment: GitHub dev-activity, Left FFC / Work Tier triage,
+host/age/cost signals, and the volunteer-persona priority scores (Migration, Maintenance, Dev).
 
 ## How it is generated
 

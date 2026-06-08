@@ -164,24 +164,34 @@ async function fetchRepoActivity(domains) {
   return result;
 }
 
+// "Transferred Away" means the registration left eNom. That's only a problem if
+// the domain is no longer in FFC Cloudflare — then FFC has actually lost it. A
+// transfer that landed in FFC Cloudflare is fine and the domain is tiered normally.
+function leftFfc({ status, inCloudflare }) {
+  return (status || '').toLowerCase() === 'transferred away' &&
+    (inCloudflare || '').toLowerCase() !== 'yes'
+    ? 'Yes'
+    : '';
+}
+
 // Derive the volunteer-facing work tier from dev activity, lifecycle status,
-// and hosting. Lower tier number = more worth a volunteer's attention.
-function workTier({ devStatus, status, server }) {
+// hosting, and Cloudflare ownership. Lower tier number = more worth attention.
+function workTier({ devStatus, status, server, inCloudflare }) {
   const s = (status || '').toLowerCase();
   const srv = (server || '').toLowerCase();
   // Hard-dead lifecycle states are never worth volunteer effort, even if a repo
   // shows recent (often bot-generated) activity -> always Tier 6.
   const hardDead = ['expired', 'cancelled', 'fraud', 'terminated'].includes(s);
-  const transferred = s === 'transferred away';
   const ghPages = srv === 'github pages';
   const legacy = ['hostpapa', 'interserver', 'hostinger', 'krystal', 'cloudflare proxy'].some((x) =>
     srv.includes(x),
   );
   if (hardDead) return '6 - Inactive / Archive';
-  // Active development wins over a transferred-registration status, since the
-  // site itself may still be live and worked on (e.g. the main FFC site).
+  // Transferred away AND no longer in FFC Cloudflare = the domain left FFC.
+  if (leftFfc({ status, inCloudflare })) return '6 - Inactive / Archive';
+  // Everything else (including a transfer that stayed in FFC Cloudflare) is
+  // tiered normally by development activity and hosting.
   if (devStatus === 'Active') return '1 - Active Development';
-  if (transferred) return '6 - Inactive / Archive';
   if (devStatus === 'Stalled') return '2 - Has Repo, Stalled';
   if (ghPages) return '4 - Done / Stable';
   if (legacy) return '3 - Needs Migration';
@@ -302,10 +312,15 @@ async function main() {
               ? 'Active'
               : 'Stalled';
         newItem['Dev Status'] = devStatus;
+        newItem['Left FFC'] = leftFfc({
+          status: newItem['Status'],
+          inCloudflare: newItem['In Cloudflare'],
+        });
         newItem['Work Tier'] = workTier({
           devStatus,
           status: newItem['Status'],
           server: newItem['Server In Use'],
+          inCloudflare: newItem['In Cloudflare'],
         });
 
         mergedData.push(newItem);

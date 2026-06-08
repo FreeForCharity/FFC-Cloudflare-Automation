@@ -1,5 +1,28 @@
 [
   {
+    "Section": "Subdomain",
+    "Domain": "ffcadmin.org",
+    "Status": "Active",
+    "In WHMCS": "Yes",
+    "In Cloudflare": "Yes",
+    "In WPMUDEV": "No",
+    "Server In Use": "GitHub Pages",
+    "Old Server Abandoned?": "Yes",
+    "Notes": "Fully migrated",
+    "Cloudflare IP": "185.199.108.153;185.199.109.153;185.199.110.153;185.199.111.153",
+    "Is In Cloudflare": "Yes",
+    "Repo URL": "https://github.com/FreeForCharity/FFC-IN-ffcadmin.org",
+    "Site Health": "Live",
+    "Priority": "Standard",
+    "Repo Archived": "No",
+    "Last PR Closed": "2026-06-08",
+    "Open PRs": "2",
+    "Last Commit": "2026-06-08",
+    "Dev Status": "Active",
+    "Left FFC": "",
+    "Work Tier": "1 - Active Development"
+  },
+  {
     "Section": "Unknown",
     "Domain": "bearupinternationalministries.org",
     "Status": "Unknown",
@@ -19,28 +42,7 @@
     "Open PRs": "16",
     "Last Commit": "2026-06-07",
     "Dev Status": "Active",
-    "Work Tier": "1 - Active Development"
-  },
-  {
-    "Section": "Subdomain",
-    "Domain": "ffcadmin.org",
-    "Status": "Active",
-    "In WHMCS": "Yes",
-    "In Cloudflare": "Yes",
-    "In WPMUDEV": "No",
-    "Server In Use": "GitHub Pages",
-    "Old Server Abandoned?": "Yes",
-    "Notes": "Fully migrated",
-    "Cloudflare IP": "185.199.108.153;185.199.109.153;185.199.110.153;185.199.111.153",
-    "Is In Cloudflare": "Yes",
-    "Repo URL": "https://github.com/FreeForCharity/FFC-IN-ffcadmin.org",
-    "Site Health": "Live",
-    "Priority": "Standard",
-    "Repo Archived": "No",
-    "Last PR Closed": "2026-06-07",
-    "Open PRs": "3",
-    "Last Commit": "2026-06-07",
-    "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -63,6 +65,7 @@
     "Open PRs": "3",
     "Last Commit": "2026-06-07",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -82,9 +85,10 @@
     "Priority": "Standard",
     "Repo Archived": "No",
     "Last PR Closed": "2026-06-07",
-    "Open PRs": "5",
+    "Open PRs": "4",
     "Last Commit": "2026-06-07",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -107,6 +111,7 @@
     "Open PRs": "4",
     "Last Commit": "2026-06-04",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -129,6 +134,7 @@
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -151,6 +157,7 @@
     "Open PRs": "21",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -166,13 +173,14 @@
     "Cloudflare IP": "(no A record)",
     "Is In Cloudflare": "No",
     "Repo URL": "https://github.com/FreeForCharity/FFC-EX-americanlegionpost64.org",
-    "Site Health": "Unreachable",
+    "Site Health": "Live",
     "Priority": "Standard",
     "Repo Archived": "No",
     "Last PR Closed": "2026-06-02",
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -188,13 +196,14 @@
     "Cloudflare IP": "204.44.192.77",
     "Is In Cloudflare": "Yes",
     "Repo URL": "https://github.com/FreeForCharity/FFC-EX-aprilhansen.com",
-    "Site Health": "Unreachable",
+    "Site Health": "Live",
     "Priority": "Standard",
     "Repo Archived": "No",
     "Last PR Closed": "2026-06-02",
     "Open PRs": "19",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -217,6 +226,7 @@
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -239,6 +249,7 @@
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -261,6 +272,7 @@
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -283,6 +295,7 @@
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -305,6 +318,7 @@
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -327,6 +341,7 @@
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -349,6 +364,7 @@
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -371,6 +387,7 @@
     "Open PRs": "22",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -393,6 +410,7 @@
     "Open PRs": "24",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -415,6 +433,7 @@
     "Open PRs": "5",
     "Last Commit": "2026-06-06",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -437,6 +456,7 @@
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -459,6 +479,7 @@
     "Open PRs": "18",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -481,6 +502,7 @@
     "Open PRs": "23",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -503,6 +525,7 @@
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -525,6 +548,7 @@
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -547,6 +571,7 @@
     "Open PRs": "20",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -569,6 +594,7 @@
     "Open PRs": "22",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -591,6 +617,7 @@
     "Open PRs": "19",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -613,6 +640,7 @@
     "Open PRs": "27",
     "Last Commit": "2026-05-28",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -635,6 +663,7 @@
     "Open PRs": "23",
     "Last Commit": "2026-06-03",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -657,6 +686,7 @@
     "Open PRs": "22",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -676,9 +706,10 @@
     "Priority": "Standard",
     "Repo Archived": "No",
     "Last PR Closed": "2026-05-27",
-    "Open PRs": "0",
+    "Open PRs": "11",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -698,9 +729,10 @@
     "Priority": "Standard",
     "Repo Archived": "No",
     "Last PR Closed": "2026-05-27",
-    "Open PRs": "0",
+    "Open PRs": "8",
     "Last Commit": "2026-05-27",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -723,6 +755,7 @@
     "Open PRs": "0",
     "Last Commit": "2026-05-28",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -745,6 +778,7 @@
     "Open PRs": "0",
     "Last Commit": "2026-05-27",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -767,6 +801,7 @@
     "Open PRs": "0",
     "Last Commit": "2026-05-27",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "1 - Active Development"
   },
   {
@@ -789,6 +824,7 @@
     "Open PRs": "0",
     "Last Commit": "2026-03-25",
     "Dev Status": "Stalled",
+    "Left FFC": "",
     "Work Tier": "2 - Has Repo, Stalled"
   },
   {
@@ -811,6 +847,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -833,6 +870,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -855,6 +893,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -877,6 +916,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -899,6 +939,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -921,6 +962,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -943,6 +985,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -965,6 +1008,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -987,6 +1031,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1002,13 +1047,14 @@
     "Cloudflare IP": "192.64.86.202",
     "Is In Cloudflare": "Yes",
     "Repo URL": "",
-    "Site Health": "Unreachable",
+    "Site Health": "Live",
     "Priority": "Standard",
     "Repo Archived": "",
     "Last PR Closed": "",
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1024,13 +1070,14 @@
     "Cloudflare IP": "192.64.86.202",
     "Is In Cloudflare": "Yes",
     "Repo URL": "",
-    "Site Health": "Unreachable",
+    "Site Health": "Live",
     "Priority": "Standard",
     "Repo Archived": "",
     "Last PR Closed": "",
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1053,6 +1100,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1075,6 +1123,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1097,6 +1146,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1119,6 +1169,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1134,13 +1185,14 @@
     "Cloudflare IP": "185.199.220.110",
     "Is In Cloudflare": "Yes",
     "Repo URL": "",
-    "Site Health": "Live",
+    "Site Health": "Unreachable",
     "Priority": "Standard",
     "Repo Archived": "",
     "Last PR Closed": "",
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1163,6 +1215,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1185,6 +1238,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1207,6 +1261,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1229,6 +1284,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1251,6 +1307,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1273,6 +1330,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1295,6 +1353,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1317,6 +1376,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1339,6 +1399,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1361,6 +1422,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1383,6 +1445,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1405,6 +1468,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1427,6 +1491,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1449,6 +1514,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1471,6 +1537,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1493,6 +1560,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1515,6 +1583,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1537,6 +1606,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1559,6 +1629,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1581,6 +1652,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1603,6 +1675,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1625,6 +1698,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1647,6 +1721,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1669,6 +1744,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1691,6 +1767,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1713,6 +1790,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1735,6 +1813,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1757,6 +1836,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1779,6 +1859,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1801,6 +1882,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1823,6 +1905,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1845,6 +1928,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1867,6 +1951,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1889,6 +1974,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1911,6 +1997,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1933,6 +2020,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1955,6 +2043,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1977,6 +2066,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -1999,6 +2089,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -2021,6 +2112,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -2043,6 +2135,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -2065,6 +2158,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -2087,6 +2181,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -2109,6 +2204,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -2131,6 +2227,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -2153,6 +2250,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -2175,6 +2273,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "3 - Needs Migration"
   },
   {
@@ -2197,6 +2296,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "4 - Done / Stable"
   },
   {
@@ -2219,6 +2319,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "4 - Done / Stable"
   },
   {
@@ -2241,6 +2342,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "4 - Done / Stable"
   },
   {
@@ -2263,6 +2365,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "4 - Done / Stable"
   },
   {
@@ -2285,6 +2388,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "4 - Done / Stable"
   },
   {
@@ -2307,6 +2411,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "4 - Done / Stable"
   },
   {
@@ -2329,6 +2434,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2351,6 +2457,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2373,6 +2480,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2395,6 +2503,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2410,13 +2519,14 @@
     "Cloudflare IP": "216.222.200.253",
     "Is In Cloudflare": "No",
     "Repo URL": "",
-    "Site Health": "Unreachable",
+    "Site Health": "Live",
     "Priority": "Standard",
     "Repo Archived": "",
     "Last PR Closed": "",
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2439,6 +2549,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2461,6 +2572,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2483,6 +2595,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2505,6 +2618,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2527,6 +2641,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2549,6 +2664,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2571,6 +2687,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2593,6 +2710,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2615,6 +2733,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2637,6 +2756,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2659,6 +2779,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2681,6 +2802,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2703,6 +2825,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2725,6 +2848,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2747,6 +2871,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2769,6 +2894,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2791,6 +2917,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2813,6 +2940,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2828,13 +2956,14 @@
     "Cloudflare IP": "(no A record)",
     "Is In Cloudflare": "No",
     "Repo URL": "",
-    "Site Health": "Live",
+    "Site Health": "Unreachable",
     "Priority": "Standard",
     "Repo Archived": "",
     "Last PR Closed": "",
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2857,6 +2986,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2879,6 +3009,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2901,6 +3032,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2923,6 +3055,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2945,6 +3078,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2967,6 +3101,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -2989,6 +3124,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3011,6 +3147,30 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
+    "Work Tier": "5 - Needs Triage"
+  },
+  {
+    "Section": "Unknown",
+    "Domain": "ffchostingmultisite.org",
+    "Status": "Transferred Away",
+    "In WHMCS": "Yes",
+    "In Cloudflare": "Yes",
+    "In WPMUDEV": "No",
+    "Server In Use": "",
+    "Old Server Abandoned?": "",
+    "Notes": "",
+    "Cloudflare IP": "(no A record)",
+    "Is In Cloudflare": "Yes",
+    "Repo URL": "",
+    "Site Health": "Redirect",
+    "Priority": "Standard",
+    "Repo Archived": "",
+    "Last PR Closed": "",
+    "Open PRs": "",
+    "Last Commit": "",
+    "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3033,6 +3193,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3055,6 +3216,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3077,6 +3239,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3099,6 +3262,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3121,6 +3285,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3143,6 +3308,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3165,6 +3331,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3187,6 +3354,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3209,6 +3377,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3231,6 +3400,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3253,6 +3423,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3268,13 +3439,14 @@
     "Cloudflare IP": "(no A record)",
     "Is In Cloudflare": "No",
     "Repo URL": "",
-    "Site Health": "Redirect",
+    "Site Health": "Unreachable",
     "Priority": "Standard",
     "Repo Archived": "",
     "Last PR Closed": "",
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3297,6 +3469,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3319,6 +3492,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3341,6 +3515,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3363,6 +3538,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3385,6 +3561,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3407,6 +3584,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3429,6 +3607,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3451,6 +3630,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3473,6 +3653,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3495,6 +3676,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3517,6 +3699,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3539,6 +3722,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3561,6 +3745,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3583,6 +3768,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3605,6 +3791,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3627,6 +3814,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3649,6 +3837,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3671,6 +3860,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3693,6 +3883,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3715,6 +3906,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3737,6 +3929,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3759,6 +3952,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3781,6 +3975,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3803,6 +3998,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3825,6 +4021,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3847,6 +4044,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3869,6 +4067,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3891,6 +4090,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3913,6 +4113,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3935,6 +4136,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3957,6 +4159,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -3979,6 +4182,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4001,6 +4205,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4023,6 +4228,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4045,6 +4251,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4067,6 +4274,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4089,6 +4297,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4111,6 +4320,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4133,6 +4343,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4155,6 +4366,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4177,6 +4389,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4199,6 +4412,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4214,13 +4428,14 @@
     "Cloudflare IP": "174.138.190.170",
     "Is In Cloudflare": "Yes",
     "Repo URL": "",
-    "Site Health": "Live",
+    "Site Health": "Unreachable",
     "Priority": "Standard",
     "Repo Archived": "",
     "Last PR Closed": "",
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4243,6 +4458,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4265,6 +4481,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4287,6 +4504,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4309,6 +4527,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4331,6 +4550,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4353,6 +4573,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4375,6 +4596,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4397,6 +4619,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4419,6 +4642,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4441,6 +4665,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4463,6 +4688,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4485,6 +4711,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4507,6 +4734,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4529,6 +4757,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4551,6 +4780,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4573,6 +4803,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4588,13 +4819,14 @@
     "Cloudflare IP": "(no A record)",
     "Is In Cloudflare": "No",
     "Repo URL": "",
-    "Site Health": "Live",
+    "Site Health": "Unreachable",
     "Priority": "Standard",
     "Repo Archived": "",
     "Last PR Closed": "",
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4617,6 +4849,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4639,6 +4872,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4661,6 +4895,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4683,6 +4918,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4705,6 +4941,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4727,6 +4964,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4742,13 +4980,14 @@
     "Cloudflare IP": "(no A record)",
     "Is In Cloudflare": "No",
     "Repo URL": "",
-    "Site Health": "Unreachable",
+    "Site Health": "Live",
     "Priority": "Standard",
     "Repo Archived": "",
     "Last PR Closed": "",
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4764,13 +5003,14 @@
     "Cloudflare IP": "(no A record)",
     "Is In Cloudflare": "No",
     "Repo URL": "",
-    "Site Health": "Unreachable",
+    "Site Health": "Live",
     "Priority": "Standard",
     "Repo Archived": "",
     "Last PR Closed": "",
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4793,6 +5033,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4815,6 +5056,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "5 - Needs Triage"
   },
   {
@@ -4834,9 +5076,10 @@
     "Priority": "Standard",
     "Repo Archived": "No",
     "Last PR Closed": "2026-06-06",
-    "Open PRs": "27",
+    "Open PRs": "0",
     "Last Commit": "2026-06-06",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -4856,9 +5099,10 @@
     "Priority": "Standard",
     "Repo Archived": "No",
     "Last PR Closed": "2026-06-02",
-    "Open PRs": "20",
+    "Open PRs": "0",
     "Last Commit": "2026-06-02",
     "Dev Status": "Active",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -4881,6 +5125,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -4903,6 +5148,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -4925,6 +5171,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -4947,6 +5194,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -4969,6 +5217,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -4991,6 +5240,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5013,6 +5263,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5035,6 +5286,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5057,6 +5309,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5079,6 +5332,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5101,6 +5355,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5123,6 +5378,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5145,6 +5401,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5167,6 +5424,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5189,6 +5447,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5211,6 +5470,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5233,6 +5493,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5255,6 +5516,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5277,6 +5539,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5299,6 +5562,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5321,6 +5585,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5343,6 +5608,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5365,6 +5631,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5387,6 +5654,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5409,6 +5677,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5431,6 +5700,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5453,6 +5723,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5475,6 +5746,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5497,6 +5769,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5519,6 +5792,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5541,6 +5815,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5563,6 +5838,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5585,28 +5861,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
-    "Work Tier": "6 - Inactive / Archive"
-  },
-  {
-    "Section": "Unknown",
-    "Domain": "ffchostingmultisite.org",
-    "Status": "Transferred Away",
-    "In WHMCS": "Yes",
-    "In Cloudflare": "Yes",
-    "In WPMUDEV": "No",
-    "Server In Use": "",
-    "Old Server Abandoned?": "",
-    "Notes": "",
-    "Cloudflare IP": "(no A record)",
-    "Is In Cloudflare": "Yes",
-    "Repo URL": "",
-    "Site Health": "Redirect",
-    "Priority": "Standard",
-    "Repo Archived": "",
-    "Last PR Closed": "",
-    "Open PRs": "",
-    "Last Commit": "",
-    "Dev Status": "None",
+    "Left FFC": "Yes",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5629,6 +5884,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5651,6 +5907,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5673,6 +5930,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5695,6 +5953,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5717,6 +5976,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5739,6 +5999,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5761,6 +6022,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5783,6 +6045,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "Yes",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5805,6 +6068,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5827,6 +6091,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "Yes",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5849,6 +6114,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "Yes",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5871,6 +6137,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "Yes",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5893,6 +6160,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5915,6 +6183,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5937,6 +6206,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5959,6 +6229,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "Yes",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -5981,6 +6252,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6003,6 +6275,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6025,6 +6298,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6047,6 +6321,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6069,6 +6344,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6091,6 +6367,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6113,6 +6390,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6135,6 +6413,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6157,6 +6436,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6179,6 +6459,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6201,6 +6482,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6223,6 +6505,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6245,6 +6528,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6267,6 +6551,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6289,6 +6574,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6311,6 +6597,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6333,6 +6620,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6355,6 +6643,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6377,6 +6666,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6399,6 +6689,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6421,6 +6712,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6443,6 +6735,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6465,6 +6758,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6487,6 +6781,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6509,6 +6804,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6531,6 +6827,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6553,6 +6850,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6575,6 +6873,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6597,6 +6896,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6619,6 +6919,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6641,6 +6942,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6663,6 +6965,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6685,6 +6988,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6707,6 +7011,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6729,6 +7034,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6751,6 +7057,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6773,6 +7080,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6795,6 +7103,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6817,6 +7126,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6839,6 +7149,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6861,6 +7172,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6883,6 +7195,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6905,6 +7218,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6927,6 +7241,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6949,6 +7264,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6971,6 +7287,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -6993,6 +7310,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7015,6 +7333,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7037,6 +7356,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "Yes",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7059,6 +7379,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "Yes",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7081,6 +7402,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7103,6 +7425,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7125,6 +7448,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7147,6 +7471,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "Yes",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7169,6 +7494,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "Yes",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7191,6 +7517,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7213,6 +7540,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7235,6 +7563,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7257,6 +7586,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7279,6 +7609,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7301,6 +7632,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "Yes",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7323,6 +7655,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7345,6 +7678,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7367,6 +7701,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7389,6 +7724,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7411,6 +7747,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7433,6 +7770,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7455,6 +7793,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7477,6 +7816,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7499,6 +7839,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7521,6 +7862,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7543,6 +7885,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7565,6 +7908,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7587,6 +7931,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7609,6 +7954,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7631,6 +7977,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7653,6 +8000,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7675,6 +8023,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7697,6 +8046,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7719,6 +8069,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7741,6 +8092,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7763,6 +8115,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7785,6 +8138,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7807,6 +8161,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7829,6 +8184,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7851,6 +8207,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7873,6 +8230,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7895,6 +8253,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7917,6 +8276,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7939,6 +8299,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7961,6 +8322,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -7983,6 +8345,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "Yes",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8005,6 +8368,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8027,6 +8391,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8042,13 +8407,14 @@
     "Cloudflare IP": "(no A record)",
     "Is In Cloudflare": "No",
     "Repo URL": "",
-    "Site Health": "Live",
+    "Site Health": "Unreachable",
     "Priority": "Standard",
     "Repo Archived": "",
     "Last PR Closed": "",
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8071,6 +8437,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8093,6 +8460,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8115,6 +8483,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8137,6 +8506,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8159,6 +8529,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8181,6 +8552,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8203,6 +8575,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8225,6 +8598,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8247,6 +8621,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   },
   {
@@ -8269,6 +8644,7 @@
     "Open PRs": "",
     "Last Commit": "",
     "Dev Status": "None",
+    "Left FFC": "",
     "Work Tier": "6 - Inactive / Archive"
   }
 ]

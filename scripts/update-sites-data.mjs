@@ -180,7 +180,7 @@ function leftFfc({ status, inCloudflare, notes }) {
 
 // Derive the volunteer-facing work tier from dev activity, lifecycle status,
 // hosting, and Cloudflare ownership. Lower tier number = more worth attention.
-function workTier({ devStatus, status, server, inCloudflare, notes }) {
+function workTier({ devStatus, status, server, inCloudflare, notes, health, hostCat }) {
   const s = (status || '').toLowerCase();
   const srv = (server || '').toLowerCase();
   // Hard-dead lifecycle states are never worth volunteer effort, even if a repo
@@ -199,7 +199,95 @@ function workTier({ devStatus, status, server, inCloudflare, notes }) {
   if (devStatus === 'Stalled') return '2 - Has Repo, Stalled';
   if (ghPages) return '4 - Done / Stable';
   if (legacy) return '3 - Needs Migration';
+  // Demote genuinely-parked + unreachable domains out of triage (effectively dead).
+  if ((health || '') === 'Unreachable' && /parked|unresolved/i.test(hostCat || ''))
+    return '6 - Inactive / Archive';
   return '5 - Needs Triage';
+}
+
+// ---- Volunteer-persona scoring -------------------------------------------------
+// Classify where a domain is actually hosted (curated Server In Use wins; else
+// infer from the Cloudflare apex IP / www CNAME). Drives the "how much can FFC
+// act on this" signal for the persona scores.
+function hostCategory(server, cfIp, wwwCname) {
+  if (server) return server;
+  const j = `${(cfIp || '').toLowerCase()} ${(wwwCname || '').toLowerCase()}`;
+  if (/192\.64\.86|is\.cc|trouble-free/.test(j)) return 'InterServer';
+  if (/153\.92\.213|hostinger|2a02:4780/.test(j)) return 'Hostinger';
+  if (/185\.199\.10[89]|185\.199\.11[01]|github\.io/.test(j)) return 'GitHub Pages';
+  if (/204\.44\.192/.test(j)) return 'HostPapa';
+  if (/185\.199\.220|krystal/.test(j)) return 'Krystal.io';
+  if (/172\.6[67]\.|104\.21\.|104\.16\./.test(j)) return 'Cloudflare Proxy';
+  if (/amazonaws|googleusercontent|^54\.|^34\.|^52\.|^3\.|^35\./.test(j.trim())) return 'External';
+  if (!(cfIp || '').replace('(no A record)', '').trim() && !wwwCname) return 'Unresolved/Parked';
+  return 'Other-external';
+}
+
+const isStaging = (domain) => /(^|\.)(staging|dev|test)\./i.test(domain);
+const domainAgeYears = (whmcsEntry) =>
+  whmcsEntry?.regdate
+    ? (Date.now() - new Date(whmcsEntry.regdate).getTime()) / (365.25 * 86400000)
+    : null;
+
+const FFC_SERVER = /interserver|hostpapa|hostinger|krystal|onlineimpact|ffc-whm/i;
+const HEALTH_PTS = { Live: 30, Redirect: 22, Error: 8, Unreachable: 0, Unknown: 5 };
+const expiryUrgency = (expiry) => {
+  if (!expiry) return 0;
+  const days = (new Date(expiry).getTime() - Date.now()) / 86400000;
+  if (Number.isNaN(days)) return 0;
+  return days < 0 ? 6 : days < 90 ? 10 : days < 365 ? 4 : 0; // sooner = more urgent decision
+};
+
+// Migration view: live sites on a migratable, FFC-controllable host that are NOT
+// yet on GitHub Pages — the backlog to move to Pages.
+function migrationScore(c) {
+  const gh = /github pages/i.test(c.hostCat);
+  if (c.dead || gh) return 0;
+  if (/parked|unresolved/i.test(c.hostCat) && c.health === 'Unreachable') return 0;
+  let s = HEALTH_PTS[c.health] || 0;
+  s += FFC_SERVER.test(c.hostCat)
+    ? 25
+    : /cloudflare proxy/i.test(c.hostCat)
+      ? 15
+      : /external/i.test(c.hostCat)
+        ? 8
+        : 0;
+  s += c.wp ? 15 : 0;
+  s += c.ageYrs ? Math.round((Math.min(c.ageYrs, 10) / 10) * 15) : 0;
+  s += c.recur > 0 ? 5 : 0;
+  s += expiryUrgency(c.expiry);
+  s -= c.donotrenew ? 15 : 0;
+  return Math.max(0, s);
+}
+
+// Maintenance view: already-live production sites to keep healthy.
+function maintenanceScore(c) {
+  if (c.staging || c.dead || !['Live', 'Redirect'].includes(c.health)) return 0;
+  let s = HEALTH_PTS[c.health];
+  s += /github pages/i.test(c.hostCat)
+    ? 20
+    : FFC_SERVER.test(c.hostCat)
+      ? 15
+      : /cloudflare proxy/i.test(c.hostCat)
+        ? 10
+        : 5;
+  s += c.repoUrl ? 12 : 0;
+  s += c.ageYrs ? Math.round((Math.min(c.ageYrs, 10) / 10) * 15) : 0;
+  s += c.recur > 10 ? 8 : 0;
+  return s;
+}
+
+// Development view: new builds and redesigns in progress.
+function devScore(c) {
+  let s = 0;
+  if (/^1/.test(c.workTier)) s += 25; // active dev
+  if (c.devStatus === 'Stalled') s += 12;
+  if (c.staging) s += 22;
+  if (c.ageYrs !== null && c.ageYrs < 1.5) s += 15; // newly registered
+  if (c.health === 'Error') s += 8; // mid-build / misconfigured
+  if (c.repoUrl) s += 10;
+  if (c.dead) s = Math.max(0, s - 30);
+  return s;
 }
 
 async function main() {
@@ -321,13 +409,49 @@ async function main() {
           inCloudflare: newItem['In Cloudflare'],
           notes: newItem['Notes'],
         });
+
+        // Persona-view enrichment: host, staging, age/renewal, and the three scores.
+        const hostCat = hostCategory(
+          newItem['Server In Use'],
+          newItem['Cloudflare IP'],
+          cfEntry?.www_cname_target,
+        );
+        const ageYrs = domainAgeYears(whmcsEntry);
+        const staging = isStaging(domain);
+        newItem['Host Category'] = hostCat;
+        newItem['Is Staging'] = staging ? 'Yes' : '';
+        newItem['Domain Age'] = ageYrs !== null ? ageYrs.toFixed(1) : '';
+        newItem['Expiry'] = whmcsEntry?.expirydate || '';
+        newItem['Recurring'] = whmcsEntry?.recurringamount || '';
+
         newItem['Work Tier'] = workTier({
           devStatus,
           status: newItem['Status'],
           server: newItem['Server In Use'],
           inCloudflare: newItem['In Cloudflare'],
           notes: newItem['Notes'],
+          health: healthStatus,
+          hostCat,
         });
+
+        const dead = /^6/.test(newItem['Work Tier']) || newItem['Left FFC'] === 'Yes';
+        const scoreCtx = {
+          health: healthStatus,
+          hostCat,
+          wp: newItem['In WPMUDEV'] === 'Yes',
+          ageYrs,
+          donotrenew: whmcsEntry?.donotrenew === '1',
+          recur: parseFloat(whmcsEntry?.recurringamount || '0') || 0,
+          expiry: newItem['Expiry'],
+          devStatus,
+          workTier: newItem['Work Tier'],
+          repoUrl: newItem['Repo URL'],
+          staging,
+          dead,
+        };
+        newItem['Migration Score'] = String(migrationScore(scoreCtx));
+        newItem['Maintenance Score'] = String(maintenanceScore(scoreCtx));
+        newItem['Dev Score'] = String(devScore(scoreCtx));
 
         mergedData.push(newItem);
       }),

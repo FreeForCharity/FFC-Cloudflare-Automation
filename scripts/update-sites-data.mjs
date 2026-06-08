@@ -223,7 +223,7 @@ function hostCategory(server, cfIp, wwwCname) {
   return 'Other-external';
 }
 
-const isStaging = (domain) => /(^|\.)(staging|dev|test)\./i.test(domain);
+const isStaging = (domain) => /(^|\.)(staging|stg|dev|test)\./i.test(domain);
 const domainAgeYears = (whmcsEntry) =>
   whmcsEntry?.regdate
     ? (Date.now() - new Date(whmcsEntry.regdate).getTime()) / (365.25 * 86400000)

@@ -167,7 +167,11 @@ async function fetchRepoActivity(domains) {
 // "Transferred Away" means the registration left eNom. That's only a problem if
 // the domain is no longer in FFC Cloudflare — then FFC has actually lost it. A
 // transfer that landed in FFC Cloudflare is fine and the domain is tiered normally.
-function leftFfc({ status, inCloudflare }) {
+// Exception: some valid FFC sites keep DNS in the *client's* own Cloudflare
+// account, so they look "not in FFC Cloudflare" but haven't left. Curated Notes
+// containing "client-managed cloudflare" mark these as a manual override.
+function leftFfc({ status, inCloudflare, notes }) {
+  if ((notes || '').toLowerCase().includes('client-managed cloudflare')) return '';
   return (status || '').toLowerCase() === 'transferred away' &&
     (inCloudflare || '').toLowerCase() !== 'yes'
     ? 'Yes'
@@ -176,7 +180,7 @@ function leftFfc({ status, inCloudflare }) {
 
 // Derive the volunteer-facing work tier from dev activity, lifecycle status,
 // hosting, and Cloudflare ownership. Lower tier number = more worth attention.
-function workTier({ devStatus, status, server, inCloudflare }) {
+function workTier({ devStatus, status, server, inCloudflare, notes }) {
   const s = (status || '').toLowerCase();
   const srv = (server || '').toLowerCase();
   // Hard-dead lifecycle states are never worth volunteer effort, even if a repo
@@ -188,7 +192,7 @@ function workTier({ devStatus, status, server, inCloudflare }) {
   );
   if (hardDead) return '6 - Inactive / Archive';
   // Transferred away AND no longer in FFC Cloudflare = the domain left FFC.
-  if (leftFfc({ status, inCloudflare })) return '6 - Inactive / Archive';
+  if (leftFfc({ status, inCloudflare, notes })) return '6 - Inactive / Archive';
   // Everything else (including a transfer that stayed in FFC Cloudflare) is
   // tiered normally by development activity and hosting.
   if (devStatus === 'Active') return '1 - Active Development';
@@ -315,12 +319,14 @@ async function main() {
         newItem['Left FFC'] = leftFfc({
           status: newItem['Status'],
           inCloudflare: newItem['In Cloudflare'],
+          notes: newItem['Notes'],
         });
         newItem['Work Tier'] = workTier({
           devStatus,
           status: newItem['Status'],
           server: newItem['Server In Use'],
           inCloudflare: newItem['In Cloudflare'],
+          notes: newItem['Notes'],
         });
 
         mergedData.push(newItem);

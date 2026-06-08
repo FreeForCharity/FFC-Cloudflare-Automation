@@ -55,7 +55,7 @@ Org-WPAdmin,facinggiantsnc.org,Active,Yes,Yes,Yes,Hostinger,No,Duplicate exists 
 Org-NoWP,ffchtml.onlineimpacts.org,Unknown,No,No,No,Hostinger,No,Subdomain-like structure,153.92.213.212,No,,Error,Standard,,,,,None,,3 - Needs Migration
 Org-WPAdmin,ftnfcog.org,Active,Yes,No,Yes,Hostinger,No,Matches Hostinger,153.92.213.212,No,,Live,Standard,,,,,None,,3 - Needs Migration
 Org-WPAdmin,graftonareahistory.org,Active,Yes,Yes,Yes,Cloudflare Proxy,No,Proxy origin unknown,141.193.213.10;141.193.213.11,Yes,,Live,Standard,,,,,None,,3 - Needs Migration
-For-Profit,hardpointconsulting.com,Transferred Away,Yes,No,Yes,HostPapa,No,"Client-managed Cloudflare; valid FFC site, DNS in client own Cloudflare account (reviewed 2026-06-08)",204.44.192.77,No,,Live,Standard,,,,,None,,3 - Needs Migration
+For-Profit,hardpointconsulting.com,Transferred Away,Yes,No,Yes,HostPapa,No,"Client-managed Cloudflare; valid FFC site, DNS in client’s own Cloudflare account (reviewed 2026-06-08)",204.44.192.77,No,,Live,Standard,,,,,None,,3 - Needs Migration
 InterServer-Org,harmonycenterfoundation.org,Active,Yes,Yes,No,InterServer DA,No,Correct InterServer mapping,192.64.86.202,Yes,,Live,Standard,,,,,None,,3 - Needs Migration
 Cloudflare-Only,hasbeensandgonnabees.org,Active,Yes,Yes,No,Cloudflare Proxy,No,Proxy origin unknown,52.184.222.116,Yes,,Unreachable,Standard,,,,,None,,3 - Needs Migration
 Org-WPAdmin,homesforchange.org,Unknown,No,No,Yes,Hostinger,No,Matches Hostinger,153.92.213.212,No,,Live,Standard,,,,,None,,3 - Needs Migration

@@ -1296,7 +1296,7 @@
     "In WPMUDEV": "Yes",
     "Server In Use": "HostPapa",
     "Old Server Abandoned?": "No",
-    "Notes": "Client-managed Cloudflare; valid FFC site, DNS in client own Cloudflare account (reviewed 2026-06-08)",
+    "Notes": "Client-managed Cloudflare; valid FFC site, DNS in client’s own Cloudflare account (reviewed 2026-06-08)",
     "Cloudflare IP": "204.44.192.77",
     "Is In Cloudflare": "No",
     "Repo URL": "",

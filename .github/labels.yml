@@ -48,6 +48,10 @@
   description: Request to provision a new website from the template (DNS + repo + content)
   color: '0aa7a7'
 
+- name: admin-provision
+  description: Admin-only minimal provisioning (repo + apex DNS) without full charity details
+  color: '5319e7'
+
 # General Labels
 - name: bug
   description: Something isn't working

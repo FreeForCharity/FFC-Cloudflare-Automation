@@ -225,6 +225,12 @@ Provisions a charity website end-to-end after a website request issue is assigne
 - Trigger: `issues.assigned`
   - Gate: issue title starts with `[WEBSITE REQUEST]` **or** the issue has the `website-request`
     label.
+  - **Admin-minimal mode**: if the issue also carries the `admin-provision` label (use the **07.
+    [ADMIN ONLY] Provision Website (Minimal)** issue template), validation mirrors manual dispatch —
+    only the domain is required and all charity/footer/leadership/social fields are optional. Footer
+    content patching is skipped; the repo (from the FFC template) is still created and apex GitHub Pages
+    DNS is still enforced when the zone is controlled in Cloudflare. Use this right after registering
+    a domain when you only need the repo + apex DNS.
 - Trigger: `workflow_dispatch` (manual)
   - This supports “best-effort” provisioning when only a domain is known.
 

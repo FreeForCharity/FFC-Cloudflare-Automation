@@ -143,6 +143,16 @@ jobs:
               return;
             }
 
+            // Admin-minimal provisioning: an administrator can provision the repo
+            // (from the FFC template) and enforce apex GitHub Pages DNS for a freshly
+            // registered domain WITHOUT supplying full charity/footer details. This is
+            // signalled by the `admin-provision` label (see the admin-only issue
+            // template). In this mode validation mirrors manual dispatch: only the
+            // domain is required and all charity/footer/leadership/social fields are
+            // optional, so footer content patching is simply skipped.
+            const adminMinimal = !isManual && labels.includes('admin-provision');
+            const bestEffort = isManual || adminMinimal;
+
             const requesterGitHubUsername = (
               String(manualInputs.requester_github_username || '').trim().replace(/^@/, '') ||
               requesterFromIssue ||
@@ -339,13 +349,17 @@ jobs:
               const addressState = normalizeInput(extractSection('Footer Mailing State/Province'));
               const addressPostal = normalizeInput(extractSection('Footer Mailing Postal Code'));
 
+              // Only stamp the country when an address was actually provided, so
+              // admin-minimal runs that omit the address don't end up with a
+              // country-only string that fails the best-effort ZIP validation.
+              const hasAnyAddress = !!(addressLine1 || addressCity || addressState || addressPostal);
               footerAddress = buildAddress({
                 line1: addressLine1,
                 line2: '',
                 city: addressCity,
                 state: addressState,
                 postal: addressPostal,
-                country: 'United States',
+                country: hasAnyAddress ? 'United States' : '',
               });
 
               footerEin = normalizeInput(extractSection('EIN / Tax ID'));
@@ -354,21 +368,25 @@ jobs:
               guideStarProfileUrl = normalizeInput(extractSection('Candid / GuideStar Profile URL'));
               guideStarDirectProfileUrl = normalizeInput(extractSection('Candid / GuideStar Direct Profile Link'));
 
-              const facebookUrl = validateRequiredUrl('Facebook URL', extractSection('Facebook URL'));
+              // Issue-based runs normally require all 4 social URLs; admin-minimal
+              // runs treat them as optional (same as manual best-effort dispatch).
+              const validateSocialUrl = bestEffort ? validateOptionalUrl : validateRequiredUrl;
+
+              const facebookUrl = validateSocialUrl('Facebook URL', extractSection('Facebook URL'));
               if (facebookUrl === null) return;
-              const xUrl = validateRequiredUrl('X / Twitter URL', extractSection('X / Twitter URL'));
+              const xUrl = validateSocialUrl('X / Twitter URL', extractSection('X / Twitter URL'));
               if (xUrl === null) return;
-              const linkedinUrl = validateRequiredUrl('LinkedIn URL', extractSection('LinkedIn URL'));
+              const linkedinUrl = validateSocialUrl('LinkedIn URL', extractSection('LinkedIn URL'));
               if (linkedinUrl === null) return;
-              const githubUrl = validateRequiredUrl('GitHub URL', extractSection('GitHub URL'));
+              const githubUrl = validateSocialUrl('GitHub URL', extractSection('GitHub URL'));
               if (githubUrl === null) return;
 
               footerSocialLinks = [
-                `facebook: ${facebookUrl}`,
-                `x: ${xUrl}`,
-                `linkedin: ${linkedinUrl}`,
-                `github: ${githubUrl}`,
-              ];
+                facebookUrl ? `facebook: ${facebookUrl}` : '',
+                xUrl ? `x: ${xUrl}` : '',
+                linkedinUrl ? `linkedin: ${linkedinUrl}` : '',
+                githubUrl ? `github: ${githubUrl}` : '',
+              ].filter(Boolean);
 
               // Leadership can be provided as:
               // 1) A single multiline block ("Board / Leadership")
@@ -472,7 +490,7 @@ jobs:
             // Enforce non-placeholder values for required fields.
             // We cannot prevent users from typing `N/A` into a required field in GitHub Issue Forms,
             // so we block the workflow if it happens.
-            if (!isManual) {
+            if (!bestEffort) {
               const requiredChecks = [
                 ['domain', domain],
                 ['Organization Name (as displayed)', charityName],
@@ -489,7 +507,7 @@ jobs:
                 }
               }
             } else {
-              // Manual dispatch: best-effort mode.
+              // Manual dispatch / admin-minimal: best-effort mode.
               // Domain is required; everything else is optional (but N/A is never allowed).
               if (isDisallowedValue(domain)) {
                 core.setFailed('Invalid value for required field: domain. Please provide a real value (not N/A).');
@@ -509,7 +527,7 @@ jobs:
             if (failIfNAProvided('Technical POC GitHub Username', technicalPocGitHubUsername)) return;
 
             const is501c3 = /\b501\s*\(c\)\s*3\b/i.test(irsStatus);
-            if (!isManual && isDisallowedValue(irsStatus)) {
+            if (!bestEffort && isDisallowedValue(irsStatus)) {
               core.setFailed('Missing required field: IRS 501(c)(3) Status.');
               return;
             }
@@ -537,8 +555,8 @@ jobs:
             }
 
             // Footer phone: must be a valid US phone number (10 digits, or 11 digits starting with 1).
-            // Required for issue-based runs; manual runs validate only if provided.
-            if (!isManual || !isDisallowedValue(footerPhone)) {
+            // Required for full issue-based runs; manual/admin-minimal runs validate only if provided.
+            if (!bestEffort || !isDisallowedValue(footerPhone)) {
               if (!isValidUsPhone(footerPhone)) {
                 core.setFailed('Footer Contact Phone must be a valid US phone number (10 digits, or 11 digits starting with 1).');
                 return;
@@ -553,7 +571,7 @@ jobs:
 
             // Address requirement: must map to a real location (issue form).
             // Require Street/PO Box + City/State/ZIP and a valid US ZIP format.
-            if (!isManual) {
+            if (!bestEffort) {
               const line1 = normalizeInput(extractSection('Footer Mailing Address Line 1'));
               const city = normalizeInput(extractSection('Footer Mailing City'));
               const state = normalizeInput(extractSection('Footer Mailing State/Province'));
@@ -586,8 +604,8 @@ jobs:
               }
             }
 
-            // Leadership is displayed on the site. Require at least one leader line for issue-based runs.
-            if (!isManual) {
+            // Leadership is displayed on the site. Require at least one leader line for full issue-based runs.
+            if (!bestEffort) {
               if (!leadershipLines || leadershipLines.length === 0) {
                 core.setFailed(
                   'Board / Leadership is required. Provide at least Board President, Board Secretary, and Board Treasurer (or fill out the legacy Board / Leadership block).',
@@ -655,8 +673,8 @@ jobs:
               }
             }
 
-            // Social URLs: issue-based runs require all 4; manual runs are best-effort.
-            if (isManual) {
+            // Social URLs: full issue-based runs require all 4; manual/admin-minimal runs are best-effort.
+            if (bestEffort) {
               for (const line of footerSocialLinks || []) {
                 if (/\bn\/?a\b/i.test(line)) {
                   core.setFailed('Social links cannot include N/A. Provide a real URL or leave it blank.');

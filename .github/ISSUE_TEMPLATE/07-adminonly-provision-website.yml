@@ -1,0 +1,69 @@
+name: 07. [ADMIN ONLY] Provision Website (Minimal - repo + apex DNS)
+description: |
+  ADMIN ONLY. Provision a repo from the FFC template and enforce apex GitHub Pages DNS
+  for a freshly registered domain, WITHOUT supplying full charity/footer details.
+  Assignment triggers automation.
+title: '[WEBSITE REQUEST] '
+labels: ['website-request', 'admin-provision', 'github-pages', 'cloudflare']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If you have trouble creating the issue, contact Clarke Moyer by text at 520-222-8104.
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Admin-only Minimal Provisioning
+
+        Use this template right after a domain is registered and added to FFC Cloudflare,
+        when you only need the repository created (from the FFC template) and the apex
+        DNS pointed at GitHub Pages. No charity/footer details are required.
+
+        After you submit this issue, an administrator assigns it; **assignment triggers
+        the `15. Website - Provision` workflow**. Because the `admin-provision` label is
+        applied, the workflow runs in best-effort mode (only the domain is required) and
+        skips footer/content patching.
+
+        **Issue title requirement (IMPORTANT):**
+        - Keep the prefix exactly as-is: `[WEBSITE REQUEST]`
+        - Append the apex domain (no `https://`, no `www`)
+
+        Examples:
+        - ✅ `[WEBSITE REQUEST] freeforcharity.org`
+        - ❌ `[WEBSITE REQUEST] https://freeforcharity.org`
+        - ❌ `[WEBSITE REQUEST] www.freeforcharity.org`
+
+        **What this does**
+        - Creates `FFC-EX-<domain>` from `FreeForCharity/FFC_Single_Page_Template`.
+        - Enables GitHub Pages and (if the zone is controlled in FFC Cloudflare) sets the
+          Pages custom domain to the apex.
+        - Enforces standard apex + `www` GitHub Pages DNS in Cloudflare.
+
+        **What this does NOT do**
+        - It does not create/transfer the Cloudflare zone. If the domain is not yet in
+          FFC Cloudflare, add it first (`02. Domain - Add to FFC Cloudflare` or
+          `09. DNS - Create Zone`); otherwise the DNS step is skipped (repo is still
+          created).
+
+  - type: input
+    id: domain
+    attributes:
+      label: Website Domain (no http://)
+      description: |
+        The apex/root domain name (example: `freeforcharity.org`).
+        Do not include `https://` and do not use `www`.
+      placeholder: freeforcharity.org
+    validations:
+      required: true
+
+  - type: input
+    id: technical_poc_github
+    attributes:
+      label: Technical POC GitHub Username
+      description: |
+        Optional. GitHub username to add as a maintainer of the provisioned repo.
+        Leave blank to skip.
+      placeholder: FreeForCharity
+    validations:
+      required: false

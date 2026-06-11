@@ -923,16 +923,16 @@ jobs:
           }
 
           # Best-effort check: if repo already exists, skip creation.
-          $exists = $false
-          try {
-            gh repo view $repoFull --json nameWithOwner 1>$null
-            $exists = $true
-          } catch {
-            $exists = $false
-          }
+          # NOTE: native commands (gh) do not throw on failure in PowerShell, so a
+          # try/catch around `gh repo view` never detects a missing repo — it left
+          # $exists always true and the step exiting with gh's failure code. Check
+          # $LASTEXITCODE instead.
+          gh repo view $repoFull --json nameWithOwner 1>$null 2>$null
+          $exists = ($LASTEXITCODE -eq 0)
 
           if ($exists) {
             Write-Host "Repo already exists: $repoFull. Skipping creation." -ForegroundColor Yellow
+            exit 0
           } else {
             $createParams = @{
               RepoName      = $repoName

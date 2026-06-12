@@ -62,7 +62,7 @@ jobs:
       domain_id: ${{ steps.check.outputs.domain_id }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Metadata
         id: meta
@@ -122,7 +122,7 @@ jobs:
       ns2: ${{ steps.meta.outputs.ns2 }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Metadata
         id: meta
@@ -186,7 +186,7 @@ jobs:
       ns2: ${{ steps.meta.outputs.ns2 }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Metadata
         id: meta
@@ -243,7 +243,7 @@ jobs:
       issues_count: ${{ steps.summary.outputs.issues_count }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
@@ -303,7 +303,7 @@ jobs:
     if: ${{ inputs.update_whmcs_nameservers }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Validate required WHMCS secrets
         shell: pwsh

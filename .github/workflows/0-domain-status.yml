@@ -35,7 +35,7 @@ jobs:
       changes_count: ${{ steps.summary.outputs.changes_count }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Validate required Azure secrets
         shell: bash
@@ -133,10 +133,10 @@ jobs:
       supports_email: ${{ steps.graph.outputs.supports_email }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}

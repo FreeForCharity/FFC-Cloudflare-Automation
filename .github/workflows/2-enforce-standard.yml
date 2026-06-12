@@ -37,7 +37,7 @@ jobs:
     runs-on: windows-latest
     environment: cloudflare-prod-write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # F1 refactor: Cloudflare tokens now sourced from Key Vault at runtime via OIDC.
       # The composite action sets CLOUDFLARE_API_TOKEN_{FFC,CM} for subsequent steps.

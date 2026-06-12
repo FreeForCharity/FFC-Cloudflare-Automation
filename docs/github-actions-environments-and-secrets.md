@@ -133,7 +133,7 @@ Environment secrets (optional, only needed for DKIM app-only mode):
 
 ## `m365-prod`: OIDC and app prerequisites (Azure/Entra)
 
-The M365 workflows authenticate with GitHub OIDC via `azure/login@v2`, then use Azure CLI to fetch a
+The M365 workflows authenticate with GitHub OIDC via `azure/login@v3`, then use Azure CLI to fetch a
 Microsoft Graph token.
 
 This is what makes the workflow **headless**:

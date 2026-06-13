@@ -142,6 +142,13 @@ function Invoke-GhCommand {
         
         # We'll rely on the shell execution.
         $result = Invoke-Expression "gh $CommandStr"
+        # Native commands (gh) do not reliably throw on failure in PowerShell, so
+        # check the exit code explicitly: every call routed through this helper is a
+        # required step, so a non-zero exit must be fatal. (Best-effort calls such as
+        # HTTPS enforcement deliberately bypass this helper.)
+        if ($LASTEXITCODE -ne 0) {
+            throw "gh command failed (exit code $LASTEXITCODE): gh $CommandStr"
+        }
         return $result
     }
 }
@@ -292,6 +299,6 @@ if ($EnablePages) {
 
 Write-Host "Repository setup complete!" -ForegroundColor Green
 
-# Exit cleanly: best-effort native `gh` calls above may have left a stray
-# non-zero $LASTEXITCODE that would otherwise fail the calling Actions step.
-exit 0
+# No blanket `exit 0` here: required `gh` calls fail fatally via Invoke-GhCommand,
+# and the only best-effort call (HTTPS enforcement) already clears its own stray
+# non-zero $LASTEXITCODE. Forcing a 0 exit would mask genuine earlier failures.

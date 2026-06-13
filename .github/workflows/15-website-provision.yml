@@ -797,18 +797,33 @@ jobs:
     steps:
       - name: Comment start
         uses: actions/github-script@v8
+        env:
+          # Pass values through the environment instead of inlining `${{ }}` into
+          # the script body: a value containing a quote, newline or `${` would
+          # otherwise break the JS source (SyntaxError) and is a script-injection
+          # vector.
+          ISSUE_NUMBER: ${{ needs.resolve.outputs.issue_number }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          REPO_FULL: ${{ needs.resolve.outputs.repo_full }}
+          TEMPLATE_REPO: ${{ needs.resolve.outputs.template_repo }}
+          RUN_URL: ${{ needs.resolve.outputs.run_url }}
+          ZONE_CONTROLLED: ${{ needs.zone_check.outputs.zone_controlled }}
+          ZONE_ACCOUNT: ${{ needs.zone_check.outputs.zone_account }}
+          WEBSITE_SITUATION: ${{ needs.resolve.outputs.website_situation }}
+          REQUESTER: ${{ needs.resolve.outputs.requester_github_username }}
+          TECHNICAL_POC: ${{ needs.resolve.outputs.technical_poc_github_username }}
         with:
           script: |
-            const issueNumber = Number('${{ needs.resolve.outputs.issue_number }}');
-            const domain = '${{ needs.resolve.outputs.domain }}';
-            const repoFull = '${{ needs.resolve.outputs.repo_full }}';
-            const templateRepo = '${{ needs.resolve.outputs.template_repo }}';
-            const runUrl = '${{ needs.resolve.outputs.run_url }}';
-            const zoneControlled = '${{ needs.zone_check.outputs.zone_controlled }}' === 'true';
-            const zoneAccount = '${{ needs.zone_check.outputs.zone_account }}';
-            const websiteSituation = '${{ needs.resolve.outputs.website_situation }}';
-            const requester = '${{ needs.resolve.outputs.requester_github_username }}';
-            const technicalPoc = '${{ needs.resolve.outputs.technical_poc_github_username }}';
+            const issueNumber = Number(process.env.ISSUE_NUMBER);
+            const domain = process.env.DOMAIN;
+            const repoFull = process.env.REPO_FULL;
+            const templateRepo = process.env.TEMPLATE_REPO;
+            const runUrl = process.env.RUN_URL;
+            const zoneControlled = process.env.ZONE_CONTROLLED === 'true';
+            const zoneAccount = process.env.ZONE_ACCOUNT;
+            const websiteSituation = process.env.WEBSITE_SITUATION;
+            const requester = process.env.REQUESTER;
+            const technicalPoc = process.env.TECHNICAL_POC;
 
             const steps = zoneControlled
               ? [
@@ -1126,14 +1141,22 @@ jobs:
     steps:
       - name: Comment completion
         uses: actions/github-script@v8
+        env:
+          # See the note on the announce job: interpolate via env, not inline,
+          # to avoid SyntaxError / script injection from user-derived values.
+          ISSUE_NUMBER: ${{ needs.resolve.outputs.issue_number }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          REPO_FULL: ${{ needs.resolve.outputs.repo_full }}
+          RUN_URL: ${{ needs.resolve.outputs.run_url }}
+          ZONE_CONTROLLED: ${{ needs.zone_check.outputs.zone_controlled }}
         with:
           script: |
-            const issueNumber = Number('${{ needs.resolve.outputs.issue_number }}');
-            const domain = '${{ needs.resolve.outputs.domain }}';
-            const repoFull = '${{ needs.resolve.outputs.repo_full }}';
+            const issueNumber = Number(process.env.ISSUE_NUMBER);
+            const domain = process.env.DOMAIN;
+            const repoFull = process.env.REPO_FULL;
             const repoUrl = `${context.serverUrl}/${repoFull}`;
-            const runUrl = '${{ needs.resolve.outputs.run_url }}';
-            const zoneControlled = '${{ needs.zone_check.outputs.zone_controlled }}' === 'true';
+            const runUrl = process.env.RUN_URL;
+            const zoneControlled = process.env.ZONE_CONTROLLED === 'true';
 
             const marker = '<!-- website-provision:completed -->';
             const dnsNote = zoneControlled

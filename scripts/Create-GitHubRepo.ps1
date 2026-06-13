@@ -269,15 +269,21 @@ if ($EnablePages) {
                 Write-Host "[DRY RUN] gh api repos/$fullRepoName/pages -X PUT -F 'https_enforced=true'" -ForegroundColor Cyan
             }
             else {
-                # We use a try/catch equivalent logic or just allow it to fail non-fatally
-                # Since Invoke-GhCommand uses Invoke-Expression and script has $ErrorActionPreference = "Stop", 
-                # we need to be careful.
-                try {
-                    gh api repos/$fullRepoName/pages -X PUT -F "https_enforced=true" 2>&1 | Out-Null
+                # HTTPS enforcement is best-effort: it routinely returns a non-zero
+                # exit (HTTP 422) right after the CNAME is set because the GitHub
+                # certificate is still provisioning. Native commands do NOT throw in
+                # PowerShell, so the try/catch never fired and the failure's exit code
+                # was left in $LASTEXITCODE, which the GitHub Actions pwsh wrapper then
+                # propagated -- failing the whole step even though the repo was fully
+                # set up. Detect the exit code explicitly and clear it so a non-ready
+                # certificate doesn't fail provisioning.
+                gh api repos/$fullRepoName/pages -X PUT -F "https_enforced=true" 2>&1 | Out-Null
+                if ($LASTEXITCODE -eq 0) {
                     Write-Host "HTTPS Enforcement Enabled." -ForegroundColor Green
                 }
-                catch {
-                    Write-Warning "Could not enforce HTTPS immediately (Certificate likely provisioning). Please enable it later in Settings."
+                else {
+                    Write-Warning "Could not enforce HTTPS immediately (certificate likely provisioning). Please enable it later in Settings."
+                    $global:LASTEXITCODE = 0
                 }
             }
         }
@@ -285,3 +291,7 @@ if ($EnablePages) {
 }
 
 Write-Host "Repository setup complete!" -ForegroundColor Green
+
+# Exit cleanly: best-effort native `gh` calls above may have left a stray
+# non-zero $LASTEXITCODE that would otherwise fail the calling Actions step.
+exit 0

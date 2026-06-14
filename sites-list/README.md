@@ -27,6 +27,20 @@ Curated columns (`Section`, `Server In Use`, `Notes`, `Priority`, …) are prese
 `sites_list.csv`; edit them there. If an export is unavailable, the matching membership flags are
 preserved rather than wiped.
 
+## Ordering
+
+Rows are grouped so the most relevant sites are easiest to find:
+
+1. **Stable + live on GitHub Pages** (top) — `Host Category`/`Server In Use` is GitHub Pages and
+   `Site Health` is `Live`.
+2. **Everything else** (middle) — other live/redirecting sites we still manage.
+3. **Unidentified** (bottom) — health `Unknown`/`Unreachable`, parked/unresolved, or an unknown
+   status with no live response (the "don't know about" set).
+4. **Left FFC** (very bottom) — `Left FFC = Yes`.
+
+Within each group, rows are ordered by `Work Tier`, then most-recent activity, then keep
+`.org`/`.com` pairs together by lead domain.
+
 ## Consuming from other repos
 
 These files are public; pull them without credentials, e.g.:

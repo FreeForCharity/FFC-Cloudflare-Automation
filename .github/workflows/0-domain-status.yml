@@ -225,13 +225,13 @@ jobs:
 
     steps:
       - name: Download Cloudflare artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: cloudflare-domain-status
           path: artifacts/cloudflare
 
       - name: Download M365 artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: m365-domain-status
           path: artifacts/m365
@@ -448,13 +448,13 @@ jobs:
 
     steps:
       - name: Download Cloudflare artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: cloudflare-domain-status
           path: artifacts/cloudflare
 
       - name: Download M365 artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: m365-domain-status
           path: artifacts/m365

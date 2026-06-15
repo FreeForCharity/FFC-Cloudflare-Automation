@@ -191,6 +191,12 @@ jobs:
             function normalizeInput(value) {
               const v = String(value || '').trim();
               if (!v) return '';
+              // GitHub issue forms render unfilled optional fields as the
+              // literal "_No response_" sentinel. Treat it (and a bare
+              // "No response") as empty so it never flows downstream as a
+              // real value — e.g. a collaborator login that 404s and fails
+              // the provisioning run.
+              if (/^_?no response_?$/i.test(v)) return '';
               return v;
             }
 
@@ -967,9 +973,27 @@ jobs:
           $users = @($requester, $technicalPoc)
           $users = $users | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
 
+          # Defense in depth: only attempt usernames that match GitHub's login
+          # format (alphanumeric with non-consecutive, non-trailing hyphens,
+          # max 39 chars). Anything else (stray sentinels, typos) is skipped
+          # with a warning rather than 404'ing and failing the whole run.
+          $loginPattern = '^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$'
+
           foreach ($u in $users) {
+            if ($u -notmatch $loginPattern) {
+              Write-Warning "Skipping invalid GitHub username for maintainer: '$u'"
+              continue
+            }
             Write-Host "Adding maintainer: $u" -ForegroundColor Cyan
-            gh api -X PUT "repos/$repoFull/collaborators/$u" -f permission=maintain 1>$null
+            try {
+              gh api -X PUT "repos/$repoFull/collaborators/$u" -f permission=maintain 1>$null
+              if ($LASTEXITCODE -ne 0) { throw "gh exited with code $LASTEXITCODE" }
+            } catch {
+              # Adding a maintainer is a best-effort convenience step; a single
+              # bad/non-existent login must not fail provisioning when DNS and
+              # the repo are already in place.
+              Write-Warning "Could not add maintainer '$u': $($_.Exception.Message)"
+            }
           }
 
   content:

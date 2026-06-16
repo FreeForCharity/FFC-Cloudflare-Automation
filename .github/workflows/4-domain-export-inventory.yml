@@ -16,7 +16,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
@@ -70,10 +70,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
@@ -135,7 +135,7 @@ jobs:
     runs-on: windows-latest
     environment: whmcs-prod
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Validate required WHMCS secrets
         shell: pwsh
@@ -177,7 +177,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: wpmudev-prod
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Export domains
         shell: pwsh
@@ -207,10 +207,10 @@ jobs:
       - export_whmcs
       - export_wpmudev
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: inventory
 

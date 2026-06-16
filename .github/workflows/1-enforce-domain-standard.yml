@@ -45,7 +45,7 @@ jobs:
       issues_count: ${{ steps.summary.outputs.issues_count }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
@@ -111,10 +111,10 @@ jobs:
       selector2_target: ${{ steps.dkim.outputs.selector2_target }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
@@ -152,7 +152,7 @@ jobs:
     if: ${{ inputs.dry_run == false && inputs.skip_m365 != true }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
@@ -182,10 +182,10 @@ jobs:
     if: ${{ inputs.dry_run == false && inputs.skip_m365 != true }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}

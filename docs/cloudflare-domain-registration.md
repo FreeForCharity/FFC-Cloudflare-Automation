@@ -19,10 +19,12 @@ billing/record-of-truth**: after registering here, create the matching WHMCS rec
 
 ## Components
 
-| File                                                  | Purpose                                                        |
-| ----------------------------------------------------- | -------------------------------------------------------------- |
-| `scripts/cloudflare-domain-register.ps1`              | Check availability/pricing and (optionally) register a domain. |
-| `.github/workflows/20-cloudflare-domain-register.yml` | Manual workflow wrapper with safety gates.                     |
+| File                                                         | Purpose                                                        |
+| ------------------------------------------------------------ | -------------------------------------------------------------- |
+| `scripts/cloudflare-domain-register.ps1`                     | Check availability/pricing and (optionally) register a domain. |
+| `.github/workflows/20-cloudflare-domain-register.yml`        | Manual workflow wrapper with safety gates.                     |
+| `scripts/cloudflare-registrar-access-check.ps1`              | Read-only probe: does the token have Registrar read/write?     |
+| `.github/workflows/21-cloudflare-registrar-access-check.yml` | Manual workflow to validate Registrar API rights.              |
 
 ## Safety model
 
@@ -44,6 +46,12 @@ Registration spends real money, so the script is gated:
    the existing `CLOUDFLARE_API_TOKEN_FFC` / `_CM`).
 2. On the Cloudflare account: a **billing profile with a default payment method**, a **default
    registrant contact**, and **acceptance of the Domain Registration Agreement**.
+
+To confirm whether the current token already has these rights, run **"13. Domain - Validate
+Cloudflare Registrar API Access (Read-only) [CF]"** (or
+`scripts/cloudflare-registrar-access-check.ps1 -Account FFC`). It reports `registrarRead` /
+`registrarWrite` as `granted`, `denied`, or `inconclusive` without registering anything.
+`canRegister` is `true` only when write is granted.
 
 ## Usage
 

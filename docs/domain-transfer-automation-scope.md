@@ -1,7 +1,10 @@
 # Domain Transfer Automation — Scope
 
-Branch: `claude/domain-transfer-automation-pb8abt` Parent project:
-[#157 — Transition eNOM domains to Cloudflare Registrar](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/157)
+- **Branch:** `claude/domain-transfer-automation-pb8abt`
+- **Parent project:**
+  [#157 — Transition eNOM domains to Cloudflare Registrar](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/157)
+- **Implementation:** see [domain-transfer-automation.md](domain-transfer-automation.md) for usage;
+  the in-scope items below are now built (workflows 14/16/25).
 
 ## Purpose
 
@@ -60,7 +63,7 @@ dashboard transfer-in:
 | Buying brand-new domains via Registrar API                | Merged: #428 (`cloudflare-domain-register.ps1`, `cloudflare-registrar-access-check.ps1`, wf 20/21) | New registrations, not transfers. Now on `main`.                                       |
 | Duplicate of #428                                         | PR #356                                                                                            | Same script, older Copilot version — superseded by the merged #428, recommend closing. |
 | API-initiated transfer                                    | Cloudflare                                                                                         | Not supported by the API; revisit when the beta adds it.                               |
-| Nameserver update in WHMCS                                | `whmcs-domain-nameservers-update.ps1` + wf 14                                                      | Reused, not reimplemented.                                                             |
+| Nameserver update in WHMCS                                | `whmcs-domain-nameservers-update.ps1` + the Add-Domain workflow (display 02)                       | Reused, not reimplemented.                                                             |
 
 ## Sequence (end to end)
 

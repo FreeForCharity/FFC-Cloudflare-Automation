@@ -1,0 +1,147 @@
+name: '14. Domain - Transfer Readiness Preflight (Report) [WHMCS]'
+run-name: 'Transfer Preflight'
+
+# READ-ONLY: exports WHMCS domains, then runs scripts/domain-transfer-preflight.ps1
+# offline to classify each domain's readiness to transfer to Cloudflare Registrar
+# (eNOM -> Cloudflare; project #157). Initiates no transfer and spends no money.
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_days_to_expiry:
+        description: 'Minimum days to expiry to treat a domain as transfer-ready'
+        required: false
+        type: string
+        default: '15'
+      post_reg_lock_days:
+        description: 'Days since registration before a transfer is allowed (ICANN)'
+        required: false
+        type: string
+        default: '60'
+      issue_number:
+        description: 'Optional: issue number to comment the summary back to'
+        required: false
+        type: number
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  export_whmcs:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate required WHMCS secrets
+        shell: pwsh
+        env:
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
+            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
+          }
+
+      - name: Export WHMCS domains (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts/transfer | Out-Null
+          & pwsh -NoProfile -File .\scripts\whmcs-domain-export.ps1 -OutputFile artifacts/transfer/whmcs_domains.csv
+          if ($LASTEXITCODE -ne 0) { throw "WHMCS export failed (exit $LASTEXITCODE)." }
+
+      - name: Upload WHMCS export
+        uses: actions/upload-artifact@v6
+        with:
+          name: transfer-whmcs-domains
+          path: artifacts/transfer/whmcs_domains.csv
+          if-no-files-found: error
+
+  preflight:
+    runs-on: ubuntu-latest
+    needs: [export_whmcs]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download WHMCS export
+        uses: actions/download-artifact@v7
+        with:
+          name: transfer-whmcs-domains
+          path: artifacts/transfer
+
+      - name: Run transfer-readiness preflight (offline)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts/transfer/runbooks | Out-Null
+
+          $ErrorActionPreference = 'Continue'
+          $out = & pwsh -NoProfile -File .\scripts\domain-transfer-preflight.ps1 `
+            -WhmcsDomainsCsv artifacts/transfer/whmcs_domains.csv `
+            -OutputFile artifacts/transfer/domain_transfer_preflight.csv `
+            -RunbookDir artifacts/transfer/runbooks `
+            -MinDaysToExpiry ${{ inputs.min_days_to_expiry }} `
+            -PostRegLockDays ${{ inputs.post_reg_lock_days }}
+          $exit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          if ($exit -ne 0) { throw "domain-transfer-preflight.ps1 failed (exit $exit)." }
+
+          $summary = ($out | Out-String)
+          Write-Host $summary
+          $fence = [string][char]0x60 * 3
+          $lines = @('### Domain transfer preflight summary', '', ($fence + 'json'), $summary.TrimEnd(), $fence)
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload preflight results
+        uses: actions/upload-artifact@v6
+        with:
+          name: domain-transfer-preflight
+          path: |
+            artifacts/transfer/domain_transfer_preflight.csv
+            artifacts/transfer/runbooks/*.md
+          if-no-files-found: error
+
+      - name: Comment summary back to issue
+        if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const issueNumber = Number('${{ inputs.issue_number }}');
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let table = '';
+            try {
+              const csv = fs.readFileSync('artifacts/transfer/domain_transfer_preflight.csv', 'utf8');
+              const rows = csv.split(/\r?\n/).filter(Boolean);
+              const counts = { ready: 0, blocked: 0, review: 0, done: 0 };
+              for (const line of rows.slice(1)) {
+                for (const k of Object.keys(counts)) {
+                  if (new RegExp(`(^|,)"?${k}"?(,|$)`).test(line)) counts[k]++;
+                }
+              }
+              table = `- ready: **${counts.ready}**\n- blocked: **${counts.blocked}**\n- review: **${counts.review}**\n- done: **${counts.done}**`;
+            } catch (e) {
+              table = '(could not parse preflight CSV)';
+            }
+            const body = [
+              `Transfer readiness preflight results`,
+              '',
+              table,
+              '',
+              `Full CSV + per-domain runbooks: ${runUrl}/artifacts`,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });

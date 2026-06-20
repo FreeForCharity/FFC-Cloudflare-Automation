@@ -409,14 +409,14 @@ try {
     # them correctly at order time (AddOrder customfields).
     $customFieldsByPid = @{}
     foreach ($cp in $allClientProducts) {
-        $pid = $null
-        try { $pid = [string]$cp.pid } catch {}
-        if ([string]::IsNullOrWhiteSpace($pid)) { continue }
-        if (-not $customFieldsByPid.ContainsKey($pid)) { $customFieldsByPid[$pid] = @{} }
+        $cpPid = $null
+        try { $cpPid = [string]$cp.pid } catch {}
+        if ([string]::IsNullOrWhiteSpace($cpPid)) { continue }
+        if (-not $customFieldsByPid.ContainsKey($cpPid)) { $customFieldsByPid[$cpPid] = @{} }
         foreach ($f in (Get-CustomFieldNodes -Node $cp)) {
             if ([string]::IsNullOrWhiteSpace($f.name)) { continue }
             $key = if ($f.id) { "$($f.name) [id=$($f.id)]" } else { $f.name }
-            $customFieldsByPid[$pid][$key] = $true
+            $customFieldsByPid[$cpPid][$key] = $true
         }
     }
 

@@ -1,0 +1,95 @@
+name: '26. Domain - Transfer Eligibility Analysis (one-off) [WHMCS]'
+run-name: 'Transfer eligibility analysis'
+
+# One-off, READ-ONLY analysis (not intended for main). On push to this branch it:
+#   1. exports live WHMCS domains (registrar/status/expiry/regdate),
+#   2. derives the "in Cloudflare" set from the committed Sites Master List,
+#   3. runs scripts/domain-transfer-preflight.ps1 with the real expiry + 60-day
+#      lock gates, and
+#   4. PRINTS the per-domain results to the job log (artifacts can't be fetched
+#      via the API from the assistant session, so the log is the channel).
+# It changes nothing and spends no money.
+
+on:
+  push:
+    branches: [claude/transfer-eligibility-analysis]
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate required WHMCS secrets
+        shell: pwsh
+        env:
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
+            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
+          }
+
+      - name: Export WHMCS domains (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          & pwsh -NoProfile -File .\scripts\whmcs-domain-export.ps1 -OutputFile artifacts/whmcs_domains.csv
+          if ($LASTEXITCODE -ne 0) { throw "WHMCS export failed (exit $LASTEXITCODE)." }
+
+      - name: Derive 'in Cloudflare' zone set from Sites Master List
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cf = Import-Csv sites-list/sites_list.csv |
+            Where-Object { $_.'In Cloudflare' -eq 'Yes' } |
+            ForEach-Object { [pscustomobject]@{ zone = ($_.Domain).Trim().ToLowerInvariant() } } |
+            Where-Object { $_.zone }
+          $cf | Sort-Object zone -Unique | Export-Csv artifacts/cf_zones.csv -NoTypeInformation -Encoding utf8
+          Write-Host ("Cloudflare zones (from master list): {0}" -f @($cf).Count)
+
+      - name: Run transfer-readiness preflight (gated) and print results
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & pwsh -NoProfile -File .\scripts\domain-transfer-preflight.ps1 `
+            -WhmcsDomainsCsv artifacts/whmcs_domains.csv `
+            -CloudflareZonesCsv artifacts/cf_zones.csv `
+            -OutputFile artifacts/preflight.csv `
+            -MinDaysToExpiry 15 -PostRegLockDays 60 | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "preflight failed (exit $LASTEXITCODE)." }
+
+          $rows = Import-Csv artifacts/preflight.csv
+
+          # The set the request targets: in WHMCS (all preflight rows are) AND in
+          # Cloudflare AND readiness=ready.
+          $readyInCf = $rows | Where-Object { $_.inCloudflareZone -eq 'True' -and $_.readiness -eq 'ready' }
+
+          Write-Host ''
+          Write-Host '=== COUNTS ==='
+          $rows | Group-Object readiness | Sort-Object Name | ForEach-Object { Write-Host ("  {0}: {1}" -f $_.Name, $_.Count) }
+          Write-Host ("  in-Cloudflare (any readiness): {0}" -f @($rows | Where-Object { $_.inCloudflareZone -eq 'True' }).Count)
+          Write-Host ("  READY + in-Cloudflare (target set): {0}" -f @($readyInCf).Count)
+
+          Write-Host ''
+          Write-Host '=== READY_IN_CLOUDFLARE_BEGIN ==='
+          $readyInCf | Sort-Object domain | ForEach-Object {
+            Write-Host ("READY1|{0}|{1}|exp={2}|sinceReg={3}|health={4}" -f $_.domain, $_.currentRegistrar, $_.daysToExpiry, $_.daysSinceRegistration, $_.httpHealth)
+          }
+          Write-Host '=== READY_IN_CLOUDFLARE_END ==='
+
+          Write-Host ''
+          Write-Host '=== FULL_PREFLIGHT_CSV_BEGIN ==='
+          Get-Content artifacts/preflight.csv | ForEach-Object { Write-Host $_ }
+          Write-Host '=== FULL_PREFLIGHT_CSV_END ==='

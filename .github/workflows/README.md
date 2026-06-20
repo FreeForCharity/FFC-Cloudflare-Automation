@@ -70,9 +70,12 @@ These cover buying new domains via Cloudflare Registrar and transferring existin
 Cloudflare Registrar (project #157). See
 [docs/domain-transfer-automation.md](../../docs/domain-transfer-automation.md).
 
-- **12. Domain - Register via Cloudflare Registrar (Admin, DRAFT) [CF]**: buy a brand-new domain via
-  the Registrar API. Distinct from transfers. Defaults to an availability/pricing check; live
-  purchase is gated behind `execute-register` + a typed confirmation.
+- **12. Domain - Registrar Search / Check / Register (Admin, DRAFT) [CF]**: search for available
+  names (`mode=search`), check availability/pricing, or register a brand-new domain via the
+  Registrar API. Distinct from transfers. Applying the `domain-purchase-approved` label to a
+  purchase request issue runs a **check-only** pass and comments the result back; a live purchase is
+  gated behind `mode=execute-register` + a typed `confirm_domain`. See
+  [docs/cloudflare-domain-registration.md](../../docs/cloudflare-domain-registration.md).
 - **13. Domain - Validate Cloudflare Registrar API Access (Read-only) [CF]**: probe whether the
   selected token has Registrar read/write rights. Never charges.
 - **14. Domain - Transfer Readiness Preflight (Report) [WHMCS]**: read-only/offline. Exports WHMCS

@@ -1,6 +1,5 @@
 # Domain Transfer Automation — Scope
 
-- **Branch:** `claude/domain-transfer-automation-pb8abt`
 - **Parent project:**
   [#157 — Transition eNOM domains to Cloudflare Registrar](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/157)
 - **Implementation:** see [domain-transfer-automation.md](domain-transfer-automation.md) for usage;

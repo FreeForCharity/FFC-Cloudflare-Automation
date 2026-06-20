@@ -1,0 +1,18 @@
+{
+  "_comment": "PUBLIC registrant contact for Free For Charity (umbrella owner). PUBLIC INFORMATION ONLY: every value here is intended to be publicly visible (it matches FFC's public 501(c)(3) record) and is what is used as the WHOIS registrant for FFC-owned charity domains. Do NOT put any individual charity's private contact details here - those live only in WHMCS (see scripts/whmcs-client-add.ps1 / whmcs-contact-add.ps1). This file is the registrant used by the Cloudflare Registrar flow; it is independent of WHMCS client records.",
+  "registrant": {
+    "organization": "Free For Charity",
+    "first_name": "Clarke",
+    "last_name": "Moyer",
+    "email": "clarkemoyer@freeforcharity.org",
+    "phone": "+1.5202228104",
+    "address": {
+      "street1": "TODO: FFC public North Carolina street address (from public 501(c)(3) record)",
+      "street2": "",
+      "city": "TODO: city",
+      "state": "NC",
+      "postal_code": "TODO: ZIP",
+      "country": "US"
+    }
+  }
+}

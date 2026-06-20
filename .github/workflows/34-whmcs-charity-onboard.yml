@@ -1,4 +1,4 @@
-name: '12. WHMCS - Charity Onboard (client + contacts + order) [WHMCS]'
+name: '34. WHMCS - Charity Onboard (client + contacts + order) [WHMCS]'
 run-name: 'WHMCS Charity Onboard${{ inputs.dry_run == false && ' (LIVE)' || ' (dry-run)' }}'
 
 # Creates a WHMCS client, attaches Contacts, and places the onboarding order

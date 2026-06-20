@@ -49,7 +49,7 @@ WHOIS.
 (`examples/whmcs/onboard-501c3.example.json`) and runs AddClient → AddContact (one per roster
 person, with notification routing / sub-account logins) → AddOrder. The `product` key resolves to a
 `pid` via `config/whmcs-onboarding-products.json`. Always run with `-DryRun` first; it previews
-every call without writing. The dispatch workflow **"12. WHMCS - Charity Onboard"** runs it (dry-run
+every call without writing. The dispatch workflow **"34. WHMCS - Charity Onboard"** runs it (dry-run
 by default).
 
 ### Onboarding products (enumerated)

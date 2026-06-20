@@ -108,10 +108,15 @@ jobs:
             default { throw "Unknown mode '$mode'." }
           }
 
+          # The script emits JSON-only on stdout and diagnostics on stderr.
+          # Capture stdout (JSON); use Continue so native stderr can't terminate.
+          $ErrorActionPreference = 'Continue'
           $out = & pwsh -NoProfile -File .\scripts\cloudflare-domain-register.ps1 @scriptArgs
-          if ($LASTEXITCODE -ne 0) { throw "cloudflare-domain-register.ps1 failed (exit $LASTEXITCODE)." }
+          $exit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          if ($exit -ne 0) { throw "cloudflare-domain-register.ps1 failed (exit $exit)." }
 
-          # Echo result and append to the job summary (avoid here-strings for YAML safety).
+          # stdout is a single JSON object; safe to fence as json.
           $summary = ($out | Out-String)
           Write-Host $summary
           $fence = [string][char]0x60 * 3

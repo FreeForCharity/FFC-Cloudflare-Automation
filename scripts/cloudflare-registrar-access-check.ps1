@@ -21,6 +21,9 @@
 
     'canRegister' is true only when Registrar WRITE is granted.
 
+    Human-readable lines are written to stderr so stdout stays strictly the
+    final JSON verdict object.
+
 .PARAMETER Account
     Which token to test: 'FFC' or 'CM'. Reads env CLOUDFLARE_API_TOKEN_FFC /
     CLOUDFLARE_API_TOKEN_CM (same convention as the other cloudflare-*.ps1).
@@ -48,6 +51,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Diagnostics go to stderr so stdout is strictly the final JSON object.
+function Write-Diag {
+    param([Parameter(Mandatory = $true)][string]$Message)
+    [Console]::Error.WriteLine($Message)
+}
 
 function Get-TokenForAccount {
     param(
@@ -118,14 +127,21 @@ function Get-Capability {
     }
     if (-not $message) { $message = "HTTP $Status" }
 
-    # Auth / permission indicators -> the token lacks the right.
     $authCodes = @(1001, 9106, 9109, 10000)
-    $isDenied = ($Status -eq 401) -or ($Status -eq 403) -or
-        (@($codes | Where-Object { $authCodes -contains $_ }).Count -gt 0) -or
-        ($message -match 'authenticat|authoriz|permission|not allowed|unauthorized')
+    $hasAuthCode = (@($codes | Where-Object { $authCodes -contains $_ }).Count -gt 0)
+    $matchesAuthText = ($message -match 'authenticat|authoriz|permission|not allowed|unauthorized')
+    $isDenied = ($Status -eq 401 -or $Status -eq 403 -or $hasAuthCode -or $matchesAuthText)
 
-    $state = if ($isDenied) { 'denied' } else { 'inconclusive' }
-    $detail = if ($codes.Count -gt 0) { "$message (codes: $($codes -join ','))" } else { $message }
+    $state = 'inconclusive'
+    if ($isDenied) {
+        $state = 'denied'
+    }
+
+    $detail = $message
+    if ($codes.Count -gt 0) {
+        $detail = "$message (codes: $($codes -join ','))"
+    }
+
     return [pscustomobject]@{ state = $state; status = $Status; detail = $detail }
 }
 
@@ -138,7 +154,8 @@ try {
 
     # Resolve the account id (single-account guard, matching cloudflare-zone-create.ps1).
     $acctProbe = Invoke-CfProbe -Method 'GET' -Uri '/accounts' -Token $token
-    if (-not ($acctProbe.status -ge 200 -and $acctProbe.status -lt 300 -and [bool]$acctProbe.body.success)) {
+    $acctOk = ($acctProbe.status -ge 200 -and $acctProbe.status -lt 300 -and [bool]$acctProbe.body.success)
+    if (-not $acctOk) {
         throw "Could not list accounts for token '$Account' (HTTP $($acctProbe.status)). Token may be invalid or lack Account read."
     }
     $accounts = @($acctProbe.body.result)
@@ -174,10 +191,9 @@ try {
         }
     }
 
-    Write-Host ("Token '{0}' ({1}): active={2}, registrarRead={3}, registrarWrite={4}, canRegister={5}" -f `
-            $Account, $accountName, $tokenActive, $read.state, $write.state, $canRegister) -ForegroundColor Cyan
-    Write-Host ("  read : {0}" -f $verdict.details.registrarRead) -ForegroundColor DarkGray
-    Write-Host ("  write: {0}" -f $verdict.details.registrarWrite) -ForegroundColor DarkGray
+    Write-Diag ("Token '$Account' ($accountName): active=$tokenActive, registrarRead=$($read.state), registrarWrite=$($write.state), canRegister=$canRegister")
+    Write-Diag ("  read : " + $verdict.details.registrarRead)
+    Write-Diag ("  write: " + $verdict.details.registrarWrite)
 
     $verdict | ConvertTo-Json -Depth 6
 

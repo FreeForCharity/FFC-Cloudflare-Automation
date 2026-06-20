@@ -99,6 +99,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Human-readable diagnostics go to stderr so stdout stays strictly the final
+# JSON object (callers, and the workflow, capture stdout and may parse it).
+function Write-Diag {
+    param([Parameter(Mandatory = $true)][string]$Message)
+    [Console]::Error.WriteLine($Message)
+}
+
 function Get-TokenForAccount {
     param(
         [Parameter(Mandatory = $true)][string]$Account
@@ -136,13 +143,16 @@ function Invoke-CfApi {
         if ($qs) { $url = "$url`?$qs" }
     }
 
-    $headers = @{ Authorization = "Bearer $Token" }
-
+    # Use -SkipHttpErrorCheck so non-2xx responses (400/403/etc.) do not throw
+    # before we can read the Cloudflare error body; we normalize the message
+    # ourselves including the HTTP status code.
     $irmParams = @{
-        Method      = $Method
-        Uri         = $url
-        Headers     = $headers
-        ErrorAction = 'Stop'
+        Method             = $Method
+        Uri                = $url
+        Headers            = @{ Authorization = "Bearer $Token" }
+        SkipHttpErrorCheck = $true
+        StatusCodeVariable = 'statusCode'
+        ErrorAction        = 'Stop'
     }
 
     if ($null -ne $Body) {
@@ -151,10 +161,10 @@ function Invoke-CfApi {
     }
 
     $resp = Invoke-RestMethod @irmParams
-    if (-not $resp.success) {
+    if ($statusCode -lt 200 -or $statusCode -ge 300 -or -not $resp.success) {
         $msg = ($resp.errors | Select-Object -First 1 -ExpandProperty message -ErrorAction SilentlyContinue)
         if (-not $msg) { $msg = ($resp | ConvertTo-Json -Depth 6) }
-        throw "Cloudflare API error: $msg"
+        throw "Cloudflare API error (HTTP $statusCode): $msg"
     }
 
     return $resp
@@ -185,7 +195,7 @@ try {
     $acct = Resolve-AccountId -Token $token -Account $Account
     $accountId = $acct.id
 
-    Write-Host ("Account: {0} ({1}) [{2}]" -f $acct.name, $accountId, $Account) -ForegroundColor Cyan
+    Write-Diag ("Account: {0} ({1}) [{2}]" -f $acct.name, $accountId, $Account)
 
     # --- 1) Availability + pricing check (always; never charges) ---
     $checkResp = Invoke-CfApi -Method 'POST' -Uri "/accounts/$accountId/registrar/domain-check" -Token $token -Body @{ domains = @($d) }
@@ -199,14 +209,18 @@ try {
     $regCostRaw = [string]$check.pricing.registration_cost
     $renewCostRaw = [string]$check.pricing.renewal_cost
 
+    # Parse with invariant culture so API values like '10.44' are read
+    # consistently regardless of the runner's locale (',' vs '.' decimals).
     $regCost = $null
     if (-not [string]::IsNullOrWhiteSpace($regCostRaw)) {
         [decimal]$parsed = 0
-        if ([decimal]::TryParse($regCostRaw, [ref]$parsed)) { $regCost = $parsed }
+        $numberStyles = [System.Globalization.NumberStyles]::Number
+        $invariant = [System.Globalization.CultureInfo]::InvariantCulture
+        if ([decimal]::TryParse($regCostRaw, $numberStyles, $invariant, [ref]$parsed)) { $regCost = $parsed }
     }
 
-    Write-Host ("Domain '{0}': registrable={1}, registration={2} {3}, renewal={4} {5}" -f `
-            $d, $registrable, $regCostRaw, $currency, $renewCostRaw, $currency) -ForegroundColor Green
+    Write-Diag ("Domain '{0}': registrable={1}, registration={2} {3}, renewal={4} {5}" -f `
+            $d, $registrable, $regCostRaw, $currency, $renewCostRaw, $currency)
 
     # Result object accumulated and emitted as JSON at the end.
     $result = [ordered]@{
@@ -270,14 +284,21 @@ try {
         $result.action = 'register'
         $result.dryRun = $true
         $result.message = "DRY RUN: would POST /accounts/$accountId/registrar/registrations. Re-run with -Execute to purchase."
-        Write-Host $result.message -ForegroundColor Yellow
-        Write-Host ('Request body: ' + ($regBody | ConvertTo-Json -Depth 6)) -ForegroundColor DarkGray
+        Write-Diag $result.message
+
+        # Redact the contacts payload (registrant PII) before logging the body.
+        $safeBody = [ordered]@{}
+        foreach ($key in $regBody.Keys) {
+            if ($key -eq 'contacts') { $safeBody[$key] = '[redacted]' }
+            else { $safeBody[$key] = $regBody[$key] }
+        }
+        Write-Diag ('Request body (contacts redacted): ' + ($safeBody | ConvertTo-Json -Depth 6))
         $result | ConvertTo-Json -Depth 6
         exit 0
     }
 
     # --- LIVE registration (charges money) ---
-    Write-Host ("[LIVE] Registering '{0}' for {1} {2}..." -f $d, $regCostRaw, $currency) -ForegroundColor Magenta
+    Write-Diag ("[LIVE] Registering '{0}' for {1} {2}..." -f $d, $regCostRaw, $currency)
     $regResp = Invoke-CfApi -Method 'POST' -Uri "/accounts/$accountId/registrar/registrations" -Token $token -Body $regBody
     $reg = $regResp.result
 
@@ -296,7 +317,7 @@ try {
         "Registration state '$($reg.state)' (may still be in progress; check the Cloudflare dashboard)."
     }
 
-    Write-Host $result.message -ForegroundColor Green
+    Write-Diag $result.message
     $result | ConvertTo-Json -Depth 6
     exit 0
 }

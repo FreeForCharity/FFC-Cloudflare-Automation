@@ -53,8 +53,12 @@ jobs:
           $scriptArgs = @('-Account', $account)
           if ('${{ inputs.require_write }}' -eq 'true') { $scriptArgs += '-RequireWrite' }
 
+          # The script emits JSON-only on stdout and diagnostics on stderr.
+          # Capture stdout (JSON); use Continue so native stderr can't terminate.
+          $ErrorActionPreference = 'Continue'
           $out = & pwsh -NoProfile -File .\scripts\cloudflare-registrar-access-check.ps1 @scriptArgs
           $exit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
 
           $summary = ($out | Out-String)
           Write-Host $summary

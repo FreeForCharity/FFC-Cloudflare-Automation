@@ -19,12 +19,13 @@ billing/record-of-truth**: after registering here, create the matching WHMCS rec
 
 ## Components
 
-| File                                                         | Purpose                                                        |
-| ------------------------------------------------------------ | -------------------------------------------------------------- |
-| `scripts/cloudflare-domain-register.ps1`                     | Check availability/pricing and (optionally) register a domain. |
-| `.github/workflows/20-cloudflare-domain-register.yml`        | Manual workflow wrapper with safety gates.                     |
-| `scripts/cloudflare-registrar-access-check.ps1`              | Read-only probe: does the token have Registrar read/write?     |
-| `.github/workflows/21-cloudflare-registrar-access-check.yml` | Manual workflow to validate Registrar API rights.              |
+| File                                                         | Purpose                                                                              |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `scripts/cloudflare-domain-search.ps1`                       | Read-only: suggest available domains for a keyword/phrase.                           |
+| `scripts/cloudflare-domain-register.ps1`                     | Check availability/pricing and (optionally) register a domain.                       |
+| `.github/workflows/20-cloudflare-domain-register.yml`        | Workflow 12: search / check / register, plus a label-triggered check (safety-gated). |
+| `scripts/cloudflare-registrar-access-check.ps1`              | Read-only probe: does the token have Registrar read/write?                           |
+| `.github/workflows/21-cloudflare-registrar-access-check.yml` | Manual workflow to validate Registrar API rights.                                    |
 
 ## Safety model
 
@@ -64,6 +65,9 @@ Cloudflare Registrar API Access (Read-only) [CF]"** (or
 ### CLI
 
 ```powershell
+# 0) Search for available names by keyword (read-only, never charges):
+pwsh -File scripts/cloudflare-domain-search.ps1 -Query 'evergreen coffee' -Account FFC
+
 # 1) Availability + pricing only (safe):
 pwsh -File scripts/cloudflare-domain-register.ps1 -Domain example.org -Account FFC
 
@@ -80,11 +84,22 @@ as `cloudflare-zone-create.ps1`).
 
 ### Workflow
 
-Run **"12. Domain - Register via Cloudflare Registrar (Admin, DRAFT) [CF]"** from the Actions tab:
+Run **"12. Domain - Registrar Search / Check / Register (Admin, DRAFT) [CF]"** from the Actions tab:
 
+- `mode=search` — suggest available names for `search_query` (read-only)
 - `mode=check` — availability/pricing only
 - `mode=dry-run-register` — shows what would be purchased
 - `mode=execute-register` — purchases (requires `confirm_domain` to match)
+
+### Label-triggered availability check
+
+Applying the **`domain-purchase-approved`** label to a
+[domain purchase request issue](../.github/ISSUE_TEMPLATE/01-purchase-new-domain.yml) runs workflow
+12 in **check-only** mode: it parses the domain from the issue, checks availability + price, and
+comments the result back to the issue. **A label never purchases** — it cannot reach
+`execute-register`. Buying remains a deliberate, separate `workflow_dispatch` with
+`mode=execute-register` and a typed `confirm_domain`. This keeps a human approval gate (the label)
+while removing the manual availability-lookup step.
 
 ## Output
 

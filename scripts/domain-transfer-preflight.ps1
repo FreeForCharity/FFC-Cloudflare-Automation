@@ -185,7 +185,9 @@ function Get-Readiness {
         [bool]$HasZoneInfo,
         [bool]$InZone,
         [string]$NameServers,
-        [string]$HttpHealth
+        [string]$HttpHealth,
+        [int]$MinDaysToExpiry,
+        [int]$PostRegLockDays
     )
 
     $today = (Get-Date).Date
@@ -205,9 +207,11 @@ function Get-Readiness {
         $postRegLockOk = ($daysSinceReg -ge $PostRegLockDays)
     }
 
+    # Informational only (not a gate). Use specific NS hostnames rather than a
+    # bare 'cloudflare'/'freeforcharity' substring to avoid false positives.
     $nsAtCloudflare = $null
     if (-not [string]::IsNullOrWhiteSpace($NameServers)) {
-        $nsAtCloudflare = ($NameServers -match '(?i)cloudflare|freeforcharity')
+        $nsAtCloudflare = ($NameServers -match '(?i)\.ns\.cloudflare\.com|\.freeforcharity\.org')
     }
 
     # Derive category when not supplied by the inventory.
@@ -311,7 +315,8 @@ try {
         $r = Get-Readiness -DomainName $d -Registrar $CurrentRegistrar `
             -Expiry ($(if ($exp) { $exp } else { [datetime]::MinValue })) -HasExpiry ($null -ne $exp) `
             -RegDate ($(if ($reg) { $reg } else { [datetime]::MinValue })) -HasRegDate ($null -ne $reg) `
-            -Category $null -HasZoneInfo $hasZones -InZone $inZone -NameServers $ns -HttpHealth $null
+            -Category $null -HasZoneInfo $hasZones -InZone $inZone -NameServers $ns -HttpHealth $null `
+            -MinDaysToExpiry $MinDaysToExpiry -PostRegLockDays $PostRegLockDays
 
         if ($r.readiness -eq 'ready') { Write-Runbook -R ([pscustomobject]$r) -Dir $RunbookDir }
         ([pscustomobject]$r) | ConvertTo-Json -Depth 6
@@ -354,7 +359,8 @@ try {
         $r = Get-Readiness -DomainName $d -Registrar $registrar `
             -Expiry ($(if ($exp) { $exp } else { [datetime]::MinValue })) -HasExpiry ($null -ne $exp) `
             -RegDate ($(if ($reg) { $reg } else { [datetime]::MinValue })) -HasRegDate ($null -ne $reg) `
-            -Category $category -HasZoneInfo $hasZoneInfo -InZone $inZone -NameServers $ns -HttpHealth $httpHealth
+            -Category $category -HasZoneInfo $hasZoneInfo -InZone $inZone -NameServers $ns -HttpHealth $httpHealth `
+            -MinDaysToExpiry $MinDaysToExpiry -PostRegLockDays $PostRegLockDays
 
         if ($r.readiness -eq 'ready') { Write-Runbook -R ([pscustomobject]$r) -Dir $RunbookDir }
         [pscustomobject]$r

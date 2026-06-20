@@ -134,7 +134,7 @@ jobs:
               '',
               table,
               '',
-              `Full CSV + per-domain runbooks: ${runUrl}/artifacts`,
+              `Full CSV + per-domain runbooks: see the Artifacts section of ${runUrl}`,
             ].join('\n');
             await github.rest.issues.createComment({
               owner: context.repo.owner,

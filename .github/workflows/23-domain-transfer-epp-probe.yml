@@ -5,9 +5,10 @@ run-name: 'EPP Probe (${{ inputs.mode }}): ${{ inputs.domain }}'
 # WHMCS API (copy-pasteable) or only EMAILED to the registrant. Wraps
 # scripts/domain-transfer-epp-probe.ps1.
 #
-# Safety: mode=dry-run does nothing live. mode=execute calls DomainRequestEPP,
-# which may trigger the registrar to email the registrant. The literal code is
-# NOT printed unless show_code is true.
+# Safety: mode=dry-run performs read-only WHMCS calls (to locate the domain) and
+# has no side effects. mode=execute calls DomainRequestEPP, which may trigger the
+# registrar to email the registrant. The literal code is NOT printed unless
+# show_code is true.
 
 on:
   workflow_dispatch:

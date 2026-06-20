@@ -14,10 +14,11 @@
     the registrar emails it. This script calls that endpoint for ONE domain and
     reports which behavior occurs.
 
-    SAFETY: calling DomainRequestEPP has a side effect (it may trigger the
-    registrar to email the registrant), so it does NOTHING live unless you pass
-    -Execute. Without -Execute it only resolves the domain and explains what it
-    would do.
+    SAFETY: the side-effecting call is DomainRequestEPP (it may trigger the
+    registrar to email the registrant) and is gated behind -Execute. WITHOUT
+    -Execute the script still makes READ-ONLY WHMCS calls (GetClientsDomains, to
+    locate the domain record) but does NOT call DomainRequestEPP — so a dry run
+    has no side effects, it just resolves the domain and reports what it would do.
 
     By default the actual code is NEVER printed (only whether it was returned and
     its length). Pass -ShowCode to include the literal code in the JSON output

@@ -133,8 +133,12 @@ try {
     }
     # Require ALL authoritative nameservers to be Cloudflare/FFC (and at least one
     # to exist); a mixed/partially-updated NS set is not considered verified.
+    # Anchor on the expected NS suffixes (Cloudflare assigns <name>.ns.cloudflare.com;
+    # FFC custom NS are under freeforcharity.org) so a hostname that merely *contains*
+    # 'cloudflare' can't pass the gate.
+    $nsPattern = '(?i)\.ns\.cloudflare\.com\.?$|\.freeforcharity\.org\.?$'
     $nsAtCloudflare = ($nameServers.Count -gt 0) -and `
-    (@($nameServers | Where-Object { $_ -notmatch '(?i)cloudflare|freeforcharity' }).Count -eq 0)
+    (@($nameServers | Where-Object { $_ -notmatch $nsPattern }).Count -eq 0)
 
     # 3) Site reachability.
     $http = Get-HttpHealth -Domain $d

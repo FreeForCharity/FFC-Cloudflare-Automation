@@ -64,6 +64,27 @@ domain configuration.
   same rule. Defaults to `dry_run=true`; flip it off to actually apply, which gates on
   `cloudflare-prod-write`.
 
+### 12–16 Registrar + Domain transfer workflows
+
+These cover buying new domains via Cloudflare Registrar and transferring existing eNOM domains to
+Cloudflare Registrar (project #157). See
+[docs/domain-transfer-automation.md](../../docs/domain-transfer-automation.md).
+
+- **12. Domain - Register via Cloudflare Registrar (Admin, DRAFT) [CF]**: buy a brand-new domain via
+  the Registrar API. Distinct from transfers. Defaults to an availability/pricing check; live
+  purchase is gated behind `execute-register` + a typed confirmation.
+- **13. Domain - Validate Cloudflare Registrar API Access (Read-only) [CF]**: probe whether the
+  selected token has Registrar read/write rights. Never charges.
+- **14. Domain - Transfer Readiness Preflight (Report) [WHMCS]**: read-only/offline. Exports WHMCS
+  domains and classifies each as ready/blocked/review/done for transfer, emitting per-domain
+  dashboard runbooks.
+- **16. Domain - Transfer EPP/Auth Code Probe (Admin) [WHMCS]**: determines whether a domain's
+  EPP/auth code is returned inline (copy-pasteable) or only emailed. `dry-run` has no side effects;
+  `execute` calls `DomainRequestEPP`.
+- **25. Domain - Post-Transfer Verification (Report) [CF]**: read-only confirmation that a transfer
+  landed (registrar = Cloudflare, nameservers on Cloudflare, site reachable). Numbered 25 because
+  15–19 are already taken; it sorts after the M365 block in the Actions list.
+
 ### 20–24 M365 workflows
 
 - **20. M365 - Domain Preflight (Read-only) [M365+CF]**: onboarding checks.

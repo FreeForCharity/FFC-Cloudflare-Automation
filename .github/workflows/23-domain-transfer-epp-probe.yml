@@ -1,0 +1,81 @@
+name: '16. Domain - Transfer EPP/Auth Code Probe (Admin) [WHMCS]'
+run-name: 'EPP Probe (${{ inputs.mode }}): ${{ inputs.domain }}'
+
+# Probes whether a domain's EPP/auth (transfer) code is returned INLINE by the
+# WHMCS API (copy-pasteable) or only EMAILED to the registrant. Wraps
+# scripts/domain-transfer-epp-probe.ps1.
+#
+# Safety: mode=dry-run performs read-only WHMCS calls (to locate the domain) and
+# has no side effects. mode=execute calls DomainRequestEPP, which may trigger the
+# registrar to email the registrant. The literal code is NOT printed unless
+# show_code is true.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain to probe (must exist in WHMCS)'
+        required: true
+        type: string
+      mode:
+        description: 'dry-run = no side effects; execute = call DomainRequestEPP'
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - execute
+        default: dry-run
+      show_code:
+        description: 'Reveal the literal EPP code in output (avoid in shared logs)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate required WHMCS secrets
+        shell: pwsh
+        env:
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
+            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
+          }
+
+      - name: Run EPP probe
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ inputs.domain }}"
+          $mode = "${{ inputs.mode }}"
+
+          $scriptArgs = @('-Domain', $domain)
+          if ($mode -eq 'execute') { $scriptArgs += '-Execute' }
+          if ('${{ inputs.show_code }}' -eq 'true') { $scriptArgs += '-ShowCode' }
+
+          $ErrorActionPreference = 'Continue'
+          $out = & pwsh -NoProfile -File .\scripts\domain-transfer-epp-probe.ps1 @scriptArgs
+          $exit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          if ($exit -ne 0) { throw "domain-transfer-epp-probe.ps1 failed (exit $exit)." }
+
+          $summary = ($out | Out-String)
+          Write-Host $summary
+          $fence = [string][char]0x60 * 3
+          $lines = @("### EPP probe ($mode): ${{ inputs.domain }}", '', ($fence + 'json'), $summary.TrimEnd(), $fence)
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

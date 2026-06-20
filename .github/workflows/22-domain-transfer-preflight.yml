@@ -11,13 +11,13 @@ on:
       min_days_to_expiry:
         description: 'Minimum days to expiry to treat a domain as transfer-ready'
         required: false
-        type: string
-        default: '15'
+        type: number
+        default: 15
       post_reg_lock_days:
         description: 'Days since registration before a transfer is allowed (ICANN)'
         required: false
-        type: string
-        default: '60'
+        type: number
+        default: 60
       issue_number:
         description: 'Optional: issue number to comment the summary back to'
         required: false
@@ -97,6 +97,9 @@ jobs:
 
           $summary = ($out | Out-String)
           Write-Host $summary
+          # Persist the script's own summary JSON so the issue-comment step can
+          # read authoritative counts instead of re-parsing the CSV.
+          $summary.TrimEnd() | Out-File -FilePath artifacts/transfer/preflight_summary.json -Encoding utf8
           $fence = [string][char]0x60 * 3
           $lines = @('### Domain transfer preflight summary', '', ($fence + 'json'), $summary.TrimEnd(), $fence)
           $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
@@ -107,6 +110,7 @@ jobs:
           name: domain-transfer-preflight
           path: |
             artifacts/transfer/domain_transfer_preflight.csv
+            artifacts/transfer/preflight_summary.json
             artifacts/transfer/runbooks/*.md
           if-no-files-found: error
 
@@ -120,17 +124,10 @@ jobs:
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             let table = '';
             try {
-              const csv = fs.readFileSync('artifacts/transfer/domain_transfer_preflight.csv', 'utf8');
-              const rows = csv.split(/\r?\n/).filter(Boolean);
-              const counts = { ready: 0, blocked: 0, review: 0, done: 0 };
-              for (const line of rows.slice(1)) {
-                for (const k of Object.keys(counts)) {
-                  if (new RegExp(`(^|,)"?${k}"?(,|$)`).test(line)) counts[k]++;
-                }
-              }
-              table = `- ready: **${counts.ready}**\n- blocked: **${counts.blocked}**\n- review: **${counts.review}**\n- done: **${counts.done}**`;
+              const s = JSON.parse(fs.readFileSync('artifacts/transfer/preflight_summary.json', 'utf8'));
+              table = `- ready: **${s.ready}**\n- blocked: **${s.blocked}**\n- review: **${s.review}**\n- done: **${s.done}**\n- total: **${s.total}**`;
             } catch (e) {
-              table = '(could not parse preflight CSV)';
+              table = '(could not read preflight summary)';
             }
             const body = [
               `Transfer readiness preflight results`,

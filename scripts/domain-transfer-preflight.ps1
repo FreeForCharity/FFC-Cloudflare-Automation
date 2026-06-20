@@ -20,7 +20,9 @@
                           lock after registration or a prior transfer)
       * inCloudflareZone / nameserversAtCloudflare (when a zones CSV is supplied)
       * category        - Cat1/Cat2/Cat3 (read from inventory, else derived)
-      * readiness       - ready | blocked | review | done, with reasons[]
+      * readiness       - ready | blocked | review | done
+      * reasons         - a single human-readable summary string (space-joined;
+                          also written to the CSV 'reasons' column)
 
     Lock status and WHOIS-privacy state are NOT in the inventory exports, so they
     are emitted as explicit "confirm in dashboard" items in the per-domain

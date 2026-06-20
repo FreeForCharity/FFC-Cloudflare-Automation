@@ -131,7 +131,10 @@ try {
         $zones = @($zoneProbe.body.result)
         if ($zones.Count -ge 1) { $nameServers = @($zones[0].name_servers) }
     }
-    $nsAtCloudflare = (@($nameServers | Where-Object { $_ -match '(?i)cloudflare|freeforcharity' }).Count -gt 0)
+    # Require ALL authoritative nameservers to be Cloudflare/FFC (and at least one
+    # to exist); a mixed/partially-updated NS set is not considered verified.
+    $nsAtCloudflare = ($nameServers.Count -gt 0) -and `
+    (@($nameServers | Where-Object { $_ -notmatch '(?i)cloudflare|freeforcharity' }).Count -eq 0)
 
     # 3) Site reachability.
     $http = Get-HttpHealth -Domain $d

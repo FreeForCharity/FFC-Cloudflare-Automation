@@ -36,20 +36,25 @@ be probed before relying on it:
 - **eNOM** has a documented path to **email** the EPP key; inline retrieval needs direct eNOM
   reseller API credentials, which today live inside the WHMCS registrar-module config.
 
-Therefore the preflight includes a **read-only EPP-retrieval probe** that reports, per registrar,
-whether the code comes back inline or email-only. No transfer is initiated by the probe.
+Therefore a **separate EPP-retrieval probe** (its own script/workflow, not part of the preflight)
+reports whether the code comes back inline or email-only. It initiates no transfer, but in execute
+mode it calls `DomainRequestEPP`, which may email the registrant — so it is gated behind an explicit
+execute flag.
 
 ## In scope (this branch)
 
 The transfer-execution/readiness layer, sitting between the inventory (#325) and the manual
 dashboard transfer-in:
 
-1. **Read-only transfer-readiness preflight** — per domain: registrar-lock state, 60-day
-   post-registration/transfer lock window, expiry buffer, WHOIS-privacy state, nameservers already
-   pointed at Cloudflare. Runs standalone, and consumes #325's
+1. **Read-only transfer-readiness preflight** — per domain: registrar (eNOM vs Cloudflare), expiry
+   buffer, the 60-day post-registration lock window, and (when zone data is supplied) whether the
+   domain is in Cloudflare with nameservers pointed there. Registrar-lock and WHOIS-privacy state
+   are not in the inventory exports, so they are emitted as "confirm in dashboard" items in each
+   runbook rather than automated checks. Runs standalone, and consumes #325's
    `enom_cloudflare_transition_inventory.csv` when it is available.
-2. **EPP-retrieval probe** — determines inline vs email-only auth-code delivery; read-only,
-   initiates nothing.
+2. **EPP-retrieval probe** — determines inline vs email-only auth-code delivery. It initiates no
+   transfer; in execute mode it calls `DomainRequestEPP`, which may email the registrant, so it is
+   gated behind an explicit execute flag.
 3. **Per-domain dashboard runbook** — the exact manual transfer-in steps and where the auth code
    will appear, generated per domain.
 4. **Post-transfer verification** — confirms registrar is now Cloudflare, nameservers are correct,

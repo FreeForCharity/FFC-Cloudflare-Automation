@@ -84,13 +84,13 @@ try {
     $accessKey = Resolve-WhmcsAccessKey -AccessKeyParam $AccessKey
 
     $body = @{
-        identifier   = $creds.Identifier
-        secret       = $creds.Secret
-        action       = 'AddOrder'
-        responsetype = 'json'
-        clientid     = $ClientId
-        pid          = $ProductId
-        billingcycle = $BillingCycle
+        identifier    = $creds.Identifier
+        secret        = $creds.Secret
+        action        = 'AddOrder'
+        responsetype  = 'json'
+        clientid      = $ClientId
+        pid           = $ProductId
+        billingcycle  = $BillingCycle
         paymentmethod = $PaymentMethod
     }
     if (-not [string]::IsNullOrWhiteSpace($accessKey)) { $body.accesskey = $accessKey }

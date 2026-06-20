@@ -84,13 +84,20 @@ function Resolve-ProductId {
     return [int]$entry.pid
 }
 
-function Add-CredArgs {
+function Set-CredentialEnv {
+    # Forward credentials to child scripts via inherited environment variables
+    # (never on the command line, so secrets cannot leak via process listings or
+    # failure output). Child scripts already resolve WHMCS_API_* from the env.
+    if ($ApiUrl) { $env:WHMCS_API_URL = $ApiUrl }
+    if ($Identifier) { $env:WHMCS_API_IDENTIFIER = $Identifier }
+    if ($Secret) { $env:WHMCS_API_SECRET = $Secret }
+    if ($AccessKey) { $env:WHMCS_API_ACCESS_KEY = $AccessKey }
+    if ($CredentialsJson) { $env:WHMCS_API_CREDENTIALS_JSON = $CredentialsJson }
+}
+
+function Add-CommonArgs {
+    # Only non-secret flags go on the child command line.
     param([System.Collections.Generic.List[string]]$ArgList)
-    if ($ApiUrl) { $ArgList.Add('-ApiUrl'); $ArgList.Add($ApiUrl) }
-    if ($Identifier) { $ArgList.Add('-Identifier'); $ArgList.Add($Identifier) }
-    if ($Secret) { $ArgList.Add('-Secret'); $ArgList.Add($Secret) }
-    if ($CredentialsJson) { $ArgList.Add('-CredentialsJson'); $ArgList.Add($CredentialsJson) }
-    if ($AccessKey) { $ArgList.Add('-AccessKey'); $ArgList.Add($AccessKey) }
     if ($DryRun) { $ArgList.Add('-DryRun') }
 }
 
@@ -123,6 +130,7 @@ function Add-StringArg {
 try {
     $intake = Get-IntakeObject
     if (-not $intake.client) { throw 'Intake must include a "client" object.' }
+    Set-CredentialEnv
     $productId = Resolve-ProductId -Product $intake.product
 
     $c = $intake.client
@@ -140,7 +148,7 @@ try {
     Add-StringArg $clientArgs '-Country'     $c.country
     Add-StringArg $clientArgs '-PhoneNumber' $c.phoneNumber
     $clientArgs.Add('-NoWelcomeEmail')
-    Add-CredArgs $clientArgs
+    Add-CommonArgs $clientArgs
     $clientResult = Invoke-ChildScript -Name 'whmcs-client-add.ps1' -ArgList $clientArgs
 
     $clientId = if ($clientResult.clientid) { [int]$clientResult.clientid } else { 0 }
@@ -163,7 +171,7 @@ try {
         if ($ct.generalEmails) { $caArgs.Add('-GeneralEmails') }
         if ($ct.subAccount) { $caArgs.Add('-SubAccount') }
         Add-StringArg $caArgs '-Permissions' $ct.permissions
-        Add-CredArgs $caArgs
+        Add-CommonArgs $caArgs
         $contactResults += (Invoke-ChildScript -Name 'whmcs-contact-add.ps1' -ArgList $caArgs)
     }
 
@@ -175,7 +183,7 @@ try {
         $cfJson = $intake.customFields | ConvertTo-Json -Compress -Depth 6
         $orderArgs.Add('-CustomFieldsJson'); $orderArgs.Add($cfJson)
     }
-    Add-CredArgs $orderArgs
+    Add-CommonArgs $orderArgs
     $orderResult = Invoke-ChildScript -Name 'whmcs-order-add.ps1' -ArgList $orderArgs
 
     [pscustomobject]@{

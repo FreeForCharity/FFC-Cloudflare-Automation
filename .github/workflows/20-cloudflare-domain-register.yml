@@ -98,10 +98,11 @@ jobs:
           IN_ISSUE_NUMBER: ${{ inputs.issue_number }}
         with:
           script: |
-            // Strip protocol, any path, and a trailing dot; lowercase. Used by
-            // both entry points so normalization is consistent.
+            // Strip protocol, then anything from the first '/', '?' or '#'
+            // (path/query/fragment), and a trailing dot; lowercase. Used by both
+            // entry points so normalization is consistent.
             const normDomain = (s) =>
-              (s || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/\.$/, '');
+              (s || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/[/?#].*$/, '').replace(/\.$/, '');
 
             if (context.eventName === 'issues') {
               const label = context.payload.label && context.payload.label.name;
@@ -114,7 +115,9 @@ jobs:
               const body = issue.body || '';
               // The 01-purchase-new-domain issue form renders the field as:
               //   ### Domain Name\n\n<value>
-              const m = body.match(/###\s*Domain Name\s*\r?\n+\s*([^\r\n#]+)/i);
+              // Capture only domain-safe characters so stray quotes/backticks/
+              // query strings in the issue body can't flow downstream.
+              const m = body.match(/###\s*Domain Name\s*\r?\n+\s*([A-Za-z0-9.-]+)/i);
               const domain = m ? normDomain(m[1]) : '';
               if (!domain) {
                 core.setFailed(`Could not parse a domain from issue #${issue.number} (expected a "Domain Name" field).`);
@@ -156,11 +159,16 @@ jobs:
 
       - name: Validate inputs and confirmation
         shell: pwsh
+        env:
+          MODE: ${{ needs.resolve.outputs.mode }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          QUERY: ${{ needs.resolve.outputs.search_query }}
+          CONFIRM_DOMAIN: ${{ inputs.confirm_domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $mode = "${{ needs.resolve.outputs.mode }}"
-          $domain = "${{ needs.resolve.outputs.domain }}".Trim().ToLowerInvariant().Trim('.')
-          $query = "${{ needs.resolve.outputs.search_query }}".Trim()
+          $mode = [string]$env:MODE
+          $domain = ([string]$env:DOMAIN).Trim().ToLowerInvariant().Trim('.')
+          $query = ([string]$env:QUERY).Trim()
 
           if ($mode -eq 'search') {
             if ([string]::IsNullOrWhiteSpace($query) -and [string]::IsNullOrWhiteSpace($domain)) {
@@ -172,7 +180,7 @@ jobs:
           }
 
           if ($mode -eq 'execute-register') {
-            $confirm = "${{ inputs.confirm_domain }}".Trim().ToLowerInvariant().Trim('.')
+            $confirm = ([string]$env:CONFIRM_DOMAIN).Trim().ToLowerInvariant().Trim('.')
             if ($confirm -ne $domain) {
               throw "execute-register requires 'confirm_domain' to exactly match 'domain'. This is a paid action."
             }
@@ -188,13 +196,20 @@ jobs:
 
       - name: Run Registrar operation
         shell: pwsh
+        env:
+          MODE: ${{ needs.resolve.outputs.mode }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          ACCOUNT: ${{ needs.resolve.outputs.account }}
+          QUERY: ${{ needs.resolve.outputs.search_query }}
+          MAX_COST: ${{ inputs.max_registration_cost }}
+          AUTO_RENEW: ${{ inputs.auto_renew }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $mode = "${{ needs.resolve.outputs.mode }}"
-          $domain = "${{ needs.resolve.outputs.domain }}"
-          $account = "${{ needs.resolve.outputs.account }}"
-          $query = "${{ needs.resolve.outputs.search_query }}"
-          $maxCost = "${{ inputs.max_registration_cost }}"
+          $mode = [string]$env:MODE
+          $domain = [string]$env:DOMAIN
+          $account = [string]$env:ACCOUNT
+          $query = [string]$env:QUERY
+          $maxCost = [string]$env:MAX_COST
           if ([string]::IsNullOrWhiteSpace($maxCost)) { $maxCost = '20' }
 
           $ErrorActionPreference = 'Continue'
@@ -204,7 +219,7 @@ jobs:
           }
           else {
             $scriptArgs = @('-Domain', $domain, '-Account', $account, '-MaxRegistrationCost', $maxCost)
-            if ('${{ inputs.auto_renew }}' -eq 'true') { $scriptArgs += '-AutoRenew' }
+            if ($env:AUTO_RENEW -eq 'true') { $scriptArgs += '-AutoRenew' }
             switch ($mode) {
               'check' { }
               'dry-run-register' { $scriptArgs += '-Register' }

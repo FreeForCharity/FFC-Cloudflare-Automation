@@ -1,5 +1,5 @@
 name: '34. WHMCS - Charity Onboard (client + contacts + order) [WHMCS]'
-run-name: 'WHMCS Charity Onboard${{ inputs.dry_run == false && ' (LIVE)' || ' (dry-run)' }}'
+run-name: 'WHMCS Charity Onboard'
 
 # Creates a WHMCS client, attaches Contacts, and places the onboarding order
 # (pre-501c3 / 501c3) from an intake JSON. Defaults to dry-run (no writes).

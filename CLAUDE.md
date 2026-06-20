@@ -2,9 +2,9 @@
 
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 
-The `gh` CLI is installed in the remote environment and **already authenticated as `clarkemoyer`**
-(user OAuth token, scopes: `read:org`, `repo`, `workflow`). **Use `gh` for anything
-Actions-related.**
+In this remote environment the `gh` CLI is typically pre-authenticated — run `gh auth status` to
+confirm (and `gh auth login` if not). When available it acts as a real user (e.g. `clarkemoyer`)
+with `workflow` + `repo` scopes. **Prefer `gh` for anything Actions-related.**
 
 Do NOT rely on the MCP GitHub tools to run workflows: those act via a GitHub **App** that lacks
 `actions: write`, so `actions_run_trigger`/`run_workflow` returns

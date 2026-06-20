@@ -130,6 +130,7 @@ function Add-StringArg {
 try {
     $intake = Get-IntakeObject
     if (-not $intake.client) { throw 'Intake must include a "client" object.' }
+    if (-not $intake.product) { throw 'Intake must include a "product" key (e.g. "pre501c3", "501c3", or a numeric pid).' }
     Set-CredentialEnv
     $productId = Resolve-ProductId -Product $intake.product
 

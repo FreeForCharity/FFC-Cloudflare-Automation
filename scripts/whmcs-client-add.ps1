@@ -136,7 +136,7 @@ try {
 
     if ($DryRun) {
         $preview = $body.Clone()
-        foreach ($k in @('secret', 'accesskey', 'password2')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
+        foreach ($k in @('secret', 'accesskey', 'password2', 'customfields')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
         [pscustomobject]@{ action = 'AddClient'; dryRun = $true; clientid = $null; email = $Email; request = $preview } | ConvertTo-Json -Depth 8
         exit 0
     }

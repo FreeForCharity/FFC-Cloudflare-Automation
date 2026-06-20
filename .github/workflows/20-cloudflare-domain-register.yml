@@ -98,17 +98,17 @@ jobs:
           $mode = "${{ inputs.mode }}"
           $maxCost = "${{ inputs.max_registration_cost }}"
 
-          $args = @('-Domain', $domain, '-Account', $account, '-MaxRegistrationCost', $maxCost)
-          if ('${{ inputs.auto_renew }}' -eq 'true') { $args += '-AutoRenew' }
+          $scriptArgs = @('-Domain', $domain, '-Account', $account, '-MaxRegistrationCost', $maxCost)
+          if ('${{ inputs.auto_renew }}' -eq 'true') { $scriptArgs += '-AutoRenew' }
 
           switch ($mode) {
             'check' { }
-            'dry-run-register' { $args += '-Register' }
-            'execute-register' { $args += @('-Register', '-Execute') }
+            'dry-run-register' { $scriptArgs += '-Register' }
+            'execute-register' { $scriptArgs += @('-Register', '-Execute') }
             default { throw "Unknown mode '$mode'." }
           }
 
-          $out = & pwsh -NoProfile -File .\scripts\cloudflare-domain-register.ps1 @args
+          $out = & pwsh -NoProfile -File .\scripts\cloudflare-domain-register.ps1 @scriptArgs
           if ($LASTEXITCODE -ne 0) { throw "cloudflare-domain-register.ps1 failed (exit $LASTEXITCODE)." }
 
           # Echo result and append to the job summary (avoid here-strings for YAML safety).

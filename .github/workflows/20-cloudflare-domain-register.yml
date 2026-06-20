@@ -1,6 +1,6 @@
 name: '12. Domain - Registrar Search / Check / Register (Admin, DRAFT) [CF]'
 run-name:
-  "Registrar (${{ inputs.mode || 'label-check' }}): ${{ inputs.domain }}${{ inputs.search_query }}"
+  "Registrar (${{ inputs.mode || 'label-check' }}): ${{ inputs.domain || inputs.search_query }}"
 
 # DRAFT: Wraps the Cloudflare Registrar API (beta) via
 #   scripts/cloudflare-domain-search.ps1     (suggest available names; read-only)
@@ -88,8 +88,21 @@ jobs:
       - name: Resolve inputs
         id: r
         uses: actions/github-script@v8
+        env:
+          # Pass dispatch inputs via env (never inline ${{ }} into the JS source)
+          # to avoid breaking the script or opening an injection vector.
+          IN_DOMAIN: ${{ inputs.domain }}
+          IN_ACCOUNT: ${{ inputs.account }}
+          IN_MODE: ${{ inputs.mode }}
+          IN_SEARCH_QUERY: ${{ inputs.search_query }}
+          IN_ISSUE_NUMBER: ${{ inputs.issue_number }}
         with:
           script: |
+            // Strip protocol, any path, and a trailing dot; lowercase. Used by
+            // both entry points so normalization is consistent.
+            const normDomain = (s) =>
+              (s || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/\.$/, '');
+
             if (context.eventName === 'issues') {
               const label = context.payload.label && context.payload.label.name;
               if (label !== 'domain-purchase-approved') {
@@ -102,7 +115,7 @@ jobs:
               // The 01-purchase-new-domain issue form renders the field as:
               //   ### Domain Name\n\n<value>
               const m = body.match(/###\s*Domain Name\s*\r?\n+\s*([^\r\n#]+)/i);
-              const domain = m ? m[1].trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/\.$/, '') : '';
+              const domain = m ? normDomain(m[1]) : '';
               if (!domain) {
                 core.setFailed(`Could not parse a domain from issue #${issue.number} (expected a "Domain Name" field).`);
                 return;
@@ -115,13 +128,13 @@ jobs:
               core.setOutput('issue_number', String(issue.number));
               core.setOutput('post_comments', 'true');
             } else {
-              const issueNumber = '${{ inputs.issue_number }}';
+              const issueNumber = (process.env.IN_ISSUE_NUMBER || '').trim();
               core.setOutput('skip', 'false');
-              core.setOutput('domain', '${{ inputs.domain }}'.trim().toLowerCase().replace(/\.$/, ''));
-              core.setOutput('account', '${{ inputs.account }}');
-              core.setOutput('mode', '${{ inputs.mode }}');
-              core.setOutput('search_query', '${{ inputs.search_query }}');
-              core.setOutput('issue_number', issueNumber || '');
+              core.setOutput('domain', normDomain(process.env.IN_DOMAIN));
+              core.setOutput('account', (process.env.IN_ACCOUNT || 'FFC').trim());
+              core.setOutput('mode', (process.env.IN_MODE || 'check').trim());
+              core.setOutput('search_query', (process.env.IN_SEARCH_QUERY || '').trim());
+              core.setOutput('issue_number', issueNumber);
               core.setOutput('post_comments', issueNumber ? 'true' : 'false');
             }
 
@@ -235,12 +248,16 @@ jobs:
 
       - name: Comment result back to issue
         uses: actions/github-script@v8
+        env:
+          ISSUE_NUMBER: ${{ needs.resolve.outputs.issue_number }}
+          MODE: ${{ needs.resolve.outputs.mode }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
         with:
           script: |
             const fs = require('fs');
-            const issueNumber = Number('${{ needs.resolve.outputs.issue_number }}');
-            const mode = '${{ needs.resolve.outputs.mode }}';
-            const domain = '${{ needs.resolve.outputs.domain }}';
+            const issueNumber = Number(process.env.ISSUE_NUMBER);
+            const mode = process.env.MODE;
+            const domain = process.env.DOMAIN;
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
             let raw = '';

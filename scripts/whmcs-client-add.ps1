@@ -102,7 +102,16 @@ function ConvertTo-PhpSerializedCustomFields {
     param([Parameter(Mandatory = $true)][string]$Json)
 
     $obj = $Json | ConvertFrom-Json -ErrorAction Stop
+    if ($obj -is [System.Array]) {
+        throw 'CustomFieldsJson must be a JSON object mapping numeric field ids to values (e.g. {"1":"value"}), not an array.'
+    }
     $pairs = @($obj.PSObject.Properties)
+    foreach ($p in $pairs) {
+        $idCheck = 0
+        if (-not [int]::TryParse([string]$p.Name, [ref]$idCheck)) {
+            throw "CustomFieldsJson keys must be numeric WHMCS custom-field ids; got '$($p.Name)'."
+        }
+    }
     $sb = [System.Text.StringBuilder]::new()
     [void]$sb.Append("a:$($pairs.Count):{")
     foreach ($p in $pairs) {

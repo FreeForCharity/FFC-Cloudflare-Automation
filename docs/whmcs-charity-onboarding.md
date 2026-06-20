@@ -23,10 +23,12 @@ Everything stored in WHMCS (the client and its contacts) is **private**, admin-s
 **never published**.
 
 The only contact data that becomes **public** is the domain **WHOIS registrant**. For FFC-owned
-domains that registrant is always **Free For Charity's public org contact** (see
-`config/ffc-registrant-contact.json`) — public information only, matching FFC's public 501(c)(3)
-record. It is set on the registrar (Cloudflare) side and is **not** derived from WHMCS client
-records.
+domains that registrant is always **Free For Charity's public org contact** — public information
+only, matching FFC's public 501(c)(3) record. It is set on the registrar (Cloudflare) side and is
+**not** derived from WHMCS client records. The values live in
+`config/ffc-registrant-contact.example.json` (a template); copy it to
+`config/ffc-registrant-contact.json` and complete the address fields before any registrar flow
+consumes it.
 
 So: collect the charity's real (private) people in WHMCS; publish only FFC's public contact to
 WHOIS.

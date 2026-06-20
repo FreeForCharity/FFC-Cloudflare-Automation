@@ -99,6 +99,17 @@ function Get-ContactList {
     # of hashtables of WHMCS AddContact field names.
     param()
 
+    # Whitelist of documented AddContact fields. Anything else (notably reserved
+    # API fields like action/clientid/identifier/secret/accesskey/responsetype)
+    # is ignored so untrusted/malformed JSON can never override the request.
+    $allowed = @(
+        'firstname', 'lastname', 'companyname', 'email',
+        'address1', 'address2', 'city', 'state', 'postcode', 'country', 'phonenumber',
+        'generalemails', 'invoiceemails', 'supportemails', 'productemails', 'domainemails',
+        'subaccount', 'password2', 'permissions'
+    )
+    $boolFields = @('generalemails', 'invoiceemails', 'supportemails', 'productemails', 'domainemails', 'subaccount')
+
     if (-not [string]::IsNullOrWhiteSpace($ContactsJson)) {
         $arr = $ContactsJson | ConvertFrom-Json -ErrorAction Stop
         if ($arr -isnot [System.Array]) { $arr = @($arr) }
@@ -106,9 +117,18 @@ function Get-ContactList {
         foreach ($c in $arr) {
             $h = @{}
             foreach ($p in $c.PSObject.Properties) {
+                $name = $p.Name.ToLowerInvariant()
+                if ($allowed -notcontains $name) { continue }
                 $v = $p.Value
-                if ($v -is [bool]) { if ($v) { $h[$p.Name.ToLowerInvariant()] = $true } }
-                elseif ($null -ne $v -and -not [string]::IsNullOrWhiteSpace([string]$v)) { $h[$p.Name.ToLowerInvariant()] = [string]$v }
+                if ($boolFields -contains $name) {
+                    if ([bool]$v) { $h[$name] = $true }
+                }
+                elseif ($null -ne $v -and -not [string]::IsNullOrWhiteSpace([string]$v)) {
+                    $h[$name] = [string]$v
+                }
+            }
+            if (-not $h.ContainsKey('firstname') -or -not $h.ContainsKey('lastname') -or -not $h.ContainsKey('email')) {
+                throw 'Each -ContactsJson entry requires firstname, lastname and email.'
             }
             $out += , $h
         }

@@ -97,34 +97,6 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'whmcs-api-common.ps1')
 
-function ConvertTo-PhpSerializedCustomFields {
-    # Builds base64(serialize(array(id => value))) as WHMCS expects.
-    param([Parameter(Mandatory = $true)][string]$Json)
-
-    $obj = $Json | ConvertFrom-Json -ErrorAction Stop
-    if ($obj -is [System.Array]) {
-        throw 'CustomFieldsJson must be a JSON object mapping numeric field ids to values (e.g. {"1":"value"}), not an array.'
-    }
-    $pairs = @($obj.PSObject.Properties)
-    foreach ($p in $pairs) {
-        $idCheck = 0
-        if (-not [int]::TryParse([string]$p.Name, [ref]$idCheck)) {
-            throw "CustomFieldsJson keys must be numeric WHMCS custom-field ids; got '$($p.Name)'."
-        }
-    }
-    $sb = [System.Text.StringBuilder]::new()
-    [void]$sb.Append("a:$($pairs.Count):{")
-    foreach ($p in $pairs) {
-        $key = [int]$p.Name
-        $val = [string]$p.Value
-        $valBytes = [System.Text.Encoding]::UTF8.GetByteCount($val)
-        [void]$sb.Append("i:$key;s:$valBytes`:`"$val`";")
-    }
-    [void]$sb.Append('}')
-    $serialized = $sb.ToString()
-    return [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($serialized))
-}
-
 try {
     $api = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
     $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret -CredentialsJsonParam $CredentialsJson
@@ -159,7 +131,7 @@ try {
     if ($SkipValidation) { $body.skipvalidation = $true }
 
     if (-not [string]::IsNullOrWhiteSpace($CustomFieldsJson)) {
-        $body.customfields = ConvertTo-PhpSerializedCustomFields -Json $CustomFieldsJson
+        $body.customfields = ConvertTo-WhmcsCustomFields -Json $CustomFieldsJson
     }
 
     if ($DryRun) {

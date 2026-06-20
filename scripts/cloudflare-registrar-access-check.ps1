@@ -7,10 +7,14 @@
     Registrar access the selected token has, without registering or changing
     anything. It checks:
 
-      1. Token is active            -> GET /user/tokens/verify
-      2. Registrar READ access      -> GET  /accounts/{id}/registrar/domains
-      3. Registrar WRITE access     -> POST /accounts/{id}/registrar/domain-check
-                                       (availability check only; never charges)
+      1. Token usable / account      -> GET  /accounts (also sets tokenActive)
+      2. Registrar READ access       -> GET  /accounts/{id}/registrar/domains
+      3. Registrar WRITE access       -> POST /accounts/{id}/registrar/domain-check
+                                        (availability check only; never charges)
+
+    Note: tokenActive reflects whether the token can list its account. The
+    /user/tokens/verify endpoint is intentionally not used: it does not apply to
+    account-scoped tokens and can report a valid token as inactive.
 
     Each capability is classified as:
       granted       - the call succeeded (right is present)
@@ -148,9 +152,9 @@ function Get-Capability {
 try {
     $token = Get-TokenForAccount -Account $Account
 
-    # 1) Token active?
-    $verify = Invoke-CfProbe -Method 'GET' -Uri '/user/tokens/verify' -Token $token
-    $tokenActive = ($verify.status -ge 200 -and $verify.status -lt 300 -and [bool]$verify.body.success)
+    # Token validity is inferred from a successful account listing below. The
+    # /user/tokens/verify endpoint does not apply to account-scoped API tokens
+    # and can return 403 even for a fully valid token, so we do not rely on it.
 
     # Resolve the account id (single-account guard, matching cloudflare-zone-create.ps1).
     $acctProbe = Invoke-CfProbe -Method 'GET' -Uri '/accounts' -Token $token
@@ -158,6 +162,7 @@ try {
     if (-not $acctOk) {
         throw "Could not list accounts for token '$Account' (HTTP $($acctProbe.status)). Token may be invalid or lack Account read."
     }
+    $tokenActive = $acctOk
     $accounts = @($acctProbe.body.result)
     if ($accounts.Count -lt 1) { throw "Token '$Account' resolved no accounts." }
     if ($accounts.Count -gt 1) {

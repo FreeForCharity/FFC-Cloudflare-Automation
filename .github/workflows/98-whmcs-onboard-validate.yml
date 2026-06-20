@@ -1,0 +1,47 @@
+name: '98. WHMCS - Onboard Dry-Run Validate (temp) [WHMCS]'
+run-name: 'WHMCS Onboard Dry-Run Validate'
+
+# TEMPORARY: push-triggered dry-run of the onboarding orchestrator against the
+# example intake, to validate the PowerShell end-to-end (no writes). Remove once
+# validated. Dispatch is unavailable until the real workflow is on main.
+
+on:
+  push:
+    branches:
+      - claude/whmcs-version-updates-5g2s5s
+    paths:
+      - '.github/workflows/98-whmcs-onboard-validate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate required WHMCS secrets
+        shell: pwsh
+        env:
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
+            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
+          }
+
+      - name: Onboard dry-run (no writes)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
+          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
+          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & pwsh -NoProfile -File .\scripts\whmcs-charity-onboard.ps1 `
+            -IntakeJsonPath .\examples\whmcs\onboard-501c3.example.json -DryRun
+          if ($LASTEXITCODE -ne 0) { throw "Onboard dry-run failed (exit $LASTEXITCODE)." }

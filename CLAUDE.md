@@ -2,14 +2,14 @@
 
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 
-The `gh` CLI is installed in the remote environment and **already authenticated as
-`clarkemoyer`** (user OAuth token, scopes: `read:org`, `repo`, `workflow`).
-**Use `gh` for anything Actions-related.**
+The `gh` CLI is installed in the remote environment and **already authenticated as `clarkemoyer`**
+(user OAuth token, scopes: `read:org`, `repo`, `workflow`). **Use `gh` for anything
+Actions-related.**
 
-Do NOT rely on the MCP GitHub tools to run workflows: those act via a GitHub
-**App** that lacks `actions: write`, so `actions_run_trigger`/`run_workflow`
-returns `403 Resource not accessible by integration`. (MCP is fine for PRs,
-issues, comments, reviews — it acts as `clarkemoyer`.)
+Do NOT rely on the MCP GitHub tools to run workflows: those act via a GitHub **App** that lacks
+`actions: write`, so `actions_run_trigger`/`run_workflow` returns
+`403 Resource not accessible by integration`. (MCP is fine for PRs, issues, comments, reviews — it
+acts as `clarkemoyer`.)
 
 ### Dispatch a workflow
 
@@ -19,14 +19,14 @@ gh workflow run <workflow-file>.yml --ref <branch>
 gh workflow run 8-whmcs-export-products.yml --ref main
 ```
 
-`git push` also triggers `push`-event workflows, but environment-gated jobs still
-wait for approval (see below).
+`git push` also triggers `push`-event workflows, but environment-gated jobs still wait for approval
+(see below).
 
 ### Environment approval gate (`whmcs-prod`)
 
-Workflows that use `environment: whmcs-prod` (all WHMCS jobs) require a deployment
-approval; the run sits at `status: waiting`. Reviewer is `clarkemoyer`, and `gh`
-is authed as them, so approve it directly:
+Workflows that use `environment: whmcs-prod` (all WHMCS jobs) require a deployment approval; the run
+sits at `status: waiting`. Reviewer is `clarkemoyer`, and `gh` is authed as them, so approve it
+directly:
 
 ```bash
 RUN_ID=<run id>
@@ -38,8 +38,8 @@ gh api -X POST repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$RUN_
   -F "environment_ids[]=<env_id>" -f state=approved -f comment="approved"
 ```
 
-(Note: the approval API returns an array of deployment objects; don't apply a
-`--jq` filter that assumes a single object.)
+(Note: the approval API returns an array of deployment objects; don't apply a `--jq` filter that
+assumes a single object.)
 
 ### Watch a run / read results
 
@@ -54,11 +54,10 @@ To wait for completion, poll in a background Bash task with an `until`/loop on
 
 ## WHMCS API
 
-- Endpoint: `https://freeforcharity.org/hub/includes/api.php`. Identifier is inline
-  in workflows; secret = env secret `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU`, plus
-  `WHMCS_API_ACCESS_KEY`. Secrets live only in the `whmcs-prod` environment, so
-  WHMCS scripts can't run from this sandbox directly — run them via Actions.
-- Onboarding scripts: `whmcs-client-add.ps1` (AddClient), `whmcs-contact-add.ps1`
-  (AddContact), `whmcs-order-add.ps1` (AddOrder), shared helpers in
-  `whmcs-api-common.ps1`. Product/custom-field discovery via
-  `whmcs-products-export.ps1` (prints a catalog to the job log).
+- Endpoint: `https://freeforcharity.org/hub/includes/api.php`. Identifier is inline in workflows;
+  secret = env secret `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU`, plus `WHMCS_API_ACCESS_KEY`. Secrets live
+  only in the `whmcs-prod` environment, so WHMCS scripts can't run from this sandbox directly — run
+  them via Actions.
+- Onboarding scripts: `whmcs-client-add.ps1` (AddClient), `whmcs-contact-add.ps1` (AddContact),
+  `whmcs-order-add.ps1` (AddOrder), shared helpers in `whmcs-api-common.ps1`. Product/custom-field
+  discovery via `whmcs-products-export.ps1` (prints a catalog to the job log).

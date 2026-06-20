@@ -245,20 +245,20 @@ function Get-Readiness {
     }
 
     return [ordered]@{
-        domain                = $DomainName
-        currentRegistrar      = $Registrar
-        alreadyAtCloudflare   = $atCloudflare
-        category              = $Category
-        inCloudflareZone      = $(if ($HasZoneInfo) { $InZone } else { $null })
-        nameServers           = $NameServers
+        domain                  = $DomainName
+        currentRegistrar        = $Registrar
+        alreadyAtCloudflare     = $atCloudflare
+        category                = $Category
+        inCloudflareZone        = $(if ($HasZoneInfo) { $InZone } else { $null })
+        nameServers             = $NameServers
         nameserversAtCloudflare = $nsAtCloudflare
-        httpHealth            = $HttpHealth
-        daysToExpiry          = $daysToExpiry
-        expiryOk              = $expiryOk
-        daysSinceRegistration = $daysSinceReg
-        postRegLockOk         = $postRegLockOk
-        readiness             = $readiness
-        reasons               = ($reasons -join ' ')
+        httpHealth              = $HttpHealth
+        daysToExpiry            = $daysToExpiry
+        expiryOk                = $expiryOk
+        daysSinceRegistration   = $daysSinceReg
+        postRegLockOk           = $postRegLockOk
+        readiness               = $readiness
+        reasons                 = ($reasons -join ' ')
     }
 }
 

@@ -139,16 +139,16 @@ try {
     $verified = ($registrarIsCloudflare -and $nsAtCloudflare -and ($http.health -in @('Live', 'Redirect')))
 
     $verdict = [ordered]@{
-        domain                = $d
-        account               = $Account
-        accountId             = $accountId
-        registrarIsCloudflare = $registrarIsCloudflare
-        registrarState        = $registrarState
-        nameServers           = $nameServers
+        domain                  = $d
+        account                 = $Account
+        accountId               = $accountId
+        registrarIsCloudflare   = $registrarIsCloudflare
+        registrarState          = $registrarState
+        nameServers             = $nameServers
         nameserversAtCloudflare = $nsAtCloudflare
-        httpStatus            = $http.status
-        httpHealth            = $http.health
-        verified              = $verified
+        httpStatus              = $http.status
+        httpHealth              = $http.health
+        verified                = $verified
     }
 
     Write-Diag ("Verify '$d' ($Account): registrar=$registrarIsCloudflare ns=$nsAtCloudflare http=$($http.health) verified=$verified")

@@ -1,0 +1,129 @@
+name: '12. Domain - Register via Cloudflare Registrar (Admin, DRAFT) [CF]'
+run-name: 'Register Domain (${{ inputs.mode }}): ${{ inputs.domain }}'
+
+# DRAFT: Wraps scripts/cloudflare-domain-register.ps1 (Cloudflare Registrar API, beta).
+#
+# Safety model:
+#   - mode=check            -> availability + pricing only (no charge)
+#   - mode=dry-run-register -> shows the registration request, no charge
+#   - mode=execute-register -> PURCHASES the domain (charges money); requires
+#                              confirm_domain to exactly match domain.
+#
+# Prerequisite for execute-register: the Cloudflare API token must have
+# "Registrar" write permission. The existing KV tokens are scoped zone-and-dns,
+# so a token with Registrar scope (and a matching KV secret) is required before
+# live registration will succeed. See docs/cloudflare-domain-registration.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain to check/register (e.g., example.org)'
+        required: true
+        type: string
+      account:
+        description: 'Cloudflare account/token to use'
+        required: true
+        type: choice
+        options:
+          - FFC
+          - CM
+        default: FFC
+      mode:
+        description: 'What to do'
+        required: true
+        type: choice
+        options:
+          - check
+          - dry-run-register
+          - execute-register
+        default: check
+      auto_renew:
+        description: 'Enable auto-renew (execute-register only)'
+        required: false
+        type: boolean
+        default: false
+      max_registration_cost:
+        description: 'Spend cap in quoted currency (0 = no cap)'
+        required: false
+        type: string
+        default: '20'
+      confirm_domain:
+        description: 'Type the domain again to confirm a live purchase (execute-register only)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  register:
+    runs-on: windows-latest
+    # Deliberately a single write-scoped job for all modes (not split read/write
+    # like 16-dns-create-redirect-rule.yml). The Cloudflare Registrar
+    # availability check (domain-check) used by `check` and `dry-run-register` is
+    # documented to require Registrar *write* permission, so every mode needs the
+    # write-scoped token anyway. The actual purchase remains gated behind
+    # mode=execute-register + a typed confirm_domain match below.
+    environment: cloudflare-prod-write
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate confirmation for live purchases
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $mode = "${{ inputs.mode }}"
+          if ($mode -eq 'execute-register') {
+            $domain = "${{ inputs.domain }}".Trim().ToLowerInvariant().Trim('.')
+            $confirm = "${{ inputs.confirm_domain }}".Trim().ToLowerInvariant().Trim('.')
+            if ($confirm -ne $domain) {
+              throw "execute-register requires 'confirm_domain' to exactly match 'domain'. This is a paid action."
+            }
+            Write-Host "Confirmation OK for live registration of '$domain'." -ForegroundColor Yellow
+          }
+
+      # CF token from Key Vault via OIDC (write scope; needs Registrar permission for execute).
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Run Cloudflare domain register script
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ inputs.domain }}"
+          $account = "${{ inputs.account }}"
+          $mode = "${{ inputs.mode }}"
+          $maxCost = "${{ inputs.max_registration_cost }}"
+
+          $scriptArgs = @('-Domain', $domain, '-Account', $account, '-MaxRegistrationCost', $maxCost)
+          if ('${{ inputs.auto_renew }}' -eq 'true') { $scriptArgs += '-AutoRenew' }
+
+          switch ($mode) {
+            'check' { }
+            'dry-run-register' { $scriptArgs += '-Register' }
+            'execute-register' { $scriptArgs += @('-Register', '-Execute') }
+            default { throw "Unknown mode '$mode'." }
+          }
+
+          # The script emits JSON-only on stdout and diagnostics on stderr.
+          # Capture stdout (JSON); use Continue so native stderr can't terminate.
+          $ErrorActionPreference = 'Continue'
+          $out = & pwsh -NoProfile -File .\scripts\cloudflare-domain-register.ps1 @scriptArgs
+          $exit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          if ($exit -ne 0) { throw "cloudflare-domain-register.ps1 failed (exit $exit)." }
+
+          # stdout is a single JSON object; safe to fence as json.
+          $summary = ($out | Out-String)
+          Write-Host $summary
+          $fence = [string][char]0x60 * 3
+          $lines = @("### Cloudflare domain register ($mode)", '', ($fence + 'json'), $summary.TrimEnd(), $fence)
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

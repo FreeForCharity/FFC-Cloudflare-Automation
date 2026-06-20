@@ -40,10 +40,16 @@ Registration spends real money, so the script is gated:
 
 ## Prerequisites (before live registration works)
 
-1. **API token with `Registrar` write permission.** The existing Key Vault tokens are scoped
-   **zone-and-dns only**, so they can run availability checks but will be rejected for registration
-   until a Registrar-scoped token is provisioned (add it to Key Vault and load it the same way as
-   the existing `CLOUDFLARE_API_TOKEN_FFC` / `_CM`).
+1. **A Cloudflare token carrying the `Registrar` permission group.** The OIDC loader action
+   (`.github/actions/cloudflare-tokens-from-kv`) is **hardcoded** to fetch the `read-all-*` /
+   `wr-all-*-cloudflare-api-token-zone-and-dns` Key Vault secrets into `CLOUDFLARE_API_TOKEN_FFC` /
+   `_CM`. So simply adding a _new, separate_ Registrar-token secret to Key Vault would **not** be
+   picked up by the workflow. To enable Registrar calls you must either: (a) **add the `Registrar`
+   permission group to the existing token** behind the `*-cloudflare-api-token-zone-and-dns` secret
+   (simplest — no workflow change), or (b) **extend the loader/workflow** to fetch a dedicated
+   Registrar-token secret. The zone-and-dns scope alone is not sufficient; note that even the
+   availability/`domain-check` call is documented to require Registrar **write** permission. Use
+   `scripts/cloudflare-registrar-access-check.ps1` to confirm what the token actually has.
 2. On the Cloudflare account: a **billing profile with a default payment method**, a **default
    registrant contact**, and **acceptance of the Domain Registration Agreement**.
 

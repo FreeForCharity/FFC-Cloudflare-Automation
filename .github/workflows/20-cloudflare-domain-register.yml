@@ -59,7 +59,12 @@ permissions:
 jobs:
   register:
     runs-on: windows-latest
-    # Use the write-scoped environment because registration is a write/billing op.
+    # Deliberately a single write-scoped job for all modes (not split read/write
+    # like 16-dns-create-redirect-rule.yml). The Cloudflare Registrar
+    # availability check (domain-check) used by `check` and `dry-run-register` is
+    # documented to require Registrar *write* permission, so every mode needs the
+    # write-scoped token anyway. The actual purchase remains gated behind
+    # mode=execute-register + a typed confirm_domain match below.
     environment: cloudflare-prod-write
     permissions:
       contents: read

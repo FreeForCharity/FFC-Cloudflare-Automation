@@ -23,6 +23,11 @@
   description: Request to purchase a new domain
   color: '1d76db'
 
+- name: domain-purchase-approved
+  description:
+    Admin approved a domain purchase request; triggers an automated availability/price check
+  color: '0075ca'
+
 - name: domain-remove
   description: Request to remove a domain
   color: 'd93f0b'

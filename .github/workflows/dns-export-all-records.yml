@@ -1,5 +1,5 @@
 name: '08b. DNS - Export All Records (Full, per-record) [CF]'
-run-name: "Export All DNS Records: ${{ inputs.domain || 'freeforcharity.org' }}"
+run-name: 'Export All DNS Records: ${{ inputs.domain }}'
 
 # Read-only full per-record export for a single zone. Unlike "08. DNS -
 # Export Cloudflare Zones" (a per-zone apex/www SUMMARY), this dumps EVERY
@@ -14,11 +14,6 @@ on:
         description: 'Domain Name / Zone (e.g., freeforcharity.org)'
         required: true
         type: string
-  # Temporary: lets this run on the feature branch before it lands on the
-  # default branch (workflow_dispatch requires the file on main). Remove
-  # before merge. Defaults the export to freeforcharity.org on push.
-  push:
-    branches: ['claude/dns-full-export']
 
 permissions:
   id-token: write
@@ -42,7 +37,7 @@ jobs:
       - name: Export all DNS records
         shell: pwsh
         run: |
-          $Domain = "${{ inputs.domain || 'freeforcharity.org' }}"
+          $Domain = "${{ inputs.domain }}"
           .\Update-CloudflareDns.ps1 -Zone $Domain -ExportAll -OutputFile "dns_records_full.csv"
           if (-not (Test-Path "dns_records_full.csv")) {
             throw "Export did not produce dns_records_full.csv"
@@ -53,7 +48,7 @@ jobs:
         run: |
           $csv = Get-Content "dns_records_full.csv" -Raw
           @(
-            "## Full DNS record export: ${{ inputs.domain || 'freeforcharity.org' }}",
+            "## Full DNS record export: ${{ inputs.domain }}",
             '',
             '```csv',
             $csv.TrimEnd(),

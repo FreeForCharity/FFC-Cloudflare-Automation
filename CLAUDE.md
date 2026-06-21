@@ -6,10 +6,10 @@ In this remote environment the `gh` CLI is typically pre-authenticated — run `
 confirm (and `gh auth login` if not). When available it acts as a real user (e.g. `clarkemoyer`)
 with `workflow` + `repo` scopes. **Prefer `gh` for anything Actions-related.**
 
-Do NOT rely on the MCP GitHub tools to run workflows: those act via a GitHub **App** that lacks
-`actions: write`, so `actions_run_trigger`/`run_workflow` returns
-`403 Resource not accessible by integration`. (MCP is fine for PRs, issues, comments, reviews — it
-acts as `clarkemoyer`.)
+Do NOT rely on the MCP GitHub tools to run workflows: they run through a GitHub **App installation**
+whose granted scopes do not include `actions: write`, so `actions_run_trigger`/`run_workflow`
+returns `403 Resource not accessible by integration`. (MCP is fine for PRs, issues, comments,
+reviews — those are within the App installation's granted permissions.)
 
 ### Dispatch a workflow
 
@@ -55,9 +55,11 @@ To wait for completion, poll in a background Bash task with an `until`/loop on
 ## WHMCS API
 
 - Endpoint: `https://freeforcharity.org/hub/includes/api.php`. Identifier is inline in workflows;
-  secret = env secret `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU`, plus `WHMCS_API_ACCESS_KEY`. Secrets live
-  only in the `whmcs-prod` environment, so WHMCS scripts can't run from this sandbox directly — run
-  them via Actions.
+  the secret value is stored under the GitHub Actions **secret named**
+  `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` (this is the secret name/key, not the value), referenced as
+  `${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}`, plus the secret named `WHMCS_API_ACCESS_KEY`.
+  These secrets live only in the `whmcs-prod` environment, so WHMCS scripts can't run from this
+  sandbox directly — run them via Actions.
 - Onboarding scripts: `whmcs-client-add.ps1` (AddClient), `whmcs-contact-add.ps1` (AddContact),
   `whmcs-order-add.ps1` (AddOrder), shared helpers in `whmcs-api-common.ps1`. Product/custom-field
   discovery via `whmcs-products-export.ps1` (prints a catalog to the job log).

@@ -78,7 +78,7 @@ try {
 
     New-DirectoryForFile -Path $OutputFile
 
-    $all = @()
+    $all = [System.Collections.Generic.List[object]]::new()
     $start = 0
     while ($true) {
         $body = @{
@@ -100,7 +100,7 @@ try {
         $page = Get-TicketsFromResponse -Response $resp
         if ($page.Count -le 0) { break }
 
-        $all += $page
+        $all.AddRange([object[]]$page)
         $start += $page.Count
 
         $total = 0

@@ -15,6 +15,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
+    [ValidateRange(1, 2147483647)]
     [int]$DeptId,
 
     [Parameter(Mandatory = $true)]
@@ -88,9 +89,14 @@ try {
         priority     = $Priority
     }
     if (-not [string]::IsNullOrWhiteSpace($accessKey)) { $body.accesskey = $accessKey }
-    if ($hasClient) { $body.clientid = $ClientId }
-    if ($Name) { $body.name = $Name }
-    if ($Email) { $body.email = $Email }
+    # Identify the requester unambiguously: clientid OR name/email, not both.
+    if ($hasClient) {
+        $body.clientid = $ClientId
+    }
+    else {
+        if ($Name) { $body.name = $Name }
+        if ($Email) { $body.email = $Email }
+    }
     if ($Markdown) { $body.markdown = $true }
     if (-not [string]::IsNullOrWhiteSpace($CustomFieldsJson)) {
         $body.customfields = ConvertTo-WhmcsCustomFields -Json $CustomFieldsJson

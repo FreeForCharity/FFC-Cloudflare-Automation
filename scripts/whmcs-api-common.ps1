@@ -115,3 +115,34 @@ function Invoke-WhmcsApi {
 
     return $resp
 }
+
+function ConvertTo-WhmcsCustomFields {
+    # Builds base64(serialize(array(id => value))) as WHMCS expects for the
+    # `customfields` parameter on AddClient / AddOrder. -Json must be a JSON
+    # object whose keys are numeric custom-field ids, e.g. {"1":"value"}.
+    param([Parameter(Mandatory = $true)][string]$Json)
+
+    $obj = $Json | ConvertFrom-Json -ErrorAction Stop
+    if ($obj -is [System.Array]) {
+        throw 'Custom fields JSON must be a JSON object mapping numeric field ids to values (e.g. {"1":"value"}), not an array.'
+    }
+    $pairs = @($obj.PSObject.Properties)
+    foreach ($p in $pairs) {
+        $idCheck = 0
+        if (-not [int]::TryParse([string]$p.Name, [ref]$idCheck)) {
+            throw "Custom fields JSON keys must be numeric WHMCS custom-field ids; got '$($p.Name)'."
+        }
+    }
+
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.Append("a:$($pairs.Count):{")
+    foreach ($p in $pairs) {
+        $key = [int]$p.Name
+        $val = [string]$p.Value
+        $valBytes = [System.Text.Encoding]::UTF8.GetByteCount($val)
+        [void]$sb.Append("i:$key;s:$valBytes`:`"$val`";")
+    }
+    [void]$sb.Append('}')
+    $serialized = $sb.ToString()
+    return [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($serialized))
+}

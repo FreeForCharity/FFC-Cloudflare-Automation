@@ -35,16 +35,32 @@ WHOIS.
 
 ## What the WHMCS API can automate
 
-| Capability                                           | API action                           | Script                        | Status |
-| ---------------------------------------------------- | ------------------------------------ | ----------------------------- | ------ |
-| Create the charity account                           | `AddClient`                          | `whmcs-client-add.ps1`        | ✅     |
-| Add additional contacts (with routing / sub-account) | `AddContact`                         | `whmcs-contact-add.ps1`       | ✅     |
-| Read products + per-service custom fields            | `GetProducts` / `GetClientsProducts` | `whmcs-products-export.ps1`   | ✅     |
-| Create the onboarding service/order for a product    | `AddOrder`                           | _pending product enumeration_ | ⏳     |
+| Capability                                           | API action                           | Script                      | Status |
+| ---------------------------------------------------- | ------------------------------------ | --------------------------- | ------ |
+| Create the charity account                           | `AddClient`                          | `whmcs-client-add.ps1`      | ✅     |
+| Add additional contacts (with routing / sub-account) | `AddContact`                         | `whmcs-contact-add.ps1`     | ✅     |
+| Read products + per-service custom fields            | `GetProducts` / `GetClientsProducts` | `whmcs-products-export.ps1` | ✅     |
+| Create the onboarding service/order for a product    | `AddOrder`                           | `whmcs-order-add.ps1`       | ✅     |
+| Orchestrate client + contacts + order                | (composes the above)                 | `whmcs-charity-onboard.ps1` | ✅     |
 
-The order step (`AddOrder`) is intentionally deferred until the live product catalog and its
-custom-field ids are enumerated — those ids are install-specific and must be confirmed before we
-write to them.
+### End-to-end onboarding
+
+`scripts/whmcs-charity-onboard.ps1` takes an intake JSON
+(`examples/whmcs/onboard-501c3.example.json`) and runs AddClient → AddContact (one per roster
+person, with notification routing / sub-account logins) → AddOrder. The `product` key resolves to a
+`pid` via `config/whmcs-onboarding-products.json`. Always run with `-DryRun` first; it previews
+every call without writing. The dispatch workflow **"34. WHMCS - Charity Onboard"** runs it (dry-run
+by default).
+
+### Onboarding products (enumerated)
+
+| Key        | pid | Product                                      | Notes                                                  |
+| ---------- | --- | -------------------------------------------- | ------------------------------------------------------ |
+| `pre501c3` | 16  | FFC Pre-501c3 Nonprofit / Charity Onboarding | light intake (status, mission, domain, EIN, GuideStar) |
+| `501c3`    | 33  | FFC 501c3 Nonprofit / Charity Onboarding     | full board + primary + technical contact roster        |
+
+`config/whmcs-onboarding-products.json` holds each product's custom-field ids. (Note: pid 35 "Online
+Impacts" is a **separate funnel**, not a duplicate — leave it as is.)
 
 ## Custom fields
 

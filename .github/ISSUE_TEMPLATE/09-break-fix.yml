@@ -1,0 +1,32 @@
+name: 'Break/Fix (site incident)'
+description: 'Report a problem with a charity site to track the fix in WHMCS.'
+title: 'Break/Fix: <domain> - <short summary>'
+labels: ['whmcs:break-fix']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This opens a **high-priority WHMCS support ticket** to track the incident and the
+        break/fix actions taken. Record remediation steps as ticket replies/notes.
+  - type: input
+    id: charity_email
+    attributes:
+      label: Charity contact email
+      description: The email of the charity contact / WHMCS client.
+      placeholder: contact@charity.org
+    validations:
+      required: true
+  - type: input
+    id: domain
+    attributes:
+      label: Affected domain / site
+      placeholder: example.org
+    validations:
+      required: true
+  - type: textarea
+    id: symptoms
+    attributes:
+      label: Symptoms / impact
+      description: What is broken, and how is it affecting the site?
+    validations:
+      required: true

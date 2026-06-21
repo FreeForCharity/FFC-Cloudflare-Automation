@@ -1,0 +1,19 @@
+{
+  "_comment": "WHMCS support department map (from GetSupportDepartments discovery). FFC currently has ONE department (id 1, 'Support'); WHMCS departments are created in the admin UI, not via API. 'routing' maps logical ticket types to a deptid so ticket automation can re-point later if dedicated Onboarding/Break-Fix departments are added - just change the ids here. Until then both route to 1 and are distinguished by subject prefix + priority + GitHub label.",
+  "departments": {
+    "1": "Support"
+  },
+  "default_deptid": 1,
+  "routing": {
+    "new_request": 1,
+    "break_fix": 1
+  },
+  "subject_prefix": {
+    "new_request": "[New Request]",
+    "break_fix": "[Break/Fix]"
+  },
+  "priority": {
+    "new_request": "Medium",
+    "break_fix": "High"
+  }
+}

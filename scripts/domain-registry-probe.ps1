@@ -177,7 +177,7 @@ function Get-RegistryTruth {
 
     foreach ($ev in @($resp.events)) {
         switch ($ev.eventAction) {
-            'expiration'   { $row.registryExpiry = Format-RdapDate $ev.eventDate }
+            'expiration' { $row.registryExpiry = Format-RdapDate $ev.eventDate }
             'registration' { $row.registryCreated = Format-RdapDate $ev.eventDate }
         }
     }

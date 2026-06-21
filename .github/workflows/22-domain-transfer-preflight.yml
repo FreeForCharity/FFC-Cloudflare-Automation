@@ -156,6 +156,82 @@ jobs:
           $md | Out-File -FilePath artifacts/transfer/cat1_ready_in_cloudflare.md -Encoding utf8
           $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
+      - name: Probe registry truth (RDAP) for the in-Cloudflare set
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # WHMCS expiry/status is frequently stale (it has wrongly marked live
+          # domains "Expired"/"Cancelled"). Resolve the authoritative registrar of
+          # record, real expiry, and transfer-lock state from the registry (RDAP)
+          # for every in-Cloudflare zone. Read-only; no secrets, no money.
+          & pwsh -NoProfile -File .\scripts\domain-registry-probe.ps1 `
+            -DomainsCsv artifacts/transfer/cf_zones.csv `
+            -OutputFile artifacts/transfer/registry_truth.csv | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "domain-registry-probe.ps1 failed (exit $LASTEXITCODE)." }
+
+      - name: Build registry-truth transfer worklist
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $reg = Import-Csv artifacts/transfer/registry_truth.csv
+
+          # Join site health + WHMCS status from the Master List so the worklist
+          # shows where the registry contradicts WHMCS.
+          $sites = @{}
+          foreach ($s in (Import-Csv sites-list/sites_list.csv)) {
+            $d = ($s.Domain).Trim().ToLowerInvariant()
+            if ($d -and -not $sites.ContainsKey($d)) { $sites[$d] = $s }
+          }
+
+          $order = 'ENOM_READY','ENOM_LOCKED','ENOM_EXPIRED','OTHER','UNREGISTERED','UNKNOWN','AT_CLOUDFLARE'
+          $titles = @{
+            ENOM_READY   = 'eNom — unlocked, not expired → transfer to Cloudflare now'
+            ENOM_LOCKED  = 'eNom — clientTransferProhibited → unlock at eNom first'
+            ENOM_EXPIRED = 'eNom — registry expiry in the past → renew first'
+            OTHER        = 'Registrar is NOT FFC (not Cloudflare/eNom) → investigate'
+            UNREGISTERED = 'No registry record → dropped / available → investigate'
+            UNKNOWN      = 'No RDAP server for TLD or lookup errored → manual WHOIS'
+            AT_CLOUDFLARE= 'Already at Cloudflare (migration complete)'
+          }
+
+          $joined = foreach ($r in $reg) {
+            $s = $sites[$r.domain]
+            [pscustomobject]@{
+              domain            = $r.domain
+              bucket            = $r.bucket
+              registrarOfRecord = $r.registrarOfRecord
+              registryExpiry    = $r.registryExpiry
+              transferLocked    = $r.transferLocked
+              siteHealth        = if ($s) { $s.'Site Health' } else { '' }
+              whmcsStatus       = if ($s) { $s.Status } else { '' }
+            }
+          }
+          $joined | Export-Csv artifacts/transfer/registry_truth_worklist.csv -NoTypeInformation -Encoding utf8
+
+          $md = New-Object System.Collections.Generic.List[string]
+          $md.Add('### Registry-truth transfer worklist (RDAP, authoritative)')
+          $md.Add('')
+          foreach ($b in $order) {
+            $rows = @($joined | Where-Object { $_.bucket -eq $b })
+            $md.Add(("- **{0}** ({1}): {2}" -f $b, $rows.Count, $titles[$b]))
+          }
+          $md.Add('')
+          foreach ($b in $order) {
+            $rows = @($joined | Where-Object { $_.bucket -eq $b } |
+              Sort-Object @{ e = { $_.siteHealth -ne 'Live' } }, domain)
+            if ($rows.Count -eq 0) { continue }
+            $md.Add(("#### {0} ({1})" -f $b, $rows.Count))
+            $md.Add('| domain | registrar | registryExpiry | locked | siteHealth | whmcsStatus |')
+            $md.Add('| --- | --- | --- | --- | --- | --- |')
+            foreach ($r in $rows) {
+              $md.Add(("| {0} | {1} | {2} | {3} | {4} | {5} |" -f `
+                $r.domain, $r.registrarOfRecord, $r.registryExpiry, $r.transferLocked, $r.siteHealth, $r.whmcsStatus))
+            }
+            $md.Add('')
+          }
+          $md | Out-File -FilePath artifacts/transfer/registry_truth_worklist.md -Encoding utf8
+          $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
       - name: Upload preflight results
         uses: actions/upload-artifact@v6
         with:
@@ -166,6 +242,9 @@ jobs:
             artifacts/transfer/cf_zones.csv
             artifacts/transfer/cat1_ready_in_cloudflare.csv
             artifacts/transfer/cat1_ready_in_cloudflare.md
+            artifacts/transfer/registry_truth.csv
+            artifacts/transfer/registry_truth_worklist.csv
+            artifacts/transfer/registry_truth_worklist.md
             artifacts/transfer/runbooks/*.md
           if-no-files-found: error
 
@@ -190,12 +269,29 @@ jobs:
             } catch (e) {
               cat1 = '_(Cat1-ready report not available)_';
             }
+            let registry = '';
+            try {
+              const rows = fs.readFileSync('artifacts/transfer/registry_truth.csv', 'utf8')
+                .trim().split('\n').slice(1);
+              const counts = {};
+              for (const line of rows) {
+                const b = (line.split(',').pop() || '').replace(/"/g, '').trim();
+                counts[b] = (counts[b] || 0) + 1;
+              }
+              const order = ['ENOM_READY','ENOM_LOCKED','ENOM_EXPIRED','OTHER','UNREGISTERED','UNKNOWN','AT_CLOUDFLARE'];
+              registry = '### Registry truth (RDAP — authoritative registrar/expiry)\n' +
+                order.filter(b => counts[b]).map(b => `- ${b}: **${counts[b]}**`).join('\n');
+            } catch (e) {
+              registry = '_(registry-truth probe not available)_';
+            }
             const body = [
               `Transfer readiness preflight results`,
               '',
               table,
               '',
               cat1,
+              '',
+              registry,
               '',
               `Full CSV + per-domain runbooks: see the Artifacts section of ${runUrl}`,
             ].join('\n');

@@ -1,0 +1,48 @@
+{
+  "_comment": "Example intake for scripts/whmcs-charity-onboard.ps1 (501c3 flow). Replace sample values. customFields keys are WHMCS product custom-field ids for pid 33 (see config/whmcs-onboarding-products.json). Run with -DryRun first.",
+  "product": "501c3",
+  "client": {
+    "firstName": "Jane",
+    "lastName": "Doe",
+    "email": "jane@example-charity.org",
+    "companyName": "Example Charity Inc",
+    "address1": "123 Mission St",
+    "city": "Raleigh",
+    "state": "NC",
+    "postcode": "27601",
+    "country": "US",
+    "phoneNumber": "+1.9195551234"
+  },
+  "contacts": [
+    {
+      "firstName": "Jane",
+      "lastName": "Doe",
+      "email": "jane@example-charity.org",
+      "phoneNumber": "+1.9195551234",
+      "generalEmails": true,
+      "invoiceEmails": true,
+      "subAccount": true,
+      "permissions": "managetickets,manageinvoices,managedomains"
+    },
+    {
+      "firstName": "Tariq",
+      "lastName": "Tech",
+      "email": "tech@example-charity.org",
+      "phoneNumber": "+1.9195555678",
+      "domainEmails": true,
+      "supportEmails": true,
+      "productEmails": true,
+      "subAccount": true,
+      "permissions": "managedomains,managetickets"
+    }
+  ],
+  "customFields": {
+    "98": "jane@example-charity.org",
+    "97": "+1.9195551234",
+    "101": "tech@example-charity.org",
+    "100": "+1.9195555678",
+    "102": "US/Eastern",
+    "106": "501(c)(3)",
+    "105": "Weekday mornings"
+  }
+}

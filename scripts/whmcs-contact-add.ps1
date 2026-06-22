@@ -166,6 +166,8 @@ try {
     $contacts = Get-ContactList
     if (@($contacts).Count -eq 0) { throw 'No contacts to add.' }
 
+    $auth = New-WhmcsAuthBody -Creds $creds -AccessKey $accessKey
+
     $results = @()
     foreach ($c in $contacts) {
         $body = @{
@@ -185,10 +187,19 @@ try {
             continue
         }
 
+        # Idempotency: skip a contact that already exists (same email) on this client.
+        if ($email) {
+            $existingContactId = Find-WhmcsContactIdByEmail -ApiUrl $api -Auth $auth -ClientId $ClientId -Email $email
+            if ($existingContactId) {
+                $results += [pscustomobject]@{ contactid = $existingContactId; email = $email; existing = $true }
+                continue
+            }
+        }
+
         $resp = Invoke-WhmcsApi -ApiUrl $api -Body $body
         $contactId = $null
         try { $contactId = [string]$resp.contactid } catch {}
-        $results += [pscustomobject]@{ contactid = $contactId; email = $email }
+        $results += [pscustomobject]@{ contactid = $contactId; email = $email; existing = $false }
     }
 
     [pscustomobject]@{ clientid = $ClientId; dryRun = [bool]$DryRun; contacts = $results } | ConvertTo-Json -Depth 6

@@ -70,6 +70,11 @@ param(
     [Parameter()]
     [string]$AccessKey,
 
+    # Place the order even if the client already has a service for this product
+    # (default: skip to avoid duplicate services).
+    [Parameter()]
+    [switch]$AllowDuplicate,
+
     [Parameter()]
     [switch]$DryRun
 )
@@ -111,6 +116,16 @@ try {
         foreach ($k in @('secret', 'accesskey', 'customfields')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
         [pscustomobject]@{ action = 'AddOrder'; dryRun = $true; orderid = $null; invoiceid = $null; productids = $null; request = $preview } | ConvertTo-Json -Depth 8
         exit 0
+    }
+
+    # Idempotency: skip if the client already has a (non-terminated) service for
+    # this product, unless -AllowDuplicate.
+    if (-not $AllowDuplicate) {
+        $auth = New-WhmcsAuthBody -Creds $creds -AccessKey $accessKey
+        if (Test-WhmcsClientHasProduct -ApiUrl $api -Auth $auth -ClientId $ClientId -ProductId $ProductId) {
+            [pscustomobject]@{ action = 'AddOrder'; dryRun = $false; orderid = $null; invoiceid = $null; productids = $null; skipped = 'existing-service' } | ConvertTo-Json -Depth 6
+            exit 0
+        }
     }
 
     $resp = Invoke-WhmcsApi -ApiUrl $api -Body $body

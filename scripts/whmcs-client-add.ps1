@@ -89,6 +89,10 @@ param(
     [Parameter()]
     [string]$AccessKey,
 
+    # Throw if a client with this email already exists (default: reuse it).
+    [Parameter()]
+    [switch]$FailIfExists,
+
     [Parameter()]
     [switch]$DryRun
 )
@@ -101,6 +105,17 @@ try {
     $api = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
     $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret -CredentialsJsonParam $CredentialsJson
     $accessKey = Resolve-WhmcsAccessKey -AccessKeyParam $AccessKey
+
+    # Idempotency: reuse an existing client with the same email (skipped in dry-run).
+    if (-not $DryRun) {
+        $auth = New-WhmcsAuthBody -Creds $creds -AccessKey $accessKey
+        $existingId = Find-WhmcsClientIdByEmail -ApiUrl $api -Auth $auth -Email $Email
+        if ($existingId) {
+            if ($FailIfExists) { throw "A WHMCS client with email '$Email' already exists (clientid $existingId)." }
+            [pscustomobject]@{ action = 'AddClient'; dryRun = $false; clientid = $existingId; email = $Email; existing = $true } | ConvertTo-Json -Depth 6
+            exit 0
+        }
+    }
 
     $body = @{
         identifier   = $creds.Identifier
@@ -145,7 +160,7 @@ try {
     $clientId = $null
     try { $clientId = [string]$resp.clientid } catch {}
 
-    [pscustomobject]@{ action = 'AddClient'; dryRun = $false; clientid = $clientId; email = $Email } | ConvertTo-Json -Depth 6
+    [pscustomobject]@{ action = 'AddClient'; dryRun = $false; clientid = $clientId; email = $Email; existing = $false } | ConvertTo-Json -Depth 6
     exit 0
 }
 catch {

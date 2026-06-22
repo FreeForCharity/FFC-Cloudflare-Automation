@@ -29,7 +29,7 @@ import {
   writeFileSync,
   readFileSync,
 } from 'node:fs';
-import { join, relative, dirname, basename } from 'node:path';
+import { join, relative, dirname } from 'node:path';
 
 function arg(name, def) {
   const i = process.argv.indexOf(`--${name}`);

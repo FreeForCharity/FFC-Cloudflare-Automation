@@ -62,6 +62,23 @@ by default).
 `config/whmcs-onboarding-products.json` holds each product's custom-field ids. (Note: pid 35 "Online
 Impacts" is a **separate funnel**, not a duplicate — leave it as is.)
 
+### Idempotency (safe re-runs)
+
+The write scripts dedupe against live WHMCS so re-running onboarding does not create duplicates:
+
+- **Client** — `AddClient` reuses an existing client with the same email (`GetClients`); pass
+  `-FailIfExists` to error instead. Output includes `existing: true/false`.
+- **Contacts** — `AddContact` skips a contact whose email already exists on the client
+  (`GetContacts`); each result carries `existing`.
+- **Order** — `AddOrder` skips when the client already has a non-terminated service for that product
+  (`GetClientsProducts`); pass `-AllowDuplicate` to override (output shows
+  `skipped: existing-service`).
+
+These checks — and the `existing` / `skipped` output fields they produce — appear on **live
+execution only**. Under `-DryRun` the dedupe is skipped and those fields are absent (dry-run output
+keeps its original shape: client `{…, request}`, contacts `[{contactid, email}]`, order
+`{…, request}`).
+
 ## Custom fields
 
 - **Client custom fields** (Setup → Custom Client Fields) are passed to `AddClient` via

@@ -146,3 +146,110 @@ function ConvertTo-WhmcsCustomFields {
     $serialized = $sb.ToString()
     return [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($serialized))
 }
+
+function New-WhmcsAuthBody {
+    # Base request body with auth fields (for read lookups).
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Creds,
+        [string]$AccessKey
+    )
+    $b = @{
+        identifier   = $Creds.Identifier
+        secret       = $Creds.Secret
+        responsetype = 'json'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($AccessKey)) { $b.accesskey = $AccessKey }
+    return $b
+}
+
+function Find-WhmcsClientIdByEmail {
+    # Returns the clientid of an existing client whose email matches exactly
+    # (case-insensitive), or $null. Used for onboarding idempotency.
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiUrl,
+        [Parameter(Mandatory = $true)][hashtable]$Auth,
+        [Parameter(Mandatory = $true)][string]$Email
+    )
+    $target = $Email.Trim().ToLowerInvariant()
+    $body = $Auth.Clone()
+    $body.action = 'GetClients'
+    $body.search = $Email
+    $body.limitnum = 250
+    $resp = Invoke-WhmcsApi -ApiUrl $ApiUrl -Body $body
+
+    $clients = @()
+    if ($resp.clients -and $resp.clients.client) { $clients = @($resp.clients.client) }
+    elseif ($resp.clients -is [System.Array]) { $clients = @($resp.clients) }
+
+    foreach ($c in $clients) {
+        $e = $null
+        try { $e = [string]$c.email } catch {}
+        if ($e -and $e.Trim().ToLowerInvariant() -eq $target) {
+            return [string]$c.id
+        }
+    }
+    return $null
+}
+
+function Test-WhmcsClientHasProduct {
+    # True if the client already has a non-terminated service for the product id.
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiUrl,
+        [Parameter(Mandatory = $true)][hashtable]$Auth,
+        [Parameter(Mandatory = $true)][int]$ClientId,
+        [Parameter(Mandatory = $true)][int]$ProductId
+    )
+    $body = $Auth.Clone()
+    $body.action = 'GetClientsProducts'
+    $body.clientid = $ClientId
+    $body.pid = $ProductId
+    $resp = Invoke-WhmcsApi -ApiUrl $ApiUrl -Body $body
+
+    $products = @()
+    if ($resp.products -and $resp.products.product) { $products = @($resp.products.product) }
+    elseif ($resp.products -is [System.Array]) { $products = @($resp.products) }
+
+    $dead = @('Cancelled', 'Terminated', 'Fraud')
+    foreach ($p in $products) {
+        $prodId = $null; $status = $null
+        try { $prodId = [string]$p.pid } catch {}
+        try { $status = [string]$p.status } catch {}
+        if ($prodId -eq [string]$ProductId -and ($dead -notcontains $status)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Find-WhmcsContactIdByEmail {
+    # Returns the contactid of an existing contact (under the client) whose email
+    # matches exactly (case-insensitive), or $null.
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiUrl,
+        [Parameter(Mandatory = $true)][hashtable]$Auth,
+        [Parameter(Mandatory = $true)][int]$ClientId,
+        [Parameter(Mandatory = $true)][string]$Email
+    )
+    $target = $Email.Trim().ToLowerInvariant()
+    $body = $Auth.Clone()
+    $body.action = 'GetContacts'
+    $body.userid = $ClientId
+    $body.email = $Email
+    $resp = Invoke-WhmcsApi -ApiUrl $ApiUrl -Body $body
+
+    $contacts = @()
+    if ($resp.contacts -and $resp.contacts.contact) { $contacts = @($resp.contacts.contact) }
+    elseif ($resp.contacts -is [System.Array]) { $contacts = @($resp.contacts) }
+
+    foreach ($c in $contacts) {
+        $e = $null
+        try { $e = [string]$c.email } catch {}
+        if ($e -and $e.Trim().ToLowerInvariant() -eq $target) {
+            return [string]$c.id
+        }
+    }
+    return $null
+}

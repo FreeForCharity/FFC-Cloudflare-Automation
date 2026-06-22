@@ -81,3 +81,12 @@
 - name: good first issue
   description: Good for newcomers
   color: '7057ff'
+
+# WHMCS Support Tickets - Used by issue templates and the issue->ticket workflow
+- name: 'whmcs:new-request'
+  description: Charity support/help request; opens a WHMCS ticket
+  color: '1d76db'
+
+- name: 'whmcs:break-fix'
+  description: Charity site incident; opens a high-priority WHMCS ticket
+  color: 'b60205'

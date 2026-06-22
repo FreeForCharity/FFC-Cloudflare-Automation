@@ -7,8 +7,10 @@
 .DESCRIPTION
     Wraps the WHMCS 'AddClient' API action following the same credential / error
     conventions as the other scripts in this repo. Emits a single JSON object on
-    stdout: { action, dryRun, clientid, email }. Use -DryRun to preview the call
-    (no write) - the would-be request body is returned (secrets stripped).
+    stdout. Live runs: { action, dryRun, clientid, email, existing } where
+    'existing' is $true when an existing client (same email) was reused instead
+    of created. Dry-run: { action, dryRun, clientid=null, email, request } (the
+    would-be request body, secrets stripped); dedupe is skipped under -DryRun.
 
     PRIVACY: charity client + contact details live only inside WHMCS (private,
     admin-side) and are never published. The public WHOIS registrant for FFC
@@ -89,6 +91,10 @@ param(
     [Parameter()]
     [string]$AccessKey,
 
+    # Throw if a client with this email already exists (default: reuse it).
+    [Parameter()]
+    [switch]$FailIfExists,
+
     [Parameter()]
     [switch]$DryRun
 )
@@ -101,6 +107,17 @@ try {
     $api = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
     $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret -CredentialsJsonParam $CredentialsJson
     $accessKey = Resolve-WhmcsAccessKey -AccessKeyParam $AccessKey
+
+    # Idempotency: reuse an existing client with the same email (skipped in dry-run).
+    if (-not $DryRun) {
+        $auth = New-WhmcsAuthBody -Creds $creds -AccessKey $accessKey
+        $existingId = Find-WhmcsClientIdByEmail -ApiUrl $api -Auth $auth -Email $Email
+        if ($existingId) {
+            if ($FailIfExists) { throw "A WHMCS client with email '$Email' already exists (clientid $existingId)." }
+            [pscustomobject]@{ action = 'AddClient'; dryRun = $false; clientid = $existingId; email = $Email; existing = $true } | ConvertTo-Json -Depth 6
+            exit 0
+        }
+    }
 
     $body = @{
         identifier   = $creds.Identifier
@@ -145,7 +162,7 @@ try {
     $clientId = $null
     try { $clientId = [string]$resp.clientid } catch {}
 
-    [pscustomobject]@{ action = 'AddClient'; dryRun = $false; clientid = $clientId; email = $Email } | ConvertTo-Json -Depth 6
+    [pscustomobject]@{ action = 'AddClient'; dryRun = $false; clientid = $clientId; email = $Email; existing = $false } | ConvertTo-Json -Depth 6
     exit 0
 }
 catch {

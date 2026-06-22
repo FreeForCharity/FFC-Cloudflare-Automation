@@ -6,8 +6,12 @@
 .DESCRIPTION
     Wraps the WHMCS 'AddOrder' API action following the same credential / error
     conventions as the other scripts in this repo. Emits a single JSON object on
-    stdout: { action, dryRun, orderid, invoiceid, productids }. Use -DryRun to
-    preview the request (no write); secrets are stripped from the preview.
+    stdout: { action, dryRun, orderid, invoiceid, productids }. If the client
+    already has a non-terminated service for this product (and -AllowDuplicate is
+    not set), no order is placed and the output instead carries
+    { action, dryRun=false, orderid=null, ..., skipped='existing-service' }. Use
+    -DryRun to preview the request (no write); secrets are stripped from the
+    preview. Idempotency checks are skipped under -DryRun.
 
     Product custom fields are populated by id via -CustomFieldsJson
     '{"<productCustomFieldId>":"value"}'. Discover the ids by running the WHMCS

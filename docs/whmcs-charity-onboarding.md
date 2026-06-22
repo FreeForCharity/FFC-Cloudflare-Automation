@@ -74,7 +74,10 @@ The write scripts dedupe against live WHMCS so re-running onboarding does not cr
   (`GetClientsProducts`); pass `-AllowDuplicate` to override (output shows
   `skipped: existing-service`).
 
-These checks run only on live execution (they are skipped under `-DryRun`).
+These checks — and the `existing` / `skipped` output fields they produce — appear on **live
+execution only**. Under `-DryRun` the dedupe is skipped and those fields are absent (dry-run output
+keeps its original shape: client `{…, request}`, contacts `[{contactid, email}]`, order
+`{…, request}`).
 
 ## Custom fields
 

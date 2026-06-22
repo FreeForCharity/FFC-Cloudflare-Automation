@@ -15,7 +15,10 @@
             "supportemails":true},
            {"firstname":"C","lastname":"D","email":"c@x.org","invoiceemails":true}]'
 
-    Emits JSON on stdout: { clientid, dryRun, contacts:[{contactid,email}] }.
+    Emits JSON on stdout: { clientid, dryRun, contacts:[{contactid,email,existing}] }.
+    On live runs each contact entry includes 'existing' ($true when a contact
+    with that email already existed and was skipped); the 'existing' field is not
+    present in -DryRun entries (dedupe is skipped under -DryRun).
 
     PRIVACY: these records are private to WHMCS and are never published to WHOIS.
 #>

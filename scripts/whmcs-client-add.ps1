@@ -7,8 +7,10 @@
 .DESCRIPTION
     Wraps the WHMCS 'AddClient' API action following the same credential / error
     conventions as the other scripts in this repo. Emits a single JSON object on
-    stdout: { action, dryRun, clientid, email }. Use -DryRun to preview the call
-    (no write) - the would-be request body is returned (secrets stripped).
+    stdout. Live runs: { action, dryRun, clientid, email, existing } where
+    'existing' is $true when an existing client (same email) was reused instead
+    of created. Dry-run: { action, dryRun, clientid=null, email, request } (the
+    would-be request body, secrets stripped); dedupe is skipped under -DryRun.
 
     PRIVACY: charity client + contact details live only inside WHMCS (private,
     admin-side) and are never published. The public WHOIS registrant for FFC

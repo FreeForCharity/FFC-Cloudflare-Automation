@@ -192,6 +192,28 @@ function Get-WhmcsProductsFromResponse {
     return @()
 }
 
+function ConvertTo-NodeText {
+    # Returns the inner text of an XML node, or the joined text of several nodes.
+    # Avoids '[string]$node' yielding a type name ('System.Xml.XmlElement', or
+    # 'System.Object[]' when XML property access matches multiple elements) for
+    # name/value nodes that carry child markup. See issue #440.
+    [OutputType([string])]
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [string]) { return $Value }
+    if ($Value -is [System.Xml.XmlNode]) { return $Value.InnerText }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $parts = foreach ($item in $Value) {
+            if ($null -eq $item) { continue }
+            elseif ($item -is [System.Xml.XmlNode]) { $item.InnerText }
+            else { [string]$item }
+        }
+        return ($parts -join ' ')
+    }
+    return [string]$Value
+}
+
 function ConvertTo-ProductPricingRow {
     param(
         [Parameter(Mandatory = $true)]
@@ -202,7 +224,7 @@ function ConvertTo-ProductPricingRow {
         pid                = $Product.pid
         gid                = $Product.gid
         type               = $Product.type
-        name               = $Product.name
+        name               = ConvertTo-NodeText $Product.name
         slug               = $Product.slug
         module             = $Product.module
         paytype            = $Product.paytype
@@ -285,9 +307,9 @@ function Get-CustomFieldNodes {
         if (-not $e) { continue }
         $id = $null; $name = $null; $value = $null
         try { $id = [string]$e.id } catch {}
-        try { $name = [string]$e.name } catch {}
-        if ([string]::IsNullOrWhiteSpace($name)) { try { $name = [string]$e.translated_name } catch {} }
-        try { $value = if ($e.value -is [System.Xml.XmlNode]) { $e.value.InnerText } else { [string]$e.value } } catch {}
+        try { $name = ConvertTo-NodeText $e.name } catch {}
+        if ([string]::IsNullOrWhiteSpace($name)) { try { $name = ConvertTo-NodeText $e.translated_name } catch {} }
+        try { $value = ConvertTo-NodeText $e.value } catch {}
         if ([string]::IsNullOrWhiteSpace($name) -and [string]::IsNullOrWhiteSpace($id)) { continue }
         $out += [pscustomobject]@{ id = $id; name = $name; value = $value }
     }
@@ -317,7 +339,7 @@ function ConvertTo-ClientProductRow {
             serviceid          = $Product.id
             clientid           = $Product.clientid
             pid                = $Product.pid
-            name               = $Product.name
+            name               = ConvertTo-NodeText $Product.name
             groupname          = $Product.groupname
             domain             = $Product.domain
             regdate            = $Product.regdate

@@ -80,40 +80,88 @@ function Invoke-WhmcsApi {
         'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
-    $resp = Invoke-RestMethod -Method Post -Uri $ApiUrl -Headers $headers -Body $Body -ContentType 'application/x-www-form-urlencoded' -ErrorAction Stop
-
-    if ($resp -is [string]) {
-        $raw = $resp
+    # The WHMCS host's Imunify360 bot-protection intermittently challenges
+    # GitHub-hosted runner IPs ("Access denied by Imunify360 bot-protection").
+    # All WHMCS workflows hit the same endpoint, so the block is transient and
+    # IP-dependent, not workflow-specific. Retry just that signature (and a few
+    # transient HTTP conditions) with exponential backoff; genuine auth/permission
+    # errors do not match and still fail fast.
+    $transientRe = 'Imunify360|bot-protection|too many requests|temporarily unavailable|timed out|The operation has timed out|\b(429|502|503|504)\b'
+    $maxAttempts = 5
+    if ($env:WHMCS_API_MAX_ATTEMPTS -and ([int]::TryParse($env:WHMCS_API_MAX_ATTEMPTS, [ref]([int]$null)))) {
+        $maxAttempts = [int]$env:WHMCS_API_MAX_ATTEMPTS
+    }
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        $transientReason = $null
         try {
-            $resp = $raw | ConvertFrom-Json -ErrorAction Stop
+            $resp = Invoke-RestMethod -Method Post -Uri $ApiUrl -Headers $headers -Body $Body -ContentType 'application/x-www-form-urlencoded' -ErrorAction Stop
+
+            if ($resp -is [string]) {
+                $raw = $resp
+                try {
+                    $resp = $raw | ConvertFrom-Json -ErrorAction Stop
+                }
+                catch {
+                    if ($raw -match $transientRe) {
+                        $transientReason = 'bot-protection challenge (non-JSON response)'
+                    }
+                    else {
+                        $snippet = if ($raw.Length -gt 400) { $raw.Substring(0, 400) + '...' } else { $raw }
+                        throw "WHMCS API returned a non-JSON response: $snippet"
+                    }
+                }
+            }
+
+            if (-not $transientReason) {
+                if (-not $resp) {
+                    throw 'WHMCS API returned an empty response.'
+                }
+
+                if ($resp.result -ne 'success') {
+                    $msg = $null
+                    if ($resp.message) { $msg = $resp.message }
+                    elseif ($resp.errormessage) { $msg = $resp.errormessage }
+                    elseif ($resp.error) { $msg = $resp.error }
+                    if ([string]::IsNullOrWhiteSpace($msg)) {
+                        $diag = $null
+                        try { $diag = ($resp | ConvertTo-Json -Depth 6 -Compress) } catch {}
+                        if (-not [string]::IsNullOrWhiteSpace($diag) -and $diag.Length -gt 800) {
+                            $diag = $diag.Substring(0, 800) + '...'
+                        }
+                        $msg = 'Unknown WHMCS API error.' + $(if ($diag) { " Response: $diag" } else { '' })
+                    }
+                    if ($msg -match $transientRe) {
+                        $transientReason = $msg
+                    }
+                    else {
+                        throw "WHMCS API error: $msg"
+                    }
+                }
+            }
+
+            if (-not $transientReason) {
+                return $resp
+            }
         }
         catch {
-            $snippet = if ($raw.Length -gt 400) { $raw.Substring(0, 400) + '...' } else { $raw }
-            throw "WHMCS API returned a non-JSON response: $snippet"
-        }
-    }
-
-    if (-not $resp) {
-        throw 'WHMCS API returned an empty response.'
-    }
-
-    if ($resp.result -ne 'success') {
-        $msg = $null
-        if ($resp.message) { $msg = $resp.message }
-        elseif ($resp.errormessage) { $msg = $resp.errormessage }
-        elseif ($resp.error) { $msg = $resp.error }
-        if ([string]::IsNullOrWhiteSpace($msg)) {
-            $diag = $null
-            try { $diag = ($resp | ConvertTo-Json -Depth 6 -Compress) } catch {}
-            if (-not [string]::IsNullOrWhiteSpace($diag) -and $diag.Length -gt 800) {
-                $diag = $diag.Substring(0, 800) + '...'
+            $em = "$($_.Exception.Message)"
+            if ($em -match $transientRe) {
+                $transientReason = $em
             }
-            $msg = 'Unknown WHMCS API error.' + (if ($diag) { " Response: $diag" } else { '' })
+            else {
+                throw
+            }
         }
-        throw "WHMCS API error: $msg"
-    }
 
-    return $resp
+        if ($attempt -ge $maxAttempts) {
+            throw "WHMCS API blocked after $maxAttempts attempts (transient: $transientReason). The host's Imunify360 bot-protection is challenging the runner IP; re-run the workflow or whitelist GitHub Actions egress."
+        }
+        $delay = [int][math]::Min(30, [math]::Pow(2, $attempt))
+        Write-Warning "WHMCS API transient block (attempt $attempt/$maxAttempts): $transientReason. Retrying in ${delay}s..."
+        Start-Sleep -Seconds $delay
+    }
 }
 
 function ConvertTo-WhmcsCustomFields {

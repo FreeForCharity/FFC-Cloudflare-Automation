@@ -1,4 +1,4 @@
-name: '24. Domain - Registrar Lock / Unlock [WHMCS]'
+name: '26. Domain - Registrar Lock / Unlock [WHMCS]'
 run-name: 'Domain lock ${{ inputs.action }} ${{ inputs.domain }} (dry_run=${{ inputs.dry_run }})'
 
 # Reads or changes a domain's registrar lock (clientTransferProhibited) in WHMCS,

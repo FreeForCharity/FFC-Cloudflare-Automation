@@ -213,10 +213,10 @@ function Test-WhmcsClientHasProduct {
 
     $dead = @('Cancelled', 'Terminated', 'Fraud')
     foreach ($p in $products) {
-        $pid = $null; $status = $null
-        try { $pid = [string]$p.pid } catch {}
+        $prodId = $null; $status = $null
+        try { $prodId = [string]$p.pid } catch {}
         try { $status = [string]$p.status } catch {}
-        if ($pid -eq [string]$ProductId -and ($dead -notcontains $status)) {
+        if ($prodId -eq [string]$ProductId -and ($dead -notcontains $status)) {
             return $true
         }
     }

@@ -193,12 +193,24 @@ function Get-WhmcsProductsFromResponse {
 }
 
 function ConvertTo-NodeText {
-    # Returns the inner text of an XML node. Avoids '[string]$node' yielding the
-    # type name 'System.Xml.XmlElement' when a name/value node carries child
-    # markup (e.g. product/field names with nested elements). See issue #440.
-    param($Value)
+    # Returns the inner text of an XML node, or the joined text of several nodes.
+    # Avoids '[string]$node' yielding a type name ('System.Xml.XmlElement', or
+    # 'System.Object[]' when XML property access matches multiple elements) for
+    # name/value nodes that carry child markup. See issue #440.
+    [OutputType([string])]
+    param([AllowNull()][object]$Value)
+
     if ($null -eq $Value) { return $null }
+    if ($Value -is [string]) { return $Value }
     if ($Value -is [System.Xml.XmlNode]) { return $Value.InnerText }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $parts = foreach ($item in $Value) {
+            if ($null -eq $item) { continue }
+            elseif ($item -is [System.Xml.XmlNode]) { $item.InnerText }
+            else { [string]$item }
+        }
+        return ($parts -join ' ')
+    }
     return [string]$Value
 }
 

@@ -98,7 +98,12 @@ jobs:
         run: |
           npm ci
           npm run build
-          test -f out/index.html && echo "out/index.html present" || (echo "missing out/index.html" && exit 1)
+          if [ -f out/index.html ]; then
+            echo "out/index.html present"
+          else
+            echo "missing out/index.html"
+            exit 1
+          fi
 
       - name: Commit and open PR on the FFC-EX repo
         working-directory: ffc-ex

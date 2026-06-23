@@ -46,6 +46,8 @@ permissions:
 jobs:
   clone-deploy:
     runs-on: ubuntu-latest
+    # CBM_TOKEN (cross-repo PAT) lives in the github-prod environment.
+    environment: github-prod
     steps:
       - name: Check out automation repo (clone + integration scripts)
         uses: actions/checkout@v5

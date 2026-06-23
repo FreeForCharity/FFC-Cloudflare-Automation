@@ -104,6 +104,23 @@ writeFileSync(
 // 5) Ensure CNAME (apex) is present for GitHub Pages.
 writeFileSync(cnamePath, (keptCname || domain) + '\n');
 
+// 6) The cloned WordPress assets in public/ are not source and must not be run
+//    through the repo's Prettier/ESLint (minified CSS/JS would fail). Make sure
+//    the repo's ignore files exclude public/ so its CI (and pre-commit hooks)
+//    skip the clone.
+for (const ignoreName of ['.prettierignore', '.eslintignore']) {
+  const ignorePath = join(repo, ignoreName);
+  const existing = existsSync(ignorePath) ? readFileSync(ignorePath, 'utf8') : '';
+  const lines = existing.split(/\r?\n/);
+  if (!lines.includes('public/')) {
+    const sep = existing && !existing.endsWith('\n') ? '\n' : '';
+    writeFileSync(
+      ignorePath,
+      existing + sep + '# Static WordPress clone assets (not source)\npublic/\n',
+    );
+  }
+}
+
 const report = {
   domain,
   publicFiles: countFiles(publicDir),

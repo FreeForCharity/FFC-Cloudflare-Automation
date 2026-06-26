@@ -145,7 +145,6 @@ This is what makes the workflow **headless**:
 You must configure the Entra application referenced by `FFC_AZURE_CLIENT_ID`:
 
 - **Federated credential** (for GitHub OIDC)
-
   - Issuer: `https://token.actions.githubusercontent.com`
   - Audience: `api://AzureADTokenExchange`
   - Subject (recommended pattern when workflows use `environment: m365-prod`):
@@ -154,12 +153,10 @@ You must configure the Entra application referenced by `FFC_AZURE_CLIENT_ID`:
     changes.
 
 - **Azure subscription access**
-
   - Not required for the current M365 workflows because they set `allow-no-subscriptions: true`.
   - Only required if you add steps that manage Azure resources.
 
 - **Microsoft Graph permissions**
-
   - For the domain listing/status workflows, grant (and admin-consent) one of:
     - Application permission `Domain.Read.All` (recommended), or
     - Application permission `Directory.Read.All`
@@ -172,13 +169,11 @@ You must configure the Entra application referenced by `FFC_AZURE_CLIENT_ID`:
 ## Troubleshooting quick hits
 
 - `azure/login` fails:
-
   - Confirm the job has `permissions: id-token: write`.
   - Confirm `FFC_AZURE_CLIENT_ID` / `FFC_AZURE_TENANT_ID` are set on the `m365-prod` environment.
   - Confirm the Entra app federated credential subject matches the repo/environment.
 
 - Graph calls return `403 Forbidden`:
-
   - Confirm the Entra app has Graph **application** permissions and **admin consent**.
 
 - DKIM steps fail:

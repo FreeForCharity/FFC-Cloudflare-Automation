@@ -19,7 +19,7 @@ import common  # noqa: E402
 # Maps file extension -> the local command that mirrors the CI gate
 # (.github/workflows/ci.yml). Prettier is pinned + --ignore-unknown like CI; the
 # PowerShell helpers run under pwsh and operate on *.ps1.
-_PRETTIER = "Prettier (npx --yes prettier@3.3.3 --write <file> --ignore-unknown)"
+_PRETTIER = "Prettier (npx --yes prettier@3.8.1 --write <file> --ignore-unknown)"
 _PS1 = ("PSScriptAnalyzer + Invoke-Formatter "
         "(pwsh scripts/format-powershell.ps1; pwsh scripts/analyze-powershell.ps1)")
 QUALITY_HINTS = {

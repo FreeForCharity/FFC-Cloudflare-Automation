@@ -110,7 +110,7 @@ Cloudflare Registrar (project #157). See
 - Export hosted sites inventory from WPMUDEV Hub API for domain reconciliation. See
   [docs/wpmudev-domain-inventory.md](../../docs/wpmudev-domain-inventory.md) for details.
 
-### 89–94 Repo workflows
+### 89–98 Repo workflows
 
 - **89. Repo - Create GitHub Repo [Repo]**: repo bootstrap helper.
 - **90. Repo - Deploy GitHub Pages [Repo]**: deploys the site from `main`.
@@ -257,9 +257,9 @@ Provisions a charity website end-to-end after a website request issue is assigne
   - **Admin-minimal mode**: if the issue also carries the `admin-provision` label (use the **07.
     [ADMIN ONLY] Provision Website (Minimal)** issue template), validation mirrors manual dispatch —
     only the domain is required and all charity/footer/leadership/social fields are optional. Footer
-    content patching is skipped; the repo (from the FFC template) is still created and apex GitHub Pages
-    DNS is still enforced when the zone is controlled in Cloudflare. Use this right after registering
-    a domain when you only need the repo + apex DNS.
+    content patching is skipped; the repo (from the FFC template) is still created and apex GitHub
+    Pages DNS is still enforced when the zone is controlled in Cloudflare. Use this right after
+    registering a domain when you only need the repo + apex DNS.
 - Trigger: `workflow_dispatch` (manual)
   - This supports “best-effort” provisioning when only a domain is known.
 
@@ -293,7 +293,6 @@ Provisions a charity website end-to-end after a website request issue is assigne
 - Adds the issue requester and Technical POC GitHub username as repo maintainers.
 
 6. **Content application** in `github-prod`:
-
    - Clones the new repo.
    - Writes `ffc-content.json` (audit/traceability record).
    - Runs `scripts/Apply-WebsiteReactTemplate.ps1` (best-effort) to patch the React template when
@@ -439,12 +438,10 @@ This repository uses an **issue-based workflow** for domain management:
 No additional setup is required for these workflows to run. However, to get the most value:
 
 1. **Enable CodeQL scanning in repository settings:**
-
    - Go to Settings > Security > Code scanning
    - CodeQL results will appear in the Security tab
 
 2. **Review workflow results:**
-
    - Check the Actions tab for workflow runs
    - Address any failures before merging PRs
 

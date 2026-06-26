@@ -83,7 +83,7 @@ jobs:
 
       - name: Check formatting (Prettier)
         run: |
-          npx --yes prettier@3.3.3 --check . --ignore-unknown
+          npx --yes prettier@3.8.1 --check . --ignore-unknown
 
       - name: Validate PowerShell scripts
         shell: pwsh

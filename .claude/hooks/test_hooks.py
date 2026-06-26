@@ -70,6 +70,15 @@ def main():
     check("normal gh run", "guard_bash.py", bash("gh workflow run 8-whmcs-export-products.yml --ref main"), False)
     check("rm -rf build dir", "guard_bash.py", bash("rm -rf ./node_modules"), False)
     check("curl normal", "guard_bash.py", bash("curl -sS https://api.cloudflare.com/x"), False)
+    # Regressions from PR #448 review:
+    check("rm -rf root", "guard_bash.py", bash("rm -rf /"), True)
+    check("rm -rf bare star", "guard_bash.py", bash("rm -rf *"), True)
+    check("rm -rf abs path allowed", "guard_bash.py", bash("rm -rf /tmp/foo"), False)
+    check("rm -rf .git slash", "guard_bash.py", bash("rm -rf .git/"), True)
+    check("force-push feature/main allowed", "guard_bash.py",
+          bash("git push --force origin feature/main"), False)
+    check("echo lowercase secret var", "guard_bash.py",
+          bash("echo $cloudflare_api_token"), True)
 
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)

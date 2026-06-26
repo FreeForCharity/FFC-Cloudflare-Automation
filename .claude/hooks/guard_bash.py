@@ -57,16 +57,20 @@ def main():
         if re.search(pat, low):
             block(f"Refusing to disable TLS/proxy security: {desc}.")
 
-    # 2. Force-push to a protected branch.
+    # 2. Force-push to a protected branch. Match 'main'/'master' only as a
+    #    standalone branch token, so e.g. 'feature/main' is NOT caught.
     if re.search(r"\bgit\s+push\b", low) and re.search(r"(--force\b|--force-with-lease|\s-f\b)", low):
-        if re.search(r"\b(main|master)\b", low):
+        if re.search(r"(?<![\w./-])(main|master)(?![\w/-])", low):
             block("Force-push to a protected branch (main/master) is not allowed.")
 
-    # 3. Printing secrets to logs.
+    # 3. Printing secrets to logs. Case-insensitive so a lowercase env var
+    #    (e.g. $cloudflare_api_token) can't slip past.
     secret_var = r"[A-Za-z_][A-Za-z0-9_]*(?:_TOKEN|_SECRET|_KEY|_PASSWORD|_APIKEY|_API_KEY)\b"
     known_vars = r"(CLOUDFLARE_API_TOKEN|GH_TOKEN|GITHUB_TOKEN|WHMCS_[A-Z_]+)"
     if re.search(r"\b(echo|printf|printenv|env)\b", low):
-        if re.search(secret_var, cmd) or re.search(known_vars, cmd) or "${{ secrets." in cmd:
+        if (re.search(secret_var, cmd, re.IGNORECASE)
+                or re.search(known_vars, cmd, re.IGNORECASE)
+                or "${{ secrets." in cmd):
             block("Refusing to echo/print a secret value to logs.")
 
     # 4. A real-looking secret literal pasted into the command.
@@ -75,9 +79,20 @@ def main():
         block("Command appears to contain a secret literal: " + ", ".join(findings)
               + ". Reference it via an env var / GitHub secret instead.")
 
-    # 5. Irreversible destructive removals.
-    if re.search(r"\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b", low):
-        if re.search(r"\s(/|~|\$home|\.\s*$|\*\s*$|\.git(\b|/)|--no-preserve-root)", low):
+    # 5. Irreversible destructive removals. Only block when an rm -rf targets a
+    #    root/home/.git path or a bare wildcard -- NOT ordinary paths like /tmp/x.
+    if re.search(r"\brm\b", low) and re.search(r"-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r", low):
+        dangerous = "--no-preserve-root" in low
+        roots = {"", "/*", "~", "~/", "~/*", "$home", "$home/", "$home/*", "*"}
+        for tok in cmd.split():
+            if tok.startswith("-"):
+                continue
+            t = tok.lower()
+            stripped = t.rstrip("/")  # "/" and "//" -> "" (root)
+            if stripped == "" or t in roots or stripped == ".git" or stripped.endswith("/.git"):
+                dangerous = True
+                break
+        if dangerous:
             block("Refusing a destructive 'rm -rf' targeting a root/home/.git path.")
 
     sys.exit(0)

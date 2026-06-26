@@ -2,7 +2,7 @@
 
 A `pre-commit` hook that scans staged changes for secrets and sensitive files **for every
 contributor** — not just Claude Code sessions. It reuses the exact detection logic in
-[`../.claude/hooks/common.py`](../.claude/hooks/README.md), so Git and Claude Code enforce identical
+[`../.claude/hooks/common.py`](../.claude/hooks/common.py), so Git and Claude Code enforce identical
 rules.
 
 ## Enable (opt-in, once per clone)

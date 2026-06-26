@@ -15,7 +15,7 @@ reviews — those are within the App installation's granted permissions.)
 
 When running as **Claude Code on the web**, do not waste time trying to `gh auth login` (web/device
 flow) to get "full org" access — it cannot work in this sandbox, and here is the proof so a future
-session doesn't re-discover it the hard way:
+session doesn't rediscover it the hard way:
 
 - All outbound HTTPS goes through the agent egress proxy. The proxy **intercepts `api.github.com`
   and injects its own auth**, ignoring whatever token `gh`/`curl` sends. A request to
@@ -53,6 +53,13 @@ assignee** via MCP so the `assigned` event fires:
   - `### Website Domain (no http://)` → `<domain>`
   - `### Technical POC GitHub Username` → the maintainer's GitHub login (omit/blank to skip)
 - Assignee: any user (e.g. `clarkemoyer`) — assignment is what triggers the run.
+
+> **Gotcha — keep all prose ABOVE the `###` sections.** `extractSection` captures everything from a
+> heading to the next `###` _or end of body_, so any explanatory text placed **after** the last
+> section (e.g. a `---` note after `### Technical POC GitHub Username`) is slurped into that field's
+> value. A maintainer login then fails validation and is silently skipped
+> (`Skipping invalid GitHub username for maintainer`), and the repo is created without the
+> maintainer. Put any narrative at the top of the body, before `### Website Domain`.
 
 Then watch the run via MCP (`actions_list` / `get_job_logs`). **If the zone is controlled in FFC
 Cloudflare**, the `dns` (`cloudflare-prod-write`) and `repo` (`github-prod`) jobs sit at

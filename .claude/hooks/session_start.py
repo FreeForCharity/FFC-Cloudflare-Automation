@@ -17,7 +17,9 @@ Security hooks in .claude/hooks/ enforce .github/agents/AI_AGENT_INSTRUCTIONS.md
   * Bash that disables TLS/proxy, force-pushes main, or echoes secrets is blocked.
 Quality (mirrors .github/workflows/ci.yml): Prettier for web files; PSScriptAnalyzer
 + Invoke-Formatter for *.ps1; actionlint for workflows. Run these before pushing.
-Secrets live only in the whmcs-prod / cloudflare-prod GitHub environments.
+Secrets live only in the per-service GitHub Environments (cloudflare-prod-read,
+cloudflare-prod-write, whmcs-prod, m365-prod, github-prod, wpmudev-prod) -- never
+in the repo. Reference them as ${{ secrets.* }}, never as literals.
 """
 
 

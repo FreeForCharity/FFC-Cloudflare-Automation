@@ -16,17 +16,23 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common  # noqa: E402
 
-# Maps file extension -> the local command that mirrors the CI gate.
+# Maps file extension -> the local command that mirrors the CI gate
+# (.github/workflows/ci.yml). Prettier is pinned + --ignore-unknown like CI; the
+# PowerShell helpers run under pwsh and operate on *.ps1.
+_PRETTIER = "Prettier (npx --yes prettier@3.3.3 --write <file> --ignore-unknown)"
+_PS1 = ("PSScriptAnalyzer + Invoke-Formatter "
+        "(pwsh scripts/format-powershell.ps1; pwsh scripts/analyze-powershell.ps1)")
 QUALITY_HINTS = {
-    ".ps1": "PSScriptAnalyzer + Invoke-Formatter (pwsh scripts/format-powershell.ps1; scripts/analyze-powershell.ps1)",
-    ".psm1": "PSScriptAnalyzer + Invoke-Formatter (scripts/analyze-powershell.ps1)",
-    ".js": "Prettier (npx prettier@3.3.3 --write <file>)",
-    ".mjs": "Prettier (npx prettier@3.3.3 --write <file>)",
-    ".cjs": "Prettier (npx prettier@3.3.3 --write <file>)",
-    ".json": "Prettier (npx prettier@3.3.3 --write <file>)",
-    ".md": "Prettier (npx prettier@3.3.3 --write <file>)",
-    ".css": "Prettier (npx prettier@3.3.3 --write <file>)",
-    ".html": "Prettier (npx prettier@3.3.3 --write <file>)",
+    ".ps1": _PS1,
+    # The repo's helper scripts only target *.ps1, so scan a module directly.
+    ".psm1": "PSScriptAnalyzer (pwsh -c 'Invoke-ScriptAnalyzer -Path <file>')",
+    ".js": _PRETTIER,
+    ".mjs": _PRETTIER,
+    ".cjs": _PRETTIER,
+    ".json": _PRETTIER,
+    ".md": _PRETTIER,
+    ".css": _PRETTIER,
+    ".html": _PRETTIER,
 }
 
 

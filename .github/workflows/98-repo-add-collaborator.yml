@@ -1,0 +1,168 @@
+name: '98. Repo - Add Collaborator [Repo]'
+
+# Reusable workflow that adds (or updates) a GitHub user as a collaborator on a
+# repository with a chosen permission level.
+#
+# Two ways to use it:
+#   1. Manually via the Actions tab (workflow_dispatch).
+#   2. From another workflow via `uses:` (workflow_call) -- e.g. the website
+#      provisioning workflow can call this instead of inlining the gh api PUT.
+#
+# The privileged step runs with secrets.CBM_TOKEN (environment: github-prod), so
+# callers do not need `actions: write` themselves -- they only need to be able to
+# create/assign issues or dispatch this workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description:
+          'Target repo: "owner/repo" or just "<name>" (defaults to the FreeForCharity org).'
+        required: true
+        type: string
+      username:
+        description: 'GitHub username to add as a collaborator.'
+        required: true
+        type: string
+      permission:
+        description: 'Permission level to grant.'
+        required: true
+        default: maintain
+        type: choice
+        options:
+          - pull
+          - triage
+          - push
+          - maintain
+          - admin
+      dry_run:
+        description: 'Dry run (preview only; no changes).'
+        required: false
+        default: false
+        type: boolean
+
+  workflow_call:
+    inputs:
+      repo:
+        description:
+          'Target repo: "owner/repo" or just "<name>" (defaults to the FreeForCharity org).'
+        required: true
+        type: string
+      username:
+        description: 'GitHub username to add as a collaborator.'
+        required: true
+        type: string
+      permission:
+        description: 'Permission level to grant (pull|triage|push|maintain|admin).'
+        required: false
+        default: maintain
+        type: string
+      dry_run:
+        description: 'Dry run (preview only; no changes).'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  add-collaborator:
+    runs-on: ubuntu-latest
+    environment: github-prod
+    steps:
+      - name: Add collaborator
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+          ORG_DEFAULT: FreeForCharity
+          IN_REPO: ${{ inputs.repo }}
+          IN_USER: ${{ inputs.username }}
+          IN_PERM: ${{ inputs.permission }}
+          IN_DRY: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::CBM_TOKEN secret is not set (environment: github-prod)."
+            exit 1
+          fi
+
+          # Normalize the repo to owner/repo (accept a bare name or a full URL).
+          repo="$IN_REPO"
+          repo="${repo#https://github.com/}"
+          repo="${repo%.git}"
+          repo="${repo%/}"
+          if [[ "$repo" != */* ]]; then
+            repo="$ORG_DEFAULT/$repo"
+          fi
+
+          user="${IN_USER#@}"
+          perm="${IN_PERM:-maintain}"
+
+          # Validate the username against GitHub's login format (alphanumeric with
+          # non-consecutive, non-trailing hyphens, max 39 chars).
+          if ! printf '%s' "$user" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9]|-[A-Za-z0-9]){0,38}$'; then
+            echo "::error::Invalid GitHub username: '$user'."
+            exit 1
+          fi
+
+          case "$perm" in
+            pull | triage | push | maintain | admin) ;;
+            *)
+              echo "::error::Invalid permission '$perm' (expected pull|triage|push|maintain|admin)."
+              exit 1
+              ;;
+          esac
+
+          echo "Repo:        $repo"
+          echo "Username:    $user"
+          echo "Permission:  $perm"
+
+          # Pre-flight: the user and the repo must exist.
+          if ! gh api "users/$user" >/dev/null 2>&1; then
+            echo "::error::GitHub user '$user' was not found."
+            exit 1
+          fi
+          if ! gh api "repos/$repo" >/dev/null 2>&1; then
+            echo "::error::Repository '$repo' was not found (or the token lacks access)."
+            exit 1
+          fi
+
+          if [ "$(printf '%s' "${IN_DRY:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+            echo "[DRY RUN] Would PUT repos/$repo/collaborators/$user permission=$perm"
+            {
+              echo "### Add collaborator (dry run)"
+              echo ""
+              echo "- Repo: \`$repo\`"
+              echo "- User: \`$user\`"
+              echo "- Permission: \`$perm\`"
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Add or update the collaborator. For an org member this applies
+          # immediately (HTTP 204); for an outside collaborator it creates an
+          # invitation (HTTP 201) the user must accept.
+          gh api -X PUT "repos/$repo/collaborators/$user" -f permission="$perm" >/dev/null
+
+          # Confirm the resulting role. role_name carries the granular role
+          # (e.g. maintain); it stays "none"/empty for a pending outside invite.
+          role="$(gh api "repos/$repo/collaborators/$user/permission" --jq '.role_name // .permission' 2>/dev/null || echo '')"
+
+          if [ -z "$role" ] || [ "$role" = "none" ]; then
+            echo "Invitation sent to $user for $repo ($perm). Pending acceptance."
+            effective="invited ($perm, pending acceptance)"
+          else
+            echo "Effective role for $user on $repo: $role"
+            effective="$role"
+          fi
+
+          {
+            echo "### Add collaborator"
+            echo ""
+            echo "- Repo: \`$repo\`"
+            echo "- User: \`$user\`"
+            echo "- Requested permission: \`$perm\`"
+            echo "- Effective: \`$effective\`"
+          } >>"$GITHUB_STEP_SUMMARY"

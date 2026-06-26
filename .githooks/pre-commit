@@ -1,0 +1,18 @@
+#!/bin/sh
+# FFC shared pre-commit hook: scan staged changes for secrets / sensitive files.
+#
+# Enable once per clone:
+#   git config core.hooksPath .githooks        (or run scripts/install-git-hooks.sh)
+# Bypass a confirmed false positive:
+#   git commit --no-verify
+
+if command -v python3 >/dev/null 2>&1; then
+  PY=python3
+elif command -v python >/dev/null 2>&1; then
+  PY=python
+else
+  echo "pre-commit: python not found; skipping secret scan" >&2
+  exit 0
+fi
+
+exec "$PY" "$(git rev-parse --show-toplevel)/.githooks/scan_staged.py"

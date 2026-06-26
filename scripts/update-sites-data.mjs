@@ -487,10 +487,34 @@ async function main() {
     }
   });
 
-  // Order by Work Tier (most actionable first), then most-recent activity, then
-  // keep .org/.com pairs together by lead domain.
+  // Order rows for the published list:
+  //   1. Primary group (FFC request): stable + live GitHub Pages sites float to
+  //      the top; domains that have left FFC, or that we can't identify, sink to
+  //      the very bottom.
+  //   2. Within a group: Work Tier (most actionable first), then most-recent
+  //      activity, then keep .org/.com pairs together by lead domain.
   const tierNum = (d) => parseInt(d['Work Tier'], 10) || 9;
+  const onGitHubPages = (d) =>
+    /github pages/i.test(d['Host Category'] || '') ||
+    /github pages/i.test(d['Server In Use'] || '');
+  // Lower rank sorts higher in the list.
+  const groupRank = (d) => {
+    const health = d['Site Health'] || '';
+    if (onGitHubPages(d) && health === 'Live') return 0; // stable + live on GitHub -> top
+    if (d['Left FFC'] === 'Yes') return 3; // left FFC -> very bottom
+    const status = (d['Status'] || '').toLowerCase();
+    const unidentified =
+      health === 'Unknown' ||
+      health === 'Unreachable' ||
+      /unresolved|parked/i.test(d['Host Category'] || '') ||
+      (status === 'unknown' && health !== 'Live' && health !== 'Redirect');
+    if (unidentified) return 2; // can't identify / don't know about -> bottom
+    return 1; // everything else -> middle
+  };
   mergedData.sort((a, b) => {
+    const gA = groupRank(a);
+    const gB = groupRank(b);
+    if (gA !== gB) return gA - gB;
     const tA = tierNum(a);
     const tB = tierNum(b);
     if (tA !== tB) return tA - tB;

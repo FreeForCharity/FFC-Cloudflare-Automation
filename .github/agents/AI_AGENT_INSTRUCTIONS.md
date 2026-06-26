@@ -5,6 +5,11 @@
 **This document provides mandatory instructions for ALL AI agents (GitHub Copilot, ChatGPT, Claude,
 etc.) working on this repository.**
 
+> **Enforced for Claude Code:** The rules below are not just guidance for Claude Code sessions —
+> they are enforced automatically by hooks in [`.claude/hooks/`](../../.claude/hooks/README.md),
+> which block edits/commands that would write sensitive files, expose a secret, force-push `main`,
+> or disable TLS. Other agents (Copilot, ChatGPT) rely on these instructions plus CI.
+
 ---
 
 ## 🔒 Secret Management - MANDATORY RULES

@@ -103,6 +103,7 @@ jobs:
       current_website_url: ${{ steps.parse.outputs.current_website_url }}
       requester_github_username: ${{ steps.parse.outputs.requester_github_username }}
       technical_poc_github_username: ${{ steps.parse.outputs.technical_poc_github_username }}
+      maintainers_csv: ${{ steps.parse.outputs.maintainers_csv }}
       domain: ${{ steps.parse.outputs.domain }}
       charity_name: ${{ steps.parse.outputs.charity_name }}
       footer_email: ${{ steps.parse.outputs.footer_email }}
@@ -705,6 +706,17 @@ jobs:
             const templateRepo = process.env.WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC_Single_Page_Template';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
+            // Maintainers to add: requester + technical POC, deduped and validated
+            // against GitHub's login format. Emitted as a space-separated list for
+            // the reusable "98. Repo - Add Collaborator" workflow, which re-validates
+            // and adds each one best-effort.
+            const loginRe = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+            const maintainersCsv = [...new Set(
+              [requesterGitHubUsername, technicalPocGitHubUsername]
+                .map(s => String(s || '').trim().replace(/^@/, ''))
+                .filter(s => loginRe.test(s))
+            )].join(' ');
+
             core.setOutput('skip', 'false');
             core.setOutput('issue_number', isManual ? '' : String(issue.number));
             core.setOutput('post_comments', isManual ? 'false' : 'true');
@@ -713,6 +725,7 @@ jobs:
             core.setOutput('current_website_url', currentWebsiteUrl);
             core.setOutput('requester_github_username', requesterGitHubUsername);
             core.setOutput('technical_poc_github_username', technicalPocGitHubUsername);
+            core.setOutput('maintainers_csv', maintainersCsv);
             core.setOutput('domain', domain);
             core.setOutput('charity_name', charityName);
             core.setOutput('footer_email', footerEmail);
@@ -974,42 +987,21 @@ jobs:
             ./scripts/Create-GitHubRepo.ps1 @createParams
           }
 
-      - name: Add maintainers (requester + technical POC)
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $repoFull = "${{ needs.resolve.outputs.repo_full }}"
-          $requester = "${{ needs.resolve.outputs.requester_github_username }}".Trim()
-          $technicalPoc = "${{ needs.resolve.outputs.technical_poc_github_username }}".Trim().TrimStart('@')
-
-          $users = @($requester, $technicalPoc)
-          $users = $users | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-
-          # Defense in depth: only attempt usernames that match GitHub's login
-          # format (alphanumeric with non-consecutive, non-trailing hyphens,
-          # max 39 chars). Anything else (stray sentinels, typos) is skipped
-          # with a warning rather than 404'ing and failing the whole run.
-          $loginPattern = '^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$'
-
-          foreach ($u in $users) {
-            if ($u -notmatch $loginPattern) {
-              Write-Warning "Skipping invalid GitHub username for maintainer: '$u'"
-              continue
-            }
-            Write-Host "Adding maintainer: $u" -ForegroundColor Cyan
-            try {
-              gh api -X PUT "repos/$repoFull/collaborators/$u" -f permission=maintain 1>$null
-              if ($LASTEXITCODE -ne 0) { throw "gh exited with code $LASTEXITCODE" }
-            } catch {
-              # Adding a maintainer is a best-effort convenience step; a single
-              # bad/non-existent login must not fail provisioning when DNS and
-              # the repo are already in place.
-              Write-Warning "Could not add maintainer '$u': $($_.Exception.Message)"
-            }
-          }
+  # Add the requester + technical POC as repo maintainers via the reusable
+  # "98. Repo - Add Collaborator" workflow. soft_fail keeps this best-effort:
+  # a bad/owner/non-existent login warns instead of failing provisioning.
+  maintainers:
+    needs: [resolve, repo]
+    if: >-
+      needs.resolve.outputs.skip != 'true' && needs.repo.result == 'success' &&
+      needs.resolve.outputs.maintainers_csv != ''
+    uses: ./.github/workflows/98-repo-add-collaborator.yml
+    with:
+      repo: ${{ needs.resolve.outputs.repo_full }}
+      username: ${{ needs.resolve.outputs.maintainers_csv }}
+      permission: maintain
+      soft_fail: true
+    secrets: inherit
 
   content:
     runs-on: windows-latest
@@ -1064,6 +1056,12 @@ jobs:
 
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
+
+          # `gh repo clone` configures a plain https remote with no push
+          # credentials, so a later `git push` prompts for a username and fails in
+          # CI ("could not read Username for https://github.com"). Wire git to use
+          # gh's token (GH_TOKEN) as the credential helper for github.com.
+          gh auth setup-git --hostname github.com
 
           $content = [ordered]@{
             domain = $domain
@@ -1157,11 +1155,12 @@ jobs:
 
   finalize:
     runs-on: ubuntu-latest
-    needs: [resolve, zone_check, dns, repo, content]
+    needs: [resolve, zone_check, dns, repo, maintainers, content]
     if: >-
       always() && needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.post_comments ==
       'true' && (needs.dns.result == 'success' || needs.dns.result == 'skipped') &&
-      needs.repo.result == 'success' && needs.content.result == 'success'
+      needs.repo.result == 'success' && (needs.maintainers.result == 'success' ||
+      needs.maintainers.result == 'skipped') && needs.content.result == 'success'
     steps:
       - name: Comment completion
         uses: actions/github-script@v8

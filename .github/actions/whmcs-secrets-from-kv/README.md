@@ -138,9 +138,10 @@ gh variable set WR_ALL_FFC_AZURE_TENANT_ID \
 ```
 
 Until the last two boxes are checked, the migrated workflows fail fast: the action throws a clear
-error if KV still returns the `PLACEHOLDER-SET-VIA-AZURE-PORTAL` scaffold value, and input validation
-fails if the repository Variables are missing. The legacy `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` secret
-can stay in `whmcs-prod` during cutover (nothing reads it anymore).
+error if KV still returns the `PLACEHOLDER-SET-VIA-AZURE-PORTAL` scaffold value, and input
+validation fails if the repository Variables are missing. The legacy
+`ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` secret can stay in `whmcs-prod` during cutover (nothing reads it
+anymore).
 
 ## Rotation flow
 

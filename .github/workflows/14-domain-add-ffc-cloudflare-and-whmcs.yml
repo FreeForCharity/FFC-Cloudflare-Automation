@@ -56,6 +56,9 @@ jobs:
   whmcs_preflight:
     runs-on: windows-latest
     environment: whmcs-prod
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       domain: ${{ steps.meta.outputs.domain }}
       found: ${{ steps.check.outputs.found }}
@@ -64,6 +67,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+
       - name: Metadata
         id: meta
         shell: pwsh
@@ -71,24 +80,11 @@ jobs:
           $d = "${{ inputs.domain }}".Trim().ToLowerInvariant().Trim('.')
           "domain=$d" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Validate required WHMCS secrets
-        shell: pwsh
-        env:
-          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
-            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
-          }
-
       - name: Check domain exists in WHMCS (smoke test)
         id: check
         shell: pwsh
         env:
           WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
-          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
-          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
-          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = "${{ steps.meta.outputs.domain }}"
@@ -301,28 +297,23 @@ jobs:
     environment: whmcs-prod
     needs: [whmcs_preflight, cloudflare_zone_create, cloudflare_enforce_standard]
     if: ${{ inputs.update_whmcs_nameservers }}
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - uses: actions/checkout@v5
 
-      - name: Validate required WHMCS secrets
-        shell: pwsh
-        env:
-          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_SECRET)) {
-            throw "Missing secret in environment 'whmcs-prod': ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU"
-          }
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Update WHMCS nameservers to FFC custom nameservers
         shell: pwsh
         env:
           WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
-          WHMCS_API_IDENTIFIER: 'zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu'
-          WHMCS_API_SECRET: ${{ secrets.ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU }}
-          WHMCS_API_ACCESS_KEY: ${{ secrets.WHMCS_API_ACCESS_KEY }}
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = "${{ needs.cloudflare_zone_create.outputs.domain }}"

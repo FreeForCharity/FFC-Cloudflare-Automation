@@ -182,19 +182,30 @@ jobs:
               continue
             fi
 
-            # PUT adds an org member immediately (204) or invites an outside
-            # collaborator (201, pending acceptance).
-            if gh api -X PUT "repos/$repo/collaborators/$u" -f permission="$perm" >/dev/null 2>&1; then
-              role="$(gh api "repos/$repo/collaborators/$u/permission" --jq '.role_name // .permission' 2>/dev/null || echo '')"
-              if [ -z "$role" ] || [ "$role" = "none" ]; then
-                echo "Invited $u to $repo ($perm); pending acceptance."
-                added+=("$u (invited, pending)")
+            # PUT either updates an existing member/collaborator in place (HTTP
+            # 204, empty body) or, for an outside collaborator, creates an
+            # invitation (HTTP 201, body is the invitation object with an `id`).
+            # Capturing the body lets us distinguish the two: the /permission
+            # endpoint reports the interim `read` for a pending invite, so relying
+            # on it alone mislabels an invitation as a granted role.
+            # Capture stderr so a failed PUT surfaces the underlying GitHub API
+            # error instead of just a generic "Could not add" message.
+            put_err="$(mktemp)"
+            if resp="$(gh api -X PUT "repos/$repo/collaborators/$u" -f permission="$perm" 2>"$put_err")"; then
+              rm -f "$put_err"
+              invite_id="$(printf '%s' "$resp" | jq -r '.id // empty' 2>/dev/null || echo '')"
+              if [ -n "$invite_id" ]; then
+                echo "Invited $u to $repo as $perm (invitation #$invite_id); pending acceptance."
+                added+=("$u (invited as $perm, pending)")
               else
+                role="$(gh api "repos/$repo/collaborators/$u/permission" --jq '.role_name // .permission' 2>/dev/null || echo "$perm")"
                 echo "Added $u to $repo as $role."
                 added+=("$u ($role)")
               fi
             else
-              problem "Could not add '$u' to $repo."
+              api_err="$(tr '\n' ' ' <"$put_err" 2>/dev/null)"
+              rm -f "$put_err"
+              problem "Could not add '$u' to $repo: ${api_err:-unknown error}"
               failed+=("$u")
             fi
           done

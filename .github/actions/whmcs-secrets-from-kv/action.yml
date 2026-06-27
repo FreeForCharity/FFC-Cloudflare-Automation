@@ -108,8 +108,10 @@ runs:
           throw "az keyvault secret show for '$secretName' failed (exit $LASTEXITCODE). Check the identity's role on vault '$vaultName' and that the secret exists."
         }
 
-        $identifier = ([string]$idRaw).Trim().Trim('"')
-        $secret = ([string]$secRaw).Trim().Trim('"')
+        # az ... -o tsv returns the raw, unquoted value; trim only surrounding whitespace
+        # (the trailing newline) so a credential that legitimately contains a quote is preserved.
+        $identifier = ([string]$idRaw).Trim()
+        $secret = ([string]$secRaw).Trim()
 
         if ([string]::IsNullOrWhiteSpace($identifier)) {
           throw "Key Vault secret '$identifierName' returned empty from vault '$vaultName'."
@@ -136,7 +138,7 @@ runs:
           if ($LASTEXITCODE -ne 0) {
             throw "az keyvault secret show for '$accessKeyName' failed (exit $LASTEXITCODE). Set access-key-secret-name to '' if the WHMCS API does not use an access key, or grant access and create the secret."
           }
-          $accessKey = ([string]$akRaw).Trim().Trim('"')
+          $accessKey = ([string]$akRaw).Trim()
           if ([string]::IsNullOrWhiteSpace($accessKey)) {
             throw "Key Vault secret '$accessKeyName' returned empty from vault '$vaultName'. Set access-key-secret-name to '' if the WHMCS API does not use an access key."
           }

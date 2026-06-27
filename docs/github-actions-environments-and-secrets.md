@@ -89,8 +89,12 @@ Repository **Variables** (required for OIDC → Key Vault — these are **identi
 so they live at repository level, not as environment secrets; this keeps `whmcs-prod` free of Azure
 creds):
 
-- `vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID` (OIDC client id of the `ffc-admin-kv-writer` identity)
-- `vars.WR_ALL_FFC_AZURE_TENANT_ID` (Azure tenant id)
+- `WR_ALL_FFC_AZURE_KV_CLIENT_ID` (OIDC client id of the `ffc-admin-kv-writer` identity)
+- `WR_ALL_FFC_AZURE_TENANT_ID` (Azure tenant id)
+
+Create them with those exact names; workflows read them as
+`${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}` and `${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}` (the
+`vars.` prefix is the expression context, not part of the variable name).
 
 The `whmcs-prod` environment itself holds **no** secrets after this migration (the WHMCS credential
 moved to Key Vault); it remains only to provide the deployment approval gate. The per-environment
@@ -110,8 +114,8 @@ The OIDC identity (`ffc-admin-kv-writer`) holds **Key Vault Secrets Officer** va
 **federated credential** for `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:whmcs-prod`.
 Each WHMCS job sets `permissions: id-token: write`. See
 `.github/actions/whmcs-secrets-from-kv/README.md` for the full setup checklist (and the two
-remaining steps: setting the real secret value in KV and ensuring the GitHub env secrets are
-present).
+remaining steps: setting the real secret value in KV and creating the two repository Variables
+above).
 
 To rotate the WHMCS credential, add a new version of the `*-ffc-whmcs-api-secret` KV secret — no
 GitHub secret update needed.

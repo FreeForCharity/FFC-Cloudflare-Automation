@@ -105,7 +105,9 @@ RBAC is needed.
 
 Status of the one-time setup (most already done in the AZ KV migration):
 
-- [x] **KV secrets exist** — `wr-all-`/`read-all-ffc-whmcs-api-identifier` + `-secret` (+ `-url`).
+- [x] **KV secrets exist** — `wr-all-ffc-whmcs-api-identifier` / `read-all-ffc-whmcs-api-identifier`
+      and `wr-all-ffc-whmcs-api-secret` / `read-all-ffc-whmcs-api-secret` (plus the
+      `wr-all-ffc-whmcs-api-url` / `read-all-ffc-whmcs-api-url` pair).
 - [x] **Identifier + URL populated** — set to the FFC identifier and API endpoint.
 - [x] **Federated credential** — `ffc-admin-kv-writer` trusts
       `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:whmcs-prod` (federated cred

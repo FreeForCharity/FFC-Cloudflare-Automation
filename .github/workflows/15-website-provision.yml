@@ -4,6 +4,15 @@ on:
   issues:
     types: [assigned]
 
+  # Cross-repo trigger from FFCadmin's trigger-provisioning.yml, sent after an
+  # intake issue passes sponsoring-admin verification. client_payload carries:
+  # charity_title, ffcadmin_issue, issue_url, sponsor. See FFCadmin
+  # docs/migration-plan.md §2. NOTE: the payload does not yet carry the apex
+  # domain this workflow requires; resolving the domain from the intake issue is
+  # the remaining wiring (tracked for a maintainer).
+  repository_dispatch:
+    types: [ffcadmin-website-provision]
+
   workflow_dispatch:
     inputs:
       domain:

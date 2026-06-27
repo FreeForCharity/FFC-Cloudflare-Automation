@@ -8,6 +8,14 @@ description: >-
 author: 'Free For Charity'
 
 inputs:
+  scope:
+    description: >-
+      Token scope: 'write' loads wr-all-* secrets (via the ffc-admin-kv-writer identity); 'read'
+      loads read-all-* secrets (via ffc-admin-kv-reader). WHMCS is a single credential, so the
+      values are identical; scope only selects which identity/secret copy is used. Defaults to
+      'write'.
+    required: false
+    default: 'write'
   vault-name:
     description: 'Azure Key Vault name that holds the WHMCS credential.'
     required: false
@@ -18,18 +26,10 @@ inputs:
   azure-tenant-id:
     description: 'Azure tenant ID for OIDC federation.'
     required: true
-  identifier-secret-name:
-    description: 'Key Vault secret name holding the WHMCS API identifier.'
-    required: false
-    default: 'ffc-whmcs-api-identifier'
-  secret-secret-name:
-    description: 'Key Vault secret name holding the WHMCS API secret.'
-    required: false
-    default: 'ffc-whmcs-api-secret'
   access-key-secret-name:
     description: >-
-      Key Vault secret name holding the optional WHMCS API access key. Leave empty to skip (WHMCS
-      access key is optional and only present if the WHMCS API config requires one).
+      Key Vault secret name holding the optional WHMCS API access key. Leave empty to skip (the
+      WHMCS API does not currently use an access key, and no such secret exists in the vault).
     required: false
     default: ''
 
@@ -39,13 +39,15 @@ runs:
     - name: Validate inputs
       shell: pwsh
       env:
+        INPUT_SCOPE: ${{ inputs.scope }}
         INPUT_VAULT_NAME: ${{ inputs.vault-name }}
         INPUT_AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
         INPUT_AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
-        INPUT_IDENTIFIER_SECRET_NAME: ${{ inputs.identifier-secret-name }}
-        INPUT_SECRET_SECRET_NAME: ${{ inputs.secret-secret-name }}
       run: |
         $ErrorActionPreference = 'Stop'
+        if ($env:INPUT_SCOPE -notin @('read', 'write')) {
+          throw "Invalid scope '$($env:INPUT_SCOPE)'. Expected 'read' or 'write'."
+        }
         if ([string]::IsNullOrWhiteSpace($env:INPUT_VAULT_NAME)) {
           throw "Input 'vault-name' is empty."
         }
@@ -54,12 +56,6 @@ runs:
         }
         if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_TENANT_ID)) {
           throw "Input 'azure-tenant-id' is empty. Pass secrets.WR_ALL_FFC_AZURE_TENANT_ID from the caller."
-        }
-        if ([string]::IsNullOrWhiteSpace($env:INPUT_IDENTIFIER_SECRET_NAME)) {
-          throw "Input 'identifier-secret-name' is empty."
-        }
-        if ([string]::IsNullOrWhiteSpace($env:INPUT_SECRET_SECRET_NAME)) {
-          throw "Input 'secret-secret-name' is empty."
         }
 
     - name: Azure login (OIDC)
@@ -72,28 +68,44 @@ runs:
     - name: Fetch WHMCS credential from Key Vault
       shell: pwsh
       env:
+        INPUT_SCOPE: ${{ inputs.scope }}
         INPUT_VAULT_NAME: ${{ inputs.vault-name }}
-        INPUT_IDENTIFIER_SECRET_NAME: ${{ inputs.identifier-secret-name }}
-        INPUT_SECRET_SECRET_NAME: ${{ inputs.secret-secret-name }}
         INPUT_ACCESS_KEY_SECRET_NAME: ${{ inputs.access-key-secret-name }}
       run: |
         $ErrorActionPreference = 'Stop'
 
+        $scope = $env:INPUT_SCOPE
         $vaultName = $env:INPUT_VAULT_NAME
-        $identifierName = $env:INPUT_IDENTIFIER_SECRET_NAME
-        $secretName = $env:INPUT_SECRET_SECRET_NAME
         $accessKeyName = $env:INPUT_ACCESS_KEY_SECRET_NAME
+        $prefix = if ($scope -eq 'write') { 'wr-all' } else { 'read-all' }
+
+        $identifierName = "$prefix-ffc-whmcs-api-identifier"
+        $secretName = "$prefix-ffc-whmcs-api-secret"
+
+        # Writes a value to GITHUB_ENV using GitHub's heredoc-delimited format so a value that ever
+        # contains a newline (or a line that looks like a delimiter) cannot inject extra env vars
+        # into later steps. The delimiter is randomized per value.
+        function Add-EnvVar {
+          param([string]$Name, [string]$Value)
+          $delim = "ghadelim_$([guid]::NewGuid().ToString('N'))"
+          if ($Value -match [regex]::Escape($delim)) {
+            throw "Refusing to write '$Name': value collides with the generated heredoc delimiter."
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "$Name<<$delim"
+          Add-Content -Path $env:GITHUB_ENV -Value $Value
+          Add-Content -Path $env:GITHUB_ENV -Value $delim
+        }
 
         # az is an external command — $ErrorActionPreference does NOT cause it to throw
         # on non-zero exit. Check $LASTEXITCODE explicitly after each az invocation so a
         # KV permission/auth failure surfaces as a step failure instead of an empty value.
         $idRaw = az keyvault secret show --vault-name $vaultName --name $identifierName --query value -o tsv
         if ($LASTEXITCODE -ne 0) {
-          throw "az keyvault secret show for '$identifierName' failed (exit $LASTEXITCODE). Check managed-identity 'Get' permission on vault '$vaultName' and that the secret exists."
+          throw "az keyvault secret show for '$identifierName' failed (exit $LASTEXITCODE). Check the identity's role on vault '$vaultName' and that the secret exists."
         }
         $secRaw = az keyvault secret show --vault-name $vaultName --name $secretName --query value -o tsv
         if ($LASTEXITCODE -ne 0) {
-          throw "az keyvault secret show for '$secretName' failed (exit $LASTEXITCODE). Check managed-identity 'Get' permission on vault '$vaultName' and that the secret exists."
+          throw "az keyvault secret show for '$secretName' failed (exit $LASTEXITCODE). Check the identity's role on vault '$vaultName' and that the secret exists."
         }
 
         $identifier = ([string]$idRaw).Trim().Trim('"')
@@ -105,6 +117,9 @@ runs:
         if ([string]::IsNullOrWhiteSpace($secret)) {
           throw "Key Vault secret '$secretName' returned empty from vault '$vaultName'."
         }
+        if ($identifier -eq 'PLACEHOLDER-SET-VIA-AZURE-PORTAL' -or $secret -eq 'PLACEHOLDER-SET-VIA-AZURE-PORTAL') {
+          throw "Key Vault '$prefix-ffc-whmcs-api-*' still holds the scaffolding placeholder. Set the real WHMCS identifier and secret in '$vaultName' before running."
+        }
 
         # Mask before any further use so they cannot appear in logs.
         Write-Host "::add-mask::$identifier"
@@ -112,25 +127,25 @@ runs:
 
         # Export to GITHUB_ENV so subsequent steps see them as plain env vars,
         # matching the names downstream WHMCS scripts already expect.
-        Add-Content -Path $env:GITHUB_ENV -Value "WHMCS_API_IDENTIFIER=$identifier"
-        Add-Content -Path $env:GITHUB_ENV -Value "WHMCS_API_SECRET=$secret"
+        Add-EnvVar -Name 'WHMCS_API_IDENTIFIER' -Value $identifier
+        Add-EnvVar -Name 'WHMCS_API_SECRET' -Value $secret
 
         $accessKeyNote = 'not requested'
         if (-not [string]::IsNullOrWhiteSpace($accessKeyName)) {
           $akRaw = az keyvault secret show --vault-name $vaultName --name $accessKeyName --query value -o tsv
           if ($LASTEXITCODE -ne 0) {
-            throw "az keyvault secret show for '$accessKeyName' failed (exit $LASTEXITCODE). Set access-key-secret-name to '' if the WHMCS API does not use an access key, or grant 'Get' and create the secret."
+            throw "az keyvault secret show for '$accessKeyName' failed (exit $LASTEXITCODE). Set access-key-secret-name to '' if the WHMCS API does not use an access key, or grant access and create the secret."
           }
           $accessKey = ([string]$akRaw).Trim().Trim('"')
           if ([string]::IsNullOrWhiteSpace($accessKey)) {
             throw "Key Vault secret '$accessKeyName' returned empty from vault '$vaultName'. Set access-key-secret-name to '' if the WHMCS API does not use an access key."
           }
           Write-Host "::add-mask::$accessKey"
-          Add-Content -Path $env:GITHUB_ENV -Value "WHMCS_API_ACCESS_KEY=$accessKey"
+          Add-EnvVar -Name 'WHMCS_API_ACCESS_KEY' -Value $accessKey
           $accessKeyNote = "loaded from '$accessKeyName'"
         }
 
-        Write-Host "Loaded WHMCS identifier + secret from KV vault '$vaultName' (values masked). Access key: $accessKeyNote."
+        Write-Host "Loaded $scope-scope WHMCS identifier + secret from KV vault '$vaultName' (values masked). Access key: $accessKeyNote."
 
 branding:
   icon: 'cloud'

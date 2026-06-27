@@ -1,6 +1,6 @@
 # Composite action: `whmcs-secrets-from-kv`
 
-Fetch the FFC WHMCS API credential (identifier + secret, and optionally the access key) from Azure
+Fetch the FFC WHMCS API credential (identifier + secret, and optionally an access key) from Azure
 Key Vault at workflow runtime, via OIDC. Replaces the older pattern of holding the WHMCS secret as a
 GitHub Environment Secret in `whmcs-prod`.
 
@@ -22,33 +22,48 @@ that bit the Cloudflare tokens (a CM token rotation in KV did not reach this rep
 months; see `../cloudflare-tokens-from-kv/README.md`).
 
 This action makes Key Vault the single source of truth for the WHMCS credential, matching the
-`cloudflare-tokens-from-kv` pattern already used across this repo's DNS workflows. Workflows
+`cloudflare-tokens-from-kv` pattern (same scoped secret naming, same OIDC identities). Workflows
 authenticate to Azure via OIDC (no Azure password stored in GitHub), pull the current values from KV
 at runtime, and expose them to downstream steps using the same env-var names the WHMCS PowerShell
 scripts already read (`scripts/whmcs-api-common.ps1` → `Resolve-WhmcsCredentials`).
 
+## Key Vault secrets
+
+The credential lives in `kv-ffc-admin-prod-cbm` under the repo's scoped naming convention. WHMCS is
+a single API credential, so the `read-all-*` and `wr-all-*` copies hold identical values — `scope`
+only selects which copy/identity is used:
+
+| Secret name                         | Scope | Holds                |
+| ----------------------------------- | ----- | -------------------- |
+| `wr-all-ffc-whmcs-api-identifier`   | write | WHMCS API identifier |
+| `wr-all-ffc-whmcs-api-secret`       | write | WHMCS API secret     |
+| `read-all-ffc-whmcs-api-identifier` | read  | WHMCS API identifier |
+| `read-all-ffc-whmcs-api-secret`     | read  | WHMCS API secret     |
+
+(There are also `*-ffc-whmcs-api-url` secrets in the vault; this action does not use them — the API
+URL is non-secret and passed inline by the workflows.)
+
 ## Inputs
 
-| Name                     | Required | Default                    | Description                                                                                                                             |
-| ------------------------ | -------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `vault-name`             | no       | `kv-ffc-admin-prod-cbm`    | Azure Key Vault name                                                                                                                    |
-| `azure-client-id`        | yes      | —                          | OIDC client ID for the managed identity with `Get` on the vault. Pass `${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}`.                   |
-| `azure-tenant-id`        | yes      | —                          | Azure tenant ID. Pass `${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}`.                                                                      |
-| `identifier-secret-name` | no       | `ffc-whmcs-api-identifier` | Key Vault secret name holding the WHMCS API identifier                                                                                  |
-| `secret-secret-name`     | no       | `ffc-whmcs-api-secret`     | Key Vault secret name holding the WHMCS API secret                                                                                      |
-| `access-key-secret-name` | no       | `''` (skip)                | Key Vault secret name holding the optional WHMCS API access key. Leave empty to skip; set only if the WHMCS API requires an access key. |
+| Name                     | Required | Default                 | Description                                                                                                   |
+| ------------------------ | -------- | ----------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `scope`                  | no       | `write`                 | `write` loads `wr-all-*` (via `ffc-admin-kv-writer`); `read` loads `read-all-*` (via `ffc-admin-kv-reader`).  |
+| `vault-name`             | no       | `kv-ffc-admin-prod-cbm` | Azure Key Vault name                                                                                          |
+| `azure-client-id`        | yes      | —                       | OIDC client ID of the identity with access to the vault. Pass `${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}`. |
+| `azure-tenant-id`        | yes      | —                       | Azure tenant ID. Pass `${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}`.                                            |
+| `access-key-secret-name` | no       | `''` (skip)             | KV secret name for an optional WHMCS access key. The WHMCS API does not currently use one, so leave empty.    |
 
 ## Outputs
 
-This action does not declare formal outputs. It exports environment variables visible to all
-subsequent steps in the same job:
+This action declares no formal outputs. It exports environment variables visible to all subsequent
+steps in the same job, written in GitHub's heredoc-delimited `$GITHUB_ENV` format (so a value can
+never inject extra variables):
 
 - `WHMCS_API_IDENTIFIER` — WHMCS API identifier
 - `WHMCS_API_SECRET` — WHMCS API secret
-- `WHMCS_API_ACCESS_KEY` — WHMCS API access key (only when `access-key-secret-name` is set)
+- `WHMCS_API_ACCESS_KEY` — only when `access-key-secret-name` is set
 
-All exported values are masked via `::add-mask::` before export, so they will not appear in workflow
-logs.
+All exported values are masked via `::add-mask::` before export, so they will not appear in logs.
 
 ## Usage
 
@@ -78,57 +93,50 @@ jobs:
           pwsh -NoProfile -File .\scripts\whmcs-products-export.ps1
 ```
 
-If the WHMCS API is configured to require an access key, store it in KV and add:
+All WHMCS workflows in this repo use the default `write` scope (one identity, one federated
+credential). A purely read-only workflow may pass `scope: read` with the reader identity's secrets,
+but that requires the reader-side setup below to be completed too.
 
-```yaml
-- uses: ./.github/actions/whmcs-secrets-from-kv
-  with:
-    azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-    azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
-    access-key-secret-name: ffc-whmcs-api-access-key
+## Azure / GitHub prerequisites
+
+The OIDC identity is the Entra app **`ffc-admin-kv-writer`** (the same one the Cloudflare `wr-all`
+flows use). It already holds **Key Vault Secrets Officer** on `kv-ffc-admin-prod-cbm`, so no extra
+RBAC is needed.
+
+Status of the one-time setup (most already done in the AZ KV migration):
+
+- [x] **KV secrets exist** — `wr-all-`/`read-all-ffc-whmcs-api-identifier` + `-secret` (+ `-url`).
+- [x] **Identifier + URL populated** — set to the FFC identifier and API endpoint.
+- [x] **Federated credential** — `ffc-admin-kv-writer` trusts
+      `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:whmcs-prod` (federated cred
+      `gha-FFC-Cloudflare-Automation-whmcs-prod`). A previously malformed credential
+      (`subject: repo:whmcs-prod-read`) was replaced.
+- [x] **Vault RBAC** — `ffc-admin-kv-writer` has `Key Vault Secrets Officer` vault-wide.
+- [ ] **Set the real WHMCS secret value** in KV — see the command below (it lives only in the legacy
+      GH secret today).
+- [ ] **GitHub `whmcs-prod` environment secrets** — `WR_ALL_FFC_AZURE_KV_CLIENT_ID` and
+      `WR_ALL_FFC_AZURE_TENANT_ID` must be available to `whmcs-prod` jobs (add them to the
+      environment if they are not already repo-level).
+
+Set the real secret value (both scope copies):
+
+```bash
+az keyvault secret set --vault-name kv-ffc-admin-prod-cbm \
+  --name wr-all-ffc-whmcs-api-secret --value '<WHMCS API secret>'
+az keyvault secret set --vault-name kv-ffc-admin-prod-cbm \
+  --name read-all-ffc-whmcs-api-secret --value '<WHMCS API secret>'
 ```
 
-## Required prerequisites in the consuming environment
-
-The calling job's `environment: whmcs-prod` must hold two secrets:
-
-| Secret name                     | Role                                                                       |
-| ------------------------------- | -------------------------------------------------------------------------- |
-| `WR_ALL_FFC_AZURE_KV_CLIENT_ID` | OIDC client ID of the managed identity that has `Get` permission on the KV |
-| `WR_ALL_FFC_AZURE_TENANT_ID`    | Azure tenant ID                                                            |
-
-These are **identifiers, not passwords** — the same pair already used by the Cloudflare KV action.
-
-### One-time Azure setup (cannot be done from the web sandbox)
-
-A human with Azure access must, in the `kv-ffc-admin-prod-cbm` vault and the managed identity:
-
-1. **Create the KV secrets** (Key Vault → Secrets → Generate/Import):
-   - `ffc-whmcs-api-identifier` → the WHMCS API identifier (currently
-     `zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu`)
-   - `ffc-whmcs-api-secret` → the WHMCS API secret (currently mastered as the GH secret named
-     `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU`)
-   - `ffc-whmcs-api-access-key` → only if the WHMCS API uses an access key
-2. **Grant the managed identity `Get` on those secrets** (RBAC role `Key Vault Secrets User` on the
-   vault, or an access policy with secret `Get`). The same identity used for `WR_ALL_*` Cloudflare
-   reads can be reused.
-3. **Add a federated credential** on that identity for the WHMCS environment, because federated
-   credentials are scoped per environment and the existing ones only cover the Cloudflare envs:
-   - Issuer: `https://token.actions.githubusercontent.com`
-   - Audience: `api://AzureADTokenExchange`
-   - Subject: `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:whmcs-prod`
-4. **Add `WR_ALL_FFC_AZURE_KV_CLIENT_ID` and `WR_ALL_FFC_AZURE_TENANT_ID`** to the `whmcs-prod`
-   GitHub environment (Settings → Environments → `whmcs-prod` → Environment secrets).
-
-Until steps 1–4 are done, the migrated workflows' Azure login / KV fetch step fails fast with a
-clear error (and the old GH `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` secret can stay in place as a
-fallback during cutover).
+Until the last two boxes are checked, the migrated workflows fail fast: the action throws a clear
+error if KV still returns the `PLACEHOLDER-SET-VIA-AZURE-PORTAL` scaffold value, and `azure/login`
+fails if the GitHub environment secrets are missing. The legacy `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU`
+secret can stay in `whmcs-prod` during cutover (nothing reads it anymore).
 
 ## Rotation flow
 
-To rotate the WHMCS credential, open its Key Vault entry, click **+ New Version**, paste the new
-value, and save. The next workflow dispatch picks up the new value automatically — no GitHub
-Environment Secret update and no sync workflow needed.
+To rotate the WHMCS credential, add a new version of `wr-all-ffc-whmcs-api-secret` (and the
+`read-all-` copy) in Key Vault. The next workflow dispatch picks up the new value automatically — no
+GitHub Environment Secret update and no sync workflow needed.
 
 ## Notes
 
@@ -136,8 +144,8 @@ Environment Secret update and no sync workflow needed.
   preinstalled on GitHub's Windows runners, so OIDC + KV reads work the same as on Ubuntu (the
   `cloudflare-tokens-from-kv` action already runs on `windows-latest` in workflow 02).
 - The action cannot be unit-tested in isolation (OIDC + Azure are real dependencies). Validate by
-  dispatching any migrated WHMCS workflow (e.g. **31. WHMCS - Export Products**) after the Azure
-  setup above is complete.
+  dispatching any migrated WHMCS workflow (e.g. **31. WHMCS - Export Products**) once the real
+  secret value and GitHub environment secrets are in place.
 
 ## Related
 

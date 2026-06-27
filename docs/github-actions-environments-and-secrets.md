@@ -87,24 +87,29 @@ no longer carry a copy of the WHMCS secret or hard-code the identifier inline.
 
 Environment secrets (required for OIDC → Key Vault):
 
-- `WR_ALL_FFC_AZURE_KV_CLIENT_ID` (OIDC client id of the managed identity with `Get` on the vault —
-  an **identifier**, not a password)
+- `WR_ALL_FFC_AZURE_KV_CLIENT_ID` (OIDC client id of the `ffc-admin-kv-writer` identity — an
+  **identifier**, not a password)
 - `WR_ALL_FFC_AZURE_TENANT_ID` (Azure tenant id)
 
-Key Vault secrets (in `kv-ffc-admin-prod-cbm`):
+Key Vault secrets (in `kv-ffc-admin-prod-cbm`, scoped naming like the Cloudflare tokens — the action
+defaults to `write` scope / `wr-all-*`):
 
-- `ffc-whmcs-api-identifier` → the WHMCS API identifier
-- `ffc-whmcs-api-secret` → the WHMCS API secret
-- `ffc-whmcs-api-access-key` → only if the WHMCS API requires an access key (otherwise omit; the
-  action skips it by default)
+- `wr-all-ffc-whmcs-api-identifier` / `read-all-ffc-whmcs-api-identifier` → the WHMCS API identifier
+- `wr-all-ffc-whmcs-api-secret` / `read-all-ffc-whmcs-api-secret` → the WHMCS API secret
+- `wr-all-ffc-whmcs-api-url` / `read-all-ffc-whmcs-api-url` → the API endpoint (non-secret; the
+  workflows pass it inline, the action does not read it)
 
-The managed identity also needs a **federated credential** for
-`repo:FreeForCharity/FFC-Cloudflare-Automation:environment:whmcs-prod` (federated credentials are
-per-environment; the Cloudflare ones only cover the Cloudflare envs). Each WHMCS job sets
-`permissions: id-token: write`. See `.github/actions/whmcs-secrets-from-kv/README.md` for the full
-one-time Azure setup and rotation flow.
+WHMCS is a single credential, so the `read-all-*` and `wr-all-*` copies hold identical values.
 
-To rotate the WHMCS credential, add a new version of the KV secret — no GitHub secret update needed.
+The OIDC identity (`ffc-admin-kv-writer`) holds **Key Vault Secrets Officer** vault-wide and a
+**federated credential** for `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:whmcs-prod`.
+Each WHMCS job sets `permissions: id-token: write`. See
+`.github/actions/whmcs-secrets-from-kv/README.md` for the full setup checklist (and the two
+remaining steps: setting the real secret value in KV and ensuring the GitHub env secrets are
+present).
+
+To rotate the WHMCS credential, add a new version of the `*-ffc-whmcs-api-secret` KV secret — no
+GitHub secret update needed.
 
 #### Legacy (pre-refactor)
 

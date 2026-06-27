@@ -77,14 +77,41 @@ custom account nameservers.
 
 Used by the WHMCS export workflows and any automation that updates WHMCS domain settings.
 
-Environment secrets (required):
+### WHMCS credential now comes from Azure Key Vault (single source of truth)
 
-- `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` (WHMCS API secret for identifier
-  `zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu`)
+As of the AZ KV refactor, WHMCS workflows fetch the WHMCS API identifier + secret from Azure Key
+Vault at runtime via OIDC, using the `./.github/actions/whmcs-secrets-from-kv` composite action —
+the same pattern as `cloudflare-tokens-from-kv`. The action exports `WHMCS_API_IDENTIFIER`,
+`WHMCS_API_SECRET`, and (optionally) `WHMCS_API_ACCESS_KEY` to downstream steps, masked. Workflows
+no longer carry a copy of the WHMCS secret or hard-code the identifier inline.
 
-Environment secrets (optional):
+Environment secrets (required for OIDC → Key Vault):
 
-- `WHMCS_API_ACCESS_KEY` (if your WHMCS API configuration requires an access key)
+- `WR_ALL_FFC_AZURE_KV_CLIENT_ID` (OIDC client id of the managed identity with `Get` on the vault —
+  an **identifier**, not a password)
+- `WR_ALL_FFC_AZURE_TENANT_ID` (Azure tenant id)
+
+Key Vault secrets (in `kv-ffc-admin-prod-cbm`):
+
+- `ffc-whmcs-api-identifier` → the WHMCS API identifier
+- `ffc-whmcs-api-secret` → the WHMCS API secret
+- `ffc-whmcs-api-access-key` → only if the WHMCS API requires an access key (otherwise omit; the
+  action skips it by default)
+
+The managed identity also needs a **federated credential** for
+`repo:FreeForCharity/FFC-Cloudflare-Automation:environment:whmcs-prod` (federated credentials are
+per-environment; the Cloudflare ones only cover the Cloudflare envs). Each WHMCS job sets
+`permissions: id-token: write`. See `.github/actions/whmcs-secrets-from-kv/README.md` for the full
+one-time Azure setup and rotation flow.
+
+To rotate the WHMCS credential, add a new version of the KV secret — no GitHub secret update needed.
+
+#### Legacy (pre-refactor)
+
+Before the refactor the secret was held as a GH Environment Secret named
+`ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` (for identifier `zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu`), with an
+optional `WHMCS_API_ACCESS_KEY`. It can be removed from the `whmcs-prod` environment once the Key
+Vault path is validated; keeping it in place during cutover does no harm (nothing reads it anymore).
 
 ## `m365-prod`
 

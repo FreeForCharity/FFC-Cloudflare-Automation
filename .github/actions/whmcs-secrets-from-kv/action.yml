@@ -1,0 +1,137 @@
+name: 'WHMCS secrets from Key Vault'
+description: >-
+  Authenticate to Azure via OIDC, fetch the FFC WHMCS API identifier, secret, and (optionally)
+  access key from Azure Key Vault, mask them, and expose them to subsequent steps as the env vars
+  WHMCS_API_IDENTIFIER, WHMCS_API_SECRET, and WHMCS_API_ACCESS_KEY. Replaces direct consumption of
+  GH Environment Secret copies of the WHMCS credential.
+
+author: 'Free For Charity'
+
+inputs:
+  vault-name:
+    description: 'Azure Key Vault name that holds the WHMCS credential.'
+    required: false
+    default: 'kv-ffc-admin-prod-cbm'
+  azure-client-id:
+    description: 'OIDC client ID for the managed identity that has Get permission on the vault.'
+    required: true
+  azure-tenant-id:
+    description: 'Azure tenant ID for OIDC federation.'
+    required: true
+  identifier-secret-name:
+    description: 'Key Vault secret name holding the WHMCS API identifier.'
+    required: false
+    default: 'ffc-whmcs-api-identifier'
+  secret-secret-name:
+    description: 'Key Vault secret name holding the WHMCS API secret.'
+    required: false
+    default: 'ffc-whmcs-api-secret'
+  access-key-secret-name:
+    description: >-
+      Key Vault secret name holding the optional WHMCS API access key. Leave empty to skip (WHMCS
+      access key is optional and only present if the WHMCS API config requires one).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: pwsh
+      env:
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+        INPUT_AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        INPUT_AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+        INPUT_IDENTIFIER_SECRET_NAME: ${{ inputs.identifier-secret-name }}
+        INPUT_SECRET_SECRET_NAME: ${{ inputs.secret-secret-name }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_VAULT_NAME)) {
+          throw "Input 'vault-name' is empty."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_CLIENT_ID)) {
+          throw "Input 'azure-client-id' is empty. Pass secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID from the caller."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_TENANT_ID)) {
+          throw "Input 'azure-tenant-id' is empty. Pass secrets.WR_ALL_FFC_AZURE_TENANT_ID from the caller."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_IDENTIFIER_SECRET_NAME)) {
+          throw "Input 'identifier-secret-name' is empty."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_SECRET_SECRET_NAME)) {
+          throw "Input 'secret-secret-name' is empty."
+        }
+
+    - name: Azure login (OIDC)
+      uses: azure/login@v3
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        allow-no-subscriptions: true
+
+    - name: Fetch WHMCS credential from Key Vault
+      shell: pwsh
+      env:
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+        INPUT_IDENTIFIER_SECRET_NAME: ${{ inputs.identifier-secret-name }}
+        INPUT_SECRET_SECRET_NAME: ${{ inputs.secret-secret-name }}
+        INPUT_ACCESS_KEY_SECRET_NAME: ${{ inputs.access-key-secret-name }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        $vaultName = $env:INPUT_VAULT_NAME
+        $identifierName = $env:INPUT_IDENTIFIER_SECRET_NAME
+        $secretName = $env:INPUT_SECRET_SECRET_NAME
+        $accessKeyName = $env:INPUT_ACCESS_KEY_SECRET_NAME
+
+        # az is an external command — $ErrorActionPreference does NOT cause it to throw
+        # on non-zero exit. Check $LASTEXITCODE explicitly after each az invocation so a
+        # KV permission/auth failure surfaces as a step failure instead of an empty value.
+        $idRaw = az keyvault secret show --vault-name $vaultName --name $identifierName --query value -o tsv
+        if ($LASTEXITCODE -ne 0) {
+          throw "az keyvault secret show for '$identifierName' failed (exit $LASTEXITCODE). Check managed-identity 'Get' permission on vault '$vaultName' and that the secret exists."
+        }
+        $secRaw = az keyvault secret show --vault-name $vaultName --name $secretName --query value -o tsv
+        if ($LASTEXITCODE -ne 0) {
+          throw "az keyvault secret show for '$secretName' failed (exit $LASTEXITCODE). Check managed-identity 'Get' permission on vault '$vaultName' and that the secret exists."
+        }
+
+        $identifier = ([string]$idRaw).Trim().Trim('"')
+        $secret = ([string]$secRaw).Trim().Trim('"')
+
+        if ([string]::IsNullOrWhiteSpace($identifier)) {
+          throw "Key Vault secret '$identifierName' returned empty from vault '$vaultName'."
+        }
+        if ([string]::IsNullOrWhiteSpace($secret)) {
+          throw "Key Vault secret '$secretName' returned empty from vault '$vaultName'."
+        }
+
+        # Mask before any further use so they cannot appear in logs.
+        Write-Host "::add-mask::$identifier"
+        Write-Host "::add-mask::$secret"
+
+        # Export to GITHUB_ENV so subsequent steps see them as plain env vars,
+        # matching the names downstream WHMCS scripts already expect.
+        Add-Content -Path $env:GITHUB_ENV -Value "WHMCS_API_IDENTIFIER=$identifier"
+        Add-Content -Path $env:GITHUB_ENV -Value "WHMCS_API_SECRET=$secret"
+
+        $accessKeyNote = 'not requested'
+        if (-not [string]::IsNullOrWhiteSpace($accessKeyName)) {
+          $akRaw = az keyvault secret show --vault-name $vaultName --name $accessKeyName --query value -o tsv
+          if ($LASTEXITCODE -ne 0) {
+            throw "az keyvault secret show for '$accessKeyName' failed (exit $LASTEXITCODE). Set access-key-secret-name to '' if the WHMCS API does not use an access key, or grant 'Get' and create the secret."
+          }
+          $accessKey = ([string]$akRaw).Trim().Trim('"')
+          if ([string]::IsNullOrWhiteSpace($accessKey)) {
+            throw "Key Vault secret '$accessKeyName' returned empty from vault '$vaultName'. Set access-key-secret-name to '' if the WHMCS API does not use an access key."
+          }
+          Write-Host "::add-mask::$accessKey"
+          Add-Content -Path $env:GITHUB_ENV -Value "WHMCS_API_ACCESS_KEY=$accessKey"
+          $accessKeyNote = "loaded from '$accessKeyName'"
+        }
+
+        Write-Host "Loaded WHMCS identifier + secret from KV vault '$vaultName' (values masked). Access key: $accessKeyNote."
+
+branding:
+  icon: 'cloud'
+  color: 'orange'

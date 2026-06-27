@@ -32,7 +32,7 @@ Unknown,friendsof362.org,Unknown,No,No,No,,,,(no A record),No,https://github.com
 Unknown,slopestohope.org,Active,Yes,No,No,,,,185.199.111.153;185.199.110.153;185.199.109.153;185.199.108.153,No,https://github.com/FreeForCharity/FFC-EX-slopestohope.org,Live,Standard,No,2026-05-27,11,2026-06-02,Active,,GitHub Pages,,,,,1 - Active Development,0,62,35
 For-Profit,srrn.net,Unknown,No,Yes,Yes,Hostinger,No,.net not paired,153.92.213.212,Yes,https://github.com/FreeForCharity/FFC-EX-SRRN.net,Redirect,Standard,No,2026-05-27,8,2026-05-27,Active,,Hostinger,,,,,1 - Active Development,62,49,35
 Cloudflare-Only,technologymonastery.org,Active,Yes,Yes,Yes,InterServer RS1,No,Matches InterServer RS1 IP,216.158.234.18,Yes,https://github.com/FreeForCharity/TechnologyMonastery.org,Live,Standard,No,2026-05-27,0,2026-05-28,Active,,InterServer RS1,,,,,1 - Active Development,70,57,35
-Unknown,thecrookedhouse.net,Unknown,No,No,No,,,,185.199.111.153;185.199.110.153;185.199.109.153;185.199.108.153,No,https://github.com/FreeForCharity/FFC-EX-thecrookedhouse.net,Live,Standard,No,2026-05-27,0,2026-05-27,Active,,GitHub Pages,,,,,1 - Active Development,0,62,35
+For-Profit,thecrookedhouse.net,Unknown,No,No,No,,,,185.199.111.153;185.199.110.153;185.199.109.153;185.199.108.153,No,https://github.com/FreeForCharity/FFC-EX-thecrookedhouse.net,Live,Standard,No,2026-05-27,0,2026-05-27,Active,,GitHub Pages,,,,,1 - Active Development,0,62,35
 Cloudflare-Only,bintobetter.org,Active,Yes,Yes,No,GitHub Pages,Yes,Fully migrated,185.199.108.153;185.199.111.153;185.199.110.153;185.199.109.153,Yes,https://github.com/FreeForCharity/FFC-EX-bintobetter.org,Live,Standard,No,2026-05-12,0,2026-05-27,Active,,GitHub Pages,,,,,1 - Active Development,0,62,35
 For-Profit,alltypetowing.com,Active,Yes,Yes,Yes,HostPapa,No,Matches HostPapa server list,204.44.192.77,Yes,https://github.com/FreeForCharity/FFC-EX-AllTypeTowing.com,Live,Standard,No,2026-01-27,0,2026-03-25,Stalled,,HostPapa,,,,,"2 - Has Repo, Stalled",70,57,22
 Org-WPAdmin,acharyaapp.org,Unknown,No,No,Yes,Hostinger,No,.com exists as subdomain,153.92.213.212,No,,Redirect,Standard,,,,,None,,Hostinger,,,,,3 - Needs Migration,62,37,0
@@ -72,7 +72,7 @@ Krystal-New,letspiritlead.org,Unknown,No,Yes,No,Krystal.io,No,New Krystal Host,7
 Org-WPAdmin,lifelessonslearned.us.org,Active,Yes,Yes,Yes,Hostinger,No,Treated as .org family,153.92.213.212,Yes,,Live,Standard,,,,,None,,Hostinger,,,,,3 - Needs Migration,70,45,0
 Krystal-New,movewithcompassion.org,Unknown,No,No,No,Krystal.io,No,New Krystal Host,185.199.224.x,No,,Live,Standard,,,,,None,,Krystal.io,,,,,3 - Needs Migration,55,45,0
 For-Profit,moyermanagement.com,Active,Yes,No,Yes,HostPapa,No,Matches HostPapa,185.199.111.153;185.199.110.153;185.199.109.153;185.199.108.153,No,,Live,Standard,,,,,None,,HostPapa,,,,,3 - Needs Migration,70,45,0
-Krystal-New,muckfichigan.com,Unknown,No,No,No,Krystal.io,No,New Krystal Host,185.199.224.x,No,,Live,Standard,,,,,None,,Krystal.io,,,,,3 - Needs Migration,55,45,0
+For-Profit,muckfichigan.com,Unknown,No,No,No,Krystal.io,No,New Krystal Host,185.199.224.x,No,,Live,Standard,,,,,None,,Krystal.io,,,,,3 - Needs Migration,55,45,0
 Org-WPAdmin,my-missions.org,Active,Yes,Yes,Yes,Hostinger,No,Matches Hostinger,153.92.213.212,Yes,,Live,Standard,,,,,None,,Hostinger,,,,,3 - Needs Migration,70,45,0
 Org-WPAdmin,myservicehours.org,Unknown,No,No,Yes,Hostinger,No,Matches Hostinger,153.92.213.212,No,,Live,Standard,,,,,None,,Hostinger,,,,,3 - Needs Migration,70,45,0
 Org-WPAdmin,naturaldividends.org,Unknown,No,No,Yes,Hostinger,No,Matches Hostinger,153.92.213.212,No,,Unreachable,Standard,,,,,None,,Hostinger,,,,,3 - Needs Migration,40,0,0
@@ -105,17 +105,17 @@ Subdomain,ffcworkingsite1.org,Active,Yes,Yes,No,GitHub Pages,Yes,Fully migrated,
 Org-NoWP,ffcworkingsite2.org,Active,Yes,Yes,No,GitHub Pages,Yes,Fully migrated,185.199.111.153;185.199.110.153;185.199.109.153;185.199.108.153,Yes,https://github.com/FreeForCharity/FFC_Single_Page_Template,Live,Standard,,,,,None,,GitHub Pages,,,,,4 - Done / Stable,0,62,10
 Cloudflare-Only,pagbooster.org,Active,Yes,Yes,Yes,GitHub Pages,Yes,Fully migrated,185.199.111.153;185.199.110.153;185.199.109.153;185.199.108.153,Yes,https://github.com/FreeForCharity/FFC-EX-PAGboosters.org,Live,Standard,,,,,None,,GitHub Pages,,,,,4 - Done / Stable,0,62,10
 Cloudflare-Only,thekccf.org,Active,Yes,Yes,No,GitHub Pages,Yes,Fully migrated,185.199.111.153;185.199.109.153;185.199.110.153;185.199.108.153,Yes,https://github.com/koenig-childhood-cancer-foundation/KCCF-web,Unreachable,Standard,,,,,None,,GitHub Pages,,,,,4 - Done / Stable,0,0,10
-Unknown,3dmc2.com,Active,Yes,No,No,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,30,35,0
+For-Profit,3dmc2.com,Active,Yes,No,No,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,30,35,0
 Unknown,americanlegionpost64.com,Active,Yes,No,No,,,,(no A record),No,,Redirect,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,22,27,0
 Unknown,amplifiedaid.org,Active,Yes,No,Yes,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,45,35,0
-Unknown,aprilunlimited.com,Active,Yes,No,Yes,,,,216.222.200.253,No,,Live,Standard,,,,,None,,Other-external,,,,,5 - Needs Triage,53,35,0
+For-Profit,aprilunlimited.com,Active,Yes,No,Yes,,,,216.222.200.253,No,,Live,Standard,,,,,None,,Other-external,,,,,5 - Needs Triage,53,35,0
 Unknown,avengedfastpitch.org,Active,Yes,No,Yes,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,45,35,0
 Unknown,bhakthinivedana.com/sandbox,Unknown,No,No,No,,,,(no A record),No,,Redirect,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,22,27,0
 Unknown,birthfree.org,Active,Yes,No,No,,,,172.67.181.220;104.21.18.132,No,,Error,Standard,,,,,None,,Cloudflare Proxy,,,,,5 - Needs Triage,23,0,8
 Unknown,bowiesblessings.org,Active,Yes,No,No,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,30,35,0
 Unknown,burnsurvivorscharity.org,Active,Yes,No,No,,,,(no A record),No,,Error,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,8,0,8
 For-Profit,canadatokeywestcoastalrun.com,Unknown,No,Yes,No,No A Record,Yes,Domain inactive; .org exists,(no A record),Yes,,Unreachable,Standard,,,,,None,,No A Record,,,,,5 - Needs Triage,0,0,0
-Unknown,clarkemoyer.com,Active,Yes,No,Yes,,,,185.199.111.153;185.199.110.153;185.199.108.153;185.199.109.153,No,,Live,Standard,,,,,None,,GitHub Pages,,,,,5 - Needs Triage,0,50,0
+For-Profit,clarkemoyer.com,Active,Yes,No,Yes,,,,185.199.111.153;185.199.110.153;185.199.108.153;185.199.109.153,No,,Live,Standard,,,,,None,,GitHub Pages,,,,,5 - Needs Triage,0,50,0
 Unknown,clarkmoyer.com,Active,Yes,No,No,,,,52.184.222.116,No,,Redirect,Standard,,,,,None,,External,,,,,5 - Needs Triage,30,27,0
 Cloudflare-Only,cochiserobotics.org,Active,Yes,Yes,No,FFC-WHM-01,No,Not on any known server list,52.184.222.116,Yes,,Unreachable,Standard,,,,,None,,FFC-WHM-01,,,,,5 - Needs Triage,25,0,0
 Unknown,communitychristianpentecostal.org,Active,Yes,No,No,,,,(no A record),No,,Error,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,8,0,8
@@ -130,7 +130,7 @@ Unknown,ffchosting.onlineimpacts.org,Unknown,No,No,Yes,,,,(no A record),No,,Live
 Org-WPAdmin,ffchosting.org,Active,Yes,Yes,No,No A Record,Yes,Inactive,(no A record),Yes,,Redirect,Standard,,,,,None,,No A Record,,,,,5 - Needs Triage,22,27,0
 Unknown,ffchosting.com,Active,Yes,Yes,No,,,,(no A record),Yes,,Redirect,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,22,27,0
 Unknown,ffchostingmultisite.org,Transferred Away,Yes,Yes,No,,,,(no A record),Yes,,Redirect,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,22,27,0
-Unknown,focus-on-free.com,Active,Yes,No,No,,,,216.222.200.253,No,,Live,Standard,,,,,None,,Other-external,,,,,5 - Needs Triage,38,35,0
+For-Profit,focus-on-free.com,Active,Yes,No,No,,,,216.222.200.253,No,,Live,Standard,,,,,None,,Other-external,,,,,5 - Needs Triage,38,35,0
 Unknown,focusonfree.org,Active,Yes,No,No,,,,104.21.52.163;172.67.201.83,No,,Error,Standard,,,,,None,,Cloudflare Proxy,,,,,5 - Needs Triage,23,0,8
 Unknown,focusonfree.us,Active,Yes,No,No,,,,172.67.202.82;104.21.76.244,No,,Error,Standard,,,,,None,,Cloudflare Proxy,,,,,5 - Needs Triage,23,0,8
 Unknown,freeforcharity.ngo,Unknown,No,Yes,No,,,,(no A record),Yes,,Redirect,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,22,27,0
@@ -161,7 +161,7 @@ Unknown,staging.facinggiantsnc.org,Unknown,No,No,Yes,,,,(no A record),No,,Live,S
 Unknown,staging.instituteofforgiveness.org,Unknown,No,No,Yes,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,Yes,,,,5 - Needs Triage,45,0,22
 Unknown,staging.southamptonfriends.org,Unknown,No,No,No,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,Yes,,,,5 - Needs Triage,30,0,22
 Unknown,stepeople.org,Active,Yes,No,No,,,,(no A record),No,,Error,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,8,0,8
-Unknown,stylesbysheba.com,Unknown,No,No,Yes,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,45,35,0
+For-Profit,stylesbysheba.com,Unknown,No,No,Yes,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,45,35,0
 Cloudflare-Only,tamkeensports.org,Active,Yes,Yes,No,External,No,External hosting,174.138.190.170,Yes,,Live,Standard,,,,,None,,External,,,,,5 - Needs Triage,38,35,0
 Unknown,tasteandseelocal.org,Active,Yes,No,No,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,30,35,0
 Unknown,technologyadoptionbarriers.org,Active,Yes,Yes,No,,,,184.72.224.80;34.227.238.166;3.91.109.122;100.24.182.117;35.172.73.102;34.199.202.106,Yes,,Live,Standard,,,,,None,,Other-external,,,,,5 - Needs Triage,38,35,0
@@ -183,7 +183,7 @@ Unknown,www.americanlegionpost64.org,Unknown,No,No,Yes,,,,(no A record),No,,Redi
 Unknown,www.henricovareentrycouncil.com,Unknown,No,No,Yes,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,45,35,0
 Unknown,www.jeeyarasramam.org,Unknown,No,No,No,,,,(no A record),No,,Error,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,8,0,8
 Unknown,www.nolefturns.org,Unknown,No,No,No,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,30,35,0
-Unknown,www.shebawilliams.com,Unknown,No,No,Yes,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,45,35,0
+For-Profit,www.shebawilliams.com,Unknown,No,No,Yes,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,45,35,0
 Unknown,www.virginiajusticeconference.com,Unknown,No,No,Yes,,,,(no A record),No,,Live,Standard,,,,,None,,Unresolved/Parked,,,,,5 - Needs Triage,45,35,0
 Cloudflare-Only,youngfatherscare.org,Active,Yes,Yes,No,External,No,Adjacent to InterServer but not exact match,192.64.86.203,Yes,,Live,Standard,,,,,None,,External,,,,,5 - Needs Triage,38,35,0
 InterServer-Org,nittanypost245.org,Cancelled,Yes,Yes,No,InterServer DA,No,Correct InterServer mapping,192.64.86.202,Yes,https://github.com/FreeForCharity/FFC-EX-nittanypost245.org,Unreachable,Standard,No,2026-06-06,0,2026-06-08,Active,,InterServer DA,,,,,6 - Inactive / Archive,0,0,0

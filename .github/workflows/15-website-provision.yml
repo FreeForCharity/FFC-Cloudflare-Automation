@@ -4,6 +4,16 @@ on:
   issues:
     types: [assigned]
 
+  # Cross-repo trigger from FFCadmin's trigger-provisioning.yml, sent after an
+  # intake issue passes sponsoring-admin verification. client_payload carries:
+  # charity_title, ffcadmin_issue, issue_url, sponsor, and domain (the
+  # applicant's desired apex domain). See FFCadmin docs/migration-plan.md §1-2.
+  # TODO (maintainer): map github.event.client_payload.domain into this
+  # workflow's `domain` input. It may be empty (applicant left it blank) — fall
+  # back to the workflow_dispatch `domain` input / an admin prompt in that case.
+  repository_dispatch:
+    types: [ffcadmin-website-provision]
+
   workflow_dispatch:
     inputs:
       domain:

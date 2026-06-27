@@ -85,11 +85,16 @@ the same pattern as `cloudflare-tokens-from-kv`. The action exports `WHMCS_API_I
 `WHMCS_API_SECRET`, and (optionally) `WHMCS_API_ACCESS_KEY` to downstream steps, masked. Workflows
 no longer carry a copy of the WHMCS secret or hard-code the identifier inline.
 
-Environment secrets (required for OIDC → Key Vault):
+Repository **Variables** (required for OIDC → Key Vault — these are **identifiers, not passwords**,
+so they live at repository level, not as environment secrets; this keeps `whmcs-prod` free of Azure
+creds):
 
-- `WR_ALL_FFC_AZURE_KV_CLIENT_ID` (OIDC client id of the `ffc-admin-kv-writer` identity — an
-  **identifier**, not a password)
-- `WR_ALL_FFC_AZURE_TENANT_ID` (Azure tenant id)
+- `vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID` (OIDC client id of the `ffc-admin-kv-writer` identity)
+- `vars.WR_ALL_FFC_AZURE_TENANT_ID` (Azure tenant id)
+
+The `whmcs-prod` environment itself holds **no** secrets after this migration (the WHMCS credential
+moved to Key Vault); it remains only to provide the deployment approval gate. The per-environment
+**federated credential** on `ffc-admin-kv-writer` is what actually authorizes the OIDC exchange.
 
 Key Vault secrets (in `kv-ffc-admin-prod-cbm`, scoped naming like the Cloudflare tokens — the action
 defaults to `write` scope / `wr-all-*`):

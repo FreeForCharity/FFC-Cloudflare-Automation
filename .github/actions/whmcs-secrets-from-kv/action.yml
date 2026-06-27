@@ -52,10 +52,10 @@ runs:
           throw "Input 'vault-name' is empty."
         }
         if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_CLIENT_ID)) {
-          throw "Input 'azure-client-id' is empty. Pass secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID from the caller."
+          throw "Input 'azure-client-id' is empty. Pass vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID (a repository-level Variable) from the caller."
         }
         if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_TENANT_ID)) {
-          throw "Input 'azure-tenant-id' is empty. Pass secrets.WR_ALL_FFC_AZURE_TENANT_ID from the caller."
+          throw "Input 'azure-tenant-id' is empty. Pass vars.WR_ALL_FFC_AZURE_TENANT_ID (a repository-level Variable) from the caller."
         }
 
     - name: Azure login (OIDC)

@@ -71,6 +71,32 @@ jobs:
               upd=$(echo "$settings" | cut -d'|' -f4)
               has_mq=$(gh api "repos/$org/$repo/rules/branches/$default" --jq '[.[] | select(.type=="merge_queue")] | length' 2>/dev/null || echo "0")
 
+              # Team-tier drift: FFC-ORGWIDE-* tier teams should be granted on PUBLIC FFC repos.
+              # Private repos are intentionally excluded (Option C defensive isolation —
+              # private repos require explicit per-team grants by an Owner, no auto-tier).
+              # Conversely: if a PRIVATE repo has any ORGWIDE tier team granted, that's drift in
+              # the OPPOSITE direction (private should never auto-inherit). Flag both cases.
+              missing_teams=""
+              unexpected_teams=""
+              if [ "$org" = "FreeForCharity" ]; then
+                team_grants=$(gh api "repos/$org/$repo/teams" --jq '[.[] | .slug] | join(",")' 2>/dev/null || echo "")
+                if [ "$vis" = "public" ]; then
+                  for required in ffc-orgwide-admins ffc-orgwide-maintainers ffc-orgwide-writers ffc-orgwide-triagers ffc-orgwide-readers; do
+                    case ",$team_grants," in
+                      *,$required,*) ;;
+                      *) missing_teams="${missing_teams}${required#ffc-orgwide-} ";;
+                    esac
+                  done
+                else
+                  # Private repo — flag if ANY ORGWIDE tier team is granted (shouldn't be)
+                  for unexpected in ffc-orgwide-admins ffc-orgwide-maintainers ffc-orgwide-writers ffc-orgwide-triagers ffc-orgwide-readers; do
+                    case ",$team_grants," in
+                      *,$unexpected,*) unexpected_teams="${unexpected_teams}${unexpected#ffc-orgwide-} ";;
+                    esac
+                  done
+                fi
+              fi
+
               issues=()
               [ "$squash" = "true" ] && issues+=("squash-enabled")
               [ "$auto" != "true" ] && issues+=("auto-merge-off")
@@ -79,6 +105,12 @@ jobs:
               # For public repos, expect merge_queue
               if [ "$vis" = "public" ] && [ "$has_mq" = "0" ]; then
                 issues+=("no-merge-queue")
+              fi
+              if [ -n "$missing_teams" ]; then
+                issues+=("missing-teams:${missing_teams% }")
+              fi
+              if [ -n "$unexpected_teams" ]; then
+                issues+=("private-repo-has-orgwide-teams:${unexpected_teams% }")
               fi
 
               issue_str="-"

@@ -19,27 +19,32 @@ one stable IP regardless of which runner ran the job.
 ```
 GitHub runner (dynamic IP)
   └─ POST https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php
+       Ocp-Apim-Subscription-Key: <whmcs-ops key, from Key Vault>
        └─ APIM (egresses as 20.231.116.111) ──► https://freeforcharity.org/hub/includes/api.php
 ```
 
 This mirrors the existing `cpanel` API in the same APIM instance (a proxy to an IP-restricted cPanel
-host).
+host with a dedicated subscription key).
 
 ## APIM configuration
 
-| Item          | Value                                                       |
-| ------------- | ----------------------------------------------------------- |
-| Instance      | `apim-ffc-gateway-prod` (Developer SKU, East US, non-VNet)  |
-| Static IP     | `20.231.116.111`                                            |
-| API id / path | `whmcs` / `whmcs`                                           |
-| Backend       | `https://freeforcharity.org/hub/includes`                   |
-| Operation     | `POST /api.php`                                             |
-| Gateway URL   | `https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php` |
-| Subscription  | **Not required** (see hardening note below)                 |
+| Item          | Value                                                                       |
+| ------------- | --------------------------------------------------------------------------- |
+| Instance      | `apim-ffc-gateway-prod` (Developer SKU, East US, non-VNet)                  |
+| Static IP     | `20.231.116.111`                                                            |
+| API id / path | `whmcs` / `whmcs`                                                           |
+| Backend       | `https://freeforcharity.org/hub/includes`                                   |
+| Operation     | `POST /api.php`                                                             |
+| Gateway URL   | `https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php`                 |
+| Subscription  | **Required** — `Ocp-Apim-Subscription-Key` header, subscription `whmcs-ops` |
 
-The workflows set `WHMCS_API_URL` to the gateway URL; the WHMCS PowerShell scripts are
-backend-agnostic and need no change. No subscription key is sent, so the heterogeneous
-self-contained export scripts did not have to be modified.
+The workflows set `WHMCS_API_URL` to the gateway URL. The `whmcs-secrets-from-kv` action also
+fetches the `whmcs-ops` subscription key from Key Vault and exports it as
+`WHMCS_APIM_SUBSCRIPTION_KEY`; the WHMCS PowerShell helpers (`Invoke-WhmcsApi` in
+`scripts/whmcs-api-common.ps1` and each self-contained export script) add it as the
+`Ocp-Apim-Subscription-Key` request header when that env var is present. So the scripts stay
+backend-agnostic: with the env var unset they call WHMCS directly; with it set they authenticate to
+APIM.
 
 ## Required WHMCS configuration (one-time, manual)
 
@@ -62,17 +67,24 @@ visitors' IPs come from the same header.)
 After both steps, the migrated workflows run cleanly: OIDC → Key Vault → WHMCS via APIM. Verified
 with a live `GetProducts` call returning `result: success`.
 
-## Security note
+## Security model
 
-The `whmcs` API is currently **keyless** (`subscriptionRequired: false`). This keeps the change
-minimal and is security-equivalent to the prior direct-to-WHMCS setup: every WHMCS action still
-requires the identifier + secret (now mastered in Key Vault), and WHMCS only accepts the APIM IP.
+Three independent layers gate a WHMCS API call, all sourced from Key Vault at runtime:
 
-A dedicated **API-scoped subscription `whmcs-ops`** is already provisioned, and its key is stored in
-Key Vault as `read-all-ffc-apim-whmcs-subscription-key` / `wr-all-ffc-apim-whmcs-subscription-key`.
-To harden (defense-in-depth) later, set the `whmcs` API to `subscriptionRequired: true`, have
-`whmcs-secrets-from-kv` export the key, and send it as the `Ocp-Apim-Subscription-Key` header (via
-`Invoke-WhmcsApi` in `scripts/whmcs-api-common.ps1` and the self-contained export scripts).
+1. **APIM subscription key** (`Ocp-Apim-Subscription-Key`) — the `whmcs` API has
+   `subscriptionRequired: true`; a call without the `whmcs-ops` key gets `401` from APIM and never
+   reaches WHMCS.
+2. **WHMCS IP allowlist** — WHMCS only accepts requests it sees as coming from APIM's
+   `20.231.116.111` (resolved via the `CF-Connecting-IP` proxy header).
+3. **WHMCS identifier + secret** — the API credential itself, mastered in Key Vault.
+
+The `whmcs-ops` subscription is **API-scoped** (it can only call the `whmcs` API, nothing else in
+the gateway), mirroring the `cpanel-ops` subscription. Its key lives in Key Vault as
+`read-all-ffc-apim-whmcs-subscription-key` / `wr-all-ffc-apim-whmcs-subscription-key` (identical
+values; the scope only selects which identity reads it).
+
+To rotate the subscription key: regenerate it on the `whmcs-ops` subscription in APIM, then update
+both KV secret versions. The next workflow run picks it up.
 
 ## Caveats
 

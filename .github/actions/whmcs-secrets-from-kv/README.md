@@ -33,25 +33,28 @@ The credential lives in `kv-ffc-admin-prod-cbm` under the repo's scoped naming c
 a single API credential, so the `read-all-*` and `wr-all-*` copies hold identical values — `scope`
 only selects which copy/identity is used:
 
-| Secret name                         | Scope | Holds                |
-| ----------------------------------- | ----- | -------------------- |
-| `wr-all-ffc-whmcs-api-identifier`   | write | WHMCS API identifier |
-| `wr-all-ffc-whmcs-api-secret`       | write | WHMCS API secret     |
-| `read-all-ffc-whmcs-api-identifier` | read  | WHMCS API identifier |
-| `read-all-ffc-whmcs-api-secret`     | read  | WHMCS API secret     |
+| Secret name                                | Scope | Holds                             |
+| ------------------------------------------ | ----- | --------------------------------- |
+| `wr-all-ffc-whmcs-api-identifier`          | write | WHMCS API identifier              |
+| `wr-all-ffc-whmcs-api-secret`              | write | WHMCS API secret                  |
+| `wr-all-ffc-apim-whmcs-subscription-key`   | write | APIM `whmcs-ops` subscription key |
+| `read-all-ffc-whmcs-api-identifier`        | read  | WHMCS API identifier              |
+| `read-all-ffc-whmcs-api-secret`            | read  | WHMCS API secret                  |
+| `read-all-ffc-apim-whmcs-subscription-key` | read  | APIM `whmcs-ops` subscription key |
 
 (There are also `*-ffc-whmcs-api-url` secrets in the vault; this action does not use them — the API
 URL is non-secret and passed inline by the workflows.)
 
 ## Inputs
 
-| Name                     | Required | Default                 | Description                                                                                                  |
-| ------------------------ | -------- | ----------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `scope`                  | no       | `write`                 | `write` loads `wr-all-*` (via `ffc-admin-kv-writer`); `read` loads `read-all-*` (via `ffc-admin-kv-reader`). |
-| `vault-name`             | no       | `kv-ffc-admin-prod-cbm` | Azure Key Vault name                                                                                         |
-| `azure-client-id`        | yes      | —                       | OIDC client ID of the identity with access to the vault. Pass `${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}`.   |
-| `azure-tenant-id`        | yes      | —                       | Azure tenant ID. Pass `${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}`.                                              |
-| `access-key-secret-name` | no       | `''` (skip)             | KV secret name for an optional WHMCS access key. The WHMCS API does not currently use one, so leave empty.   |
+| Name                         | Required | Default                 | Description                                                                                                                                                                                                               |
+| ---------------------------- | -------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scope`                      | no       | `write`                 | `write` loads `wr-all-*` (via `ffc-admin-kv-writer`); `read` loads `read-all-*` (via `ffc-admin-kv-reader`).                                                                                                              |
+| `vault-name`                 | no       | `kv-ffc-admin-prod-cbm` | Azure Key Vault name                                                                                                                                                                                                      |
+| `azure-client-id`            | yes      | —                       | OIDC client ID of the identity with access to the vault. Pass `${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}`.                                                                                                                |
+| `azure-tenant-id`            | yes      | —                       | Azure tenant ID. Pass `${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}`.                                                                                                                                                           |
+| `access-key-secret-name`     | no       | `''` (skip)             | KV secret name for an optional WHMCS access key. The WHMCS API does not currently use one, so leave empty.                                                                                                                |
+| `load-apim-subscription-key` | no       | `'true'`                | When true, also fetch `{scope}-ffc-apim-whmcs-subscription-key` and export `WHMCS_APIM_SUBSCRIPTION_KEY`. The WHMCS API is reached via APIM, which requires this key. Set `false` only to call the WHMCS origin directly. |
 
 ## Outputs
 
@@ -61,6 +64,9 @@ never inject extra variables):
 
 - `WHMCS_API_IDENTIFIER` — WHMCS API identifier
 - `WHMCS_API_SECRET` — WHMCS API secret
+- `WHMCS_APIM_SUBSCRIPTION_KEY` — APIM `whmcs-ops` subscription key (unless
+  `load-apim-subscription-key: 'false'`); the WHMCS scripts send it as the
+  `Ocp-Apim-Subscription-Key` header
 - `WHMCS_API_ACCESS_KEY` — only when `access-key-secret-name` is set
 
 All exported values are masked via `::add-mask::` before export, so they will not appear in logs.

@@ -106,10 +106,17 @@ defaults to `write` scope / `wr-all-*`):
 
 - `wr-all-ffc-whmcs-api-identifier` / `read-all-ffc-whmcs-api-identifier` → the WHMCS API identifier
 - `wr-all-ffc-whmcs-api-secret` / `read-all-ffc-whmcs-api-secret` → the WHMCS API secret
+- `wr-all-ffc-apim-whmcs-subscription-key` / `read-all-ffc-apim-whmcs-subscription-key` → the APIM
+  `whmcs-ops` subscription key (WHMCS calls route through APIM, which requires it)
 - `wr-all-ffc-whmcs-api-url` / `read-all-ffc-whmcs-api-url` → the API endpoint (non-secret; the
   workflows pass it inline, the action does not read it)
 
 WHMCS is a single credential, so the `read-all-*` and `wr-all-*` copies hold identical values.
+
+WHMCS API calls do not hit `freeforcharity.org` directly — they route through Azure API Management
+(`apim-ffc-gateway-prod`, static IP `20.231.116.111`) so WHMCS can allowlist one stable IP. See
+[docs/whmcs-apim-routing.md](whmcs-apim-routing.md) for that pattern (gateway URL, subscription key,
+and the required `CF-Connecting-IP` proxy-header setting in WHMCS).
 
 The OIDC identity (`ffc-admin-kv-writer`) holds **Key Vault Secrets Officer** vault-wide and a
 **federated credential** for `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:whmcs-prod`.

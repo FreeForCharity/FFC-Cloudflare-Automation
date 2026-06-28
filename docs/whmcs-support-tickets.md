@@ -37,6 +37,21 @@ stdout. Log **break/fix remediation steps** as internal notes:
 Manual/ad-hoc use: **"35. WHMCS - Open Ticket"** (dry-run by default) and **"37. WHMCS - Export
 Tickets"**.
 
+## Triage and templated responses (workflows 38/39)
+
+- **38. WHMCS - Tickets Triage** (`38-whmcs-tickets-triage.yml`) — **read-only**.
+  `workflow_dispatch` + a weekday `schedule`. Runs `whmcs-tickets-export.ps1` once per status
+  (default `Open,Customer-Reply`), writes a Markdown table of tickets needing attention to the job
+  summary, uploads CSV artifacts, and can upsert **one** rolling tracking issue labeled
+  `whmcs:triage` (`open_tracking_issue: true`). This only _surfaces_ tickets — it performs no ticket
+  writes — so the integration remains **one-way** (GitHub→WHMCS); replies are not synced back.
+- **39. WHMCS - Ticket Respond** (`39-whmcs-ticket-respond.yml`) — posts a templated reply or
+  internal note to one ticket using `scripts/whmcs-ticket-reply.ps1`. Template bodies live in
+  `config/whmcs-ticket-templates.json` (`ack_new_request`, `ack_break_fix`, `need_info`,
+  `internal_note`); `internal: true` templates become staff-only `AddTicketNote`s. Dry-run by
+  default. A live (`dry_run=false`) client-visible reply is **human-gated** and requires a real
+  WHMCS admin username (`admin_username`).
+
 ## Note on the environment approval gate
 
 All WHMCS workflows use the `whmcs-prod` environment, which requires a deployment approval, so each

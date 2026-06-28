@@ -35,7 +35,7 @@ jobs:
       - name: Export tickets (read-only)
         shell: pwsh
         env:
-          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
         run: |
           $ErrorActionPreference = 'Stop'
           $out = "${{ inputs.output_file }}"

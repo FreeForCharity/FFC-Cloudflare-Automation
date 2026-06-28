@@ -36,7 +36,7 @@ jobs:
       - name: Open ticket from issue and comment back
         shell: pwsh
         env:
-          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
           GH_TOKEN: ${{ github.token }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_TITLE: ${{ github.event.issue.title }}

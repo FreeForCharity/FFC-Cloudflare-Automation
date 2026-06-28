@@ -105,6 +105,29 @@ Cloudflare Registrar (project #157). See
 - **33. WHMCS -> Zeffy Payments Import (Draft) [WHMCS]**: build a draft import CSV from WHMCS
   transactions.
 
+### 34–43 WHMCS support, orders & products
+
+Onboarding / support (34–37) plus the support-triage, orders, and product-catalog automation
+(38–43). All run on `windows-latest` under the `whmcs-prod` environment and read credentials from
+Key Vault via the `whmcs-secrets-from-kv` action. Write workflows default to `dry_run=true`.
+
+- **34. WHMCS - Charity Onboard [WHMCS]**: AddClient + AddContact + AddOrder from an intake JSON.
+- **35. WHMCS - Open Ticket [WHMCS]** / **36. WHMCS - Issue to Ticket [WHMCS]** / **37. WHMCS -
+  Export Tickets [WHMCS]**: manual ticket open, issue→ticket (one-way), and ticket export.
+- **38. WHMCS - Tickets Triage [WHMCS]**: read-only. Surfaces Open/Customer-Reply tickets into the
+  job summary + CSV artifact; can upsert a rolling `whmcs:triage` tracking issue. See
+  [docs/whmcs-support-tickets.md](../../docs/whmcs-support-tickets.md).
+- **39. WHMCS - Ticket Respond [WHMCS]**: post a templated reply/internal note to one ticket
+  (`config/whmcs-ticket-templates.json`); dry-run by default, live reply is human-gated.
+- **41. WHMCS - Orders Triage [WHMCS]**: read-only. Summarizes orders by status (Pending/Fraud/
+  Active) and lists actionable Pending orders. See
+  [docs/whmcs-orders.md](../../docs/whmcs-orders.md).
+- **42. WHMCS - Order Update [WHMCS]**: accept/cancel/fraud one order; dry-run by default, no bulk
+  automation.
+- **43. WHMCS - Product Add [WHMCS]**: create a catalog product from
+  `config/whmcs-catalog-products.json`; dry-run by default. See
+  [docs/whmcs-product-catalog.md](../../docs/whmcs-product-catalog.md).
+
 ### 40. WPMUDEV - Export Sites/Domains (Read-only) [WPMUDEV]
 
 - Export hosted sites inventory from WPMUDEV Hub API for domain reconciliation. See
@@ -236,6 +259,11 @@ This workflow helps identify security vulnerabilities early in the development p
 | 8-whmcs-export-products.yml                | Manual (workflow_dispatch)                | 31. WHMCS: Export products                                                       |
 | 9-whmcs-export-payment-methods.yml         | Manual (workflow_dispatch)                | 32. WHMCS: Export payment methods                                                |
 | 10-whmcs-zeffy-payments-import-draft.yml   | Manual (workflow_dispatch)                | 33. WHMCS -> Zeffy: Build draft import CSV                                       |
+| 38-whmcs-tickets-triage.yml                | Manual + schedule                         | 38. WHMCS: Tickets triage (read-only)                                            |
+| 39-whmcs-ticket-respond.yml                | Manual (workflow_dispatch)                | 39. WHMCS: Ticket respond (templated, dry-run default)                           |
+| 41-whmcs-orders-triage.yml                 | Manual + schedule                         | 41. WHMCS: Orders triage (read-only)                                             |
+| 42-whmcs-order-update.yml                  | Manual (workflow_dispatch)                | 42. WHMCS: Order update accept/cancel/fraud (dry-run default)                    |
+| 43-whmcs-product-add.yml                   | Manual (workflow_dispatch)                | 43. WHMCS: Product add (catalog, dry-run default)                                |
 | 13-wpmudev-export-sites.yml                | Manual (workflow_dispatch)                | 40. WPMUDEV: Export sites/domains for reconciliation                             |
 | create-repo.yml                            | Manual (workflow_dispatch)                | 89. Repo: Create GitHub repo                                                     |
 | deploy-pages.yml                           | Pushes to `main` + manual                 | 90. Repo: Deploy GitHub Pages                                                    |

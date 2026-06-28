@@ -1,0 +1,25 @@
+{
+  "_comment": "Templated WHMCS ticket responses used by workflow 39 (whmcs-ticket-respond). 'internal': true -> AddTicketNote (staff-only); false -> AddTicketReply (client-visible, requires a WHMCS admin username). Bodies are intentionally generic with no PII; the workflow appends an optional extra_message. Edit/extend keys here without touching the workflow.",
+  "templates": {
+    "ack_new_request": {
+      "internal": false,
+      "subject_prefix": "[New Request]",
+      "body": "Thank you for contacting Free For Charity support. We have received your request and a volunteer will follow up shortly. If you have additional details (the affected domain, screenshots, or steps to reproduce), please reply to this ticket and they will be added to the record."
+    },
+    "ack_break_fix": {
+      "internal": false,
+      "subject_prefix": "[Break/Fix]",
+      "body": "Thank you for reporting this issue with your site. We have logged it as a break/fix request and a volunteer is reviewing it. We will reply here with progress. If the site is fully down, please confirm the affected domain so we can prioritize."
+    },
+    "need_info": {
+      "internal": false,
+      "subject_prefix": "[Info Needed]",
+      "body": "To continue with your request we need a little more information. Could you please reply with the affected domain, what you expected to happen, and what actually happened (including any error message)? Once we have that we can proceed."
+    },
+    "internal_note": {
+      "internal": true,
+      "subject_prefix": "",
+      "body": "Triage note: reviewed via the WHMCS tickets triage workflow. Recording current assessment and next action below."
+    }
+  }
+}

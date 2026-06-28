@@ -1,0 +1,125 @@
+name: '41. WHMCS - Orders Triage (Pending/Fraud/Active) [WHMCS]'
+run-name: 'WHMCS Orders Triage'
+
+# Read-only. Summarizes WHMCS orders by status into the job summary + CSV
+# artifacts, lists actionable Pending orders, and can optionally upsert ONE
+# rolling tracking issue. No order writes are performed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      statuses:
+        description: 'Comma-separated WHMCS order statuses to triage'
+        required: false
+        type: string
+        default: 'Pending,Fraud,Active'
+      api_url:
+        description: 'WHMCS API endpoint'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+      open_tracking_issue:
+        description: 'Upsert a rolling GitHub tracking issue with the pending orders'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    # Weekday mid-morning sweep (17 past 13:00 UTC). Adjust as needed.
+    - cron: '17 13 * * 1-5'
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+jobs:
+  orders_triage:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Export + summarize orders (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL:
+            ${{ inputs.api_url || 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php' }}
+          GH_TOKEN: ${{ github.token }}
+          STATUSES: ${{ inputs.statuses || 'Pending,Fraud,Active' }}
+          OPEN_ISSUE: ${{ inputs.open_tracking_issue }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $statuses = ($env:STATUSES -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          New-Item -ItemType Directory -Force -Path artifacts/whmcs | Out-Null
+
+          $counts = [ordered]@{}
+          $pending = [System.Collections.Generic.List[object]]::new()
+          foreach ($s in $statuses) {
+            $safe = ($s -replace '[^A-Za-z0-9]', '_')
+            $out = "artifacts/whmcs/orders_$safe.csv"
+            & pwsh -NoProfile -File .\scripts\whmcs-orders-export.ps1 -ApiUrl $env:WHMCS_API_URL -Status $s -OutputFile $out
+            if ($LASTEXITCODE -ne 0) { throw "Orders export failed for status '$s' (exit $LASTEXITCODE)." }
+            $rows = @()
+            if (Test-Path $out) { $rows = @(Import-Csv $out) }
+            $counts[$s] = $rows.Count
+            if ($s -eq 'Pending') { foreach ($r in $rows) { $pending.Add($r) } }
+          }
+
+          "## WHMCS orders triage" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          foreach ($k in $counts.Keys) {
+            "- **$k**: $($counts[$k])" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          $lines = [System.Collections.Generic.List[string]]::new()
+          if (@($pending).Count -gt 0) {
+            $lines.Add("### Pending orders (actionable)")
+            $lines.Add("")
+            $lines.Add("| order | client | name | amount | payment | date | products |")
+            $lines.Add("| --- | --- | --- | --- | --- | --- | --- |")
+            foreach ($o in $pending) {
+              $prod = ([string]$o.products) -replace '\|', '\\|'
+              $lines.Add("| $($o.ordernum) (id $($o.id)) | $($o.userid) | $($o.name) | $($o.amount) | $($o.paymentmethodname) | $($o.date) | $prod |")
+            }
+          } else {
+            $lines.Add("_No Pending orders._")
+          }
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          if ($env:OPEN_ISSUE -eq 'true') {
+            $title = 'WHMCS Orders: pending orders needing triage'
+            $bodyLines = [System.Collections.Generic.List[string]]::new()
+            $bodyLines.Add("Rolling triage of WHMCS orders by status: $($statuses -join ', ').")
+            $bodyLines.Add("")
+            foreach ($k in $counts.Keys) { $bodyLines.Add("- **$k**: $($counts[$k])") }
+            $bodyLines.Add("")
+            $bodyLines.Add("Last run: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)")
+            $bodyLines.Add("")
+            foreach ($l in $lines) { $bodyLines.Add($l) }
+            $bodyFile = Join-Path $env:RUNNER_TEMP 'orders-issue.md'
+            $bodyLines | Out-File -FilePath $bodyFile -Encoding utf8
+
+            $existing = (gh issue list --state open --label 'whmcs:triage' --search $title --json number,title --jq ".[] | select(.title==`"$title`") | .number" | Select-Object -First 1)
+            if ([string]::IsNullOrWhiteSpace($existing)) {
+              gh issue create --title $title --label 'whmcs:triage' --body-file $bodyFile
+            } else {
+              gh issue comment $existing --body-file $bodyFile
+            }
+            if ($LASTEXITCODE -ne 0) { throw "Failed to upsert tracking issue (exit $LASTEXITCODE)." }
+          }
+
+      - name: Upload orders CSV artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: whmcs_orders_triage
+          path: artifacts/whmcs/orders_*.csv
+          if-no-files-found: warn

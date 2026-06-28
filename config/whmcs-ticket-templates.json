@@ -20,6 +20,16 @@
       "internal": true,
       "subject_prefix": "",
       "body": "Triage note: reviewed via the WHMCS tickets triage workflow. Recording current assessment and next action below."
+    },
+    "international_techsoup": {
+      "internal": false,
+      "subject_prefix": "[Eligibility]",
+      "body": "Thank you for reaching out, and for the important work your organization does. Unfortunately, Free For Charity is only able to support nonprofits registered in the United States, so we are not able to provide our services for your organization, and I'm sorry to disappoint you. A great alternative is TechSoup, which supports nonprofits internationally through its global partner network - you can find your country's partner and the resources available to you at https://www.techsoup.org. We've closed out the related request on our side. Wishing you and your team all the best with your mission."
+    },
+    "international_note": {
+      "internal": true,
+      "subject_prefix": "",
+      "body": "International charity (country of record outside the United States) - not eligible for FFC services per policy. Referred to TechSoup (https://www.techsoup.org) and any related order(s) cancelled. See docs/whmcs-support-tickets.md."
     }
   }
 }

@@ -52,6 +52,28 @@ Tickets"**.
   default. A live (`dry_run=false`) client-visible reply is **human-gated** and requires a real
   WHMCS admin username (`admin_username`).
 
+## Eligibility policy: US nonprofits only (international → TechSoup)
+
+Free For Charity supports **nonprofits registered in the United States only**. When a request or
+order comes from an organization whose **country of record is outside the US**, the policy is to
+**gently decline, refer the organization to [TechSoup](https://www.techsoup.org)** (which supports
+nonprofits internationally through its global partner network), and **cancel any related order(s)**.
+
+Determining "international" — be sure before acting:
+
+- Use the **client's country of record** (`GetClientsDetails` → `countrycode`), not just the message
+  text or the order IP. Someone may be a US org whose staff is temporarily travelling abroad (their
+  client country is still `US`) — those are **eligible** and must not be declined.
+- **US territories are US**: `PR`, `VI` (U.S. Virgin Islands), `GU`, `AS`, `MP` are eligible — do
+  **not** treat them as international.
+- A request with **no client account** can only be judged from its message; decline only when the
+  international status is unambiguous (e.g. "registered in <country> outside the US").
+
+Templates: use **`international_techsoup`** (client-visible reply with the TechSoup referral) plus
+the staff-only **`international_note`** in `config/whmcs-ticket-templates.json`. Cancel the related
+order via **42. WHMCS - Order Update** (`-Action cancel`). As with all live writes, the reply and
+the cancellation are **human-gated** (explicit per-order authorization).
+
 ## Note on the environment approval gate
 
 All WHMCS workflows use the `whmcs-prod` environment, which requires a deployment approval, so each

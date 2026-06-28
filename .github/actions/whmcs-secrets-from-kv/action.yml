@@ -32,6 +32,14 @@ inputs:
       WHMCS API does not currently use an access key, and no such secret exists in the vault).
     required: false
     default: ''
+  load-apim-subscription-key:
+    description: >-
+      When 'true' (default), also fetch the APIM subscription key
+      ('{scope}-ffc-apim-whmcs-subscription-key') and export it as WHMCS_APIM_SUBSCRIPTION_KEY. The
+      WHMCS workflows call the API through APIM ('apim-ffc-gateway-prod'), whose 'whmcs' API
+      requires this key. Set to 'false' only when calling the WHMCS origin directly (not via APIM).
+    required: false
+    default: 'true'
 
 runs:
   using: composite
@@ -71,6 +79,7 @@ runs:
         INPUT_SCOPE: ${{ inputs.scope }}
         INPUT_VAULT_NAME: ${{ inputs.vault-name }}
         INPUT_ACCESS_KEY_SECRET_NAME: ${{ inputs.access-key-secret-name }}
+        INPUT_LOAD_APIM_KEY: ${{ inputs.load-apim-subscription-key }}
       run: |
         $ErrorActionPreference = 'Stop'
 
@@ -148,7 +157,26 @@ runs:
           $accessKeyNote = "loaded from '$accessKeyName'"
         }
 
-        Write-Host "Loaded $scope-scope WHMCS identifier + secret from KV vault '$vaultName' (values masked). Access key: $accessKeyNote."
+        # The WHMCS workflows call WHMCS through APIM (apim-ffc-gateway-prod), whose 'whmcs' API
+        # requires a subscription key. Fetch it (same scoped naming) and export it; the WHMCS
+        # PowerShell helpers send it as the Ocp-Apim-Subscription-Key header when present.
+        $apimNote = 'not requested'
+        if ($env:INPUT_LOAD_APIM_KEY -eq 'true') {
+          $apimKeyName = "$prefix-ffc-apim-whmcs-subscription-key"
+          $apimRaw = az keyvault secret show --vault-name $vaultName --name $apimKeyName --query value -o tsv
+          if ($LASTEXITCODE -ne 0) {
+            throw "az keyvault secret show for '$apimKeyName' failed (exit $LASTEXITCODE). The WHMCS APIM API requires a subscription key; set load-apim-subscription-key to 'false' only when calling the WHMCS origin directly (not via APIM)."
+          }
+          $apimKey = ([string]$apimRaw).TrimEnd([char]13, [char]10)
+          if ([string]::IsNullOrWhiteSpace($apimKey)) {
+            throw "Key Vault secret '$apimKeyName' returned empty from vault '$vaultName'."
+          }
+          Write-Host "::add-mask::$apimKey"
+          Add-EnvVar -Name 'WHMCS_APIM_SUBSCRIPTION_KEY' -Value $apimKey
+          $apimNote = "loaded from '$apimKeyName'"
+        }
+
+        Write-Host "Loaded $scope-scope WHMCS identifier + secret from KV vault '$vaultName' (values masked). Access key: $accessKeyNote. APIM subscription key: $apimNote."
 
 branding:
   icon: 'cloud'

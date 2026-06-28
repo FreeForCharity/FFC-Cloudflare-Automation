@@ -115,6 +115,13 @@ To wait for completion, poll in a background Bash task with an `until`/loop on
 
 WHMCS automation is **fully Key-Vault-backed and IP-stable**. The end-to-end path is:
 
+> **Validation status (2026-06-28):** the hardened path is proven in production. A keyless call to
+> the APIM gateway returns `401` (the `whmcs` API is `subscriptionRequired: true`), and a real
+> `windows-latest` runner dispatch of **`31. WHMCS - Export Products`**
+> (`8-whmcs-export-products.yml`) on `main` completed `success` — the `whmcs-secrets-from-kv` action
+> loaded `WHMCS_APIM_SUBSCRIPTION_KEY` (masked) and the export returned live data (30 products, 535
+> client products) through OIDC → KV → APIM → Cloudflare → WHMCS.
+
 ```
 GitHub runner ──OIDC──► Azure (ffc-admin-kv-writer) ──► Key Vault (creds + APIM key)
 runner ──POST + Ocp-Apim-Subscription-Key──► APIM apim-ffc-gateway-prod (egress 20.231.116.111)

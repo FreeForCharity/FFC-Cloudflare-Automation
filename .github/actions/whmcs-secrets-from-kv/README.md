@@ -158,7 +158,7 @@ GitHub Environment Secret update and no sync workflow needed.
   `cloudflare-tokens-from-kv` action already runs on `windows-latest` in workflow 02).
 - The action cannot be unit-tested in isolation (OIDC + Azure are real dependencies). Validate by
   dispatching any migrated WHMCS workflow (e.g. **31. WHMCS - Export Products**) once the real
-  secret value and GitHub environment secrets are in place.
+  secret value (in Key Vault) and the repository Variables are in place.
 
 ## Related
 

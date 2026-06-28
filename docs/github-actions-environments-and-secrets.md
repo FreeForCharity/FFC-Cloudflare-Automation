@@ -85,9 +85,10 @@ the same pattern as `cloudflare-tokens-from-kv`. The action exports `WHMCS_API_I
 `WHMCS_API_SECRET`, and (optionally) `WHMCS_API_ACCESS_KEY` to downstream steps, masked. Workflows
 no longer carry a copy of the WHMCS secret or hard-code the identifier inline.
 
-Repository **Variables** (required for OIDC → Key Vault — these are **identifiers, not passwords**,
-so they live at repository level, not as environment secrets; this keeps `whmcs-prod` free of Azure
-creds):
+Variables (required for OIDC → Key Vault — these are **identifiers, not passwords**). **Repository**
+Variables are recommended (so `whmcs-prod` holds no Azure creds at all), but because the workflows
+read them via the `vars.` context, environment-level Variables on `whmcs-prod` resolve too if you'd
+rather scope them there:
 
 - `WR_ALL_FFC_AZURE_KV_CLIENT_ID` (OIDC client id of the `ffc-admin-kv-writer` identity)
 - `WR_ALL_FFC_AZURE_TENANT_ID` (Azure tenant id)

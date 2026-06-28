@@ -49,13 +49,27 @@ jobs:
       - name: Export + summarize orders (read-only)
         shell: pwsh
         env:
-          WHMCS_API_URL:
-            ${{ inputs.api_url || 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php' }}
+          WHMCS_API_URL: ${{ inputs.api_url }}
           GH_TOKEN: ${{ github.token }}
           STATUSES: ${{ inputs.statuses || 'Pending,Fraud,Active' }}
           OPEN_ISSUE: ${{ inputs.open_tracking_issue }}
         run: |
           $ErrorActionPreference = 'Stop'
+
+          # On scheduled runs inputs.* are empty; default to the APIM gateway so
+          # the call stays on the static-IP path (not the IP-restricted origin).
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+
+          # Mask a name for PII-safe display in the (public) job summary / issue.
+          function Format-MaskedName {
+            param([string]$Name)
+            if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
+            $t = $Name.Trim()
+            if ($t.Length -le 1) { return '***' }
+            return $t.Substring(0, 1) + '***'
+          }
 
           $statuses = ($env:STATUSES -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
           New-Item -ItemType Directory -Force -Path artifacts/whmcs | Out-Null
@@ -88,7 +102,8 @@ jobs:
             $lines.Add("| --- | --- | --- | --- | --- | --- | --- |")
             foreach ($o in $pending) {
               $prod = ([string]$o.products) -replace '\|', '\\|'
-              $lines.Add("| $($o.ordernum) (id $($o.id)) | $($o.userid) | $($o.name) | $($o.amount) | $($o.paymentmethodname) | $($o.date) | $prod |")
+              $who = Format-MaskedName ([string]$o.name)
+              $lines.Add("| $($o.ordernum) (id $($o.id)) | $($o.userid) | $who | $($o.amount) | $($o.paymentmethodname) | $($o.date) | $prod |")
             }
           } else {
             $lines.Add("_No Pending orders._")
@@ -108,8 +123,9 @@ jobs:
             $bodyFile = Join-Path $env:RUNNER_TEMP 'orders-issue.md'
             $bodyLines | Out-File -FilePath $bodyFile -Encoding utf8
 
-            $existing = (gh issue list --state open --label 'whmcs:triage' --search $title --json number,title --jq ".[] | select(.title==`"$title`") | .number" | Select-Object -First 1)
-            if ([string]::IsNullOrWhiteSpace($existing)) {
+            $existing = gh issue list --state open --label 'whmcs:triage' --search $title --json number,title |
+              ConvertFrom-Json | Where-Object { $_.title -eq $title } | Select-Object -First 1 -ExpandProperty number
+            if ([string]::IsNullOrWhiteSpace([string]$existing)) {
               gh issue create --title $title --label 'whmcs:triage' --body-file $bodyFile
             } else {
               gh issue comment $existing --body-file $bodyFile

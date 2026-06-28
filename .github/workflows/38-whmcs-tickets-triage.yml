@@ -49,13 +49,27 @@ jobs:
       - name: Export + summarize tickets (read-only)
         shell: pwsh
         env:
-          WHMCS_API_URL:
-            ${{ inputs.api_url || 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php' }}
+          WHMCS_API_URL: ${{ inputs.api_url }}
           GH_TOKEN: ${{ github.token }}
           STATUSES: ${{ inputs.statuses || 'Open,Customer-Reply' }}
           OPEN_ISSUE: ${{ inputs.open_tracking_issue }}
         run: |
           $ErrorActionPreference = 'Stop'
+
+          # On scheduled runs inputs.* are empty; default to the APIM gateway so
+          # the call stays on the static-IP path (not the IP-restricted origin).
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+
+          # Mask an email for PII-safe display in the (public) job summary / issue.
+          function Format-MaskedEmail {
+            param([string]$Email)
+            if ([string]::IsNullOrWhiteSpace($Email)) { return '' }
+            $at = $Email.IndexOf('@')
+            if ($at -lt 1) { return '***' }
+            return '***' + $Email.Substring($at)
+          }
 
           $statuses = ($env:STATUSES -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
           New-Item -ItemType Directory -Force -Path artifacts/whmcs | Out-Null
@@ -83,7 +97,8 @@ jobs:
             $lines.Add("| --- | --- | --- | --- | --- | --- | --- |")
             foreach ($t in $all) {
               $subj = ([string]$t.subject) -replace '\|', '\\|'
-              $lines.Add("| $($t.tid) | $($t.deptname) | $($t.priority) | $($t.status) | $subj | $($t.email) | $($t.lastreply) |")
+              $req = Format-MaskedEmail ([string]$t.email)
+              $lines.Add("| $($t.tid) | $($t.deptname) | $($t.priority) | $($t.status) | $subj | $req | $($t.lastreply) |")
             }
           } else {
             $lines.Add("_No tickets in the selected statuses._")
@@ -101,8 +116,9 @@ jobs:
             $bodyFile = Join-Path $env:RUNNER_TEMP 'triage-issue.md'
             $bodyLines | Out-File -FilePath $bodyFile -Encoding utf8
 
-            $existing = (gh issue list --state open --label 'whmcs:triage' --search $title --json number,title --jq ".[] | select(.title==`"$title`") | .number" | Select-Object -First 1)
-            if ([string]::IsNullOrWhiteSpace($existing)) {
+            $existing = gh issue list --state open --label 'whmcs:triage' --search $title --json number,title |
+              ConvertFrom-Json | Where-Object { $_.title -eq $title } | Select-Object -First 1 -ExpandProperty number
+            if ([string]::IsNullOrWhiteSpace([string]$existing)) {
               gh issue create --title $title --label 'whmcs:triage' --body-file $bodyFile
             } else {
               gh issue comment $existing --body-file $bodyFile

@@ -38,7 +38,7 @@ jobs:
       - name: Run onboarding
         shell: pwsh
         env:
-          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
           INTAKE_JSON: ${{ inputs.intake_json }}
         run: |
           $ErrorActionPreference = 'Stop'

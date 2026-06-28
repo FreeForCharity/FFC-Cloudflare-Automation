@@ -61,7 +61,7 @@ jobs:
       - name: Open ticket
         shell: pwsh
         env:
-          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
           TICKET_SUBJECT: ${{ inputs.subject }}
           TICKET_MESSAGE: ${{ inputs.message }}
           TICKET_EMAIL: ${{ inputs.client_email }}

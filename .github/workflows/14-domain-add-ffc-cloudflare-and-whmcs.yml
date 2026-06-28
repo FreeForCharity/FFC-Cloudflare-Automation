@@ -84,7 +84,7 @@ jobs:
         id: check
         shell: pwsh
         env:
-          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = "${{ steps.meta.outputs.domain }}"
@@ -313,7 +313,7 @@ jobs:
       - name: Update WHMCS nameservers to FFC custom nameservers
         shell: pwsh
         env:
-          WHMCS_API_URL: 'https://freeforcharity.org/hub/includes/api.php'
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = "${{ needs.cloudflare_zone_create.outputs.domain }}"

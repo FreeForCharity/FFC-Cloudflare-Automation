@@ -5,10 +5,11 @@ on:
   workflow_dispatch:
     inputs:
       api_url:
-        description: 'WHMCS API endpoint (e.g., https://freeforcharity.org/hub/includes/api.php)'
+        description:
+          'WHMCS API endpoint (e.g., https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php)'
         required: false
         type: string
-        default: 'https://freeforcharity.org/hub/includes/api.php'
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
       clients_output:
         description: 'WHMCS clients CSV output path'
         required: false

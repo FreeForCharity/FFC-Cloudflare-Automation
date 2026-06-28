@@ -43,13 +43,24 @@ self-contained export scripts did not have to be modified.
 
 ## Required WHMCS configuration (one-time, manual)
 
-Allowlist the APIM IP on the WHMCS API credential so WHMCS accepts APIM's traffic:
+In **WHMCS admin → Configuration → System Settings → General Settings → Security**:
 
-- **WHMCS admin → System Settings → API Credentials** → edit the credential used by automation →
-  **Allowed IPs** → add **`20.231.116.111`** → Save.
-- (Legacy installs: **Setup → General Settings → Security → API IP Access Restriction**.)
+1. **API IP Access Restriction** → add **`20.231.116.111`** (the APIM gateway IP). This is the only
+   IP WHMCS needs to allow for the API.
+2. **Proxy IP Header** → set to **`CF-Connecting-IP`** (or `CF_CONNECTING_IP` if the field requires
+   the underscore form). **This step is essential.**
 
-After this, the migrated workflows run cleanly: OIDC → Key Vault → WHMCS via APIM.
+Why step 2 matters: `freeforcharity.org` sits behind **Cloudflare** (the Cloudflare ranges are in
+WHMCS's _Trusted Proxies_), so the real path is `runner → APIM → Cloudflare → WHMCS`. By default
+WHMCS reads the client IP from `X-Forwarded-For`, and APIM **appends the original caller's
+(runner's) dynamic IP** to that header — so WHMCS would see the runner, not APIM, and reject it.
+Setting the proxy header to `CF-Connecting-IP` makes WHMCS use the IP that actually connected to
+Cloudflare — which is APIM's stable `20.231.116.111` — and the runner IP in `X-Forwarded-For` is
+ignored. (This is also the generally-correct setting for a Cloudflare-fronted WHMCS: normal
+visitors' IPs come from the same header.)
+
+After both steps, the migrated workflows run cleanly: OIDC → Key Vault → WHMCS via APIM. Verified
+with a live `GetProducts` call returning `result: success`.
 
 ## Security note
 

@@ -2,8 +2,8 @@
   "_comment": "Catalog (status-marker) products created via scripts/whmcs-product-add.ps1 (AddProduct) or the WHMCS admin UI. 'pid' is null until the product is created; backfill it from the products export (8-whmcs-export-products) afterwards. 'gid' is a WHMCS product group id and MUST be supplied by an admin (groups are created in the admin UI). These products mark a charity's true infrastructure state and are assigned to a charity via scripts/whmcs-order-add.ps1 (AddOrder). They are parallel to, not replacements for, the legacy WordPress hosting products.",
   "products": {
     "domain_registered_cloudflare": {
-      "pid": null,
-      "gid": null,
+      "pid": 39,
+      "gid": 6,
       "name": "Domain Registered in Cloudflare (Registrar)",
       "type": "other",
       "paymenttype": "free",
@@ -11,8 +11,8 @@
       "description": "Marks that this domain's REGISTRATION is held at Cloudflare Registrar - not merely that Cloudflare provides DNS / nameservers for it. Use this to distinguish a domain FFC actually registers/renews through Cloudflare from one that only uses Cloudflare DNS."
     },
     "hosted_github_pages": {
-      "pid": null,
-      "gid": null,
+      "pid": 40,
+      "gid": 6,
       "name": "Hosted by GitHub Pages",
       "type": "other",
       "paymenttype": "free",

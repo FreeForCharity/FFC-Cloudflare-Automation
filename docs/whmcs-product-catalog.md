@@ -12,6 +12,13 @@ These are **status markers**, not billable services; they default to a free paym
 hidden from the public order form. They are **parallel to** (not replacements for) the legacy
 WordPress hosting products, so reporting can tell the cohorts apart.
 
+> **Status (live):** both products now exist in WHMCS, created via `AddProduct` through the APIM
+> path in group **`gid 6`** (the FFC charity/nonprofit services group, alongside the FFC onboarding
+> products): **`pid 39`** = _Domain Registered in Cloudflare (Registrar)_, **`pid 40`** = _Hosted by
+> GitHub Pages_ (both `type=other`, `paytype=free`, hidden). The ids are recorded in
+> `config/whmcs-catalog-products.json`. Assign them to a charity via the existing `AddOrder` path
+> (see below).
+
 ## How products are created
 
 WHMCS exposes an `AddProduct` admin API action. A non-mutating capability probe

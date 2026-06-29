@@ -74,6 +74,38 @@ the staff-only **`international_note`** in `config/whmcs-ticket-templates.json`.
 order via **42. WHMCS - Order Update** (`-Action cancel`). As with all live writes, the reply and
 the cancellation are **human-gated** (explicit per-order authorization).
 
+### Scope matters: scan Active, not just Pending/Fraud
+
+A foreign org can sit in any order state. When auditing eligibility, scan **all** states — `Active`
+(already provisioned and being served), `Pending` (awaiting acceptance), and `Fraud` (already
+auto-blocked) — by mapping each order's `userid` to its client `countrycode`. Note the practical
+differences:
+
+- **`Fraud`** orders are already blocked; `CancelOrder` only acts on `Pending`, so there is nothing
+  to cancel — they are effectively already dead.
+- **`Pending`** orders are cancellable via `CancelOrder` (omit `cancelsub` on $0/no-gateway orders;
+  passing it triggers a gateway subscription-cancel that errors).
+- **`Active`** orders/services are **live** — see the wind-down rule below.
+
+### Existing **active** foreign clients (wind-down, never an abrupt cutoff)
+
+An active foreign client is a charity **whose site/services we are currently hosting**. Cancelling
+or terminating these takes a **live nonprofit website offline immediately** — an irreversible,
+outward-facing action. **Never** bulk-terminate active services as part of an eligibility sweep.
+
+The required process is a **deliberate wind-down**, one client at a time, with human authorization
+at each step:
+
+1. **Notify** the charity (`international_techsoup` reply, plus your direct appeal contact in case
+   of misclassification) with an explicit **grace period** (e.g. 30–60 days).
+2. **Offer a data/site export** so the organization does not lose its work.
+3. **Terminate only after** the notice window — _or_ **grandfather** long-standing active charities
+   if leadership prefers not to disrupt them.
+
+Record the decision and date per client (staff note via `AddTicketNote` / `international_note`). The
+country determination caveats above (country of record, US territories, travelling staff) apply
+equally here — be **100% sure** before touching a live charity.
+
 ## Note on the environment approval gate
 
 All WHMCS workflows use the `whmcs-prod` environment, which requires a deployment approval, so each

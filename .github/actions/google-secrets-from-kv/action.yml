@@ -1,0 +1,148 @@
+name: 'Google credentials from Key Vault'
+description: >-
+  Authenticate to Azure via OIDC, fetch the FFC Google service-account key (JSON) from Azure Key
+  Vault, mask it, write it to a runner-temp file, and expose GOOGLE_APPLICATION_CREDENTIALS
+  (Application Default Credentials) to subsequent steps. Mirrors cloudflare-tokens-from-kv /
+  whmcs-secrets-from-kv. Key Vault is the single source of truth for the Google credential — it is
+  never copied into a GitHub secret.
+
+author: 'Free For Charity'
+
+inputs:
+  scope:
+    description: >-
+      Credential scope: 'read' loads read-all-* (via the KV-reader identity); 'write' loads wr-all-*
+      (via the KV-writer identity). Google reporting is read-only, so this defaults to 'read'. The
+      values may be identical until a write-capable service account is introduced for provisioning
+      (Wave 3); scope only selects which identity/secret copy is used.
+    required: false
+    default: 'read'
+  vault-name:
+    description: 'Azure Key Vault name that holds the Google service-account key.'
+    required: false
+    default: 'kv-ffc-admin-prod-cbm'
+  azure-client-id:
+    description: 'OIDC client ID for the managed identity that has Get permission on the vault.'
+    required: true
+  azure-tenant-id:
+    description: 'Azure tenant ID for OIDC federation.'
+    required: true
+
+outputs:
+  credentials-file:
+    description: 'Absolute path to the temp SA key file (also exported as GOOGLE_APPLICATION_CREDENTIALS).'
+    value: ${{ steps.fetch.outputs.credentials_file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+        INPUT_AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        INPUT_AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ($env:INPUT_SCOPE -notin @('read', 'write')) {
+          throw "Invalid scope '$($env:INPUT_SCOPE)'. Expected 'read' or 'write'."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_VAULT_NAME)) {
+          throw "Input 'vault-name' is empty."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_CLIENT_ID)) {
+          throw "Input 'azure-client-id' is empty. Pass secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID (read) or vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID (write) from the caller."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_TENANT_ID)) {
+          throw "Input 'azure-tenant-id' is empty. Pass the matching READ_ALL/WR_ALL Azure tenant id from the caller."
+        }
+
+    - name: Azure login (OIDC)
+      uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        allow-no-subscriptions: true
+
+    - name: Fetch Google SA key from Key Vault
+      id: fetch
+      shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        $scope = $env:INPUT_SCOPE
+        $vaultName = $env:INPUT_VAULT_NAME
+        $prefix = if ($scope -eq 'write') { 'wr-all' } else { 'read-all' }
+        $secretName = "$prefix-ffc-google-sa-key"
+
+        # GitHub's ::add-mask:: only masks up to the first newline, so a multi-line value would leak
+        # its later lines (and a line beginning with '::' could be read as a workflow command). Mask
+        # each non-blank line of the secret individually. The SA private key spans many lines.
+        function Protect-Secret {
+          param([string]$Value)
+          foreach ($line in ($Value -split "[\r\n]+")) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) { Write-Host "::add-mask::$line" }
+          }
+        }
+
+        # Write to GITHUB_ENV with a randomized heredoc delimiter (matching the other secrets-from-kv
+        # actions) so a value that ever contains a newline cannot inject extra env vars.
+        function Add-EnvVar {
+          param([string]$Name, [string]$Value)
+          $delim = "ghadelim_$([guid]::NewGuid().ToString('N'))"
+          if ($Value -match [regex]::Escape($delim)) {
+            throw "Refusing to write '$Name': value collides with the generated heredoc delimiter."
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "$Name<<$delim"
+          Add-Content -Path $env:GITHUB_ENV -Value $Value
+          Add-Content -Path $env:GITHUB_ENV -Value $delim
+        }
+
+        # az is an external command — $ErrorActionPreference does NOT cause it to throw on non-zero
+        # exit. Check $LASTEXITCODE explicitly so a KV permission/auth failure surfaces as a step
+        # failure instead of an empty value.
+        $keyRaw = az keyvault secret show --vault-name $vaultName --name $secretName --query value -o tsv
+        if ($LASTEXITCODE -ne 0) {
+          throw "az keyvault secret show for '$secretName' failed (exit $LASTEXITCODE). Check the identity's role on vault '$vaultName' and that the secret exists."
+        }
+
+        # az ... -o tsv returns the raw value with a trailing newline; strip only trailing CR/LF.
+        $key = ([string]$keyRaw).TrimEnd([char]13, [char]10)
+
+        if ([string]::IsNullOrWhiteSpace($key)) {
+          throw "Key Vault secret '$secretName' returned empty from vault '$vaultName'."
+        }
+        if ($key -eq 'PLACEHOLDER-SET-VIA-AZURE-PORTAL') {
+          throw "Key Vault '$secretName' still holds the scaffolding placeholder. Store the real Google service-account JSON key in '$vaultName' before running (see docs/google-api.md)."
+        }
+
+        # Validate it parses as the expected SA key JSON before we trust it downstream.
+        try {
+          $obj = $key | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+          throw "Key Vault secret '$secretName' is not valid JSON. Expected a Google service-account key file."
+        }
+        if ($obj.type -ne 'service_account' -or [string]::IsNullOrWhiteSpace($obj.client_email) -or [string]::IsNullOrWhiteSpace($obj.private_key)) {
+          throw "Key Vault secret '$secretName' is not a service-account key (missing type/client_email/private_key)."
+        }
+
+        # Mask before any further use so nothing can appear in logs.
+        Protect-Secret $key
+        Write-Host "::add-mask::$($obj.private_key_id)"
+
+        # ADC file lives only on the runner for the job's lifetime ($RUNNER_TEMP is wiped per job).
+        $credFile = Join-Path $env:RUNNER_TEMP 'ffc-google-sa.json'
+        Set-Content -Path $credFile -Value $key -NoNewline -Encoding ascii
+
+        Add-EnvVar -Name 'GOOGLE_APPLICATION_CREDENTIALS' -Value $credFile
+        "credentials_file=$credFile" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+        Write-Host "Loaded $scope-scope Google SA key from KV vault '$vaultName' for $($obj.client_email) (value masked; ADC file written to RUNNER_TEMP)."
+
+branding:
+  icon: 'cloud'
+  color: 'blue'

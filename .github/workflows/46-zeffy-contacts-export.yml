@@ -1,0 +1,62 @@
+name: '46. Zeffy - Contacts Export (PII masked) [ZEFFY]'
+run-name: 'Zeffy Contacts Export (PII masked)'
+
+# Read-only export of Zeffy contacts/donors (GET /api/v1/contacts) via OIDC -> Key Vault. The
+# contacts endpoint is the donor directory and is PII end-to-end (email / name / phone / address);
+# this workflow runs the export WITHOUT -IncludePii, so those columns are written blank and only the
+# pseudonymous contact id (UUID), donor type, giving totals/counts/dates, currency, and country are
+# kept. The PII passes through the ephemeral runner only and is never persisted, so the uploaded
+# artifact is safe to keep on this public repo. Dispatch-only (no schedule). One workflow per
+# endpoint.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  zeffy_contacts_export:
+    runs-on: windows-latest
+    environment: zeffy-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Zeffy organization API key from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/zeffy-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Export contacts (PII masked)
+        shell: pwsh
+        env:
+          # Pinned to the canonical Zeffy host. Not a workflow input so a dispatcher cannot point
+          # the Bearer key at an arbitrary host on this public repo.
+          ZEFFY_API_URL: 'https://api.zeffy.com'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts/zeffy | Out-Null
+
+          # No -IncludePii: donor PII columns are written blank. The artifact is safe to retain on
+          # the public repo.
+          & pwsh -NoProfile -File .\scripts\zeffy-contacts-export.ps1 -BaseUrl $env:ZEFFY_API_URL -OutputFile 'artifacts/zeffy/zeffy_contacts.csv'
+          if ($LASTEXITCODE -ne 0) { throw "Zeffy contacts export failed (exit $LASTEXITCODE)." }
+
+          $f = 'artifacts/zeffy/zeffy_contacts.csv'
+          if (-not (Test-Path $f)) { throw "Expected output file not found: $f" }
+
+          $n = (Import-Csv $f | Measure-Object).Count
+          "## Zeffy contacts export (PII masked)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- $f : $n row(s)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload contacts CSV artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: zeffy_contacts
+          path: artifacts/zeffy/zeffy_contacts.csv
+          if-no-files-found: error
+          retention-days: 7

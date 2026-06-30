@@ -49,7 +49,12 @@ param(
 
     [Parameter()]
     [ValidateRange(1, 1000000)]
-    [int]$MaxRows = 100000
+    [int]$MaxRows = 100000,
+
+    # Include donor PII (buyer email / name / company) in the CSV. OFF by default so the output is
+    # safe to store as a public-repo artifact; the buyer contact_id (a UUID) is always kept for joins.
+    [Parameter()]
+    [switch]$IncludePii
 )
 
 $ErrorActionPreference = 'Stop'
@@ -99,14 +104,14 @@ try {
             campaign_cat   = $p.campaign_category
             description    = Get-ZeffyText $p.description
             contact_id     = Get-ZeffyText $p.contact
-            buyer_email    = if ($p.buyer) { Get-ZeffyText $p.buyer.email } else { $null }
-            buyer_first    = if ($p.buyer) { Get-ZeffyText $p.buyer.first_name } else { $null }
-            buyer_last     = if ($p.buyer) { Get-ZeffyText $p.buyer.last_name } else { $null }
-            buyer_company  = if ($p.buyer) { Get-ZeffyText $p.buyer.company_name } else { $null }
+            buyer_email    = if ($IncludePii -and $p.buyer) { Get-ZeffyText $p.buyer.email } else { $null }
+            buyer_first    = if ($IncludePii -and $p.buyer) { Get-ZeffyText $p.buyer.first_name } else { $null }
+            buyer_last     = if ($IncludePii -and $p.buyer) { Get-ZeffyText $p.buyer.last_name } else { $null }
+            buyer_company  = if ($IncludePii -and $p.buyer) { Get-ZeffyText $p.buyer.company_name } else { $null }
             is_recurring   = if ($p.recurring) { $p.recurring.is_recurring } else { $false }
             recur_interval = if ($p.recurring) { Get-ZeffyText $p.recurring.interval } else { $null }
             payment_method = if ($p.payment_method) { Get-ZeffyText $p.payment_method.type } else { $null }
-            receipt_url    = Get-ZeffyText $p.receipt_url
+            receipt_url    = if ($IncludePii) { Get-ZeffyText $p.receipt_url } else { $null }
             item_count     = if ($p.items) { @($p.items).Count } else { 0 }
         }
     }

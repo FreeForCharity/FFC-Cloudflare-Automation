@@ -133,13 +133,25 @@ Key Vault via the `whmcs-secrets-from-kv` action. Write workflows default to `dr
 - Export hosted sites inventory from WPMUDEV Hub API for domain reconciliation. See
   [docs/wpmudev-domain-inventory.md](../../docs/wpmudev-domain-inventory.md) for details.
 
-### 44. Zeffy - Export (Payments/Contacts/Campaigns) [ZEFFY]
+### 44–46 Zeffy - Export [ZEFFY]
 
-- **Read-only** pull of Zeffy donations, donors, and campaigns from the Zeffy public API via OIDC →
-  Key Vault (key loaded by `zeffy-secrets-from-kv`; no key stored in GitHub). `workflow_dispatch` +
-  weekly schedule; uploads a `zeffy_export` CSV artifact. Complements the one-way WHMCS→Zeffy import
-  (workflow 33) by letting FFC pull Zeffy data back for reconciliation/reporting. See
-  [docs/zeffy-api.md](../../docs/zeffy-api.md).
+Read-only pulls from the Zeffy public API via OIDC → Key Vault (key loaded by
+`zeffy-secrets-from-kv`; no key stored in GitHub). **One workflow per endpoint**, all
+**dispatch-only** (no schedule) while we evaluate the API, and **none write donor PII** to an
+artifact. Complements the one-way WHMCS→Zeffy import (workflow 33). See
+[docs/zeffy-api.md](../../docs/zeffy-api.md).
+
+- **44. Zeffy - Campaigns Export [ZEFFY]**: campaigns/events only (`GET /api/v1/campaigns`). This
+  endpoint returns no personal data, so artifact `zeffy_campaigns` is inherently safe on this public
+  repo.
+- **45. Zeffy - Payments Export (PII masked) [ZEFFY]**: payments (`GET /api/v1/payments`) with donor
+  PII **masked** (buyer email/name/company and receipt URL blanked). Artifact `zeffy_payments`.
+- **46. Zeffy - Contacts Export (PII masked) [ZEFFY]**: donors (`GET /api/v1/contacts`) with PII
+  **masked** (email/name/phone/address blanked; only the pseudonymous UUID, giving totals/counts,
+  and country kept). Artifact `zeffy_contacts`.
+
+The `-IncludePii` switch on the payments/contacts scripts is for local/private runs only; no
+workflow passes it.
 
 ### 89–98 Repo workflows
 
@@ -273,7 +285,9 @@ This workflow helps identify security vulnerabilities early in the development p
 | 42-whmcs-order-update.yml                  | Manual (workflow_dispatch)                | 42. WHMCS: Order update accept/cancel/fraud (dry-run default)                    |
 | 43-whmcs-product-add.yml                   | Manual (workflow_dispatch)                | 43. WHMCS: Product add (catalog, dry-run default)                                |
 | 13-wpmudev-export-sites.yml                | Manual (workflow_dispatch)                | 40. WPMUDEV: Export sites/domains for reconciliation                             |
-| 44-zeffy-export.yml                        | Manual + schedule                         | 44. Zeffy: Export payments/contacts/campaigns (read-only)                        |
+| 44-zeffy-campaigns-export.yml              | Manual (workflow_dispatch)                | 44. Zeffy: Campaigns export (read-only, no PII)                                  |
+| 45-zeffy-payments-export.yml               | Manual (workflow_dispatch)                | 45. Zeffy: Payments export (read-only, PII masked)                               |
+| 46-zeffy-contacts-export.yml               | Manual (workflow_dispatch)                | 46. Zeffy: Contacts export (read-only, PII masked)                               |
 | create-repo.yml                            | Manual (workflow_dispatch)                | 89. Repo: Create GitHub repo                                                     |
 | deploy-pages.yml                           | Pushes to `main` + manual                 | 90. Repo: Deploy GitHub Pages                                                    |
 | ci.yml                                     | PRs and pushes to `main`                  | 91. Repo: Lint workflows, validate scripts, check formatting and sensitive files |

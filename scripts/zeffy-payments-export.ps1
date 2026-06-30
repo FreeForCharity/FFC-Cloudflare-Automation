@@ -85,29 +85,29 @@ try {
         $amountCents = 0
         [void][int]::TryParse([string]$p.amount, [ref]$amountCents)
         [pscustomobject]@{
-            id               = $p.id
-            created          = ConvertFrom-UnixSeconds $p.created
-            amount_cents     = $p.amount
-            amount           = if ($null -ne $p.amount) { [math]::Round(([double]$p.amount) / 100, 2) } else { $null }
-            eligible_cents   = $p.eligible_amount
-            currency         = $p.currency
-            status           = $p.status
-            type             = $p.type
-            refund_status    = $p.refund_status
-            campaign_id      = $p.campaign_id
-            campaign_type    = $p.campaign_type
-            campaign_cat     = $p.campaign_category
-            description      = Get-ZeffyText $p.description
-            contact_id       = Get-ZeffyText $p.contact
-            buyer_email      = if ($p.buyer) { Get-ZeffyText $p.buyer.email } else { $null }
-            buyer_first      = if ($p.buyer) { Get-ZeffyText $p.buyer.first_name } else { $null }
-            buyer_last       = if ($p.buyer) { Get-ZeffyText $p.buyer.last_name } else { $null }
-            buyer_company    = if ($p.buyer) { Get-ZeffyText $p.buyer.company_name } else { $null }
-            is_recurring     = if ($p.recurring) { $p.recurring.is_recurring } else { $false }
-            recur_interval   = if ($p.recurring) { Get-ZeffyText $p.recurring.interval } else { $null }
-            payment_method   = if ($p.payment_method) { Get-ZeffyText $p.payment_method.type } else { $null }
-            receipt_url      = Get-ZeffyText $p.receipt_url
-            item_count       = if ($p.items) { @($p.items).Count } else { 0 }
+            id             = $p.id
+            created        = ConvertFrom-UnixSeconds $p.created
+            amount_cents   = $p.amount
+            amount         = if ($null -ne $p.amount) { [math]::Round(([double]$p.amount) / 100, 2) } else { $null }
+            eligible_cents = $p.eligible_amount
+            currency       = $p.currency
+            status         = $p.status
+            type           = $p.type
+            refund_status  = $p.refund_status
+            campaign_id    = $p.campaign_id
+            campaign_type  = $p.campaign_type
+            campaign_cat   = $p.campaign_category
+            description    = Get-ZeffyText $p.description
+            contact_id     = Get-ZeffyText $p.contact
+            buyer_email    = if ($p.buyer) { Get-ZeffyText $p.buyer.email } else { $null }
+            buyer_first    = if ($p.buyer) { Get-ZeffyText $p.buyer.first_name } else { $null }
+            buyer_last     = if ($p.buyer) { Get-ZeffyText $p.buyer.last_name } else { $null }
+            buyer_company  = if ($p.buyer) { Get-ZeffyText $p.buyer.company_name } else { $null }
+            is_recurring   = if ($p.recurring) { $p.recurring.is_recurring } else { $false }
+            recur_interval = if ($p.recurring) { Get-ZeffyText $p.recurring.interval } else { $null }
+            payment_method = if ($p.payment_method) { Get-ZeffyText $p.payment_method.type } else { $null }
+            receipt_url    = Get-ZeffyText $p.receipt_url
+            item_count     = if ($p.items) { @($p.items).Count } else { 0 }
         }
     }
     $rows | Export-Csv -Path $OutputFile -NoTypeInformation -Encoding UTF8

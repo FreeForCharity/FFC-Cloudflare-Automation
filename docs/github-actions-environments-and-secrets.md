@@ -12,8 +12,8 @@ This is used for:
 - `wpmudev-prod` (WPMUDEV domain/site inventory workflows)
 
 > **Current required-reviewer config (audited 2026-06-30 by workflow
-> `99. Repo - Audit Environment Approval Gates`).** Gated (require reviewer `clarkemoyer`, so jobs
-> pause for approval): `cloudflare-prod`, `cloudflare-prod-write`, `whmcs-prod`, `github-prod`,
+> `99. Repo - Audit Environment Approval Gates [Repo]`).** Gated (require reviewer `clarkemoyer`, so
+> jobs pause for approval): `cloudflare-prod`, `cloudflare-prod-write`, `whmcs-prod`, `github-prod`,
 > `m365-prod`, `wpmudev-prod`. Not gated (runs proceed): `cloudflare-prod-read`, `zeffy-prod`. See
 > [workflow-safety-and-approvals.md](workflow-safety-and-approvals.md) for the per-workflow table;
 > re-run workflow 99 to refresh after any change in _Settings → Environments_.

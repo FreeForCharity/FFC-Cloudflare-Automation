@@ -1,0 +1,113 @@
+name: 'Zeffy API key from Key Vault'
+description: >-
+  Authenticate to Azure via OIDC, fetch the FFC Zeffy organization API key from Azure Key Vault,
+  mask it, and expose it to subsequent steps as the env var ZEFFY_API_KEY. Mirrors the
+  whmcs-secrets-from-kv / cloudflare-tokens-from-kv pattern: Key Vault is the single source of truth
+  and GitHub consumes the key at runtime via OIDC (no API key copy stored in GitHub).
+
+author: 'Free For Charity'
+
+inputs:
+  scope:
+    description: >-
+      Key scope: 'write' loads the wr-all-* secret (via the ffc-admin-kv-writer identity); 'read'
+      loads the read-all-* secret (via ffc-admin-kv-reader). The Zeffy API is read-only, so the two
+      copies hold identical values; scope only selects which identity/copy is used. Defaults to
+      'write' to match the identity that already has a federated credential configured.
+    required: false
+    default: 'write'
+  vault-name:
+    description: 'Azure Key Vault name that holds the Zeffy API key.'
+    required: false
+    default: 'kv-ffc-admin-prod-cbm'
+  azure-client-id:
+    description: 'OIDC client ID for the managed identity that has Get permission on the vault.'
+    required: true
+  azure-tenant-id:
+    description: 'Azure tenant ID for OIDC federation.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+        INPUT_AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        INPUT_AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ($env:INPUT_SCOPE -notin @('read', 'write')) {
+          throw "Invalid scope '$($env:INPUT_SCOPE)'. Expected 'read' or 'write'."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_VAULT_NAME)) {
+          throw "Input 'vault-name' is empty."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_CLIENT_ID)) {
+          throw "Input 'azure-client-id' is empty. Pass vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID (a repository-level Variable) from the caller."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_TENANT_ID)) {
+          throw "Input 'azure-tenant-id' is empty. Pass vars.WR_ALL_FFC_AZURE_TENANT_ID (a repository-level Variable) from the caller."
+        }
+
+    - name: Azure login (OIDC)
+      uses: azure/login@v3
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        allow-no-subscriptions: true
+
+    - name: Fetch Zeffy API key from Key Vault
+      shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        $scope = $env:INPUT_SCOPE
+        $vaultName = $env:INPUT_VAULT_NAME
+        $prefix = if ($scope -eq 'write') { 'wr-all' } else { 'read-all' }
+        $keyName = "$prefix-ffc-zeffy-api-key"
+
+        # Writes a value to GITHUB_ENV using GitHub's heredoc-delimited format so a value that ever
+        # contains a newline (or a line that looks like a delimiter) cannot inject extra env vars
+        # into later steps. The delimiter is randomized per value.
+        function Add-EnvVar {
+          param([string]$Name, [string]$Value)
+          $delim = "ghadelim_$([guid]::NewGuid().ToString('N'))"
+          if ($Value -match [regex]::Escape($delim)) {
+            throw "Refusing to write '$Name': value collides with the generated heredoc delimiter."
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "$Name<<$delim"
+          Add-Content -Path $env:GITHUB_ENV -Value $Value
+          Add-Content -Path $env:GITHUB_ENV -Value $delim
+        }
+
+        # az is an external command — $ErrorActionPreference does NOT cause it to throw on non-zero
+        # exit. Check $LASTEXITCODE explicitly so a KV permission/auth failure surfaces as a step
+        # failure instead of an empty value.
+        $raw = az keyvault secret show --vault-name $vaultName --name $keyName --query value -o tsv
+        if ($LASTEXITCODE -ne 0) {
+          throw "az keyvault secret show for '$keyName' failed (exit $LASTEXITCODE). Check the identity's role on vault '$vaultName' and that the secret exists."
+        }
+
+        # az ... -o tsv returns the raw, unquoted value with a trailing newline; strip only the
+        # trailing CR/LF so a key that legitimately ends with other characters is preserved exactly.
+        $apiKey = ([string]$raw).TrimEnd([char]13, [char]10)
+        if ([string]::IsNullOrWhiteSpace($apiKey)) {
+          throw "Key Vault secret '$keyName' returned empty from vault '$vaultName'."
+        }
+        if ($apiKey -eq 'PLACEHOLDER-SET-VIA-AZURE-PORTAL') {
+          throw "Key Vault '$keyName' still holds the scaffolding placeholder. The Zeffy organization owner must generate an API key (Zeffy Settings -> Integrations) and set it in '$vaultName' before running."
+        }
+
+        Write-Host "::add-mask::$apiKey"
+        Add-EnvVar -Name 'ZEFFY_API_KEY' -Value $apiKey
+        Write-Host "Loaded $scope-scope Zeffy API key from KV vault '$vaultName' (value masked)."
+
+branding:
+  icon: 'gift'
+  color: 'purple'

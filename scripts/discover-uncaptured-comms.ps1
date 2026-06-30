@@ -32,6 +32,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Defense-in-depth: only these org-owned shared mailboxes may ever be queried, regardless of the
+# -Mailboxes input. This bounds the blast radius until the Exchange Online application access policy
+# is confirmed/enforced (a broader/accidental Graph grant still can't be pointed elsewhere).
+$approvedMailboxes = @(
+    'contact@freeforcharity.org', 'support@freeforcharity.org', 'info@freeforcharity.org'
+)
+
 # Personal email providers are never an org "candidate domain" for reconciliation.
 $personalProviders = @(
     'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com',
@@ -81,6 +88,14 @@ try {
         throw 'No Graph token: pass -AccessToken or set GRAPH_ACCESS_TOKEN (see 47-discover-uncaptured-comms.yml).'
     }
 
+    # Validate the requested mailboxes against the allowlist up front; fail fast on anything else.
+    $requested = @($Mailboxes -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    foreach ($mbx in $requested) {
+        if ($approvedMailboxes -notcontains $mbx.ToLowerInvariant()) {
+            throw "Mailbox '$mbx' is not in the approved org shared-mailbox allowlist ($($approvedMailboxes -join ', '))."
+        }
+    }
+
     # Onboarded domains (reconciliation set) from the sites-list. Be tolerant of the exact field
     # name; collect anything that looks like a bare domain.
     $onboarded = New-Object System.Collections.Generic.HashSet[string]
@@ -105,7 +120,7 @@ try {
     $rowsOut = New-Object System.Collections.Generic.List[object]
     $scanned = 0; $charity = 0; $uncaptured = 0
 
-    foreach ($mbx in ($Mailboxes -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+    foreach ($mbx in $requested) {
         # Inquiries live in the Inbox. Encode the mailbox and the $filter value so UPNs / reserved
         # characters can't break the request.
         $mbxEnc = [uri]::EscapeDataString($mbx)

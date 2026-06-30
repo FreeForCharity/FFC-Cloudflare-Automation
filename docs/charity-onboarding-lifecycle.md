@@ -5,9 +5,25 @@ fully online: **domain → Cloudflare zone → M365 email → website → WHMCS 
 Each phase links to its deep-dive doc; this page is the order, the hand-offs, and the "is this step
 done?" checks.
 
-Workflow numbers below are the display numbers shown in the Actions UI (and in
-[.github/workflows/README.md](../.github/workflows/README.md)). For how safe each run is and which
-ones pause for approval, see [workflow-safety-and-approvals.md](workflow-safety-and-approvals.md).
+Workflow numbers below are the display numbers shown in the Actions UI (the `NN.` name prefix),
+**not the workflow file names** (the two differ — see the safety doc). For how safe each run is and
+which ones pause for approval, see
+[workflow-safety-and-approvals.md](workflow-safety-and-approvals.md).
+
+> **This is not one-shot.** Several phases pause for a human to **approve an environment
+> deployment** before the live step runs (the required reviewer is currently `clarkemoyer`), and the
+> website-provision `repo` step is chained behind DNS approval. Expect the rhythm: _dispatch → wait
+> for approval → continue_. Phases that gate are marked **⏸ waits for approval** below.
+
+## Prerequisites & roles
+
+- **Operator** (files/assigns issues, dispatches workflows): needs **write** access to this repo.
+- **Approver** (approves environment deployments for `cloudflare-prod-write`, `whmcs-prod`,
+  `github-prod`): a required reviewer, currently `clarkemoyer`. Live phases can't proceed without
+  them.
+- **Already configured (not per-charity):** Azure Key Vault holds every credential and workflows
+  fetch them via OIDC (nothing secret in GitHub); Cloudflare, the M365 tenant, WHMCS, and the FFC
+  website template are already connected.
 
 ## How work is requested
 
@@ -39,7 +55,7 @@ workflow. The relevant intake templates:
 - **Done when:** you know whether the domain already has a Cloudflare zone and M365 presence
   (via 01) and a WHMCS client (via 04 / 30).
 
-## Phase 1 — Domain under FFC Cloudflare
+## Phase 1 — Domain under FFC Cloudflare ⏸ waits for approval
 
 Pick the path that matches the domain's origin:
 
@@ -54,7 +70,7 @@ Pick the path that matches the domain's origin:
 - **Done when:** the Cloudflare zone exists and is active (nameservers delegated). Re-run **01** to
   confirm.
 
-## Phase 2 — Standard DNS + Microsoft 365 email
+## Phase 2 — Standard DNS + Microsoft 365 email ⏸ waits for approval
 
 - **Run (dry-run first):** **03. Domain - Enforce Standard (GitHub Apex + M365)**. This applies the
   FFC-standard records — GitHub Pages apex A/AAAA + `www` CNAME, and M365 MX/SPF/DMARC — and can
@@ -68,7 +84,7 @@ Pick the path that matches the domain's origin:
   [end-to-end-testing-m365-cloudflare.md](end-to-end-testing-m365-cloudflare.md).
 - **Done when:** **07. DNS - Audit Compliance** reports the domain compliant, and DKIM validates.
 
-## Phase 3 — Website repo + GitHub Pages
+## Phase 3 — Website repo + GitHub Pages ⏸ waits for approval
 
 - **Trigger:** file template **02** (full metadata: org name, footer contact, board, socials) or
   **07** (admin-minimal, domain only) and **assign** the issue — assignment fires **15. Website -
@@ -85,7 +101,7 @@ Pick the path that matches the domain's origin:
   [fidelity audit](ffc-ex-clone-fidelity-audit.md) before cutover.
 - **Done when:** the repo exists, Pages serves the apex over HTTPS, and the maintainer has access.
 
-## Phase 4 — WHMCS account + onboarding order
+## Phase 4 — WHMCS account + onboarding order ⏸ waits for approval
 
 - **Run (dry-run first):** **34. WHMCS - Charity Onboard** — creates one WHMCS client, adds the
   primary + any secondary contacts (with routing/sub-account flags), and places the onboarding order
@@ -95,10 +111,15 @@ Pick the path that matches the domain's origin:
 - **Catalog note:** if a needed product/status-marker doesn't exist yet, add it with **43. WHMCS -
   Product Add** (`config/whmcs-catalog-products.json`, dry-run default). See
   [whmcs-product-catalog.md](whmcs-product-catalog.md).
+- **Pick the products that match the charity's true state.** Status-marker products are additive and
+  describe what's actually true — e.g. _Domain Registered in Cloudflare (Registrar)_ (the registrar
+  path in Phase 1) is distinct from a DNS-only zone, and _Hosted by GitHub Pages_ is distinct from
+  the legacy WordPress hosting products. Assign the markers that apply alongside the onboarding
+  product rather than instead of it.
 - **Done when:** the dry-run preview is correct, the live run reports the client id + order id, and
   the order shows in **41. WHMCS - Orders Triage**.
 
-## Phase 5 — Ongoing support
+## Phase 5 — Ongoing support ⏸ waits for approval
 
 - Charities (or admins) file template **08 (Support Request)** / **09 (Break/Fix)**, which open a
   WHMCS ticket via **36. WHMCS - Issue → Ticket** (one-way GitHub → WHMCS).
@@ -117,6 +138,22 @@ Pick the path that matches the domain's origin:
 - **Donations:** reconcile WHMCS transactions against Zeffy using **33. WHMCS → Zeffy Import Draft**
   and the read-only Zeffy exports **44–46** (see [zeffy-api.md](zeffy-api.md)).
 
+## Unhappy paths
+
+- **Zone already exists** (Phase 0/1 shows a Cloudflare zone): skip creation and go straight to
+  Phase 2 enforce-standard to true-up the records. Don't re-run 02/09 against an existing zone.
+- **M365 domain verification pending** (Phase 2): the domain reads unverified until the verification
+  records propagate. Re-run **20. M365 - Domain Preflight** to recheck; don't enable DKIM (**23**)
+  until the domain is verified.
+- **Maintainer login dropped** (Phase 3): if the provision run logs
+  `Skipping invalid GitHub username for maintainer`, the issue body almost certainly had prose
+  **after** the last `###` field (it gets slurped into the field value). Fix the body and re-assign,
+  or add the collaborator with **98. Repo - Add Collaborator**.
+- **Dry-run preview looks wrong** (any write phase): do **not** flip `dry_run=false`. The preview is
+  the redacted exact request — fix the intake issue/config and re-run dry first.
+- **Run stuck at `status: waiting`:** that's the environment approval gate, not a failure. Ping the
+  approver (`clarkemoyer`); the job resumes when approved.
+
 ## Rollback / recovery notes
 
 - **DNS:** every DNS-changing workflow previews first (`dry_run=true`); to revert, re-run **05.
@@ -127,3 +164,21 @@ Pick the path that matches the domain's origin:
   WHMCS - Order Update** (`action=cancel`, dry-run default).
 - **Domain registration (#12)** and **collaborator add (#98)** are **not** reversible by a workflow
   — treat their typed-confirm / live-default behavior accordingly.
+
+## Worked example
+
+Bringing `examplecharity.org` online from scratch:
+
+1. **01. Domain - Status** confirms no Cloudflare zone or M365 presence; **04. Export Inventory**
+   confirms no WHMCS client. Clear to onboard.
+2. File **template 01** to buy the domain → **12. Registrar Register** with `mode=execute-register`
+   and `confirm_domain=examplecharity.org` → ⏸ approve `cloudflare-prod-write` → zone created.
+3. **03. Enforce Standard** dry-run → review the planned GitHub Pages + M365 records → re-run with
+   `dry_run=false` → ⏸ approve → records applied. **24. Add Tenant Domain** + **23. Enable DKIM**,
+   then verify with **20. M365 - Domain Preflight**.
+4. File and **assign template 02** → **15. Website - Provision** → ⏸ approve DNS; the chained `repo`
+   job then creates `FFC-EX-examplecharity.org`, enables Pages, and adds the maintainer.
+5. **34. WHMCS - Charity Onboard** dry-run → confirm the client/contacts/order preview →
+   `dry_run=false` → ⏸ approve `whmcs-prod` → client + order created; add the _Hosted by GitHub
+   Pages_ status marker (**43**).
+6. Done. Future tickets arrive via **template 08/09** → triage/respond with **38/39**.

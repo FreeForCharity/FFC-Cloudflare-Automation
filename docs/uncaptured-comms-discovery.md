@@ -42,7 +42,10 @@ prospective charities with no record in the system.
    back further for a one-time backfill). M365 is pulled by the workflow; Google Voice is pulled by
    the operator in an interactive session.
 2. **Classify** charity-signal vs noise. Drop parking receipts, 2FA / verification codes, and
-   personal messages. Extract `org`, `domain`, `phone`, `firstSeen`, `intent`.
+   personal messages. The current M365 scaffold emits, per charity message, only masked fields:
+   `receivedDate`, `mailbox`, a first-initial-masked sender, the org `candidateDomain` (the sender's
+   email domain, org-only), and `status` (existing / uncaptured / unknown). Richer fields (intent,
+   firstSeen) are future work.
 3. **Reconcile** each candidate domain/org against:
    - `sites-list/sites_list.json` (the reconciled domain inventory) — this is what the automated
      script reconciles against today, and
@@ -89,14 +92,13 @@ Pulled in an authorized interactive session (the human-in-the-loop model in acti
 scan (pagination run to the 2023-06-29 boundary) counted **6,193 Google Voice text threads** over
 the 3 years — Gmail's own ~201 estimate is wrong — of which **~45% are charity-related** (calibrated
 on 2,250 classified), i.e. **≈ 2,780 charity/volunteer threads** (estimate; threads, not individual
-messages). Three texts illustrate each disposition:
+messages). Three dispositions, paraphrased (no direct message quotes):
 
-- **Already onboarded** — `theafghanistanaffairs.org` (has an `FFC-EX` repo), POC `****8351`, asking
-  about finalizing the site and _"For Candid, do I need to do anything?"_ → reconciles to an
+- **Already onboarded** — `theafghanistanaffairs.org` (has an `FFC-EX` repo), POC `****8351`:
+  following up on its site build and asking whether anything is needed for Candid → reconciles to an
   existing site; not a new lead, but shows support volume the system doesn't currently count.
-- **Uncaptured lead** — `LoveMustWin.org`, POC `****1515`: _"get everything in one spot for my
-  website … I submitted a ticket."_ → a charity actively engaging with no clean record in the
-  metrics inventory.
+- **Uncaptured lead** — `LoveMustWin.org`, POC `****1515`: actively engaging (wants its services
+  consolidated, references a submitted ticket) with no clean record in the metrics inventory.
 - **Uncaptured prospect** — POC `****1706`: a prospective senior-community initiative weighing
   whether to become a nonprofit → top-of-funnel lead invisible to WHMCS today.
 

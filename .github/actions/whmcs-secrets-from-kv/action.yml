@@ -1,9 +1,9 @@
 name: 'WHMCS secrets from Key Vault'
 description: >-
-  Authenticate to Azure via OIDC, fetch the FFC WHMCS API identifier, secret, and (optionally)
-  access key from Azure Key Vault, mask them, and expose them to subsequent steps as the env vars
-  WHMCS_API_IDENTIFIER, WHMCS_API_SECRET, and WHMCS_API_ACCESS_KEY. Replaces direct consumption of
-  GH Environment Secret copies of the WHMCS credential.
+  Authenticate to Azure via OIDC, fetch the FFC WHMCS API identifier and secret (and, via APIM, the
+  subscription key) from Azure Key Vault, mask them, and expose them to subsequent steps as the env
+  vars WHMCS_API_IDENTIFIER, WHMCS_API_SECRET, and WHMCS_APIM_SUBSCRIPTION_KEY. Replaces direct
+  consumption of GH Environment Secret copies of the WHMCS credential.
 
 author: 'Free For Charity'
 
@@ -26,12 +26,6 @@ inputs:
   azure-tenant-id:
     description: 'Azure tenant ID for OIDC federation.'
     required: true
-  access-key-secret-name:
-    description: >-
-      Key Vault secret name holding the optional WHMCS API access key. Leave empty to skip (the
-      WHMCS API does not currently use an access key, and no such secret exists in the vault).
-    required: false
-    default: ''
   load-apim-subscription-key:
     description: >-
       When 'true' (default), also fetch the APIM subscription key
@@ -78,14 +72,12 @@ runs:
       env:
         INPUT_SCOPE: ${{ inputs.scope }}
         INPUT_VAULT_NAME: ${{ inputs.vault-name }}
-        INPUT_ACCESS_KEY_SECRET_NAME: ${{ inputs.access-key-secret-name }}
         INPUT_LOAD_APIM_KEY: ${{ inputs.load-apim-subscription-key }}
       run: |
         $ErrorActionPreference = 'Stop'
 
         $scope = $env:INPUT_SCOPE
         $vaultName = $env:INPUT_VAULT_NAME
-        $accessKeyName = $env:INPUT_ACCESS_KEY_SECRET_NAME
         $prefix = if ($scope -eq 'write') { 'wr-all' } else { 'read-all' }
 
         $identifierName = "$prefix-ffc-whmcs-api-identifier"
@@ -152,21 +144,6 @@ runs:
         Add-EnvVar -Name 'WHMCS_API_IDENTIFIER' -Value $identifier
         Add-EnvVar -Name 'WHMCS_API_SECRET' -Value $secret
 
-        $accessKeyNote = 'not requested'
-        if (-not [string]::IsNullOrWhiteSpace($accessKeyName)) {
-          $akRaw = az keyvault secret show --vault-name $vaultName --name $accessKeyName --query value -o tsv
-          if ($LASTEXITCODE -ne 0) {
-            throw "az keyvault secret show for '$accessKeyName' failed (exit $LASTEXITCODE). Set access-key-secret-name to '' if the WHMCS API does not use an access key, or grant access and create the secret."
-          }
-          $accessKey = ([string]$akRaw).TrimEnd([char]13, [char]10)
-          if ([string]::IsNullOrWhiteSpace($accessKey)) {
-            throw "Key Vault secret '$accessKeyName' returned empty from vault '$vaultName'. Set access-key-secret-name to '' if the WHMCS API does not use an access key."
-          }
-          Protect-Secret $accessKey
-          Add-EnvVar -Name 'WHMCS_API_ACCESS_KEY' -Value $accessKey
-          $accessKeyNote = "loaded from '$accessKeyName'"
-        }
-
         # The WHMCS workflows call WHMCS through APIM (apim-ffc-gateway-prod), whose 'whmcs' API
         # requires a subscription key. Fetch it (same scoped naming) and export it; the WHMCS
         # PowerShell helpers send it as the Ocp-Apim-Subscription-Key header when present.
@@ -186,7 +163,7 @@ runs:
           $apimNote = "loaded from '$apimKeyName'"
         }
 
-        Write-Host "Loaded $scope-scope WHMCS identifier + secret from KV vault '$vaultName' (values masked). Access key: $accessKeyNote. APIM subscription key: $apimNote."
+        Write-Host "Loaded $scope-scope WHMCS identifier + secret from KV vault '$vaultName' (values masked). APIM subscription key: $apimNote."
 
 branding:
   icon: 'cloud'

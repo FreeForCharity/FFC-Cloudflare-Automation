@@ -82,8 +82,8 @@ Used by the WHMCS export workflows and any automation that updates WHMCS domain 
 As of the AZ KV refactor, WHMCS workflows fetch the WHMCS API identifier + secret from Azure Key
 Vault at runtime via OIDC, using the `./.github/actions/whmcs-secrets-from-kv` composite action —
 the same pattern as `cloudflare-tokens-from-kv`. The action exports `WHMCS_API_IDENTIFIER`,
-`WHMCS_API_SECRET`, and (optionally) `WHMCS_API_ACCESS_KEY` to downstream steps, masked. Workflows
-no longer carry a copy of the WHMCS secret or hard-code the identifier inline.
+`WHMCS_API_SECRET`, and `WHMCS_APIM_SUBSCRIPTION_KEY` to downstream steps, masked. Workflows no
+longer carry a copy of the WHMCS secret or hard-code the identifier inline.
 
 Variables (required for OIDC → Key Vault — these are **identifiers, not passwords**). **Repository**
 Variables are recommended (so `whmcs-prod` holds no Azure creds at all), but because the workflows
@@ -132,8 +132,9 @@ GitHub secret update needed.
 
 Before the refactor the secret was held as a GH Environment Secret named
 `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` (for identifier `zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu`), with an
-optional `WHMCS_API_ACCESS_KEY`. It can be removed from the `whmcs-prod` environment once the Key
-Vault path is validated; keeping it in place during cutover does no harm (nothing reads it anymore).
+optional `WHMCS_API_ACCESS_KEY`. Both are safe to remove from the `whmcs-prod` environment: nothing
+reads them — the WHMCS API access key is not used (the action no longer fetches or exports it), and
+the identifier/secret now come from Key Vault.
 
 ## `m365-prod`
 

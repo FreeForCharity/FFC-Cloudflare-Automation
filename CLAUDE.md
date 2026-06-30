@@ -175,6 +175,8 @@ runner ──POST + Ocp-Apim-Subscription-Key──► APIM apim-ffc-gateway-pro
   key; GitHub consumes them at runtime via OIDC. Never reintroduce a GH-environment copy of the
   secret (that drift is exactly what broke the Cloudflare token for 4 months). The legacy GH secret
   `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` / `WHMCS_API_ACCESS_KEY` is **deprecated** (nothing reads it)
-  and can be deleted from `whmcs-prod`.
+  and can be deleted from `whmcs-prod`. The `whmcs-secrets-from-kv` action no longer fetches or
+  exports a WHMCS access key at all (the WHMCS API does not use one); the per-script `-AccessKey`
+  parameter remains as a generic, inert WHMCS API option.
 - **Rotate** the WHMCS secret or the APIM key by adding a new version of the relevant
   `*-ffc-whmcs-*` / `*-ffc-apim-whmcs-subscription-key` KV secret — no GitHub change needed.

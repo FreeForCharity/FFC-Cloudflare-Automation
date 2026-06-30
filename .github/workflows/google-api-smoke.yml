@@ -9,7 +9,8 @@ on:
   workflow_dispatch:
     inputs:
       property_id:
-        description: 'GA4 numeric property id (e.g. 123456789). Falls back to vars.GA_PROPERTY_ID_PRIMARY.'
+        description:
+          'GA4 numeric property id (e.g. 123456789). Falls back to vars.GA_PROPERTY_ID_PRIMARY.'
         required: false
         type: string
   workflow_call:
@@ -53,7 +54,8 @@ jobs:
       - name: GA4 Data API connectivity check
         shell: pwsh
         env:
-          PROPERTY_ID: ${{ inputs.property_id != '' && inputs.property_id || vars.GA_PROPERTY_ID_PRIMARY }}
+          PROPERTY_ID:
+            ${{ inputs.property_id != '' && inputs.property_id || vars.GA_PROPERTY_ID_PRIMARY }}
         run: |
           $ErrorActionPreference = 'Stop'
           . "$env:GITHUB_WORKSPACE/scripts/google-api-common.ps1"

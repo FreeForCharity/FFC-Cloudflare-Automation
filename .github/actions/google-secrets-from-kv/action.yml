@@ -30,7 +30,8 @@ inputs:
 
 outputs:
   credentials-file:
-    description: 'Absolute path to the temp SA key file (also exported as GOOGLE_APPLICATION_CREDENTIALS).'
+    description:
+      'Absolute path to the temp SA key file (also exported as GOOGLE_APPLICATION_CREDENTIALS).'
     value: ${{ steps.fetch.outputs.credentials_file }}
 
 runs:

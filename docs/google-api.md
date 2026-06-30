@@ -24,43 +24,43 @@ GitHub runner ──OIDC──► Azure (federated cred on google-prod-read / -w
 
 ## Components in this repo
 
-| Path | Purpose |
-| --- | --- |
+| Path                                                | Purpose                                                                                                                                 |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `.github/actions/google-secrets-from-kv/action.yml` | OIDC -> KV; writes the SA key to a runner-temp ADC file, exports `GOOGLE_APPLICATION_CREDENTIALS`. Twin of `cloudflare-tokens-from-kv`. |
-| `scripts/google-api-common.ps1` | `Get-GoogleAccessToken` (signed-JWT bearer flow, pure .NET RSA — no gcloud/Python needed), `Invoke-GoogleApi`. |
-| `.github/workflows/google-api-smoke.yml` | Read-only GA4 connectivity gate; reusable via `workflow_call`. |
-| `scripts/google-analytics-report.ps1` | Wave 1 GA4 report -> aggregate JSON. `-DryRun` emits a stub without contacting Google. |
+| `scripts/google-api-common.ps1`                     | `Get-GoogleAccessToken` (signed-JWT bearer flow, pure .NET RSA — no gcloud/Python needed), `Invoke-GoogleApi`.                          |
+| `.github/workflows/google-api-smoke.yml`            | Read-only GA4 connectivity gate; reusable via `workflow_call`.                                                                          |
+| `scripts/google-analytics-report.ps1`               | Wave 1 GA4 report -> aggregate JSON. `-DryRun` emits a stub without contacting Google.                                                  |
 
 ## Environments & OIDC identifiers
 
-| Environment | Scope | KV secret prefix | Azure OIDC identity |
-| --- | --- | --- | --- |
-| `google-prod-read` | read (reporting) | `read-all-` | KV-reader; federated cred `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:google-prod-read` |
-| `google-prod-write` | write (provisioning, Wave 3+) | `wr-all-` | KV-writer; **requires human approval** |
+| Environment         | Scope                         | KV secret prefix | Azure OIDC identity                                                                                    |
+| ------------------- | ----------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------ |
+| `google-prod-read`  | read (reporting)              | `read-all-`      | KV-reader; federated cred `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:google-prod-read` |
+| `google-prod-write` | write (provisioning, Wave 3+) | `wr-all-`        | KV-writer; **requires human approval**                                                                 |
 
 OIDC identifiers are **non-secret GUIDs** passed from the caller:
-`secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID` / `READ_ALL_FFC_AZURE_TENANT_ID` (read path) — same names the
-Cloudflare read workflows use. Non-secret GA property ids live as repo Variables
+`secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID` / `READ_ALL_FFC_AZURE_TENANT_ID` (read path) — same names
+the Cloudflare read workflows use. Non-secret GA property ids live as repo Variables
 (`vars.GA_PROPERTY_ID_PRIMARY`, etc.), never as secrets.
 
 ## APIs enabled per wave (least privilege)
 
-| Wave | API | Scope granted |
-| --- | --- | --- |
-| 0/1 | Analytics Data API | `analytics.readonly` |
-| 2 | Search Console API | `webmasters.readonly` |
-| 2 | Site Verification API | `siteverification` (gated write) |
-| 3 | Analytics Admin API | property admin, scoped to the FFC GA4 account (gated write) |
+| Wave | API                   | Scope granted                                               |
+| ---- | --------------------- | ----------------------------------------------------------- |
+| 0/1  | Analytics Data API    | `analytics.readonly`                                        |
+| 2    | Search Console API    | `webmasters.readonly`                                       |
+| 2    | Site Verification API | `siteverification` (gated write)                            |
+| 3    | Analytics Admin API   | property admin, scoped to the FFC GA4 account (gated write) |
 
 Enable an API only when its wave starts; grant the SA the minimum role for that API only.
 
 ## Provisioned environment (#509 / #510 — completed 2026-06-30)
 
 Project **`ffc-api-prod`** (number `281370217264`) under the `freeforcharity.org` org. The only
-billing account is currently **closed**, but the **Analytics Data API is free and needs no billing**.
-Read-only SA **`ffc-ga-reader@ffc-api-prod.iam.gserviceaccount.com`** created; its key is stored in
-Key Vault as `read-all`/`wr-all-ffc-google-analytics-sa-key`. The commands below are the provisioning
-+ rotation record.
+billing account is currently **closed**, but the **Analytics Data API is free and needs no
+billing**. Read-only SA **`ffc-ga-reader@ffc-api-prod.iam.gserviceaccount.com`** created; its key is
+stored in Key Vault as `read-all`/`wr-all-ffc-google-analytics-sa-key`. The commands below are the
+provisioning and rotation record.
 
 ```bash
 # 1. Project + (free) API
@@ -87,20 +87,21 @@ ffcadmin.org properties; record the numeric property ids.
 
 ## KV secret naming: `cbm` vs `ffc`
 
-- **`cbm-…`** — credential attributed to a **named user** (acts as `clarkemoyer@freeforcharity.org`),
-  e.g. the Workspace Admin SDK set (domain-wide delegation impersonates the admin).
-- **`ffc-…`** — **non-named service identity** that acts as itself, e.g. `ffc-google-analytics-sa-key`
-  (the GA reader SA is added directly as a property Viewer).
+- **`cbm-…`** — credential attributed to a **named user** (acts as
+  `clarkemoyer@freeforcharity.org`), e.g. the Workspace Admin SDK set (domain-wide delegation
+  impersonates the admin).
+- **`ffc-…`** — **non-named service identity** that acts as itself, e.g.
+  `ffc-google-analytics-sa-key` (the GA reader SA is added directly as a property Viewer).
 
 ### Universal Clarke-Moyer Google credentials (provisioned 2026-06-30, Wave 5 use)
 
 The `cbm-google-workspace-*` placeholders were filled with real values so future Workspace workflows
 need no re-authorization: `admin-user` = `clarkemoyer@freeforcharity.org`, `customer-id` =
 `C00vzt6sw`, `service-account-email` = `ffc-workspace-admin@ffc-api-prod.iam.gserviceaccount.com`,
-`service-account-key` = that SA's key. **One manual step remains before any Workspace API call** (not
-a credential): authorize the SA's domain-wide delegation in **Admin console → Security → API controls
-→ Domain-wide delegation** using client id **`110347116631668841237`** with the scopes the workflow
-needs.
+`service-account-key` = that SA's key. **One manual step remains before any Workspace API call**
+(not a credential): authorize the SA's domain-wide delegation in **Admin console → Security → API
+controls → Domain-wide delegation** using client id **`110347116631668841237`** with the scopes the
+workflow needs.
 
 Then in GitHub: create environments `google-prod-read` (no approval) and `google-prod-write`
 (required reviewer `clarkemoyer`); add the matching Azure federated credentials; set repo Variables
@@ -111,6 +112,7 @@ Then in GitHub: create environments `google-prod-read` (no approval) and `google
 ```bash
 gh workflow run google-api-smoke.yml --ref main -f property_id=<GA4_PROPERTY_ID>
 ```
+
 Green => the OIDC -> KV -> Google chain works with no Google secret in GitHub.
 
 ## Safety conventions
@@ -136,9 +138,9 @@ GitHub change. To revoke, delete the old SA key in GCP:
 ## Tagging: always via GTM, never hardcoded
 
 FFC sites are tagged through **Google Tag Manager**, not by hardcoding `gtag` in site code. Why:
-change tags with no per-site redeploy, manage GA + Clarity + Meta + conversions in one layer, central
-consent handling, no fleet drift, and full API automation. Hardcode `gtag` only for a one-off,
-self-contained site with a specific reason.
+change tags with no per-site redeploy, manage GA + Clarity + Meta + conversions in one layer,
+central consent handling, no fleet drift, and full API automation. Hardcode `gtag` only for a
+one-off, self-contained site with a specific reason.
 
 GA4 is configured in GTM as a **Google tag** (type `googtag`, param `tagId` = the stream's
 measurement id `G-XXXX`) firing on the built-in **All Pages** trigger (id `2147479553`). Manage via
@@ -169,8 +171,8 @@ entity; multiple streams only when one entity spans domains/subdomains/apps.**
 
 GTM access is **container-level**, so charities that self-administer need their **own container**:
 
-- **One FFC-owned GTM account**, **one container per charity site**. FFC keeps **account admin**; the
-  charity POC gets **container Edit/Publish** on only their container → full self-service, no
+- **One FFC-owned GTM account**, **one container per charity site**. FFC keeps **account admin**;
+  the charity POC gets **container Edit/Publish** on only their container → full self-service, no
   cross-charity exposure. (A shared container cannot delegate per-charity admin.)
 - FFC seeds three **default tags** per container — GA4 (→ the charity's measurement id), Microsoft
   Clarity, Meta Pixel — and hands over; the charity extends with their own.
@@ -182,8 +184,11 @@ GTM access is **container-level**, so charities that self-administer need their 
 ## Per-charity onboarding flow (Wave 3/4 — all API)
 
 For `FFC-EX-<domain>`:
-1. **GA:** create `<domain> - GA4` property under `FFC Supported Charities` → web stream → measurement id.
-2. **GTM:** create the charity's container → seed GA4 / Clarity / Meta default tags on All Pages → publish → `GTM-XXXX`.
+
+1. **GA:** create `<domain> - GA4` property under `FFC Supported Charities` → web stream →
+   measurement id.
+2. **GTM:** create the charity's container → seed GA4 / Clarity / Meta default tags on All Pages →
+   publish → `GTM-XXXX`.
 3. **Delegate:** grant the charity POC container Edit/Publish.
 4. **Site:** provisioning workflow injects `GTM-XXXX` into the site config.
 5. **Reporting:** pipeline reads the property (account-level grant) → JSON → dashboard.

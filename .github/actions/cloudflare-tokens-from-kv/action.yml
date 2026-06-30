@@ -96,10 +96,24 @@ runs:
         Write-Host "::add-mask::$ffc"
         Write-Host "::add-mask::$cm"
 
+        # Write to GITHUB_ENV with a randomized heredoc delimiter (matching the WHMCS/Zeffy
+        # secrets-from-kv actions) so a token that ever contains a newline (or a line that looks
+        # like a delimiter) cannot inject extra env vars into later steps.
+        function Add-EnvVar {
+          param([string]$Name, [string]$Value)
+          $delim = "ghadelim_$([guid]::NewGuid().ToString('N'))"
+          if ($Value -match [regex]::Escape($delim)) {
+            throw "Refusing to write '$Name': value collides with the generated heredoc delimiter."
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "$Name<<$delim"
+          Add-Content -Path $env:GITHUB_ENV -Value $Value
+          Add-Content -Path $env:GITHUB_ENV -Value $delim
+        }
+
         # Export to GITHUB_ENV so subsequent steps see them as plain env vars,
         # matching the pre-refactor interface (CLOUDFLARE_API_TOKEN_FFC / _CM).
-        Add-Content -Path $env:GITHUB_ENV -Value "CLOUDFLARE_API_TOKEN_FFC=$ffc"
-        Add-Content -Path $env:GITHUB_ENV -Value "CLOUDFLARE_API_TOKEN_CM=$cm"
+        Add-EnvVar -Name 'CLOUDFLARE_API_TOKEN_FFC' -Value $ffc
+        Add-EnvVar -Name 'CLOUDFLARE_API_TOKEN_CM' -Value $cm
 
         Write-Host "Loaded $scope-scope Cloudflare tokens from KV vault '$vaultName' (values masked)."
 

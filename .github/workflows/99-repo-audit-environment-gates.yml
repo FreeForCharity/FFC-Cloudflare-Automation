@@ -9,6 +9,12 @@ run-name: 'Audit environment approval gates'
 
 on:
   workflow_dispatch:
+  # Also run once automatically whenever this file lands on main (so the audit can be produced
+  # without a manual dispatch). Scoped to its own path so it doesn't run on unrelated pushes.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/99-repo-audit-environment-gates.yml'
 
 permissions:
   contents: read

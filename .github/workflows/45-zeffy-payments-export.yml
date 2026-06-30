@@ -10,11 +10,6 @@ run-name: 'Zeffy Payments Export (PII masked)'
 on:
   workflow_dispatch:
     inputs:
-      base_url:
-        description: 'Zeffy API base URL'
-        required: false
-        type: string
-        default: 'https://api.zeffy.com'
       status:
         description: 'Filter payments by status: succeeded | pending | failed (blank = all)'
         required: false
@@ -42,7 +37,9 @@ jobs:
       - name: Export payments (PII masked)
         shell: pwsh
         env:
-          ZEFFY_API_URL: ${{ inputs.base_url || 'https://api.zeffy.com' }}
+          # Pinned to the canonical Zeffy host. Not a workflow input so a dispatcher cannot point
+          # the Bearer key at an arbitrary host on this public repo.
+          ZEFFY_API_URL: 'https://api.zeffy.com'
           PAY_STATUS: ${{ inputs.status }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -67,6 +64,6 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: zeffy_payments
-          path: artifacts/zeffy/*.csv
+          path: artifacts/zeffy/zeffy_payments.csv
           if-no-files-found: error
           retention-days: 7

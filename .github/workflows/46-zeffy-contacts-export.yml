@@ -11,12 +11,6 @@ run-name: 'Zeffy Contacts Export (PII masked)'
 
 on:
   workflow_dispatch:
-    inputs:
-      base_url:
-        description: 'Zeffy API base URL'
-        required: false
-        type: string
-        default: 'https://api.zeffy.com'
 
 permissions:
   contents: read
@@ -39,7 +33,9 @@ jobs:
       - name: Export contacts (PII masked)
         shell: pwsh
         env:
-          ZEFFY_API_URL: ${{ inputs.base_url || 'https://api.zeffy.com' }}
+          # Pinned to the canonical Zeffy host. Not a workflow input so a dispatcher cannot point
+          # the Bearer key at an arbitrary host on this public repo.
+          ZEFFY_API_URL: 'https://api.zeffy.com'
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path artifacts/zeffy | Out-Null
@@ -61,6 +57,6 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: zeffy_contacts
-          path: artifacts/zeffy/*.csv
+          path: artifacts/zeffy/zeffy_contacts.csv
           if-no-files-found: error
           retention-days: 7

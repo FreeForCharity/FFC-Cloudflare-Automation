@@ -1,0 +1,61 @@
+name: '44. Zeffy - Campaigns Export [ZEFFY]'
+run-name: 'Zeffy Campaigns Export'
+
+# Read-only export of Zeffy campaigns/events (GET /api/v1/campaigns) via OIDC -> Key Vault.
+# This endpoint returns NO personal data (forms/events only: title, target, volume, dates, URLs),
+# so the uploaded artifact is inherently safe to keep on this public repo. Dispatch-only (no
+# schedule) while we are testing the API. One workflow per endpoint.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Zeffy API base URL'
+        required: false
+        type: string
+        default: 'https://api.zeffy.com'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  zeffy_campaigns_export:
+    runs-on: windows-latest
+    environment: zeffy-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Zeffy organization API key from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/zeffy-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Export campaigns
+        shell: pwsh
+        env:
+          ZEFFY_API_URL: ${{ inputs.base_url || 'https://api.zeffy.com' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts/zeffy | Out-Null
+
+          & pwsh -NoProfile -File .\scripts\zeffy-campaigns-export.ps1 -BaseUrl $env:ZEFFY_API_URL -OutputFile 'artifacts/zeffy/zeffy_campaigns.csv'
+          if ($LASTEXITCODE -ne 0) { throw "Zeffy campaigns export failed (exit $LASTEXITCODE)." }
+
+          $f = 'artifacts/zeffy/zeffy_campaigns.csv'
+          if (-not (Test-Path $f)) { throw "Expected output file not found: $f" }
+
+          $n = (Import-Csv $f | Measure-Object).Count
+          "## Zeffy campaigns export (no PII)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- $f : $n row(s)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload campaigns CSV artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: zeffy_campaigns
+          path: artifacts/zeffy/*.csv
+          if-no-files-found: error
+          retention-days: 7

@@ -39,7 +39,13 @@ param(
 
     [Parameter()]
     [ValidateRange(1, 1000000)]
-    [int]$MaxRows = 100000
+    [int]$MaxRows = 100000,
+
+    # Include donor PII (email / name / phone / street-level address) in the CSV. OFF by default so
+    # the output is safe to store as a public-repo artifact; the contact id (a UUID), donor_type,
+    # giving totals/counts/dates, currency, and country are always kept.
+    [Parameter()]
+    [switch]$IncludePii
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,10 +81,10 @@ try {
             id                  = $c.id
             created             = ConvertFrom-UnixSeconds $c.created
             updated             = ConvertFrom-UnixSeconds $c.updated
-            email               = Get-ZeffyText $c.email
-            first_name          = Get-ZeffyText $c.first_name
-            last_name           = Get-ZeffyText $c.last_name
-            phone_number        = Get-ZeffyText $c.phone_number
+            email               = if ($IncludePii) { Get-ZeffyText $c.email } else { $null }
+            first_name          = if ($IncludePii) { Get-ZeffyText $c.first_name } else { $null }
+            last_name           = if ($IncludePii) { Get-ZeffyText $c.last_name } else { $null }
+            phone_number        = if ($IncludePii) { Get-ZeffyText $c.phone_number } else { $null }
             donor_type          = Get-ZeffyText $c.donor_type
             total_contrib_cents = $c.total_contribution
             total_contrib       = if ($null -ne $c.total_contribution) { [math]::Round(([double]$c.total_contribution) / 100, 2) } else { $null }
@@ -86,9 +92,9 @@ try {
             donation_count      = $c.donation_count
             first_donation      = ConvertFrom-UnixSeconds $c.first_donation_date
             last_donation       = ConvertFrom-UnixSeconds $c.last_donation_date
-            city                = if ($addr) { Get-ZeffyText $addr.city } else { $null }
-            state               = if ($addr) { Get-ZeffyText $addr.state } else { $null }
-            postal_code         = if ($addr) { Get-ZeffyText $addr.postal_code } else { $null }
+            city                = if ($IncludePii -and $addr) { Get-ZeffyText $addr.city } else { $null }
+            state               = if ($IncludePii -and $addr) { Get-ZeffyText $addr.state } else { $null }
+            postal_code         = if ($IncludePii -and $addr) { Get-ZeffyText $addr.postal_code } else { $null }
             country             = if ($addr) { Get-ZeffyText $addr.country } else { $null }
         }
     }

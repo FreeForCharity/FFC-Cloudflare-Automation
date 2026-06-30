@@ -1,0 +1,72 @@
+name: '45. Zeffy - Payments Export (PII masked) [ZEFFY]'
+run-name: 'Zeffy Payments Export (PII masked)'
+
+# Read-only export of Zeffy payments (GET /api/v1/payments) via OIDC -> Key Vault. The payments
+# payload carries donor PII (buyer email / name / company, receipt URL); this workflow runs the
+# export WITHOUT -IncludePii, so those columns are written blank. The PII passes through the
+# ephemeral runner only and is never persisted, so the uploaded artifact is safe to keep on this
+# public repo. Dispatch-only (no schedule) while we are testing the API. One workflow per endpoint.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Zeffy API base URL'
+        required: false
+        type: string
+        default: 'https://api.zeffy.com'
+      status:
+        description: 'Filter payments by status: succeeded | pending | failed (blank = all)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  zeffy_payments_export:
+    runs-on: windows-latest
+    environment: zeffy-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Zeffy organization API key from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/zeffy-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Export payments (PII masked)
+        shell: pwsh
+        env:
+          ZEFFY_API_URL: ${{ inputs.base_url || 'https://api.zeffy.com' }}
+          PAY_STATUS: ${{ inputs.status }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts/zeffy | Out-Null
+
+          # No -IncludePii: donor PII columns are written blank. The artifact is safe to retain on
+          # the public repo.
+          $payArgs = @('-NoProfile', '-File', '.\scripts\zeffy-payments-export.ps1', '-BaseUrl', $env:ZEFFY_API_URL, '-OutputFile', 'artifacts/zeffy/zeffy_payments.csv')
+          if (-not [string]::IsNullOrWhiteSpace($env:PAY_STATUS)) { $payArgs += @('-Status', $env:PAY_STATUS) }
+          & pwsh @payArgs
+          if ($LASTEXITCODE -ne 0) { throw "Zeffy payments export failed (exit $LASTEXITCODE)." }
+
+          $f = 'artifacts/zeffy/zeffy_payments.csv'
+          if (-not (Test-Path $f)) { throw "Expected output file not found: $f" }
+
+          $n = (Import-Csv $f | Measure-Object).Count
+          "## Zeffy payments export (PII masked)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- $f : $n row(s)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload payments CSV artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: zeffy_payments
+          path: artifacts/zeffy/*.csv
+          if-no-files-found: error
+          retention-days: 7

@@ -1,4 +1,4 @@
-﻿name: '09. DNS - Create Zone (Admin) [CF]'
+name: '09. DNS - Create Zone (Admin) [CF]'
 run-name: 'Create Zone: ${{ inputs.domain }} (${{ inputs.account }})'
 
 on:

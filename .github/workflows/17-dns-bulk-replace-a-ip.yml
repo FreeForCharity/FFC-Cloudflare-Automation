@@ -23,6 +23,11 @@ permissions:
   contents: read
   id-token: write
 
+# Serialize: this rewrites A records across many zones; parallel dispatches must not race.
+concurrency:
+  group: dns-bulk-replace-a-ip
+  cancel-in-progress: false
+
 jobs:
   bulk-replace:
     runs-on: windows-latest

@@ -56,6 +56,13 @@ $noiseKeywords = @(
     'unsubscribe', 'receipt', 'shipment', 'appointment reminder'
 )
 
+function Get-LowerText {
+    # Null-safe lowercase (avoids the PS7-only `??` operator so the script also parses on PS 5.1).
+    param([string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return '' }
+    return $Text.ToLowerInvariant()
+}
+
 function Get-MaskedName {
     param([string]$Name)
     if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
@@ -65,21 +72,49 @@ function Get-MaskedName {
 
 function Test-IsCharity {
     param([string]$Text)
-    $t = ($Text ?? '').ToLowerInvariant()
+    $t = Get-LowerText $Text
     foreach ($k in $charityKeywords) { if ($t.Contains($k)) { return $true } }
     return $false
 }
 
 function Test-IsNoise {
     param([string]$Text)
-    $t = ($Text ?? '').ToLowerInvariant()
+    $t = Get-LowerText $Text
     foreach ($k in $noiseKeywords) { if ($t.Contains($k)) { return $true } }
     return $false
 }
 
 function Invoke-GraphGet {
+    # GET with retry/backoff on throttling (429) and transient 5xx, honouring Retry-After.
     param([string]$Uri, [string]$Token)
-    Invoke-RestMethod -Method Get -Uri $Uri -Headers @{ Authorization = "Bearer $Token" } -ErrorAction Stop
+    $headers = @{ Authorization = "Bearer $Token" }
+    $maxAttempts = 5
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            return Invoke-RestMethod -Method Get -Uri $Uri -Headers $headers -ErrorAction Stop
+        }
+        catch {
+            $code = $null
+            $resp = $_.Exception.Response
+            if ($resp) { try { $code = [int]$resp.StatusCode } catch { $code = $null } }
+            $retryable = ($code -eq 429) -or ($null -ne $code -and $code -ge 500 -and $code -le 599)
+            if (-not $retryable -or $attempt -eq $maxAttempts) { throw }
+
+            $delay = [math]::Min(60, [math]::Pow(2, $attempt))
+            if ($resp) {
+                try {
+                    $ra = $resp.Headers['Retry-After']
+                    $raSec = 0
+                    if ($ra -and [int]::TryParse([string]$ra, [ref]$raSec)) {
+                        $delay = [math]::Max($delay, $raSec)
+                    }
+                }
+                catch { }
+            }
+            Write-Warning "Graph $code on attempt $attempt; retrying in $delay s."
+            Start-Sleep -Seconds $delay
+        }
+    }
 }
 
 try {
@@ -122,15 +157,15 @@ try {
 
     foreach ($mbx in $requested) {
         # Inquiries live in the Inbox. Encode the mailbox and the $filter value so UPNs / reserved
-        # characters can't break the request.
+        # characters can't break the request. Large page size to cut request count / throttling.
         $mbxEnc = [uri]::EscapeDataString($mbx)
-        $uri = "https://graph.microsoft.com/v1.0/users/$mbxEnc/mailFolders/inbox/messages?`$filter=$filterEnc&`$select=from,subject,bodyPreview,receivedDateTime&`$top=50"
+        $uri = "https://graph.microsoft.com/v1.0/users/$mbxEnc/mailFolders/inbox/messages?`$filter=$filterEnc&`$select=from,subject,bodyPreview,receivedDateTime&`$top=999"
         while ($uri) {
             $resp = Invoke-GraphGet -Uri $uri -Token $token
             foreach ($m in @($resp.value)) {
                 $scanned++
                 $text = "$($m.subject) $($m.bodyPreview)"
-                if (Test-IsNoise -Text $text -and -not (Test-IsCharity -Text $text)) { continue }
+                if ((Test-IsNoise -Text $text) -and -not (Test-IsCharity -Text $text)) { continue }
                 if (-not (Test-IsCharity -Text $text)) { continue }
                 $charity++
 

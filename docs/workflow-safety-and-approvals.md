@@ -90,7 +90,7 @@ environment approval gate and/or a typed confirmation. ✅ = an approval-gated e
 | 21    | M365 - List Tenant Domains                | Reads                     | m365-prod                              | —                                                                                   |
 | 22    | M365 - Domain Status + DKIM (Toolbox)     | Reads                     | m365-prod                              | read-oriented toolbox                                                               |
 | 23    | M365 - Enable DKIM                        | Writes (gated)            | ✅ cloudflare-prod-write / m365-prod   | —                                                                                   |
-| 24    | M365 - Add Tenant Domain (Admin)          | Writes                    | m365-prod                              | approval depends on m365-prod reviewer cfg                                          |
+| 24    | M365 - Add Tenant Domain (Admin)          | Writes (dry-run default)  | m365-prod                              | `dry_run` (default true)                                                            |
 | 25    | Domain - Post-Transfer Verification       | Reads                     | cloudflare-prod-read                   | —                                                                                   |
 | 26    | Domain - Registrar Lock / Unlock          | Writes (dry-run default)  | ✅ whmcs-prod                          | `dry_run` (default true)                                                            |
 | 27    | Domain - Deploy Static Clone (FFC-EX)     | Writes (gated)            | ✅ github-prod                         | opens a draft PR (never pushes); serialized                                         |

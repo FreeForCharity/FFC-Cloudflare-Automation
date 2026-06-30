@@ -134,8 +134,12 @@ try {
                 if (-not (Test-IsCharity -Text $text)) { continue }
                 $charity++
 
-                $addr = [string]$m.from.emailAddress.address
-                $name = [string]$m.from.emailAddress.name
+                # $m.from (and .emailAddress) can be null for system-generated messages; deref
+                # defensively so one malformed message can't abort the whole run under
+                # ErrorActionPreference=Stop.
+                $emailObj = if ($m.from) { $m.from.emailAddress } else { $null }
+                $addr = if ($emailObj) { [string]$emailObj.address } else { '' }
+                $name = if ($emailObj) { [string]$emailObj.name } else { '' }
                 $domain = if ($addr -match '@') { $addr.Split('@')[-1].ToLowerInvariant() } else { '' }
                 $isOrgDomain = $domain -and ($personalProviders -notcontains $domain)
 

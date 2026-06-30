@@ -21,7 +21,6 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: write
   id-token: write
 
 jobs:
@@ -444,7 +443,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-      pull-requests: write
 
     steps:
       - name: Download Cloudflare artifacts

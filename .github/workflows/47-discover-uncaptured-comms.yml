@@ -2,9 +2,9 @@ name: '47. Discover - Uncaptured Comms (M365, PII masked) [M365]'
 run-name: 'Discover uncaptured comms (M365 mailboxes)'
 
 # Automated track of Gap B (#492): scan the ORG-OWNED Microsoft 365 shared mailboxes for charity
-# inquiries, reconcile candidate domains against the sites-list + WHMCS, and emit a PII-masked
-# pipeline of leads not yet captured. The personal Google Voice source is deliberately NOT here — it
-# is human-in-the-loop only (see docs/runbooks/google-voice-metrics.md). Dispatch-only.
+# inquiries, reconcile candidate domains against the sites-list (WHMCS reconciliation planned), and
+# emit a PII-masked pipeline of leads not yet captured. The personal Google Voice source is excluded
+# here — it is human-in-the-loop only (see docs/runbooks/google-voice-metrics.md). Dispatch-only.
 #
 # Requires a Graph app registration with Mail.Read scoped to the listed mailboxes via an Exchange
 # Online application access policy (so the tenant-wide Mail.Read grant only reads those mailboxes).

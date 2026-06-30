@@ -133,6 +133,14 @@ Key Vault via the `whmcs-secrets-from-kv` action. Write workflows default to `dr
 - Export hosted sites inventory from WPMUDEV Hub API for domain reconciliation. See
   [docs/wpmudev-domain-inventory.md](../../docs/wpmudev-domain-inventory.md) for details.
 
+### 44. Zeffy - Export (Payments/Contacts/Campaigns) [ZEFFY]
+
+- **Read-only** pull of Zeffy donations, donors, and campaigns from the Zeffy public API via OIDC →
+  Key Vault (key loaded by `zeffy-secrets-from-kv`; no key stored in GitHub). `workflow_dispatch` +
+  weekly schedule; uploads a `zeffy_export` CSV artifact. Complements the one-way WHMCS→Zeffy import
+  (workflow 33) by letting FFC pull Zeffy data back for reconciliation/reporting. See
+  [docs/zeffy-api.md](../../docs/zeffy-api.md).
+
 ### 89–98 Repo workflows
 
 - **89. Repo - Create GitHub Repo [Repo]**: repo bootstrap helper.
@@ -265,6 +273,7 @@ This workflow helps identify security vulnerabilities early in the development p
 | 42-whmcs-order-update.yml                  | Manual (workflow_dispatch)                | 42. WHMCS: Order update accept/cancel/fraud (dry-run default)                    |
 | 43-whmcs-product-add.yml                   | Manual (workflow_dispatch)                | 43. WHMCS: Product add (catalog, dry-run default)                                |
 | 13-wpmudev-export-sites.yml                | Manual (workflow_dispatch)                | 40. WPMUDEV: Export sites/domains for reconciliation                             |
+| 44-zeffy-export.yml                        | Manual + schedule                         | 44. Zeffy: Export payments/contacts/campaigns (read-only)                        |
 | create-repo.yml                            | Manual (workflow_dispatch)                | 89. Repo: Create GitHub repo                                                     |
 | deploy-pages.yml                           | Pushes to `main` + manual                 | 90. Repo: Deploy GitHub Pages                                                    |
 | ci.yml                                     | PRs and pushes to `main`                  | 91. Repo: Lint workflows, validate scripts, check formatting and sensitive files |

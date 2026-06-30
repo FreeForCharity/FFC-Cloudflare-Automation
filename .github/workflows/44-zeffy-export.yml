@@ -1,0 +1,97 @@
+name: '44. Zeffy - Export (Payments/Contacts/Campaigns) [ZEFFY]'
+run-name: 'Zeffy Export'
+
+# Read-only. Pulls payments, contacts (donors), and campaigns from the Zeffy public API into CSV
+# artifacts via OIDC -> Key Vault (no API key stored in GitHub). Zeffy has no IP allowlist, so the
+# runner calls api.zeffy.com directly with the Bearer key loaded by the zeffy-secrets-from-kv action.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Zeffy API base URL'
+        required: false
+        type: string
+        default: 'https://api.zeffy.com'
+      status:
+        description: 'Filter payments by status: succeeded | pending | failed (blank = all)'
+        required: false
+        type: string
+        default: ''
+      payments_output:
+        description: 'Payments CSV path'
+        required: false
+        type: string
+        default: 'artifacts/zeffy/zeffy_payments.csv'
+      contacts_output:
+        description: 'Contacts CSV path'
+        required: false
+        type: string
+        default: 'artifacts/zeffy/zeffy_contacts.csv'
+      campaigns_output:
+        description: 'Campaigns CSV path'
+        required: false
+        type: string
+        default: 'artifacts/zeffy/zeffy_campaigns.csv'
+  schedule:
+    # Weekly Monday pull (08:13 UTC). Adjust as needed.
+    - cron: '13 8 * * 1'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  zeffy_export:
+    runs-on: windows-latest
+    environment: zeffy-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Zeffy organization API key from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/zeffy-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Export Zeffy payments + contacts + campaigns (read-only)
+        shell: pwsh
+        env:
+          ZEFFY_API_URL: ${{ inputs.base_url || 'https://api.zeffy.com' }}
+          PAYMENTS_OUT: ${{ inputs.payments_output || 'artifacts/zeffy/zeffy_payments.csv' }}
+          CONTACTS_OUT: ${{ inputs.contacts_output || 'artifacts/zeffy/zeffy_contacts.csv' }}
+          CAMPAIGNS_OUT: ${{ inputs.campaigns_output || 'artifacts/zeffy/zeffy_campaigns.csv' }}
+          PAY_STATUS: ${{ inputs.status }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts/zeffy | Out-Null
+
+          $payArgs = @('-NoProfile', '-File', '.\scripts\zeffy-payments-export.ps1', '-BaseUrl', $env:ZEFFY_API_URL, '-OutputFile', $env:PAYMENTS_OUT)
+          if (-not [string]::IsNullOrWhiteSpace($env:PAY_STATUS)) { $payArgs += @('-Status', $env:PAY_STATUS) }
+          & pwsh @payArgs
+          if ($LASTEXITCODE -ne 0) { throw "Zeffy payments export failed (exit $LASTEXITCODE)." }
+
+          & pwsh -NoProfile -File .\scripts\zeffy-contacts-export.ps1 -BaseUrl $env:ZEFFY_API_URL -OutputFile $env:CONTACTS_OUT
+          if ($LASTEXITCODE -ne 0) { throw "Zeffy contacts export failed (exit $LASTEXITCODE)." }
+
+          & pwsh -NoProfile -File .\scripts\zeffy-campaigns-export.ps1 -BaseUrl $env:ZEFFY_API_URL -OutputFile $env:CAMPAIGNS_OUT
+          if ($LASTEXITCODE -ne 0) { throw "Zeffy campaigns export failed (exit $LASTEXITCODE)." }
+
+          foreach ($f in @($env:PAYMENTS_OUT, $env:CONTACTS_OUT, $env:CAMPAIGNS_OUT)) {
+            if (-not (Test-Path $f)) { throw "Expected output file not found: $f" }
+          }
+
+          "## Zeffy export" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          foreach ($f in @($env:PAYMENTS_OUT, $env:CONTACTS_OUT, $env:CAMPAIGNS_OUT)) {
+            $n = (Import-Csv $f | Measure-Object).Count
+            "- $f : $n row(s)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+
+      - name: Upload Zeffy CSV artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: zeffy_export
+          path: artifacts/zeffy/*.csv
+          if-no-files-found: error

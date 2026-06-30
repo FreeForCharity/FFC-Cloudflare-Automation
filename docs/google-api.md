@@ -125,6 +125,71 @@ Green => the OIDC -> KV -> Google chain works with no Google secret in GitHub.
 
 ## Rotation
 
-Add a new version of `read-all-ffc-google-sa-key` (and `wr-all-…`) in Key Vault — no GitHub change.
-To revoke, delete the old SA key in GCP:
-`gcloud iam service-accounts keys delete <KEY_ID> --iam-account=ffc-ga-reader@ffc-prod.iam.gserviceaccount.com`.
+Add a new version of `read-all-ffc-google-analytics-sa-key` (and `wr-all-…`) in Key Vault — no
+GitHub change. To revoke, delete the old SA key in GCP:
+`gcloud iam service-accounts keys delete <KEY_ID> --iam-account=ffc-ga-reader@ffc-api-prod.iam.gserviceaccount.com`.
+
+---
+
+# Multi-site analytics architecture (internal vs supported charities)
+
+## Tagging: always via GTM, never hardcoded
+
+FFC sites are tagged through **Google Tag Manager**, not by hardcoding `gtag` in site code. Why:
+change tags with no per-site redeploy, manage GA + Clarity + Meta + conversions in one layer, central
+consent handling, no fleet drift, and full API automation. Hardcode `gtag` only for a one-off,
+self-contained site with a specific reason.
+
+GA4 is configured in GTM as a **Google tag** (type `googtag`, param `tagId` = the stream's
+measurement id `G-XXXX`) firing on the built-in **All Pages** trigger (id `2147479553`). Manage via
+the Tag Manager API impersonating a Workspace admin (DWD): find container by `publicId` → add/edit
+tag in the Default Workspace → `:create_version` → `:publish`. Requires `tagmanager.googleapis.com`
+enabled on `ffc-api-prod`.
+
+## GA properties: one property per entity
+
+Measurement ids are per **data stream**, not per property. Principle: **one property per distinct
+entity; multiple streams only when one entity spans domains/subdomains/apps.**
+
+- **Internal FFC domains** → one `Free For Charity` property, one web **stream per internal domain**
+  (same org, same audience, unified rollup; isolation not needed). Applied going forward; existing
+  per-site internal properties are left as-is.
+- **Supported charities** → a dedicated **`FFC Supported Charities` account**, **one property per
+  charity** (NOT stream-per-charity). GA4 access control, Ads/Search Console/BigQuery links, and
+  retention/data-deletion are all **property-level**, plus a ~50-stream cap. Cross-charity rollups
+  happen in FFC's **own dashboard layer**, not GA4.
+- Grant `ffc-ga-reader` at the **account level** so new properties inherit read access (no
+  per-property grants).
+
+> ⚠️ Property display names are historically inconsistent with their actual streams — **verify by
+> stream `defaultUri` / `measurementId`, never the property name** (e.g. `513417483` was named
+> "ffchosting.org" but tracks ffcadmin.org; renamed 2026-06-30). Map ids with the `streams` lookup.
+
+## GTM: one container per charity (self-service handover)
+
+GTM access is **container-level**, so charities that self-administer need their **own container**:
+
+- **One FFC-owned GTM account**, **one container per charity site**. FFC keeps **account admin**; the
+  charity POC gets **container Edit/Publish** on only their container → full self-service, no
+  cross-charity exposure. (A shared container cannot delegate per-charity admin.)
+- FFC seeds three **default tags** per container — GA4 (→ the charity's measurement id), Microsoft
+  Clarity, Meta Pixel — and hands over; the charity extends with their own.
+- Containers are exportable/transferable, so a charity can take their tagging if they leave FFC.
+- Costs to accept: each site embeds its **own** GTM id (per-repo config at provision time), and
+  default-tag refreshes span N containers (script via the GTM API).
+- Internal sites may share or keep existing containers (e.g. ffcadmin = `GTM-WMZH965Q`).
+
+## Per-charity onboarding flow (Wave 3/4 — all API)
+
+For `FFC-EX-<domain>`:
+1. **GA:** create `<domain> - GA4` property under `FFC Supported Charities` → web stream → measurement id.
+2. **GTM:** create the charity's container → seed GA4 / Clarity / Meta default tags on All Pages → publish → `GTM-XXXX`.
+3. **Delegate:** grant the charity POC container Edit/Publish.
+4. **Site:** provisioning workflow injects `GTM-XXXX` into the site config.
+5. **Reporting:** pipeline reads the property (account-level grant) → JSON → dashboard.
+
+## Prototype helpers → productionize as workflows
+
+DWD-based admin proven locally during bring-up (in scratch, not committed): `ga-admin.ps1`
+(list/streams/grant/rename/delete), `ga-provision.ps1` (create property+stream), `gtm.ps1`
+(inspect/add GA4 tag). Production form is gated GitHub workflows under `google-prod-write`.

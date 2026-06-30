@@ -25,6 +25,11 @@ permissions:
   contents: read
   id-token: write
 
+# Serialize: this writes CNAMEs across many FFC-EX zones; parallel dispatches must not race.
+concurrency:
+  group: bulk-staging-cname-github-pages
+  cancel-in-progress: false
+
 jobs:
   bulk-staging-cname:
     runs-on: windows-latest

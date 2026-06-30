@@ -27,11 +27,10 @@ A live change generally has to get past several of these, not just one:
 4. **Typed confirmation for the highest-stakes actions.** The riskiest workflows require you to type
    an exact value (e.g. domain registration needs `mode=execute-register` **and** `confirm_domain`
    to exactly match the domain).
-5. **Concurrency serialization.** Three stateful workflows declare a `concurrency` group with
-   `cancel-in-progress: false` — **19** (bulk cutover), **27** (clone-deploy), and **33** (WHMCS →
-   Zeffy import) — so a second dispatch **queues** behind the first instead of racing it. Note the
-   other bulk workflows (**17**, **18**) are **not** serialized: a second dispatch runs in parallel,
-   so don't run them concurrently by hand.
+5. **Concurrency serialization.** The stateful workflows declare a `concurrency` group with
+   `cancel-in-progress: false` — **17** / **18** (bulk DNS), **19** (bulk cutover), **27**
+   (clone-deploy), and **33** (WHMCS → Zeffy import) — so a second dispatch **queues** behind the
+   first instead of racing it.
 
 ## Credential & data guarantees (always on)
 
@@ -77,8 +76,8 @@ environment approval gate and/or a typed confirmation. ✅ = an approval-gated e
 | 14    | Domain - Transfer Readiness Preflight     | Reads                     | ✅ whmcs-prod                          | —                                                                                   |
 | 15    | Website - Provision                       | Writes (gated)            | ✅ cloudflare-prod-write / github-prod | `repo` chained behind `dns` approval                                                |
 | 16    | Domain - Transfer EPP/Auth Probe          | Writes (dry-run default)  | ✅ whmcs-prod                          | `dry-run` vs `execute`                                                              |
-| 17    | DNS - Bulk Replace A-record IP            | Writes (gated)            | ✅ cloudflare-prod-write               | high blast radius; **not** serialized                                               |
-| 18    | DNS - Bulk Staging CNAME → GH Pages       | Writes (dry-run default)  | ✅ cloudflare-prod-write               | `dry_run` (default true); **not** serialized                                        |
+| 17    | DNS - Bulk Replace A-record IP            | Writes (gated)            | ✅ cloudflare-prod-write               | high blast radius; serialized                                                       |
+| 18    | DNS - Bulk Staging CNAME → GH Pages       | Writes (dry-run default)  | ✅ cloudflare-prod-write               | `dry_run` (default true); serialized                                                |
 | 19    | DNS + GH Pages - Bulk Cutover             | Writes (dry-run default)  | ✅ cloudflare-prod-write / github-prod | `dry_run` (default true); serialized                                                |
 | 20    | M365 - Domain Preflight                   | Reads                     | cloudflare-prod-read / m365-prod       | —                                                                                   |
 | 21    | M365 - List Tenant Domains                | Reads                     | m365-prod                              | —                                                                                   |
@@ -120,8 +119,8 @@ environment approval gate and/or a typed confirmation. ✅ = an approval-gated e
 4. **Dispatch with `dry_run=false`**, then **approve the environment gate** when the run pauses at
    `status: waiting` (a reviewer must approve `*-write` / `whmcs-prod` / `github-prod`).
 5. For **bulk DNS (17/18/19)**: cut over in the staging→apex order, and verify a single domain
-   end-to-end before running the full list. Only **19** is serialized; **17** and **18** are not, so
-   don't dispatch them a second time while one is running.
+   end-to-end before running the full list. All three are now serialized (a second dispatch queues
+   behind the first), but they still touch many zones in one run — read the dry-run preview first.
 
 ## What is _not_ protected
 

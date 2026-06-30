@@ -71,9 +71,15 @@ permissions:
   contents: read
   id-token: write
 
+# Serialize runs so two dispatches can't race on the artifacts/zeffy/* outputs.
+concurrency:
+  group: whmcs-zeffy-payments-import
+  cancel-in-progress: false
+
 jobs:
   whmcs_to_zeffy_draft:
     runs-on: windows-latest
+    timeout-minutes: 30
     environment: whmcs-prod
 
     steps:

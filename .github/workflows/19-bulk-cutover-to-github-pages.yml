@@ -39,6 +39,11 @@ permissions:
   contents: read
   id-token: write
 
+# Serialize cutover runs: parallel dispatches would race on the same FFC-EX CNAMEs / Cloudflare DNS.
+concurrency:
+  group: bulk-cutover-github-pages
+  cancel-in-progress: false
+
 jobs:
   # ---------------------------------------------------------------------------
   # JOB 1: Flip public/CNAME in each FFC-EX repo (uses github-prod env's CBM_TOKEN).
@@ -47,6 +52,7 @@ jobs:
   cname-flip:
     if: ${{ inputs.skip_cname != true }}
     runs-on: windows-latest
+    timeout-minutes: 30
     environment: github-prod
     env:
       GH_TOKEN: ${{ secrets.CBM_TOKEN }}
@@ -95,6 +101,7 @@ jobs:
       ${{ always() && inputs.skip_dns != true && (needs.cname-flip.result == 'success' ||
       needs.cname-flip.result == 'skipped') }}
     runs-on: windows-latest
+    timeout-minutes: 30
     environment: cloudflare-prod-write
     env:
       # GH_TOKEN set to a dummy so the script doesn't error on missing var;

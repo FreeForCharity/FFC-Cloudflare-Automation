@@ -6,8 +6,11 @@
 # via an Exchange Online application access policy. The personal Google Voice source is deliberately
 # NOT handled here — it is human-in-the-loop only (see docs/runbooks/google-voice-metrics.md).
 #
-# PII: only masked values are written to the artifact (name -> first initial + ***, email ->
-# ***@domain). Org domains are not personal data and are kept. No raw bodies are persisted.
+# PII: the CSV only ever contains (a) a first-initial-masked sender name and (b) a candidateDomain
+# that is a NON-personal-provider org domain (personal providers like gmail.com are excluded, and the
+# raw sender email is never written). Org domains are not personal data; a personal custom domain is
+# rare in this org-mailbox context and the artifact is retention-capped (7 days) — operators still
+# treat any personal domain per the PII policy. No raw bodies are persisted.
 
 [CmdletBinding()]
 param(
@@ -53,19 +56,10 @@ function Get-MaskedName {
     return "$first***"
 }
 
-function Get-MaskedEmail {
-    param([string]$Email)
-    if ([string]::IsNullOrWhiteSpace($Email) -or ($Email -notmatch '@')) { return '' }
-    $domain = $Email.Split('@')[-1]
-    return "***@$domain"
-}
-
 function Test-IsCharity {
     param([string]$Text)
     $t = ($Text ?? '').ToLowerInvariant()
-    $isCharity = $false
-    foreach ($k in $charityKeywords) { if ($t.Contains($k)) { $isCharity = $true; break } }
-    if ($isCharity) { return $true }
+    foreach ($k in $charityKeywords) { if ($t.Contains($k)) { return $true } }
     return $false
 }
 
@@ -107,11 +101,15 @@ try {
     }
 
     $sinceIso = (Get-Date).ToUniversalTime().AddDays(-1 * [math]::Abs($SinceDays)).ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $filterEnc = [uri]::EscapeDataString("receivedDateTime ge $sinceIso")
     $rowsOut = New-Object System.Collections.Generic.List[object]
     $scanned = 0; $charity = 0; $uncaptured = 0
 
     foreach ($mbx in ($Mailboxes -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
-        $uri = "https://graph.microsoft.com/v1.0/users/$mbx/messages?`$filter=receivedDateTime ge $sinceIso&`$select=from,subject,bodyPreview,receivedDateTime&`$top=50"
+        # Inquiries live in the Inbox. Encode the mailbox and the $filter value so UPNs / reserved
+        # characters can't break the request.
+        $mbxEnc = [uri]::EscapeDataString($mbx)
+        $uri = "https://graph.microsoft.com/v1.0/users/$mbxEnc/mailFolders/inbox/messages?`$filter=$filterEnc&`$select=from,subject,bodyPreview,receivedDateTime&`$top=50"
         while ($uri) {
             $resp = Invoke-GraphGet -Uri $uri -Token $token
             foreach ($m in @($resp.value)) {
@@ -132,11 +130,12 @@ try {
                     if ($status -eq 'uncaptured') { $uncaptured++ }
                 }
 
+                # Only a non-personal-provider org domain is ever written; the raw sender email
+                # (whose domain could be personal) is not.
                 $rowsOut.Add([pscustomobject]@{
                         receivedDate    = ([datetime]$m.receivedDateTime).ToString('yyyy-MM-dd')
                         mailbox         = $mbx
                         maskedSender    = Get-MaskedName -Name $name
-                        senderEmail     = Get-MaskedEmail -Email $addr
                         candidateDomain = if ($isOrgDomain) { $domain } else { '' }
                         status          = $status
                     })

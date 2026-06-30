@@ -46,12 +46,18 @@ jobs:
           else
             while IFS= read -r e; do
               if [ -z "$e" ]; then continue; fi
-              json=$(gh api "repos/$REPO/environments/$e" 2>/dev/null || echo '{}')
-              reviewers=$(printf '%s' "$json" | jq -r '[.protection_rules[]? | select(.type=="required_reviewers") | .reviewers[]?.reviewer.login] | join(", ")')
-              if [ -z "$reviewers" ]; then reviewers="—"; fi
-              wait_min=$(printf '%s' "$json" | jq -r '([.protection_rules[]? | select(.type=="wait_timer") | .wait_timer] | first) // "—"')
-              branch=$(printf '%s' "$json" | jq -r 'if .deployment_branch_policy == null then "any" elif .deployment_branch_policy.protected_branches then "protected only" else "custom list" end')
-              echo "| $e | $reviewers | $wait_min | $branch |" >> "$GITHUB_STEP_SUMMARY"
+              enc=$(jq -rn --arg s "$e" '$s|@uri')
+              # Detect a failed fetch explicitly — never let an error render as "no reviewers / any",
+              # which would misreport a gated environment as ungated.
+              if json=$(gh api "repos/$REPO/environments/$enc" 2>/dev/null); then
+                reviewers=$(printf '%s' "$json" | jq -r '[.protection_rules[]? | select(.type=="required_reviewers") | .reviewers[]?.reviewer.login] | join(", ")')
+                if [ -z "$reviewers" ]; then reviewers="—"; fi
+                wait_min=$(printf '%s' "$json" | jq -r '([.protection_rules[]? | select(.type=="wait_timer") | .wait_timer] | first) // "—"')
+                branch=$(printf '%s' "$json" | jq -r 'if .deployment_branch_policy == null then "any" elif .deployment_branch_policy.protected_branches then "protected only" else "custom list" end')
+                echo "| $e | $reviewers | $wait_min | $branch |" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "| $e | ⚠️ failed to read protection rules | — | — |" >> "$GITHUB_STEP_SUMMARY"
+              fi
             done <<< "$names"
           fi
 

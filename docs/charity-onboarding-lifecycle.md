@@ -32,17 +32,19 @@ workflow. The relevant intake templates:
 
 ## Phase 0 — Status check (always start here)
 
-- **Run:** **01. Domain - Status (All Sources)** — read-only across Cloudflare + M365 (+ WHMCS).
+- **Run:** **01. Domain - Status (All Sources)** — read-only across **Cloudflare + M365** (it is the
+  `[CF+M365]` workflow and does not query WHMCS). To check for an existing **WHMCS** client/domain,
+  run **04. Domain - Export Inventory** (which includes WHMCS) or a WHMCS export (30).
 - **Why:** establishes the starting state so you don't re-create a zone or double-onboard.
-- **Done when:** you know whether the domain already has a Cloudflare zone, M365 presence, and a
-  WHMCS client.
+- **Done when:** you know whether the domain already has a Cloudflare zone and M365 presence
+  (via 01) and a WHMCS client (via 04 / 30).
 
 ## Phase 1 — Domain under FFC Cloudflare
 
 Pick the path that matches the domain's origin:
 
-- **New domain (FFC buys it):** file template **01**; the registrar workflows (**12 / 20 - Registrar
-  Search / Register**) handle availability, purchase, and zone creation. Live registration needs
+- **New domain (FFC buys it):** file template **01**; **12. Domain - Registrar Search / Check /
+  Register** handles availability, purchase, and zone creation. Live registration needs
   `mode=execute-register` **and** a typed `confirm_domain` match. See
   [cloudflare-domain-registration.md](cloudflare-domain-registration.md).
 - **Existing domain (transfer in / point NS):** file template **03**, then **02. Domain - Add to FFC
@@ -123,5 +125,5 @@ Pick the path that matches the domain's origin:
   template, so revert by closing the PR or deleting the repo before cutover.
 - **WHMCS:** onboarding is idempotent; a mistaken order is cancelled one at a time with **42.
   WHMCS - Order Update** (`action=cancel`, dry-run default).
-- **Domain registration (#20)** and **collaborator add (#98)** are **not** reversible by a workflow
+- **Domain registration (#12)** and **collaborator add (#98)** are **not** reversible by a workflow
   — treat their typed-confirm / live-default behavior accordingly.

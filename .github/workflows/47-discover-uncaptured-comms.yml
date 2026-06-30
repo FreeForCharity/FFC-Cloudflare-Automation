@@ -1,0 +1,69 @@
+name: '47. Discover - Uncaptured Comms (M365, PII masked) [M365]'
+run-name: 'Discover uncaptured comms (M365 mailboxes)'
+
+# Automated track of Gap B (#492): scan the ORG-OWNED Microsoft 365 shared mailboxes for charity
+# inquiries, reconcile candidate domains against the sites-list + WHMCS, and emit a PII-masked
+# pipeline of leads not yet captured. The personal Google Voice source is deliberately NOT here — it
+# is human-in-the-loop only (see docs/runbooks/google-voice-metrics.md). Dispatch-only.
+#
+# Requires a Graph app registration with Mail.Read scoped to the listed mailboxes via an Exchange
+# Online application access policy (so the tenant-wide Mail.Read grant only reads those mailboxes).
+
+on:
+  workflow_dispatch:
+    inputs:
+      since_days:
+        description: 'How many days back to scan'
+        required: false
+        default: '365'
+      mailboxes:
+        description: 'Comma-separated shared mailboxes to scan'
+        required: false
+        default: 'contact@freeforcharity.org,support@freeforcharity.org,info@freeforcharity.org'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  discover:
+    runs-on: windows-latest
+    environment: m365-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Acquire Microsoft Graph token
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $token = (az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+          if (-not $token) { throw 'Failed to acquire Graph access token via Azure CLI.' }
+          "GRAPH_ACCESS_TOKEN=$token" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Discover uncaptured comms (PII masked)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts/discovery | Out-Null
+          pwsh -File scripts/discover-uncaptured-comms.ps1 `
+            -Mailboxes '${{ github.event.inputs.mailboxes }}' `
+            -SinceDays '${{ github.event.inputs.since_days }}' `
+            -SitesListPath 'sites-list/sites_list.json' `
+            -OutputFile 'artifacts/discovery/pipeline.csv'
+          if ($LASTEXITCODE -ne 0) { throw "Discovery failed (exit $LASTEXITCODE)." }
+
+      - name: Upload pipeline artifact (PII masked)
+        uses: actions/upload-artifact@v6
+        with:
+          name: uncaptured-comms-pipeline
+          path: artifacts/discovery/pipeline.csv
+          if-no-files-found: error
+          retention-days: 7

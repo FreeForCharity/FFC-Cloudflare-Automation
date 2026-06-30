@@ -7,6 +7,14 @@ To keep the Actions UI list stable and easy to scan, workflows are prefixed with
 (e.g., `01.`). CI validates that every active workflow has a numeric prefix and that prefixes are
 unique.
 
+**New here?** Start with these two guides:
+
+- [docs/charity-onboarding-lifecycle.md](../../docs/charity-onboarding-lifecycle.md) — the
+  end-to-end order for bringing a charity online (domain → DNS/M365 → website → WHMCS → support).
+- [docs/workflow-safety-and-approvals.md](../../docs/workflow-safety-and-approvals.md) — which
+  workflows write live data, what `dry_run` and the environment approval gates protect, and the
+  credential/PII guarantees.
+
 ## Why some workflows are deprecated
 
 Older workflows (including the legacy “Cloudflare DNS Run” and “Zone Add”) were created before the

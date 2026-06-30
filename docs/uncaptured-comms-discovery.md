@@ -44,9 +44,10 @@ prospective charities with no record in the system.
 2. **Classify** charity-signal vs noise. Drop parking receipts, 2FA / verification codes, and
    personal messages. Extract `org`, `domain`, `phone`, `firstSeen`, `intent`.
 3. **Reconcile** each candidate domain/org against:
-   - `sites-list/sites_list.json` (the reconciled domain inventory), and
-   - WHMCS `GetClients` / gid-6 product holders (via the existing APIM path). A candidate with no
-     match is an **uncaptured lead**.
+   - `sites-list/sites_list.json` (the reconciled domain inventory) — this is what the automated
+     script reconciles against today, and
+   - _(planned)_ WHMCS `GetClients` / gid-6 product holders via the existing APIM path. A candidate
+     with no match in the available sources is an **uncaptured lead**.
 4. **Emit**:
    - `artifacts/discovery/pipeline.csv` — PII-masked, `retention-days: 7`.
    - Aggregate counts to the job step summary (no per-person rows).
@@ -74,9 +75,9 @@ Follow the same rule as the Zeffy exports:
 
 - **Automated (this repo):** `47-discover-uncaptured-comms.yml` — `workflow_dispatch` only,
   `windows-latest`, `pwsh` — covering **only the M365 mailboxes + onboarding forms** and the
-  reconciliation against `sites-list/sites_list.json` / WHMCS. Validates secrets resolved, writes
-  counts to the step summary, uploads the masked `pipeline.csv` (`retention-days: 7`,
-  `if-no-files-found: error`).
+  reconciliation against `sites-list/sites_list.json` (WHMCS reconciliation planned). Validates
+  secrets resolved, writes counts to the step summary, uploads the masked `pipeline.csv`
+  (`retention-days: 7`, `if-no-files-found: error`).
 - **Human-in-the-loop (runbook, not a workflow):** an authorized operator runs the Google
   Voice/Gmail discovery in an interactive session, producing a masked summary (counts + candidate
   org/domain list) that is merged into the derivation. This is deliberately NOT a CI job — no
@@ -84,9 +85,10 @@ Follow the same rule as the Zeffy exports:
 
 ## Live evidence (PII-masked, 2026-06-30)
 
-Pulled in an authorized interactive session (the human-in-the-loop model in action). A wider scan of
-~148 of ~201 Google Voice text threads found ≈48% charity-related and ≥6 uncaptured leads. Three
-texts illustrate each disposition:
+Pulled in an authorized interactive session (the human-in-the-loop model in action). A deeper scan
+confirmed **≥ 3,650 Google Voice text threads** over the period (a floor — pagination was halted
+before the full 3-year boundary; Gmail's own ~201 estimate is wrong), **~45% charity-related**, i.e.
+**≥ ~1,640 charity/volunteer threads**. Three texts illustrate each disposition:
 
 - **Already onboarded** — `theafghanistanaffairs.org` (has an `FFC-EX` repo), POC `****8351`, asking
   about finalizing the site and _"For Candid, do I need to do anything?"_ → reconciles to an

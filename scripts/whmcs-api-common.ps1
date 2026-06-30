@@ -101,8 +101,9 @@ function Invoke-WhmcsApi {
     # errors do not match and still fail fast.
     $transientRe = 'Imunify360|bot-protection|too many requests|temporarily unavailable|timed out|The operation has timed out|\b(429|502|503|504)\b'
     $maxAttempts = 5
-    if ($env:WHMCS_API_MAX_ATTEMPTS -and ([int]::TryParse($env:WHMCS_API_MAX_ATTEMPTS, [ref]([int]$null)))) {
-        $maxAttempts = [int]$env:WHMCS_API_MAX_ATTEMPTS
+    $parsedMax = 0
+    if ([int]::TryParse($env:WHMCS_API_MAX_ATTEMPTS, [ref]$parsedMax) -and $parsedMax -ge 1) {
+        $maxAttempts = $parsedMax
     }
     $attempt = 0
     while ($true) {

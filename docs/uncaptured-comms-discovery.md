@@ -9,10 +9,9 @@ and stop undercounting reach.
 - **Microsoft 365** mailboxes are org-owned and **can be automated** (OIDC → Key Vault → Graph, like
   the other exports in this repo).
 - **Google Voice texts come from a personal Google account and must NOT be fully authorized for
-  automation.** That pull is **human-in-the-loop**: run interactively by the operator (e.g.
-  clarkemoyer, or whoever is updating the metrics) in an authorized session like this one, using
-  their own Google sign-in. It hands a PII-masked summary to the pipeline. **No Google refresh token
-  is ever stored in Key Vault or CI.**
+  automation.** That pull is **human-in-the-loop**: an authorized operator (whoever is updating the
+  metrics) runs it in an interactive session using their own Google sign-in, and hands a PII-masked
+  summary to the pipeline. **No Google refresh token is ever stored in Key Vault or CI.**
 
 ## Why
 
@@ -33,7 +32,7 @@ prospective charities with no record in the system.
 | **Onboarding form** submissions                                                        | **Automated**         | Normalize to the same shape (wherever they currently land).                                                                                                                                                                                                                                        |
 
 > **Principle — no stored Google credential.** Putting a personal Google account's long-lived token
-> into CI is out of scope. The scheduled workflow automates **only the org-owned sources** (M365 +
+> into CI is out of scope. The automated workflow covers **only the org-owned sources** (M365 +
 > onboarding forms) and the reconciliation; the personal Google Voice/Gmail pull is run by a human
 > in an authorized session and merged in as a masked summary.
 
@@ -75,12 +74,13 @@ Follow the same rule as the Zeffy exports:
 
 - **Automated (this repo):** `47-discover-uncaptured-comms.yml` — `workflow_dispatch` only,
   `windows-latest`, `pwsh` — covering **only the M365 mailboxes + onboarding forms** and the
-  reconciliation against `sites_list.json` / WHMCS. Validates secrets resolved, writes counts to the
-  step summary, uploads the masked `pipeline.csv` (`retention-days: 7`, `if-no-files-found: error`).
-- **Human-in-the-loop (runbook, not a workflow):** the operator runs the Google Voice/Gmail
-  discovery in an authorized interactive session (this session is the reference run), producing a
-  masked summary (counts + candidate org/domain list) that is merged into the derivation. This is
-  deliberately NOT a CI job — no personal Google token is stored.
+  reconciliation against `sites-list/sites_list.json` / WHMCS. Validates secrets resolved, writes
+  counts to the step summary, uploads the masked `pipeline.csv` (`retention-days: 7`,
+  `if-no-files-found: error`).
+- **Human-in-the-loop (runbook, not a workflow):** an authorized operator runs the Google
+  Voice/Gmail discovery in an interactive session, producing a masked summary (counts + candidate
+  org/domain list) that is merged into the derivation. This is deliberately NOT a CI job — no
+  personal Google token is stored.
 
 ## Live evidence (PII-masked, 2026-06-30)
 

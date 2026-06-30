@@ -8,6 +8,11 @@ on:
         description: 'Domain to add to tenant (e.g., example.org)'
         required: true
         type: string
+      dry_run:
+        description: 'Preview only (no create). Default true; set false to actually add the domain.'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -47,6 +52,14 @@ jobs:
         shell: pwsh
         env:
           GRAPH_ACCESS_TOKEN: ${{ env.GRAPH_ACCESS_TOKEN }}
+          # Pass the domain via env (not interpolated into the script line) so the input can't
+          # break out of the argument.
+          INPUT_DOMAIN: ${{ inputs.domain }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
-          pwsh -NoProfile -File scripts/m365-add-tenant-domain.ps1 -Domain "${{ inputs.domain }}" -AccessToken $env:GRAPH_ACCESS_TOKEN
+          $scriptArgs = @('-NoProfile', '-File', 'scripts/m365-add-tenant-domain.ps1', '-Domain', $env:INPUT_DOMAIN, '-AccessToken', $env:GRAPH_ACCESS_TOKEN)
+          # Fail safe: preview unless dry_run is explicitly 'false'.
+          if ($env:INPUT_DRY_RUN -ne 'false') { $scriptArgs += '-DryRun' }
+          & pwsh @scriptArgs
+          if ($LASTEXITCODE -ne 0) { throw "m365-add-tenant-domain failed (exit $LASTEXITCODE)." }

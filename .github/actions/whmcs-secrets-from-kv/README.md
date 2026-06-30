@@ -1,8 +1,8 @@
 # Composite action: `whmcs-secrets-from-kv`
 
-Fetch the FFC WHMCS API credential (identifier + secret, and optionally an access key) from Azure
-Key Vault at workflow runtime, via OIDC. Replaces the older pattern of holding the WHMCS secret as a
-GitHub Environment Secret in `whmcs-prod`.
+Fetch the FFC WHMCS API credential (identifier + secret) from Azure Key Vault at workflow runtime,
+via OIDC. Replaces the older pattern of holding the WHMCS secret as a GitHub Environment Secret in
+`whmcs-prod`.
 
 ## Why this action exists
 
@@ -53,7 +53,6 @@ URL is non-secret and passed inline by the workflows.)
 | `vault-name`                 | no       | `kv-ffc-admin-prod-cbm` | Azure Key Vault name                                                                                                                                                                                                      |
 | `azure-client-id`            | yes      | —                       | OIDC client ID of the identity with access to the vault. Pass `${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}`.                                                                                                                |
 | `azure-tenant-id`            | yes      | —                       | Azure tenant ID. Pass `${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}`.                                                                                                                                                           |
-| `access-key-secret-name`     | no       | `''` (skip)             | KV secret name for an optional WHMCS access key. The WHMCS API does not currently use one, so leave empty.                                                                                                                |
 | `load-apim-subscription-key` | no       | `'true'`                | When true, also fetch `{scope}-ffc-apim-whmcs-subscription-key` and export `WHMCS_APIM_SUBSCRIPTION_KEY`. The WHMCS API is reached via APIM, which requires this key. Set `false` only to call the WHMCS origin directly. |
 
 ## Outputs
@@ -67,7 +66,6 @@ never inject extra variables):
 - `WHMCS_APIM_SUBSCRIPTION_KEY` — APIM `whmcs-ops` subscription key (unless
   `load-apim-subscription-key: 'false'`); the WHMCS scripts send it as the
   `Ocp-Apim-Subscription-Key` header
-- `WHMCS_API_ACCESS_KEY` — only when `access-key-secret-name` is set
 
 All exported values are masked via `::add-mask::` before export, so they will not appear in logs.
 

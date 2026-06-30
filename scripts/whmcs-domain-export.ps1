@@ -90,6 +90,15 @@ function Invoke-WhmcsApi {
         [hashtable]$Body
     )
 
+    # SECURITY: the WHMCS credential (identifier/secret + APIM subscription key) is attached to
+    # this request, so only allow it to be sent to known WHMCS hosts. A workflow input
+    # (-ApiUrl / WHMCS_API_URL) must never redirect the credential to an arbitrary host.
+    $allowedHosts = @('apim-ffc-gateway-prod.azure-api.net', 'freeforcharity.org')
+    $parsedUri = $null
+    if (-not [Uri]::TryCreate($ApiUrl, [UriKind]::Absolute, [ref]$parsedUri) -or $parsedUri.Scheme -ne 'https' -or $allowedHosts -notcontains $parsedUri.Host) {
+        throw "Refusing to send WHMCS credentials to '$ApiUrl': host is not in the allowlist ($($allowedHosts -join ', '))."
+    }
+
     $headers = @{
         'Accept'     = 'application/json'
         'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'

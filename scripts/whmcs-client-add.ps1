@@ -113,7 +113,11 @@ try {
         $auth = New-WhmcsAuthBody -Creds $creds -AccessKey $accessKey
         $existingId = Find-WhmcsClientIdByEmail -ApiUrl $api -Auth $auth -Email $Email
         if ($existingId) {
-            if ($FailIfExists) { throw "A WHMCS client with email '$Email' already exists (clientid $existingId)." }
+            if ($FailIfExists) {
+                # Mask the email in the error message (it may surface in workflow logs).
+                $maskedEmail = if ($Email -match '@') { '***' + $Email.Substring($Email.IndexOf('@')) } else { '***' }
+                throw "A WHMCS client with email '$maskedEmail' already exists (clientid $existingId)."
+            }
             [pscustomobject]@{ action = 'AddClient'; dryRun = $false; clientid = $existingId; email = $Email; existing = $true } | ConvertTo-Json -Depth 6
             exit 0
         }

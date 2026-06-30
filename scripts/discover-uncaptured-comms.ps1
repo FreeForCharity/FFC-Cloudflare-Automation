@@ -6,11 +6,11 @@
 # via an Exchange Online application access policy. The personal Google Voice source is deliberately
 # NOT handled here — it is human-in-the-loop only (see docs/runbooks/google-voice-metrics.md).
 #
-# PII: the CSV only ever contains (a) a first-initial-masked sender name and (b) a candidateDomain
-# that is a NON-personal-provider org domain (personal providers like gmail.com are excluded, and the
-# raw sender email is never written). Org domains are not personal data; a personal custom domain is
-# rare in this org-mailbox context and the artifact is retention-capped (7 days) — operators still
-# treat any personal domain per the PII policy. No raw bodies are persisted.
+# PII: the CSV columns are receivedDate, mailbox, a first-initial-masked sender name, candidateDomain
+# (a NON-personal-provider org domain only), and status — none are personal data. The raw sender
+# email is never written, and personal providers like gmail.com are excluded from candidateDomain.
+# A personal custom domain is rare in this org-mailbox context and the artifact is retention-capped
+# (7 days) — operators still treat any personal domain per the PII policy. No raw bodies are persisted.
 
 [CmdletBinding()]
 param(

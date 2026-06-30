@@ -46,6 +46,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $token = (az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
           if (-not $token) { throw 'Failed to acquire Graph access token via Azure CLI.' }
+          Write-Host "::add-mask::$token"
           "GRAPH_ACCESS_TOKEN=$token" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Discover uncaptured comms (PII masked)

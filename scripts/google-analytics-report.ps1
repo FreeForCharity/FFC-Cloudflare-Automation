@@ -20,11 +20,11 @@
 
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory)][string]$SiteLabel,
-  [Parameter(Mandatory)][string]$OutPath,
-  [string]$PropertyId,
-  [int]$Days = 28,
-  [switch]$DryRun
+    [Parameter(Mandatory)][string]$SiteLabel,
+    [Parameter(Mandatory)][string]$OutPath,
+    [string]$PropertyId,
+    [int]$Days = 28,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,30 +34,30 @@ $startDate = "$Days" + 'daysAgo'
 $now = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 
 function Write-Report {
-  param([object]$Report, [string]$Path)
-  $dir = Split-Path -Parent $Path
-  if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-  ($Report | ConvertTo-Json -Depth 20) | Set-Content -Path $Path -Encoding utf8
-  Write-Host "Wrote GA report for $SiteLabel -> $Path"
+    param([object]$Report, [string]$Path)
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    ($Report | ConvertTo-Json -Depth 20) | Set-Content -Path $Path -Encoding utf8
+    Write-Host "Wrote GA report for $SiteLabel -> $Path"
 }
 
 if ($DryRun) {
-  $stub = [ordered]@{
-    updatedAt  = $now
-    site       = $SiteLabel
-    propertyId = if ($PropertyId) { $PropertyId } else { 'DRYRUN' }
-    dryRun     = $true
-    range      = [ordered]@{ days = $Days; startDate = $startDate; endDate = 'today' }
-    metrics    = [ordered]@{ activeUsers = 0; newUsers = 0; sessions = 0; screenPageViews = 0; engagementRate = 0 }
-    topPages   = @()
-    channels   = @()
-  }
-  Write-Report -Report $stub -Path $OutPath
-  return
+    $stub = [ordered]@{
+        updatedAt  = $now
+        site       = $SiteLabel
+        propertyId = if ($PropertyId) { $PropertyId } else { 'DRYRUN' }
+        dryRun     = $true
+        range      = [ordered]@{ days = $Days; startDate = $startDate; endDate = 'today' }
+        metrics    = [ordered]@{ activeUsers = 0; newUsers = 0; sessions = 0; screenPageViews = 0; engagementRate = 0 }
+        topPages   = @()
+        channels   = @()
+    }
+    Write-Report -Report $stub -Path $OutPath
+    return
 }
 
 if ([string]::IsNullOrWhiteSpace($PropertyId)) {
-  throw 'A GA4 -PropertyId is required for a live run (omit only with -DryRun).'
+    throw 'A GA4 -PropertyId is required for a live run (omit only with -DryRun).'
 }
 
 $token = Get-GoogleAccessToken -Scope 'https://www.googleapis.com/auth/analytics.readonly'
@@ -65,54 +65,54 @@ $uri = "https://analyticsdata.googleapis.com/v1beta/properties/$PropertyId:runRe
 
 # Headline metrics (no dimensions -> single aggregate row; PII-safe).
 $headline = Invoke-GoogleApi -Method POST -Uri $uri -AccessToken $token -Body @{
-  dateRanges = @(@{ startDate = $startDate; endDate = 'today' })
-  metrics    = @(
-    @{ name = 'activeUsers' }, @{ name = 'newUsers' }, @{ name = 'sessions' },
-    @{ name = 'screenPageViews' }, @{ name = 'engagementRate' }
-  )
+    dateRanges = @(@{ startDate = $startDate; endDate = 'today' })
+    metrics    = @(
+        @{ name = 'activeUsers' }, @{ name = 'newUsers' }, @{ name = 'sessions' },
+        @{ name = 'screenPageViews' }, @{ name = 'engagementRate' }
+    )
 }
 
 $metricNames = @('activeUsers', 'newUsers', 'sessions', 'screenPageViews', 'engagementRate')
 $headlineRows = Get-GoogleRows $headline
 $metrics = [ordered]@{}
 for ($i = 0; $i -lt $metricNames.Count; $i++) {
-  $v = if ($headlineRows.Count) { $headlineRows[0].metricValues[$i].value } else { 0 }
-  $metrics[$metricNames[$i]] = $v
+    $v = if ($headlineRows.Count) { $headlineRows[0].metricValues[$i].value } else { 0 }
+    $metrics[$metricNames[$i]] = $v
 }
 
 # Top pages by views (pagePath is page-level, not user-level -> safe to publish).
 $pagesResp = Invoke-GoogleApi -Method POST -Uri $uri -AccessToken $token -Body @{
-  dateRanges = @(@{ startDate = $startDate; endDate = 'today' })
-  dimensions = @(@{ name = 'pagePath' })
-  metrics    = @(@{ name = 'screenPageViews' })
-  orderBys   = @(@{ desc = $true; metric = @{ metricName = 'screenPageViews' } })
-  limit      = 10
+    dateRanges = @(@{ startDate = $startDate; endDate = 'today' })
+    dimensions = @(@{ name = 'pagePath' })
+    metrics    = @(@{ name = 'screenPageViews' })
+    orderBys   = @(@{ desc = $true; metric = @{ metricName = 'screenPageViews' } })
+    limit      = 10
 }
 $topPages = @()
 foreach ($r in (Get-GoogleRows $pagesResp)) {
-  $topPages += [ordered]@{ path = $r.dimensionValues[0].value; views = $r.metricValues[0].value }
+    $topPages += [ordered]@{ path = $r.dimensionValues[0].value; views = $r.metricValues[0].value }
 }
 
 # Channel mix.
 $chResp = Invoke-GoogleApi -Method POST -Uri $uri -AccessToken $token -Body @{
-  dateRanges = @(@{ startDate = $startDate; endDate = 'today' })
-  dimensions = @(@{ name = 'sessionDefaultChannelGroup' })
-  metrics    = @(@{ name = 'sessions' })
-  orderBys   = @(@{ desc = $true; metric = @{ metricName = 'sessions' } })
+    dateRanges = @(@{ startDate = $startDate; endDate = 'today' })
+    dimensions = @(@{ name = 'sessionDefaultChannelGroup' })
+    metrics    = @(@{ name = 'sessions' })
+    orderBys   = @(@{ desc = $true; metric = @{ metricName = 'sessions' } })
 }
 $channels = @()
 foreach ($r in (Get-GoogleRows $chResp)) {
-  $channels += [ordered]@{ channel = $r.dimensionValues[0].value; sessions = $r.metricValues[0].value }
+    $channels += [ordered]@{ channel = $r.dimensionValues[0].value; sessions = $r.metricValues[0].value }
 }
 
 $report = [ordered]@{
-  updatedAt  = $now
-  site       = $SiteLabel
-  propertyId = $PropertyId
-  dryRun     = $false
-  range      = [ordered]@{ days = $Days; startDate = $startDate; endDate = 'today' }
-  metrics    = $metrics
-  topPages   = $topPages
-  channels   = $channels
+    updatedAt  = $now
+    site       = $SiteLabel
+    propertyId = $PropertyId
+    dryRun     = $false
+    range      = [ordered]@{ days = $Days; startDate = $startDate; endDate = 'today' }
+    metrics    = $metrics
+    topPages   = $topPages
+    channels   = $channels
 }
 Write-Report -Report $report -Path $OutPath

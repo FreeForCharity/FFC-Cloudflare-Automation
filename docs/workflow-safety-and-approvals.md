@@ -23,11 +23,16 @@ A live change generally has to get past several of these, not just one:
    provider logs.)
 2. **Environment approval gates.** A job whose `environment` is configured with **required
    reviewers** pauses at `status: waiting` until a reviewer (currently `clarkemoyer`) approves the
-   deployment. The environments confirmed to require a reviewer are **`cloudflare-prod-write`**,
-   **`whmcs-prod`**, and **`github-prod`** (see repo _Settings → Environments_ for the live config).
-   `whmcs-prod` gates **every** WHMCS job — including read-only exports and the cross-source
-   inventory (04) — so even a triage run waits for approval. The `*-read` environments are not
-   gated.
+   deployment. The live config was **audited on 2026-06-30** by the read-only workflow **99. Repo -
+   Audit Environment Approval Gates [Repo]** (reads the protection rules with `GITHUB_TOKEN`). The
+   environments that require a reviewer are: **`cloudflare-prod-write`**, **`whmcs-prod`**,
+   **`github-prod`**, **`m365-prod`**, and **`wpmudev-prod`** (plus a bare **`cloudflare-prod`**
+   that no workflow currently uses). The environments with **no** reviewer — runs proceed without
+   pausing — are **`cloudflare-prod-read`** and **`zeffy-prod`**. Because `whmcs-prod`, `m365-prod`,
+   and `wpmudev-prod` are gated at the environment level, they gate **every** job that uses them —
+   including read-only exports and triage (e.g. the cross-source inventory 04, the M365
+   list/preflight reads 20–22, and the WPMUDEV export 40) — so even a read run waits for approval.
+   Re-run workflow 99 after any change in _Settings → Environments_ to refresh this list.
 3. **`dry_run` defaults to preview.** The granular write workflows take a `dry_run` input that
    **defaults to `true`**. A dry run returns a preview (e.g. redacted JSON of what _would_ be sent)
    and performs **no** mutation. You must explicitly pass `dry_run=false` to go live.
@@ -63,53 +68,54 @@ Numbers are the **display numbers** shown in the Actions UI (the `name:` prefix)
 the workflow file names. Legend — **Reads**: no external mutation. **Writes (dry-run default)**:
 mutates only when you set `dry_run=false`. **Writes (gated)**: mutates when run, protected by the
 environment approval gate and/or a typed confirmation. ✅ = an approval-gated environment
-(`cloudflare-prod-write`, `whmcs-prod`, or `github-prod`) applies.
+(`cloudflare-prod-write`, `whmcs-prod`, `github-prod`, `m365-prod`, or `wpmudev-prod`) applies — so
+the run pauses for approval, even if the action itself only reads.
 
-| #     | Workflow                                  | Level                     | Approval env                           | Extra guard                                                                         |
-| ----- | ----------------------------------------- | ------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------- |
-| 01    | Domain - Status                           | Reads                     | cloudflare-prod-read / m365-prod       | —                                                                                   |
-| 02    | Domain - Add to FFC CF + WHMCS NS         | Writes (gated)            | ✅ cloudflare-prod-write / whmcs-prod  | —                                                                                   |
-| 03    | Domain - Enforce Standard (Apex + M365)   | Writes (dry-run default)  | ✅ cloudflare-prod-write / m365-prod   | `dry_run` (default true)                                                            |
-| 04    | Domain - Export Inventory                 | Reads                     | ✅ whmcs-prod (+ cf-read/m365/wpmudev) | waits on whmcs-prod approval                                                        |
-| 05    | DNS - Manage Record                       | Writes (dry-run default)  | ✅ cloudflare-prod-write               | `dry_run` (default true); issue-label trig                                          |
-| 06    | DNS - Enforce Standard (DNS-only)         | Writes (dry-run default)  | ✅ cloudflare-prod-write               | `dry_run` (default true)                                                            |
-| 07    | DNS - Audit Compliance                    | Reads                     | cloudflare-prod-read                   | —                                                                                   |
-| 08    | DNS - Export Cloudflare Zones             | Reads                     | cloudflare-prod-read                   | —                                                                                   |
-| 09    | DNS - Create Zone (Admin)                 | Writes (gated)            | ✅ cloudflare-prod-write               | —                                                                                   |
-| 10    | DNS - Create Redirect Rule                | Writes (dry-run default)  | ✅ cloudflare-prod-write               | `dry_run` (default true)                                                            |
-| 11    | DNS - Export All Records                  | Reads                     | cloudflare-prod-read                   | —                                                                                   |
-| 12    | Domain - Registrar Search/Check/Reg.      | Writes (gated)            | ✅ cloudflare-prod-write               | `mode` (default `check`); register needs `mode=execute-register` + `confirm_domain` |
-| 13    | Domain - Validate Registrar API Access    | Reads                     | ✅ cloudflare-prod-write               | never charges                                                                       |
-| 14    | Domain - Transfer Readiness Preflight     | Reads                     | ✅ whmcs-prod                          | —                                                                                   |
-| 15    | Website - Provision                       | Writes (gated)            | ✅ cloudflare-prod-write / github-prod | `repo` chained behind `dns` approval                                                |
-| 16    | Domain - Transfer EPP/Auth Probe          | Writes (dry-run default)  | ✅ whmcs-prod                          | `dry-run` vs `execute`                                                              |
-| 17    | DNS - Bulk Replace A-record IP            | Writes (gated)            | ✅ cloudflare-prod-write               | high blast radius; serialized                                                       |
-| 18    | DNS - Bulk Staging CNAME → GH Pages       | Writes (dry-run default)  | ✅ cloudflare-prod-write               | `dry_run` (default true); serialized                                                |
-| 19    | DNS + GH Pages - Bulk Cutover             | Writes (dry-run default)  | ✅ cloudflare-prod-write / github-prod | `dry_run` (default true); serialized                                                |
-| 20    | M365 - Domain Preflight                   | Reads                     | cloudflare-prod-read / m365-prod       | —                                                                                   |
-| 21    | M365 - List Tenant Domains                | Reads                     | m365-prod                              | —                                                                                   |
-| 22    | M365 - Domain Status + DKIM (Toolbox)     | Reads                     | m365-prod                              | read-oriented toolbox                                                               |
-| 23    | M365 - Enable DKIM                        | Writes (gated)            | ✅ cloudflare-prod-write / m365-prod   | —                                                                                   |
-| 24    | M365 - Add Tenant Domain (Admin)          | Writes (dry-run default)  | m365-prod                              | `dry_run` (default true)                                                            |
-| 25    | Domain - Post-Transfer Verification       | Reads                     | cloudflare-prod-read                   | —                                                                                   |
-| 26    | Domain - Registrar Lock / Unlock          | Writes (dry-run default)  | ✅ whmcs-prod                          | `dry_run` (default true)                                                            |
-| 27    | Domain - Deploy Static Clone (FFC-EX)     | Writes (gated)            | ✅ github-prod                         | opens a draft PR (never pushes); serialized                                         |
-| 30–32 | WHMCS - Exports (domains/products/pmts)   | Reads                     | ✅ whmcs-prod                          | gated only by the env approval                                                      |
-| 33    | WHMCS → Zeffy Payments Import (Draft)     | Reads (builds a file)     | ✅ whmcs-prod                          | output is a draft; serialized                                                       |
-| 34    | WHMCS - Charity Onboard                   | Writes (dry-run default)  | ✅ whmcs-prod                          | `dry_run` (default true); idempotent                                                |
-| 35    | WHMCS - Open Ticket (manual)              | Writes (gated)            | ✅ whmcs-prod                          | one-way GitHub→WHMCS                                                                |
-| 36    | WHMCS - Issue to Ticket                   | Writes (gated)            | ✅ whmcs-prod                          | one-way GitHub→WHMCS                                                                |
-| 37    | WHMCS - Export Tickets                    | Reads                     | ✅ whmcs-prod                          | —                                                                                   |
-| 38    | WHMCS - Tickets Triage                    | Reads                     | ✅ whmcs-prod                          | summary masks PII                                                                   |
-| 39    | WHMCS - Ticket Respond                    | Writes (dry-run default)  | ✅ whmcs-prod                          | `dry_run` (default true); live reply needs admin username                           |
-| 40    | WPMUDEV - Export Sites/Domains            | Reads                     | wpmudev-prod                           | —                                                                                   |
-| 41    | WHMCS - Orders Triage                     | Reads                     | ✅ whmcs-prod                          | summary masks PII                                                                   |
-| 42    | WHMCS - Order Update                      | Writes (dry-run default)  | ✅ whmcs-prod                          | `dry_run` (default true); one order at a time                                       |
-| 43    | WHMCS - Product Add                       | Writes (dry-run default)  | ✅ whmcs-prod                          | `dry_run` (default true); idempotent                                                |
-| 44–46 | Zeffy - Exports (campaigns/pmts/contacts) | Reads                     | zeffy-prod                             | PII masked; never `-IncludePii`                                                     |
-| 95    | Repo - Rulesets + Settings Drift Audit    | Reads                     | —                                      | report only                                                                         |
-| 98    | Repo - Add Collaborator                   | Writes (**live default**) | ✅ github-prod                         | ⚠️ `dry_run` defaults to **false**                                                  |
-| 99    | Repo - Audit Environment Approval Gates   | Reads                     | —                                      | report only (environment reviewer config)                                           |
+| #     | Workflow                                  | Level                     | Approval env                                               | Extra guard                                                                         |
+| ----- | ----------------------------------------- | ------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| 01    | Domain - Status                           | Reads                     | cloudflare-prod-read / ✅ m365-prod                        | M365 job waits on m365-prod approval                                                |
+| 02    | Domain - Add to FFC CF + WHMCS NS         | Writes (gated)            | ✅ cloudflare-prod-write / ✅ whmcs-prod                   | —                                                                                   |
+| 03    | Domain - Enforce Standard (Apex + M365)   | Writes (dry-run default)  | ✅ cloudflare-prod-write / ✅ m365-prod                    | `dry_run` (default true)                                                            |
+| 04    | Domain - Export Inventory                 | Reads                     | ✅ whmcs-prod / ✅ m365-prod / ✅ wpmudev-prod (+ cf-read) | waits on whmcs-prod, m365-prod, and wpmudev-prod approvals                          |
+| 05    | DNS - Manage Record                       | Writes (dry-run default)  | ✅ cloudflare-prod-write                                   | `dry_run` (default true); issue-label trig                                          |
+| 06    | DNS - Enforce Standard (DNS-only)         | Writes (dry-run default)  | ✅ cloudflare-prod-write                                   | `dry_run` (default true)                                                            |
+| 07    | DNS - Audit Compliance                    | Reads                     | cloudflare-prod-read                                       | —                                                                                   |
+| 08    | DNS - Export Cloudflare Zones             | Reads                     | cloudflare-prod-read                                       | —                                                                                   |
+| 09    | DNS - Create Zone (Admin)                 | Writes (gated)            | ✅ cloudflare-prod-write                                   | —                                                                                   |
+| 10    | DNS - Create Redirect Rule                | Writes (dry-run default)  | ✅ cloudflare-prod-write                                   | `dry_run` (default true)                                                            |
+| 11    | DNS - Export All Records                  | Reads                     | cloudflare-prod-read                                       | —                                                                                   |
+| 12    | Domain - Registrar Search/Check/Reg.      | Writes (gated)            | ✅ cloudflare-prod-write                                   | `mode` (default `check`); register needs `mode=execute-register` + `confirm_domain` |
+| 13    | Domain - Validate Registrar API Access    | Reads                     | ✅ cloudflare-prod-write                                   | never charges                                                                       |
+| 14    | Domain - Transfer Readiness Preflight     | Reads                     | ✅ whmcs-prod                                              | —                                                                                   |
+| 15    | Website - Provision                       | Writes (gated)            | ✅ cloudflare-prod-write / ✅ github-prod                  | `repo` chained behind `dns` approval                                                |
+| 16    | Domain - Transfer EPP/Auth Probe          | Writes (dry-run default)  | ✅ whmcs-prod                                              | `dry-run` vs `execute`                                                              |
+| 17    | DNS - Bulk Replace A-record IP            | Writes (gated)            | ✅ cloudflare-prod-write                                   | high blast radius; serialized                                                       |
+| 18    | DNS - Bulk Staging CNAME → GH Pages       | Writes (dry-run default)  | ✅ cloudflare-prod-write                                   | `dry_run` (default true); serialized                                                |
+| 19    | DNS + GH Pages - Bulk Cutover             | Writes (dry-run default)  | ✅ cloudflare-prod-write / ✅ github-prod                  | `dry_run` (default true); serialized                                                |
+| 20    | M365 - Domain Preflight                   | Reads                     | cloudflare-prod-read / ✅ m365-prod                        | M365 job waits on m365-prod approval                                                |
+| 21    | M365 - List Tenant Domains                | Reads                     | ✅ m365-prod                                               | waits on m365-prod approval                                                         |
+| 22    | M365 - Domain Status + DKIM (Toolbox)     | Reads                     | ✅ m365-prod                                               | read-oriented toolbox; waits on m365-prod approval                                  |
+| 23    | M365 - Enable DKIM                        | Writes (gated)            | ✅ cloudflare-prod-write / ✅ m365-prod                    | —                                                                                   |
+| 24    | M365 - Add Tenant Domain (Admin)          | Writes (dry-run default)  | ✅ m365-prod                                               | `dry_run` (default true); also gated by m365-prod approval                          |
+| 25    | Domain - Post-Transfer Verification       | Reads                     | cloudflare-prod-read                                       | —                                                                                   |
+| 26    | Domain - Registrar Lock / Unlock          | Writes (dry-run default)  | ✅ whmcs-prod                                              | `dry_run` (default true)                                                            |
+| 27    | Domain - Deploy Static Clone (FFC-EX)     | Writes (gated)            | ✅ github-prod                                             | opens a draft PR (never pushes); serialized                                         |
+| 30–32 | WHMCS - Exports (domains/products/pmts)   | Reads                     | ✅ whmcs-prod                                              | gated only by the env approval                                                      |
+| 33    | WHMCS → Zeffy Payments Import (Draft)     | Reads (builds a file)     | ✅ whmcs-prod                                              | output is a draft; serialized                                                       |
+| 34    | WHMCS - Charity Onboard                   | Writes (dry-run default)  | ✅ whmcs-prod                                              | `dry_run` (default true); idempotent                                                |
+| 35    | WHMCS - Open Ticket (manual)              | Writes (gated)            | ✅ whmcs-prod                                              | one-way GitHub→WHMCS                                                                |
+| 36    | WHMCS - Issue to Ticket                   | Writes (gated)            | ✅ whmcs-prod                                              | one-way GitHub→WHMCS                                                                |
+| 37    | WHMCS - Export Tickets                    | Reads                     | ✅ whmcs-prod                                              | —                                                                                   |
+| 38    | WHMCS - Tickets Triage                    | Reads                     | ✅ whmcs-prod                                              | summary masks PII                                                                   |
+| 39    | WHMCS - Ticket Respond                    | Writes (dry-run default)  | ✅ whmcs-prod                                              | `dry_run` (default true); live reply needs admin username                           |
+| 40    | WPMUDEV - Export Sites/Domains            | Reads                     | ✅ wpmudev-prod                                            | waits on wpmudev-prod approval                                                      |
+| 41    | WHMCS - Orders Triage                     | Reads                     | ✅ whmcs-prod                                              | summary masks PII                                                                   |
+| 42    | WHMCS - Order Update                      | Writes (dry-run default)  | ✅ whmcs-prod                                              | `dry_run` (default true); one order at a time                                       |
+| 43    | WHMCS - Product Add                       | Writes (dry-run default)  | ✅ whmcs-prod                                              | `dry_run` (default true); idempotent                                                |
+| 44–46 | Zeffy - Exports (campaigns/pmts/contacts) | Reads                     | zeffy-prod                                                 | PII masked; never `-IncludePii`                                                     |
+| 95    | Repo - Rulesets + Settings Drift Audit    | Reads                     | —                                                          | report only                                                                         |
+| 98    | Repo - Add Collaborator                   | Writes (**live default**) | ✅ github-prod                                             | ⚠️ `dry_run` defaults to **false**                                                  |
+| 99    | Repo - Audit Environment Approval Gates   | Reads                     | —                                                          | report only (environment reviewer config)                                           |
 
 > **Exception to call out:** **98. Repo - Add Collaborator** is the one write workflow whose
 > `dry_run` defaults to **`false`** (it runs live by default). It's low-risk (adding a repo

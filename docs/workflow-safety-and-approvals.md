@@ -8,12 +8,19 @@ It complements
 [github-actions-environments-and-secrets.md](github-actions-environments-and-secrets.md) (which
 covers _how secrets are configured_) — this doc covers _what protects you at run time_.
 
+> **Maintenance.** The per-workflow table is kept honest by CI
+> (`scripts/check-workflow-doc-consistency.py`): a new or renamed workflow that isn't reflected here
+> fails the build. Owner: repo maintainers. Last hand-reconciled against the workflow set:
+> **2026-06-30**.
+
 ## The safety model: five independent layers
 
 A live change generally has to get past several of these, not just one:
 
 1. **Read vs. write split.** Read-only workflows load `*-read` / reader-scope credentials and cannot
-   mutate anything. Write workflows load `*-write` / writer-scope credentials.
+   mutate anything. Write workflows load `*-write` / writer-scope credentials. ("Read" means no data
+   change — but a read run still calls the live API, so it counts against rate limits and appears in
+   provider logs.)
 2. **Environment approval gates.** A job whose `environment` is configured with **required
    reviewers** pauses at `status: waiting` until a reviewer (currently `clarkemoyer`) approves the
    deployment. The environments confirmed to require a reviewer are **`cloudflare-prod-write`**,
@@ -120,7 +127,8 @@ environment approval gate and/or a typed confirmation. ✅ = an approval-gated e
    `status: waiting` (a reviewer must approve `*-write` / `whmcs-prod` / `github-prod`).
 5. For **bulk DNS (17/18/19)**: cut over in the staging→apex order, and verify a single domain
    end-to-end before running the full list. All three are now serialized (a second dispatch queues
-   behind the first), but they still touch many zones in one run — read the dry-run preview first.
+   behind the first), but the **blast radius is large** — **17** rewrites A records across **all**
+   zones, and **18/19** default to the full ~13-domain FFC-EX list. Read the dry-run preview first.
 
 ## What is _not_ protected
 

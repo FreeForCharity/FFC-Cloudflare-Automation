@@ -109,6 +109,7 @@ environment approval gate and/or a typed confirmation. ✅ = an approval-gated e
 | 44–46 | Zeffy - Exports (campaigns/pmts/contacts) | Reads                     | zeffy-prod                             | PII masked; never `-IncludePii`                                                     |
 | 95    | Repo - Rulesets + Settings Drift Audit    | Reads                     | —                                      | report only                                                                         |
 | 98    | Repo - Add Collaborator                   | Writes (**live default**) | ✅ github-prod                         | ⚠️ `dry_run` defaults to **false**                                                  |
+| 99    | Repo - Audit Environment Approval Gates   | Reads                     | —                                      | report only (environment reviewer config)                                           |
 
 > **Exception to call out:** **98. Repo - Add Collaborator** is the one write workflow whose
 > `dry_run` defaults to **`false`** (it runs live by default). It's low-risk (adding a repo

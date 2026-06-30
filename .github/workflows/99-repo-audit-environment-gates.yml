@@ -1,0 +1,58 @@
+name: '99. Repo - Audit Environment Approval Gates [Repo]'
+run-name: 'Audit environment approval gates'
+
+# Read-only. Lists every GitHub Environment's required reviewers, wait timer, and deployment
+# branch policy to the job summary (and the log). Answers "which environments gate a deployment
+# behind a human approval?" — which the docs hedge on because environment protection rules can't
+# be read from the agent sandbox proxy. Uses the built-in GITHUB_TOKEN (repo read is enough to
+# read protection rules), so it needs no environment and no approval. Dispatch-only.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Audit environment protection rules
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## Environment approval gates — \`$REPO\`"
+            echo ""
+            echo "| Environment | Required reviewers | Wait timer (min) | Branch policy |"
+            echo "| --- | --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          names=$(gh api "repos/$REPO/environments" --paginate --jq '.environments[].name' 2>/dev/null | sort || true)
+
+          if [ -z "$names" ]; then
+            echo "| (none returned — the token may lack access to read environments) | — | — | — |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            while IFS= read -r e; do
+              if [ -z "$e" ]; then continue; fi
+              json=$(gh api "repos/$REPO/environments/$e" 2>/dev/null || echo '{}')
+              reviewers=$(printf '%s' "$json" | jq -r '[.protection_rules[]? | select(.type=="required_reviewers") | .reviewers[]?.reviewer.login] | join(", ")')
+              if [ -z "$reviewers" ]; then reviewers="—"; fi
+              wait_min=$(printf '%s' "$json" | jq -r '([.protection_rules[]? | select(.type=="wait_timer") | .wait_timer] | first) // "—"')
+              branch=$(printf '%s' "$json" | jq -r 'if .deployment_branch_policy == null then "any" elif .deployment_branch_policy.protected_branches then "protected only" else "custom list" end')
+              echo "| $e | $reviewers | $wait_min | $branch |" >> "$GITHUB_STEP_SUMMARY"
+            done <<< "$names"
+          fi
+
+          {
+            echo ""
+            echo "_Read-only audit; no changes made._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "----- summary (also above) -----"
+          cat "$GITHUB_STEP_SUMMARY"

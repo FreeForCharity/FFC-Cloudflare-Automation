@@ -14,14 +14,9 @@ on:
         type: string
         default: 'https://api.zeffy.com'
       status:
-        description: 'Filter payments by status (blank = all)'
+        description: 'Filter payments by status: succeeded | pending | failed (blank = all)'
         required: false
-        type: choice
-        options:
-          - ''
-          - succeeded
-          - pending
-          - failed
+        type: string
         default: ''
       payments_output:
         description: 'Payments CSV path'

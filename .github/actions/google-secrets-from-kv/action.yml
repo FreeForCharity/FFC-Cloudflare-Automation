@@ -77,7 +77,7 @@ runs:
         $scope = $env:INPUT_SCOPE
         $vaultName = $env:INPUT_VAULT_NAME
         $prefix = if ($scope -eq 'write') { 'wr-all' } else { 'read-all' }
-        $secretName = "$prefix-ffc-google-sa-key"
+        $secretName = "$prefix-ffc-google-analytics-sa-key"
 
         # GitHub's ::add-mask:: only masks up to the first newline, so a multi-line value would leak
         # its later lines (and a line beginning with '::' could be read as a workflow command). Mask

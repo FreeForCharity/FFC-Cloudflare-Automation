@@ -10,10 +10,10 @@ into a GitHub secret (that drift broke the Cloudflare token for 4 months — see
 ## Architecture
 
 ```
-GCP project (ffc-prod) ──► Service Account (read-only to start: GA Viewer)
+GCP project (ffc-api-prod) ──► Service Account (read-only to start: GA Viewer)
    SA JSON key ──► Azure Key Vault kv-ffc-admin-prod-cbm
-                     read-all-ffc-google-sa-key   (read path)
-                     wr-all-ffc-google-sa-key     (write path, Wave 3+)
+                     read-all-ffc-google-analytics-sa-key   (read path)
+                     wr-all-ffc-google-analytics-sa-key     (write path, Wave 3+)
 GitHub runner ──OIDC──► Azure (federated cred on google-prod-read / -write env)
    ──► .github/actions/google-secrets-from-kv  (masks key, writes ADC file,
                                                 exports GOOGLE_APPLICATION_CREDENTIALS)
@@ -54,32 +54,53 @@ Cloudflare read workflows use. Non-secret GA property ids live as repo Variables
 
 Enable an API only when its wave starts; grant the SA the minimum role for that API only.
 
-## One-time setup (#509 / #510) — human steps
+## Provisioned environment (#509 / #510 — completed 2026-06-30)
 
-Run as `clarkemoyer@freeforcharity.org`. Replace IDs as noted.
+Project **`ffc-api-prod`** (number `281370217264`) under the `freeforcharity.org` org. The only
+billing account is currently **closed**, but the **Analytics Data API is free and needs no billing**.
+Read-only SA **`ffc-ga-reader@ffc-api-prod.iam.gserviceaccount.com`** created; its key is stored in
+Key Vault as `read-all`/`wr-all-ffc-google-analytics-sa-key`. The commands below are the provisioning
++ rotation record.
 
 ```bash
-# 1. Project + API (Wave 0/1)
-gcloud projects create ffc-prod --name="FFC Production"
-gcloud billing projects link ffc-prod --billing-account=<BILLING_ACCOUNT_ID>
-gcloud services enable analyticsdata.googleapis.com --project ffc-prod
+# 1. Project + (free) API
+gcloud projects create ffc-api-prod --organization=589649103155 --name="FFC Production API"
+gcloud services enable analyticsdata.googleapis.com --project ffc-api-prod
 
 # 2. Read-only service account (NO project roles; access granted per GA4 property)
 gcloud iam service-accounts create ffc-ga-reader \
-  --project ffc-prod --display-name="FFC GA reader (read-only)"
+  --project ffc-api-prod --display-name="FFC GA reader read-only"
 
 # 3. Generate a key, store it in Key Vault, then DELETE the local copy
 gcloud iam service-accounts keys create ffc-ga-reader.json \
-  --iam-account=ffc-ga-reader@ffc-prod.iam.gserviceaccount.com
+  --iam-account=ffc-ga-reader@ffc-api-prod.iam.gserviceaccount.com
 az keyvault secret set --vault-name kv-ffc-admin-prod-cbm \
-  --name read-all-ffc-google-sa-key --file ffc-ga-reader.json
+  --name read-all-ffc-google-analytics-sa-key --file ffc-ga-reader.json
 az keyvault secret set --vault-name kv-ffc-admin-prod-cbm \
-  --name wr-all-ffc-google-sa-key --file ffc-ga-reader.json   # identical until a writer SA exists
+  --name wr-all-ffc-google-analytics-sa-key --file ffc-ga-reader.json
 rm -f ffc-ga-reader.json
-
-# 4. In GA4: add ffc-ga-reader@ffc-prod.iam.gserviceaccount.com as a Viewer on the
-#    freeforcharity.org and ffcadmin.org properties; record the numeric property ids.
 ```
+
+**Remaining for the smoke test (#512):** in GA4, add
+`ffc-ga-reader@ffc-api-prod.iam.gserviceaccount.com` as a **Viewer** on the freeforcharity.org and
+ffcadmin.org properties; record the numeric property ids.
+
+## KV secret naming: `cbm` vs `ffc`
+
+- **`cbm-…`** — credential attributed to a **named user** (acts as `clarkemoyer@freeforcharity.org`),
+  e.g. the Workspace Admin SDK set (domain-wide delegation impersonates the admin).
+- **`ffc-…`** — **non-named service identity** that acts as itself, e.g. `ffc-google-analytics-sa-key`
+  (the GA reader SA is added directly as a property Viewer).
+
+### Universal Clarke-Moyer Google credentials (provisioned 2026-06-30, Wave 5 use)
+
+The `cbm-google-workspace-*` placeholders were filled with real values so future Workspace workflows
+need no re-authorization: `admin-user` = `clarkemoyer@freeforcharity.org`, `customer-id` =
+`C00vzt6sw`, `service-account-email` = `ffc-workspace-admin@ffc-api-prod.iam.gserviceaccount.com`,
+`service-account-key` = that SA's key. **One manual step remains before any Workspace API call** (not
+a credential): authorize the SA's domain-wide delegation in **Admin console → Security → API controls
+→ Domain-wide delegation** using client id **`110347116631668841237`** with the scopes the workflow
+needs.
 
 Then in GitHub: create environments `google-prod-read` (no approval) and `google-prod-write`
 (required reviewer `clarkemoyer`); add the matching Azure federated credentials; set repo Variables

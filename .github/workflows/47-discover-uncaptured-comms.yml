@@ -53,7 +53,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path artifacts/discovery | Out-Null
-          pwsh -File scripts/discover-uncaptured-comms.ps1 `
+          pwsh -NoProfile -File scripts/discover-uncaptured-comms.ps1 `
             -Mailboxes '${{ github.event.inputs.mailboxes }}' `
             -SinceDays '${{ github.event.inputs.since_days }}' `
             -SitesListPath 'sites-list/sites_list.json' `

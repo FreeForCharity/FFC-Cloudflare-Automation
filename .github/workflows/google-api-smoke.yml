@@ -1,4 +1,4 @@
-name: '47. Google - API Smoke (GA4 connectivity) [GOOGLE]'
+name: '48. Google - API Smoke (GA4 connectivity) [GOOGLE]'
 run-name: 'Google API Smoke: property ${{ inputs.property_id }}'
 
 # Proves the full OIDC -> Azure Key Vault -> Google chain end to end before any real reporting runs.

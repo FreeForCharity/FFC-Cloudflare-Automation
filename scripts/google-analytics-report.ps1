@@ -73,9 +73,10 @@ $headline = Invoke-GoogleApi -Method POST -Uri $uri -AccessToken $token -Body @{
 }
 
 $metricNames = @('activeUsers', 'newUsers', 'sessions', 'screenPageViews', 'engagementRate')
+$headlineRows = Get-GoogleRows $headline
 $metrics = [ordered]@{}
 for ($i = 0; $i -lt $metricNames.Count; $i++) {
-  $v = if ($headline.rows) { $headline.rows[0].metricValues[$i].value } else { 0 }
+  $v = if ($headlineRows.Count) { $headlineRows[0].metricValues[$i].value } else { 0 }
   $metrics[$metricNames[$i]] = $v
 }
 
@@ -88,7 +89,7 @@ $pagesResp = Invoke-GoogleApi -Method POST -Uri $uri -AccessToken $token -Body @
   limit      = 10
 }
 $topPages = @()
-foreach ($r in @($pagesResp.rows)) {
+foreach ($r in (Get-GoogleRows $pagesResp)) {
   $topPages += [ordered]@{ path = $r.dimensionValues[0].value; views = $r.metricValues[0].value }
 }
 
@@ -100,7 +101,7 @@ $chResp = Invoke-GoogleApi -Method POST -Uri $uri -AccessToken $token -Body @{
   orderBys   = @(@{ desc = $true; metric = @{ metricName = 'sessions' } })
 }
 $channels = @()
-foreach ($r in @($chResp.rows)) {
+foreach ($r in (Get-GoogleRows $chResp)) {
   $channels += [ordered]@{ channel = $r.dimensionValues[0].value; sessions = $r.metricValues[0].value }
 }
 

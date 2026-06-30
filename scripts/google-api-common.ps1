@@ -127,3 +127,13 @@ function Invoke-GoogleApi {
   }
   return Invoke-RestMethod @params
 }
+
+function Get-GoogleRows {
+  <#
+    Safely return a report response's rows as an array. The GA Data API omits the 'rows' field
+    entirely when a property/date range has no data, so $response.rows throws under Set-StrictMode.
+  #>
+  param([Parameter(Mandatory)]$Response)
+  if (($Response.PSObject.Properties.Name -contains 'rows') -and $Response.rows) { return @($Response.rows) }
+  return @()
+}

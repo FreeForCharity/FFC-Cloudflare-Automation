@@ -107,6 +107,7 @@ environment approval gate and/or a typed confirmation. ✅ = an approval-gated e
 | 42    | WHMCS - Order Update                      | Writes (dry-run default)  | ✅ whmcs-prod                          | `dry_run` (default true); one order at a time                                       |
 | 43    | WHMCS - Product Add                       | Writes (dry-run default)  | ✅ whmcs-prod                          | `dry_run` (default true); idempotent                                                |
 | 44–46 | Zeffy - Exports (campaigns/pmts/contacts) | Reads                     | zeffy-prod                             | PII masked; never `-IncludePii`                                                     |
+| 47    | Discover - Uncaptured Comms (M365)        | Reads                     | m365-prod                              | PII masked; dispatch-only; org mailboxes only                                       |
 | 95    | Repo - Rulesets + Settings Drift Audit    | Reads                     | —                                      | report only                                                                         |
 | 98    | Repo - Add Collaborator                   | Writes (**live default**) | ✅ github-prod                         | ⚠️ `dry_run` defaults to **false**                                                  |
 

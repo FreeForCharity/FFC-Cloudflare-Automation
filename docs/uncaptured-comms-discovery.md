@@ -85,10 +85,11 @@ Follow the same rule as the Zeffy exports:
 
 ## Live evidence (PII-masked, 2026-06-30)
 
-Pulled in an authorized interactive session (the human-in-the-loop model in action). A deeper scan
-confirmed **≥ 3,650 Google Voice text threads** over the period (a floor — pagination was halted
-before the full 3-year boundary; Gmail's own ~201 estimate is wrong), **~45% charity-related**, i.e.
-**≥ ~1,640 charity/volunteer threads**. Three texts illustrate each disposition:
+Pulled in an authorized interactive session (the human-in-the-loop model in action). An exhaustive
+scan (pagination run to the 2023-06-29 boundary) counted **6,193 Google Voice text threads** over
+the 3 years — Gmail's own ~201 estimate is wrong — of which **~45% are charity-related** (calibrated
+on 2,250 classified), i.e. **≈ 2,780 charity/volunteer threads** (estimate; threads, not individual
+messages). Three texts illustrate each disposition:
 
 - **Already onboarded** — `theafghanistanaffairs.org` (has an `FFC-EX` repo), POC `****8351`, asking
   about finalizing the site and _"For Candid, do I need to do anything?"_ → reconciles to an

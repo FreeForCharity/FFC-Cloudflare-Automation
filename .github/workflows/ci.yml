@@ -65,6 +65,14 @@ jobs:
 
           echo "✓ Workflow name prefixes are present and unique (${#seen[@]} workflows)"
 
+      - name: Validate workflow / safety-doc consistency
+        shell: bash
+        run: |
+          # Rejects a BOM at the start of any workflow YAML and keeps the
+          # per-workflow table in docs/workflow-safety-and-approvals.md in sync
+          # with the actual workflow set (coverage + no stale rows).
+          python3 scripts/check-workflow-doc-consistency.py
+
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v6
         with:

@@ -165,11 +165,20 @@ jobs:
 
       - name: Manage DNS Record
         shell: pwsh
+        # Untrusted/user-supplied values are passed via env (never interpolated directly into the
+        # script body) so they cannot break out of the string and inject PowerShell.
+        env:
+          REC_DOMAIN: ${{ needs.resolve-context.outputs.domain }}
+          REC_TYPE: ${{ github.event.inputs.record_type || 'TXT' }}
+          REC_NAME: ${{ github.event.inputs.record_name || '@' }}
+          REC_CONTENT:
+            ${{ github.event.inputs.record_content || 'v=spf1 include:spf.protection.outlook.com
+            -all' }}
         run: |
-          $Domain  = "${{ needs.resolve-context.outputs.domain }}"
-          $Type    = "${{ github.event.inputs.record_type || 'TXT' }}"
-          $Name    = "${{ github.event.inputs.record_name || '@' }}"
-          $Content = "${{ github.event.inputs.record_content || 'v=spf1 include:spf.protection.outlook.com -all' }}"
+          $Domain  = $env:REC_DOMAIN
+          $Type    = $env:REC_TYPE
+          $Name    = $env:REC_NAME
+          $Content = $env:REC_CONTENT
 
           Write-Host "Managing $Type record for $Name in zone $Domain..."
 

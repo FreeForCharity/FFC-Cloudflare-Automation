@@ -58,7 +58,7 @@ Create a New Group), not via the API.
 
 ### Workflow
 
-**43. WHMCS - Product Add** (`43-whmcs-product-add.yml`) — inputs `product_key`
+**212. WHMCS - Product Add** (`212-whmcs-product-add.yml`) — inputs `product_key`
 (`domain_registered_cloudflare` | `hosted_github_pages`), an optional `gid` override, a
 `run_capability_check` toggle (read-only probe first, default on), and `dry_run` (default **true**).
 It resolves name/type/description from the config and calls `whmcs-product-add.ps1`.
@@ -69,9 +69,9 @@ It resolves name/type/description from the config and calls `whmcs-product-add.p
    products share one group, e.g. "FFC Status Markers", or use existing groups.)
 2. Optionally set the `gid` values in `config/whmcs-catalog-products.json`, or pass `gid` to the
    workflow.
-3. Dispatch **43. WHMCS - Product Add** with `dry_run=true` to preview, then `dry_run=false` to
+3. Dispatch **212. WHMCS - Product Add** with `dry_run=true` to preview, then `dry_run=false` to
    create. The capability check runs first and reports `addProductPermission`.
-4. Run **31. WHMCS - Export Products** and copy the new `pid` for each product into
+4. Run **202. WHMCS - Export Products** and copy the new `pid` for each product into
    `config/whmcs-catalog-products.json` (commit the backfill).
 
 ## Admin-UI fallback

@@ -1,6 +1,6 @@
 # FFC-EX clone fidelity audit (live vs staging)
 
-_Generated 2026-06-22. For each FFC-EX cutover domain (the workflow 19 default list), the live apex
+_Generated 2026-06-22. For each FFC-EX cutover domain (the workflow 120 default list), the live apex
 (current WordPress) and the GitHub Pages `staging.` build were loaded in a headless browser and
 their image counts compared. The staging sites are required to be **faithful static clones of the
 live sites with exact visuals and all assets localized into the repo** (WordPress is being
@@ -8,7 +8,7 @@ decommissioned)._
 
 > **Finding:** most staging builds are **Next.js template scaffolds**, not static clones. They
 > render the charity's text but pull **zero images** and do not match the live visuals. A bulk
-> cutover (workflow 19) would publish broken/incomplete sites for the majority of the batch.
+> cutover (workflow 120) would publish broken/incomplete sites for the majority of the batch.
 > **Cutover is on hold pending real clones.**
 
 | domain                                    | live images | staging images | live engine | verdict            |

@@ -49,11 +49,12 @@ Wraps the three order state-change actions via `-Action accept|cancel|fraud`. Em
 
 ## Workflows
 
-- **41. WHMCS - Orders Triage** (`41-whmcs-orders-triage.yml`) — **read-only**. `workflow_dispatch`
+- **210. WHMCS - Orders Triage** (`210-whmcs-orders-triage.yml`) — **read-only**.
+  `workflow_dispatch`
   - weekday `schedule`. Runs the export once per status (default `Pending,Fraud,Active`), writes a
     count summary + a Pending-orders table to the job summary, uploads CSV artifacts, and can upsert
     one rolling `whmcs:triage` tracking issue (`open_tracking_issue: true`).
-- **42. WHMCS - Order Update** (`42-whmcs-order-update.yml`) — inputs `order_id`, `action`
+- **211. WHMCS - Order Update** (`211-whmcs-order-update.yml`) — inputs `order_id`, `action`
   (accept/cancel/fraud), `reason`, `dry_run` (default **true**). One explicit order per dispatch.
 
 ## Safety policy (no bulk automation)

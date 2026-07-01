@@ -1,8 +1,8 @@
 # Domain transfer-eligibility report — Cat1-ready (eNOM → Cloudflare Registrar)
 
 _Generated 2026-06-20 from live WHMCS data joined to the Sites Master List
-(`sites-list/sites_list.csv`, `In Cloudflare = Yes`) via workflow 22 (Transfer Readiness Preflight).
-Gates: `MinDaysToExpiry=15`, `PostRegLockDays=60`. Source run:
+(`sites-list/sites_list.csv`, `In Cloudflare = Yes`) via workflow 303 (Transfer Readiness
+Preflight). Gates: `MinDaysToExpiry=15`, `PostRegLockDays=60`. Source run:
 https://github.com/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/27883949722._
 
 > **Read-only.** This report initiates no transfer and spends no money. It is the gated input to the
@@ -135,7 +135,7 @@ gated run resolves that set:
 
 ## Reproduce
 
-Run **workflow 22 — Domain Transfer Readiness Preflight** (`workflow_dispatch`,
+Run **workflow 303 — Domain Transfer Readiness Preflight** (`workflow_dispatch`,
 `min_days_to_expiry=15`, `post_reg_lock_days=60`, optional `issue_number`), approve the `whmcs-prod`
 deployment, then download the `domain-transfer-preflight` artifact. The Cat1-ready list is
 `cat1_ready_in_cloudflare.csv` / `.md`; the full classification is `domain_transfer_preflight.csv`.

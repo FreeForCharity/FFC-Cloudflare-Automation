@@ -1,6 +1,6 @@
-# Cloudflare Redirect Rules (workflow 10)
+# Cloudflare Redirect Rules (workflow 111)
 
-This document describes the **`10. DNS - Create Redirect Rule (Admin) [CF]`** workflow and the
+This document describes the **`111. DNS - Create Redirect Rule (Admin) [CF]`** workflow and the
 `scripts/Set-CloudflareRedirectRule.ps1` script that backs it. Use this workflow to point a source
 domain (apex + optional `www`) at a target domain via a Cloudflare Single Redirect rule.
 
@@ -12,7 +12,7 @@ domain (apex + optional `www`) at a target domain via a Cloudflare Single Redire
 - Pointing a marketing alias at a primary site without standing up a separate origin.
 
 The source zone must already exist in the Free For Charity Cloudflare account with proxied A/AAAA
-records (run `01. Domain - Status` first if unsure).
+records (run `101. Domain - Status` first if unsure).
 
 ## What the workflow does
 
@@ -44,7 +44,7 @@ script generates:
 ### From the CLI
 
 ```bash
-gh workflow run "10. DNS - Create Redirect Rule (Admin) [CF]" \
+gh workflow run "111. DNS - Create Redirect Rule (Admin) [CF]" \
   --repo FreeForCharity/FFC-Cloudflare-Automation \
   -f source_domain=ffcsites.org \
   -f target_domain=ffcadmin.org \
@@ -64,7 +64,7 @@ Inputs:
 
 ### From the GitHub UI
 
-Actions → **10. DNS - Create Redirect Rule (Admin) [CF]** → **Run workflow** → fill in
+Actions → **111. DNS - Create Redirect Rule (Admin) [CF]** → **Run workflow** → fill in
 `source_domain` and `target_domain`. Leave `dry_run=true` for the first pass, review the preview
 job's logs, then re-run with `dry_run=false`.
 
@@ -122,8 +122,8 @@ You may see the misleading error `request is not authorized` if a PUT hits a non
 ### Source zone must be proxied
 
 If the source zone's A/AAAA records aren't proxied (orange cloud), Cloudflare never sees the request
-and can't apply the rule. Use `01. Domain - Status` or `06. DNS - Enforce Standard` first to ensure
-the apex/www records are proxied.
+and can't apply the rule. Use `101. Domain - Status` or `106. DNS - Enforce Standard` first to
+ensure the apex/www records are proxied.
 
 ### Running the script locally
 
@@ -149,7 +149,7 @@ auto-detect tokens in `CLOUDFLARE_API_TOKEN_FFC` / `CLOUDFLARE_API_TOKEN_CM` env
 
 ## Related workflows
 
-- **01. Domain - Status (All Sources)** — check the source zone is in Cloudflare and proxied.
-- **05. DNS - Manage Record** — if you need to create/update the DNS records first.
-- **06. DNS - Enforce Standard** — bulk apply the FFC standard (proxied apex + www) before setting
+- **101. Domain - Status (All Sources)** — check the source zone is in Cloudflare and proxied.
+- **105. DNS - Manage Record** — if you need to create/update the DNS records first.
+- **106. DNS - Enforce Standard** — bulk apply the FFC standard (proxied apex + www) before setting
   up the redirect.

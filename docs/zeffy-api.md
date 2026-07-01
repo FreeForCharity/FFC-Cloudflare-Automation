@@ -2,8 +2,8 @@
 
 Free For Charity uses **Zeffy** (the free fundraising platform) for donations, events, and
 ticketing. As of 2026 Zeffy ships a **public REST API**, so FFC can pull this data programmatically
-instead of the manual CSV import that workflow 33 still supports. This doc is the reference for that
-integration.
+instead of the manual CSV import that workflow 213 still supports. This doc is the reference for
+that integration.
 
 ## API at a glance
 
@@ -38,16 +38,16 @@ integration.
 Following the `whmcs-secrets-from-kv` pattern — Key Vault is the single source of truth, GitHub
 consumes the key at runtime via OIDC, nothing secret is committed.
 
-| Piece                                             | Purpose                                                                                                                                         |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.github/actions/zeffy-secrets-from-kv`           | OIDC → KV → exports masked `ZEFFY_API_KEY`.                                                                                                     |
-| `scripts/zeffy-api-common.ps1`                    | `Invoke-ZeffyApi` (Bearer + 429 backoff) + `Get-ZeffyList` (cursor pagination).                                                                 |
-| `scripts/zeffy-payments-export.ps1`               | Read-only payments → CSV (filters + date window).                                                                                               |
-| `scripts/zeffy-contacts-export.ps1`               | Read-only donors → CSV.                                                                                                                         |
-| `scripts/zeffy-campaigns-export.ps1`              | Read-only campaigns/events → CSV.                                                                                                               |
-| `.github/workflows/44-zeffy-campaigns-export.yml` | **44. Zeffy - Campaigns Export** — dispatch-only; campaigns only; artifact `zeffy_campaigns`. Inherently PII-free.                              |
-| `.github/workflows/45-zeffy-payments-export.yml`  | **45. Zeffy - Payments Export (PII masked)** — dispatch-only; payments with donor PII **masked**; artifact `zeffy_payments` (public-repo safe). |
-| `.github/workflows/46-zeffy-contacts-export.yml`  | **46. Zeffy - Contacts Export (PII masked)** — dispatch-only; donors with PII **masked**; artifact `zeffy_contacts` (public-repo safe).         |
+| Piece                                              | Purpose                                                                                                                                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `.github/actions/zeffy-secrets-from-kv`            | OIDC → KV → exports masked `ZEFFY_API_KEY`.                                                                                                      |
+| `scripts/zeffy-api-common.ps1`                     | `Invoke-ZeffyApi` (Bearer + 429 backoff) + `Get-ZeffyList` (cursor pagination).                                                                  |
+| `scripts/zeffy-payments-export.ps1`                | Read-only payments → CSV (filters + date window).                                                                                                |
+| `scripts/zeffy-contacts-export.ps1`                | Read-only donors → CSV.                                                                                                                          |
+| `scripts/zeffy-campaigns-export.ps1`               | Read-only campaigns/events → CSV.                                                                                                                |
+| `.github/workflows/401-zeffy-campaigns-export.yml` | **401. Zeffy - Campaigns Export** — dispatch-only; campaigns only; artifact `zeffy_campaigns`. Inherently PII-free.                              |
+| `.github/workflows/402-zeffy-payments-export.yml`  | **402. Zeffy - Payments Export (PII masked)** — dispatch-only; payments with donor PII **masked**; artifact `zeffy_payments` (public-repo safe). |
+| `.github/workflows/403-zeffy-contacts-export.yml`  | **403. Zeffy - Contacts Export (PII masked)** — dispatch-only; donors with PII **masked**; artifact `zeffy_contacts` (public-repo safe).         |
 
 There is **one workflow per endpoint** and **no PII workflow** — none of them write donor PII to an
 artifact. All three are **dispatch-only** (no schedule) while we evaluate the API. Unlike WHMCS
@@ -69,7 +69,7 @@ for local/private runs). Field-level reality from the OpenAPI spec:
 | `GET /api/v1/payments`  | **Yes** — `buyer` (email/name/company), `buyer_questions`, `items[].questions`, `tribute.honouree_name`, `receipt_url`. | ⚠️ exported with PII columns blanked |
 | `GET /api/v1/contacts`  | **Yes, by definition** — the donor directory (email/name/phone/address).                                                | ⚠️ exported with PII columns blanked |
 
-So the **only call that never retrieves PII is `/campaigns`** (workflow 44). `/payments` (45) and
+So the **only call that never retrieves PII is `/campaigns`** (workflow 401). `/payments` (45) and
 `/contacts` (46) return PII in the payload, but the masked export **writes the non-PII subset only**
 (financials, status, campaign id, the pseudonymous `contact_id`/`id` UUIDs, giving
 totals/counts/dates, country) — the PII passes through the ephemeral runner and is never persisted.
@@ -85,7 +85,7 @@ destination — there is intentionally **no workflow** that does this on the pub
 
 - **Donation reporting & reconciliation.** Pull every Zeffy payment into CSV on a schedule and
   reconcile against WHMCS / accounting — closing the loop on the existing one-way WHMCS→Zeffy import
-  (workflow 33). You can now verify what actually landed in Zeffy instead of importing blind.
+  (workflow 213). You can now verify what actually landed in Zeffy instead of importing blind.
 - **Donor (contact) sync.** `total_contribution`, `donation_count`, first/last donation dates, and
   address per donor — feed a CRM, mailing list, or year-end donor reports without manual exports.
 - **Campaign / event dashboards.** Target vs. current `volume`, status, and event occurrences for
@@ -130,4 +130,4 @@ Tracked as a follow-up.
   `curl -H 'Authorization: Bearer <key>' 'https://api.zeffy.com/api/v1/payments?limit=1'` — note
   `api.zeffy.com` sits behind a Cloudflare bot-challenge, so a CI runner (real client) works; ad-hoc
   tooling may be challenged. Never echo the key.
-- **CI dispatch:** run **44. Zeffy - Campaigns Export** (or **45**/**46**) once the key is in KV.
+- **CI dispatch:** run **401. Zeffy - Campaigns Export** (or **45**/**46**) once the key is in KV.

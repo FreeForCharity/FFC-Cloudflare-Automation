@@ -28,7 +28,7 @@ GitHub runner ──OIDC──► Azure (federated cred on google-prod-read / -w
 | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `.github/actions/google-secrets-from-kv/action.yml` | OIDC -> KV; writes the SA key to a runner-temp ADC file, exports `GOOGLE_APPLICATION_CREDENTIALS`. Twin of `cloudflare-tokens-from-kv`. |
 | `scripts/google-api-common.ps1`                     | `Get-GoogleAccessToken` (signed-JWT bearer flow, pure .NET RSA — no gcloud/Python needed), `Invoke-GoogleApi`.                          |
-| `.github/workflows/google-api-smoke.yml`            | Read-only GA4 connectivity gate; reusable via `workflow_call`.                                                                          |
+| `.github/workflows/501-google-api-smoke.yml`        | Read-only GA4 connectivity gate; reusable via `workflow_call`.                                                                          |
 | `scripts/google-analytics-report.ps1`               | Wave 1 GA4 report -> aggregate JSON. `-DryRun` emits a stub without contacting Google.                                                  |
 
 ## Environments & OIDC identifiers
@@ -110,7 +110,7 @@ Then in GitHub: create environments `google-prod-read` (no approval) and `google
 ## Validate
 
 ```bash
-gh workflow run google-api-smoke.yml --ref main -f property_id=<GA4_PROPERTY_ID>
+gh workflow run 501-google-api-smoke.yml --ref main -f property_id=<GA4_PROPERTY_ID>
 ```
 
 Green => the OIDC -> KV -> Google chain works with no Google secret in GitHub.

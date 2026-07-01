@@ -180,3 +180,21 @@ runner ──POST + Ocp-Apim-Subscription-Key──► APIM apim-ffc-gateway-pro
   parameter remains as a generic, inert WHMCS API option.
 - **Rotate** the WHMCS secret or the APIM key by adding a new version of the relevant
   `*-ffc-whmcs-*` / `*-ffc-apim-whmcs-subscription-key` KV secret — no GitHub change needed.
+
+## Candid (GuideStar) — MCP + API workflows
+
+- **Interactive:** the repo `.mcp.json` registers Candid's official remote MCP server
+  (`https://mcp.candid.org/mcp`, OAuth with a Candid account — run `/mcp` to connect). Tools: org
+  search (name/EIN/seal level), org identification, knowledge search, PCS taxonomy matching. Note:
+  Claude Code on the web only sees org-level connectors, so this entry helps local/desktop sessions.
+- **Workflows:** `801-candid-charity-check.yml` (validate 501(c)(3)/Pub78/BMF/OFAC by EIN) and
+  `802-candid-essentials-search.yml` (find profile + transparency-seal level). Both read-only,
+  environment `candid-prod-read` (no approval gate), keys from KV via
+  `.github/actions/candid-keys-from-kv` (`Subscription-Key` header, host allowlist
+  `api.candid.org`).
+- **Provisioning status:** scaffolding is inert until the one-time setup in
+  `docs/candid-api-and-mcp.md` is done (Candid developer keys → KV secrets
+  `read-all-ffc-candid-{charity-check,essentials}-key`, environment `candid-prod-read` with the
+  `READ_ALL_FFC_AZURE_*` secrets, federated credential for `ffc-admin-kv-reader`).
+- **No write API:** the annual Candid Platinum profile update stays a manual web form — the
+  paste-sheet automation is issue #493.

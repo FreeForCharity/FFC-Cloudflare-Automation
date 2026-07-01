@@ -1,0 +1,154 @@
+name: 'Candid API keys from Key Vault'
+description: >-
+  Authenticate to Azure via OIDC, fetch the FFC Candid API subscription key(s) from Azure Key Vault,
+  mask them, and expose them to subsequent steps as the env vars CANDID_ESSENTIALS_KEY and/or
+  CANDID_CHARITY_CHECK_KEY. Candid issues a separate subscription key per API product, so the 'apis'
+  input selects which keys to load. Mirrors whmcs-secrets-from-kv / google-secrets-from-kv: Key
+  Vault is the single source of truth — the keys are never copied into GitHub secrets.
+
+author: 'Free For Charity'
+
+inputs:
+  scope:
+    description: >-
+      Key scope: 'read' loads read-all-* secrets (via the KV-reader identity); 'write' loads
+      wr-all-* secrets (via ffc-admin-kv-writer). The Candid APIs are read-only, so this defaults to
+      'read'. The values are identical between scopes; scope only selects which identity/secret copy
+      is used.
+    required: false
+    default: 'read'
+  apis:
+    description: >-
+      Comma-separated list of Candid API products whose keys to load. Supported values: 'essentials'
+      (exports CANDID_ESSENTIALS_KEY from '{scope}-ffc-candid-essentials-key') and 'charity-check'
+      (exports CANDID_CHARITY_CHECK_KEY from '{scope}-ffc-candid-charity-check-key').
+    required: false
+    default: 'essentials,charity-check'
+  vault-name:
+    description: 'Azure Key Vault name that holds the Candid API keys.'
+    required: false
+    default: 'kv-ffc-admin-prod-cbm'
+  azure-client-id:
+    description: 'OIDC client ID for the managed identity that has Get permission on the vault.'
+    required: true
+  azure-tenant-id:
+    description: 'Azure tenant ID for OIDC federation.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_APIS: ${{ inputs.apis }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+        INPUT_AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        INPUT_AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ($env:INPUT_SCOPE -notin @('read', 'write')) {
+          throw "Invalid scope '$($env:INPUT_SCOPE)'. Expected 'read' or 'write'."
+        }
+        $apis = $env:INPUT_APIS -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ }
+        if (-not $apis) {
+          throw "Input 'apis' is empty. Expected a comma-separated subset of: essentials, charity-check."
+        }
+        foreach ($api in $apis) {
+          if ($api -notin @('essentials', 'charity-check')) {
+            throw "Invalid api '$api' in input 'apis'. Expected a comma-separated subset of: essentials, charity-check."
+          }
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_VAULT_NAME)) {
+          throw "Input 'vault-name' is empty."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_CLIENT_ID)) {
+          throw "Input 'azure-client-id' is empty. Pass secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID (read) or vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID (write) from the caller."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_TENANT_ID)) {
+          throw "Input 'azure-tenant-id' is empty. Pass the matching READ_ALL/WR_ALL Azure tenant id from the caller."
+        }
+
+    - name: Azure login (OIDC)
+      uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        allow-no-subscriptions: true
+
+    - name: Fetch Candid API keys from Key Vault
+      shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_APIS: ${{ inputs.apis }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        $scope = $env:INPUT_SCOPE
+        $vaultName = $env:INPUT_VAULT_NAME
+        $prefix = if ($scope -eq 'write') { 'wr-all' } else { 'read-all' }
+        $apis = $env:INPUT_APIS -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ }
+
+        # Writes a value to GITHUB_ENV using GitHub's heredoc-delimited format so a value that ever
+        # contains a newline (or a line that looks like a delimiter) cannot inject extra env vars
+        # into later steps. The delimiter is randomized per value.
+        function Add-EnvVar {
+          param([string]$Name, [string]$Value)
+          $delim = "ghadelim_$([guid]::NewGuid().ToString('N'))"
+          if ($Value -match [regex]::Escape($delim)) {
+            throw "Refusing to write '$Name': value collides with the generated heredoc delimiter."
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "$Name<<$delim"
+          Add-Content -Path $env:GITHUB_ENV -Value $Value
+          Add-Content -Path $env:GITHUB_ENV -Value $delim
+        }
+
+        # GitHub's ::add-mask:: only masks up to the first newline, so a multi-line value would
+        # leak its later lines (and a line beginning with '::' could be read as a workflow
+        # command). Mask each non-blank line of the secret individually.
+        function Protect-Secret {
+          param([string]$Value)
+          foreach ($line in ($Value -split "[\r\n]+")) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) { Write-Host "::add-mask::$line" }
+          }
+        }
+
+        $envVarByApi = @{
+          'essentials'    = 'CANDID_ESSENTIALS_KEY'
+          'charity-check' = 'CANDID_CHARITY_CHECK_KEY'
+        }
+
+        $loaded = @()
+        foreach ($api in $apis) {
+          $secretName = "$prefix-ffc-candid-$api-key"
+
+          # az is an external command — $ErrorActionPreference does NOT cause it to throw
+          # on non-zero exit. Check $LASTEXITCODE explicitly so a KV permission/auth failure
+          # surfaces as a step failure instead of an empty value.
+          $raw = az keyvault secret show --vault-name $vaultName --name $secretName --query value -o tsv
+          if ($LASTEXITCODE -ne 0) {
+            throw "az keyvault secret show for '$secretName' failed (exit $LASTEXITCODE). Check the identity's role on vault '$vaultName' and that the secret exists (see docs/candid-api-and-mcp.md for the one-time setup)."
+          }
+
+          # az ... -o tsv returns the raw value with a trailing newline; strip only trailing CR/LF.
+          $key = ([string]$raw).TrimEnd([char]13, [char]10)
+
+          if ([string]::IsNullOrWhiteSpace($key)) {
+            throw "Key Vault secret '$secretName' returned empty from vault '$vaultName'."
+          }
+          if ($key -eq 'PLACEHOLDER-SET-VIA-AZURE-PORTAL') {
+            throw "Key Vault secret '$secretName' still holds the scaffolding placeholder. Set the real Candid subscription key (from developer.candid.org) in '$vaultName' before running."
+          }
+
+          Protect-Secret $key
+          Add-EnvVar -Name $envVarByApi[$api] -Value $key
+          $loaded += "$($envVarByApi[$api]) (from '$secretName')"
+        }
+
+        Write-Host "Loaded $scope-scope Candid key(s) from KV vault '$vaultName' (values masked): $($loaded -join ', ')."
+
+branding:
+  icon: 'cloud'
+  color: 'orange'

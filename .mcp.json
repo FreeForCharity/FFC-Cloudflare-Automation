@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "candid": {
+      "type": "http",
+      "url": "https://mcp.candid.org/mcp"
+    }
+  }
+}

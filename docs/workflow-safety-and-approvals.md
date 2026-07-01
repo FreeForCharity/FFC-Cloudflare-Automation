@@ -120,6 +120,8 @@ the run pauses for approval, even if the action itself only reads.
 | 726     | Repo - Rulesets + Settings Drift Audit    | Reads                     | —                                                          | report only                                                                         |
 | 729     | Repo - Add Collaborator                   | Writes (**live default**) | ✅ github-prod                                             | ⚠️ `dry_run` defaults to **false**                                                  |
 | 730     | Repo - Audit Environment Approval Gates   | Reads                     | —                                                          | report only (environment reviewer config)                                           |
+| 801     | Candid - Charity Check (EIN)              | Reads                     | candid-prod-read                                           | read-only IRS-status lookup; public org data only                                   |
+| 802     | Candid - Essentials Search                | Reads                     | candid-prod-read                                           | read-only profile search; public org data only                                      |
 
 > **Exception to call out:** **729. Repo - Add Collaborator** is the one write workflow whose
 > `dry_run` defaults to **`false`** (it runs live by default). It's low-risk (adding a repo

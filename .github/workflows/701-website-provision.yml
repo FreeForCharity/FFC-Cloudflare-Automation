@@ -1199,10 +1199,14 @@ jobs:
           # warning, never a hard failure (a slow cert must not turn a good provision red).
           for attempt in $(seq 1 12); do
             for host in "$DOMAIN" "www.$DOMAIN"; do
-              code=$(curl -sS -L --max-time 20 -o /dev/null -w '%{http_code}' "https://$host" 2>/dev/null || echo "000")
-              server=$(curl -sS -L --max-time 20 -o /dev/null -w '%header{server}' "https://$host" 2>/dev/null || echo "")
-              echo "attempt $attempt: https://$host -> HTTP $code, Server: ${server:-<none>}"
-              if [ "$code" = "200" ] && printf '%s' "$server" | grep -qi 'github'; then
+              # HEAD + follow redirects, then parse status and Server from the final response
+              # headers. Uses only widely-available curl flags (-sSIL) rather than the newer
+              # -w '%header{...}' write-out, which older runner curl builds may not support.
+              headers=$(curl -sSIL --max-time 20 "https://$host" 2>/dev/null || true)
+              code=$(printf '%s\n' "$headers" | awk 'toupper($1) ~ /^HTTP/ { c = $2 } END { print c }')
+              server=$(printf '%s\n' "$headers" | grep -i '^server:' | tail -n1 | tr -d '\r' | sed -E 's/^[Ss]erver:[[:space:]]*//')
+              echo "attempt $attempt: https://$host -> HTTP ${code:-000}, Server: ${server:-<none>}"
+              if [ "${code:-}" = "200" ] && printf '%s' "$server" | grep -qi 'github'; then
                 served=true
                 break
               fi

@@ -3,9 +3,10 @@
 This repository uses GitHub Actions workflows to ensure code quality, security, and support DNS
 management operations.
 
-To keep the Actions UI list stable and easy to scan, workflows are prefixed with a two-digit number
-(e.g., `01.`). CI validates that every active workflow has a numeric prefix and that prefixes are
-unique.
+To keep the Actions UI list stable and easy to scan, workflows are prefixed with a three-digit
+number whose first digit is the system the workflow targets (e.g., `101.` = Cloudflare, `201.` =
+WHMCS — see the auto-generated catalog below). CI validates that every active workflow has a
+numeric prefix, that prefixes are unique, and that the catalog is regenerated.
 
 **New here?** Start with these two guides:
 
@@ -94,8 +95,7 @@ Cloudflare Registrar (project #157). See
   EPP/auth code is returned inline (copy-pasteable) or only emailed. `dry-run` has no side effects;
   `execute` calls `DomainRequestEPP`.
 - **117. Domain - Post-Transfer Verification (Report) [CF]**: read-only confirmation that a transfer
-  landed (registrar = Cloudflare, nameservers on Cloudflare, site reachable). Numbered 25 because
-  15–19 are already taken; it sorts after the M365 block in the Actions list.
+  landed (registrar = Cloudflare, nameservers on Cloudflare, site reachable).
 
 ### 301–305 M365 workflows
 
@@ -602,7 +602,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | # | Workflow | File | Triggers | Safety | Approval env |
 | --- | --- | --- | --- | --- | --- |
 | 701 | Website - Provision (Issue Assigned) [CF+Repo] | `701-website-provision.yml` | issues | Writes (gated) | ✅ cloudflare-prod-write / ✅ github-prod |
-| 702 | Domain - Deploy Static Clone to FFC-EX Repo [] | `702-ffc-ex-clone-deploy.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
+| 702 | Domain - Deploy Static Clone to FFC-EX Repo | `702-ffc-ex-clone-deploy.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
 | 703 | Sites List - Generate (CSV + JSON) [GH] | `703-sites-list-generate.yml` | schedule, workflow_dispatch | (repo plumbing) | — |
 | 720 | Repo - Create GitHub Repo [Repo] | `720-create-repo.yml` | workflow_dispatch | (repo plumbing) | — |
 | 721 | Repo - Deploy GitHub Pages [Repo] | `721-deploy-pages.yml` | push, workflow_dispatch | (repo plumbing) | — |

@@ -72,8 +72,11 @@ def parse_workflow(path):
     om = re.search(r"^on:\s*\n((?:[ \t]+.*\n?)+)", txt, re.M)
     if om:
         triggers = re.findall(r"^  ([a-z_]+):", om.group(1), re.M)
-    # environments used
-    envs = sorted(set(re.findall(r"^\s+environment:\s*([A-Za-z0-9_\-]+)\s*$", txt, re.M)))
+    # environments used — both the scalar form (environment: name) and the
+    # mapping form (environment:\n  name: <name>, used e.g. by the Pages deploy)
+    envs = set(re.findall(r"^\s+environment:\s*([A-Za-z0-9_\-]+)\s*$", txt, re.M))
+    envs.update(re.findall(r"^\s+environment:\s*\n\s+name:\s*([A-Za-z0-9_\-]+)\s*$", txt, re.M))
+    envs = sorted(envs)
     # description: first contiguous comment block after the name/run-name lines
     desc = ""
     dm = re.search(r"\n\n((?:#[^\n]*\n)+)", txt)
@@ -136,12 +139,10 @@ def render_markdown(cat):
         trig = ", ".join(w["triggers"]) or "—"
         level = w["safetyLevel"] or "(repo plumbing)"
         env = w["approvalEnv"] or "—"
-        tag = "+".join(w["apis"])
+        tag = f" [{'+'.join(w['apis'])}]" if w["apis"] else ""
         out.append(
-            f"| {w['number']} | {w['title']} [{tag}] | `{w['file']}` | {trig} | {level} | {env} |"
+            f"| {w['number']} | {w['title']}{tag} | `{w['file']}` | {trig} | {level} | {env} |"
         )
-        if c != cur:
-            out.append("")
     out.append("")
     out.append("<!-- catalog:end -->")
     return "\n".join(out)

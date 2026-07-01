@@ -23,7 +23,7 @@ A live change generally has to get past several of these, not just one:
    provider logs.)
 2. **Environment approval gates.** A job whose `environment` is configured with **required
    reviewers** pauses at `status: waiting` until a reviewer (currently `clarkemoyer`) approves the
-   deployment. The live config was **audited on 2026-06-30** by the read-only workflow **99. Repo -
+   deployment. The live config was **audited on 2026-06-30** by the read-only workflow **730. Repo -
    Audit Environment Approval Gates [Repo]** (reads the protection rules with `GITHUB_TOKEN`). The
    environments that require a reviewer are: **`cloudflare-prod-write`**, **`whmcs-prod`**,
    **`github-prod`**, **`m365-prod`**, and **`wpmudev-prod`** (plus a bare **`cloudflare-prod`**
@@ -32,7 +32,7 @@ A live change generally has to get past several of these, not just one:
    and `wpmudev-prod` are gated at the environment level, they gate **every** job that uses them —
    including read-only exports and triage (e.g. the cross-source inventory 04, the M365
    list/preflight reads 20–22, and the WPMUDEV export 40) — so even a read run waits for approval.
-   Re-run workflow 99 after any change in _Settings → Environments_ to refresh this list.
+   Re-run workflow 730 after any change in _Settings → Environments_ to refresh this list.
 3. **`dry_run` defaults to preview.** The granular write workflows take a `dry_run` input that
    **defaults to `true`**. A dry run returns a preview (e.g. redacted JSON of what _would_ be sent)
    and performs **no** mutation. You must explicitly pass `dry_run=false` to go live.
@@ -121,7 +121,7 @@ the run pauses for approval, even if the action itself only reads.
 | 729     | Repo - Add Collaborator                   | Writes (**live default**) | ✅ github-prod                                             | ⚠️ `dry_run` defaults to **false**                                                  |
 | 730     | Repo - Audit Environment Approval Gates   | Reads                     | —                                                          | report only (environment reviewer config)                                           |
 
-> **Exception to call out:** **98. Repo - Add Collaborator** is the one write workflow whose
+> **Exception to call out:** **729. Repo - Add Collaborator** is the one write workflow whose
 > `dry_run` defaults to **`false`** (it runs live by default). It's low-risk (adding a repo
 > collaborator, gated by `github-prod` approval), but don't assume the "preview-by-default" rule
 > applies to it.

@@ -37,7 +37,7 @@ any environment gates. See the next section.
 ### Provision a website repo + add a maintainer (primary workflow)
 
 This is the canonical way to "establish the repo for `<domain>` and add a GitHub user as
-maintainer". It runs **`15. Website - Provision`** (`.github/workflows/15-website-provision.yml`),
+maintainer". It runs **`701. Website - Provision`** (`.github/workflows/701-website-provision.yml`),
 which on `issues: [assigned]` creates `FFC-EX-<domain>` from the FFC template, enables GitHub Pages,
 adds the Technical POC as a `maintain` collaborator, and (only if the zone is controlled in FFC
 Cloudflare) enforces apex + `www` GitHub Pages DNS. All privileged steps run inside Actions with
@@ -68,14 +68,14 @@ Cloudflare**, the `dns` (`cloudflare-prod-write`) and `repo` (`github-prod`) job
 approve both gates (UI → _Review deployments_, or the `gh api … pending_deployments` flow below).
 
 From a `gh`-authed environment you can instead dispatch directly:
-`gh workflow run 15-website-provision.yml --ref main -f domain=<domain> -f technical_poc_github_username=<login>`.
+`gh workflow run 701-website-provision.yml --ref main -f domain=<domain> -f technical_poc_github_username=<login>`.
 
 ### Dispatch a workflow
 
 ```bash
 gh workflow run <workflow-file>.yml --ref <branch>
 # e.g.
-gh workflow run 8-whmcs-export-products.yml --ref main
+gh workflow run 202-whmcs-export-products.yml --ref main
 ```
 
 `git push` also triggers `push`-event workflows, but environment-gated jobs still wait for approval
@@ -117,10 +117,10 @@ WHMCS automation is **fully Key-Vault-backed and IP-stable**. The end-to-end pat
 
 > **Validation status (2026-06-28):** the hardened path is proven in production. A keyless call to
 > the APIM gateway returns `401` (the `whmcs` API is `subscriptionRequired: true`), and a real
-> `windows-latest` runner dispatch of **`31. WHMCS - Export Products`**
-> (`8-whmcs-export-products.yml`) on `main` completed `success` — the `whmcs-secrets-from-kv` action
-> loaded `WHMCS_APIM_SUBSCRIPTION_KEY` (masked) and the export returned live data (30 products, 535
-> client products) through OIDC → KV → APIM → Cloudflare → WHMCS.
+> `windows-latest` runner dispatch of **`202. WHMCS - Export Products`**
+> (`202-whmcs-export-products.yml`) on `main` completed `success` — the `whmcs-secrets-from-kv`
+> action loaded `WHMCS_APIM_SUBSCRIPTION_KEY` (masked) and the export returned live data (30
+> products, 535 client products) through OIDC → KV → APIM → Cloudflare → WHMCS.
 
 ```
 GitHub runner ──OIDC──► Azure (ffc-admin-kv-writer) ──► Key Vault (creds + APIM key)

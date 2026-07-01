@@ -12,11 +12,11 @@ This is used for:
 - `wpmudev-prod` (WPMUDEV domain/site inventory workflows)
 
 > **Current required-reviewer config (audited 2026-06-30 by workflow
-> `99. Repo - Audit Environment Approval Gates [Repo]`).** Gated (require reviewer `clarkemoyer`, so
-> jobs pause for approval): `cloudflare-prod`, `cloudflare-prod-write`, `whmcs-prod`, `github-prod`,
-> `m365-prod`, `wpmudev-prod`. Not gated (runs proceed): `cloudflare-prod-read`, `zeffy-prod`. See
-> [workflow-safety-and-approvals.md](workflow-safety-and-approvals.md) for the per-workflow table;
-> re-run workflow 99 to refresh after any change in _Settings → Environments_.
+> `730. Repo - Audit Environment Approval Gates [Repo]`).** Gated (require reviewer `clarkemoyer`,
+> so jobs pause for approval): `cloudflare-prod`, `cloudflare-prod-write`, `whmcs-prod`,
+> `github-prod`, `m365-prod`, `wpmudev-prod`. Not gated (runs proceed): `cloudflare-prod-read`,
+> `zeffy-prod`. See [workflow-safety-and-approvals.md](workflow-safety-and-approvals.md) for the
+> per-workflow table; re-run workflow 730 to refresh after any change in _Settings → Environments_.
 
 ## Where to configure Environments
 
@@ -55,11 +55,11 @@ Recommended Cloudflare API token permissions:
 - DMARC Management: **Edit** (optional; currently this repo does not have a routable Cloudflare API
   surface to enable/inspect DMARC Management, so enabling is done manually in the dashboard: Email >
   DMARC Management)
-- Account Rulesets: **Write** (required by workflow 10 — DNS - Create Redirect Rule)
-- Zone WAF: **Write** (required by workflow 10)
-- Dynamic URL Redirects: **Write** (required by workflow 10)
+- Account Rulesets: **Write** (required by workflow 111 — DNS - Create Redirect Rule)
+- Zone WAF: **Write** (required by workflow 111)
+- Dynamic URL Redirects: **Write** (required by workflow 111)
 
-Without the Rulesets/WAF/Dynamic-URL-Redirects permissions, workflow 10's apply step fails with
+Without the Rulesets/WAF/Dynamic-URL-Redirects permissions, workflow 111's apply step fails with
 Cloudflare error code `10000 "Authentication error"`. The dry-run / preview job still works because
 GET on the entrypoint URL doesn't require write scope.
 
@@ -147,8 +147,8 @@ the identifier/secret now come from Key Vault.
 
 Used by:
 
-- `.github/workflows/5-m365-domain-and-dkim.yml`
-- `.github/workflows/6-m365-list-domains.yml`
+- `.github/workflows/303-m365-domain-and-dkim.yml`
+- `.github/workflows/302-m365-list-domains.yml`
 
 ### Identifiers vs secrets
 
@@ -167,7 +167,7 @@ Environment secrets (required for the M365 workflows in this repo):
 
 ### Split-environment preflight
 
-The preflight workflow `.github/workflows/7-m365-domain-preflight.yml` is intentionally split into
+The preflight workflow `.github/workflows/301-m365-domain-preflight.yml` is intentionally split into
 two jobs so secrets do not have to be duplicated across environments:
 
 - **Graph job** runs in `m365-prod` and requires:
@@ -240,7 +240,7 @@ You must configure the Entra application referenced by `FFC_AZURE_CLIENT_ID`:
 ## `wpmudev-prod`
 
 Used by the WPMUDEV domain/site inventory workflow in
-`.github/workflows/13-wpmudev-export-sites.yml`.
+`.github/workflows/601-wpmudev-export-sites.yml`.
 
 ### Environment secrets
 

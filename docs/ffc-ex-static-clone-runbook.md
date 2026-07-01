@@ -47,7 +47,7 @@ npx serve out                # spot-check vs the live site, then commit + PR
 - Visual diff of the built `out/` homepage + key inner pages vs the live site.
 - `remainingExternalHosts` reviewed: outbound `<a>` links are fine; asset hosts (fonts/CDN images)
   should be localized or consciously accepted.
-- Only then run the cutover (workflow 19). **Do not bulk-cut-over** until each domain passes this
+- Only then run the cutover (workflow 120). **Do not bulk-cut-over** until each domain passes this
   gate.
 
 ## Validation status

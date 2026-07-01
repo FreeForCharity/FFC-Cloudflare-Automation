@@ -29,23 +29,23 @@ stdout. Log **break/fix remediation steps** as internal notes:
 
 1. Open an issue from **"Support Request"** (`whmcs:new-request`) or **"Break/Fix"**
    (`whmcs:break-fix`) — `.github/ISSUE_TEMPLATE/08-support-request.yml` / `09-break-fix.yml`.
-2. Workflow **"36. WHMCS - Issue to Ticket"** triggers on the label, opens a ticket from the form
+2. Workflow **"206. WHMCS - Issue to Ticket"** triggers on the label, opens a ticket from the form
    fields (charity email, domain, details), and comments the ticket **#** back to the issue.
 3. New requests → priority Medium, subject `[New Request]`; break/fix → priority High, subject
    `[Break/Fix]`.
 
-Manual/ad-hoc use: **"35. WHMCS - Open Ticket"** (dry-run by default) and **"37. WHMCS - Export
+Manual/ad-hoc use: **"205. WHMCS - Open Ticket"** (dry-run by default) and **"208. WHMCS - Export
 Tickets"**.
 
 ## Triage and templated responses (workflows 38/39)
 
-- **38. WHMCS - Tickets Triage** (`38-whmcs-tickets-triage.yml`) — **read-only**.
+- **209. WHMCS - Tickets Triage** (`209-whmcs-tickets-triage.yml`) — **read-only**.
   `workflow_dispatch` + a weekday `schedule`. Runs `whmcs-tickets-export.ps1` once per status
   (default `Open,Customer-Reply`), writes a Markdown table of tickets needing attention to the job
   summary, uploads CSV artifacts, and can upsert **one** rolling tracking issue labeled
   `whmcs:triage` (`open_tracking_issue: true`). This only _surfaces_ tickets — it performs no ticket
   writes — so the integration remains **one-way** (GitHub→WHMCS); replies are not synced back.
-- **39. WHMCS - Ticket Respond** (`39-whmcs-ticket-respond.yml`) — posts a templated reply or
+- **207. WHMCS - Ticket Respond** (`207-whmcs-ticket-respond.yml`) — posts a templated reply or
   internal note to one ticket using `scripts/whmcs-ticket-reply.ps1`. Template bodies live in
   `config/whmcs-ticket-templates.json` (`ack_new_request`, `ack_break_fix`, `need_info`,
   `internal_note`); `internal: true` templates become staff-only `AddTicketNote`s. Dry-run by
@@ -71,7 +71,7 @@ Determining "international" — be sure before acting:
 
 Templates: use **`international_techsoup`** (client-visible reply with the TechSoup referral) plus
 the staff-only **`international_note`** in `config/whmcs-ticket-templates.json`. Cancel the related
-order via **42. WHMCS - Order Update** (`-Action cancel`). As with all live writes, the reply and
+order via **211. WHMCS - Order Update** (`-Action cancel`). As with all live writes, the reply and
 the cancellation are **human-gated** (explicit per-order authorization).
 
 ### Scope matters: scan Active, not just Pending/Fraud

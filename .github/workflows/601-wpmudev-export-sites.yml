@@ -1,0 +1,78 @@
+name: '601. WPMUDEV - Export Sites/Domains (Read-only) [WPMUDEV]'
+
+on:
+  workflow_dispatch:
+    inputs:
+      output_file:
+        description: 'CSV output filename'
+        required: false
+        default: 'wpmudev_domains.csv'
+
+jobs:
+  export:
+    name: Export WPMUDEV sites/domains
+    runs-on: ubuntu-latest
+    environment: wpmudev-prod
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run export
+        shell: pwsh
+        env:
+          WPMUDEV_API_TOKEN: ${{ secrets.FFC_WPMUDEV_GA_API_Token }}
+        run: |
+          Write-Host "::group::WPMUDEV Diagnostics"
+          try {
+            $base = 'https://wpmudev.com/api/hub/v1'
+            $headers = @{ AUTHORIZATION = $env:WPMUDEV_API_TOKEN }
+            $uri = "$base/account"
+            Write-Host "GET $uri"
+            Invoke-RestMethod -Method Get -Uri $uri -Headers $headers -ErrorAction Stop | Out-Null
+            Write-Host "Diagnostics: success"
+          }
+          catch {
+            $statusCode = $null
+            try {
+              if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+                $statusCode = [int]$_.Exception.Response.StatusCode
+              }
+            }
+            catch {
+            }
+
+            if ($statusCode) {
+              Write-Host "Diagnostics: request failed with HTTP $statusCode"
+            }
+            else {
+              Write-Host "Diagnostics: request failed (no status code available)"
+            }
+
+            Write-Host "Diagnostics: $($_.Exception.Message)"
+          }
+          Write-Host "::endgroup::"
+
+          $out = '${{ inputs.output_file }}'
+          pwsh -NoProfile -File scripts/wpmudev-sites-export.ps1 -OutputFile $out
+
+          Write-Host "::group::WPMUDEV Summary"
+          if (Test-Path $out) {
+            $rows = Import-Csv -Path $out
+            $domainCount = $rows.Count
+            $multiSiteDomains = ($rows | Where-Object {
+                $c = 0
+                [int]::TryParse([string]$_.sitesCount, [ref]$c) -and $c -gt 1
+              }).Count
+            Write-Host "Summary: domains=$domainCount; domainsWithMultipleSites=$multiSiteDomains"
+          }
+          else {
+            Write-Host "Summary: output file not found: $out"
+          }
+          Write-Host "::endgroup::"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: wpmudev-domain-inventory
+          path: ${{ inputs.output_file }}

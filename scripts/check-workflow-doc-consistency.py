@@ -20,11 +20,11 @@ WF_GLOB = ".github/workflows/*.yml"
 DOC = "docs/workflow-safety-and-approvals.md"
 
 # Display numbers intentionally NOT in the operator safety table (CI / repo plumbing).
-EXCLUDE = {"50", "89", "90", "91", "92", "93", "94", "96", "97"}
+EXCLUDE = {"703", "720", "721", "722", "723", "724", "725", "727", "728"}
 
 
 def two(n):
-    return str(int(n)).zfill(2)
+    return str(int(n)).zfill(3)
 
 
 def main():
@@ -40,14 +40,14 @@ def main():
     wf_nums = {}
     for f in sorted(glob.glob(WF_GLOB)):
         txt = open(f, encoding="utf-8-sig").read()
-        m = re.search(r"^name:\s*['\"]?(\d{1,2})\.", txt, re.M)
+        m = re.search(r"^name:\s*['\"]?(\d{2,3})\.", txt, re.M)
         if m:
             wf_nums[two(m.group(1))] = f
 
     # 3) Display numbers covered by the safety table (expand A-B / A-B en-dash ranges).
     covered = set()
     for line in open(DOC, encoding="utf-8"):
-        m = re.match(r"\|\s*(\d{1,2})(?:\s*[–-]\s*(\d{1,2}))?\s*\|", line)
+        m = re.match(r"\|\s*(\d{2,3})(?:\s*[–-]\s*(\d{2,3}))?\s*\|", line)
         if not m:
             continue
         lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))

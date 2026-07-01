@@ -1,0 +1,106 @@
+name: '106. DNS - Enforce Standard (DNS-only) [CF]'
+run-name: 'Enforce Standard: ${{ inputs.domain }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain Name (e.g., example.org)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry Run (Check before Fix)'
+        type: boolean
+        default: true
+      pages_only:
+        description:
+          'Only enforce GitHub Pages (apex A/AAAA + www CNAME). Does NOT touch MX/TXT/SRV/etc.'
+        type: boolean
+        default: false
+      proxy_on:
+        description:
+          'Enable Cloudflare proxy (orange cloud) for GitHub Pages records. Default is OFF (DNS
+          only) so GitHub can validate and issue SSL.'
+        type: boolean
+        default: false
+      dmarc_mgmt_debug:
+        description: 'Debug: run DMARC Management API probe/attempts (noisy)'
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  enforce_standard:
+    runs-on: windows-latest
+    environment: cloudflare-prod-write
+    steps:
+      - uses: actions/checkout@v5
+
+      # F1 refactor: Cloudflare tokens now sourced from Key Vault at runtime via OIDC.
+      # The composite action sets CLOUDFLARE_API_TOKEN_{FFC,CM} for subsequent steps.
+      # Local copy of CBMadmin's canonical action (cross-repo private access is blocked
+      # because this repo is public but CBMadmin is private). Sync changes from
+      # CBMadmin's .github/actions/cloudflare-tokens-from-kv/ via the workflows-library
+      # copy convention.
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Enforce FFC Standard Configuration
+        shell: pwsh
+        env:
+          FFC_CF_DMARCMGMT_DEBUG: ${{ inputs.dmarc_mgmt_debug && '1' || '0' }}
+        run: |
+          $Domain = "${{ inputs.domain }}"
+          $DryRun = "${{ inputs.dry_run }}"
+          $PagesOnly = "${{ inputs.pages_only }}"
+          $ProxyOn = "${{ inputs.proxy_on }}"
+
+          if ($DryRun -eq "true") {
+            Write-Host "--- DRY RUN MODE: PREVIEWING CHANGES ---"
+            if ($PagesOnly -eq 'true') {
+              if ($ProxyOn -eq 'true') {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly -ProxyGitHubPages -DryRun
+              } else {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly -DryRun
+              }
+            } else {
+              if ($ProxyOn -eq 'true') {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -ProxyGitHubPages -DryRun
+              } else {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -DryRun
+              }
+            }
+          } else {
+            Write-Host "--- LIVE MODE: APPLYING FIXES ---"
+            if ($PagesOnly -eq 'true') {
+              if ($ProxyOn -eq 'true') {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly -ProxyGitHubPages
+              } else {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly
+              }
+            } else {
+              if ($ProxyOn -eq 'true') {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -ProxyGitHubPages
+              } else {
+                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard
+              }
+            }
+          }
+
+      - name: Post-Enforce Compliance Audit
+        shell: pwsh
+        # CLOUDFLARE_API_TOKEN_{FFC,CM} already in env from the composite action above.
+        run: |
+          $Domain = "${{ inputs.domain }}"
+          $ProxyOn = "${{ inputs.proxy_on }}"
+          if ($ProxyOn -eq 'true') {
+            .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ProxyGitHubPages -ErrorAction Continue
+          } else {
+            .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ErrorAction Continue
+          }

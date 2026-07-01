@@ -1,0 +1,37 @@
+name: '728. Repo - AI Agent Hooks Validate [Repo]'
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.claude/**'
+      - '.githooks/**'
+      - '.github/workflows/97-ai-agent-hooks-validate.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.claude/**'
+      - '.githooks/**'
+      - '.github/workflows/97-ai-agent-hooks-validate.yml'
+
+jobs:
+  validate-hooks:
+    name: Validate AI agent hooks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate .claude/settings.json is valid JSON
+        run: python3 -c "import json; json.load(open('.claude/settings.json'))"
+
+      - name: Run hook self-tests
+        run: python3 .claude/hooks/test_hooks.py

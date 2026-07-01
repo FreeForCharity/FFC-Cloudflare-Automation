@@ -1,0 +1,64 @@
+name: '118. Domain - Registrar Lock / Unlock [WHMCS]'
+run-name: 'Domain lock ${{ inputs.action }} ${{ inputs.domain }} (dry_run=${{ inputs.dry_run }})'
+
+# Reads or changes a domain's registrar lock (clientTransferProhibited) in WHMCS,
+# ahead of an eNOM -> Cloudflare transfer (project #157). dry_run only reads the
+# current state and changes nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain to read/change (must exist in WHMCS)'
+        required: true
+        type: string
+      action:
+        description: 'Desired lock state'
+        required: true
+        type: choice
+        default: unlock
+        options:
+          - unlock
+          - lock
+      dry_run:
+        description: 'Read-only: report current lock state, make no change'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  lock:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Run registrar lock/unlock
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $params = @{ Domain = '${{ inputs.domain }}' }
+          if ('${{ inputs.action }}' -eq 'lock') { $params.Lock = $true }
+          if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun = $true }
+
+          $out = & pwsh -NoProfile -File .\scripts\whmcs-domain-lock.ps1 @params
+          if ($LASTEXITCODE -ne 0) { throw "whmcs-domain-lock.ps1 failed (exit $LASTEXITCODE)." }
+
+          $json = ($out | Out-String).Trim()
+          Write-Host $json
+          $fence = [string][char]0x60 * 3
+          @('### Registrar lock result', '', ($fence + 'json'), $json, $fence) |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

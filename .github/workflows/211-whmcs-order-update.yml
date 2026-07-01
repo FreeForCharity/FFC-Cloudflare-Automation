@@ -1,0 +1,80 @@
+name: '211. WHMCS - Order Update (accept/cancel/fraud) [WHMCS]'
+run-name: 'WHMCS Order Update #${{ inputs.order_id }} (${{ inputs.action }})'
+
+# Change one WHMCS order's state. Dry-run by default. There is intentionally NO
+# bulk / automatic accept-or-cancel: each live state change is a single explicit
+# human dispatch (dry_run=false).
+
+on:
+  workflow_dispatch:
+    inputs:
+      order_id:
+        description: 'WHMCS order id (numeric)'
+        required: true
+        type: string
+      action:
+        description: 'State change to apply'
+        required: true
+        type: choice
+        options:
+          - accept
+          - cancel
+          - fraud
+      reason:
+        description: 'Reason recorded on cancel/fraud (optional)'
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: 'Preview only (no order write)'
+        required: false
+        type: boolean
+        default: true
+      api_url:
+        description: 'WHMCS API endpoint'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  order_update:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Update order
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          ORDER_ID: ${{ inputs.order_id }}
+          ACTION: ${{ inputs.action }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $orderId = [int]$env:ORDER_ID
+          $whatArgs = @('-NoProfile', '-File', '.\scripts\whmcs-order-update.ps1', '-OrderId', $orderId, '-Action', $env:ACTION)
+          if (-not [string]::IsNullOrWhiteSpace($env:REASON)) { $whatArgs += @('-Reason', $env:REASON) }
+          if ('${{ inputs.dry_run }}' -ne 'false') { $whatArgs += '-DryRun' }
+
+          $out = & pwsh @whatArgs
+          if ($LASTEXITCODE -ne 0) { throw "Order update failed (exit $LASTEXITCODE). Output: $out" }
+          $out
+
+          "## WHMCS order update" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Order: #$orderId" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Action: $($env:ACTION)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Dry run: ${{ inputs.dry_run }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

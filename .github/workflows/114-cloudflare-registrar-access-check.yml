@@ -1,0 +1,72 @@
+name: '114. Domain - Validate Cloudflare Registrar API Access (Read-only) [CF]'
+run-name: 'Validate Registrar access: ${{ inputs.account }}'
+
+# READ-ONLY: probes whether the selected Cloudflare token has Registrar API
+# rights (read + write). Never registers or changes anything. Wraps
+# scripts/cloudflare-registrar-access-check.ps1.
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Cloudflare account/token to validate'
+        required: true
+        type: choice
+        options:
+          - FFC
+          - CM
+        default: FFC
+      require_write:
+        description: 'Fail the run if Registrar WRITE access is not granted'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    # Load the WRITE-scoped token from Key Vault so we validate the same token
+    # that registration would use. The probe itself is read-only.
+    environment: cloudflare-prod-write
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Validate Registrar API access
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $account = "${{ inputs.account }}"
+
+          $scriptArgs = @('-Account', $account)
+          if ('${{ inputs.require_write }}' -eq 'true') { $scriptArgs += '-RequireWrite' }
+
+          # The script emits JSON-only on stdout and diagnostics on stderr.
+          # Capture stdout (JSON); use Continue so native stderr can't terminate.
+          $ErrorActionPreference = 'Continue'
+          $out = & pwsh -NoProfile -File .\scripts\cloudflare-registrar-access-check.ps1 @scriptArgs
+          $exit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+
+          $summary = ($out | Out-String)
+          Write-Host $summary
+
+          $fence = [string][char]0x60 * 3
+          $lines = @("### Cloudflare Registrar access ($account)", '', ($fence + 'json'), $summary.TrimEnd(), $fence)
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          if ($exit -ne 0) {
+            throw "Registrar access validation failed (exit $exit)."
+          }

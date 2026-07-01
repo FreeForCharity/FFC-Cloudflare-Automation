@@ -1,0 +1,52 @@
+name: '204. WHMCS - Charity Onboard (client + contacts + order) [WHMCS]'
+run-name: 'WHMCS Charity Onboard'
+
+# Creates a WHMCS client, attaches Contacts, and places the onboarding order
+# (pre-501c3 / 501c3) from an intake JSON. Defaults to dry-run (no writes).
+
+on:
+  workflow_dispatch:
+    inputs:
+      intake_json:
+        description: 'Intake JSON (see examples/whmcs/onboard-501c3.example.json)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Preview only (no client/contacts/order created)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  onboard:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Run onboarding
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          INTAKE_JSON: ${{ inputs.intake_json }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $intake = $env:INTAKE_JSON
+          if ('${{ inputs.dry_run }}' -eq 'false') {
+            & pwsh -NoProfile -File .\scripts\whmcs-charity-onboard.ps1 -IntakeJson $intake
+          }
+          else {
+            & pwsh -NoProfile -File .\scripts\whmcs-charity-onboard.ps1 -IntakeJson $intake -DryRun
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Onboarding failed (exit $LASTEXITCODE)." }

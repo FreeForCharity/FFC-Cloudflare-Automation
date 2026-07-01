@@ -995,7 +995,7 @@ jobs:
     if: >-
       needs.resolve.outputs.skip != 'true' && needs.repo.result == 'success' &&
       needs.resolve.outputs.maintainers_csv != ''
-    uses: ./.github/workflows/98-repo-add-collaborator.yml
+    uses: ./.github/workflows/729-repo-add-collaborator.yml
     with:
       repo: ${{ needs.resolve.outputs.repo_full }}
       username: ${{ needs.resolve.outputs.maintainers_csv }}

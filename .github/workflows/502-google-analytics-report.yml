@@ -1,0 +1,101 @@
+name: '502. Google - Analytics Report (GA4 -> JSON) [GOOGLE]'
+run-name: 'Google Analytics Report'
+
+# Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers
+# it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe:
+# aggregate metrics only. Requires the google-prod-read environment + the Wave 0 foundation.
+
+on:
+  schedule:
+    - cron: '17 7 * * *' # daily 07:17 UTC
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Lookback window in days'
+        required: false
+        default: '28'
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  report:
+    runs-on: windows-latest
+    environment: google-prod-read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate required Azure secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set (environment: google-prod-read)"; exit 1;
+          fi
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID is not set (environment: google-prod-read)"; exit 1;
+          fi
+
+      - uses: ./.github/actions/google-secrets-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Generate GA reports (both primary sites)
+        shell: pwsh
+        env:
+          DAYS: ${{ inputs.days != '' && inputs.days || '28' }}
+          FFC_PROP: ${{ vars.GA_PROPERTY_ID_PRIMARY }}
+          ADMIN_PROP: ${{ vars.GA_PROPERTY_ID_FFCADMIN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'ga-out'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $days = [int]$env:DAYS
+          if (-not $env:FFC_PROP) { throw 'vars.GA_PROPERTY_ID_PRIMARY is not set.' }
+          & pwsh -NoProfile -File scripts/google-analytics-report.ps1 -SiteLabel 'freeforcharity.org' -PropertyId $env:FFC_PROP -Days $days -OutPath (Join-Path $out 'freeforcharity.org.json')
+          if ($env:ADMIN_PROP) {
+            & pwsh -NoProfile -File scripts/google-analytics-report.ps1 -SiteLabel 'ffcadmin.org' -PropertyId $env:ADMIN_PROP -Days $days -OutPath (Join-Path $out 'ffcadmin.org.json')
+          } else {
+            Write-Host '::warning::vars.GA_PROPERTY_ID_FFCADMIN not set; skipping ffcadmin.org'
+          }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ga-reports
+          path: ga-out/*.json
+          if-no-files-found: error
+
+  deliver:
+    needs: report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download reports
+        uses: actions/download-artifact@v7
+        with:
+          name: ga-reports
+          path: ga-out
+
+      - name: Open/update PR into FFC-IN-ffcadmin.org
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config --global user.name 'ffc-automation[bot]'
+          git config --global user.email 'automation@freeforcharity.org'
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/FreeForCharity/FFC-IN-ffcadmin.org.git" target
+          cd target
+          git checkout -B chore/ga-data-sync
+          mkdir -p public/data/google-analytics
+          cp ../ga-out/*.json public/data/google-analytics/
+          git add public/data/google-analytics
+          if git diff --cached --quiet; then echo 'No GA data changes; skipping PR.'; exit 0; fi
+          git commit -m "chore(analytics): refresh GA data ($(date -u +%F))"
+          git push -f origin chore/ga-data-sync
+          if ! gh pr view chore/ga-data-sync --repo FreeForCharity/FFC-IN-ffcadmin.org >/dev/null 2>&1; then
+            gh pr create --repo FreeForCharity/FFC-IN-ffcadmin.org --base main --head chore/ga-data-sync \
+              --title 'chore(analytics): refresh GA data' \
+              --body 'Automated GA4 aggregate metrics for freeforcharity.org + ffcadmin.org (source: 49. Google - Analytics Report). PII-safe aggregates only.'
+          fi

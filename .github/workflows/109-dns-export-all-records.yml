@@ -1,0 +1,63 @@
+name: '109. DNS - Export All Records (Full, per-record) [CF]'
+run-name: 'Export All DNS Records: ${{ inputs.domain }}'
+
+# Read-only full per-record export for a single zone. Unlike "08. DNS -
+# Export Cloudflare Zones" (a per-zone apex/www SUMMARY), this dumps EVERY
+# record (id, type, name, content, proxied, ttl, priority) to a CSV
+# artifact via Update-CloudflareDns.ps1 -ExportAll. Uses the same
+# read-only KV-OIDC token path as the audit workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain Name / Zone (e.g., freeforcharity.org)'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  export_all:
+    name: Export all DNS records
+    runs-on: windows-latest
+    environment: cloudflare-prod-read
+    steps:
+      - uses: actions/checkout@v5
+
+      # CF tokens from Key Vault at runtime via OIDC (read scope).
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Export all DNS records
+        shell: pwsh
+        run: |
+          $Domain = "${{ inputs.domain }}"
+          .\Update-CloudflareDns.ps1 -Zone $Domain -ExportAll -OutputFile "dns_records_full.csv"
+          if (-not (Test-Path "dns_records_full.csv")) {
+            throw "Export did not produce dns_records_full.csv"
+          }
+
+      - name: Add CSV to job summary
+        shell: pwsh
+        run: |
+          $csv = Get-Content "dns_records_full.csv" -Raw
+          @(
+            "## Full DNS record export: ${{ inputs.domain }}",
+            '',
+            '```csv',
+            $csv.TrimEnd(),
+            '```'
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: dns-records-full
+          path: dns_records_full.csv
+          if-no-files-found: error

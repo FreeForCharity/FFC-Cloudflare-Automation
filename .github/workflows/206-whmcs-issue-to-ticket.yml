@@ -1,0 +1,120 @@
+name: '206. WHMCS - Issue to Ticket (one-way) [WHMCS]'
+run-name: 'WHMCS Issue to Ticket'
+
+# When a charity issue is labeled whmcs:new-request or whmcs:break-fix, open a
+# WHMCS support ticket from the issue form fields and comment the ticket number
+# back to the issue. One-way (GitHub issue -> WHMCS ticket).
+
+on:
+  issues:
+    types: [opened, labeled]
+
+permissions:
+  contents: read
+  issues: write
+  id-token: write
+
+jobs:
+  open_ticket:
+    if: >-
+      (github.event.action == 'labeled' && (github.event.label.name == 'whmcs:new-request' ||
+      github.event.label.name == 'whmcs:break-fix')) || (github.event.action == 'opened' &&
+      (contains(github.event.issue.labels.*.name, 'whmcs:new-request') ||
+      contains(github.event.issue.labels.*.name, 'whmcs:break-fix')))
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Open ticket from issue and comment back
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          LABEL_NAME: ${{ github.event.label.name }}
+          ISSUE_LABELS: ${{ toJson(github.event.issue.labels.*.name) }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # --- Parse the issue-form body into heading -> value sections ---
+          $sections = @{}
+          $current = $null
+          $buf = @()
+          foreach ($line in ($env:ISSUE_BODY -split "`n")) {
+            if ($line -match '^###\s+(.*)') {
+              if ($current) { $sections[$current] = ($buf -join "`n").Trim() }
+              $current = $Matches[1].Trim()
+              $buf = @()
+            }
+            else { $buf += $line }
+          }
+          if ($current) { $sections[$current] = ($buf -join "`n").Trim() }
+
+          function Get-Section([string]$pattern) {
+            foreach ($k in $sections.Keys) {
+              if ($k -match $pattern) {
+                $v = $sections[$k]
+                if ($v -and $v -ne '_No response_') { return $v }
+              }
+            }
+            return $null
+          }
+
+          $email = Get-Section 'email'
+          $domain = Get-Section 'domain|site'
+          $details = Get-Section 'detail|symptom|impact|request'
+          if ([string]::IsNullOrWhiteSpace($email)) { throw 'Could not find a charity contact email in the issue.' }
+          if ([string]::IsNullOrWhiteSpace($details)) { $details = $env:ISSUE_TITLE }
+
+          # --- Resolve the effective WHMCS label ---
+          # 'labeled' events carry github.event.label.name; 'opened' events do not,
+          # so fall back to the issue's labels (set by the issue form at creation).
+          $effLabel = $env:LABEL_NAME
+          if ([string]::IsNullOrWhiteSpace($effLabel) -or $effLabel -notmatch '^whmcs:') {
+            $labels = @()
+            if (-not [string]::IsNullOrWhiteSpace($env:ISSUE_LABELS)) { $labels = $env:ISSUE_LABELS | ConvertFrom-Json }
+            if ($labels -contains 'whmcs:break-fix') { $effLabel = 'whmcs:break-fix' }
+            elseif ($labels -contains 'whmcs:new-request') { $effLabel = 'whmcs:new-request' }
+          }
+          if ($effLabel -notmatch '^whmcs:(break-fix|new-request)$') {
+            throw 'No WHMCS ticket label (whmcs:new-request / whmcs:break-fix) found on the issue.'
+          }
+
+          # --- Route via the department config (validate the entry) ---
+          $cfg = Get-Content -Raw .\config\whmcs-support-departments.json | ConvertFrom-Json
+          $type = if ($effLabel -eq 'whmcs:break-fix') { 'break_fix' } else { 'new_request' }
+          $route = $cfg.routing.$type
+          if ($null -eq $route) { throw "No routing entry for '$type' in whmcs-support-departments.json." }
+          $deptid = [int]$route
+          if ($deptid -lt 1) { throw "Invalid deptid ($deptid) for '$type'." }
+          $prefix = [string]$cfg.subject_prefix.$type
+          $priority = [string]$cfg.priority.$type
+
+          $subject = ("{0} {1}" -f $prefix, $env:ISSUE_TITLE).Trim()
+          $message = $details
+          if ($domain) { $message += "`n`nDomain/site: $domain" }
+          $message += "`n`nFiled from GitHub issue #$($env:ISSUE_NUMBER): $($env:ISSUE_URL)"
+
+          $out = & pwsh -NoProfile -File .\scripts\whmcs-ticket-open.ps1 `
+            -DeptId $deptid -Subject $subject -Message $message -Priority $priority `
+            -Email $email -Name $email
+          if ($LASTEXITCODE -ne 0) { throw "Open ticket failed (exit $LASTEXITCODE). Output: $out" }
+
+          $result = ($out | Out-String).Trim() | ConvertFrom-Json
+          $tid = $result.tid
+          $ticketid = $result.ticketid
+
+          $comment = "Opened WHMCS support ticket **#$tid** (id $ticketid) in department $deptid for this request."
+          gh issue comment $env:ISSUE_NUMBER --body $comment
+          if ($LASTEXITCODE -ne 0) { throw "Failed to comment back on issue (exit $LASTEXITCODE)." }

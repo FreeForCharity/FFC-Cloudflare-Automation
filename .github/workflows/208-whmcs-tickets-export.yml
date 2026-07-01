@@ -1,0 +1,54 @@
+name: '208. WHMCS - Export Tickets (Report) [WHMCS]'
+run-name: 'WHMCS Export Tickets'
+
+on:
+  workflow_dispatch:
+    inputs:
+      status:
+        description: 'Filter by status (e.g. Open, Answered, Closed) - blank for all'
+        required: false
+        type: string
+      output_file:
+        description: 'Output CSV filename'
+        required: false
+        type: string
+        default: 'artifacts/whmcs/whmcs_tickets.csv'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  export_tickets:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Export tickets (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "${{ inputs.output_file }}"
+          $dir = Split-Path -Parent $out
+          if (-not [string]::IsNullOrWhiteSpace($dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+          $cliArgs = @('-OutputFile', $out)
+          if ('${{ inputs.status }}' -ne '') { $cliArgs += @('-Status', '${{ inputs.status }}') }
+          & pwsh -NoProfile -File .\scripts\whmcs-tickets-export.ps1 @cliArgs
+          if ($LASTEXITCODE -ne 0) { throw "Tickets export failed (exit $LASTEXITCODE)." }
+
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: whmcs_tickets
+          path: ${{ inputs.output_file }}
+          if-no-files-found: error

@@ -1,0 +1,99 @@
+name: '503. Google - GTM Provision (per-charity container) [GOOGLE]'
+run-name: 'GTM Provision: ${{ inputs.domain }} (dry_run=${{ inputs.dry_run }})'
+
+# Provision a per-charity GTM container: create it, seed GA4 + optional Clarity/Meta tags on All
+# Pages, publish, and delegate Edit/Publish to the charity POC. Gated write: google-prod-write +
+# dry_run defaults to true. See docs/google-api.md (GTM: one container per charity).
+#
+# SETUP REQUIRED before first run: create the `google-prod-write` environment + a federated
+# credential (repo:...:environment:google-prod-write) on ffc-admin-kv-writer, and set env secrets
+# WR_ALL_FFC_AZURE_KV_CLIENT_ID / WR_ALL_FFC_AZURE_TENANT_ID (mirrors the google-prod-read setup).
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Charity domain (container name), e.g. newcharity.org'
+        required: true
+        type: string
+      measurement_id:
+        description: 'GA4 measurement id (G-XXXX) for this charity property'
+        required: true
+        type: string
+      account_id:
+        description: 'FFC GTM account id'
+        required: false
+        default: '4702611686'
+        type: string
+      clarity_id:
+        description: 'Microsoft Clarity project id (optional)'
+        required: false
+        type: string
+      meta_pixel_id:
+        description: 'Meta Pixel id (optional)'
+        required: false
+        type: string
+      grantee_email:
+        description: 'Charity POC email to delegate container Edit/Publish (optional)'
+        required: false
+        type: string
+      dry_run:
+        description: 'Preview only (no create/publish)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  provision:
+    runs-on: windows-latest
+    environment: google-prod-write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate required Azure secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::WR_ALL_FFC_AZURE_KV_CLIENT_ID is not set (environment: google-prod-write)"; exit 1;
+          fi
+          if [ -z "${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::WR_ALL_FFC_AZURE_TENANT_ID is not set (environment: google-prod-write)"; exit 1;
+          fi
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Provision GTM container
+        shell: pwsh
+        env:
+          DOMAIN: ${{ inputs.domain }}
+          MEASUREMENT_ID: ${{ inputs.measurement_id }}
+          ACCOUNT_ID: ${{ inputs.account_id }}
+          CLARITY_ID: ${{ inputs.clarity_id }}
+          META_PIXEL_ID: ${{ inputs.meta_pixel_id }}
+          GRANTEE_EMAIL: ${{ inputs.grantee_email }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $keyFile = Join-Path $env:RUNNER_TEMP 'ffc-workspace-sa.json'
+          az keyvault secret download --vault-name kv-ffc-admin-prod-cbm --name wr-all-cbm-google-workspace-service-account-key --file $keyFile
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch the Workspace SA key from Key Vault.' }
+          $subject = 'clarkemoyer@freeforcharity.org'
+          $args = @(
+            '-KeyPath', $keyFile, '-Subject', $subject, '-AccountId', $env:ACCOUNT_ID,
+            '-Domain', $env:DOMAIN, '-MeasurementId', $env:MEASUREMENT_ID
+          )
+          if ($env:CLARITY_ID) { $args += @('-ClarityId', $env:CLARITY_ID) }
+          if ($env:META_PIXEL_ID) { $args += @('-MetaPixelId', $env:META_PIXEL_ID) }
+          if ($env:GRANTEE_EMAIL) { $args += @('-GranteeEmail', $env:GRANTEE_EMAIL) }
+          if ($env:DRY_RUN -ne 'false') { $args += '-DryRun' }
+          & pwsh -NoProfile -File scripts/google-gtm-provision.ps1 @args
+          Remove-Item $keyFile -Force -ErrorAction SilentlyContinue

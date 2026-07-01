@@ -100,10 +100,12 @@ jobs:
             fi
           done
 
-          echo "## Archive request" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Target: \`$full\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Reason: ${IN_REASON:-（none）}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Dry run: $IN_DRY_RUN" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Archive request"
+            echo "- Target: \`$full\`"
+            echo "- Reason: ${IN_REASON:-（none）}"
+            echo "- Dry run: $IN_DRY_RUN"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           # --- existence + current state (read-only) ---------------------------------
           if ! meta=$(gh api "repos/$full" 2>/dev/null); then

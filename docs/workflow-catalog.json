@@ -1,0 +1,1244 @@
+{
+  "_generated": "scripts/generate-workflow-catalog.py \u2014 do not hand-edit",
+  "scheme": {
+    "convention": "3-digit category-first: first digit = the API/system the workflow targets",
+    "categories": {
+      "1": "Cloudflare / DNS / Domain",
+      "2": "WHMCS",
+      "3": "Microsoft (M365 / Azure / Graph)",
+      "4": "Zeffy",
+      "5": "Google",
+      "6": "WPMUDEV",
+      "7": "GitHub (Website + Repo)",
+      "8": "Reserved",
+      "9": "Reserved"
+    },
+    "tagRule": "the [TAG] lists ALL APIs the workflow CALLS (not services configured-for, not plumbing like KV auth or issue comments)"
+  },
+  "workflows": [
+    {
+      "number": 101,
+      "title": "Domain - Status (All Sources)",
+      "apis": [
+        "CF",
+        "M365"
+      ],
+      "file": "101-domain-status.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read",
+        "m365-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "cloudflare-prod-read / \u2705 m365-prod",
+      "guard": "M365 job waits on m365-prod approval",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 102,
+      "title": "Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin)",
+      "apis": [
+        "CF",
+        "WHMCS"
+      ],
+      "file": "102-domain-add-ffc-cloudflare-and-whmcs.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read",
+        "cloudflare-prod-write",
+        "whmcs-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 whmcs-prod",
+      "guard": "\u2014",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 103,
+      "title": "Domain - Enforce Standard (GitHub Apex + M365)",
+      "apis": [
+        "CF",
+        "M365"
+      ],
+      "file": "103-enforce-domain-standard.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-write",
+        "m365-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 m365-prod",
+      "guard": "`dry_run` (default true)",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 104,
+      "title": "Domain - Export Inventory (All Sources)",
+      "apis": [
+        "CF",
+        "M365",
+        "WHMCS",
+        "WPMUDEV"
+      ],
+      "file": "104-domain-export-inventory.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read",
+        "m365-prod",
+        "whmcs-prod",
+        "wpmudev-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod / \u2705 m365-prod / \u2705 wpmudev-prod (+ cf-read)",
+      "guard": "waits on whmcs-prod, m365-prod, and wpmudev-prod approvals",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 105,
+      "title": "DNS - Manage Record (Manual / Issue Label)",
+      "apis": [
+        "CF"
+      ],
+      "file": "105-manage-record.yml",
+      "triggers": [
+        "issues",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read",
+        "cloudflare-prod-write"
+      ],
+      "description": "",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 cloudflare-prod-write",
+      "guard": "`dry_run` (default true); issue-label trig",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 106,
+      "title": "DNS - Enforce Standard (DNS-only)",
+      "apis": [
+        "CF"
+      ],
+      "file": "106-enforce-standard.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-write"
+      ],
+      "description": "",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 cloudflare-prod-write",
+      "guard": "`dry_run` (default true)",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 107,
+      "title": "DNS - Audit Compliance (Report)",
+      "apis": [
+        "CF"
+      ],
+      "file": "107-audit-compliance.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read"
+      ],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "cloudflare-prod-read",
+      "guard": "\u2014",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 108,
+      "title": "DNS - Export Cloudflare Zones (Report)",
+      "apis": [
+        "CF"
+      ],
+      "file": "108-export-summary.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read"
+      ],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "cloudflare-prod-read",
+      "guard": "\u2014",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 109,
+      "title": "DNS - Export All Records (Full, per-record)",
+      "apis": [
+        "CF"
+      ],
+      "file": "109-dns-export-all-records.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read"
+      ],
+      "description": "Read-only full per-record export for a single zone. Unlike \"08. DNS - Export Cloudflare Zones\" (a per-zone apex/www SUMMARY), this dumps EVERY record (id, type, name, content, proxied, ttl, priority) to a CSV artifact via Update-CloudflareDns.ps1 -ExportAll. Uses the same read-only KV-OIDC token path as the audit workflow.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "cloudflare-prod-read",
+      "guard": "\u2014",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 110,
+      "title": "DNS - Create Zone (Admin)",
+      "apis": [
+        "CF"
+      ],
+      "file": "110-cloudflare-zone-create.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-write"
+      ],
+      "description": "",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 cloudflare-prod-write",
+      "guard": "\u2014",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 111,
+      "title": "DNS - Create Redirect Rule (Admin)",
+      "apis": [
+        "CF"
+      ],
+      "file": "111-dns-create-redirect-rule.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read",
+        "cloudflare-prod-write"
+      ],
+      "description": "",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 cloudflare-prod-write",
+      "guard": "`dry_run` (default true)",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 112,
+      "title": "DNS - Bulk Replace A-record IP (All Zones)",
+      "apis": [
+        "CF"
+      ],
+      "file": "112-dns-bulk-replace-a-ip.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-write"
+      ],
+      "description": "Serialize: this rewrites A records across many zones; parallel dispatches must not race.",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 cloudflare-prod-write",
+      "guard": "high blast radius; serialized",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 113,
+      "title": "Domain - Registrar Search / Check / Register (Admin, DRAFT)",
+      "apis": [
+        "CF"
+      ],
+      "file": "113-cloudflare-domain-register.yml",
+      "triggers": [
+        "issues",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-write"
+      ],
+      "description": "DRAFT: Wraps the Cloudflare Registrar API (beta) via scripts/cloudflare-domain-search.ps1     (suggest available names; read-only) scripts/cloudflare-domain-register.ps1   (availability check + register)  Entry points: * workflow_dispatch  -> pick a mode: search | check | dry-run-register | execute-register * issues: labeled    -> applying 'domain-purchase-approved' to a purchase issue runs a CHECK ONLY (availability + price) and comments the result back. A label NEVER purchases; buying requires an explicit workflow_dispatch with mode=execute-register + confirm_domain.  Money safety: only mode=execute-register (dispatch) spends money, and it requires confirm_domain to exactly match domain. See docs/cloudflare-domain-registration.md.",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 cloudflare-prod-write",
+      "guard": "`mode` (default `check`); register needs `mode=execute-register` + `confirm_domain`",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 114,
+      "title": "Domain - Validate Cloudflare Registrar API Access (Read-only)",
+      "apis": [
+        "CF"
+      ],
+      "file": "114-cloudflare-registrar-access-check.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-write"
+      ],
+      "description": "READ-ONLY: probes whether the selected Cloudflare token has Registrar API rights (read + write). Never registers or changes anything. Wraps scripts/cloudflare-registrar-access-check.ps1.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 cloudflare-prod-write",
+      "guard": "never charges",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 115,
+      "title": "Domain - Transfer Readiness Preflight (Report)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "115-domain-transfer-preflight.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "READ-ONLY: exports WHMCS domains, then runs scripts/domain-transfer-preflight.ps1 offline to classify each domain's readiness to transfer to Cloudflare Registrar (eNOM -> Cloudflare; project #157). Initiates no transfer and spends no money.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "\u2014",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 116,
+      "title": "Domain - Transfer EPP/Auth Code Probe (Admin)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "116-domain-transfer-epp-probe.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Probes whether a domain's EPP/auth (transfer) code is returned INLINE by the WHMCS API (copy-pasteable) or only EMAILED to the registrant. Wraps scripts/domain-transfer-epp-probe.ps1.  Safety: mode=dry-run performs read-only WHMCS calls (to locate the domain) and has no side effects. mode=execute calls DomainRequestEPP, which may trigger the registrar to email the registrant. The literal code is NOT printed unless show_code is true.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`dry-run` vs `execute`",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 117,
+      "title": "Domain - Post-Transfer Verification (Report)",
+      "apis": [
+        "CF"
+      ],
+      "file": "117-domain-transfer-verify.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read"
+      ],
+      "description": "READ-ONLY: confirms a domain transferred to Cloudflare Registrar landed cleanly (registrar = Cloudflare, nameservers on Cloudflare, site still reachable). Wraps scripts/domain-transfer-verify.ps1. Changes nothing.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "cloudflare-prod-read",
+      "guard": "\u2014",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 118,
+      "title": "Domain - Registrar Lock / Unlock",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "118-whmcs-domain-lock.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Reads or changes a domain's registrar lock (clientTransferProhibited) in WHMCS, ahead of an eNOM -> Cloudflare transfer (project #157). dry_run only reads the current state and changes nothing.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`dry_run` (default true)",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 119,
+      "title": "DNS - Bulk Staging CNAME -> GitHub Pages (FFC-EX)",
+      "apis": [
+        "CF"
+      ],
+      "file": "119-bulk-staging-cname-github-pages.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-write"
+      ],
+      "description": "Serialize: this writes CNAMEs across many FFC-EX zones; parallel dispatches must not race.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 cloudflare-prod-write",
+      "guard": "`dry_run` (default true); serialized",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 120,
+      "title": "DNS + GH Pages - Bulk Cutover staging -> Apex (FFC-EX)",
+      "apis": [
+        "CF",
+        "GH"
+      ],
+      "file": "120-bulk-cutover-to-github-pages.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-write",
+        "github-prod"
+      ],
+      "description": "Serialize cutover runs: parallel dispatches would race on the same FFC-EX CNAMEs / Cloudflare DNS.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 github-prod",
+      "guard": "`dry_run` (default true); serialized",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 201,
+      "title": "WHMCS - Export Domains (Report)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "201-whmcs-export-domains.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "gated only by the env approval",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 202,
+      "title": "WHMCS - Export Products (Report)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "202-whmcs-export-products.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "gated only by the env approval",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 203,
+      "title": "WHMCS - Export Payment Methods (Research)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "203-whmcs-export-payment-methods.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "gated only by the env approval",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 204,
+      "title": "WHMCS - Charity Onboard (client + contacts + order)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "204-whmcs-charity-onboard.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Creates a WHMCS client, attaches Contacts, and places the onboarding order (pre-501c3 / 501c3) from an intake JSON. Defaults to dry-run (no writes).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`dry_run` (default true); idempotent",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 205,
+      "title": "WHMCS - Open Ticket (manual)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "205-whmcs-ticket-open.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Manually open a WHMCS support ticket (new request or break/fix logging). Defaults to dry-run (no ticket created).",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "one-way GitHub\u2192WHMCS",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 206,
+      "title": "WHMCS - Issue to Ticket (one-way)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "206-whmcs-issue-to-ticket.yml",
+      "triggers": [
+        "issues"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "When a charity issue is labeled whmcs:new-request or whmcs:break-fix, open a WHMCS support ticket from the issue form fields and comment the ticket number back to the issue. One-way (GitHub issue -> WHMCS ticket).",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "one-way GitHub\u2192WHMCS",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 207,
+      "title": "WHMCS - Ticket Respond (templated)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "207-whmcs-ticket-respond.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Post a templated reply or internal note to one WHMCS ticket. Dry-run by default: a live (dry_run=false) client-visible reply requires a real WHMCS admin username and is intentionally human-gated.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`dry_run` (default true); live reply needs admin username",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 208,
+      "title": "WHMCS - Export Tickets (Report)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "208-whmcs-tickets-export.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "\u2014",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 209,
+      "title": "WHMCS - Tickets Triage (Open/Customer-Reply)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "209-whmcs-tickets-triage.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Read-only. Surfaces WHMCS tickets that need attention (default Open + Customer-Reply) into the job summary + a CSV artifact, and can optionally upsert ONE rolling tracking issue. No ticket writes are performed.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "summary masks PII",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 210,
+      "title": "WHMCS - Orders Triage (Pending/Fraud/Active)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "210-whmcs-orders-triage.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Read-only. Summarizes WHMCS orders by status into the job summary + CSV artifacts, lists actionable Pending orders, and can optionally upsert ONE rolling tracking issue. No order writes are performed.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "summary masks PII",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 211,
+      "title": "WHMCS - Order Update (accept/cancel/fraud)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "211-whmcs-order-update.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Change one WHMCS order's state. Dry-run by default. There is intentionally NO bulk / automatic accept-or-cancel: each live state change is a single explicit human dispatch (dry_run=false).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`dry_run` (default true); one order at a time",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 212,
+      "title": "WHMCS - Product Add (catalog)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "212-whmcs-product-add.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Create a catalog (status-marker) product. Dry-run by default. A live (dry_run=false) create requires the target product group id (gid) and the API credential's AddProduct permission (see whmcs-product-capability-check.ps1).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`dry_run` (default true); idempotent",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 213,
+      "title": "WHMCS -> Zeffy Payments Import (Draft)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "213-whmcs-zeffy-payments-import-draft.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Serialize runs so two dispatches can't race on the artifacts/zeffy/* outputs.",
+      "safetyLevel": "Reads (builds a file)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "output is a draft; serialized",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 301,
+      "title": "M365 - Domain Preflight (Read-only)",
+      "apis": [
+        "M365",
+        "CF"
+      ],
+      "file": "301-m365-domain-preflight.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read",
+        "m365-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "cloudflare-prod-read / \u2705 m365-prod",
+      "guard": "M365 job waits on m365-prod approval",
+      "category": "Microsoft (M365 / Azure / Graph)",
+      "categoryCode": "MS"
+    },
+    {
+      "number": 302,
+      "title": "M365 - List Tenant Domains",
+      "apis": [
+        "M365"
+      ],
+      "file": "302-m365-list-domains.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "m365-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 m365-prod",
+      "guard": "waits on m365-prod approval",
+      "category": "Microsoft (M365 / Azure / Graph)",
+      "categoryCode": "MS"
+    },
+    {
+      "number": 303,
+      "title": "M365 - Domain Status + DKIM (Toolbox)",
+      "apis": [
+        "M365"
+      ],
+      "file": "303-m365-domain-and-dkim.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "m365-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 m365-prod",
+      "guard": "read-oriented toolbox; waits on m365-prod approval",
+      "category": "Microsoft (M365 / Azure / Graph)",
+      "categoryCode": "MS"
+    },
+    {
+      "number": 304,
+      "title": "M365 - Enable DKIM (Exchange Online)",
+      "apis": [
+        "M365",
+        "CF"
+      ],
+      "file": "304-m365-dkim-enable.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-write",
+        "m365-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 m365-prod",
+      "guard": "\u2014",
+      "category": "Microsoft (M365 / Azure / Graph)",
+      "categoryCode": "MS"
+    },
+    {
+      "number": 305,
+      "title": "M365 - Add Tenant Domain (Admin)",
+      "apis": [
+        "M365"
+      ],
+      "file": "305-m365-add-tenant-domain.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "m365-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 m365-prod",
+      "guard": "`dry_run` (default true); also gated by m365-prod approval",
+      "category": "Microsoft (M365 / Azure / Graph)",
+      "categoryCode": "MS"
+    },
+    {
+      "number": 306,
+      "title": "Discover - Uncaptured Comms (M365, PII masked)",
+      "apis": [
+        "M365"
+      ],
+      "file": "306-discover-uncaptured-comms.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "m365-prod"
+      ],
+      "description": "Automated track of Gap B (#492): scan the ORG-OWNED Microsoft 365 shared mailboxes for charity inquiries, reconcile candidate domains against the sites-list (WHMCS reconciliation planned), and emit a PII-masked pipeline of leads not yet captured. The personal Google Voice source is excluded here \u2014 it is human-in-the-loop only (see docs/runbooks/google-voice-metrics.md). Dispatch-only.  Requires a Graph app registration with Mail.Read scoped to the listed mailboxes via an Exchange Online application access policy (so the tenant-wide Mail.Read grant only reads those mailboxes).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 m365-prod",
+      "guard": "PII masked; dispatch-only; org mailboxes only; waits on m365-prod approval",
+      "category": "Microsoft (M365 / Azure / Graph)",
+      "categoryCode": "MS"
+    },
+    {
+      "number": 401,
+      "title": "Zeffy - Campaigns Export",
+      "apis": [
+        "ZEFFY"
+      ],
+      "file": "401-zeffy-campaigns-export.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "zeffy-prod"
+      ],
+      "description": "Read-only export of Zeffy campaigns/events (GET /api/v1/campaigns) via OIDC -> Key Vault. This endpoint returns NO personal data (forms/events only: title, target, volume, dates, URLs), so the uploaded artifact is inherently safe to keep on this public repo. Dispatch-only (no schedule) while we are testing the API. One workflow per endpoint.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "zeffy-prod",
+      "guard": "PII masked; never `-IncludePii`",
+      "category": "Zeffy",
+      "categoryCode": "ZEFFY"
+    },
+    {
+      "number": 402,
+      "title": "Zeffy - Payments Export (PII masked)",
+      "apis": [
+        "ZEFFY"
+      ],
+      "file": "402-zeffy-payments-export.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "zeffy-prod"
+      ],
+      "description": "Read-only export of Zeffy payments (GET /api/v1/payments) via OIDC -> Key Vault. The payments payload carries donor PII (buyer email / name / company, receipt URL); this workflow runs the export WITHOUT -IncludePii, so those columns are written blank. The PII passes through the ephemeral runner only and is never persisted, so the uploaded artifact is safe to keep on this public repo. Dispatch-only (no schedule) while we are testing the API. One workflow per endpoint.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "zeffy-prod",
+      "guard": "PII masked; never `-IncludePii`",
+      "category": "Zeffy",
+      "categoryCode": "ZEFFY"
+    },
+    {
+      "number": 403,
+      "title": "Zeffy - Contacts Export (PII masked)",
+      "apis": [
+        "ZEFFY"
+      ],
+      "file": "403-zeffy-contacts-export.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "zeffy-prod"
+      ],
+      "description": "Read-only export of Zeffy contacts/donors (GET /api/v1/contacts) via OIDC -> Key Vault. The contacts endpoint is the donor directory and is PII end-to-end (email / name / phone / address); this workflow runs the export WITHOUT -IncludePii, so those columns are written blank and only the pseudonymous contact id (UUID), donor type, giving totals/counts/dates, currency, and country are kept. The PII passes through the ephemeral runner only and is never persisted, so the uploaded artifact is safe to keep on this public repo. Dispatch-only (no schedule). One workflow per endpoint.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "zeffy-prod",
+      "guard": "PII masked; never `-IncludePii`",
+      "category": "Zeffy",
+      "categoryCode": "ZEFFY"
+    },
+    {
+      "number": 501,
+      "title": "Google - API Smoke (GA4 connectivity)",
+      "apis": [
+        "GOOGLE"
+      ],
+      "file": "501-google-api-smoke.yml",
+      "triggers": [
+        "workflow_call",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-read"
+      ],
+      "description": "Proves the full OIDC -> Azure Key Vault -> Google chain end to end before any real reporting runs. Read-only: a 1-day activeUsers report. Fails closed if credentials are missing or the API errors. Reusable via workflow_call so reporting workflows can require it as a gate.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "google-prod-read",
+      "guard": "read-only; fails closed; reusable via `workflow_call`",
+      "category": "Google",
+      "categoryCode": "GOOGLE"
+    },
+    {
+      "number": 502,
+      "title": "Google - Analytics Report (GA4 -> JSON)",
+      "apis": [
+        "GOOGLE"
+      ],
+      "file": "502-google-analytics-report.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-read"
+      ],
+      "description": "Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe: aggregate metrics only. Requires the google-prod-read environment + the Wave 0 foundation.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "google-prod-read",
+      "guard": "delivers JSON to ffcadmin via PR (CBM_TOKEN); PII-safe aggregates",
+      "category": "Google",
+      "categoryCode": "GOOGLE"
+    },
+    {
+      "number": 503,
+      "title": "Google - GTM Provision (per-charity container)",
+      "apis": [
+        "GOOGLE"
+      ],
+      "file": "503-google-gtm-provision.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-write"
+      ],
+      "description": "Provision a per-charity GTM container: create it, seed GA4 + optional Clarity/Meta tags on All Pages, publish, and delegate Edit/Publish to the charity POC. Gated write: google-prod-write + dry_run defaults to true. See docs/google-api.md (GTM: one container per charity).  SETUP REQUIRED before first run: create the `google-prod-write` environment + a federated credential (repo:...:environment:google-prod-write) on ffc-admin-kv-writer, and set env secrets WR_ALL_FFC_AZURE_KV_CLIENT_ID / WR_ALL_FFC_AZURE_TENANT_ID (mirrors the google-prod-read setup).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 google-prod-write",
+      "guard": "dry_run default true; seeds GA4/Clarity/Meta; delegates POC access",
+      "category": "Google",
+      "categoryCode": "GOOGLE"
+    },
+    {
+      "number": 601,
+      "title": "WPMUDEV - Export Sites/Domains (Read-only)",
+      "apis": [
+        "WPMUDEV"
+      ],
+      "file": "601-wpmudev-export-sites.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "wpmudev-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 wpmudev-prod",
+      "guard": "waits on wpmudev-prod approval",
+      "category": "WPMUDEV",
+      "categoryCode": "WPMUDEV"
+    },
+    {
+      "number": 701,
+      "title": "Website - Provision (Issue Assigned)",
+      "apis": [
+        "CF",
+        "Repo"
+      ],
+      "file": "701-website-provision.yml",
+      "triggers": [
+        "issues"
+      ],
+      "environments": [
+        "cloudflare-prod-read",
+        "cloudflare-prod-write",
+        "github-prod"
+      ],
+      "description": "",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 github-prod",
+      "guard": "`repo` chained behind `dns` approval",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 702,
+      "title": "Domain - Deploy Static Clone to FFC-EX Repo",
+      "apis": [],
+      "file": "702-ffc-ex-clone-deploy.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Regenerates an FFC-EX site as a faithful static clone of the live WordPress site and opens a PR on the target FFC-EX repo. Pipeline (all proven locally): clone-site-static.mjs (httrack) -> integrate-clone-into-nextjs.mjs -> next build (output: 'export') so the Next.js app serves the exact clone. See docs/ffc-ex-static-clone-runbook.md.  Auth: uses CBM_TOKEN (cross-repo PAT, same secret create-repo.yml uses) to check out the FFC-EX repo and push a branch + open a PR there. Non-destructive: it never pushes to the FFC-EX default branch, only opens a PR for review.",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 github-prod",
+      "guard": "opens a draft PR (never pushes); serialized",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 703,
+      "title": "Sites List - Generate (CSV + JSON)",
+      "apis": [
+        "GH"
+      ],
+      "file": "703-sites-list-generate.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Generates the merged FFC sites list from the WHMCS / Cloudflare / WPMUDEV exports plus the curated base list, runs per-domain health checks, and commits both sites-list/sites_list.csv and sites-list/sites_list.json.  This repo owns the export environments (whmcs-prod, cloudflare-prod-read, wpmudev-prod) and the GitHub PAT (CBM_TOKEN in github-prod) needed to dispatch the sibling export workflows, so generation lives here. Downstream consumers (e.g. ffcadmin.org) pull the published files from this repo.",
+      "safetyLevel": "",
+      "approvalEnv": "",
+      "guard": "",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 720,
+      "title": "Repo - Create GitHub Repo",
+      "apis": [
+        "Repo"
+      ],
+      "file": "720-create-repo.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "",
+      "safetyLevel": "",
+      "approvalEnv": "",
+      "guard": "",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 721,
+      "title": "Repo - Deploy GitHub Pages",
+      "apis": [
+        "Repo"
+      ],
+      "file": "721-deploy-pages.yml",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "",
+      "safetyLevel": "",
+      "approvalEnv": "",
+      "guard": "",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 722,
+      "title": "Repo - CI Validate and Test",
+      "apis": [
+        "Repo"
+      ],
+      "file": "722-ci.yml",
+      "triggers": [
+        "merge_group",
+        "pull_request",
+        "push"
+      ],
+      "environments": [],
+      "description": "",
+      "safetyLevel": "",
+      "approvalEnv": "",
+      "guard": "",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 723,
+      "title": "Repo - CodeQL Security Analysis",
+      "apis": [
+        "Repo"
+      ],
+      "file": "723-codeql-analysis.yml",
+      "triggers": [
+        "merge_group",
+        "pull_request",
+        "push",
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "",
+      "safetyLevel": "",
+      "approvalEnv": "",
+      "guard": "",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 724,
+      "title": "Repo - Initialize Labels",
+      "apis": [
+        "Repo"
+      ],
+      "file": "724-initialize-labels.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "",
+      "safetyLevel": "",
+      "approvalEnv": "",
+      "guard": "",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 725,
+      "title": "Repo - Sync Labels",
+      "apis": [
+        "Repo"
+      ],
+      "file": "725-sync-labels.yml",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "",
+      "safetyLevel": "",
+      "approvalEnv": "",
+      "guard": "",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 726,
+      "title": "Repo - Rulesets + Settings Drift Audit",
+      "apis": [
+        "Org"
+      ],
+      "file": "726-repo-rulesets-drift-audit.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "report only",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 727,
+      "title": "Repo - Phantom Revert Guard",
+      "apis": [
+        "Repo"
+      ],
+      "file": "727-phantom-revert-guard.yml",
+      "triggers": [
+        "merge_group",
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Detects PRs that would silently revert work that landed on main while the PR was open. The classic failure mode (we hit it twice on 2026-05-03) is:  1. Branch B is forked from main at commit M0. 2. PR P1, P2, ... merge into main between M0 and now (HEAD = M_now). 3. Branch B is not updated; CI still passes because it tests B merged with M_now (the virtual merge commit), which is fine as a build -- but a subsequent squash- or rebase-merge of the stale branch writes B's old file tree, silently reverting everything P1, P2, ... added to files B never touched. 4. The PR's \"diff vs main\" shows those files as deleted/reverted.  This guard explicitly compares \"files modified on main since fork\" against \"files changed by this PR\" and fails when untouched-but-updated files fall in critical paths or the branch is sufficiently far behind.  Note: this guard reruns only when a new commit is pushed to the PR branch. If main advances while a PR is open and the PR author pushes nothing new, the guard will not automatically rerun. For full coverage, pair this guard with branch protection's \"Require branches to be up to date before merging\" rule, which forces a fresh CI pass after updating the branch. Manual reruns are supported via workflow_dispatch; supply head_sha and base_ref inputs to analyze a specific branch (defaults: HEAD of the dispatched ref, compared against the repository's default branch).",
+      "safetyLevel": "",
+      "approvalEnv": "",
+      "guard": "",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 728,
+      "title": "Repo - AI Agent Hooks Validate",
+      "apis": [
+        "Repo"
+      ],
+      "file": "728-ai-agent-hooks-validate.yml",
+      "triggers": [
+        "pull_request",
+        "push"
+      ],
+      "environments": [],
+      "description": "",
+      "safetyLevel": "",
+      "approvalEnv": "",
+      "guard": "",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 729,
+      "title": "Repo - Add Collaborator",
+      "apis": [
+        "Repo"
+      ],
+      "file": "729-repo-add-collaborator.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Reusable workflow that adds (or updates) one or more GitHub users as collaborators on a repository at a chosen permission level.  Two ways to use it: 1. Manually via the Actions tab (workflow_dispatch). 2. From another workflow via `uses:` (workflow_call) -- e.g. the website provisioning workflow (15) calls this instead of inlining the gh api PUT.  The privileged step runs with secrets.CBM_TOKEN (environment: github-prod), so callers do not need `actions: write` themselves -- they only need to be able to create/assign issues or dispatch this workflow.",
+      "safetyLevel": "Writes (**live default**)",
+      "approvalEnv": "\u2705 github-prod",
+      "guard": "\u26a0\ufe0f `dry_run` defaults to **false**",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 730,
+      "title": "Repo - Audit Environment Approval Gates",
+      "apis": [
+        "Repo"
+      ],
+      "file": "730-repo-audit-environment-gates.yml",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Read-only. Lists every GitHub Environment's required reviewers, wait timer, and deployment branch policy to the job summary (and the log). Answers \"which environments gate a deployment behind a human approval?\" \u2014 which the docs hedge on because environment protection rules can't be read from the agent sandbox proxy. Uses the built-in GITHUB_TOKEN (repo read is enough to read protection rules), so it needs no environment and no approval. Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "report only (environment reviewer config)",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    }
+  ]
+}

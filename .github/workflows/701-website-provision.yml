@@ -1160,6 +1160,7 @@ jobs:
             git diff --cached --quiet
             if ($LASTEXITCODE -ne 0) {
               git commit -m "chore: apply footer + leadership content" | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit $LASTEXITCODE)." }
               git push origin HEAD:main
               if ($LASTEXITCODE -ne 0) { throw "git push to origin main failed (exit $LASTEXITCODE)." }
             } else {

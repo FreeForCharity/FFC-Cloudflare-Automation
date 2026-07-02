@@ -30,9 +30,9 @@ A live change generally has to get past several of these, not just one:
    that no workflow currently uses). The environments with **no** reviewer — runs proceed without
    pausing — are **`cloudflare-prod-read`** and **`zeffy-prod`**. Because `whmcs-prod`, `m365-prod`,
    and `wpmudev-prod` are gated at the environment level, they gate **every** job that uses them —
-   including read-only exports and triage (e.g. the cross-source inventory 04, the M365
-   list/preflight reads 20–22, and the WPMUDEV export 40) — so even a read run waits for approval.
-   Re-run workflow 730 after any change in _Settings → Environments_ to refresh this list.
+   including read-only exports and triage (e.g. the cross-source inventory 104, the M365
+   list/preflight reads 301–303, and the WPMUDEV export 601) — so even a read run waits for
+   approval. Re-run workflow 730 after any change in _Settings → Environments_ to refresh this list.
 3. **`dry_run` defaults to preview.** The granular write workflows take a `dry_run` input that
    **defaults to `true`**. A dry run returns a preview (e.g. redacted JSON of what _would_ be sent)
    and performs **no** mutation. You must explicitly pass `dry_run=false` to go live.
@@ -40,8 +40,8 @@ A live change generally has to get past several of these, not just one:
    an exact value (e.g. domain registration needs `mode=execute-register` **and** `confirm_domain`
    to exactly match the domain).
 5. **Concurrency serialization.** The stateful workflows declare a `concurrency` group with
-   `cancel-in-progress: false` — **17** / **18** (bulk DNS), **19** (bulk cutover), **27**
-   (clone-deploy), and **33** (WHMCS → Zeffy import) — so a second dispatch **queues** behind the
+   `cancel-in-progress: false` — **112** / **119** (bulk DNS), **120** (bulk cutover), **702**
+   (clone-deploy), and **213** (WHMCS → Zeffy import) — so a second dispatch **queues** behind the
    first instead of racing it.
 
 ## Credential & data guarantees (always on)
@@ -136,10 +136,11 @@ the run pauses for approval, even if the action itself only reads.
    `existing`/`skipped`).
 4. **Dispatch with `dry_run=false`**, then **approve the environment gate** when the run pauses at
    `status: waiting` (a reviewer must approve `*-write` / `whmcs-prod` / `github-prod`).
-5. For **bulk DNS (17/18/19)**: cut over in the staging→apex order, and verify a single domain
+5. For **bulk DNS (112/119/120)**: cut over in the staging→apex order, and verify a single domain
    end-to-end before running the full list. All three are now serialized (a second dispatch queues
-   behind the first), but the **blast radius is large** — **17** rewrites A records across **all**
-   zones, and **18/19** default to the full ~13-domain FFC-EX list. Read the dry-run preview first.
+   behind the first), but the **blast radius is large** — **112** rewrites A records across **all**
+   zones, and **119/120** default to the full ~13-domain FFC-EX list. Read the dry-run preview
+   first.
 
 ## What is _not_ protected
 

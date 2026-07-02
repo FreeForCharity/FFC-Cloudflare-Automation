@@ -718,6 +718,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 215,
+      "title": "WHMCS - Nonprofit Clients Metrics (service evidence, no PII)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "215-whmcs-nonprofit-clients-metrics.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Revalidation of the client-count metrics: classifies clients by the products/services they hold (each service has its own registration date and status), instead of the historyless client status flag \u2014 and surfaces the product catalog so \"which clients are nonprofits\" is decided from data, not assumption. Output is aggregate counts + product/group names only (no client names, emails, ids, or domains). Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "aggregate counts + product names only (no PII)",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 - Domain Preflight (Read-only)",
       "apis": [

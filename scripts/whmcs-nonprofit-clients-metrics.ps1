@@ -87,6 +87,91 @@ function Get-YearFromDate {
     return $null
 }
 
+function ConvertFrom-WhmcsXml {
+    param([Parameter(Mandatory = $true)][string]$RawXml)
+
+    $clean = $RawXml -replace "[\x00-\x08\x0B\x0C\x0E-\x1F]", ''
+    try {
+        return [xml]$clean
+    }
+    catch {
+        $snippet = if ($clean.Length -gt 400) { $clean.Substring(0, 400) + '...' } else { $clean }
+        throw "Failed to parse WHMCS XML response. Snippet: $snippet"
+    }
+}
+
+function Invoke-WhmcsApiXml {
+    # XML variant of Invoke-WhmcsApi (prior art: whmcs-clients-export.ps1) —
+    # same host allowlist; used when WHMCS's JSON encoder rejects a record.
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiUrl,
+        [Parameter(Mandatory = $true)][hashtable]$Body
+    )
+
+    $allowedHosts = @('apim-ffc-gateway-prod.azure-api.net', 'freeforcharity.org')
+    $parsedUri = $null
+    if (-not [Uri]::TryCreate($ApiUrl, [UriKind]::Absolute, [ref]$parsedUri) -or $parsedUri.Scheme -ne 'https' -or $allowedHosts -notcontains $parsedUri.Host) {
+        throw "Refusing to send WHMCS credentials to '$ApiUrl': host is not in the allowlist ($($allowedHosts -join ', '))."
+    }
+
+    $headers = @{
+        'Accept'     = '*/*'
+        'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:WHMCS_APIM_SUBSCRIPTION_KEY)) {
+        $headers['Ocp-Apim-Subscription-Key'] = $env:WHMCS_APIM_SUBSCRIPTION_KEY
+    }
+
+    $resp = Invoke-RestMethod -Method Post -Uri $ApiUrl -Headers $headers -Body $Body -ContentType 'application/x-www-form-urlencoded' -ErrorAction Stop
+
+    if ($resp -is [xml]) {
+        $xml = $resp
+    }
+    elseif ($resp -is [string]) {
+        $xml = ConvertFrom-WhmcsXml -RawXml $resp
+    }
+    else {
+        $raw = $resp | Out-String
+        $xml = ConvertFrom-WhmcsXml -RawXml $raw
+    }
+
+    $root = $xml.whmcsapi
+    if (-not $root) {
+        throw 'WHMCS API returned XML but did not contain <whmcsapi> root.'
+    }
+    if ($root.result -ne 'success') {
+        $msg = $null
+        if ($root.message) { $msg = [string]$root.message }
+        elseif ($root.errormessage) { $msg = [string]$root.errormessage }
+        if ([string]::IsNullOrWhiteSpace($msg)) { $msg = 'Unknown WHMCS API error.' }
+        throw "WHMCS API error: $msg"
+    }
+    return $root
+}
+
+function Invoke-WhmcsGet {
+    # Try JSON first; WHMCS's JSON encoder fails outright when any record in
+    # the response contains malformed UTF-8 ("Error generating JSON encoded
+    # response"), so fall back to the XML responsetype, which tolerates it.
+    # PowerShell property access works the same on the parsed XML root, so
+    # callers are format-agnostic.
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiUrl,
+        [Parameter(Mandatory = $true)][hashtable]$Body
+    )
+    try {
+        return Invoke-WhmcsApi -ApiUrl $ApiUrl -Body $Body
+    }
+    catch {
+        if ("$($_.Exception.Message)" -notmatch 'Malformed UTF-8|JSON encoded response') { throw }
+        Write-Warning "WHMCS JSON encoding failed for action '$($Body.action)'; retrying as XML."
+    }
+    $xmlBody = @{}
+    foreach ($k in $Body.Keys) { $xmlBody[$k] = $Body[$k] }
+    $xmlBody.responsetype = 'xml'
+    return Invoke-WhmcsApiXml -ApiUrl $ApiUrl -Body $xmlBody
+}
+
 try {
     $api = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
     $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret -CredentialsJsonParam $CredentialsJson
@@ -106,7 +191,7 @@ try {
 
     # --- 1. Product catalog (pid -> gid/group/name) --------------------------
     $catalog = @{}
-    $rp = Invoke-WhmcsApi -ApiUrl $api -Body (New-Body 'GetProducts')
+    $rp = Invoke-WhmcsGet -ApiUrl $api -Body (New-Body 'GetProducts')
     foreach ($p in (Get-WhmcsListFromResponse -Response $rp -Container 'products' -Item 'product')) {
         if ($null -eq $p.pid) { continue }
         $catalog["$($p.pid)"] = @{
@@ -137,7 +222,7 @@ try {
         $b = New-Body 'GetClients'
         $b.limitstart = $start
         $b.limitnum = $PageSize
-        $r = Invoke-WhmcsApi -ApiUrl $api -Body $b
+        $r = Invoke-WhmcsGet -ApiUrl $api -Body $b
         $clients = Get-WhmcsListFromResponse -Response $r -Container 'clients' -Item 'client'
         if ($clients.Count -le 0) { break }
         foreach ($c in $clients) {
@@ -171,7 +256,7 @@ try {
         $b = New-Body 'GetClientsProducts'
         $b.limitstart = $start
         $b.limitnum = $PageSize
-        $r = Invoke-WhmcsApi -ApiUrl $api -Body $b
+        $r = Invoke-WhmcsGet -ApiUrl $api -Body $b
         $services = Get-WhmcsListFromResponse -Response $r -Container 'products' -Item 'product'
         if ($services.Count -le 0) { break }
         foreach ($s in $services) {

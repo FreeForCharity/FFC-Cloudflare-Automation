@@ -164,25 +164,31 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $result | ConvertTo-Json -Depth 6 | Out-File -FilePath $OutputFile -Encoding utf8
 
+    $statusLine = ($statusCounts.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Key) $($_.Value)" }) -join ' / '
+    $sum = @(
+        '## WHMCS clients metrics (aggregate, no PII)'
+        ''
+        "- Total clients: **$total** ($statusLine)"
+        "- Unparseable signup dates: $unparseableDates"
+        ''
+        '| Year | New clients | Cumulative by year-end | Currently-active cumulative |'
+        '| ---- | ----------- | ---------------------- | --------------------------- |'
+    )
+    foreach ($y in $yearMetrics.Keys) {
+        $m = $yearMetrics[$y]
+        $sum += "| $y | $($m.newClients) | $($m.cumulativeByYearEnd) | $($m.activeCumulativeByYearEnd) |"
+    }
+    $sum += ''
+    $sum += "_'Currently-active cumulative' uses today's status, so it is a floor for historical active-member counts._"
+
     if ($env:GITHUB_STEP_SUMMARY) {
-        $statusLine = ($statusCounts.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Key) $($_.Value)" }) -join ' / '
-        $sum = @(
-            '## WHMCS clients metrics (aggregate, no PII)'
-            ''
-            "- Total clients: **$total** ($statusLine)"
-            "- Unparseable signup dates: $unparseableDates"
-            ''
-            '| Year | New clients | Cumulative by year-end | Currently-active cumulative |'
-            '| ---- | ----------- | ---------------------- | --------------------------- |'
-        )
-        foreach ($y in $yearMetrics.Keys) {
-            $m = $yearMetrics[$y]
-            $sum += "| $y | $($m.newClients) | $($m.cumulativeByYearEnd) | $($m.activeCumulativeByYearEnd) |"
-        }
-        $sum += ''
-        $sum += "_'Currently-active cumulative' uses today's status, so it is a floor for historical active-member counts._"
         $sum -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
     }
+
+    # Echo the same aggregate-only table to the job log: step summaries are not
+    # reachable via the REST API, and this output contains no PII by construction,
+    # so the log is a safe machine-readable channel for the values.
+    $sum | ForEach-Object { Write-Host $_ }
 
     Write-Host ("Aggregated {0} clients into per-year metrics ({1}-{2}) -> {3}" -f $total, $firstYear, $currentYear, $OutputFile)
     exit 0

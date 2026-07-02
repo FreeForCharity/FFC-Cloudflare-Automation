@@ -100,5 +100,14 @@ foreach ($k in $verdict.Keys) {
 $script:CandidCharityCheckVerdict = $verdict
 if ($env:GITHUB_OUTPUT) {
     $flat = ($verdict.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join '; '
-    Add-Content -Path $env:GITHUB_OUTPUT -Value "verdict_line=$flat"
+    # The verdict is built from external API fields that can legally contain newlines, and
+    # GITHUB_OUTPUT is parsed line-by-line — write it heredoc-delimited (randomized delimiter,
+    # matching candid-keys-from-kv) so the value cannot inject or truncate outputs.
+    $delim = "ghadelim_$([guid]::NewGuid().ToString('N'))"
+    if ($flat -match [regex]::Escape($delim)) {
+        throw "Refusing to write 'verdict_line': value collides with the generated heredoc delimiter."
+    }
+    Add-Content -Path $env:GITHUB_OUTPUT -Value "verdict_line<<$delim"
+    Add-Content -Path $env:GITHUB_OUTPUT -Value $flat
+    Add-Content -Path $env:GITHUB_OUTPUT -Value $delim
 }

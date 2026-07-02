@@ -569,6 +569,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 212 | WHMCS - Product Add (catalog) [WHMCS] | `212-whmcs-product-add.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 213 | WHMCS -> Zeffy Payments Import (Draft) [WHMCS] | `213-whmcs-zeffy-payments-import-draft.yml` | workflow_dispatch | Reads (builds a file) | ✅ whmcs-prod |
 | 214 | WHMCS - Clients Metrics (aggregate, no PII) [WHMCS] | `214-whmcs-clients-metrics.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
+| 215 | WHMCS - Nonprofit Clients Metrics (service evidence, no PII) [WHMCS] | `215-whmcs-nonprofit-clients-metrics.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

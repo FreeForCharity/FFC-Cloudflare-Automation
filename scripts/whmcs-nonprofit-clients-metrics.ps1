@@ -123,7 +123,8 @@ try {
     $start = 0
     while ($true) {
         $b = New-Body 'GetClients'
-        $b.limitstart = $start; $b.limitnum = $PageSize
+        $b.limitstart = $start
+        $b.limitnum = $PageSize
         $r = Invoke-WhmcsApi -ApiUrl $api -Body $b
         $clients = Get-WhmcsListFromResponse -Response $r -Container 'clients' -Item 'client'
         if ($clients.Count -le 0) { break }
@@ -155,7 +156,8 @@ try {
     $start = 0
     while ($true) {
         $b = New-Body 'GetClientsProducts'
-        $b.limitstart = $start; $b.limitnum = $PageSize
+        $b.limitstart = $start
+        $b.limitnum = $PageSize
         $r = Invoke-WhmcsApi -ApiUrl $api -Body $b
         $services = Get-WhmcsListFromResponse -Response $r -Container 'products' -Item 'product'
         if ($services.Count -le 0) { break }
@@ -252,29 +254,29 @@ try {
             clientsWithActiveService = $gidActiveClients[$gid].Count
         }
         $groupSeries[$gid] = [ordered]@{
-            group   = $groupName
-            byYear  = New-YearSeries -FirstYearByClient $gidClientFirstYear[$gid]
+            group  = $groupName
+            byYear = New-YearSeries -FirstYearByClient $gidClientFirstYear[$gid]
         }
     }
 
     $overallSeries = New-YearSeries -FirstYearByClient $clientFirstSvcYear
 
     $result = [ordered]@{
-        generatedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-        definition  = [ordered]@{
+        generatedAt       = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        definition        = [ordered]@{
             classification = 'Clients are classified by the products/services they hold; per-year series use each client FIRST service registration year in the group (service-level evidence with its own date, not the client status flag)'
             note           = 'Which product groups count as "nonprofit services" is visible in the catalog tables; combine groups as appropriate rather than assuming all clients are nonprofits'
         }
-        totals      = [ordered]@{
+        totals            = [ordered]@{
             clients                  = $totalClients
             clientsWithAnyService    = $clientAnySvc.Count
             clientsWithNoService     = $totalClients - $clientAnySvc.Count
             clientsWithActiveService = $clientActiveSvc.Count
             services                 = $svcTotal
         }
-        products    = $productRows
-        groups      = $groupRows
-        seriesByGroup = $groupSeries
+        products          = $productRows
+        groups            = $groupRows
+        seriesByGroup     = $groupSeries
         seriesAllServices = $overallSeries
     }
 

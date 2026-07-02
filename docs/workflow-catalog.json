@@ -798,6 +798,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 220,
+      "title": "WHMCS - Served-Per-Year Metrics (span evidence, no PII)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "220-whmcs-served-metrics.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "\"216 v2\": FFC's services are free, so billing events undercount service delivery. This counts a member as SERVED in year Y when a charity service or registered domain was IN FORCE during Y (span from regdate to next-due/expiry; Active runs through today), emits org-level (domain-keyed) counts with current sites-list-only orgs merged in, keeps the old billing-active series for comparison, and shows invoice $0-vs-paid composition per year. Aggregate counts only. Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "aggregate counts only (no PII)",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 - Domain Preflight (Read-only)",
       "apis": [

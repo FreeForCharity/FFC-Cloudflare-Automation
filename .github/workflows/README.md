@@ -570,6 +570,9 @@ No additional setup is required for these workflows to run. However, to get the 
 | 213 | WHMCS -> Zeffy Payments Import (Draft) [WHMCS] | `213-whmcs-zeffy-payments-import-draft.yml` | workflow_dispatch | Reads (builds a file) | ✅ whmcs-prod |
 | 214 | WHMCS - Clients Metrics (aggregate, no PII) [WHMCS] | `214-whmcs-clients-metrics.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
 | 215 | WHMCS - Nonprofit Clients Metrics (service evidence, no PII) [WHMCS] | `215-whmcs-nonprofit-clients-metrics.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
+| 216 | WHMCS - Activity Metrics (full history, no PII) [WHMCS] | `216-whmcs-activity-metrics.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
+| 217 | WHMCS - Client Fields Survey (aggregate, no PII) [WHMCS] | `217-whmcs-client-fields-survey.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
+| 218 | WHMCS - Sites-List Reconciliation + Product Alignment [WHMCS] | `218-whmcs-siteslist-reconciliation.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

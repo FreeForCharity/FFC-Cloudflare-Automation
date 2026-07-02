@@ -615,5 +615,11 @@ No additional setup is required for these workflows to run. However, to get the 
 | 728 | Repo - AI Agent Hooks Validate [Repo] | `728-ai-agent-hooks-validate.yml` | pull_request, push | (repo plumbing) | — |
 | 729 | Repo - Add Collaborator [Repo] | `729-repo-add-collaborator.yml` | workflow_dispatch | Writes (**live default**) | ✅ github-prod |
 | 730 | Repo - Audit Environment Approval Gates [Repo] | `730-repo-audit-environment-gates.yml` | push, workflow_dispatch | Reads | — |
+### 8xx — Reserved
+
+| # | Workflow | File | Triggers | Safety | Approval env |
+| --- | --- | --- | --- | --- | --- |
+| 801 | Candid - Charity Check (EIN) [CANDID] | `801-candid-charity-check.yml` | workflow_dispatch | Reads | candid-prod-read |
+| 802 | Candid - Essentials Search [CANDID] | `802-candid-essentials-search.yml` | workflow_dispatch | Reads | candid-prod-read |
 
 <!-- catalog:end -->

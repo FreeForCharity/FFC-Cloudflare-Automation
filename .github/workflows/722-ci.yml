@@ -74,6 +74,14 @@ jobs:
           # with the actual workflow set (coverage + no stale rows).
           python3 scripts/check-workflow-doc-consistency.py
 
+      - name: Validate workflow catalog is regenerated
+        shell: bash
+        run: |
+          # docs/workflow-catalog.json + the README catalog section are generated
+          # from the workflow files; fail if a workflow change wasn't accompanied
+          # by a regeneration (python3 scripts/generate-workflow-catalog.py).
+          python3 scripts/generate-workflow-catalog.py --check
+
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v6
         with:

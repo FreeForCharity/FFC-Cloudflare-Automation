@@ -67,6 +67,12 @@ function Get-Field {
     return ''
 }
 
+# Explicit array + filter so a missing city or state never leaves stray punctuation.
+$cityStateParts = @(
+    (Get-Field $data @('city'))
+    (Get-Field $data @('state', 'state_name'))
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
 $verdict = [ordered]@{
     'Organization'      = Get-Field $data @('organization_name', 'org_name', 'name')
     'EIN'               = if ((Get-Field $data @('ein'))) { Get-Field $data @('ein') } else { $einNorm }
@@ -80,7 +86,7 @@ $verdict = [ordered]@{
     'OFAC status'       = Get-Field $data @('ofac_status')
     'Revocation code'   = Get-Field $data @('revocation_code')
     'Revocation date'   = Get-Field $data @('revocation_date')
-    'City / State'      = ((Get-Field $data @('city')), (Get-Field $data @('state', 'state_name')) | Where-Object { $_ }) -join ', '
+    'City / State'      = $cityStateParts -join ', '
 }
 
 Write-Host ''

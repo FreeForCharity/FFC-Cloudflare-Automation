@@ -60,7 +60,14 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          & pwsh -NoProfile -File .\scripts\candid-charity-check.ps1 -Ein $env:INPUT_EIN -OutputFile $env:INPUT_OUTPUT_FILE
+          # The output path is uploaded as an artifact, so keep it inside the workspace: no
+          # absolute/rooted paths and no '..' traversal (which could exfiltrate runner files).
+          $out = $env:INPUT_OUTPUT_FILE
+          if ([string]::IsNullOrWhiteSpace($out) -or $out.Contains(':') -or [System.IO.Path]::IsPathRooted($out) -or (($out -split '[\\/]') -contains '..')) {
+            throw "Invalid output_file '$out': must be a relative path inside the workspace without '..'."
+          }
+
+          & pwsh -NoProfile -File .\scripts\candid-charity-check.ps1 -Ein $env:INPUT_EIN -OutputFile $out
 
           if ($LASTEXITCODE -ne 0) {
             throw "Charity Check script failed with exit code $LASTEXITCODE. See logs above."

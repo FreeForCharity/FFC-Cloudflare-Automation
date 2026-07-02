@@ -698,6 +698,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 214,
+      "title": "WHMCS - Clients Metrics (aggregate, no PII)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "214-whmcs-clients-metrics.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Per-year WHMCS client-membership aggregates (new signups, cumulative members, currently-active cumulative) for the Candid Platinum \"active members\" metric series and the freeforcharity.org impact metrics. Reads GetClients but tallies only {datecreated, status} \u2014 the artifact and step summary contain aggregate integer counts only (no names, emails, or client ids). Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "aggregate counts only \u2014 no PII in artifact or summary",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 - Domain Preflight (Read-only)",
       "apis": [

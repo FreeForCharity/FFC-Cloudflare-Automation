@@ -1,0 +1,67 @@
+name: '214. WHMCS - Clients Metrics (aggregate, no PII) [WHMCS]'
+run-name: 'WHMCS Clients Metrics (aggregate)'
+
+# Per-year WHMCS client-membership aggregates (new signups, cumulative members,
+# currently-active cumulative) for the Candid Platinum "active members" metric
+# series and the freeforcharity.org impact metrics. Reads GetClients but tallies
+# only {datecreated, status} — the artifact and step summary contain aggregate
+# integer counts only (no names, emails, or client ids). Dispatch-only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description:
+          'WHMCS API endpoint (e.g., https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php)'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+      output_file:
+        description: 'Output JSON filename'
+        required: false
+        type: string
+        default: 'artifacts/whmcs/whmcs_clients_metrics.json'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  clients_metrics:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Aggregate client metrics (read-only, no PII)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "${{ inputs.output_file }}"
+
+          & pwsh -NoProfile -File .\scripts\whmcs-clients-metrics.ps1 -ApiUrl $env:WHMCS_API_URL -OutputFile $out
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "WHMCS clients metrics script failed with exit code $LASTEXITCODE. See logs above."
+          }
+
+          if (-not (Test-Path $out)) {
+            throw "Expected output file not found: $out"
+          }
+
+      - name: Upload metrics artifact (aggregate only)
+        uses: actions/upload-artifact@v6
+        with:
+          name: whmcs_clients_metrics
+          path: ${{ inputs.output_file }}
+          if-no-files-found: error
+          retention-days: 30

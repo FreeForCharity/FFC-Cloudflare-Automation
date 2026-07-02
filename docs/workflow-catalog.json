@@ -738,6 +738,66 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 216,
+      "title": "WHMCS - Activity Metrics (full history, no PII)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "216-whmcs-activity-metrics.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Phase 1 of docs/whmcs-data-quality-and-metrics-plan.md: per-year ACTIVE nonprofit members from dated evidence (invoices, orders, service registrations) spanning the full 10+ years \u2014 the series status flags cannot provide. Aggregate integer counts only. Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "aggregate counts only (no PII)",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 217,
+      "title": "WHMCS - Client Fields Survey (aggregate, no PII)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "217-whmcs-client-fields-survey.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Phase 1 of docs/whmcs-data-quality-and-metrics-plan.md: throttled per-client GetClientsDetails loop measuring how the three classification signals line up \u2014 the Legal Organization Status custom field, the native client group, and charity-product evidence. Only exact legal-status vocabulary matches are counted; free-text values are never printed. Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "throttled per-client loop; vocabulary-matched values only (no PII)",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 218,
+      "title": "WHMCS - Sites-List Reconciliation + Product Alignment",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "218-whmcs-siteslist-reconciliation.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Phase 1 of docs/whmcs-data-quality-and-metrics-plan.md: joins the sites-list (WHMCS + Cloudflare + WPMUDEV + health) with live WHMCS domains/services to measure (a) the coverage gap (legacy-WP orgs with no WHMCS record) and (b) the product-alignment gap \u2014 Cloudflare domains whose client lacks the 'Domain Registered in Cloudflare' product (pid 39) and GitHub Pages sites whose client lacks 'Hosted by GitHub Pages' (pid 40). Summary is aggregate counts; the artifact carries the gap domain lists (org domains, public project data) as the Phase 2 backfill work-list. Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "aggregate summary; artifact carries org-domain gap lists only",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 - Domain Preflight (Read-only)",
       "apis": [

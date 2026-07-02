@@ -92,20 +92,26 @@ methodology honestly, and keeps working as years accumulate.
 5. **Client-group backfill**: auto-assign groups 1–6 from evidence (products held + legal-status
    field + For-Profit product lines); dry-run report first, operator approves, then live. Fixes G1
    so the native classification becomes trustworthy.
-6. **Onboarding enforcement**: the charity-onboard workflow (204) sets client group at creation; a
+6. **Product-alignment backfill (G10)**: the catalog products that represent current reality — pid
+   39 "Domain Registered in Cloudflare" and pid 40 "Hosted by GitHub Pages" — showed **zero
+   services** in run 215, while the sites-list shows the Cloudflare/GitHub-Pages estate they should
+   describe. Workflow 218 measures the exact gap; the backfill orders those products onto the
+   matching clients (dry-run first), after which WHMCS product counts mirror infrastructure truth
+   and every future metric can be read straight from product holdings.
+7. **Onboarding enforcement**: the charity-onboard workflow (204) sets client group at creation; a
    periodic audit flags unclassified clients (same pattern as the existing enforce-standard
    workflows) so G1 never regresses.
-7. **Disposition the no-service clients** (G3) and **fix encoding-corrupt records** (G5, manual in
+8. **Disposition the no-service clients** (G3) and **fix encoding-corrupt records** (G5, manual in
    admin, count verified by re-run).
 
 ### Phase 3 — Canonical, maintained metrics
 
-8. **219 — Candid Metrics (canonical)**: one workflow emitting the full-duration per-year series
+9. **219 — Candid Metrics (canonical)**: one workflow emitting the full-duration per-year series
    from the cleaned data, scheduled (e.g. monthly) + dispatchable, delivering the JSON to the
    freeforcharity.org repo via PR (the `sites-list-generate` pattern) so `whmcs-members.json`, the
    site, and the Candid paste sheet refresh from one pipeline with zero manual reads.
-9. **Definitions locked in the paste sheet**: each Candid metric carries its definition +
-   methodology string; year values only ever come from the canonical workflow.
+10. **Definitions locked in the paste sheet**: each Candid metric carries its definition +
+    methodology string; year values only ever come from the canonical workflow.
 
 ### Sequencing note
 

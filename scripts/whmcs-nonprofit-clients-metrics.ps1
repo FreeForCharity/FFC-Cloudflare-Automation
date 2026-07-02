@@ -117,9 +117,21 @@ try {
     }
     if ($catalog.Count -le 0) { throw 'GetProducts returned no products.' }
 
-    # --- 2. Clients (signup year + current status, tallies only) -------------
+    # --- 2. Clients (signup year + current status + client group) ------------
+    # WHMCS client groups are the org's NATIVE nonprofit classification (names
+    # from the admin UI; GetClients returns only the numeric groupid).
+    $groupNames = @{
+        '1' = 'For Profit Organization'
+        '2' = 'Pre 501c3 General Organization'
+        '3' = 'Pre 501c3 Shelter Water Hunger Organization'
+        '4' = '501c3 General Organization'
+        '5' = '501c3 Shelter Water Hunger Organization'
+        '6' = 'Unknown'
+        '0' = '(no group assigned)'
+    }
     $clientCreatedYear = @{}
     $clientStatus = @{}
+    $clientGroupId = @{}
     $start = 0
     while ($true) {
         $b = New-Body 'GetClients'
@@ -132,6 +144,7 @@ try {
             $cid = "$($c.id)"
             $clientCreatedYear[$cid] = Get-YearFromDate ([string]$c.datecreated)
             $clientStatus[$cid] = if ([string]::IsNullOrWhiteSpace([string]$c.status)) { 'Unknown' } else { [string]$c.status }
+            $clientGroupId[$cid] = if ([string]::IsNullOrWhiteSpace([string]$c.groupid)) { '0' } else { "$($c.groupid)" }
         }
         $start += $clients.Count
         $total = 0
@@ -261,23 +274,67 @@ try {
 
     $overallSeries = New-YearSeries -FirstYearByClient $clientFirstSvcYear
 
-    $result = [ordered]@{
-        generatedAt       = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-        definition        = [ordered]@{
-            classification = 'Clients are classified by the products/services they hold; per-year series use each client FIRST service registration year in the group (service-level evidence with its own date, not the client status flag)'
-            note           = 'Which product groups count as "nonprofit services" is visible in the catalog tables; combine groups as appropriate rather than assuming all clients are nonprofits'
+    # Client-group aggregation — the org's native nonprofit classification
+    # (For Profit / Pre-501c3 / 501c3 / Unknown), tallied by current status,
+    # Active-service evidence, and signup year.
+    $cgStatus = @{}
+    $cgActiveSvc = @{}
+    $cgSignupYear = @{}
+    foreach ($cid in $clientGroupId.Keys) {
+        $g = $clientGroupId[$cid]
+        if (-not $cgStatus.ContainsKey($g)) {
+            $cgStatus[$g] = @{}
+            $cgActiveSvc[$g] = 0
+            $cgSignupYear[$g] = @{}
         }
-        totals            = [ordered]@{
+        $st = $clientStatus[$cid]
+        if (-not $cgStatus[$g].ContainsKey($st)) { $cgStatus[$g][$st] = 0 }
+        $cgStatus[$g][$st]++
+        if ($clientActiveSvc.Contains($cid)) { $cgActiveSvc[$g]++ }
+        $y = $clientCreatedYear[$cid]
+        if ($null -ne $y) { $cgSignupYear[$g][$cid] = $y }
+    }
+
+    $clientGroupRows = @()
+    $clientGroupSeries = [ordered]@{}
+    foreach ($g in ($cgStatus.Keys | Sort-Object)) {
+        $gname = if ($groupNames.ContainsKey($g)) { $groupNames[$g] } else { "group-$g" }
+        $active = 0
+        if ($cgStatus[$g].ContainsKey('Active')) { $active = [int]$cgStatus[$g]['Active'] }
+        $cgTotal = 0
+        foreach ($v in $cgStatus[$g].Values) { $cgTotal += [int]$v }
+        $clientGroupRows += [ordered]@{
+            groupId                  = $g
+            group                    = $gname
+            clients                  = $cgTotal
+            activeStatus             = $active
+            clientsWithActiveService = $cgActiveSvc[$g]
+        }
+        $clientGroupSeries[$g] = [ordered]@{
+            group  = $gname
+            byYear = New-YearSeries -FirstYearByClient $cgSignupYear[$g]
+        }
+    }
+
+    $result = [ordered]@{
+        generatedAt         = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        definition          = [ordered]@{
+            classification = 'Clients are classified two ways: by their WHMCS client group (the native For Profit / Pre-501c3 / 501c3 / Unknown classification) and by the products/services they hold (service-level evidence with its own registration date, not the historyless client status flag)'
+            note           = 'Nonprofit clients = client groups 2-5 (Pre-501c3 + 501c3); the product-group tables show the same population from the service side'
+        }
+        totals              = [ordered]@{
             clients                  = $totalClients
             clientsWithAnyService    = $clientAnySvc.Count
             clientsWithNoService     = $totalClients - $clientAnySvc.Count
             clientsWithActiveService = $clientActiveSvc.Count
             services                 = $svcTotal
         }
-        products          = $productRows
-        groups            = $groupRows
-        seriesByGroup     = $groupSeries
-        seriesAllServices = $overallSeries
+        clientGroups        = $clientGroupRows
+        seriesByClientGroup = $clientGroupSeries
+        products            = $productRows
+        groups              = $groupRows
+        seriesByGroup       = $groupSeries
+        seriesAllServices   = $overallSeries
     }
 
     $dir = Split-Path -Parent $OutputFile
@@ -290,6 +347,30 @@ try {
         ''
         "- Clients: **$totalClients** total; $($clientAnySvc.Count) with >=1 service; $($totalClients - $clientAnySvc.Count) with none; $($clientActiveSvc.Count) with an Active service"
         "- Services: $svcTotal"
+        ''
+        '### Client groups (native nonprofit classification)'
+        ''
+        '| Group id | Group | Clients | Active status | With Active service |'
+        '| -------- | ----- | ------- | ------------- | ------------------- |'
+    )
+    foreach ($row in $clientGroupRows) {
+        $lines += "| $($row.groupId) | $($row.group) | $($row.clients) | $($row.activeStatus) | $($row.clientsWithActiveService) |"
+    }
+    $lines += ''
+    $lines += '### Per-year new clients by signup year, per client group'
+    foreach ($g in $clientGroupSeries.Keys) {
+        $cgs = $clientGroupSeries[$g]
+        $lines += ''
+        $lines += "#### Client group $g — $($cgs.group)"
+        $lines += ''
+        $lines += '| Year | New clients | Cumulative |'
+        $lines += '| ---- | ----------- | ---------- |'
+        foreach ($y in $cgs.byYear.Keys) {
+            $m = $cgs.byYear[$y]
+            $lines += "| $y | $($m.newClients) | $($m.cumulativeClients) |"
+        }
+    }
+    $lines += @(
         ''
         '### Product catalog reach'
         ''

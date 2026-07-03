@@ -117,17 +117,27 @@ jobs:
           git config --global user.email 'automation@freeforcharity.org'
           git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/FreeForCharity/FFC-IN-ffcadmin.org.git" target
           cd target
-          git checkout -B chore/ga-data-sync
+          # True idempotency: base on the existing sync branch when it exists, so a re-run
+          # with identical content produces no new commit and no PR churn.
+          if git fetch origin chore/ga-data-sync --depth 1 2>/dev/null; then
+            git checkout -B chore/ga-data-sync origin/chore/ga-data-sync
+          else
+            git checkout -B chore/ga-data-sync
+          fi
           mkdir -p public/data/google-analytics src/data public/data
           cp ../ga-out/*.json public/data/google-analytics/
           cp ../docs/workflow-catalog.json src/data/workflow-catalog.json
           cp ../docs/workflow-catalog.json public/data/workflow-catalog.json
           git add public/data src/data/workflow-catalog.json
-          if git diff --cached --quiet; then echo 'No data changes; skipping PR.'; exit 0; fi
+          if git diff --cached --quiet; then echo 'No data changes vs the sync branch; skipping.'; exit 0; fi
           git commit -m "chore(data): daily sync — GA metrics + time-series + workflow catalog ($(date -u +%F))"
-          git push -f origin chore/ga-data-sync
+          git push origin chore/ga-data-sync
           if ! gh pr view chore/ga-data-sync --repo FreeForCharity/FFC-IN-ffcadmin.org >/dev/null 2>&1; then
             gh pr create --repo FreeForCharity/FFC-IN-ffcadmin.org --base main --head chore/ga-data-sync \
               --title 'chore(data): daily data sync (GA + workflow catalog)' \
               --body 'Automated daily sync from FFC-Cloudflare-Automation (502): GA4 aggregate metrics + time-series for the primary sites, and the generated workflow catalog for /automation + the stable /data URL. PII-safe aggregates only.'
           fi
+          # Best-effort auto-merge so the daily PR lands once ffcadmin checks pass
+          # (no-op when auto-merge is unavailable on the repo).
+          gh pr merge chore/ga-data-sync --repo FreeForCharity/FFC-IN-ffcadmin.org --merge --auto \
+            || echo 'auto-merge unavailable; PR awaits manual merge'

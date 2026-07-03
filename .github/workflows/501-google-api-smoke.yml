@@ -84,7 +84,10 @@ jobs:
   # GSC connectivity probe (Wave 2): DWD-impersonated read of the Search Console site list.
   # Proves scope + API enablement (searchconsole.googleapis.com enabled on ffc-api-prod
   # 2026-07-03). Read-only; uses the read-all workspace SA key, never printed.
+  # Dispatch-only: callers reusing this workflow as a GA gate (e.g. 502) must not start
+  # depending on Search Console connectivity.
   gsc-smoke:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     environment: google-prod-read
     steps:
@@ -101,22 +104,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          . "$env:GITHUB_WORKSPACE/scripts/google-api-common.ps1"
           $keyFile = Join-Path $env:RUNNER_TEMP 'ws-sa.json'
           az keyvault secret download --vault-name kv-ffc-admin-prod-cbm --name read-all-cbm-google-workspace-service-account-key --file $keyFile
           if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch the Workspace SA key from Key Vault.' }
           try {
-            $key = Get-Content $keyFile -Raw | ConvertFrom-Json
-            function ConvertTo-B64Url([byte[]]$b) { [Convert]::ToBase64String($b).TrimEnd('=').Replace('+', '-').Replace('/', '_') }
-            $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-            $h = @{ alg = 'RS256'; typ = 'JWT'; kid = $key.private_key_id }
-            $c = @{ iss = $key.client_email; sub = 'clarkemoyer@freeforcharity.org'; scope = 'https://www.googleapis.com/auth/webmasters.readonly'; aud = $key.token_uri; iat = $now; exp = $now + 3600 }
-            $si = "$(ConvertTo-B64Url ([Text.Encoding]::UTF8.GetBytes(($h|ConvertTo-Json -Compress)))).$(ConvertTo-B64Url ([Text.Encoding]::UTF8.GetBytes(($c|ConvertTo-Json -Compress))))"
-            $rsa = [System.Security.Cryptography.RSA]::Create()
-            try { $rsa.ImportFromPem($key.private_key); $sig = $rsa.SignData([Text.Encoding]::ASCII.GetBytes($si), [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1) } finally { $rsa.Dispose() }
-            $tok = (Invoke-RestMethod -Method Post -Uri $key.token_uri -ContentType 'application/x-www-form-urlencoded' -Body @{ grant_type = 'urn:ietf:params:oauth:grant-type:jwt-bearer'; assertion = "$si.$(ConvertTo-B64Url $sig)" }).access_token
-            Write-Host "::add-mask::$tok"
-            $sites = Invoke-RestMethod -Uri 'https://searchconsole.googleapis.com/webmasters/v3/sites' -Headers @{ Authorization = "Bearer $tok" }
-            $count = @($sites.siteEntry).Count
+            $tok = Get-GoogleDwdAccessToken -Subject 'clarkemoyer@freeforcharity.org' -Scope 'https://www.googleapis.com/auth/webmasters.readonly' -CredentialsPath $keyFile
+            $sites = Invoke-GoogleApi -Uri 'https://searchconsole.googleapis.com/webmasters/v3/sites' -AccessToken $tok
+            # Defensive: siteEntry is absent when the list is empty, and @($null).Count is 1.
+            $entries = if (($sites.PSObject.Properties.Name -contains 'siteEntry') -and $sites.siteEntry) { @($sites.siteEntry) } else { @() }
+            $count = $entries.Count
             Write-Host "GSC OK properties=$count"
             "## GSC Smoke`n`n- Properties visible: **$count**`n- Status: PASS" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           } finally {

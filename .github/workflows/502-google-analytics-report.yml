@@ -97,13 +97,18 @@ jobs:
     needs: report
     runs-on: ubuntu-latest
     steps:
+      # Checkout gives the deliver job the current workflow catalog so the public
+      # copies on ffcadmin (src/data render + /data stable URL) refresh in the
+      # same daily PR as the GA data — one reviewable sync pipe (backlog #554).
+      - uses: actions/checkout@v5
+
       - name: Download reports
         uses: actions/download-artifact@v7
         with:
           name: ga-reports
           path: ga-out
 
-      - name: Open/update PR into FFC-IN-ffcadmin.org
+      - name: Open/update daily data-sync PR into FFC-IN-ffcadmin.org
         env:
           GH_TOKEN: ${{ secrets.CBM_TOKEN }}
         run: |
@@ -113,14 +118,16 @@ jobs:
           git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/FreeForCharity/FFC-IN-ffcadmin.org.git" target
           cd target
           git checkout -B chore/ga-data-sync
-          mkdir -p public/data/google-analytics
+          mkdir -p public/data/google-analytics src/data public/data
           cp ../ga-out/*.json public/data/google-analytics/
-          git add public/data/google-analytics
-          if git diff --cached --quiet; then echo 'No GA data changes; skipping PR.'; exit 0; fi
-          git commit -m "chore(analytics): refresh GA data ($(date -u +%F))"
+          cp ../docs/workflow-catalog.json src/data/workflow-catalog.json
+          cp ../docs/workflow-catalog.json public/data/workflow-catalog.json
+          git add public/data src/data/workflow-catalog.json
+          if git diff --cached --quiet; then echo 'No data changes; skipping PR.'; exit 0; fi
+          git commit -m "chore(data): daily sync — GA metrics + time-series + workflow catalog ($(date -u +%F))"
           git push -f origin chore/ga-data-sync
           if ! gh pr view chore/ga-data-sync --repo FreeForCharity/FFC-IN-ffcadmin.org >/dev/null 2>&1; then
             gh pr create --repo FreeForCharity/FFC-IN-ffcadmin.org --base main --head chore/ga-data-sync \
-              --title 'chore(analytics): refresh GA data' \
-              --body 'Automated GA4 aggregate metrics for freeforcharity.org + ffcadmin.org (source: 49. Google - Analytics Report). PII-safe aggregates only.'
+              --title 'chore(data): daily data sync (GA + workflow catalog)' \
+              --body 'Automated daily sync from FFC-Cloudflare-Automation (502): GA4 aggregate metrics + time-series for the primary sites, and the generated workflow catalog for /automation + the stable /data URL. PII-safe aggregates only.'
           fi

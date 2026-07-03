@@ -1,5 +1,24 @@
 # Repo notes for Claude
 
+> Agent-generic onboarding (catalog, numbering, safety model, add-a-workflow checklist) lives in
+> **AGENTS.md** — read that first. This file covers Claude-specific environment notes.
+
+## Merging: queue etiquette (validated 2026-07-01, PRs #534–#538)
+
+- `main` requires **Validate Repository** + **Phantom Revert Guard** (strict) and merges via the
+  **merge queue**, which builds a merge group and re-runs those checks (722/723 have `merge_group:`
+  triggers; 727 skips on merge groups = passing).
+- **Resolve review threads before queueing.** Copilot auto-reviews every PR; fix the real findings
+  first, then
+  `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"<id>"}){thread{isResolved}}}'`.
+  List threads: query `pullRequest(number:N){reviewThreads(first:20){nodes{id isResolved …}}}`.
+- **`gh pr merge --auto` can mask the real blocker** behind a GraphQL "rate limit" error. Use the
+  direct mutation to see the truth (unresolved conversation / CodeQL pending):
+  `gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:"<node_id>"}){mergeQueueEntry{position state}}}'`
+- GraphQL and REST have **separate rate pools** (5,000/hr each, shared account-wide). When GraphQL
+  is exhausted, reads still work via REST; check with `gh api rate_limit`.
+- Never `--admin`-merge; never push to `main` directly.
+
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 
 In a self-hosted/local remote environment the `gh` CLI is typically pre-authenticated — run

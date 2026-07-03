@@ -59,6 +59,20 @@ Azure Key Vault via OIDC (never GitHub secrets).
 5. Write workflows: `dry_run` input defaulting to `true`, a `concurrency` group
    (`cancel-in-progress: false`), and an approval-gated environment.
 
+## GitHub API rate budget (shared — be frugal)
+
+Every agent session, scheduled task, and PAT-based workflow authenticates as the same user and
+shares **one 5,000/hr GraphQL pool and one 5,000/hr REST pool** (separate reset anchors). Concurrent
+sessions polling with GraphQL-backed commands have exhausted the pool for hours.
+
+- **Poll with REST only**: `gh api repos/OWNER/REPO/pulls/N`, `.../commits/SHA/check-runs`,
+  `.../actions/runs/ID`. The `gh pr ...` / `gh issue ...` verbs are **GraphQL** — never put them in
+  a loop.
+- One consolidated watcher per concern, interval ≥ 60s, bounded iterations.
+- GraphQL is for the few mutations that need it (`enqueuePullRequest`, `resolveReviewThread`) —
+  single-shot; on `RATE_LIMIT`, read `gh api rate_limit` and wait for the reset instead of retrying.
+- Create/close issues and comments via REST (`gh api .../issues --method POST`).
+
 ## Dispatch / watch / approve recipes
 
 ```bash

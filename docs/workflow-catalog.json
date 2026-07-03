@@ -942,6 +942,27 @@
       "categoryCode": "MS"
     },
     {
+      "number": 320,
+      "title": "Azure - Key Vault Secret Inventory (audit)",
+      "apis": [
+        "MS"
+      ],
+      "file": "320-azure-kv-secret-inventory.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-read"
+      ],
+      "description": "Read-only audit of kv-ffc-admin-prod-cbm: lists every secret's name, updated date, and whether it still holds the scaffolding placeholder. Secret VALUES are never printed \u2014 only booleans/lengths derived in-process. Flags stale (>12 months) and placeholder secrets so scaffolding gaps (like the 6-week placeholder Google set) surface quickly. Runs on the google-prod-read environment because it federates the same ffc-admin-kv-reader identity; a dedicated azure-prod-read environment would need a new federated credential.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "google-prod-read (reader identity)",
+      "guard": "values never printed; placeholder/stale flags only",
+      "category": "Microsoft (M365 / Azure / Graph)",
+      "categoryCode": "MS"
+    },
+    {
       "number": 401,
       "title": "Zeffy - Campaigns Export",
       "apis": [
@@ -1060,6 +1081,27 @@
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 google-prod-write",
       "guard": "dry_run default true; seeds GA4/Clarity/Meta; delegates POC access",
+      "category": "Google",
+      "categoryCode": "GOOGLE"
+    },
+    {
+      "number": 504,
+      "title": "Google - GTM Container Backups (weekly export)",
+      "apis": [
+        "GOOGLE"
+      ],
+      "file": "504-google-gtm-backup.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-read"
+      ],
+      "description": "Weekly disaster-recovery export: the LIVE version of every FFC GTM container as JSON artifacts (90d retention). Read-only Tag Manager calls via DWD; charity self-service editing (container-per-charity model) makes restore points essential.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "google-prod-read",
+      "guard": "read-only exports; live-version JSON artifacts (90d)",
       "category": "Google",
       "categoryCode": "GOOGLE"
     },
@@ -1359,6 +1401,62 @@
       "safetyLevel": "Reads",
       "approvalEnv": "\u2014",
       "guard": "report only (environment reviewer config)",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 731,
+      "title": "Repo - Actions Run Metrics (30d per-workflow stats)",
+      "apis": [
+        "GH"
+      ],
+      "file": "731-actions-run-metrics.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Aggregates the last 30 days of Actions runs into per-workflow stats (runs, success rate, avg duration) as a JSON artifact \u2014 feeds the ffcadmin automation-metrics dashboard. Read-only against the GitHub API using the ambient GITHUB_TOKEN; no environment gate.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "GITHUB_TOKEN read-only; JSON artifact",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 732,
+      "title": "Repo - Google Workflow Failure Alert (rolling issue)",
+      "apis": [
+        "GH"
+      ],
+      "file": "732-google-workflow-failure-alert.yml",
+      "triggers": [
+        "workflow_run"
+      ],
+      "environments": [],
+      "description": "Watches the Google reporting workflows (501 smoke, 502 analytics report). On failure it upserts ONE rolling alert issue; on the next success it closes that issue. Prevents a silently-stale nightly report. GitHub API only (issues), no environment gate.",
+      "safetyLevel": "Writes (issues only)",
+      "approvalEnv": "\u2014",
+      "guard": "rolling issue upsert/close; no external API",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 733,
+      "title": "Repo - Credential Rotation Reminders (quarterly)",
+      "apis": [
+        "GH"
+      ],
+      "file": "733-credential-rotation-reminders.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Opens (or refreshes) one rotation-reminder issue per credential family each quarter, each embedding its runbook link. GitHub issues only; the rotations themselves stay human/gated.",
+      "safetyLevel": "Writes (issues only)",
+      "approvalEnv": "\u2014",
+      "guard": "quarterly reminder issues; rotations stay human/gated",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     }

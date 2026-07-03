@@ -120,12 +120,17 @@ the run pauses for approval, even if the action itself only reads.
 | 220     | WHMCS - Served-Per-Year Metrics (span)    | Reads                     | ✅ whmcs-prod                                              | aggregate counts only (no PII)                                                      |
 | 401–403 | Zeffy - Exports (campaigns/pmts/contacts) | Reads                     | zeffy-prod                                                 | PII masked; never `-IncludePii`                                                     |
 | 306     | Discover - Uncaptured Comms (M365)        | Reads                     | ✅ m365-prod                                               | PII masked; dispatch-only; org mailboxes only; waits on m365-prod approval          |
+| 320     | Azure - KV Secret Inventory (audit)       | Reads                     | google-prod-read (reader identity)                         | values never printed; placeholder/stale flags only                                  |
 | 501     | Google - API Smoke (GA4 connectivity)     | Reads                     | google-prod-read                                           | read-only; fails closed; reusable via `workflow_call`                               |
 | 502     | Google - Analytics Report (GA4 -> JSON)   | Reads                     | google-prod-read                                           | delivers JSON to ffcadmin via PR (CBM_TOKEN); PII-safe aggregates                   |
 | 503     | Google - GTM Provision (per-charity)      | Writes (dry-run default)  | ✅ google-prod-write                                       | dry_run default true; seeds GA4/Clarity/Meta; delegates POC access                  |
+| 504     | Google - GTM Container Backups (weekly)   | Reads                     | google-prod-read                                           | read-only exports; live-version JSON artifacts (90d)                                |
 | 726     | Repo - Rulesets + Settings Drift Audit    | Reads                     | —                                                          | report only                                                                         |
 | 729     | Repo - Add Collaborator                   | Writes (**live default**) | ✅ github-prod                                             | ⚠️ `dry_run` defaults to **false**                                                  |
 | 730     | Repo - Audit Environment Approval Gates   | Reads                     | —                                                          | report only (environment reviewer config)                                           |
+| 731     | Repo - Actions Run Metrics (30d)          | Reads                     | —                                                          | GITHUB_TOKEN read-only; JSON artifact                                               |
+| 732     | Repo - Google Workflow Failure Alert      | Writes (issues only)      | —                                                          | rolling issue upsert/close; no external API                                         |
+| 733     | Repo - Credential Rotation Reminders      | Writes (issues only)      | —                                                          | quarterly reminder issues; rotations stay human/gated                               |
 
 > **Exception to call out:** **729. Repo - Add Collaborator** is the one write workflow whose
 > `dry_run` defaults to **`false`** (it runs live by default). It's low-risk (adding a repo

@@ -551,6 +551,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 304 | M365 - Enable DKIM (Exchange Online) [M365+CF] | `304-m365-dkim-enable.yml` | workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write / ✅ m365-prod |
 | 305 | M365 - Add Tenant Domain (Admin) [M365] | `305-m365-add-tenant-domain.yml` | workflow_dispatch | Writes (dry-run default) | ✅ m365-prod |
 | 306 | Discover - Uncaptured Comms (M365, PII masked) [M365] | `306-discover-uncaptured-comms.yml` | workflow_dispatch | Reads | ✅ m365-prod |
+| 320 | Azure - Key Vault Secret Inventory (audit) [MS] | `320-azure-kv-secret-inventory.yml` | schedule, workflow_dispatch | Reads | google-prod-read (reader identity) |
 ### 4xx — Zeffy
 
 | # | Workflow | File | Triggers | Safety | Approval env |
@@ -565,6 +566,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 501 | Google - API Smoke (GA4 connectivity) [GOOGLE] | `501-google-api-smoke.yml` | workflow_call, workflow_dispatch | Reads | google-prod-read |
 | 502 | Google - Analytics Report (GA4 -> JSON) [GOOGLE] | `502-google-analytics-report.yml` | schedule, workflow_dispatch | Reads | google-prod-read |
 | 503 | Google - GTM Provision (per-charity container) [GOOGLE] | `503-google-gtm-provision.yml` | workflow_dispatch | Writes (dry-run default) | ✅ google-prod-write |
+| 504 | Google - GTM Container Backups (weekly export) [GOOGLE] | `504-google-gtm-backup.yml` | schedule, workflow_dispatch | Reads | google-prod-read |
 ### 6xx — WPMUDEV
 
 | # | Workflow | File | Triggers | Safety | Approval env |
@@ -588,5 +590,8 @@ No additional setup is required for these workflows to run. However, to get the 
 | 728 | Repo - AI Agent Hooks Validate [Repo] | `728-ai-agent-hooks-validate.yml` | pull_request, push | (repo plumbing) | — |
 | 729 | Repo - Add Collaborator [Repo] | `729-repo-add-collaborator.yml` | workflow_dispatch | Writes (**live default**) | ✅ github-prod |
 | 730 | Repo - Audit Environment Approval Gates [Repo] | `730-repo-audit-environment-gates.yml` | push, workflow_dispatch | Reads | — |
+| 731 | Repo - Actions Run Metrics (30d per-workflow stats) [GH] | `731-actions-run-metrics.yml` | schedule, workflow_dispatch | Reads | — |
+| 732 | Repo - Google Workflow Failure Alert (rolling issue) [GH] | `732-google-workflow-failure-alert.yml` | workflow_run | Writes (issues only) | — |
+| 733 | Repo - Credential Rotation Reminders (quarterly) [GH] | `733-credential-rotation-reminders.yml` | schedule, workflow_dispatch | Writes (issues only) | — |
 
 <!-- catalog:end -->

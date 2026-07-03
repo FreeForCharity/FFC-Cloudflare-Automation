@@ -67,7 +67,7 @@ jobs:
 
           $token = Get-GoogleAccessToken -Scope 'https://www.googleapis.com/auth/analytics.readonly'
 
-          $uri = "https://analyticsdata.googleapis.com/v1beta/properties/$propertyId:runReport"
+          $uri = "https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:runReport"
           $body = @{
             dateRanges = @(@{ startDate = '1daysAgo'; endDate = 'today' })
             metrics    = @(@{ name = 'activeUsers' })
@@ -109,7 +109,7 @@ jobs:
           az keyvault secret download --vault-name kv-ffc-admin-prod-cbm --name read-all-cbm-google-workspace-service-account-key --file $keyFile
           if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch the Workspace SA key from Key Vault.' }
           try {
-            $tok = Get-GoogleDwdAccessToken -Subject 'clarkemoyer@freeforcharity.org' -Scope 'https://www.googleapis.com/auth/webmasters.readonly' -CredentialsPath $keyFile
+            $tok = Get-GoogleDwdAccessToken -Subject 'clarkemoyer@freeforcharity.org' -Scope 'https://www.googleapis.com/auth/webmasters' -CredentialsPath $keyFile
             $sites = Invoke-GoogleApi -Uri 'https://searchconsole.googleapis.com/webmasters/v3/sites' -AccessToken $tok
             # Defensive: siteEntry is absent when the list is empty, and @($null).Count is 1.
             $entries = if (($sites.PSObject.Properties.Name -contains 'siteEntry') -and $sites.siteEntry) { @($sites.siteEntry) } else { @() }

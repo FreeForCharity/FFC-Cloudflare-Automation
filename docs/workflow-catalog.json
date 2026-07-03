@@ -54,7 +54,7 @@
         "cloudflare-prod-write",
         "whmcs-prod"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 whmcs-prod",
       "guard": "\u2014",
@@ -76,7 +76,7 @@
         "cloudflare-prod-write",
         "m365-prod"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 m365-prod",
       "guard": "`dry_run` (default true)",
@@ -124,7 +124,7 @@
         "cloudflare-prod-read",
         "cloudflare-prod-write"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
       "guard": "`dry_run` (default true); issue-label trig",
@@ -144,7 +144,7 @@
       "environments": [
         "cloudflare-prod-write"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
       "guard": "`dry_run` (default true)",
@@ -224,7 +224,7 @@
       "environments": [
         "cloudflare-prod-write"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
       "guard": "\u2014",
@@ -245,7 +245,7 @@
         "cloudflare-prod-read",
         "cloudflare-prod-write"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
       "guard": "`dry_run` (default true)",
@@ -894,7 +894,7 @@
         "cloudflare-prod-write",
         "m365-prod"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 m365-prod",
       "guard": "\u2014",
@@ -914,7 +914,7 @@
       "environments": [
         "m365-prod"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 m365-prod",
       "guard": "`dry_run` (default true); also gated by m365-prod approval",
@@ -1141,7 +1141,7 @@
         "cloudflare-prod-write",
         "github-prod"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 github-prod",
       "guard": "`repo` chained behind `dns` approval",

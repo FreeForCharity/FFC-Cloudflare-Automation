@@ -21,7 +21,16 @@ permissions:
   id-token: write
 
 jobs:
+  # Fail-closed connectivity gate: prove OIDC -> KV -> GA4 before generating any report.
+  smoke:
+    uses: ./.github/workflows/501-google-api-smoke.yml
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
+
   report:
+    needs: smoke
     runs-on: windows-latest
     environment: google-prod-read
     steps:
@@ -43,6 +52,22 @@ jobs:
           azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
 
+      - name: Seed time-series history from ffcadmin (public repo, no auth)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'ga-out'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          foreach ($site in @('freeforcharity.org', 'ffcadmin.org')) {
+            $url = "https://raw.githubusercontent.com/FreeForCharity/FFC-IN-ffcadmin.org/main/public/data/google-analytics/$site.timeseries.json"
+            try {
+              Invoke-WebRequest -Uri $url -OutFile (Join-Path $out "$site.timeseries.json") -ErrorAction Stop
+              Write-Host "Seeded history for $site"
+            } catch {
+              Write-Host "No existing history for $site (first run) - starting fresh"
+            }
+          }
+
       - name: Generate GA reports (both primary sites)
         shell: pwsh
         env:
@@ -55,9 +80,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           $days = [int]$env:DAYS
           if (-not $env:FFC_PROP) { throw 'vars.GA_PROPERTY_ID_PRIMARY is not set.' }
-          & pwsh -NoProfile -File scripts/google-analytics-report.ps1 -SiteLabel 'freeforcharity.org' -PropertyId $env:FFC_PROP -Days $days -OutPath (Join-Path $out 'freeforcharity.org.json')
+          & pwsh -NoProfile -File scripts/google-analytics-report.ps1 -SiteLabel 'freeforcharity.org' -PropertyId $env:FFC_PROP -Days $days -Hostname 'freeforcharity.org' -OutPath (Join-Path $out 'freeforcharity.org.json')
           if ($env:ADMIN_PROP) {
-            & pwsh -NoProfile -File scripts/google-analytics-report.ps1 -SiteLabel 'ffcadmin.org' -PropertyId $env:ADMIN_PROP -Days $days -OutPath (Join-Path $out 'ffcadmin.org.json')
+            & pwsh -NoProfile -File scripts/google-analytics-report.ps1 -SiteLabel 'ffcadmin.org' -PropertyId $env:ADMIN_PROP -Days $days -Hostname 'ffcadmin.org' -OutPath (Join-Path $out 'ffcadmin.org.json')
           } else {
             Write-Host '::warning::vars.GA_PROPERTY_ID_FFCADMIN not set; skipping ffcadmin.org'
           }

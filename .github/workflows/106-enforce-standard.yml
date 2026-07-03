@@ -32,6 +32,11 @@ permissions:
   id-token: write
   contents: read
 
+# Serialize runs: a second dispatch queues behind the first instead of racing it.
+concurrency:
+  group: 106-enforce-standard
+  cancel-in-progress: false
+
 jobs:
   enforce_standard:
     runs-on: windows-latest

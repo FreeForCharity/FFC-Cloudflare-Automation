@@ -266,45 +266,12 @@ This workflow helps identify security vulnerabilities early in the development p
 - Dangerous trigger patterns (e.g., unsafe use of privileged contexts)
 - Excessive permissions or missing least-privilege settings
 
-## Workflow Summary
+## Workflow summary
 
-| Workflow                                    | Trigger                                   | Purpose                                                                           |
-| ------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------- |
-| 101-domain-status.yml                       | Manual (workflow_dispatch)                | 101. Domain: Status (all sources) [CF+M365]                                       |
-| 102-domain-add-ffc-cloudflare-and-whmcs.yml | Manual (workflow_dispatch)                | 102. Domain: Add to FFC Cloudflare + WHMCS nameservers (admin) [CF+WHMCS]         |
-| 103-enforce-domain-standard.yml             | Manual (workflow_dispatch)                | 103. Domain: Enforce standard (GitHub apex + M365) [CF+M365]                      |
-| 104-domain-export-inventory.yml             | Manual (workflow_dispatch)                | 104. Domain: Export inventory (all sources) [CF+M365+WHMCS+WPMUDEV]               |
-| 105-manage-record.yml                       | Manual + issue label                      | 105. DNS: Manage a single record (plus label-gated issue trigger) [CF]            |
-| 106-enforce-standard.yml                    | Manual (workflow_dispatch)                | 106. DNS: Enforce standard (DNS-only) [CF]                                        |
-| 107-audit-compliance.yml                    | Manual (workflow_dispatch)                | 107. DNS: Audit compliance (report-only) [CF]                                     |
-| 108-export-summary.yml                      | Manual (workflow_dispatch)                | 108. DNS: Export Cloudflare zones [CF]                                            |
-| 110-cloudflare-zone-create.yml              | Manual (workflow_dispatch)                | 110. DNS: Create zone (explicit account selection) [CF]                           |
-| 701-website-provision.yml                   | Issue assigned + manual                   | 701. Website: Provision (DNS + repo + content) [CF+Repo]                          |
-| 301-m365-domain-preflight.yml               | Manual (workflow_dispatch)                | 301. M365: Domain preflight (Graph + Cloudflare audit)                            |
-| 302-m365-list-domains.yml                   | Manual (workflow_dispatch)                | 302. M365: List tenant domains                                                    |
-| 303-m365-domain-and-dkim.yml                | Manual (workflow_dispatch)                | 303. M365: Domain status + DKIM helpers                                           |
-| 304-m365-dkim-enable.yml                    | Manual (workflow_dispatch)                | 304. M365: Enable DKIM (Exchange Online)                                          |
-| 305-m365-add-tenant-domain.yml              | Manual (workflow_dispatch)                | 305. M365: Add tenant domain and print verification DNS records                   |
-| 201-whmcs-export-domains.yml                | Manual (workflow_dispatch)                | 201. WHMCS: Export domains                                                        |
-| 202-whmcs-export-products.yml               | Manual (workflow_dispatch)                | 202. WHMCS: Export products                                                       |
-| 203-whmcs-export-payment-methods.yml        | Manual (workflow_dispatch)                | 203. WHMCS: Export payment methods                                                |
-| 213-whmcs-zeffy-payments-import-draft.yml   | Manual (workflow_dispatch)                | 213. WHMCS -> Zeffy: Build draft import CSV                                       |
-| 209-whmcs-tickets-triage.yml                | Manual + schedule                         | 209. WHMCS: Tickets triage (read-only)                                            |
-| 207-whmcs-ticket-respond.yml                | Manual (workflow_dispatch)                | 207. WHMCS: Ticket respond (templated, dry-run default)                           |
-| 210-whmcs-orders-triage.yml                 | Manual + schedule                         | 210. WHMCS: Orders triage (read-only)                                             |
-| 211-whmcs-order-update.yml                  | Manual (workflow_dispatch)                | 211. WHMCS: Order update accept/cancel/fraud (dry-run default)                    |
-| 212-whmcs-product-add.yml                   | Manual (workflow_dispatch)                | 212. WHMCS: Product add (catalog, dry-run default)                                |
-| 601-wpmudev-export-sites.yml                | Manual (workflow_dispatch)                | 601. WPMUDEV: Export sites/domains for reconciliation                             |
-| 401-zeffy-campaigns-export.yml              | Manual (workflow_dispatch)                | 401. Zeffy: Campaigns export (read-only, no PII)                                  |
-| 402-zeffy-payments-export.yml               | Manual (workflow_dispatch)                | 402. Zeffy: Payments export (read-only, PII masked)                               |
-| 403-zeffy-contacts-export.yml               | Manual (workflow_dispatch)                | 403. Zeffy: Contacts export (read-only, PII masked)                               |
-| 720-create-repo.yml                         | Manual (workflow_dispatch)                | 720. Repo: Create GitHub repo                                                     |
-| 721-deploy-pages.yml                        | Pushes to `main` + manual                 | 721. Repo: Deploy GitHub Pages                                                    |
-| 722-ci.yml                                  | PRs and pushes to `main`                  | 722. Repo: Lint workflows, validate scripts, check formatting and sensitive files |
-| 723-codeql-analysis.yml                     | PRs, pushes to `main`, weekly, and manual | 723. Repo: CodeQL scanning                                                        |
-| 724-initialize-labels.yml                   | Manual (workflow_dispatch)                | 724. Repo: Initialize labels from `.github/labels.yml`                            |
-| 725-sync-labels.yml                         | Push to `main` (labels.yml) + manual      | 725. Repo: Sync labels when `.github/labels.yml` changes                          |
-| 729-repo-add-collaborator.yml               | Manual + reusable (workflow_call)         | 729. Repo: Add a user as a collaborator at a chosen permission level              |
+The complete per-workflow summary (number, file, triggers, safety level, approval env) is the
+**auto-generated catalog** at the bottom of this file — regenerated by
+`scripts/generate-workflow-catalog.py` and enforced by CI. Machine-readable version:
+`docs/workflow-catalog.json` (public: <https://ffcadmin.org/automation/>).
 
 ## 701-website-provision.yml - Website provisioning (DNS + repo + content)
 

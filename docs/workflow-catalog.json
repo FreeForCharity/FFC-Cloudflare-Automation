@@ -1126,6 +1126,26 @@
       "categoryCode": "GOOGLE"
     },
     {
+      "number": 505,
+      "title": "Google - GA4 Property Provision (per-charity)",
+      "apis": [
+        "GOOGLE"
+      ],
+      "file": "505-google-ga-property-provision.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-write"
+      ],
+      "description": "Provision a per-charity GA4 property: one property under the FFC Supported Charities GA account + one web data stream for the charity's domain, reporting the measurement id (G-XXXX) that workflow 503 seeds into the charity's GTM container. Gated write: google-prod-write + dry_run defaults to true. Idempotent \u2014 an existing stream for the domain is reported instead of duplicated. See docs/google-api.md (one property per charity).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 google-prod-write",
+      "guard": "dry_run default true; one property per charity; idempotent by stream defaultUri",
+      "category": "Google",
+      "categoryCode": "GOOGLE"
+    },
+    {
       "number": 601,
       "title": "WPMUDEV - Export Sites/Domains (Read-only)",
       "apis": [

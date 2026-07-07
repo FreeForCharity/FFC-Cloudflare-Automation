@@ -1,48 +1,43 @@
-name: '503. Google - GTM Provision (per-charity container) [GOOGLE]'
-run-name: 'GTM Provision: ${{ inputs.domain }} (dry_run=${{ inputs.dry_run }})'
+name: '505. Google - GA4 Property Provision (per-charity) [GOOGLE]'
+run-name: 'GA4 Property Provision: ${{ inputs.domain }} (dry_run=${{ inputs.dry_run }})'
 
-# Provision a per-charity GTM container: create it, seed GA4 + optional Clarity/Meta tags on All
-# Pages, publish, and delegate Edit/Publish to the charity POC. Gated write: google-prod-write +
-# dry_run defaults to true. See docs/google-api.md (GTM: one container per charity).
-#
-# SETUP REQUIRED before first run: create the `google-prod-write` environment + a federated
-# credential (repo:...:environment:google-prod-write) on ffc-admin-kv-writer, and set env secrets
-# WR_ALL_FFC_AZURE_KV_CLIENT_ID / WR_ALL_FFC_AZURE_TENANT_ID (mirrors the google-prod-read setup).
+# Provision a per-charity GA4 property: one property under the FFC Supported Charities GA
+# account + one web data stream for the charity's domain, reporting the measurement id
+# (G-XXXX) that workflow 503 seeds into the charity's GTM container. Gated write:
+# google-prod-write + dry_run defaults to true. Idempotent — an existing stream for the
+# domain is reported instead of duplicated. See docs/google-api.md (one property per charity).
 
 on:
   workflow_dispatch:
     inputs:
       domain:
-        description: 'Charity domain (container name), e.g. newcharity.org'
-        required: true
-        type: string
-      measurement_id:
-        description: 'GA4 measurement id (G-XXXX) for this charity property'
+        description: 'Charity domain (web stream defaultUri), e.g. newcharity.org'
         required: true
         type: string
       account_id:
-        description: 'FFC GTM account id'
-        required: false
-        default: '4702611686'
-        type: string
-      clarity_id:
-        description: 'Microsoft Clarity project id (optional)'
+        description: 'GA account id (numeric). Empty = resolve by account_name.'
         required: false
         type: string
-      meta_pixel_id:
-        description: 'Meta Pixel id (optional)'
+      account_name:
+        description: 'GA account display name to resolve when account_id is empty'
+        required: false
+        default: 'FFC Supported Charities'
+        type: string
+      display_name:
+        description: 'Property display name (default: "<domain> - GA4")'
         required: false
         type: string
-      grantee_email:
-        description: 'Charity POC email to delegate container Edit/Publish (optional)'
+      time_zone:
+        description: 'Property reporting time zone'
         required: false
+        default: 'America/New_York'
         type: string
       issue_number:
         description: 'Optional: issue number to comment the result back to'
         required: false
         type: string
       dry_run:
-        description: 'Preview only (no create/publish)'
+        description: 'Preview only (no create)'
         required: false
         default: true
         type: boolean
@@ -54,7 +49,7 @@ permissions:
 
 # Serialize runs: a second dispatch queues behind the first instead of racing it.
 concurrency:
-  group: 503-google-gtm-provision
+  group: 505-google-ga-property-provision
   cancel-in-progress: false
 
 jobs:
@@ -81,15 +76,14 @@ jobs:
           tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Provision GTM container
+      - name: Provision GA4 property
         shell: pwsh
         env:
           DOMAIN: ${{ inputs.domain }}
-          MEASUREMENT_ID: ${{ inputs.measurement_id }}
           ACCOUNT_ID: ${{ inputs.account_id }}
-          CLARITY_ID: ${{ inputs.clarity_id }}
-          META_PIXEL_ID: ${{ inputs.meta_pixel_id }}
-          GRANTEE_EMAIL: ${{ inputs.grantee_email }}
+          ACCOUNT_NAME: ${{ inputs.account_name }}
+          DISPLAY_NAME: ${{ inputs.display_name }}
+          TIME_ZONE: ${{ inputs.time_zone }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -97,24 +91,22 @@ jobs:
           az keyvault secret download --vault-name kv-ffc-admin-prod-cbm --name wr-all-cbm-google-workspace-service-account-key --file $keyFile
           if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch the Workspace SA key from Key Vault.' }
           $subject = 'clarkemoyer@freeforcharity.org'
-          $args = @(
-            '-KeyPath', $keyFile, '-Subject', $subject, '-AccountId', $env:ACCOUNT_ID,
-            '-Domain', $env:DOMAIN, '-MeasurementId', $env:MEASUREMENT_ID
-          )
-          if ($env:CLARITY_ID) { $args += @('-ClarityId', $env:CLARITY_ID) }
-          if ($env:META_PIXEL_ID) { $args += @('-MetaPixelId', $env:META_PIXEL_ID) }
-          if ($env:GRANTEE_EMAIL) { $args += @('-GranteeEmail', $env:GRANTEE_EMAIL) }
-          if ($env:DRY_RUN -ne 'false') { $args += '-DryRun' }
-          $out = & pwsh -NoProfile -File scripts/google-gtm-provision.ps1 @args
+          $scriptArgs = @('-KeyPath', $keyFile, '-Subject', $subject, '-Domain', $env:DOMAIN)
+          if ($env:ACCOUNT_ID) { $scriptArgs += @('-AccountId', $env:ACCOUNT_ID) }
+          if ($env:ACCOUNT_NAME) { $scriptArgs += @('-AccountName', $env:ACCOUNT_NAME) }
+          if ($env:DISPLAY_NAME) { $scriptArgs += @('-DisplayName', $env:DISPLAY_NAME) }
+          if ($env:TIME_ZONE) { $scriptArgs += @('-TimeZone', $env:TIME_ZONE) }
+          if ($env:DRY_RUN -ne 'false') { $scriptArgs += '-DryRun' }
+          $out = & pwsh -NoProfile -File scripts/google-ga-property-provision.ps1 @scriptArgs
           $exit = $LASTEXITCODE
           Remove-Item $keyFile -Force -ErrorAction SilentlyContinue
           $text = ($out | Out-String).TrimEnd()
           Write-Host $text
           New-Item -ItemType Directory -Force -Path artifacts/google | Out-Null
-          $text | Out-File -FilePath artifacts/google/gtm-provision-result.txt -Encoding utf8
-          if ($exit -ne 0) { throw "GTM provisioning failed (exit $exit)." }
+          $text | Out-File -FilePath artifacts/google/ga-property-result.txt -Encoding utf8
+          if ($exit -ne 0) { throw "GA property provisioning failed (exit $exit)." }
           $fence = [string][char]0x60 * 3
-          @("## GTM provision - $($env:DOMAIN)", '', $fence, $text, $fence) |
+          @("## GA4 property provision - $($env:DOMAIN)", '', $fence, $text, $fence) |
             Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Comment result back to issue
@@ -127,16 +119,16 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $text = Get-Content -Raw artifacts/google/gtm-provision-result.txt
+          $text = Get-Content -Raw artifacts/google/ga-property-result.txt
           $fence = [string][char]0x60 * 3
           $lines = @(
-            "## GTM provision - $($env:DOMAIN) (dry_run=$($env:DRY_RUN))",
+            "## GA4 property provision - $($env:DOMAIN) (dry_run=$($env:DRY_RUN))",
             '',
             "Run: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)",
             '',
             $fence, $text.TrimEnd(), $fence
           )
-          $bodyFile = Join-Path $env:RUNNER_TEMP 'gtm-provision-comment.md'
+          $bodyFile = Join-Path $env:RUNNER_TEMP 'ga-property-comment.md'
           $lines | Out-File -FilePath $bodyFile -Encoding utf8
           gh issue comment $env:ISSUE_NUMBER --repo $env:GITHUB_REPOSITORY --body-file $bodyFile
           if ($LASTEXITCODE -ne 0) { throw "Failed to comment on issue $($env:ISSUE_NUMBER) (exit $LASTEXITCODE)." }

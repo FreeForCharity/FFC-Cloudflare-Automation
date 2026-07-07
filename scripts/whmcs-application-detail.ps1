@@ -93,7 +93,7 @@ function New-Body {
 # Member enumeration across a plain array yields an array OF NULLS for a
 # missing child property (truthy!), so detect the shape explicitly and always
 # drop null elements. Anything else (empty-string container, wrapper without
-# the child) is an empty list — mirroring the sibling export scripts.
+# the child) is an empty list - mirroring the sibling export scripts.
 function Get-WhmcsList {
     param($Node, [Parameter(Mandatory = $true)][string]$ChildName)
     if ($null -eq $Node -or $Node -is [string]) { return @() }
@@ -149,7 +149,57 @@ foreach ($o in $orders) {
     }
 }
 
-# --- 3. Publishable projection ---------------------------------------------
+# --- 3. Products/services + their custom fields ----------------------------
+# The onboarding application's answers are captured as PRODUCT custom fields
+# on the charity-onboarding service (GetClientsProducts returns field NAMES,
+# unlike client-level GetClientsDetails). Mask a value when it looks like
+# contact data OR the field name says it holds a person's name/contact -
+# organization/charity-name and mission fields stay readable.
+function Format-MaskedProductField {
+    param([string]$FieldName, [string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    if ($FieldName -match '(?i)\b(first|last|your|contact|poc)[ _-]?name\b' -and
+        $FieldName -notmatch '(?i)org|charity|company|nonprofit|foundation|business') {
+        return Format-MaskedName $Value
+    }
+    if ($FieldName -match '(?i)phone|email|e-mail') {
+        if ($Value -match '@') { return Format-MaskedEmail $Value.Trim() }
+        return '***'
+    }
+    return Format-MaskedCustomValue $Value
+}
+
+$body = New-Body 'GetClientsProducts'
+$body.clientid = $ClientId
+$body.limitstart = 0
+$body.limitnum = 250
+$prodResp = Invoke-WhmcsApi -ApiUrl $api -Body $body
+
+$productsOut = @()
+foreach ($p in (Get-WhmcsList $prodResp.products 'product')) {
+    $cfOut = @()
+    foreach ($f in (Get-WhmcsList $p.customfields 'customfield')) {
+        $fieldName = if ($f.PSObject.Properties['name'] -and $f.name) { [string]$f.name }
+        elseif ($f.PSObject.Properties['fieldname'] -and $f.fieldname) { [string]$f.fieldname }
+        else { "field-$($f.id)" }
+        $cfOut += [ordered]@{
+            id    = [string]$f.id
+            name  = $fieldName
+            value = Format-MaskedProductField -FieldName $fieldName -Value ([string]$f.value)
+        }
+    }
+    $productsOut += [ordered]@{
+        id           = [string]$p.id
+        product      = [string]$p.name
+        status       = [string]$p.status
+        regDate      = [string]$p.regdate
+        billingCycle = [string]$p.billingcycle
+        amount       = [string]$p.recurringamount
+        customFields = $cfOut
+    }
+}
+
+# --- 4. Publishable projection ---------------------------------------------
 $result = [ordered]@{
     clientId     = $ClientId
     status       = [string]$client.status
@@ -162,6 +212,7 @@ $result = [ordered]@{
     }
     customFields = $customOut
     orders       = $ordersOut
+    products     = $productsOut
 }
 
 $json = $result | ConvertTo-Json -Depth 6

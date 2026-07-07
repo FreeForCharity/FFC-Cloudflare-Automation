@@ -542,6 +542,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 218 | WHMCS - Sites-List Reconciliation + Product Alignment [WHMCS] | `218-whmcs-siteslist-reconciliation.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 | 219 | WHMCS - Application Detail (Client + Orders, PII-masked) [WHMCS] | `219-whmcs-application-detail.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 | 220 | WHMCS - Served-Per-Year Metrics (span evidence, no PII) [WHMCS] | `220-whmcs-served-metrics.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 221 | WHMCS - Application Search (find by domain/org) [WHMCS] | `221-whmcs-application-search.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

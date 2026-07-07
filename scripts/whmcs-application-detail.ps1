@@ -88,6 +88,19 @@ function New-Body {
     return $b
 }
 
+# WHMCS JSON responses use two shapes for lists: a plain array (JSON mode) or
+# a wrapper object with a named child ({ customfields: { customfield: [...] } }).
+# Member enumeration across a plain array yields an array OF NULLS for a
+# missing child property (truthy!), so detect the shape explicitly and always
+# drop null elements.
+function Get-WhmcsList {
+    param($Node, [Parameter(Mandatory = $true)][string]$ChildName)
+    if ($null -eq $Node) { return @() }
+    if ($Node -is [System.Array]) { return @($Node | Where-Object { $null -ne $_ }) }
+    if ($Node.PSObject.Properties[$ChildName]) { return @($Node.$ChildName | Where-Object { $null -ne $_ }) }
+    return @($Node)
+}
+
 # --- 1. Client detail ------------------------------------------------------
 $body = New-Body 'GetClientsDetails'
 $body.clientid = $ClientId
@@ -96,20 +109,13 @@ $detail = Invoke-WhmcsApi -ApiUrl $api -Body $body
 
 $client = if ($detail.client) { $detail.client } else { $detail }
 
-$fields = @()
-if ($detail.customfields) {
-    if ($detail.customfields.customfield) { $fields = @($detail.customfields.customfield) }
-    elseif ($detail.customfields -is [System.Array]) { $fields = @($detail.customfields) }
-}
-if (-not $fields -and $client.customfields) {
-    if ($client.customfields.customfield) { $fields = @($client.customfields.customfield) }
-    elseif ($client.customfields -is [System.Array]) { $fields = @($client.customfields) }
-}
+$fields = Get-WhmcsList $detail.customfields 'customfield'
+if (-not $fields) { $fields = Get-WhmcsList $client.customfields 'customfield' }
 
 $customOut = @()
 foreach ($f in $fields) {
-    $name = if ($f.PSObject.Properties['fieldname']) { [string]$f.fieldname }
-    elseif ($f.PSObject.Properties['name']) { [string]$f.name }
+    $name = if ($f.PSObject.Properties['fieldname'] -and $f.fieldname) { [string]$f.fieldname }
+    elseif ($f.PSObject.Properties['name'] -and $f.name) { [string]$f.name }
     else { "field-$($f.id)" }
     $customOut += [ordered]@{
         id    = [string]$f.id
@@ -125,15 +131,11 @@ $body.limitstart = 0
 $body.limitnum = 250
 $ordersResp = Invoke-WhmcsApi -ApiUrl $api -Body $body
 
-$orders = @()
-if ($ordersResp.orders -and $ordersResp.orders.order) { $orders = @($ordersResp.orders.order) }
-elseif ($ordersResp.orders -is [System.Array]) { $orders = @($ordersResp.orders) }
+$orders = Get-WhmcsList $ordersResp.orders 'order'
 
 $ordersOut = @()
 foreach ($o in $orders) {
-    $items = @()
-    if ($o.lineitems -and $o.lineitems.lineitem) { $items = @($o.lineitems.lineitem) }
-    elseif ($o.lineitems -is [System.Array]) { $items = @($o.lineitems) }
+    $items = Get-WhmcsList $o.lineitems 'lineitem'
     $products = @($items | ForEach-Object { [string]$_.product } | Where-Object { $_ }) -join '; '
     $ordersOut += [ordered]@{
         id       = [string]$o.id

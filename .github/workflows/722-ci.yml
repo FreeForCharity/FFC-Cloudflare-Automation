@@ -90,6 +90,15 @@ jobs:
           # has no workflow_dispatch trigger. Guards the #630 failure class.
           python3 scripts/check-workflow-references.py
 
+      - name: Validate federated-credential expected map
+        shell: bash
+        run: |
+          # Self-check config/federated-credentials.json is well-formed (GUIDs,
+          # env slugs, no dupes). The live subject audit (--live) runs against
+          # Azure via the operator/#589 workflow; this CI step just keeps the
+          # declarative expected map honest. Guards the #625 subject-typo class.
+          python3 scripts/check-federated-credential-subjects.py
+
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v6
         with:

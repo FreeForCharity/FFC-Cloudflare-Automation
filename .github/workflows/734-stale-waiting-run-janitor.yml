@@ -1,0 +1,96 @@
+name: '734. Repo - Stale Waiting-Run Janitor [Repo]'
+run-name: 'Stale waiting-run janitor'
+
+# Cancels (or, in dry-run, just reports) workflow runs left in the `waiting`
+# state — i.e. paused at an environment approval gate — for longer than
+# max_age_days. Scheduled read/triage runs that no one approves otherwise stack
+# up indefinitely and the Actions history stops reflecting real state (see the
+# 209/210 backlog cleared manually on 2026-07-07, issue #637).
+#
+# Read + cancel only; never approves a gate. Uses the ambient GITHUB_TOKEN.
+
+on:
+  schedule:
+    - cron: '31 6 * * *'
+  workflow_dispatch:
+    inputs:
+      max_age_days:
+        description: 'Cancel waiting runs older than this many days'
+        required: false
+        type: string
+        default: '7'
+      dry_run:
+        description: 'Report only; do not cancel'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  janitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel stale waiting runs
+        uses: actions/github-script@v8
+        env:
+          MAX_AGE_DAYS: ${{ github.event.inputs.max_age_days || '7' }}
+          # Scheduled runs have no inputs; default to a real cancel on schedule,
+          # dry-run only when a dispatch explicitly asks for it.
+          DRY_RUN:
+            ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run || 'false'
+            }}
+        with:
+          script: |
+            const maxAgeDays = Number(process.env.MAX_AGE_DAYS) || 7;
+            const dryRun = String(process.env.DRY_RUN) === 'true';
+            const cutoff = Date.now() - maxAgeDays * 24 * 3600e3;
+
+            // Collect waiting runs across the repo (paginated).
+            const stale = [];
+            let page = 1;
+            for (;;) {
+              const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner, repo: context.repo.repo,
+                status: 'waiting', per_page: 100, page,
+              });
+              for (const r of data.workflow_runs) {
+                if (new Date(r.created_at).getTime() < cutoff) {
+                  stale.push({ id: r.id, name: r.name, created: r.created_at, url: r.html_url });
+                }
+              }
+              if (data.workflow_runs.length < 100) break;
+              page++;
+            }
+
+            const rows = [];
+            for (const r of stale) {
+              let outcome = 'would-cancel (dry-run)';
+              if (!dryRun) {
+                try {
+                  await github.rest.actions.cancelWorkflowRun({
+                    owner: context.repo.owner, repo: context.repo.repo, run_id: r.id,
+                  });
+                  outcome = 'cancelled';
+                } catch (e) {
+                  outcome = `error: ${e.status || e.message}`;
+                }
+              }
+              rows.push([String(r.id), r.name || '(unnamed)', r.created, outcome]);
+            }
+
+            core.summary
+              .addHeading(`Stale waiting-run janitor — ${stale.length} run(s) > ${maxAgeDays}d${dryRun ? ' (dry-run)' : ''}`);
+            if (rows.length) {
+              core.summary.addTable([
+                [{ data: 'Run ID', header: true }, { data: 'Workflow', header: true },
+                 { data: 'Created', header: true }, { data: 'Outcome', header: true }],
+                ...rows,
+              ]);
+            } else {
+              core.summary.addRaw('No waiting runs older than the threshold. Queue is clean.');
+            }
+            await core.summary.write();
+            console.log(`${dryRun ? 'Would cancel' : 'Cancelled'} ${stale.length} stale waiting run(s).`);

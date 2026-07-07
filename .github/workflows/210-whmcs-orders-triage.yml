@@ -27,6 +27,13 @@ on:
     # Weekday mid-morning sweep (17 past 13:00 UTC). Adjust as needed.
     - cron: '17 13 * * 1-5'
 
+# Latest run wins: a newer scheduled or dispatched run of this workflow cancels
+# an earlier one that is still queued or waiting at an approval gate, so
+# read-only triage runs never stack up (see #637).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   id-token: write

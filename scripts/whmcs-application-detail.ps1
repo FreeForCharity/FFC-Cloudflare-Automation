@@ -92,13 +92,14 @@ function New-Body {
 # a wrapper object with a named child ({ customfields: { customfield: [...] } }).
 # Member enumeration across a plain array yields an array OF NULLS for a
 # missing child property (truthy!), so detect the shape explicitly and always
-# drop null elements.
+# drop null elements. Anything else (empty-string container, wrapper without
+# the child) is an empty list — mirroring the sibling export scripts.
 function Get-WhmcsList {
     param($Node, [Parameter(Mandatory = $true)][string]$ChildName)
-    if ($null -eq $Node) { return @() }
+    if ($null -eq $Node -or $Node -is [string]) { return @() }
     if ($Node -is [System.Array]) { return @($Node | Where-Object { $null -ne $_ }) }
     if ($Node.PSObject.Properties[$ChildName]) { return @($Node.$ChildName | Where-Object { $null -ne $_ }) }
-    return @($Node)
+    return @()
 }
 
 # --- 1. Client detail ------------------------------------------------------

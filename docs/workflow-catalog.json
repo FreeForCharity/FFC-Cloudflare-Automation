@@ -1539,6 +1539,25 @@
       "guard": "quarterly reminder issues; rotations stay human/gated",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
+    },
+    {
+      "number": 734,
+      "title": "Repo - Stale Waiting-Run Janitor",
+      "apis": [
+        "Repo"
+      ],
+      "file": "734-stale-waiting-run-janitor.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Cancels (or, in dry-run, just reports) workflow runs left in the `waiting` state \u2014 i.e. paused at an environment approval gate \u2014 for longer than max_age_days. Scheduled read/triage runs that no one approves otherwise stack up indefinitely and the Actions history stops reflecting real state (see the 209/210 backlog cleared manually on 2026-07-07, issue #637).  Read + cancel only; never approves a gate. Uses the ambient GITHUB_TOKEN.",
+      "safetyLevel": "Writes (cancels runs)",
+      "approvalEnv": "\u2014",
+      "guard": "cancels runs left waiting >N days at a gate; never approves; dispatch dry-run supported",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
     }
   ]
 }

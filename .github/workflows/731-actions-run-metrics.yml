@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate run stats
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const since = new Date(Date.now() - 30 * 24 * 3600e3).toISOString();

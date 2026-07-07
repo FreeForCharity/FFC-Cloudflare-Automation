@@ -51,6 +51,13 @@ if (-not (Test-Path -LiteralPath $RepoDir)) {
 
 $changed = [System.Collections.Generic.List[string]]::new()
 
+# Record a repo-relative changed path once (single source of the bookkeeping).
+function Add-ChangedFile {
+    param([string]$Path)
+    $rel = $Path.Substring($RepoDir.Length).TrimStart('/', '\')
+    if (-not $changed.Contains($rel)) { $changed.Add($rel) }
+}
+
 # Write $Content to $Path only if it differs; record the repo-relative path.
 function Set-FileIfChanged {
     param([string]$Path, [string]$Content)
@@ -64,8 +71,7 @@ function Set-FileIfChanged {
     if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     # Write LF, UTF-8 no BOM (matches the template repos + prettier).
     [System.IO.File]::WriteAllText($Path, ($Content -replace "`r`n", "`n"), (New-Object System.Text.UTF8Encoding($false)))
-    $rel = $Path.Substring($RepoDir.Length).TrimStart('/', '\')
-    $changed.Add($rel)
+    Add-ChangedFile $Path
     return $true
 }
 
@@ -157,24 +163,34 @@ export const analyticsConfig = {
         $body = @"
     <!-- Google Tag Manager (noscript) --><noscript><iframe src="https://www.googletagmanager.com/ns.html?id=$GtmId" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript><!-- End Google Tag Manager (noscript) -->
 "@
+        # Snippets authored with LF; matched to each file's own EOL at inject time.
+        $headLf = ($head -replace "`r`n", "`n")
+        $bodyLf = ($body -replace "`r`n", "`n")
         $pages = Get-ChildItem -LiteralPath $RepoDir -Recurse -Filter '*.html' -File -ErrorAction SilentlyContinue
         foreach ($p in $pages) {
             $h = Get-Content -LiteralPath $p.FullName -Raw
             $orig = $h
+            # Preserve this file's existing newline convention so we never leave mixed CRLF/LF
+            # (WordPress exports vary; rewriting all endings would blow up the diff).
+            $eol = if ($h -match "`r`n") { "`r`n" } else { "`n" }
+            $headBlock = $eol + ($headLf -replace "`n", $eol)
+            $bodyBlock = $eol + ($bodyLf -replace "`n", $eol)
             # Point any existing GTM id (e.g. a leftover non-FFC container) at ours.
             $h = [regex]::Replace($h, 'GTM-[A-Z0-9]{5,9}', $GtmId)
             # Inject the head snippet once (skip if a GTM loader is already present).
+            # Script-block replacement avoids '$' in the snippet being read as a backreference.
             if ($h -notmatch [regex]::Escape('googletagmanager.com/gtm.js')) {
-                $h = [regex]::Replace($h, '(<head[^>]*>)', "`$1`n$head", 1)
+                $h = [regex]::Replace($h, '(<head[^>]*>)', { param($m) $m.Groups[1].Value + $headBlock }, 1)
             }
             # Inject the noscript once.
             if ($h -notmatch [regex]::Escape('googletagmanager.com/ns.html')) {
-                $h = [regex]::Replace($h, '(<body[^>]*>)', "`$1`n$body", 1)
+                $h = [regex]::Replace($h, '(<body[^>]*>)', { param($m) $m.Groups[1].Value + $bodyBlock }, 1)
             }
             if ($h -ne $orig) {
+                # Write bytes as-is (no LF normalization) to keep the file's EOL convention;
+                # bookkeeping via the shared Add-ChangedFile helper.
                 [System.IO.File]::WriteAllText($p.FullName, $h, (New-Object System.Text.UTF8Encoding($false)))
-                $rel = $p.FullName.Substring($RepoDir.Length).TrimStart('/', '\')
-                $changed.Add($rel)
+                Add-ChangedFile $p.FullName
             }
         }
     }

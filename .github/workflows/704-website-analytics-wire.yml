@@ -119,6 +119,13 @@ jobs:
           git commit -m "chore: wire analytics (GTM ${GTM_ID})"
           git push -u origin "$BRANCH" --force-with-lease
 
+          # Idempotent redispatch: if a PR for this head branch already exists, the push above
+          # updated it — don't hard-fail on `gh pr create`.
+          if gh pr view "$BRANCH" --repo "$REPO" --json number >/dev/null 2>&1; then
+            echo "PR already open for $BRANCH on $REPO — updated its branch, skipping create." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           PR_BODY=$(cat <<EOF
           Wires analytics ids into this site (public client-side ids, not secrets).
 

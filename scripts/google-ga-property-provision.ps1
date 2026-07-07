@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Provision a per-charity GA4 property (Wave 3, epic #508). Creates one property under the
-  FFC Supported Charities GA account and one web data stream for the charity's domain, then
+  FFC Supported Sites GA account and one web data stream for the charity's domain, then
   reports the stream's measurement id (G-XXXX) for GTM seeding (workflow 503).
 
 .DESCRIPTION
@@ -26,7 +26,7 @@ param(
     [Parameter(Mandatory)][string]$Domain,
     # Numeric GA account id; when empty the account is resolved by -AccountName.
     [string]$AccountId,
-    [string]$AccountName = 'FFC Supported Charities',
+    [string]$AccountName = 'FFC Supported Sites',
     [string]$DisplayName,
     [string]$TimeZone = 'America/New_York',
     [string]$CurrencyCode = 'USD',

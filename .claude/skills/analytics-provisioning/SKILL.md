@@ -47,7 +47,12 @@ Standalone runbook for the analytics slice of onboarding. Use it to add tracking
 - Creates the container, seeds the GA4 tag on All Pages (trigger `2147479553`), `:create_version` →
   `:publish`. Run dry first, then `dry_run=false` + approve the `google-prod-write` gate.
 
-### 3. Wire the ids into the site (PR)
+### 3. Wire the ids into the site (PR) — or let `704` do it
+
+> **Automated:** **`704. Website - Analytics Wire`** does steps 3/3b for you — pass `domain` +
+> `gtm_id` (+ optional `measurement_id`); it detects the site type, edits the target
+> `FFC-EX-<domain>` repo, and opens a **draft PR** (dry-run default, idempotent, gated on
+> `github-prod`). The manual steps below are what it automates.
 
 Edit `FFC-EX-<domain>/src/lib/analytics.config.ts`:
 

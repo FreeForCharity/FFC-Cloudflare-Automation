@@ -1248,6 +1248,26 @@
       "categoryCode": "GH"
     },
     {
+      "number": 704,
+      "title": "Website - Analytics Wire",
+      "apis": [
+        "GH"
+      ],
+      "file": "704-website-analytics-wire.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Wire provisioned GA4 / GTM ids into one FFC-EX-<domain> website repo by opening a PR (never pushing the default branch). Detects the site type and delegates the file edits to scripts/analytics-wire.ps1: template sites get src/lib/analytics.config.ts + a rewired GTM component; static WordPress exports get the GTM snippet injected across every *.html. Idempotent: an already-wired repo yields no PR. Gated write: github-prod (uses CBM_TOKEN). See docs (analytics-provisioning skill) and issue #629 (fleet rollout).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 github-prod",
+      "guard": "opens a draft PR (never pushes); `dry_run` (default true); idempotent",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 720,
       "title": "Repo - Create GitHub Repo",
       "apis": [

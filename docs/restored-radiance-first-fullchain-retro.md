@@ -53,8 +53,9 @@ one-command lookup in future, we built **workflow 221 (WHMCS Application Search)
 
 ## Findings handed to the operator
 
-- **M365 broken by a typo** — the `github-oidc-m365-prod` federated credential subject has a
-  trailing hyphen (`FFC-Cloudflare-Automation-`), so every M365 job fails `AADSTS700213`. Repair in
+- **M365 broken by a typo** — the `github-oidc-m365-prod` federated credential subject had a
+  trailing hyphen (`FFC-Cloudflare-Automation-`), so every M365 job failed `AADSTS700213`. **✅
+  Fixed & verified 2026-07-07 (issue #625)** — 101/301/302 M365 jobs green. Repair recipe in
   [azure-oidc-federated-credentials.md](azure-oidc-federated-credentials.md).
 - **Intake gap** — the onboarding form has no discrete "Organization Name" question, so
   `companyname` is never populated. Recommended: add an Organization Name field (product custom
@@ -64,12 +65,17 @@ one-command lookup in future, we built **workflow 221 (WHMCS Application Search)
 - **Two more real pending applications** surfaced while searching: Desert Princess Community
   Foundation (`dpfoundation.org`) and South Texas Watchmen (`southtexaswatchmen.org`).
 
-## What still needs a human (Azure IAM + GitHub settings)
+## Azure IAM + GitHub settings — ✅ applied 2026-07-07 (issue #625)
 
 The agent can read Azure and query WHMCS directly (via `az` device-auth in the sandbox), but **Azure
-AD IAM writes are blocked by the harness** and must be applied by a human:
+AD IAM writes are blocked by the harness** in auto-mode. These were applied in an interactive
+session (admin `clarkemoyer@freeforcharity.org`, device-code login after an MFA refresh):
 
-1. Fix the `m365-prod` credential typo (+ maybe add the kv-reader m365-prod credential).
-2. Add the `whmcs-prod-read` federated credential + repo Variables.
+1. ✅ Fixed the `m365-prod` credential typo on the Graph CLI app. The optional kv-reader `m365-prod`
+   credential was **not needed** — 301's second login runs under `cloudflare-prod-read`.
+2. ✅ Added the `whmcs-prod-read` federated credential on the kv-reader app + both repo Variables,
+   created the ungated `whmcs-prod-read` environment, and confirmed KV RBAC access.
 
-Both are one-liners in [azure-oidc-federated-credentials.md](azure-oidc-federated-credentials.md).
+Verified end-to-end: M365 jobs **101/301/302** green (no `AADSTS700213`); WHMCS reads
+**202/201/209** run ungated and green; gate audit **730** green. Recipes remain in
+[azure-oidc-federated-credentials.md](azure-oidc-federated-credentials.md) for future repairs.

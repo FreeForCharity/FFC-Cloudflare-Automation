@@ -64,6 +64,58 @@ Open a **PR** on the FFC-EX repo (never push its default branch); leave unused i
 `XXXX` placeholders so they stay inert. That placeholder-vs-real distinction is exactly how you tell
 whether a repo already has analytics (see the sweep below).
 
+### 3b. Static HTML / WordPress-export sites (no `analytics.config.ts`)
+
+Some FFC-EX repos are **static WordPress exports** (`index.html` + many `*.html` pages, no
+`package.json`, no `src/lib/`). They have no config file — GTM is embedded as **raw snippets in the
+HTML**. GA4/GTM **provisioning is identical** (505 then 503 still create the property + FFC
+container); only the wiring differs:
+
+1. Inject the standard GTM snippet on **every** `*.html` page (static exports are one file per page,
+   so a single index edit is not enough). The head snippet goes immediately after `<head>`, the
+   `<noscript>` immediately after `<body>`:
+
+   ```html
+   <!-- Google Tag Manager -->
+   <script>
+     (function (w, d, s, l, i) {
+       w[l] = w[l] || [];
+       w[l].push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
+       var f = d.getElementsByTagName(s)[0],
+         j = d.createElement(s),
+         dl = l != 'dataLayer' ? '&l=' + l : '';
+       j.async = true;
+       j.src = 'https://www.googletagmanager.com/gtm.js?id=' + i + dl;
+       f.parentNode.insertBefore(j, f);
+     })(window, document, 'script', 'dataLayer', 'GTM-XXXXXXX');
+   </script>
+   <!-- End Google Tag Manager -->
+   ```
+
+   ```html
+   <!-- Google Tag Manager (noscript) -->
+   <noscript
+     ><iframe
+       src="https://www.googletagmanager.com/ns.html?id=GTM-XXXXXXX"
+       height="0"
+       width="0"
+       style="display: none; visibility: hidden"
+     ></iframe
+   ></noscript>
+   <!-- End Google Tag Manager (noscript) -->
+   ```
+
+2. **If a non-FFC GTM id is already baked in** (e.g. a leftover `GTM-5JV8JHCH` from the site's
+   original WordPress install), **replace** it with the FFC container id from 503 — don't leave the
+   old one, or the charity's tags fire through a container FFC doesn't own.
+3. The GA4 tag itself lives **inside** the FFC GTM container (seeded by 503), so the pages only
+   carry the `GTM-XXXX` snippet — no `gtag`/`G-XXXX` in the HTML. Open a **PR** on the static repo.
+
+> These repos are outside this repo's MCP scope, so pushing the wiring PR needs the repo added to
+> the session (`add_repo`) or a workflow that edits the FFC-EX repo (the 505/503 provisioning half
+> needs neither — it only talks to Google). For a fleet-wide rollout, script the snippet injection
+> rather than hand-editing N pages per site.
+
 ## How it authenticates (context, not steps)
 
 Both workflows run on `windows-latest` under the gated **`google-prod-write`** environment.

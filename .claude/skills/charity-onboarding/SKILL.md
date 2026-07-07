@@ -11,12 +11,12 @@ description: >-
 
 # Charity onboarding (full chain)
 
-This skill is the map. It tells you **which workflow to run, in what order, and what will bite you**.
-For the narrative and per-phase "done when" checks, read
+This skill is the map. It tells you **which workflow to run, in what order, and what will bite
+you**. For the narrative and per-phase "done when" checks, read
 [`docs/charity-onboarding-lifecycle.md`](../../../docs/charity-onboarding-lifecycle.md) — this skill
 is the fast index into it.
 
-**Workflow numbers here are the display numbers** (the `NN.` prefix in the Actions UI), *not* the
+**Workflow numbers here are the display numbers** (the `NN.` prefix in the Actions UI), _not_ the
 file names — the two differ. Map display→file via
 [`docs/workflow-catalog.json`](../../../docs/workflow-catalog.json).
 
@@ -55,8 +55,9 @@ file names — the two differ. Map display→file via
 
 1. **`221. WHMCS - Application Search`** with the **domain** (or org name) as the query. Returns the
    **client id** + readable application (org name, mission, desired domain, legal status). Ungated
-   read? No — 221 currently runs on gated `whmcs-prod`. The read-only detail view **`219. WHMCS -
-   Application Detail`** runs on the ungated `whmcs-prod-read` env; use it once you have the id.
+   read? No — 221 currently runs on gated `whmcs-prod`. The read-only detail view
+   **`219. WHMCS - Application Detail`** runs on the ungated `whmcs-prod-read` env; use it once you
+   have the id.
 2. Confirm the client id before doing anything else.
 
 > **The #1 trap:** do **not** identify the application from the masked triage tables (`209`/`210`).
@@ -75,11 +76,11 @@ file names — the two differ. Map display→file via
 
 ## Phase 2 — DNS + Microsoft 365 email ⏸
 
-- **`103. Domain - Enforce Standard (GitHub Apex + M365)`** — GitHub Pages apex A/AAAA + `www`,
-  plus M365 MX/SPF/DMARC. **Defaults to `dry_run=true`** — read the preview, then re-run
-  `dry_run=false` and approve the gate.
-- Add the domain to the tenant if new: **`305. M365 - Add Tenant Domain`**, then **`304. M365 -
-  Enable DKIM`**; verify with **`301`/`303`**.
+- **`103. Domain - Enforce Standard (GitHub Apex + M365)`** — GitHub Pages apex A/AAAA + `www`, plus
+  M365 MX/SPF/DMARC. **Defaults to `dry_run=true`** — read the preview, then re-run `dry_run=false`
+  and approve the gate.
+- Add the domain to the tenant if new: **`305. M365 - Add Tenant Domain`**, then
+  **`304. M365 - Enable DKIM`**; verify with **`301`/`303`**.
 - **M365 was broken by a federated-credential typo** (`AADSTS700213`). If any m365 job fails Azure
   login, it's almost certainly that — see the repair in `docs/azure-oidc-federated-credentials.md`.
 
@@ -87,10 +88,10 @@ file names — the two differ. Map display→file via
 
 - File template **07** (admin-minimal) or **02** (full metadata) and **assign** it — assignment
   fires **`701. Website - Provision`**, which creates `FFC-EX-<domain>` from the template, enables
-  Pages, adds the Technical POC as `maintain`, and (if the zone is in FFC CF) enforces Pages DNS. The
-  `repo` job is **chained behind** the DNS approval.
-- **Gotcha:** in the issue body, keep all prose **above** the `###` field headings — trailing text is
-  slurped into the last field and silently drops the maintainer login.
+  Pages, adds the Technical POC as `maintain`, and (if the zone is in FFC CF) enforces Pages DNS.
+  The `repo` job is **chained behind** the DNS approval.
+- **Gotcha:** in the issue body, keep all prose **above** the `###` field headings — trailing text
+  is slurped into the last field and silently drops the maintainer login.
 
 ## Phase 4 — Rebrand the site from the application
 
@@ -109,17 +110,18 @@ file names — the two differ. Map display→file via
   `tagmanager.edit.containerversions` scope on the DWD grant (already added).
 - Wire both ids into `FFC-EX-<domain>/src/lib/analytics.config.ts` (PR).
 - Both run via **domain-wide delegation**: the `ffc-workspace-admin` SA impersonates
-  `clarkemoyer@freeforcharity.org`. Key comes from KV (`wr-all-cbm-google-workspace-service-account-key`).
+  `clarkemoyer@freeforcharity.org`. Key comes from KV
+  (`wr-all-cbm-google-workspace-service-account-key`).
 
 ## Phase 6 — WHMCS account + onboarding order ⏸
 
 - **`204. WHMCS - Charity Onboard`** — creates the client, contacts, and onboarding order.
   **Defaults to `dry_run=true`**, and is **idempotent** (re-run reports `existing`/`skipped`). Read
   the redacted preview before flipping `dry_run=false`.
-- Add **status-marker products** that describe what's now true (e.g. *Domain Registered in Cloudflare
-  (Registrar)*, *Hosted by GitHub Pages*) — additive, alongside the onboarding product. Catalog adds
-  via **`212. WHMCS - Product Add`**; cancel a mistaken order one at a time with **`211. WHMCS -
-  Order Update`** (`action=cancel`).
+- Add **status-marker products** that describe what's now true (e.g. _Domain Registered in
+  Cloudflare (Registrar)_, _Hosted by GitHub Pages_) — additive, alongside the onboarding product.
+  Catalog adds via **`212. WHMCS - Product Add`**; cancel a mistaken order one at a time with
+  **`211. WHMCS - Order Update`** (`action=cancel`).
 
 ## Phase 7 — Ongoing support
 
@@ -134,7 +136,7 @@ file names — the two differ. Map display→file via
   fails `422 Invalid value for input`.
 - **From the web sandbox:** MCP GitHub tools **can** dispatch `workflow_dispatch` workflows and
   trigger `issues`-event workflows (create+assign an issue via MCP). MCP **cannot** approve
-  environment gates — a human reviewer (`clarkemoyer`) approves those (UI → *Review deployments*, or
+  environment gates — a human reviewer (`clarkemoyer`) approves those (UI → _Review deployments_, or
   `gh api … pending_deployments`).
 - **Gates:** `cloudflare-prod-write`, `whmcs-prod`, `m365-prod`, `github-prod`, `google-prod-write`
   pause at `status: waiting`. The `*-read` envs, `zeffy-prod`, and `whmcs-prod-read` are ungated.
@@ -143,7 +145,8 @@ file names — the two differ. Map display→file via
   from KV → POST to the APIM gateway with the `Ocp-Apim-Subscription-Key` header (see `CLAUDE.md`).
 - **Azure AD IAM writes are blocked by the harness** — hand credential fixes to a human with the
   exact `az` command from `docs/azure-oidc-federated-credentials.md`.
-- Never push to `main`; PRs merge via the merge queue. Resolve Copilot review threads before queuing.
+- Never push to `main`; PRs merge via the merge queue. Resolve Copilot review threads before
+  queuing.
 
 ## Merged-application → shipped-charity checklist
 

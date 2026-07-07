@@ -103,6 +103,10 @@ file names — the two differ. Map display→file via
 
 ## Phase 5 — Analytics ⏸ (google-prod-write)
 
+> This phase is also a **standalone skill** —
+> [`analytics-provisioning`](../analytics-provisioning/SKILL.md) — use it when you only need to add
+> GA4/GTM to a site without the full chain.
+
 - **`505. Google GA4 Property Provision`** — creates a GA4 property + web stream under the
   **`FFC Supported Sites`** account (that's the real account name — not "Charities"/"Supported
   Charities"). Idempotent by stream `defaultUri`. Returns `G-XXXXXXXXXX`.

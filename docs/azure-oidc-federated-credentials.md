@@ -31,13 +31,20 @@ credentials — the same convention as `vars.*_AZURE_KV_CLIENT_ID`).
 | `google-prod-write`                         | kv-writer                            | gated (Google provisioning: 503, 505)                                            |
 | `zeffy-prod`                                | kv-writer                            | ungated                                                                          |
 | `whmcs-prod`                                | kv-writer                            | gated (WHMCS writes: 102, 116, 118, 204–207, 211, 212, 221)                      |
-| `whmcs-prod-read`                           | kv-reader                            | ungated (WHMCS reads: 104, 115, 201–203, 208–210, 213–220) — **see setup below** |
-| `m365-prod`                                 | Graph CLI (+ kv-reader for KV steps) | gated — **see repair below**                                                     |
+| `whmcs-prod-read`                           | kv-reader                            | ungated (WHMCS reads: 104, 115, 201–203, 208–210, 213–220) — **applied 2026-07-07** |
+| `m365-prod`                                 | Graph CLI (+ kv-reader for KV steps) | gated — **typo fixed 2026-07-07**                                               |
 
-## ⚠️ Known issue — `m365-prod` credential subject typo (found 2026-07-07)
+## ✅ Resolved — `m365-prod` credential subject typo (found & fixed 2026-07-07)
+
+> **Status: APPLIED & VERIFIED 2026-07-07** (issue #625). The Graph CLI credential subject was
+> corrected via `az ad app federated-credential update`. Verified green: **101** (`m365` job),
+> **301** (Graph login under `m365-prod` + kv-reader login under `cloudflare-prod-read`), and **302**
+> — all with the Azure OIDC login succeeding, no `AADSTS700213`. The optional kv-reader
+> `…:environment:m365-prod` fallback credential below was **not required** (301's second login runs
+> under `cloudflare-prod-read`, which is already credentialed).
 
 Every M365 job (101, 103, 104, 301–305) failed OIDC login with `AADSTS700213`. Root cause: the
-`github-oidc-m365-prod` federated credential on the **Graph CLI** app has a **typo in its subject**
+`github-oidc-m365-prod` federated credential on the **Graph CLI** app had a **typo in its subject**
 — a trailing hyphen on the repo name:
 
 - present: `repo:FreeForCharity/FFC-Cloudflare-Automation-:environment:m365-prod`
@@ -65,6 +72,13 @@ az ad app federated-credential create \
 Verify by re-running **101. Domain - Status** and confirming the m365 job's Azure login succeeds.
 
 ## Setup — `whmcs-prod-read` (added 2026-07-07)
+
+> **Status: APPLIED & VERIFIED 2026-07-07** (issue #625). All four steps below are done: the
+> kv-reader federated credential exists, both repo Variables are set, the kv-reader holds
+> **Key Vault Secrets User** (RBAC) on `kv-ffc-admin-prod-cbm` covering every `read-all-*` secret,
+> and the ungated `whmcs-prod-read` environment exists (`protection_rules: []`). Verified green and
+> ungated (no approval gate, no `AADSTS700213`): **202** (Export Products), **201** (Export Domains),
+> **209** (Tickets Triage). Gate audit **730** re-run green.
 
 The ungated read environment for WHMCS reads needs, one-time:
 

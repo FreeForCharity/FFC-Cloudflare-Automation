@@ -49,9 +49,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Dispatch the three read-only export workflows by stable file name
-          # (display names are renumbered periodically; file names are stable).
-          for wf in 7-whmcs-export-domains.yml 4-export-summary.yml 13-wpmudev-export-sites.yml; do
+          # Dispatch the three read-only export workflows by file name.
+          # NOTE: both display names AND file names get renumbered periodically,
+          # so keep these in sync with .github/workflows/ (last synced 2026-07-07).
+          for wf in 201-whmcs-export-domains.yml 108-export-summary.yml 601-wpmudev-export-sites.yml; do
             echo "Dispatching $wf ..."
             gh workflow run "$wf" --repo "$REPO"
           done
@@ -81,9 +82,9 @@ jobs:
               || echo "::warning::Could not download artifact '$artifact' from $wf."
           }
 
-          download_latest 7-whmcs-export-domains.yml  whmcs_domains            tmp_data/whmcs_domains
-          download_latest 4-export-summary.yml        domain_summary           tmp_data/domain_summary
-          download_latest 13-wpmudev-export-sites.yml wpmudev-domain-inventory tmp_data/wpmudev-domain-inventory
+          download_latest 201-whmcs-export-domains.yml  whmcs_domains            tmp_data/whmcs_domains
+          download_latest 108-export-summary.yml        domain_summary           tmp_data/domain_summary
+          download_latest 601-wpmudev-export-sites.yml  wpmudev-domain-inventory tmp_data/wpmudev-domain-inventory
 
       - name: Setup Node.js
         uses: actions/setup-node@v6

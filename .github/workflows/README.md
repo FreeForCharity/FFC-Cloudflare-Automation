@@ -201,7 +201,10 @@ Runs automated validation and security checks on all pull requests and pushes to
 
 1. Checks out the code
 2. Lints GitHub Actions workflows (actionlint)
-3. Checks formatting for supported files (Prettier)
+3. Validates workflow integrity: unique name prefixes, safety-doc consistency, catalog freshness, and
+   **cross-reference resolution** (`scripts/check-workflow-references.py` — every workflow file a
+   workflow/script dispatches or depends on must exist and, if dispatched, declare `workflow_dispatch`)
+4. Checks formatting for supported files (Prettier)
 4. Validates PowerShell scripts for syntax errors (PowerShell parser)
 5. Lints PowerShell scripts (PSScriptAnalyzer)
 6. Checks PowerShell formatting (Invoke-Formatter)
@@ -211,6 +214,8 @@ Runs automated validation and security checks on all pull requests and pushes to
 This workflow ensures that:
 
 - GitHub Actions workflow YAML is well-formed and consistent (actionlint)
+- Workflow cross-references stay valid — a renumbered/renamed workflow can't leave a dangling
+  `gh workflow run <file>.yml` or `paths:` reference behind (guards the class of bug fixed in #630)
 - Common file formats (YAML/Markdown/JSON/CSS/HTML) stay consistently formatted (Prettier)
 - PowerShell scripts are syntactically correct (parser)
 - PowerShell code quality rules are enforced (PSScriptAnalyzer; CI fails on errors)

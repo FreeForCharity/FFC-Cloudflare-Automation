@@ -6,13 +6,13 @@ on:
     paths:
       - '.claude/**'
       - '.githooks/**'
-      - '.github/workflows/97-ai-agent-hooks-validate.yml'
+      - '.github/workflows/728-ai-agent-hooks-validate.yml'
   push:
     branches: [main]
     paths:
       - '.claude/**'
       - '.githooks/**'
-      - '.github/workflows/97-ai-agent-hooks-validate.yml'
+      - '.github/workflows/728-ai-agent-hooks-validate.yml'
 
 jobs:
   validate-hooks:

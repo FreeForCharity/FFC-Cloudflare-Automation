@@ -14,7 +14,7 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/99-repo-audit-environment-gates.yml'
+      - '.github/workflows/730-repo-audit-environment-gates.yml'
 
 permissions:
   contents: read

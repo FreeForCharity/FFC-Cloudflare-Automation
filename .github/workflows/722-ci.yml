@@ -82,6 +82,14 @@ jobs:
           # by a regeneration (python3 scripts/generate-workflow-catalog.py).
           python3 scripts/generate-workflow-catalog.py --check
 
+      - name: Validate workflow cross-references resolve
+        shell: bash
+        run: |
+          # Fails when a workflow (or a helper script) dispatches / depends on a
+          # sibling workflow by a stale file name, or dispatches a workflow that
+          # has no workflow_dispatch trigger. Guards the #630 failure class.
+          python3 scripts/check-workflow-references.py
+
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v6
         with:

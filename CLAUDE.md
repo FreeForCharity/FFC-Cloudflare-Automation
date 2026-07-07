@@ -25,10 +25,18 @@ In a self-hosted/local remote environment the `gh` CLI is typically pre-authenti
 `gh auth status` to confirm (and `gh auth login` if not). When available it acts as a real user
 (e.g. `clarkemoyer`) with `workflow` + `repo` scopes. **Prefer `gh` for anything Actions-related.**
 
-Do NOT rely on the MCP GitHub tools to run workflows: they run through a GitHub **App installation**
-whose granted scopes do not include `actions: write`, so `actions_run_trigger`/`run_workflow`
-returns `403 Resource not accessible by integration`. (MCP is fine for PRs, issues, comments,
-reviews — those are within the App installation's granted permissions.)
+**Update (validated 2026-07-06):** the MCP GitHub App installation **now has `actions: write`** —
+`actions_run_trigger` with `method: run_workflow` successfully dispatched 101/113/209/210 from the
+web sandbox (`204` queued). Two gotchas: (a) **all dispatch inputs must be strings** — a numeric
+value (e.g. `issue_number: 609`) fails with `422 Invalid value for input`; pass `"609"`. (b) MCP
+still **cannot approve environment deployment gates** (no `pending_deployments` tool, and direct
+REST stays 403 in the sandbox), so gated jobs sit at `status: waiting` until a human reviewer
+(`clarkemoyer`) approves. The paragraph below is retained as history in case scopes regress:
+
+> Previously (pre-2026-07): the App installation lacked `actions: write`, so
+> `actions_run_trigger`/`run_workflow` returned `403 Resource not accessible by integration`, and
+> the only sandbox trigger path was `issues`-event workflows. (MCP has always been fine for PRs,
+> issues, comments, reviews.)
 
 ### Claude Code on the web (sandbox) — `gh` web-flow auth does NOT work here (IMPORTANT)
 
@@ -43,15 +51,14 @@ session doesn't rediscover it the hard way:
 - Direct repo/Actions calls via that proxy auth return
   `403 "GitHub access is not enabled for this session…"` for this org, so `gh`/`curl` cannot
   dispatch workflows or approve deployments from the sandbox either.
-- The **MCP** GitHub tools are the working channel in the sandbox (scoped to this repo) — but, as
-  above, MCP lacks `actions: write`, so it still **cannot dispatch workflows or approve environment
-  deployments**. It _can_ create/assign issues, open PRs, push files, comment, and read Actions
-  runs/logs.
+- The **MCP** GitHub tools are the working channel in the sandbox (scoped to this repo). As of
+  2026-07-06 they **can dispatch `workflow_dispatch` workflows** (see the update above) and
+  create/assign issues, open PRs, push files, comment, and read Actions runs/logs.
 
-Net effect in the web sandbox: you cannot _dispatch_ a `workflow_dispatch` workflow, and you cannot
-_approve_ an environment gate. You **can** trigger any `issues`-event workflow (e.g. Website
-Provision) by creating + assigning an issue via MCP, and a human reviewer (`clarkemoyer`) approves
-any environment gates. See the next section.
+Net effect in the web sandbox: you **can dispatch workflows via MCP** (string inputs only) and
+trigger any `issues`-event workflow (e.g. Website Provision) by creating + assigning an issue via
+MCP — but you still **cannot approve an environment gate**; a human reviewer (`clarkemoyer`)
+approves those. See the next section.
 
 ### Provision a website repo + add a maintainer (primary workflow)
 

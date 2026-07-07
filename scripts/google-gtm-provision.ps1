@@ -28,7 +28,7 @@ param(
     [string]$MetaPixelId,
     [string]$GranteeEmail,
     [switch]$DryRun,
-    [string]$Scope = 'https://www.googleapis.com/auth/tagmanager.edit.containers https://www.googleapis.com/auth/tagmanager.publish https://www.googleapis.com/auth/tagmanager.manage.accounts https://www.googleapis.com/auth/tagmanager.manage.users'
+    [string]$Scope = 'https://www.googleapis.com/auth/tagmanager.edit.containers https://www.googleapis.com/auth/tagmanager.edit.containerversions https://www.googleapis.com/auth/tagmanager.publish https://www.googleapis.com/auth/tagmanager.manage.accounts https://www.googleapis.com/auth/tagmanager.manage.users'
 )
 $ErrorActionPreference = 'Stop'
 $base = 'https://www.googleapis.com/tagmanager/v2'

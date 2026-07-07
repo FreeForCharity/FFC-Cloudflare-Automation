@@ -16,7 +16,7 @@ you**. For the narrative and per-phase "done when" checks, read
 [`docs/charity-onboarding-lifecycle.md`](../../../docs/charity-onboarding-lifecycle.md) — this skill
 is the fast index into it.
 
-**Workflow numbers here are the display numbers** (the `NN.` prefix in the Actions UI), _not_ the
+**Workflow numbers here are the display numbers** (the `NNN.` prefix in the Actions UI), _not_ the
 file names — the two differ. Map display→file via
 [`docs/workflow-catalog.json`](../../../docs/workflow-catalog.json).
 

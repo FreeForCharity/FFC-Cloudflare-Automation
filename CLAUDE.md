@@ -154,6 +154,17 @@ runner ──POST + Ocp-Apim-Subscription-Key──► APIM apim-ffc-gateway-pro
         ──► Cloudflare ──► WHMCS origin (freeforcharity.org/hub/includes/api.php)
 ```
 
+**WHMCS admin UI paths** (for direct links in issue comments/replies — the admin directory is
+renamed): `https://freeforcharity.org/hub/globaladmin/` — e.g. `clientssummary.php?userid=<id>`,
+`clientsprofile.php?userid=<id>`, `clientsservices.php?userid=<id>`,
+`orders.php?action=view&id=<orderid>`.
+
+**Where application answers live (validated 2026-07-07):** the charity-onboarding application's
+answers (org name, requested domain, mission, contacts) are **product custom fields** on the
+onboarding service — NOT client-level fields. Client `companyname` stays empty and
+`GetClientsDetails` returns client custom fields without names; use `GetClientsProducts` (workflow
+219 exports it) to read the application with field names.
+
 ### Credentials come from Key Vault via OIDC (KV is master — never a GH secret copy)
 
 - Composite action **`.github/actions/whmcs-secrets-from-kv`**: `azure/login@v3` (OIDC, no Azure

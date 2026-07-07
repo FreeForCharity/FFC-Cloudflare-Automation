@@ -540,6 +540,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 216 | WHMCS - Activity Metrics (full history, no PII) [WHMCS] | `216-whmcs-activity-metrics.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
 | 217 | WHMCS - Client Fields Survey (aggregate, no PII) [WHMCS] | `217-whmcs-client-fields-survey.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
 | 218 | WHMCS - Sites-List Reconciliation + Product Alignment [WHMCS] | `218-whmcs-siteslist-reconciliation.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
+| 219 | WHMCS - Application Detail (Client + Orders, PII-masked) [WHMCS] | `219-whmcs-application-detail.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
 | 220 | WHMCS - Served-Per-Year Metrics (span evidence, no PII) [WHMCS] | `220-whmcs-served-metrics.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 

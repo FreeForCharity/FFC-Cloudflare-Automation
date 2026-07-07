@@ -798,6 +798,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 219,
+      "title": "WHMCS - Application Detail (Client + Orders, PII-masked)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "219-whmcs-application-detail.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Read-only. Fetches ONE client's charity-application detail (GetClientsDetails + GetOrders) and posts the website-publishable projection (organization name, custom fields, orders/products; personal contact data masked) to the job summary and optionally back to a GitHub issue. Built so an agent/operator can read a specific application without downloading artifacts. No writes.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "single-client projection; personal contact fields always masked",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 220,
       "title": "WHMCS - Served-Per-Year Metrics (span evidence, no PII)",
       "apis": [

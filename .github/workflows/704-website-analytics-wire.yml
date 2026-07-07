@@ -1,5 +1,6 @@
 name: '704. Website - Analytics Wire [GH]'
-run-name: 'Analytics Wire: ${{ inputs.domain }} (GTM ${{ inputs.gtm_id }}, dry_run=${{ inputs.dry_run }})'
+run-name:
+  'Analytics Wire: ${{ inputs.domain }} (GTM ${{ inputs.gtm_id }}, dry_run=${{ inputs.dry_run }})'
 
 # Wire provisioned GA4 / GTM ids into one FFC-EX-<domain> website repo by opening a PR
 # (never pushing the default branch). Detects the site type and delegates the file edits to

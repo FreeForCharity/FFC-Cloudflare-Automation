@@ -48,13 +48,22 @@ workflow. The relevant intake templates:
 
 ## Phase 0 — Status check (always start here)
 
+- **Find the application by domain FIRST.** Run **221. WHMCS - Application Search** with the domain
+  (or org-name) as the query to get the **client id** and read the application (org name, mission,
+  desired domain, legal status). Do **not** try to identify the application from the masked triage
+  tables (209/210): those show the **applicant's personal first name**, not the org — matching on a
+  name guessed from the org name finds the wrong charity (this is exactly what happened on the first
+  full-chain run; see [retro](restored-radiance-first-fullchain-retro.md)). The org name lives only
+  in the mission text (a product custom field); use **219. WHMCS - Application Detail** for the full
+  per-client view once you have the id.
 - **Run:** **101. Domain - Status (All Sources)** — read-only across **Cloudflare + M365** (it is
   the `[CF+M365]` workflow and does not query WHMCS). To check for an existing **WHMCS**
   client/domain, run **104. Domain - Export Inventory** (which includes WHMCS) or a WHMCS export
   (30).
-- **Why:** establishes the starting state so you don't re-create a zone or double-onboard.
-- **Done when:** you know whether the domain already has a Cloudflare zone and M365 presence
-  (via 01) and a WHMCS client (via 04 / 30).
+- **Why:** establishes the starting state so you don't re-create a zone, double-onboard, or process
+  the wrong charity's application.
+- **Done when:** you have the confirmed WHMCS client id for the domain, and you know whether the
+  domain already has a Cloudflare zone and M365 presence (via 01).
 
 ## Phase 1 — Domain under FFC Cloudflare ⏸ waits for approval
 

@@ -165,6 +165,36 @@ onboarding service — NOT client-level fields. Client `companyname` stays empty
 `GetClientsDetails` returns client custom fields without names; use `GetClientsProducts` (workflow
 219 exports it) to read the application with field names.
 
+**Identify an application by DOMAIN, not by the triage name (validated 2026-07-07).** The masked
+triage tables (209/210) show the **applicant's personal first name**, not the org — the org name is
+only inside the mission text. Matching on a name-initial guessed from the org name will find the
+wrong charity. To find "the application for `<domain>`" use **workflow 221 (WHMCS Application
+Search)** — it sweeps `GetClientsProducts` and returns the matching client id + readable fields.
+Fastest confirm from the sandbox once `az` is authed (see below): read `GetClientsProducts` for a
+`clientid` directly via APIM. See `docs/restored-radiance-first-fullchain-retro.md`.
+
+### Azure CLI from the sandbox (device-auth) — direct WHMCS reads + Azure inspection
+
+`az` is **not preinstalled**, but you can install it into a venv and device-auth as the admin
+(`clarkemoyer@freeforcharity.org`), which unblocks direct WHMCS queries (KV creds → APIM) and Azure
+AD reads:
+
+```bash
+python3 -m venv azvenv && ./azvenv/bin/pip install -q azure-cli
+export AZURE_CONFIG_DIR="$PWD/azconfig"
+./azvenv/bin/az login --use-device-code --allow-no-subscriptions   # give the code to the user
+```
+
+- **Reads work:** `az ad app federated-credential list`, `az keyvault secret show`, and querying
+  live WHMCS by fetching the `read-all-ffc-whmcs-*` secrets and POSTing to the APIM gateway with the
+  `Ocp-Apim-Subscription-Key` header (no gate needed — this is how client 419 was confirmed).
+- **Azure AD IAM writes are BLOCKED by the harness auto-mode classifier** (creating/updating a
+  federated credential is high-severity). Provide the exact `az` command for a human to run, or ask
+  for a Bash allow-rule. Full identity inventory + repair commands:
+  **`docs/azure-oidc-federated-credentials.md`** — including the **`m365-prod` credential-subject
+  typo** (`FFC-Cloudflare-Automation-`, trailing hyphen) that breaks every M365 job with
+  `AADSTS700213`, and the `whmcs-prod-read` setup.
+
 ### Credentials come from Key Vault via OIDC (KV is master — never a GH secret copy)
 
 - Composite action **`.github/actions/whmcs-secrets-from-kv`**: `azure/login@v3` (OIDC, no Azure

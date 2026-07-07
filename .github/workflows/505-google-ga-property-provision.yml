@@ -1,7 +1,7 @@
 name: '505. Google - GA4 Property Provision (per-charity) [GOOGLE]'
 run-name: 'GA4 Property Provision: ${{ inputs.domain }} (dry_run=${{ inputs.dry_run }})'
 
-# Provision a per-charity GA4 property: one property under the FFC Supported Charities GA
+# Provision a per-charity GA4 property: one property under the FFC Supported Sites GA
 # account + one web data stream for the charity's domain, reporting the measurement id
 # (G-XXXX) that workflow 503 seeds into the charity's GTM container. Gated write:
 # google-prod-write + dry_run defaults to true. Idempotent — an existing stream for the
@@ -21,7 +21,7 @@ on:
       account_name:
         description: 'GA account display name to resolve when account_id is empty'
         required: false
-        default: 'FFC Supported Charities'
+        default: 'FFC Supported Sites'
         type: string
       display_name:
         description: 'Property display name (default: "<domain> - GA4")'

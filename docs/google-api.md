@@ -156,7 +156,7 @@ entity; multiple streams only when one entity spans domains/subdomains/apps.**
 - **Internal FFC domains** → one `Free For Charity` property, one web **stream per internal domain**
   (same org, same audience, unified rollup; isolation not needed). Applied going forward; existing
   per-site internal properties are left as-is.
-- **Supported charities** → a dedicated **`FFC Supported Charities` account**, **one property per
+- **Supported charities** → a dedicated **`FFC Supported Sites` account**, **one property per
   charity** (NOT stream-per-charity). GA4 access control, Ads/Search Console/BigQuery links, and
   retention/data-deletion are all **property-level**, plus a ~50-stream cap. Cross-charity rollups
   happen in FFC's **own dashboard layer**, not GA4.
@@ -185,8 +185,8 @@ GTM access is **container-level**, so charities that self-administer need their 
 
 For `FFC-EX-<domain>`:
 
-1. **GA:** create `<domain> - GA4` property under `FFC Supported Charities` → web stream →
-   measurement id.
+1. **GA:** create `<domain> - GA4` property under `FFC Supported Sites` → web stream → measurement
+   id.
 2. **GTM:** create the charity's container → seed GA4 / Clarity / Meta default tags on All Pages →
    publish → `GTM-XXXX`.
 3. **Delegate:** grant the charity POC container Edit/Publish.

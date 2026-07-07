@@ -95,6 +95,29 @@ The ungated read environment for WHMCS reads needs, one-time:
 4. Create the `whmcs-prod-read` GitHub environment with **no** required reviewers, then re-run
    **730** to refresh the gate audit.
 
+## Auditing federated-credential subjects
+
+The `m365-prod` typo above was an **expected** credential with a **malformed subject** — a
+presence/enumeration check (the shape of #589) passes it, yet every job fails `AADSTS700213`. To
+catch that class, the expected credentials this repo's workflows rely on are declared in
+[`config/federated-credentials.json`](../config/federated-credentials.json) (per app: object id +
+the environments it must carry). Subjects are **generated** from `repo` + `environment`, so the map
+itself can't carry a subject typo.
+
+`scripts/check-federated-credential-subjects.py` uses it three ways:
+
+```bash
+python3 scripts/check-federated-credential-subjects.py            # self-check the map (runs in CI)
+python3 scripts/check-federated-credential-subjects.py --live     # audit live Azure (operator; needs az)
+python3 scripts/check-federated-credential-subjects.py --actual-dir ./dumps   # audit saved az dumps
+```
+
+The `--live` / `--actual-dir` audit asserts each expected credential exists with an **exact**
+canonical `subject`, `issuer`, and `audiences`, and flags any this-repo credential that isn't
+expected. CI runs the self-check on every PR; the live audit is operator-run (and folds naturally
+into the #589 drift-audit workflow when that lands). Cross-repo credentials on these shared
+identities (`FFC-IN-*`) are intentionally out of scope.
+
 ## Inspecting / repairing from the Claude sandbox
 
 `az` is not preinstalled, but you can install it into a venv and device-auth as the admin:

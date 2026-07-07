@@ -33,7 +33,14 @@ A live change generally has to get past several of these, not just one:
    **every** job that uses them. Read-only WHMCS workflows moved to the ungated
    **`whmcs-prod-read`** (reader OIDC identity, `read-all-*` KV secrets) in 2026-07; the M365
    list/preflight reads 301–303 and the WPMUDEV export 601 still wait on their gated envs. Re-run
-   workflow 730 after any change in _Settings → Environments_ to refresh this list.
+   workflow 730 after any change in _Settings → Environments_ to refresh this list. To preview or
+   clear **several** runs waiting at a gate at once, an environment reviewer can run
+   `scripts/approve-waiting-runs.py` — an operator tool that acts under your own `gh` auth (the
+   ambient `GITHUB_TOKEN` **cannot** approve gates). It defaults to a dry-run preview; pass
+   `--approve` (optionally `--environment <name>`) to act. For the idempotent Google 505/503
+   provisioning writes specifically, the structural fix is a dedicated **ungated
+   `google-prod-provision`** environment (mirroring `whmcs-prod-read`) so they don't gate at all
+   (#636).
 3. **`dry_run` defaults to preview.** The granular write workflows take a `dry_run` input that
    **defaults to `true`**. A dry run returns a preview (e.g. redacted JSON of what _would_ be sent)
    and performs **no** mutation. You must explicitly pass `dry_run=false` to go live.

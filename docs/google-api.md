@@ -100,8 +100,29 @@ need no re-authorization: `admin-user` = `clarkemoyer@freeforcharity.org`, `cust
 `C00vzt6sw`, `service-account-email` = `ffc-workspace-admin@ffc-api-prod.iam.gserviceaccount.com`,
 `service-account-key` = that SA's key. **One manual step remains before any Workspace API call**
 (not a credential): authorize the SA's domain-wide delegation in **Admin console → Security → API
-controls → Domain-wide delegation** using client id **`110347116631668841237`** with the scopes the
-workflow needs.
+controls → Domain-wide delegation** (direct link:
+<https://admin.google.com/ac/owl/domainwidedelegation>) using client id **`110347116631668841237`**
+with the scopes the workflow needs.
+
+#### Canonical DWD scope list (client `110347116631668841237`)
+
+DWD token minting is **exact-match**: every scope a script requests must appear in the grant, or
+minting fails (`unauthorized_client`) — and a partially-covered request can pass minting but fail
+mid-call (`ACCESS_TOKEN_SCOPE_INSUFFICIENT`, as 503's first publish did). To avoid per-feature
+Admin-console round-trips, the grant is maintained as this consolidated list (front-loads Wave 2+
+scopes; acceptable because the key lives only in Key Vault and every write workflow is human-gated
+at `google-prod-write`). Paste as one comma-separated line:
+
+```
+https://www.googleapis.com/auth/analytics.edit,https://www.googleapis.com/auth/analytics.manage.users,https://www.googleapis.com/auth/analytics.readonly,https://www.googleapis.com/auth/siteverification,https://www.googleapis.com/auth/tagmanager.delete.containers,https://www.googleapis.com/auth/tagmanager.edit.containers,https://www.googleapis.com/auth/tagmanager.edit.containerversions,https://www.googleapis.com/auth/tagmanager.manage.accounts,https://www.googleapis.com/auth/tagmanager.manage.users,https://www.googleapis.com/auth/tagmanager.publish,https://www.googleapis.com/auth/tagmanager.readonly,https://www.googleapis.com/auth/webmasters
+```
+
+In use today: `analytics.edit` (505), the five `tagmanager.*` write/manage scopes (503, 504),
+`webmasters` (501). Forward-looking: `analytics.manage.users` (GA-side POC delegation),
+`analytics.readonly` (DWD reads), `siteverification` (Wave 2 — also enable the API on `ffc-api-prod`
+first), `tagmanager.readonly` (least-privilege backups), `tagmanager.delete.containers` (container
+rollback). Workspace Admin SDK scopes (`admin.directory.*`) are deliberately excluded until a Wave 5
+workflow actually ships.
 
 Then in GitHub: create environments `google-prod-read` (no approval) and `google-prod-write`
 (required reviewer `clarkemoyer`); add the matching Azure federated credentials; set repo Variables

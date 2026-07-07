@@ -99,13 +99,13 @@
       "environments": [
         "cloudflare-prod-read",
         "m365-prod",
-        "whmcs-prod",
+        "whmcs-prod-read",
         "wpmudev-prod"
       ],
       "description": "",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod / \u2705 m365-prod / \u2705 wpmudev-prod (+ cf-read)",
-      "guard": "waits on whmcs-prod, m365-prod, and wpmudev-prod approvals",
+      "approvalEnv": "whmcs-prod-read / \u2705 m365-prod / \u2705 wpmudev-prod (+ cf-read)",
+      "guard": "waits on m365-prod and wpmudev-prod approvals (WHMCS job ungated)",
       "category": "Cloudflare / DNS / Domain",
       "categoryCode": "CF"
     },
@@ -324,11 +324,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "READ-ONLY: exports WHMCS domains, then runs scripts/domain-transfer-preflight.ps1 offline to classify each domain's readiness to transfer to Cloudflare Registrar (eNOM -> Cloudflare; project #157). Initiates no transfer and spends no money.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "\u2014",
       "category": "Cloudflare / DNS / Domain",
       "categoryCode": "CF"
@@ -446,11 +446,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "gated only by the env approval",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -466,11 +466,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "gated only by the env approval",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -486,11 +486,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "gated only by the env approval",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -586,11 +586,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "\u2014",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -607,11 +607,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "Read-only. Surfaces WHMCS tickets that need attention (default Open + Customer-Reply) into the job summary + a CSV artifact, and can optionally upsert ONE rolling tracking issue. No ticket writes are performed.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "summary masks PII",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -628,11 +628,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "Read-only. Summarizes WHMCS orders by status into the job summary + CSV artifacts, lists actionable Pending orders, and can optionally upsert ONE rolling tracking issue. No order writes are performed.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "summary masks PII",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -688,11 +688,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "Serialize runs so two dispatches can't race on the artifacts/zeffy/* outputs.",
       "safetyLevel": "Reads (builds a file)",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "output is a draft; serialized",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -708,11 +708,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "Per-year WHMCS client-membership aggregates (new signups, cumulative members, currently-active cumulative) for the Candid Platinum \"active members\" metric series and the freeforcharity.org impact metrics. Reads GetClients but tallies only {datecreated, status} \u2014 the artifact and step summary contain aggregate integer counts only (no names, emails, or client ids). Dispatch-only.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "aggregate counts only \u2014 no PII in artifact or summary",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -728,11 +728,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "Revalidation of the client-count metrics: classifies clients by the products/services they hold (each service has its own registration date and status), instead of the historyless client status flag \u2014 and surfaces the product catalog so \"which clients are nonprofits\" is decided from data, not assumption. Output is aggregate counts + product/group names only (no client names, emails, ids, or domains). Dispatch-only.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "aggregate counts + product names only (no PII)",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -748,11 +748,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "Phase 1 of docs/whmcs-data-quality-and-metrics-plan.md: per-year ACTIVE nonprofit members from dated evidence (invoices, orders, service registrations) spanning the full 10+ years \u2014 the series status flags cannot provide. Aggregate integer counts only. Dispatch-only.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "aggregate counts only (no PII)",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -768,11 +768,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "Phase 1 of docs/whmcs-data-quality-and-metrics-plan.md: throttled per-client GetClientsDetails loop measuring how the three classification signals line up \u2014 the Legal Organization Status custom field, the native client group, and charity-product evidence. Only exact legal-status vocabulary matches are counted; free-text values are never printed. Dispatch-only.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "throttled per-client loop; vocabulary-matched values only (no PII)",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -788,11 +788,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "Phase 1 of docs/whmcs-data-quality-and-metrics-plan.md: joins the sites-list (WHMCS + Cloudflare + WPMUDEV + health) with live WHMCS domains/services to measure (a) the coverage gap (legacy-WP orgs with no WHMCS record) and (b) the product-alignment gap \u2014 Cloudflare domains whose client lacks the 'Domain Registered in Cloudflare' product (pid 39) and GitHub Pages sites whose client lacks 'Hosted by GitHub Pages' (pid 40). Summary is aggregate counts; the artifact carries the gap domain lists (org domains, public project data) as the Phase 2 backfill work-list. Dispatch-only.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "aggregate summary; artifact carries org-domain gap lists only",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -808,11 +808,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "Read-only. Fetches ONE client's charity-application detail (GetClientsDetails + GetOrders) and posts the website-publishable projection (organization name, custom fields, orders/products; personal contact data masked) to the job summary and optionally back to a GitHub issue. Built so an agent/operator can read a specific application without downloading artifacts. No writes.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "single-client projection; personal contact fields always masked",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -828,11 +828,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "\"216 v2\": FFC's services are free, so billing events undercount service delivery. This counts a member as SERVED in year Y when a charity service or registered domain was IN FORCE during Y (span from regdate to next-due/expiry; Active runs through today), emits org-level (domain-keyed) counts with current sites-list-only orgs merged in, keeps the old billing-active series for comparison, and shows invoice $0-vs-paid composition per year. Aggregate counts only. Dispatch-only.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "aggregate counts only (no PII)",
       "category": "WHMCS",
       "categoryCode": "WHMCS"

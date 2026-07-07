@@ -28,8 +28,9 @@ Azure Key Vault via OIDC (never GitHub secrets).
 ## Safety model (summary — full doc: `docs/workflow-safety-and-approvals.md`)
 
 1. Read vs write credential scopes (`read-all-*` vs `wr-all-*` Key Vault secrets).
-2. Environment approval gates — write envs (and some read envs like `whmcs-prod`, `m365-prod`,
-   `wpmudev-prod`) pause at `waiting` for a human reviewer.
+2. Environment approval gates — write envs (and some read envs like `m365-prod`, `wpmudev-prod`)
+   pause at `waiting` for a human reviewer. Read-only WHMCS workflows use the ungated
+   `whmcs-prod-read`.
 3. `dry_run` defaults to **true** on write workflows; live requires `dry_run=false`.
 4. Typed confirmation for the highest-stakes actions (e.g. domain registration).
 5. Key Vault is the **single source of truth** for credentials; rotation = new KV version, no GitHub

@@ -501,7 +501,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 101 | Domain - Status (All Sources) [CF+M365] | `101-domain-status.yml` | workflow_dispatch | Reads | cloudflare-prod-read / ✅ m365-prod |
 | 102 | Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS] | `102-domain-add-ffc-cloudflare-and-whmcs.yml` | workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write / ✅ whmcs-prod |
 | 103 | Domain - Enforce Standard (GitHub Apex + M365) [CF+M365] | `103-enforce-domain-standard.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write / ✅ m365-prod |
-| 104 | Domain - Export Inventory (All Sources) [CF+M365+WHMCS+WPMUDEV] | `104-domain-export-inventory.yml` | workflow_dispatch | Reads | ✅ whmcs-prod / ✅ m365-prod / ✅ wpmudev-prod (+ cf-read) |
+| 104 | Domain - Export Inventory (All Sources) [CF+M365+WHMCS+WPMUDEV] | `104-domain-export-inventory.yml` | workflow_dispatch | Reads | whmcs-prod-read / ✅ m365-prod / ✅ wpmudev-prod (+ cf-read) |
 | 105 | DNS - Manage Record (Manual / Issue Label) [CF] | `105-manage-record.yml` | issues, workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write |
 | 106 | DNS - Enforce Standard (DNS-only) [CF] | `106-enforce-standard.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write |
 | 107 | DNS - Audit Compliance (Report) [CF] | `107-audit-compliance.yml` | workflow_dispatch | Reads | cloudflare-prod-read |
@@ -512,7 +512,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 112 | DNS - Bulk Replace A-record IP (All Zones) [CF] | `112-dns-bulk-replace-a-ip.yml` | workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write |
 | 113 | Domain - Registrar Search / Check / Register (Admin, DRAFT) [CF] | `113-cloudflare-domain-register.yml` | issues, workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write |
 | 114 | Domain - Validate Cloudflare Registrar API Access (Read-only) [CF] | `114-cloudflare-registrar-access-check.yml` | workflow_dispatch | Reads | ✅ cloudflare-prod-write |
-| 115 | Domain - Transfer Readiness Preflight (Report) [WHMCS] | `115-domain-transfer-preflight.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
+| 115 | Domain - Transfer Readiness Preflight (Report) [WHMCS] | `115-domain-transfer-preflight.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 | 116 | Domain - Transfer EPP/Auth Code Probe (Admin) [WHMCS] | `116-domain-transfer-epp-probe.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 117 | Domain - Post-Transfer Verification (Report) [CF] | `117-domain-transfer-verify.yml` | workflow_dispatch | Reads | cloudflare-prod-read |
 | 118 | Domain - Registrar Lock / Unlock [WHMCS] | `118-whmcs-domain-lock.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
@@ -522,26 +522,26 @@ No additional setup is required for these workflows to run. However, to get the 
 
 | # | Workflow | File | Triggers | Safety | Approval env |
 | --- | --- | --- | --- | --- | --- |
-| 201 | WHMCS - Export Domains (Report) [WHMCS] | `201-whmcs-export-domains.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
-| 202 | WHMCS - Export Products (Report) [WHMCS] | `202-whmcs-export-products.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
-| 203 | WHMCS - Export Payment Methods (Research) [WHMCS] | `203-whmcs-export-payment-methods.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
+| 201 | WHMCS - Export Domains (Report) [WHMCS] | `201-whmcs-export-domains.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 202 | WHMCS - Export Products (Report) [WHMCS] | `202-whmcs-export-products.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 203 | WHMCS - Export Payment Methods (Research) [WHMCS] | `203-whmcs-export-payment-methods.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 | 204 | WHMCS - Charity Onboard (client + contacts + order) [WHMCS] | `204-whmcs-charity-onboard.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 205 | WHMCS - Open Ticket (manual) [WHMCS] | `205-whmcs-ticket-open.yml` | workflow_dispatch | Writes (gated) | ✅ whmcs-prod |
 | 206 | WHMCS - Issue to Ticket (one-way) [WHMCS] | `206-whmcs-issue-to-ticket.yml` | issues | Writes (gated) | ✅ whmcs-prod |
 | 207 | WHMCS - Ticket Respond (templated) [WHMCS] | `207-whmcs-ticket-respond.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
-| 208 | WHMCS - Export Tickets (Report) [WHMCS] | `208-whmcs-tickets-export.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
-| 209 | WHMCS - Tickets Triage (Open/Customer-Reply) [WHMCS] | `209-whmcs-tickets-triage.yml` | schedule, workflow_dispatch | Reads | ✅ whmcs-prod |
-| 210 | WHMCS - Orders Triage (Pending/Fraud/Active) [WHMCS] | `210-whmcs-orders-triage.yml` | schedule, workflow_dispatch | Reads | ✅ whmcs-prod |
+| 208 | WHMCS - Export Tickets (Report) [WHMCS] | `208-whmcs-tickets-export.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 209 | WHMCS - Tickets Triage (Open/Customer-Reply) [WHMCS] | `209-whmcs-tickets-triage.yml` | schedule, workflow_dispatch | Reads | whmcs-prod-read |
+| 210 | WHMCS - Orders Triage (Pending/Fraud/Active) [WHMCS] | `210-whmcs-orders-triage.yml` | schedule, workflow_dispatch | Reads | whmcs-prod-read |
 | 211 | WHMCS - Order Update (accept/cancel/fraud) [WHMCS] | `211-whmcs-order-update.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 212 | WHMCS - Product Add (catalog) [WHMCS] | `212-whmcs-product-add.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
-| 213 | WHMCS -> Zeffy Payments Import (Draft) [WHMCS] | `213-whmcs-zeffy-payments-import-draft.yml` | workflow_dispatch | Reads (builds a file) | ✅ whmcs-prod |
-| 214 | WHMCS - Clients Metrics (aggregate, no PII) [WHMCS] | `214-whmcs-clients-metrics.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
-| 215 | WHMCS - Nonprofit Clients Metrics (service evidence, no PII) [WHMCS] | `215-whmcs-nonprofit-clients-metrics.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
-| 216 | WHMCS - Activity Metrics (full history, no PII) [WHMCS] | `216-whmcs-activity-metrics.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
-| 217 | WHMCS - Client Fields Survey (aggregate, no PII) [WHMCS] | `217-whmcs-client-fields-survey.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
-| 218 | WHMCS - Sites-List Reconciliation + Product Alignment [WHMCS] | `218-whmcs-siteslist-reconciliation.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
-| 219 | WHMCS - Application Detail (Client + Orders, PII-masked) [WHMCS] | `219-whmcs-application-detail.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
-| 220 | WHMCS - Served-Per-Year Metrics (span evidence, no PII) [WHMCS] | `220-whmcs-served-metrics.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
+| 213 | WHMCS -> Zeffy Payments Import (Draft) [WHMCS] | `213-whmcs-zeffy-payments-import-draft.yml` | workflow_dispatch | Reads (builds a file) | whmcs-prod-read |
+| 214 | WHMCS - Clients Metrics (aggregate, no PII) [WHMCS] | `214-whmcs-clients-metrics.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 215 | WHMCS - Nonprofit Clients Metrics (service evidence, no PII) [WHMCS] | `215-whmcs-nonprofit-clients-metrics.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 216 | WHMCS - Activity Metrics (full history, no PII) [WHMCS] | `216-whmcs-activity-metrics.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 217 | WHMCS - Client Fields Survey (aggregate, no PII) [WHMCS] | `217-whmcs-client-fields-survey.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 218 | WHMCS - Sites-List Reconciliation + Product Alignment [WHMCS] | `218-whmcs-siteslist-reconciliation.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 219 | WHMCS - Application Detail (Client + Orders, PII-masked) [WHMCS] | `219-whmcs-application-detail.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 220 | WHMCS - Served-Per-Year Metrics (span evidence, no PII) [WHMCS] | `220-whmcs-served-metrics.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

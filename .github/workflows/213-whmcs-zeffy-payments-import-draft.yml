@@ -80,7 +80,7 @@ jobs:
   whmcs_to_zeffy_draft:
     runs-on: windows-latest
     timeout-minutes: 30
-    environment: whmcs-prod
+    environment: whmcs-prod-read
 
     steps:
       - uses: actions/checkout@v5
@@ -88,8 +88,9 @@ jobs:
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv
         with:
-          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Export clients (read-only)
         shell: pwsh

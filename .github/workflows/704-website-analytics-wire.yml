@@ -1,0 +1,142 @@
+name: '704. Website - Analytics Wire [GH]'
+run-name:
+  'Analytics Wire: ${{ inputs.domain }} (GTM ${{ inputs.gtm_id }}, dry_run=${{ inputs.dry_run }})'
+
+# Wire provisioned GA4 / GTM ids into one FFC-EX-<domain> website repo by opening a PR
+# (never pushing the default branch). Detects the site type and delegates the file edits to
+# scripts/analytics-wire.ps1: template sites get src/lib/analytics.config.ts + a rewired GTM
+# component; static WordPress exports get the GTM snippet injected across every *.html.
+# Idempotent: an already-wired repo yields no PR. Gated write: github-prod (uses CBM_TOKEN).
+# See docs (analytics-provisioning skill) and issue #629 (fleet rollout).
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Charity domain -> FreeForCharity/FFC-EX-<domain>, e.g. clarasbridge.org'
+        required: true
+        type: string
+      gtm_id:
+        description: 'GTM container id (GTM-XXXXXXX) from workflow 503'
+        required: true
+        type: string
+      measurement_id:
+        description: 'GA4 measurement id (G-XXXXXXXXXX) from workflow 505 (optional)'
+        required: false
+        type: string
+      dry_run:
+        description: 'Preview only: build the branch + print the diff, do not open the PR'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+# Serialize per-domain so re-dispatches for the same site queue instead of racing.
+concurrency:
+  group: 704-website-analytics-wire-${{ inputs.domain }}
+  cancel-in-progress: false
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    environment: github-prod
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate inputs + required token
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CBM_TOKEN}" ]; then
+            echo "::error::CBM_TOKEN secret is not set (environment: github-prod)."
+            exit 1
+          fi
+          if [[ ! "${{ inputs.gtm_id }}" =~ ^GTM-[A-Z0-9]{5,9}$ ]]; then
+            echo "::error::gtm_id '${{ inputs.gtm_id }}' is not a valid GTM-XXXXXXX id."
+            exit 1
+          fi
+          if [ -n "${{ inputs.measurement_id }}" ] && [[ ! "${{ inputs.measurement_id }}" =~ ^G-[A-Z0-9]{6,12}$ ]]; then
+            echo "::error::measurement_id '${{ inputs.measurement_id }}' is not a valid G-XXXXXXXXXX id."
+            exit 1
+          fi
+        env:
+          CBM_TOKEN: ${{ secrets.CBM_TOKEN }}
+
+      - name: Wire analytics + open PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+          DOMAIN: ${{ inputs.domain }}
+          GTM_ID: ${{ inputs.gtm_id }}
+          MEASUREMENT_ID: ${{ inputs.measurement_id }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          REPO="FreeForCharity/FFC-EX-${DOMAIN}"
+
+          if ! gh repo view "$REPO" --json nameWithOwner >/dev/null 2>&1; then
+            echo "::error::Target repo $REPO not found or not accessible."
+            exit 1
+          fi
+          DEFBRANCH="$(gh repo view "$REPO" --json defaultBranchRef --jq .defaultBranchRef.name)"
+
+          gh auth setup-git
+          git clone --depth 1 "https://github.com/${REPO}.git" target
+
+          args=(-NoProfile -File scripts/analytics-wire.ps1 -RepoDir "$PWD/target" -Domain "$DOMAIN" -GtmId "$GTM_ID")
+          if [ -n "${MEASUREMENT_ID}" ]; then
+            args+=(-MeasurementId "$MEASUREMENT_ID")
+          fi
+          pwsh "${args[@]}" | tee wire-summary.json
+          {
+            echo "## 704 Analytics Wire — ${DOMAIN}"
+            echo ''
+            echo '```json'
+            cat wire-summary.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          cd target
+          if git diff --quiet; then
+            echo "Already wired for ${GTM_ID} — no changes, no PR." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git --no-pager diff --stat
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "dry_run=true — diff shown below, no PR opened."
+            git --no-pager diff | head -300
+            exit 0
+          fi
+
+          BRANCH="chore/analytics-wire-${GTM_ID}"
+          git config user.name "ffc-automation[bot]"
+          git config user.email "actions@github.com"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "chore: wire analytics (GTM ${GTM_ID})"
+          git push -u origin "$BRANCH" --force-with-lease
+
+          # Idempotent redispatch: if a PR for this head branch already exists, the push above
+          # updated it — don't hard-fail on `gh pr create`.
+          if gh pr view "$BRANCH" --repo "$REPO" --json number >/dev/null 2>&1; then
+            echo "PR already open for $BRANCH on $REPO — updated its branch, skipping create." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          PR_BODY=$(cat <<EOF
+          Wires analytics ids into this site (public client-side ids, not secrets).
+
+          - GTM container: \`${GTM_ID}\` (FFC-owned, via workflow 503)
+          - GA4 measurement id: \`${MEASUREMENT_ID:-n/a}\` (via workflow 505; GA4 fires inside the GTM container)
+
+          Generated by FFC workflow **704. Website - Analytics Wire**. Part of the fleet analytics
+          rollout (FreeForCharity/FFC-Cloudflare-Automation#629).
+          EOF
+          )
+          gh pr create --repo "$REPO" --base "$DEFBRANCH" --head "$BRANCH" \
+            --title "chore: wire analytics (GTM ${GTM_ID})" \
+            --body "$PR_BODY" --draft
+          echo "Opened draft PR on ${REPO}." | tee -a "$GITHUB_STEP_SUMMARY"

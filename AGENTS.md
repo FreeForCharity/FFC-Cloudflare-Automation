@@ -11,6 +11,16 @@ Cloudflare (DNS/registrar), WHMCS (billing/support), Microsoft 365, Zeffy, Googl
 WPMUDEV, and the FFC GitHub org itself. PowerShell-first scripts in `scripts/`, credentials from
 Azure Key Vault via OIDC (never GitHub secrets).
 
+## Onboarding a charity (start here for the full chain)
+
+If the task is to **onboard / provision / "set up the repo for" a charity or domain** — or you just
+need to know which workflow does which onboarding step — use the **`charity-onboarding` skill**
+(`.claude/skills/charity-onboarding/SKILL.md`). It is the ordered map (Phase 0 find-the-application
+→ domain → DNS/M365 → website repo → rebrand → analytics → WHMCS → support), names the exact
+workflows and gates, and lists the gotchas that have burned prior sessions (identify by domain not
+masked name; string-only dispatch inputs; merge-to-`main` before dispatch). The narrative runbook it
+indexes is `docs/charity-onboarding-lifecycle.md`.
+
 ## Picking a workflow
 
 1. **Read the catalog first**: `docs/workflow-catalog.json` (machine-readable) or the generated

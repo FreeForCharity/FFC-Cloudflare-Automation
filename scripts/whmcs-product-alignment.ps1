@@ -41,8 +41,11 @@ param(
     [Parameter()]
     [string]$BillingCycle = 'free',
 
+    # 'mailin' is the offline/manual gateway (no card processing). This install
+    # does NOT have 'banktransfer'; valid gateways are authorize, authorizeecheck,
+    # mailin, paypalcheckout, paypal_acdc, paypal_ppcpv. mailin fits a $0 marker.
     [Parameter()]
-    [string]$PaymentMethod = 'banktransfer',
+    [string]$PaymentMethod = 'mailin',
 
     [Parameter()]
     [switch]$Execute,
@@ -81,6 +84,26 @@ function New-Body([string]$action) {
     return $b
 }
 
+# client id -> set of domains that already hold the product (cached per client).
+# Idempotency is per (client, domain): a client that owns several registrar
+# domains gets one product service line per domain, each labelled with it.
+# NB: the cache is populated as a side effect and READ back by index (below);
+# returning the HashSet from a function would enumerate it in the pipeline.
+$productDomainsByClient = @{}
+function Set-ClientProductDomainCache {
+    param([string]$ClientId)
+    $b = New-Body 'GetClientsProducts'
+    $b.clientid = $ClientId
+    $resp = Invoke-WhmcsApi -ApiUrl $api -Body $b
+    $set = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($p in @($resp.products.product)) {
+        if ("$($p.pid)" -eq $ProductId -and $p.domain) {
+            [void]$set.Add(([string]$p.domain).ToLowerInvariant())
+        }
+    }
+    $productDomainsByClient[$ClientId] = $set
+}
+
 # domain -> client id (WHMCS domain records only)
 $domainClient = @{}
 $start = 0
@@ -108,7 +131,9 @@ foreach ($domain in $domains) {
         $needsClient += $domain
         continue
     }
-    if (Test-WhmcsClientHasProduct -ApiUrl $api -Auth $auth -ClientId $cid -ProductId $ProductId) {
+    if (-not $productDomainsByClient.ContainsKey($cid)) { Set-ClientProductDomainCache -ClientId $cid }
+    $held = $productDomainsByClient[$cid]
+    if ($held.Contains($domain)) {
         $aligned += [pscustomobject]@{ domain = $domain; clientId = $cid; status = 'already-held' }
         continue
     }
@@ -123,8 +148,10 @@ foreach ($domain in $domains) {
         $b.billingcycle = $BillingCycle
         $b.paymentmethod = $PaymentMethod
         $b.domain = $domain
-        $b.noinvoice = $true
-        $b.noemail = $true
+        # Form-encoded, so use '1' (a boolean $true serializes to "True", which
+        # WHMCS mishandles and returns a malformed response for).
+        $b.noinvoice = '1'
+        $b.noemail = '1'
         $resp = Invoke-WhmcsApi -ApiUrl $api -Body $b
         $ordered += [pscustomobject]@{ domain = $domain; clientId = $cid; status = 'ordered'; orderid = "$($resp.orderid)" }
     }

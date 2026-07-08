@@ -14,6 +14,7 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    environment: github-prod
     env:
       GH_TOKEN: ${{ secrets.CBM_TOKEN }}
     steps:

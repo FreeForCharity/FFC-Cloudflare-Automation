@@ -99,11 +99,17 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           cd target
-          if git diff --quiet; then
+          # Stage everything (including brand-new files like a first-time
+          # analytics.config.ts) BEFORE checking for changes. `git diff --quiet`
+          # alone ignores UNtracked files, so a template site whose only change is
+          # a newly-created config file gets mis-reported as "already wired" and
+          # silently skipped (no PR). Compare the staged index instead.
+          git add -A
+          if git diff --cached --quiet; then
             echo "Already wired for ${GTM_ID} — no changes, no PR." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          git --no-pager diff --stat
+          git --no-pager diff --cached --stat
 
           if [ "${DRY_RUN}" = "true" ]; then
             echo "dry_run=true — diff shown below, no PR opened."
@@ -111,7 +117,7 @@ jobs:
             # `git diff | head` makes head close the pipe after 300 lines, which
             # sends git SIGPIPE (exit 141) and trips `set -o pipefail` on large
             # static-export diffs. Reading from a file avoids the broken pipe.
-            git --no-pager diff > full.diff
+            git --no-pager diff --cached > full.diff
             head -300 full.diff
             lines="$(wc -l < full.diff)"
             if [ "$lines" -gt 300 ]; then

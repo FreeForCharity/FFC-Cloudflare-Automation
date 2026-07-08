@@ -1462,7 +1462,9 @@
         "schedule",
         "workflow_dispatch"
       ],
-      "environments": [],
+      "environments": [
+        "github-prod"
+      ],
       "description": "",
       "safetyLevel": "Reads",
       "approvalEnv": "\u2014",

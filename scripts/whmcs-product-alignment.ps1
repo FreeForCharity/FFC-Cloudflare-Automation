@@ -59,6 +59,13 @@ param(
     [Parameter()]
     [string]$Secret,
 
+    # Optional JSON (see config/whmcs-cloudflare-domain-email.json) with a
+    # customtype/subject/htmlBody. When set and a product is ordered live, sends
+    # that email to the client via WHMCS SendEmail (merge fields resolve per
+    # service). Skipped in dry-run.
+    [Parameter()]
+    [string]$WelcomeEmailJson,
+
     [Parameter()]
     [string]$OutputFile = 'artifacts/whmcs/whmcs_product_alignment.json'
 )
@@ -69,6 +76,11 @@ $ErrorActionPreference = 'Stop'
 $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret
 $api = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
 $auth = New-WhmcsAuthBody -Creds $creds
+
+$welcomeEmail = $null
+if ($WelcomeEmailJson -and (Test-Path $WelcomeEmailJson)) {
+    $welcomeEmail = Get-Content $WelcomeEmailJson -Raw | ConvertFrom-Json
+}
 
 if (-not (Test-Path $DomainsJson)) { throw "Domains file not found: $DomainsJson" }
 $domains = @(Get-Content $DomainsJson -Raw | ConvertFrom-Json) |
@@ -153,7 +165,18 @@ foreach ($domain in $domains) {
         $b.noinvoice = '1'
         $b.noemail = '1'
         $resp = Invoke-WhmcsApi -ApiUrl $api -Body $b
-        $ordered += [pscustomobject]@{ domain = $domain; clientId = $cid; status = 'ordered'; orderid = "$($resp.orderid)" }
+        $serviceId = ("$($resp.productids)").Split(',')[0].Trim()
+        $emailed = $false
+        if ($welcomeEmail -and $serviceId) {
+            $e = New-Body 'SendEmail'
+            $e.customtype = if ($welcomeEmail.customtype) { [string]$welcomeEmail.customtype } else { 'product' }
+            $e.id = $serviceId
+            $e.customsubject = [string]$welcomeEmail.subject
+            $e.custommessage = [string]$welcomeEmail.htmlBody
+            try { [void](Invoke-WhmcsApi -ApiUrl $api -Body $e); $emailed = $true }
+            catch { $errors += [pscustomobject]@{ domain = $domain; clientId = $cid; error = "welcome-email: $($_.Exception.Message)" } }
+        }
+        $ordered += [pscustomobject]@{ domain = $domain; clientId = $cid; status = 'ordered'; orderid = "$($resp.orderid)"; serviceId = $serviceId; welcomeEmailed = $emailed }
     }
     catch {
         $errors += [pscustomobject]@{ domain = $domain; clientId = $cid; error = "$($_.Exception.Message)" }

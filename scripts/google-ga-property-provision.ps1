@@ -50,7 +50,23 @@ function Invoke-GaAdmin {
     param([string]$Method = 'GET', [string]$Path, [object]$Body, [hashtable]$Auth)
     $p = @{ Method = $Method; Uri = "$base/$Path"; Headers = $Auth; ErrorAction = 'Stop' }
     if ($null -ne $Body) { $p.Body = ($Body | ConvertTo-Json -Depth 8); $p.ContentType = 'application/json' }
-    Invoke-RestMethod @p
+    # The GA Admin API is rate-limited per user (600/min), so a fleet batch under the
+    # same impersonated admin can hit 429 RESOURCE_EXHAUSTED. Retry with capped
+    # exponential backoff + full jitter so concurrent runs de-synchronize and drain.
+    $max = 8
+    for ($i = 0; ; $i++) {
+        try { return Invoke-RestMethod @p }
+        catch {
+            $code = 0; try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+            if (($code -eq 429 -or $code -eq 503) -and $i -lt $max) {
+                $delay = Get-Random -Minimum 0.0 -Maximum ([Math]::Min(60, [Math]::Pow(2, $i)))
+                Write-Host "::warning::GA Admin API $code on $Path - retry $($i + 1)/$max in $([Math]::Round($delay, 1))s"
+                Start-Sleep -Seconds $delay
+                continue
+            }
+            throw
+        }
+    }
 }
 
 $domain = $Domain.Trim().ToLowerInvariant().TrimEnd('.')

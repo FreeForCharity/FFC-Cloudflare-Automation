@@ -47,7 +47,24 @@ function Invoke-Gtm {
     param([string]$Method = 'GET', [string]$Path, [object]$Body, [hashtable]$Auth)
     $p = @{ Method = $Method; Uri = "$base/$Path"; Headers = $Auth; ErrorAction = 'Stop' }
     if ($null -ne $Body) { $p.Body = ($Body | ConvertTo-Json -Depth 8); $p.ContentType = 'application/json' }
-    Invoke-RestMethod @p
+    # The Tag Manager API allows only ~30 requests/min/user, so a fleet batch (many
+    # containers provisioned concurrently under the same impersonated admin) hits 429
+    # RESOURCE_EXHAUSTED. Retry with capped exponential backoff + full jitter so the
+    # concurrent runs de-synchronize and drain within the limit instead of failing.
+    $max = 8
+    for ($i = 0; ; $i++) {
+        try { return Invoke-RestMethod @p }
+        catch {
+            $code = 0; try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+            if (($code -eq 429 -or $code -eq 503) -and $i -lt $max) {
+                $delay = Get-Random -Minimum 0.0 -Maximum ([Math]::Min(60, [Math]::Pow(2, $i)))
+                Write-Host "::warning::GTM API $code on $Path - retry $($i + 1)/$max in $([Math]::Round($delay, 1))s"
+                Start-Sleep -Seconds $delay
+                continue
+            }
+            throw
+        }
+    }
 }
 
 $key = Get-Content $KeyPath -Raw | ConvertFrom-Json

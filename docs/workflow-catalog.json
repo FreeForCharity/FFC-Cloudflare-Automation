@@ -1159,6 +1159,7 @@
         "workflow_dispatch"
       ],
       "environments": [
+        "github-prod",
         "google-prod-read"
       ],
       "description": "Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe: aggregate metrics only. Requires the google-prod-read environment + the Wave 0 foundation.",

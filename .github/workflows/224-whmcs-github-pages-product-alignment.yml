@@ -1,0 +1,97 @@
+name: '224. WHMCS - GitHub Pages Product Alignment [WHMCS+GH]'
+run-name:
+  'WHMCS GitHub-Pages product alignment (pid ${{ inputs.product_id }}, dry_run=${{ inputs.dry_run
+  }})'
+
+# Aligns the pid-40 "Hosted by GitHub Pages" marker onto the WHMCS clients whose
+# sites are hosted on GitHub Pages (one per FreeForCharity/FFC-EX-<domain> repo).
+# Sibling of 222 (Cloudflare registrar -> pid 39): same alignment engine, different
+# source list. dry-run is a drift report (#580); a live run assigns the product
+# (#579). Read-only preview by default; a live run gates on whmcs-prod.
+#
+#   1. list-domains - GitHub API (ambient token) lists the FFC-EX domains.
+#   2. align        - whmcs-prod resolves each domain to its client and, unless
+#                     dry_run, places a $0 AddOrder for any client lacking pid 40.
+#                     Idempotent per (client, domain). Domains with no WHMCS record
+#                     are reported, never guessed. Routes via the APIM gateway.
+
+on:
+  workflow_dispatch:
+    inputs:
+      product_id:
+        description: 'WHMCS product id (40 = Hosted by GitHub Pages)'
+        required: false
+        type: string
+        default: '40'
+      dry_run:
+        description: 'Preview only (place no orders) — this is the drift report'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  list-domains:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: List GitHub Pages (FFC-EX) domains
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & pwsh -NoProfile -File ./scripts/github-pages-domains.ps1 -OutputFile artifacts/github/github_pages_domains.json
+          if ($LASTEXITCODE -ne 0) { throw "GitHub Pages domain list failed with exit code $LASTEXITCODE." }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: github-pages-domains
+          path: artifacts/github/github_pages_domains.json
+          if-no-files-found: error
+          retention-days: 7
+
+  align:
+    needs: list-domains
+    runs-on: windows-latest
+    environment: whmcs-prod
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: github-pages-domains
+          path: artifacts/github
+
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Align product onto GitHub-Pages-site clients
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $params = @{
+            DomainsJson = 'artifacts/github/github_pages_domains.json'
+            ProductId   = '${{ inputs.product_id }}'
+            ApiUrl      = $env:WHMCS_API_URL
+            OutputFile  = 'artifacts/whmcs/whmcs_github_pages_alignment.json'
+          }
+          if ('${{ inputs.dry_run }}' -eq 'false') { $params.Execute = $true }
+          & pwsh -NoProfile -File ./scripts/whmcs-product-alignment.ps1 @params | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if ($LASTEXITCODE -ne 0) { throw "Product alignment failed with exit code $LASTEXITCODE." }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: whmcs-github-pages-alignment
+          path: artifacts/whmcs/whmcs_github_pages_alignment.json
+          if-no-files-found: error
+          retention-days: 30

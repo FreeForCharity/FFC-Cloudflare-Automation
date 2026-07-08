@@ -549,6 +549,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 220 | WHMCS - Served-Per-Year Metrics (span evidence, no PII) [WHMCS] | `220-whmcs-served-metrics.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 | 221 | WHMCS - Application Search (find by domain/org) [WHMCS] | `221-whmcs-application-search.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
 | 222 | WHMCS - Cloudflare Registrar Product Alignment [WHMCS+CF] | `222-whmcs-product-alignment.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
+| 223 | WHMCS - Import Cloudflare Registrar Domains as Domain Records [WHMCS+CF] | `223-whmcs-import-cloudflare-domains.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

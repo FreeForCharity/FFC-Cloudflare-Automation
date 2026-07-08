@@ -880,6 +880,27 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 223,
+      "title": "WHMCS - Import Cloudflare Registrar Domains as Domain Records",
+      "apis": [
+        "WHMCS",
+        "CF"
+      ],
+      "file": "223-whmcs-import-cloudflare-domains.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Creates a real WHMCS domain record for each Cloudflare-registered domain in the supplied domain->client map, populated with live registrar facts (expiry, nameservers, status) from the Cloudflare Registrar API. Cloudflare has no WHMCS registrar module, so the record's registrar is left None; every other field is accurate and the domain shows in the client's Domains list. Idempotent: already-populated domains are skipped; partial records are completed. Optionally accepts the client's pending onboarding order.  The domain->client map is a dispatch input (not committed) so client ids are not stored in this public repo. WHMCS calls route through the APIM gateway.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "dry_run default true; creates/populates domain records (registrar None) from CF facts",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 - Domain Preflight (Read-only)",
       "apis": [

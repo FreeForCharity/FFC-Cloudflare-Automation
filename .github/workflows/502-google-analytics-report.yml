@@ -96,6 +96,7 @@ jobs:
   deliver:
     needs: report
     runs-on: ubuntu-latest
+    environment: github-prod
     steps:
       # Checkout gives the deliver job the current workflow catalog so the public
       # copies on ffcadmin (src/data render + /data stable URL) refresh in the

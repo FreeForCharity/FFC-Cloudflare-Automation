@@ -107,7 +107,16 @@ jobs:
 
           if [ "${DRY_RUN}" = "true" ]; then
             echo "dry_run=true — diff shown below, no PR opened."
-            git --no-pager diff | head -300
+            # Write the full diff to a file first, then head the FILE. Piping
+            # `git diff | head` makes head close the pipe after 300 lines, which
+            # sends git SIGPIPE (exit 141) and trips `set -o pipefail` on large
+            # static-export diffs. Reading from a file avoids the broken pipe.
+            git --no-pager diff > full.diff
+            head -300 full.diff
+            lines="$(wc -l < full.diff)"
+            if [ "$lines" -gt 300 ]; then
+              echo "… (diff truncated at 300 of ${lines} lines)"
+            fi
             exit 0
           fi
 

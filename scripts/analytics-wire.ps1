@@ -91,9 +91,15 @@ switch ($siteType) {
         $meas = if ($MeasurementId) { $MeasurementId } else { 'G-XXXXXXXXXX' }
         $configPath = Join-Path $srcDir 'lib/analytics.config.ts'
 
+        # The GTM id we are replacing, so we can keep test fixtures that hard-code
+        # it in sync (see the test-tree sync below). Prefer the existing config
+        # value; fall back to the hardcoded literal in the GTM component.
+        $oldGtm = $null
+
         if (Test-Path -LiteralPath $configPath) {
             # Existing config (newer template): update the ids in place.
             $c = Get-Content -LiteralPath $configPath -Raw
+            if ($c -match "gtmId:\s*'(GTM-[A-Z0-9]{5,9})'") { $oldGtm = $Matches[1] }
             $c = [regex]::Replace($c, "gtmId:\s*'[^']*'", "gtmId: '$GtmId'")
             if ($MeasurementId) {
                 $c = [regex]::Replace($c, "gaMeasurementId:\s*'[^']*'", "gaMeasurementId: '$MeasurementId'")
@@ -131,6 +137,7 @@ export const analyticsConfig = {
         $gtmComp = Join-Path $srcDir 'components/google-tag-manager/index.tsx'
         if (Test-Path -LiteralPath $gtmComp) {
             $t = Get-Content -LiteralPath $gtmComp -Raw
+            if (-not $oldGtm -and $t -match "const GTM_ID = '(GTM-[A-Z0-9]{5,9})'") { $oldGtm = $Matches[1] }
             if ($t -notmatch [regex]::Escape("from '@/lib/analytics.config'")) {
                 $t = [regex]::Replace(
                     $t,
@@ -140,6 +147,26 @@ export const analyticsConfig = {
             }
             $t = [regex]::Replace($t, "const GTM_ID = '[^']*'", "const GTM_ID = analyticsConfig.gtmId")
             Set-FileIfChanged -Path $gtmComp -Content $t | Out-Null
+        }
+
+        # Keep test fixtures/specs that hard-code the previous GTM id in sync with
+        # the rewire, so each FFC-EX repo's own unit + E2E CI stays green without a
+        # manual follow-up (this was the only manual fix needed on the clarasbridge
+        # PoC wire). Scoped to the test trees only - historical docs are left as-is.
+        # Self-healing: a later re-wire rediscovers the now-current id the same way.
+        if ($oldGtm -and $oldGtm -ne $GtmId) {
+            foreach ($sub in @('__tests__', 'tests')) {
+                $tdir = Join-Path $RepoDir $sub
+                if (-not (Test-Path -LiteralPath $tdir)) { continue }
+                $tfiles = Get-ChildItem -LiteralPath $tdir -Recurse -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Extension -in '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json' }
+                foreach ($tf in $tfiles) {
+                    $tc = Get-Content -LiteralPath $tf.FullName -Raw
+                    if ($tc -match [regex]::Escape($oldGtm)) {
+                        Set-FileIfChanged -Path $tf.FullName -Content ($tc -replace [regex]::Escape($oldGtm), $GtmId) | Out-Null
+                    }
+                }
+            }
         }
     }
 

@@ -901,6 +901,27 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 224,
+      "title": "WHMCS - GitHub Pages Product Alignment",
+      "apis": [
+        "WHMCS",
+        "GH"
+      ],
+      "file": "224-whmcs-github-pages-product-alignment.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Aligns the pid-40 \"Hosted by GitHub Pages\" marker onto the WHMCS clients whose sites are hosted on GitHub Pages (one per FreeForCharity/FFC-EX-<domain> repo). Sibling of 222 (Cloudflare registrar -> pid 39): same alignment engine, different source list. dry-run is a drift report (#580); a live run assigns the product (#579). Read-only preview by default; a live run gates on whmcs-prod.  1. list-domains - GitHub API (ambient token) lists the FFC-EX domains. 2. align        - whmcs-prod resolves each domain to its client and, unless dry_run, places a $0 AddOrder for any client lacking pid 40. Idempotent per (client, domain). Domains with no WHMCS record are reported, never guessed. Routes via the APIM gateway.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "dry_run default true; $0 AddOrder of pid 40 onto FFC-EX GitHub-Pages-site clients; idempotent",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 - Domain Preflight (Read-only)",
       "apis": [

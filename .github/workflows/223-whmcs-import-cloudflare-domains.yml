@@ -1,0 +1,88 @@
+name: '223. WHMCS - Import Cloudflare Registrar Domains as Domain Records [WHMCS+CF]'
+run-name: 'Import Cloudflare domains -> WHMCS records (dry_run=${{ inputs.dry_run }})'
+
+# Creates a real WHMCS domain record for each Cloudflare-registered domain in the
+# supplied domain->client map, populated with live registrar facts (expiry,
+# nameservers, status) from the Cloudflare Registrar API. Cloudflare has no WHMCS
+# registrar module, so the record's registrar is left None; every other field is
+# accurate and the domain shows in the client's Domains list. Idempotent:
+# already-populated domains are skipped; partial records are completed. Optionally
+# accepts the client's pending onboarding order.
+#
+# The domain->client map is a dispatch input (not committed) so client ids are not
+# stored in this public repo. WHMCS calls route through the APIM gateway.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain_client_map:
+        description:
+          'JSON map of domain -> WHMCS client id, e.g.
+          {"clarasbridge.org":"376","mitchellnchistory.org":"288"}'
+        required: true
+        type: string
+      dry_run:
+        description: 'Preview only (create/populate nothing)'
+        required: false
+        type: boolean
+        default: true
+      accept_onboarding:
+        description: "Also accept each client's pending onboarding order"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  import:
+    runs-on: windows-latest
+    environment: whmcs-prod
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Import Cloudflare domains as WHMCS domain records
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          DOMAIN_CLIENT_MAP: ${{ inputs.domain_client_map }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $map = $env:DOMAIN_CLIENT_MAP | ConvertFrom-Json
+          $execute = ('${{ inputs.dry_run }}' -eq 'false')
+          $acceptOnb = ('${{ inputs.accept_onboarding }}' -eq 'true')
+          New-Item -ItemType Directory -Force -Path artifacts/whmcs | Out-Null
+          foreach ($prop in $map.PSObject.Properties) {
+            $safe = ($prop.Name -replace '[^a-zA-Z0-9.-]', '_')
+            $p = @{
+              Domain     = $prop.Name
+              ClientId   = "$($prop.Value)"
+              ApiUrl     = $env:WHMCS_API_URL
+              OutputFile = "artifacts/whmcs/import_$safe.json"
+            }
+            if ($execute) { $p.Execute = $true }
+            if ($execute -and $acceptOnb) { $p.AcceptOnboarding = $true }
+            & pwsh -NoProfile -File ./scripts/whmcs-import-cloudflare-domain.ps1 @p | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            if ($LASTEXITCODE -ne 0) { throw "Import failed for $($prop.Name) with exit code $LASTEXITCODE." }
+          }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: whmcs-import-cloudflare-domains
+          path: artifacts/whmcs/
+          if-no-files-found: warn
+          retention-days: 30

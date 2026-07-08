@@ -84,10 +84,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $params = @{
-            DomainsJson = 'artifacts/cloudflare/registrar_domains.json'
-            ProductId   = '${{ inputs.product_id }}'
-            ApiUrl      = $env:WHMCS_API_URL
-            OutputFile  = 'artifacts/whmcs/whmcs_product_alignment.json'
+            DomainsJson      = 'artifacts/cloudflare/registrar_domains.json'
+            ProductId        = '${{ inputs.product_id }}'
+            ApiUrl           = $env:WHMCS_API_URL
+            OutputFile       = 'artifacts/whmcs/whmcs_product_alignment.json'
+            WelcomeEmailJson = 'config/whmcs-cloudflare-domain-email.json'
           }
           if ('${{ inputs.dry_run }}' -eq 'false') { $params.Execute = $true }
           & pwsh -NoProfile -File ./scripts/whmcs-product-alignment.ps1 @params | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append

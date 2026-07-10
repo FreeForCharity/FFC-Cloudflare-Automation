@@ -1162,10 +1162,10 @@
         "github-prod",
         "google-prod-read"
       ],
-      "description": "Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe: aggregate metrics only. Requires the google-prod-read environment + the Wave 0 foundation.",
+      "description": "Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe: aggregate metrics only. Requires the google-prod-read environment (report) and the approval-gated github-prod environment (delivery, CBM_TOKEN) + the Wave 0 foundation.",
       "safetyLevel": "Reads",
-      "approvalEnv": "google-prod-read",
-      "guard": "delivers JSON to ffcadmin via PR (CBM_TOKEN); PII-safe aggregates",
+      "approvalEnv": "google-prod-read / \u2705 github-prod",
+      "guard": "delivers JSON to ffcadmin via PR (CBM_TOKEN, github-prod approval); PII-safe aggregates",
       "category": "Google",
       "categoryCode": "GOOGLE"
     },
@@ -1468,8 +1468,8 @@
       ],
       "description": "",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2014",
-      "guard": "report only",
+      "approvalEnv": "\u2705 github-prod",
+      "guard": "report only; CBM_TOKEN via github-prod approval",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

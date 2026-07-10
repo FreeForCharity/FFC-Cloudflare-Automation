@@ -3,7 +3,8 @@ run-name: 'Google Analytics Report'
 
 # Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers
 # it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe:
-# aggregate metrics only. Requires the google-prod-read environment + the Wave 0 foundation.
+# aggregate metrics only. Requires the google-prod-read environment (report) and the approval-gated
+# github-prod environment (delivery, CBM_TOKEN) + the Wave 0 foundation.
 
 on:
   schedule:

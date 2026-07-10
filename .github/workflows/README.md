@@ -574,7 +574,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | # | Workflow | File | Triggers | Safety | Approval env |
 | --- | --- | --- | --- | --- | --- |
 | 501 | Google - API Smoke (GA4 connectivity) [GOOGLE] | `501-google-api-smoke.yml` | workflow_call, workflow_dispatch | Reads | google-prod-read |
-| 502 | Google - Analytics Report (GA4 -> JSON) [GOOGLE] | `502-google-analytics-report.yml` | schedule, workflow_dispatch | Reads | google-prod-read |
+| 502 | Google - Analytics Report (GA4 -> JSON) [GOOGLE] | `502-google-analytics-report.yml` | schedule, workflow_dispatch | Reads | google-prod-read / ✅ github-prod |
 | 503 | Google - GTM Provision (per-charity container) [GOOGLE] | `503-google-gtm-provision.yml` | workflow_dispatch | Writes (dry-run default) | ✅ google-prod-write |
 | 504 | Google - GTM Container Backups (weekly export) [GOOGLE] | `504-google-gtm-backup.yml` | schedule, workflow_dispatch | Reads | google-prod-read |
 | 505 | Google - GA4 Property Provision (per-charity) [GOOGLE] | `505-google-ga-property-provision.yml` | workflow_dispatch | Writes (dry-run default) | ✅ google-prod-write |
@@ -597,7 +597,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 723 | Repo - CodeQL Security Analysis [Repo] | `723-codeql-analysis.yml` | merge_group, pull_request, push, schedule, workflow_dispatch | (repo plumbing) | — |
 | 724 | Repo - Initialize Labels [Repo] | `724-initialize-labels.yml` | workflow_dispatch | (repo plumbing) | — |
 | 725 | Repo - Sync Labels [Repo] | `725-sync-labels.yml` | push, workflow_dispatch | (repo plumbing) | — |
-| 726 | Repo - Rulesets + Settings Drift Audit [Org] | `726-repo-rulesets-drift-audit.yml` | schedule, workflow_dispatch | Reads | — |
+| 726 | Repo - Rulesets + Settings Drift Audit [Org] | `726-repo-rulesets-drift-audit.yml` | schedule, workflow_dispatch | Reads | ✅ github-prod |
 | 727 | Repo - Phantom Revert Guard [Repo] | `727-phantom-revert-guard.yml` | merge_group, pull_request, workflow_dispatch | (repo plumbing) | — |
 | 728 | Repo - AI Agent Hooks Validate [Repo] | `728-ai-agent-hooks-validate.yml` | pull_request, push | (repo plumbing) | — |
 | 729 | Repo - Add Collaborator [Repo] | `729-repo-add-collaborator.yml` | workflow_dispatch | Writes (**live default**) | ✅ github-prod |

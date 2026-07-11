@@ -147,6 +147,7 @@ the run pauses for approval, even if the action itself only reads.
 | 732     | Repo - Google Workflow Failure Alert         | Writes (issues only)      | —                                                            | rolling issue upsert/close; no external API                                                   |
 | 733     | Repo - Credential Rotation Reminders         | Writes (issues only)      | —                                                            | quarterly reminder issues; rotations stay human/gated                                         |
 | 734     | Repo - Stale Waiting-Run Janitor             | Writes (cancels runs)     | —                                                            | cancels runs left waiting >N days at a gate; never approves; dispatch dry-run supported       |
+| 735     | Repo - Dependabot Affected Repos             | Reads                     | ✅ github-prod                                               | weekly org inventory (feeds smoke-protected waves); PR-only + auto-merge                      |
 
 > **Exception to call out:** **729. Repo - Add Collaborator** is the one write workflow whose
 > `dry_run` defaults to **`false`** (it runs live by default). It's low-risk (adding a repo

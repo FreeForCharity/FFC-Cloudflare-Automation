@@ -1625,6 +1625,27 @@
       "guard": "cancels runs left waiting >N days at a gate; never approves; dispatch dry-run supported",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
+    },
+    {
+      "number": 735,
+      "title": "Repo - Dependabot Affected Repos",
+      "apis": [
+        "Org"
+      ],
+      "file": "735-repo-dependabot-affected-repos.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Regenerates data/dependabot-affected-repos.json (the org repo inventory that feeds the smoke-protected Dependabot waves) and delivers it as an auto-merging PR. Migrated from FFC-IN-ClarkeMoyerAdmin. Uses the github-prod environment so the PR is opened with CBM_TOKEN (a real PAT) \u2014 a PR opened by GITHUB_TOKEN does not trigger the pull_request checks / Copilot review this repo requires, so it would never satisfy branch protection. Read-only against the org; PR-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 github-prod",
+      "guard": "weekly org inventory (feeds smoke-protected waves); PR-only + auto-merge",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
     }
   ]
 }

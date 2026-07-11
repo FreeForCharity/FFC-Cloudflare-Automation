@@ -606,5 +606,6 @@ No additional setup is required for these workflows to run. However, to get the 
 | 732 | Repo - Google Workflow Failure Alert (rolling issue) [GH] | `732-google-workflow-failure-alert.yml` | workflow_run | Writes (issues only) | — |
 | 733 | Repo - Credential Rotation Reminders (quarterly) [GH] | `733-credential-rotation-reminders.yml` | schedule, workflow_dispatch | Writes (issues only) | — |
 | 734 | Repo - Stale Waiting-Run Janitor [Repo] | `734-stale-waiting-run-janitor.yml` | schedule, workflow_dispatch | Writes (cancels runs) | — |
+| 735 | Repo - Dependabot Affected Repos [Org] | `735-repo-dependabot-affected-repos.yml` | schedule, workflow_dispatch | Reads | ✅ github-prod |
 
 <!-- catalog:end -->

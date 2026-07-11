@@ -551,6 +551,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 222 | WHMCS - Cloudflare Registrar Product Alignment [WHMCS+CF] | `222-whmcs-product-alignment.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 223 | WHMCS - Import Cloudflare Registrar Domains as Domain Records [WHMCS+CF] | `223-whmcs-import-cloudflare-domains.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 224 | WHMCS - GitHub Pages Product Alignment [WHMCS+GH] | `224-whmcs-github-pages-product-alignment.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
+| 225 | WHMCS - Domain Order URL Verify [WHMCS] | `225-whmcs-domain-order-url-verify.yml` | schedule, workflow_dispatch | Reads | whmcs-prod-read |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

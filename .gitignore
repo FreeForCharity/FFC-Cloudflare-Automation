@@ -53,6 +53,7 @@ Thumbs.db
 
 # Local workflow outputs
 artifacts/
+testResults.xml
 _run_artifacts/
 _run_*/
 

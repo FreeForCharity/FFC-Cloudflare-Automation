@@ -284,12 +284,12 @@ try {
     # 2) Services for the domain products (paged per pid), joined to pending
     #    orders via the service's orderid.
     $rows = [System.Collections.Generic.List[object]]::new()
-    foreach ($pid in $ProductIds) {
+    foreach ($productId in $ProductIds) {
         $start = 0
         while ($true) {
             $body = $auth.Clone()
             $body.action = 'GetClientsProducts'
-            $body.pid = $pid
+            $body.pid = $productId
             $body.limitstart = $start
             $body.limitnum = $PageSize
             $resp = Invoke-WhmcsApi -ApiUrl $api -Body $body
@@ -316,7 +316,7 @@ try {
                         orderid    = $orderId
                         ordernum   = [string]$order.ordernum
                         clientid   = [string]$order.userid
-                        pid        = $pid
+                        pid        = $productId
                         domain     = $domain
                         url        = $verdict.Url
                         statuscode = $verdict.StatusCode

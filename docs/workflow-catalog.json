@@ -971,10 +971,10 @@
       "environments": [
         "whmcs-prod"
       ],
-      "description": "Ranks PENDING charity onboarding applications by completeness/quality, separately for pre-501(c)(3) (pid 16) and full 501(c)(3) (pid 33), and can ACCEPT specific $0 onboarding orders via the WHMCS API so the charity gets the acceptance email. Default mode 'report' is READ-ONLY (never calls AcceptOrder). Mode 'approve' requires an explicit comma-separated orderids list and accepts ONLY those ids (no accept-all, no accept-top-N). Bound to the whmcs-prod environment, so every run pauses at the approval gate (the safety checkpoint); a report run pausing there is expected and fine.",
+      "description": "Ranks PENDING charity onboarding applications by the mission-weighted FFC READINESS score (the operator's definition of \"best\"), separately for pre-501(c)(3) (pid 16) and full 501(c)(3) (pid 33). It can ACCEPT specific $0 onboarding orders (approve) so the charity gets the acceptance email, and can RECONCILE duplicate / miscategorized orders (reconcile) by cancelling only the explicitly-listed orders and emailing those applicants a paste-ready re-file email. Modes 'report' and 'reconcile-report' are READ-ONLY. The mutating modes 'approve' and 'reconcile' each require an explicit comma-separated orderids list and act ONLY on those ids (no accept-all / cancel-all). Bound to the whmcs-prod environment, so every run pauses at the approval gate (the safety checkpoint); a read-only run pausing there is expected and fine.",
       "safetyLevel": "Writes (report default)",
       "approvalEnv": "\u2705 whmcs-prod",
-      "guard": "report=read-only ranking; approve accepts ONLY listed $0 orderids (no accept-all/top-N)",
+      "guard": "report + reconcile-report read-only; approve accepts ONLY listed $0 orderids; reconcile cancels ONLY listed orderids + emails those clients a re-file email (email-first, no cancel-all)",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },

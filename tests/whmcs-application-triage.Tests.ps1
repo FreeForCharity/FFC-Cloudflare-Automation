@@ -521,3 +521,208 @@ Describe 'Candid-slug EIN fallback (pid 33 blank EIN field)' {
         $r.topGaps            | Should -Contain 'missing/invalid EIN'
     }
 }
+
+Describe 'FFC readiness scoring (mission-weighted)' {
+    It 'classifies a food-pantry mission as basic-needs (+50)' {
+        $fields = New-Fields @{ 'Mission' = 'We run a community food pantry providing meals and nutrition to hungry families.' }
+        Get-MissionCategory -MissionText 'community food pantry meals' | Should -Be 'basic-needs'
+        $r = Get-FfcReadinessScore -Fields $fields -ProductPid 16 -LegalStatus 'unknown'
+        $r.Mission                        | Should -Be 'basic-needs'
+        $r.Components.mission.points      | Should -Be 50
+    }
+
+    It 'classifies a veterans mission as veterans (+30)' {
+        $fields = New-Fields @{ 'Mission' = 'We support wounded warrior veterans and military servicemembers returning home.' }
+        $r = Get-FfcReadinessScore -Fields $fields -ProductPid 16 -LegalStatus 'unknown'
+        $r.Mission                   | Should -Be 'veterans'
+        $r.Components.mission.points | Should -Be 30
+    }
+
+    It 'classifies a general mission as general (0)' {
+        $fields = New-Fields @{ 'Mission' = 'We promote appreciation of classical music through community concerts.' }
+        $r = Get-FfcReadinessScore -Fields $fields -ProductPid 16 -LegalStatus 'unknown'
+        $r.Mission                   | Should -Be 'general'
+        $r.Components.mission.points | Should -Be 0
+    }
+
+    It 'prefers basic-needs over veterans on overlap (food for veterans)' {
+        Get-MissionCategory -MissionText 'providing food and meals to homeless veterans' | Should -Be 'basic-needs'
+    }
+
+    It 'awards charity-stage points from the legal-status bucket' {
+        $fields = New-Fields @{ 'Mission' = 'general arts' }
+        (Get-FfcReadinessScore -Fields $fields -ProductPid 33 -LegalStatus 'full').Components.charityStage.points | Should -Be 20
+        (Get-FfcReadinessScore -Fields $fields -ProductPid 33 -LegalStatus 'pre').Components.charityStage.points  | Should -Be 5
+        (Get-FfcReadinessScore -Fields $fields -ProductPid 33 -LegalStatus 'other').Components.charityStage.points | Should -Be 0
+    }
+
+    It 'awards the Candid-profile credit only when the profile is live AND the EIN verifies 501(c)(3)' {
+        $fields = New-Fields @{ 'Mission' = 'general' }
+        (Get-FfcReadinessScore -Fields $fields -ProductPid 33 -LegalStatus 'full' -EinIs501c3 $true -GuidestarLive $true).Components.candidProfile.points | Should -Be 10
+        (Get-FfcReadinessScore -Fields $fields -ProductPid 33 -LegalStatus 'full' -EinIs501c3 $true -GuidestarLive $false).Components.candidProfile.points | Should -Be 0
+        (Get-FfcReadinessScore -Fields $fields -ProductPid 33 -LegalStatus 'full' -EinIs501c3 $false -GuidestarLive $true).Components.candidProfile.points | Should -Be 0
+    }
+
+    It 'lists ffcadmin categories NOT derivable from WHMCS data (excluded, not fabricated)' {
+        $r = Get-FfcReadinessScore -Fields (New-Fields @{ 'Mission' = 'general' }) -ProductPid 16 -LegalStatus 'unknown'
+        ($r.NotDerivable -join ' ') | Should -Match 'affiliation'
+        ($r.NotDerivable -join ' ') | Should -Match 'revenue'
+        ($r.NotDerivable -join ' ') | Should -Match 'Form 1023'
+    }
+
+    It 'exposes ffcReadinessScore + mission on the scored object and leads the rationale with them' {
+        $r = Get-ApplicationScore -Application $script:Complete33
+        $r.ffcReadinessScore | Should -BeOfType [int]
+        $r.mission           | Should -BeIn @('basic-needs', 'veterans', 'general')
+        $r.rationale         | Should -Match '^FFC readiness \d'
+    }
+}
+
+Describe 'Readiness drives ranking above a more-complete-but-general app' {
+    It 'ranks a basic-needs app above a more-complete general app' {
+        # A fully-complete GENERAL pre-501c3 app (high completeness score, readiness 5).
+        $general = [pscustomobject]@{
+            orderid = '9001'; ordernum = 'ORD9001'; clientid = '901'; pid = 16
+            productName = 'FFC Pre-501c3 Application'; charityName = 'Symphony Guild'
+            fields = (New-Fields @{
+                    'Organization Name'                              = 'Symphony Guild'
+                    'What is the legal status of your organization?' = 'pre-501c(3) Nonprofit'
+                    'EIN'                                            = '12-3456789'
+                    'GuideStar / Candid Profile'                     = 'https://www.guidestar.org/profile/12-3456789'
+                    'Facebook Page'                                  = 'https://www.facebook.com/symphonyguild'
+                    'LinkedIn Organization Page'                     = 'https://www.linkedin.com/company/symphony-guild'
+                    'US-based attestation'                           = 'Yes'
+                    'Terms of Service agreement'                     = 'I agree'
+                    'Mission'                                        = 'We promote classical music education through community concerts and youth orchestra programs across the region.'
+                    'Do you need hosting'                            = 'Yes'
+                })
+        }
+        # A sparse BASIC-NEEDS pre-501c3 app (low completeness, readiness 55).
+        $basic = [pscustomobject]@{
+            orderid = '9002'; ordernum = 'ORD9002'; clientid = '902'; pid = 16
+            productName = 'FFC Pre-501c3 Application'; charityName = 'Neighborhood Food Pantry'
+            fields = (New-Fields @{
+                    'Organization Name'                              = 'Neighborhood Food Pantry'
+                    'What is the legal status of your organization?' = 'pre-501c(3) Nonprofit'
+                    'Mission'                                        = 'We provide food and meals to hungry families.'
+                })
+        }
+        $sGeneral = Get-ApplicationScore -Application $general
+        $sBasic = Get-ApplicationScore -Application $basic
+        # Completeness: general is the MORE complete of the two.
+        $sGeneral.score              | Should -BeGreaterThan $sBasic.score
+        # Readiness: basic-needs outranks general.
+        $sBasic.ffcReadinessScore    | Should -BeGreaterThan $sGeneral.ffcReadinessScore
+        $ranked = Get-ApplicationRanking -ScoredApplications @($sGeneral, $sBasic)
+        $ranked[0].orderid | Should -Be '9002'
+        $ranked[1].orderid | Should -Be '9001'
+    }
+}
+
+Describe 'Reconcile grouping (duplicate + wrong-track)' {
+    BeforeAll {
+        # Client 700: two onboarding orders (pid 16 #800 + pid 33 #801) -> keeper 801.
+        $dupPre = [pscustomobject]@{
+            orderid = '800'; ordernum = 'ORD800'; clientid = '700'; pid = 16
+            productName = 'FFC Pre-501c3 Application'; charityName = 'Twice Filed Org'
+            fields = (New-Fields @{ 'Organization Name' = 'Twice Filed Org'; 'Mission' = 'general help' })
+        }
+        $dupFull = [pscustomobject]@{
+            orderid = '801'; ordernum = 'ORD801'; clientid = '700'; pid = 33
+            productName = 'FFC 501c3 Application'; charityName = 'Twice Filed Org'
+            fields = (New-Fields @{ 'Organization Name' = 'Twice Filed Org'; 'Mission' = 'general help' })
+        }
+        # Client 701: single pid-16 order (#802) with a FULL 501(c)(3) legal status -> wrong-track.
+        $wrongTrack = [pscustomobject]@{
+            orderid = '802'; ordernum = 'ORD802'; clientid = '701'; pid = 16
+            productName = 'FFC Pre-501c3 Application'; charityName = 'Misfiled 501c3'
+            fields = (New-Fields @{
+                    'Organization Name'                              = 'Misfiled 501c3'
+                    'What is the legal status of your organization?' = '501c(3) Nonprofit'
+                    'Mission'                                        = 'general help'
+                })
+        }
+        # Client 702: single clean pid-16 order (#803) -> keep.
+        $clean = [pscustomobject]@{
+            orderid = '803'; ordernum = 'ORD803'; clientid = '702'; pid = 16
+            productName = 'FFC Pre-501c3 Application'; charityName = 'Clean Applicant'
+            fields = (New-Fields @{
+                    'Organization Name'                              = 'Clean Applicant'
+                    'What is the legal status of your organization?' = 'pre-501c(3) Nonprofit'
+                    'Mission'                                        = 'general help'
+                })
+        }
+        $script:ReconScored = @(
+            (Get-ApplicationScore -Application $dupPre),
+            (Get-ApplicationScore -Application $dupFull),
+            (Get-ApplicationScore -Application $wrongTrack),
+            (Get-ApplicationScore -Application $clean)
+        )
+    }
+
+    It 'keeps the highest application type (pid 33) and cancels the duplicate pid 16' {
+        $plan = Get-ReconciliationPlan -ScoredApplications $script:ReconScored
+        $client700 = @($plan.Clients | Where-Object { $_.clientid -eq '700' })[0]
+        $client700.keeper | Should -Be '801'
+        $o800 = @($client700.orders | Where-Object { $_.orderid -eq '800' })[0]
+        $o801 = @($client700.orders | Where-Object { $_.orderid -eq '801' })[0]
+        $o801.disposition | Should -Be 'keep'
+        $o800.disposition | Should -Be 'cancel'
+        $o800.reason      | Should -Match 'duplicate'
+    }
+
+    It 'cancels a wrong-track pre-501c3 order (full 501(c)(3) legal status) as a re-file candidate' {
+        $plan = Get-ReconciliationPlan -ScoredApplications $script:ReconScored
+        $o802 = @(($plan.CancelCandidates) | Where-Object { $_.orderid -eq '802' })[0]
+        $o802             | Should -Not -BeNullOrEmpty
+        $o802.reason      | Should -Match 'wrong-track'
+        $o802.email       | Should -Match 're-file'
+    }
+
+    It 'keeps a lone clean order and never lists it as a cancel candidate' {
+        $plan = Get-ReconciliationPlan -ScoredApplications $script:ReconScored
+        @($plan.CancelCandidates | ForEach-Object { $_.orderid }) | Should -Not -Contain '803'
+        $client702 = @($plan.Clients | Where-Object { $_.clientid -eq '702' })[0]
+        @($client702.orders)[0].disposition | Should -Be 'keep'
+    }
+
+    It 'lists exactly the two cancel candidates (800 duplicate, 802 wrong-track)' {
+        $plan = Get-ReconciliationPlan -ScoredApplications $script:ReconScored
+        $ids = @($plan.CancelCandidates | ForEach-Object { $_.orderid } | Sort-Object)
+        $ids | Should -Be @('800', '802')
+    }
+}
+
+Describe 'Re-file email compose ({$prior_answers} injection)' {
+    It 'builds a Question: Answer list from the applicant own answers, skipping blanks' {
+        $fields = New-Fields @{
+            'Organization Name'   = 'Harbor Light Mission'
+            'EIN'                 = '45-6789012'
+            'Mission'             = ''
+            'Do you need hosting' = 'n/a'
+        }
+        $html = Format-PriorAnswers -Fields $fields
+        $html | Should -Match '<li><strong>Organization Name:</strong> Harbor Light Mission</li>'
+        $html | Should -Match '<li><strong>EIN:</strong> 45-6789012</li>'
+        # Blank Mission and placeholder 'n/a' hosting are skipped.
+        $html | Should -Not -Match 'Mission:'
+        $html | Should -Not -Match 'hosting'
+    }
+
+    It 'injects the prior-answers list into the {$prior_answers} placeholder and leaves other merge fields intact' {
+        $template = '<p>Dear {$client_first_name},</p>{$prior_answers}<p>{$signature}</p>'
+        $fields = New-Fields @{ 'Organization Name' = 'Test Org' }
+        $body = New-RefileEmailBody -TemplateBody $template -Fields $fields
+        $body | Should -Match '<li><strong>Organization Name:</strong> Test Org</li>'
+        $body | Should -Not -Match ([regex]::Escape('{$prior_answers}'))
+        # Native WHMCS merge fields are preserved for WHMCS to resolve.
+        $body | Should -Match ([regex]::Escape('{$client_first_name}'))
+        $body | Should -Match ([regex]::Escape('{$signature}'))
+    }
+
+    It 'HTML-encodes answer values so they cannot break the markup' {
+        $fields = New-Fields @{ 'Notes' = 'A & B <script>' }
+        $html = Format-PriorAnswers -Fields $fields
+        $html | Should -Match 'A &amp; B &lt;script&gt;'
+    }
+}

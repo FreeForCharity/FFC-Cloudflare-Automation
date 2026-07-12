@@ -15,12 +15,20 @@
          custom fields; each service carries the orderid that links it back to
          a pending order.
       3. For every pending domain order, extract the GitHub Pages URL custom
-         field and verify it: HTTP GET must return 200 AND the body must
-         contain the FFC footer marker (default 'Free For Charity',
-         configurable via -FooterMarker or WHMCS_VERIFY_FOOTER_MARKER).
+         field and verify liveness: the URL host must be a GitHub Pages host
+         (github.io or *.github.io, matching the WHMCS field regex) and an
+         HTTP GET must return 200. That liveness result is the PASS/FAIL
+         verdict.
+      4. Separately, the page body is matched against a footer-marker regex
+         (default matches both 'FreeForCharity' and 'Free For Charity',
+         case-insensitive; configurable via -FooterMarker or
+         WHMCS_VERIFY_FOOTER_MARKER). A marker miss is reported as WARN in its
+         own column - it never fails the verdict, because cut-over FFC-EX
+         sites do not carry the literal 'Free For Charity' footer text.
 
     Emits a per-order verdict table (order id, domain, URL, PASS/FAIL +
-    reason) on stdout and writes the same rows to -OutputFile as CSV.
+    reason, footer OK/WARN) on stdout and writes the same rows to
+    -OutputFile as CSV.
 
     REPORT-ONLY: no WHMCS writes are performed. This script never accepts,
     cancels, or otherwise mutates an order.
@@ -30,7 +38,8 @@
     the only order-write precedent in this repo is the explicit single-order
     accept/cancel/fraud script (whmcs-order-update.ps1). Until a safe
     annotation path exists, failures surface via this report (job summary /
-    artifact) for a human to act on.
+    artifact) for a human to act on. The Gate-3 checklist and the WHMCS
+    attestation field (id 172) are not machine-read yet either.
 #>
 [CmdletBinding()]
 param(
@@ -62,7 +71,8 @@ param(
     [Parameter()]
     [string]$FieldNamePattern = 'Live GitHub Pages URL',
 
-    # Marker string the page body must contain (v1: the FFC footer text).
+    # Regex the page body should match (footer heuristic; WARN-only). The
+    # default matches 'FreeForCharity' and 'Free For Charity' alike.
     [Parameter()]
     [string]$FooterMarker,
 
@@ -86,26 +96,32 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'whmcs-api-common.ps1')
 
+# Same Chrome UA spoof Invoke-WhmcsApi uses (whmcs-api-common.ps1): charity
+# hosts behind Imunify360/bot protection 403 the default PowerShell UA.
+$script:FfcVerifyUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+# WHMCS JSON responses use two shapes for lists: a plain array (JSON mode) or
+# a wrapper object with a named child ({ orders: { order: [...] } }). Member
+# enumeration across a plain array yields an array OF NULLS for a missing
+# child property (truthy!), so the array shape MUST be detected before any
+# child-property truthiness test, and null elements always dropped - same
+# hardened pattern as Get-WhmcsList in whmcs-application-detail.ps1.
+function Get-WhmcsListNode {
+    param($Node, [Parameter(Mandatory = $true)][string]$ChildName)
+    if ($null -eq $Node -or $Node -is [string]) { return @() }
+    if ($Node -is [System.Array]) { return @($Node | Where-Object { $null -ne $_ }) }
+    if ($Node.PSObject.Properties[$ChildName]) { return @($Node.$ChildName | Where-Object { $null -ne $_ }) }
+    return @()
+}
+
 function Get-OrdersFromResponse {
     param([Parameter(Mandatory = $true)]$Response)
-    if ($Response.orders -and $Response.orders.order) {
-        return @($Response.orders.order)
-    }
-    if ($Response.orders -is [System.Array]) {
-        return @($Response.orders)
-    }
-    return @()
+    return Get-WhmcsListNode -Node $Response.orders -ChildName 'order'
 }
 
 function Get-ProductsFromResponse {
     param([Parameter(Mandatory = $true)]$Response)
-    if ($Response.products -and $Response.products.product) {
-        return @($Response.products.product)
-    }
-    if ($Response.products -is [System.Array]) {
-        return @($Response.products)
-    }
-    return @()
+    return Get-WhmcsListNode -Node $Response.products -ChildName 'product'
 }
 
 function Get-CustomFieldNodes {
@@ -116,24 +132,17 @@ function Get-CustomFieldNodes {
     if (-not $Node) { return @() }
 
     $cf = $null
-    try { $cf = $Node.customfields } catch {}
-    if (-not $cf) { return @() }
-
-    $entries = @()
-    try {
-        if ($cf.customfield) { $entries = @($cf.customfield) }
-        elseif ($cf -is [System.Array]) { $entries = @($cf) }
-    }
-    catch {}
+    if ($Node.PSObject.Properties['customfields']) { $cf = $Node.customfields }
+    $entries = Get-WhmcsListNode -Node $cf -ChildName 'customfield'
 
     $out = @()
     foreach ($e in $entries) {
         if (-not $e) { continue }
-        $id = $null; $name = $null; $value = $null
-        try { $id = [string]$e.id } catch {}
-        try { $name = [string]$e.name } catch {}
-        if ([string]::IsNullOrWhiteSpace($name)) { try { $name = [string]$e.translated_name } catch {} }
-        try { $value = [string]$e.value } catch {}
+        $id = if ($e.PSObject.Properties['id']) { [string]$e.id } else { $null }
+        $name = if ($e.PSObject.Properties['name'] -and $e.name) { [string]$e.name }
+        elseif ($e.PSObject.Properties['translated_name'] -and $e.translated_name) { [string]$e.translated_name }
+        else { $null }
+        $value = if ($e.PSObject.Properties['value']) { [string]$e.value } else { $null }
         if ([string]::IsNullOrWhiteSpace($name) -and [string]::IsNullOrWhiteSpace($id)) { continue }
         $out += [pscustomobject]@{ id = $id; name = $name; value = $value }
     }
@@ -170,9 +179,14 @@ function Get-GhPagesUrlFromCustomFields {
 }
 
 function Test-LiveFfcUrl {
-    # Verifies a charity-supplied URL: HTTP GET must return 200 and the body
-    # must contain $Marker (case-insensitive). Returns
-    # @{ Pass; Reason; StatusCode; Url } and never throws.
+    # Verifies a charity-supplied URL.
+    #   Verdict (Pass): the URL host must be a GitHub Pages host (github.io or
+    #   *.github.io - the canonical gate is the free github.io address, per
+    #   the WHMCS field regex) AND an HTTP GET must return 200.
+    #   Footer heuristic (FooterCheck): $Marker is matched as a
+    #   case-insensitive regex against the body; a miss is WARN, never FAIL.
+    # Returns @{ Pass; Reason; StatusCode; Url; FooterCheck; FooterNote } and
+    # never throws.
     param(
         [Parameter()]
         [string]$Url,
@@ -184,7 +198,14 @@ function Test-LiveFfcUrl {
         [int]$TimeoutSec = 30
     )
 
-    $result = [pscustomobject]@{ Pass = $false; Reason = ''; StatusCode = $null; Url = $Url }
+    $result = [pscustomobject]@{
+        Pass        = $false
+        Reason      = ''
+        StatusCode  = $null
+        Url         = $Url
+        FooterCheck = ''
+        FooterNote  = ''
+    }
 
     if ([string]::IsNullOrWhiteSpace($Url)) {
         $result.Reason = 'missing URL (custom field empty)'
@@ -204,9 +225,19 @@ function Test-LiveFfcUrl {
         return $result
     }
 
+    # The canonical gate is validation on the free *.github.io address (the
+    # WHMCS field regex enforces it). Any other host - a Wix page, an apex
+    # domain, anything - is not the artifact this order is gated on.
+    $uriHost = $parsed.Host
+    if ($uriHost -ne 'github.io' -and $uriHost -notlike '*.github.io') {
+        $result.Reason = "not a GitHub Pages URL (host '$uriHost'; expected *.github.io)"
+        return $result
+    }
+
     try {
         $resp = Invoke-WebRequest -Uri $candidate -Method Get -TimeoutSec $TimeoutSec `
-            -MaximumRedirection 5 -SkipHttpErrorCheck -ErrorAction Stop
+            -MaximumRedirection 5 -SkipHttpErrorCheck -UserAgent $script:FfcVerifyUserAgent `
+            -ErrorAction Stop
     }
     catch {
         $result.Reason = "request failed: $($_.Exception.Message)"
@@ -214,22 +245,55 @@ function Test-LiveFfcUrl {
     }
 
     $status = 0
-    try { $status = [int]$resp.StatusCode } catch {}
+    try { $status = [int]$resp.StatusCode }
+    catch { Write-Warning "Could not read HTTP status from response for $($result.Url): $($_.Exception.Message)" }
     $result.StatusCode = $status
     if ($status -ne 200) {
         $result.Reason = "HTTP $status (expected 200)"
         return $result
     }
 
+    # Liveness verdict is settled: GitHub Pages host + HTTP 200.
+    $result.Pass = $true
+    $result.Reason = 'HTTP 200 on GitHub Pages host'
+
+    # Footer-marker heuristic (WARN-only). Invoke-WebRequest can surface
+    # Content as byte[] depending on the response headers; decode it instead
+    # of [string]-casting (which yields space-joined byte numbers).
     $bodyText = ''
-    try { $bodyText = [string]$resp.Content } catch {}
-    if ($bodyText -notmatch [regex]::Escape($Marker)) {
-        $result.Reason = "footer marker '$Marker' not found in page body"
+    try {
+        $content = $resp.Content
+        if ($content -is [byte[]]) {
+            $bodyText = [System.Text.Encoding]::UTF8.GetString($content)
+        }
+        elseif ($null -ne $content) {
+            $bodyText = [string]$content
+        }
+    }
+    catch {
+        Write-Warning "Could not read response body from $($result.Url): $($_.Exception.Message)"
+        $result.FooterCheck = 'WARN'
+        $result.FooterNote = "body unreadable: $($_.Exception.Message)"
         return $result
     }
 
-    $result.Pass = $true
-    $result.Reason = "HTTP 200 + marker '$Marker' present"
+    $markerHit = $false
+    try { $markerHit = [bool]($bodyText -match $Marker) }
+    catch {
+        Write-Warning "Invalid footer-marker pattern '$Marker': $($_.Exception.Message)"
+        $result.FooterCheck = 'WARN'
+        $result.FooterNote = "invalid marker pattern '$Marker'"
+        return $result
+    }
+
+    if ($markerHit) {
+        $result.FooterCheck = 'OK'
+        $result.FooterNote = "footer marker pattern '$Marker' matched"
+    }
+    else {
+        $result.FooterCheck = 'WARN'
+        $result.FooterNote = "footer marker pattern '$Marker' not found in page body"
+    }
     return $result
 }
 
@@ -253,7 +317,9 @@ try {
 
     $marker = $FooterMarker
     if ([string]::IsNullOrWhiteSpace($marker)) { $marker = $env:WHMCS_VERIFY_FOOTER_MARKER }
-    if ([string]::IsNullOrWhiteSpace($marker)) { $marker = 'Free For Charity' }
+    # Default regex matches 'FreeForCharity' (repo-URL form on cut-over sites)
+    # and 'Free For Charity' (template placeholder footer) alike.
+    if ([string]::IsNullOrWhiteSpace($marker)) { $marker = 'Free\s?For\s?Charity' }
 
     New-DirectoryForFile -Path $OutputFile
 
@@ -270,8 +336,7 @@ try {
         $page = Get-OrdersFromResponse -Response $resp
         if ($page.Count -le 0) { break }
         foreach ($o in $page) {
-            $oid = $null
-            try { $oid = [string]$o.id } catch {}
+            $oid = [string]$o.id
             if (-not [string]::IsNullOrWhiteSpace($oid)) { $pendingOrders[$oid] = $o }
         }
         $start += $page.Count
@@ -297,13 +362,11 @@ try {
             if ($page.Count -le 0) { break }
 
             foreach ($svc in $page) {
-                $orderId = $null
-                try { $orderId = [string]$svc.orderid } catch {}
+                $orderId = [string]$svc.orderid
                 if ([string]::IsNullOrWhiteSpace($orderId) -or -not $pendingOrders.ContainsKey($orderId)) { continue }
 
-                $domain = $null
-                try { $domain = [string]$svc.domain } catch {}
-                if ([string]::IsNullOrWhiteSpace($domain)) { try { $domain = [string]$svc.name } catch {} }
+                $domain = [string]$svc.domain
+                if ([string]::IsNullOrWhiteSpace($domain)) { $domain = [string]$svc.name }
 
                 $fields = Get-CustomFieldNodes -Node $svc
                 $url = Get-GhPagesUrlFromCustomFields -Fields $fields -FieldIds $FieldIds -FieldNamePattern $FieldNamePattern
@@ -313,15 +376,17 @@ try {
 
                 $order = $pendingOrders[$orderId]
                 $rows.Add([pscustomobject]@{
-                        orderid    = $orderId
-                        ordernum   = [string]$order.ordernum
-                        clientid   = [string]$order.userid
-                        pid        = $productId
-                        domain     = $domain
-                        url        = $verdict.Url
-                        statuscode = $verdict.StatusCode
-                        verdict    = $(if ($verdict.Pass) { 'PASS' } else { 'FAIL' })
-                        reason     = $verdict.Reason
+                        orderid     = $orderId
+                        ordernum    = [string]$order.ordernum
+                        clientid    = [string]$order.userid
+                        pid         = $productId
+                        domain      = $domain
+                        url         = $verdict.Url
+                        statuscode  = $verdict.StatusCode
+                        verdict     = $(if ($verdict.Pass) { 'PASS' } else { 'FAIL' })
+                        reason      = $verdict.Reason
+                        footercheck = $verdict.FooterCheck
+                        footernote  = $verdict.FooterNote
                     })
             }
 
@@ -336,10 +401,11 @@ try {
 
     $passCount = @($rows | Where-Object { $_.verdict -eq 'PASS' }).Count
     $failCount = @($rows | Where-Object { $_.verdict -eq 'FAIL' }).Count
+    $warnCount = @($rows | Where-Object { $_.footercheck -eq 'WARN' }).Count
     Write-Host ''
-    Write-Host "Domain-order URL verification ($OrderStatus, pids: $($ProductIds -join ', ')): $($rows.Count) order(s) - PASS $passCount / FAIL $failCount"
+    Write-Host "Domain-order URL verification ($OrderStatus, pids: $($ProductIds -join ', ')): $($rows.Count) order(s) - PASS $passCount / FAIL $failCount / footer WARN $warnCount"
     if ($rows.Count -gt 0) {
-        $rows | Format-Table orderid, domain, url, verdict, reason -AutoSize | Out-String | Write-Host
+        $rows | Format-Table orderid, domain, url, verdict, reason, footercheck -AutoSize | Out-String | Write-Host
     }
     else {
         Write-Host "No $OrderStatus domain orders to verify."

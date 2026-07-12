@@ -1,11 +1,13 @@
 name: '225. WHMCS - Domain Order URL Verify [WHMCS]'
 run-name: 'WHMCS Domain Order URL Verify'
 
-# Read-only gate check for pending domain orders (pids 39 register / 41
+# Read-only liveness check for pending domain orders (pids 39 register / 41
 # transfer). Pulls the "Live GitHub Pages URL of your validated website"
 # custom field (ids 171/173) from each pending order's service and verifies
-# the site is live: HTTP 200 + FFC footer marker in the body. Emits a
-# per-order PASS/FAIL table to the job summary + a CSV artifact. No order
+# the URL is live: host must be *.github.io and HTTP GET must return 200
+# (PASS/FAIL). A footer-marker regex is also matched against the body as a
+# WARN-only heuristic (cut-over sites don't carry the literal footer text).
+# Emits a per-order table to the job summary + a CSV artifact. No order
 # writes are performed (never accepts/cancels; see issue #681).
 
 on:
@@ -17,10 +19,10 @@ on:
         type: string
         default: '39,41'
       footer_marker:
-        description: 'Marker string the page body must contain'
+        description: 'Regex the page body should match (footer heuristic; miss = WARN, not FAIL)'
         required: false
         type: string
-        default: 'Free For Charity'
+        default: 'Free\s?For\s?Charity'
       api_url:
         description: 'WHMCS API endpoint'
         required: false
@@ -60,7 +62,7 @@ jobs:
         env:
           WHMCS_API_URL: ${{ inputs.api_url }}
           PRODUCT_IDS: ${{ inputs.product_ids || '39,41' }}
-          FOOTER_MARKER: ${{ inputs.footer_marker || 'Free For Charity' }}
+          FOOTER_MARKER: ${{ inputs.footer_marker || 'Free\s?For\s?Charity' }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -71,6 +73,12 @@ jobs:
           }
 
           $pids = @(($env:PRODUCT_IDS -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { [int]$_ })
+          if ($pids.Count -eq 0) {
+            # An input of ' ' or ',' parses to an empty list, which would
+            # override the script's default and verify nothing (green no-op).
+            Write-Warning "product_ids input '$env:PRODUCT_IDS' parsed to an empty list; falling back to 39,41."
+            $pids = @(39, 41)
+          }
           New-Item -ItemType Directory -Force -Path artifacts/whmcs | Out-Null
           $out = 'artifacts/whmcs/domain_order_url_verify.csv'
 
@@ -86,22 +94,25 @@ jobs:
           if (Test-Path $out) { $rows = @(Import-Csv $out) }
           $pass = @($rows | Where-Object { $_.verdict -eq 'PASS' }).Count
           $fail = @($rows | Where-Object { $_.verdict -eq 'FAIL' }).Count
+          $warn = @($rows | Where-Object { $_.footercheck -eq 'WARN' }).Count
 
           "## WHMCS domain-order URL verification" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "- **Pending domain orders checked**: $(@($rows).Count)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "- **PASS**: $pass" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "- **FAIL**: $fail" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- **Footer WARN** (heuristic only): $warn" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
           $lines = [System.Collections.Generic.List[string]]::new()
           if (@($rows).Count -gt 0) {
-            $lines.Add("| order | domain | URL | status | verdict | reason |")
-            $lines.Add("| --- | --- | --- | --- | --- | --- |")
+            $lines.Add("| order | domain | URL | status | verdict | reason | footer |")
+            $lines.Add("| --- | --- | --- | --- | --- | --- | --- |")
             foreach ($r in $rows) {
               $url = ([string]$r.url) -replace '\|', '\\|'
               $reason = ([string]$r.reason) -replace '\|', '\\|'
-              $lines.Add("| $($r.ordernum) (id $($r.orderid)) | $($r.domain) | $url | $($r.statuscode) | $($r.verdict) | $reason |")
+              $footer = ([string]$r.footercheck) -replace '\|', '\\|'
+              $lines.Add("| $($r.ordernum) (id $($r.orderid)) | $($r.domain) | $url | $($r.statuscode) | $($r.verdict) | $reason | $footer |")
             }
           } else {
             $lines.Add("_No pending domain orders to verify._")

@@ -39,9 +39,13 @@ python3 scripts/generate-workflow-catalog.py --check   # docs/workflow-catalog.j
 Expected output (verified in-container):
 
 ```
-Workflow reference guard OK: 81 workflows, all cross-references resolve and dispatch targets are dispatchable.
-Workflow / safety-doc consistency OK: 81 workflows, 72 table rows covered.
+Workflow reference guard OK: N workflows, all cross-references resolve and dispatch targets are dispatchable.
+Workflow / safety-doc consistency OK: N workflows, M table rows covered.
+Catalog up to date (N workflows).
 ```
+
+(The counts are live — `N` workflows / `M` table rows — so they track the repo rather than going
+stale here.)
 
 If `--check` reports the catalog is dirty, regenerate it and commit the result:
 
@@ -61,8 +65,10 @@ approval gates, and the gotchas. From the web sandbox, MCP GitHub tools can disp
 - **These guards are the CI gate too.** The repo runs the same three scripts in CI, so a green local
   run predicts a green check. Run them before opening a PR that touches `.github/workflows/` or the
   safety docs.
-- **A new workflow file fails the reference guard until it's cross-referenced.** Adding
-  `.github/workflows/NN-foo.yml` also means updating the safety-doc table and any dispatch
-  references — the guards enforce that pairing.
+- **Adding an operator workflow means updating its docs, not just the file.** The reference guard
+  fails on stale cross-references and undispatchable targets; the consistency guard fails when a
+  workflow is missing from the safety-doc table; and the catalog `--check` fails until you
+  regenerate it. So after adding `.github/workflows/NNN-foo.yml`, update the safety-doc table,
+  regenerate the catalog, and fix any dispatch references.
 - **`workflow_dispatch` by filename only works after merge to `main`.** A brand new workflow on a
   branch can't be dispatched by name yet; merge first.

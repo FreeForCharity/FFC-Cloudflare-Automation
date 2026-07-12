@@ -113,6 +113,43 @@ export function parseDomains(raw) {
 }
 
 /**
+ * Pure outcome of the apex DNS check. An apex with no usable A/AAAA answer is
+ * a blocker (ok === false) so an unresolved domain can't yield a false READY.
+ */
+export function apexOutcome(host) {
+  const cls = classify(host);
+  if (cls === 'unresolved') {
+    return { cls, ok: false, detail: 'no A/AAAA records (NXDOMAIN/NODATA)' };
+  }
+  return { cls, ok: 'info', detail: `currently served by: ${cls}` };
+}
+
+/**
+ * Pure outcome of the CAA check ({ records } on success, { error } on lookup
+ * failure). A failed lookup is a blocker AND reports caaOk=false — staying
+ * conservative (we couldn't verify Let's Encrypt issuance isn't blocked) and
+ * keeping the verdict table honest about the failure.
+ */
+export function caaOutcome({ records = [], error = '' }) {
+  if (error) return { ok: false, caaOk: false, name: 'CAA lookup', detail: error };
+  const caaOk = caaAllowsLetsEncrypt(records);
+  if (!records.length) {
+    return {
+      ok: true,
+      caaOk,
+      name: 'CAA policy',
+      detail: "none set — any CA may issue (Let's Encrypt OK)",
+    };
+  }
+  return {
+    ok: caaOk,
+    caaOk,
+    name: "CAA allows Let's Encrypt (GitHub Pages HTTPS)",
+    detail: records.join(' | '),
+  };
+}
+
+/**
  * The go/no-go verdict for one domain.
  *   originHealthy  the GitHub Pages origin returns 200 (and the marker, if any)
  *   pointedAtPages apex classification starts with "GitHub Pages"
@@ -181,6 +218,22 @@ async function selfTest() {
     'c.com',
   ]);
   assert.deepEqual(parseDomains(''), []);
+
+  // apexOutcome: unresolved apex is a blocker; resolved apex is informational.
+  assert.equal(apexOutcome({ chain: [], ips: [] }).ok, false);
+  assert.equal(apexOutcome({ chain: [], ips: [] }).detail, 'no A/AAAA records (NXDOMAIN/NODATA)');
+  assert.equal(apexOutcome({ chain: [], ips: ['185.199.108.153'] }).ok, 'info');
+  assert.equal(apexOutcome({ chain: [], ips: ['185.199.108.153'] }).cls, 'GitHub Pages');
+  assert.equal(apexOutcome({ chain: [], ips: ['203.0.113.7'] }).ok, 'info');
+
+  // caaOutcome: lookup failure is a blocker AND reports caaOk=false for the
+  // verdict table; empty policy is permissive; explicit policy is respected.
+  assert.equal(caaOutcome({ error: 'DoH lookup failed' }).ok, false);
+  assert.equal(caaOutcome({ error: 'DoH lookup failed' }).caaOk, false);
+  assert.equal(caaOutcome({ records: [] }).ok, true);
+  assert.equal(caaOutcome({ records: [] }).caaOk, true);
+  assert.equal(caaOutcome({ records: ['0 issue "digicert.com"'] }).ok, false);
+  assert.equal(caaOutcome({ records: ['0 issue "letsencrypt.org"'] }).ok, true);
 
   // computeVerdict: the four outcomes.
   assert.equal(
@@ -342,14 +395,15 @@ async function preflightDomain(domain, origin, marker) {
   let apexClass = 'unresolved';
   try {
     const apex = await resolveHost(domain);
-    apexClass = classify(apex);
+    const apexRes = apexOutcome(apex);
+    apexClass = apexRes.cls;
     for (const c of apex.chain) record('info', `CNAME ${c.from} → ${c.cname}`);
     record('info', `${domain} A/AAAA → ${apex.ips.join(', ') || '(none)'}`);
-    if (apexClass === 'unresolved') {
+    if (apexRes.ok === false) {
       // No A/AAAA at the apex — a go verdict here would be a false green.
-      record(false, `${domain} apex resolves`, 'no A/AAAA records (NXDOMAIN/NODATA)');
+      record(false, `${domain} apex resolves`, apexRes.detail);
     } else {
-      record('info', `${domain} currently served by: ${apexClass}`);
+      record('info', `${domain} ${apexRes.detail}`);
     }
   } catch (err) {
     record(false, `${domain} resolves`, err.message);
@@ -367,20 +421,15 @@ async function preflightDomain(domain, origin, marker) {
 
   // 3. CAA — will Let's Encrypt (GitHub Pages' CA) be allowed to issue?
   console.log('— Certificate authority (CAA) —');
-  let caaOk = null;
+  let caaLookup;
   try {
-    const caa = await doh(domain, 'CAA');
-    const issuers = caa.map((r) => r.data);
-    caaOk = caaAllowsLetsEncrypt(issuers);
-    if (!issuers.length) {
-      record(true, 'CAA policy', "none set — any CA may issue (Let's Encrypt OK)");
-    } else {
-      record(caaOk, "CAA allows Let's Encrypt (GitHub Pages HTTPS)", issuers.join(' | '));
-    }
+    caaLookup = { records: (await doh(domain, 'CAA')).map((r) => r.data) };
   } catch (err) {
-    // Can't verify that Let's Encrypt issuance isn't blocked — stay conservative.
-    record(false, 'CAA lookup', err.message);
+    caaLookup = { error: err.message };
   }
+  const caaRes = caaOutcome(caaLookup);
+  const caaOk = caaRes.caaOk;
+  record(caaRes.ok, caaRes.name, caaRes.detail);
 
   // 4. If DNS already points at Pages, verify the live domain over HTTPS.
   console.log('— Live domain over HTTPS —');
@@ -448,7 +497,7 @@ function renderTable(rows) {
         r.originHealthy ? 'healthy' : 'UNHEALTHY',
         r.apexClass,
         r.wwwClass,
-        r.caaOk === null ? '?' : r.caaOk ? 'ok' : 'BLOCKED',
+        r.caaOk ? 'ok' : 'BLOCKED',
         r.liveStatus || '?',
         `${r.verdict.ok ? '✅' : '❌'} ${r.verdict.label}`,
       ].join(' | ')} |`,

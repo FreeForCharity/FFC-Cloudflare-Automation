@@ -24,6 +24,13 @@
          org name, so without this every row read "(unknown org)".
       3. Score each application 0-100 against a documented rubric (see
          Get-ApplicationScore) and emit a ranked table per group.
+      3b. VERIFY LEGITIMACY (unless -SkipEinVerify): parse the onboarding
+         'legal status' answer and flag category mismatches (a full 501(c)(3)
+         that filed the pre-501c3 track, or vice-versa); live-check each EIN
+         against ProPublica Nonprofit Explorer (free, key-less) to confirm an
+         IRS-determined 501(c)(3) subsection; and probe the GuideStar/Candid
+         link. Miscategorized applications are SEGREGATED into their own table
+         and can never be a group's top pick.
 
     MODES (-Mode):
       report  (DEFAULT)  Read-only. Never calls AcceptOrder. Emits a ranked
@@ -80,6 +87,17 @@ param(
 
     [Parameter()]
     [string]$OutputFile = 'artifacts/whmcs/whmcs_application_triage.json',
+
+    # Base URL of the ProPublica Nonprofit Explorer organizations endpoint
+    # (overridable so tests/self-hosts can point at a stub). The runner appends
+    # '/<digits-ein>.json'.
+    [Parameter()]
+    [string]$EinApiBaseUrl = 'https://projects.propublica.org/nonprofits/api/v2/organizations',
+
+    # Skip ALL live EIN/GuideStar verification (zero outbound calls). Tests and
+    # air-gapped runs set this; the workflow leaves verification ON.
+    [Parameter()]
+    [switch]$SkipEinVerify,
 
     # approve-only: send the WHMCS acceptance email to the charity (default on --
     # the whole point is that the charity gets the corrected acceptance email).
@@ -338,23 +356,26 @@ function Get-MissionQuality {
 # --------------------------------------------------------------------------
 
 $script:FieldPatterns = @{
-    OrgName   = 'organi[sz]ation.*name|charity.*name|legal.*name|nonprofit.*name|name of (your )?(the )?(organi[sz]ation|charity|nonprofit)'
-    Ein       = '\bEIN\b|employer identification|tax\s*id'
-    Guidestar = 'guidestar|candid'
-    Facebook  = 'facebook'
-    LinkedIn  = 'linkedin'
-    UsAttest  = 'attest|united states|based in the us|u\.s\.\s*(based|attestation)|501\(c\)'
-    Tos       = 'terms of service|terms & conditions|terms and conditions|\btos\b|\bt&c\b|agree to the terms'
-    Mission   = 'mission|about (your|the) (organi[sz]ation|charity)|purpose|what (does|do) (your|the)'
-    Hosting   = 'hosting|current (web)?site|existing (web)?site|website url|do you (have|need)'
-    Timezone  = 'time\s*zone'
-    President = 'president'
-    Secretary = 'secretary'
-    Treasurer = 'treasurer'
-    Primary   = 'primary contact|main contact'
-    Technical = 'technical contact|tech contact'
-    Phone     = 'phone|mobile|cell|tel\b'
-    Email     = 'e-?mail'
+    OrgName     = 'organi[sz]ation.*name|charity.*name|legal.*name|nonprofit.*name|name of (your )?(the )?(organi[sz]ation|charity|nonprofit)'
+    Ein         = '\bEIN\b|employer identification|tax\s*id'
+    Guidestar   = 'guidestar|candid'
+    Facebook    = 'facebook'
+    LinkedIn    = 'linkedin'
+    UsAttest    = 'attest|united states|based in the us|u\.s\.\s*(based|attestation)|501\(c\)'
+    Tos         = 'terms of service|terms & conditions|terms and conditions|\btos\b|\bt&c\b|agree to the terms'
+    Mission     = 'mission|about (your|the) (organi[sz]ation|charity)|purpose|what (does|do) (your|the)'
+    Hosting     = 'hosting|current (web)?site|existing (web)?site|website url|do you (have|need)'
+    Timezone    = 'time\s*zone'
+    President   = 'president'
+    Secretary   = 'secretary'
+    Treasurer   = 'treasurer'
+    Primary     = 'primary contact|main contact'
+    Technical   = 'technical contact|tech contact'
+    Phone       = 'phone|mobile|cell|tel\b'
+    Email       = 'e-?mail'
+    # 'What is the legal status of your organization?' -- drives the
+    # miscategorization check (legal status vs the product track filed on).
+    LegalStatus = 'legal status'
 }
 
 function Get-BoardRosterScore {
@@ -404,6 +425,103 @@ function Get-FieldFillRate {
     if ($all.Count -eq 0) { return 0.0 }
     $filled = @($all | Where-Object { -not (Test-PlaceholderValue -Value ([string]$_.value)) }).Count
     return [math]::Round($filled / $all.Count, 3)
+}
+
+# --------------------------------------------------------------------------
+# Legal-status vs product-track (miscategorization) helpers (pure).
+# --------------------------------------------------------------------------
+
+function Get-NormalizedLegalStatus {
+    # Map the onboarding 'What is the legal status of your organization?' answer to
+    # a canonical bucket:
+    #   full    -> an IRS-determined 501(c)(3) ('501c(3) Nonprofit',
+    #              '4. 501c3 General Organization')
+    #   pre     -> still forming ('pre-501c(3) Nonprofit')
+    #   other   -> a different recognized form (state-recognized nonprofit,
+    #              not-for-profit, other charitable organization)
+    #   unknown -> absent / unrecognized (no signal)
+    [OutputType([string])]
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return 'unknown' }
+    $v = $Value.Trim().ToLowerInvariant()
+    # 'pre-501c(3)' MUST be tested before the bare '501c(3)' so the pre- prefix wins.
+    if ($v -match 'pre[-\s]*501') { return 'pre' }
+    if ($v -match '501\s*\(?c\)?\s*\(?3\)?') { return 'full' }
+    if ($v -match 'state[-\s]*recognized|not[-\s]*for[-\s]*profit|other charitable|charitable organization') { return 'other' }
+    return 'unknown'
+}
+
+function Get-CategoryMismatch {
+    # Decide whether an application filed on the WRONG onboarding track. Returns
+    # @{ IsMismatch; Note }.
+    #   pid 16 (pre-501c3) but the org reports a full 501(c)(3) legal status, OR
+    #     carries an IRS-verified 501(c)(3) EIN -> mismatch (belongs on the full track).
+    #   pid 33 (full 501c3) but the org reports pre-501c3 / other-undetermined legal
+    #     status -> mismatch (belongs on the pre track).
+    # A blank/unknown legal status is NOT a mismatch on its own (no signal).
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)][int]$ProductPid,
+        [Parameter()][string]$LegalStatus = 'unknown',
+        # $true / $false / $null (null = not verified / verification skipped).
+        [Parameter()]$EinIs501c3 = $null
+    )
+    $mismatch = $false
+    $notes = [System.Collections.Generic.List[string]]::new()
+    if ($ProductPid -eq 16) {
+        if ($LegalStatus -eq 'full') {
+            $mismatch = $true
+            $notes.Add('filed on the pre-501(c)(3) track but reports a full 501(c)(3) legal status')
+        }
+        if ($EinIs501c3 -eq $true) {
+            $mismatch = $true
+            $notes.Add('EIN is an IRS-determined 501(c)(3) yet the application used the pre-501(c)(3) track')
+        }
+    }
+    elseif ($ProductPid -eq 33) {
+        if ($LegalStatus -eq 'pre') {
+            $mismatch = $true
+            $notes.Add('filed on the full 501(c)(3) track but reports pre-501(c)(3) (undetermined) legal status')
+        }
+        elseif ($LegalStatus -eq 'other') {
+            $mismatch = $true
+            $notes.Add('filed on the full 501(c)(3) track but reports a non-501(c)(3) legal status')
+        }
+    }
+    return [pscustomobject]@{ IsMismatch = $mismatch; Note = ($notes -join '; ') }
+}
+
+function Get-EinFromCandidUrl {
+    # Candid/GuideStar profile URLs sometimes embed the EIN in the slug
+    # (e.g. .../profile/12-3456789 or .../ein/123456789). Return the 9 EIN digits
+    # (digits only) when present, else ''.
+    [OutputType([string])]
+    param([string]$Value)
+    $candidate = Get-HrefOrRaw -Value $Value
+    if ([string]::IsNullOrWhiteSpace($candidate)) { return '' }
+    $m = [regex]::Match($candidate, '\b(\d{2}-?\d{7})\b')
+    if ($m.Success) { return ($m.Groups[1].Value -replace '\D', '') }
+    return ''
+}
+
+function Test-NameMismatch {
+    # True when two org names share NO significant token (they "differ greatly").
+    # Common org keywords / stopwords are stripped first so a shared 'Foundation'
+    # or 'Inc' alone never counts as a match.
+    [OutputType([bool])]
+    param([string]$NameA, [string]$NameB)
+    if ([string]::IsNullOrWhiteSpace($NameA) -or [string]::IsNullOrWhiteSpace($NameB)) { return $false }
+    $stop = 'the|of|and|for|a|an|inc|incorporated|llc|corp|co|company|foundation|fund|society|ministries|ministry|church|association|assoc|institute|coalition|alliance|council|network|project|initiative|center|centre|charity|charities|nonprofit|org|organization|organisation|group|services|community|club|league|team|academy|school|trust|guild|shelter|rescue|relief|outreach|mission|house|home|works|collective|partnership|federation|us|usa|national|international|america|american'
+    $tokenize = {
+        param($n)
+        @(($n.ToLowerInvariant() -replace '[^a-z0-9\s]', ' ' -split '\s+') |
+                Where-Object { $_ -and ($_ -notmatch "^($stop)$") })
+    }
+    $a = & $tokenize $NameA
+    $b = & $tokenize $NameB
+    if ($a.Count -eq 0 -or $b.Count -eq 0) { return $false }
+    $common = @($a | Where-Object { $b -contains $_ })
+    return ($common.Count -eq 0)
 }
 
 # --------------------------------------------------------------------------
@@ -570,20 +688,80 @@ function Get-ApplicationScore {
     $strongTxt = if ($strong.Count -gt 0) { ($strong | Select-Object -First 3) -join ', ' } else { 'few complete fields' }
     $gapTxt = if ($topGaps.Count -gt 0) { $topGaps -join ', ' } else { 'none' }
     $penTxt = if ($penalties.Count -gt 0) { ' Penalties: ' + ($penalties -join '; ') + '.' } else { '' }
-    $rationale = "Score $score/100 (pid $productPid). Strong: $strongTxt. Gaps: $gapTxt.$penTxt"
+
+    # ---- Legal-status vs product-track + live-verification signals ----
+    # legalStatus is pure (from the custom fields). The EIN/GuideStar verification
+    # fields are OPTIONAL and injected by the live layer (Get-ApplicationVerification)
+    # before scoring; when absent (unit tests / -SkipEinVerify) they read as
+    # unset/false and only the legal-status signal drives categoryMismatch.
+    $prop = { param($n) if ($Application.PSObject.Properties[$n]) { $Application.$n } else { $null } }
+    $legalStatusRaw = Get-FieldValue -Fields $fields -Pattern $script:FieldPatterns.LegalStatus
+    $legalStatus = Get-NormalizedLegalStatus -Value $legalStatusRaw
+    $einIs501c3 = & $prop 'einIs501c3'
+    $einVerified = [bool](& $prop 'einVerified')
+    $einChecked = [bool](& $prop 'einChecked')
+    $irsName = [string](& $prop 'irsName')
+    $subsectionCode = & $prop 'subsectionCode'
+    $rulingDate = & $prop 'rulingDate'
+    $guidestarLive = [bool](& $prop 'guidestarLive')
+    $guidestarChecked = [bool](& $prop 'guidestarChecked')
+    $nameMismatch = [bool](& $prop 'nameMismatch')
+    $guidestarEinMismatch = [bool](& $prop 'guidestarEinMismatch')
+
+    $cm = Get-CategoryMismatch -ProductPid $productPid -LegalStatus $legalStatus -EinIs501c3 $einIs501c3
+    $categoryMismatch = [bool]$cm.IsMismatch
+
+    $verifyNotes = [System.Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($cm.Note)) { $verifyNotes.Add($cm.Note) }
+    if ($nameMismatch -and -not [string]::IsNullOrWhiteSpace($irsName)) {
+        $verifyNotes.Add("IRS-registered name '$irsName' differs greatly from the application name '$([string]$Application.charityName)'")
+    }
+    if ($guidestarEinMismatch) {
+        $verifyNotes.Add('GuideStar/Candid profile EIN does not match the EIN field')
+    }
+
+    # Human-readable verification summary for the rationale.
+    $einTxt =
+    if (-not $einChecked) { 'EIN not checked' }
+    elseif (-not $einVerified) { 'EIN unverified (not found at IRS/ProPublica)' }
+    elseif ($einIs501c3 -eq $true) {
+        $extra = @()
+        if ($subsectionCode) { $extra += "subsection $subsectionCode" }
+        if ($rulingDate) { $extra += "ruling $rulingDate" }
+        $suffix = if ($extra.Count -gt 0) { ' (' + ($extra -join ', ') + ')' } else { '' }
+        "EIN verified 501(c)(3)$suffix"
+    }
+    else { "EIN verified but not a 501(c)(3) (subsection $subsectionCode)" }
+
+    $rationale = "Score $score/100 (pid $productPid). Strong: $strongTxt. Gaps: $gapTxt.$penTxt $einTxt."
+    if ($verifyNotes.Count -gt 0) { $rationale += ' ' + ($verifyNotes -join '. ') + '.' }
 
     return [pscustomobject]@{
-        orderid     = [string]$Application.orderid
-        ordernum    = [string]$Application.ordernum
-        clientid    = [string]$Application.clientid
-        pid         = $productPid
-        productName = [string]$Application.productName
-        charityName = [string]$Application.charityName
-        score       = $score
-        breakdown   = $breakdown
-        penalties   = $penalties.ToArray()
-        topGaps     = $topGaps
-        rationale   = $rationale
+        orderid              = [string]$Application.orderid
+        ordernum             = [string]$Application.ordernum
+        clientid             = [string]$Application.clientid
+        pid                  = $productPid
+        productName          = [string]$Application.productName
+        charityName          = [string]$Application.charityName
+        score                = $score
+        breakdown            = $breakdown
+        penalties            = $penalties.ToArray()
+        topGaps              = $topGaps
+        legalStatus          = $legalStatus
+        categoryMismatch     = $categoryMismatch
+        categoryMismatchNote = [string]$cm.Note
+        einChecked           = $einChecked
+        einVerified          = $einVerified
+        einIs501c3           = $einIs501c3
+        irsName              = $irsName
+        subsectionCode       = $subsectionCode
+        rulingDate           = $rulingDate
+        guidestarChecked     = $guidestarChecked
+        guidestarLive        = $guidestarLive
+        nameMismatch         = $nameMismatch
+        guidestarEinMismatch = $guidestarEinMismatch
+        verifyNotes          = $verifyNotes.ToArray()
+        rationale            = $rationale
     }
 }
 
@@ -595,6 +773,172 @@ function Get-ApplicationRanking {
     return @($ScoredApplications | Sort-Object -Property `
         @{ Expression = 'score'; Descending = $true }, `
         @{ Expression = { [int64]($_.orderid) }; Descending = $false })
+}
+
+function Split-ByCategory {
+    # Segregate scored applications into correctly-categorized vs miscategorized
+    # (filed the wrong track). Each list is returned ranked. Miscategorized apps
+    # can NEVER be the group's top pick.
+    [OutputType([pscustomobject])]
+    param([Parameter()]$ScoredApplications)
+    $all = @($ScoredApplications | Where-Object { $_ })
+    $ok = @($all | Where-Object { -not $_.categoryMismatch })
+    $mis = @($all | Where-Object { $_.categoryMismatch })
+    return [pscustomobject]@{
+        Ok             = @(Get-ApplicationRanking -ScoredApplications $ok)
+        Miscategorized = @(Get-ApplicationRanking -ScoredApplications $mis)
+    }
+}
+
+function Select-VerifiedBest {
+    # From the ranked, correctly-categorized applications pick the "verified best":
+    # the highest-scoring one whose EIN verifies live at the IRS/ProPublica. If none
+    # verifies, fall back to the highest correctly-categorized app and say so.
+    # Returns @{ Item; Verified; Note } or $null when the group is empty.
+    [OutputType([pscustomobject])]
+    param([Parameter()]$RankedOkApplications)
+    $ranked = @($RankedOkApplications | Where-Object { $_ })
+    if ($ranked.Count -eq 0) { return $null }
+    $verified = @($ranked | Where-Object { $_.einVerified })
+    if ($verified.Count -gt 0) {
+        return [pscustomobject]@{
+            Item     = $verified[0]
+            Verified = $true
+            Note     = 'highest-scoring correctly-categorized application whose EIN verifies live at the IRS'
+        }
+    }
+    return [pscustomobject]@{
+        Item     = $ranked[0]
+        Verified = $false
+        Note     = 'no correctly-categorized application had a live-verified EIN; showing the highest-scoring correctly-categorized application'
+    }
+}
+
+function Invoke-ProPublicaEin {
+    # Live, key-less EIN check against ProPublica Nonprofit Explorer. Cached per EIN,
+    # paced (250ms), 8s timeout; any non-200 / 404 / error is treated as UNVERIFIED.
+    # Captures organization.subsection_code (3 = 501(c)(3)), ruling_date, and name.
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)][string]$Ein,
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][hashtable]$Cache,
+        [int]$TimeoutSec = 8,
+        [int]$PaceMs = 250
+    )
+    $unverified = { param($reason) [pscustomobject]@{ Verified = $false; Is501c3 = $null; SubsectionCode = $null; RulingDate = $null; Name = ''; Reason = $reason } }
+    $digits = ([string]$Ein -replace '\D', '')
+    if ($digits.Length -ne 9) { return (& $unverified 'no valid 9-digit EIN') }
+    if ($Cache.ContainsKey($digits)) { return $Cache[$digits] }
+
+    Start-Sleep -Milliseconds $PaceMs
+    $url = ($BaseUrl.TrimEnd('/')) + "/$digits.json"
+    $result = $null
+    try {
+        $resp = Invoke-RestMethod -Method Get -Uri $url -TimeoutSec $TimeoutSec -ErrorAction Stop
+        $org = if ($resp -and $resp.PSObject.Properties['organization']) { $resp.organization } else { $null }
+        if (-not $org) {
+            $result = & $unverified 'no organization node in response'
+        }
+        else {
+            $sub = if ($org.PSObject.Properties['subsection_code']) { $org.subsection_code } else { $null }
+            $rul = if ($org.PSObject.Properties['ruling_date']) { $org.ruling_date } else { $null }
+            $nm = if ($org.PSObject.Properties['name']) { [string]$org.name } else { '' }
+            $is3 = $null
+            if ($null -ne $sub) { $is3 = ([int]$sub -eq 3) }
+            $result = [pscustomobject]@{ Verified = $true; Is501c3 = $is3; SubsectionCode = $sub; RulingDate = $rul; Name = $nm; Reason = 'ok' }
+        }
+    }
+    catch {
+        # 404 (org not found) and every other transport/HTTP error => unverified.
+        $result = & $unverified "lookup failed: $($_.Exception.Message)"
+    }
+    $Cache[$digits] = $result
+    return $result
+}
+
+function Invoke-UrlLiveness {
+    # HEAD/GET a URL and report whether it responds 200. Cached per URL, paced, 8s
+    # timeout; any error / non-200 => not live. Used for Candid/GuideStar links.
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][hashtable]$Cache,
+        [int]$TimeoutSec = 8,
+        [int]$PaceMs = 250
+    )
+    $target = Get-HrefOrRaw -Value $Url
+    if ([string]::IsNullOrWhiteSpace($target)) { return $false }
+    if ($Cache.ContainsKey($target)) { return [bool]$Cache[$target] }
+    Start-Sleep -Milliseconds $PaceMs
+    $live = $false
+    try {
+        $resp = Invoke-WebRequest -Method Get -Uri $target -TimeoutSec $TimeoutSec -MaximumRedirection 5 -ErrorAction Stop
+        $live = ([int]$resp.StatusCode -eq 200)
+    }
+    catch {
+        $live = $false
+    }
+    $Cache[$target] = $live
+    return $live
+}
+
+function Get-ApplicationVerification {
+    # Live-verify one application's EIN (ProPublica) and GuideStar/Candid link. Pure
+    # decision layer: with -SkipEinVerify it makes ZERO network calls and returns
+    # unchecked defaults. Returns a hashtable of fields that the live layer merges
+    # onto the application object BEFORE scoring (so categoryMismatch can be
+    # reinforced by an IRS-verified 501(c)(3) EIN on the pre-501c3 track).
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory = $true)]$Application,
+        [switch]$SkipEinVerify,
+        [string]$EinBaseUrl = 'https://projects.propublica.org/nonprofits/api/v2/organizations',
+        [hashtable]$EinCache = @{},
+        [hashtable]$UrlCache = @{},
+        [int]$TimeoutSec = 8
+    )
+    $out = @{
+        einChecked           = $false
+        einVerified          = $false
+        einIs501c3           = $null
+        irsName              = ''
+        subsectionCode       = $null
+        rulingDate           = $null
+        guidestarChecked     = $false
+        guidestarLive        = $false
+        nameMismatch         = $false
+        guidestarEinMismatch = $false
+    }
+    if ($SkipEinVerify) { return $out }
+
+    $fields = @($Application.fields)
+    $einValue = Get-FieldValue -Fields $fields -Pattern $script:FieldPatterns.Ein
+    if (Test-ValidEin -Value $einValue) {
+        $out.einChecked = $true
+        $v = Invoke-ProPublicaEin -Ein $einValue -BaseUrl $EinBaseUrl -Cache $EinCache -TimeoutSec $TimeoutSec
+        $out.einVerified = [bool]$v.Verified
+        $out.einIs501c3 = $v.Is501c3
+        $out.irsName = [string]$v.Name
+        $out.subsectionCode = $v.SubsectionCode
+        $out.rulingDate = $v.RulingDate
+        if ($out.einVerified -and -not [string]::IsNullOrWhiteSpace($out.irsName)) {
+            $out.nameMismatch = Test-NameMismatch -NameA $out.irsName -NameB ([string]$Application.charityName)
+        }
+    }
+
+    $gsValue = Get-FieldValue -Fields $fields -Pattern $script:FieldPatterns.Guidestar
+    if (-not [string]::IsNullOrWhiteSpace($gsValue)) {
+        $out.guidestarChecked = $true
+        $out.guidestarLive = Invoke-UrlLiveness -Url $gsValue -Cache $UrlCache -TimeoutSec $TimeoutSec
+        $candidEin = Get-EinFromCandidUrl -Value $gsValue
+        $einDigits = ([string]$einValue -replace '\D', '')
+        if ($candidEin.Length -eq 9 -and $einDigits.Length -eq 9 -and $candidEin -ne $einDigits) {
+            $out.guidestarEinMismatch = $true
+        }
+    }
+
+    return $out
 }
 
 function Get-ClientNameParts {
@@ -803,49 +1147,121 @@ try {
 
     $productPids = @($PreProductId, $FullProductId)
 
-    # Read + score the live pending onboarding applications (both modes need the
-    # ranking; approve additionally uses it to describe what it is accepting).
+    # Read the live pending onboarding applications (both modes need the ranking;
+    # approve additionally uses it to describe what it is accepting).
     $rawApps = Get-PendingOnboardingApplications -Api $api -Auth $auth -ProductPids $productPids -PageSizeInner $PageSize
-    $scored = foreach ($a in $rawApps) { Get-ApplicationScore -Application $a }
 
+    # Live legitimacy verification (EIN via ProPublica + GuideStar/Candid link).
+    # -SkipEinVerify => zero outbound calls (offline / test). Caches are shared
+    # across all apps so a repeated EIN/URL is fetched once.
+    if ($SkipEinVerify) {
+        Write-Host 'EIN/GuideStar verification: SKIPPED (-SkipEinVerify).'
+    }
+    else {
+        Write-Host "EIN/GuideStar verification: ON (ProPublica base $EinApiBaseUrl)."
+    }
+    $einCache = @{}
+    $urlCache = @{}
+    $scored = foreach ($a in $rawApps) {
+        $verify = Get-ApplicationVerification -Application $a -SkipEinVerify:$SkipEinVerify `
+            -EinBaseUrl $EinApiBaseUrl -EinCache $einCache -UrlCache $urlCache
+        foreach ($kv in $verify.GetEnumerator()) {
+            $a | Add-Member -NotePropertyName $kv.Key -NotePropertyValue $kv.Value -Force
+        }
+        Get-ApplicationScore -Application $a
+    }
+
+    # Segregate each group into correctly-categorized (rankable) vs miscategorized
+    # (filed the wrong track -- can NEVER be the group's top pick).
     $groups = [ordered]@{
-        "$PreProductId"  = @{ label = "pre-501(c)(3) (pid $PreProductId)"; items = @() }
-        "$FullProductId" = @{ label = "full 501(c)(3) (pid $FullProductId)"; items = @() }
+        "$PreProductId"  = @{ label = "pre-501(c)(3) (pid $PreProductId)"; scored = @() }
+        "$FullProductId" = @{ label = "full 501(c)(3) (pid $FullProductId)"; scored = @() }
     }
     foreach ($s in $scored) {
         $k = "$([int]$s.pid)"
-        if ($groups.Contains($k)) { $groups[$k].items = @(Get-ApplicationRanking -ScoredApplications (@($groups[$k].items) + $s)) }
+        if ($groups.Contains($k)) { $groups[$k].scored = @($groups[$k].scored) + $s }
+    }
+    foreach ($k in $groups.Keys) {
+        $split = Split-ByCategory -ScoredApplications $groups[$k].scored
+        $groups[$k].ok = @($split.Ok)
+        $groups[$k].mis = @($split.Miscategorized)
+        $groups[$k].verifiedBest = Select-VerifiedBest -RankedOkApplications $split.Ok
+    }
+
+    function Format-VerifyCell {
+        param($It)
+        $ein =
+        if (-not $It.einChecked) { 'ein n/c' }
+        elseif (-not $It.einVerified) { 'ein unverified' }
+        elseif ($It.einIs501c3 -eq $true) { 'ein 501c3 ✅' }
+        else { "ein sub-$($It.subsectionCode)" }
+        $gs = if (-not $It.guidestarChecked) { '' } elseif ($It.guidestarLive) { ', gs live' } else { ', gs down' }
+        return "$ein$gs"
     }
 
     # ------- Ranked report (both modes emit it) -------
     Write-Summary "## WHMCS application triage ($Mode)"
     Write-Summary ''
+    $verifyState = if ($SkipEinVerify) { 'OFF (-SkipEinVerify)' } else { 'ON (ProPublica IRS EIN + GuideStar/Candid liveness)' }
+    Write-Summary "_Live legitimacy verification: $verifyState._"
+    Write-Summary ''
     foreach ($k in $groups.Keys) {
         $g = $groups[$k]
-        $items = @($g.items)
-        Write-Summary "### $($g.label) - $($items.Count) pending application(s)"
+        $ok = @($g.ok)
+        $mis = @($g.mis)
+        $total = $ok.Count + $mis.Count
+        Write-Summary "### $($g.label) - $total pending application(s)"
         Write-Summary ''
-        if ($items.Count -eq 0) {
+        if ($total -eq 0) {
             Write-Summary '_No pending applications in this group._'
             Write-Summary ''
             continue
         }
-        Write-Summary '| rank | score | orderid | charity | top gaps |'
-        Write-Summary '| --- | --- | --- | --- | --- |'
-        $rank = 0
-        foreach ($it in $items) {
-            $rank++
-            $charity = ([string]$it.charityName) -replace '\|', '\\|'
-            $gaps = (@($it.topGaps) -join ', ') -replace '\|', '\\|'
-            if ([string]::IsNullOrWhiteSpace($gaps)) { $gaps = '-' }
-            Write-Summary "| $rank | $($it.score) | $($it.orderid) | $charity | $gaps |"
+        if ($ok.Count -eq 0) {
+            Write-Summary '_No correctly-categorized applications in this group._'
+            Write-Summary ''
         }
-        Write-Summary ''
-        $top = $items[0]
-        Write-Summary "**Top of group:** order $($top.orderid) - $($top.charityName)"
-        Write-Summary ''
-        Write-Summary "> $($top.rationale)"
-        Write-Summary ''
+        else {
+            Write-Summary '| rank | score | orderid | charity | legal status | verification | top gaps |'
+            Write-Summary '| --- | --- | --- | --- | --- | --- | --- |'
+            $rank = 0
+            foreach ($it in $ok) {
+                $rank++
+                $charity = ([string]$it.charityName) -replace '\|', '\\|'
+                $gaps = (@($it.topGaps) -join ', ') -replace '\|', '\\|'
+                if ([string]::IsNullOrWhiteSpace($gaps)) { $gaps = '-' }
+                $verifyCell = (Format-VerifyCell -It $it) -replace '\|', '\\|'
+                Write-Summary "| $rank | $($it.score) | $($it.orderid) | $charity | $($it.legalStatus) | $verifyCell | $gaps |"
+            }
+            Write-Summary ''
+            $top = $ok[0]
+            Write-Summary "**Top of group:** order $($top.orderid) - $($top.charityName)"
+            Write-Summary ''
+            $vb = $g.verifiedBest
+            if ($vb) {
+                $tag = if ($vb.Verified) { 'EIN-verified' } else { 'unverified (no live-verified EIN in group)' }
+                Write-Summary "**Verified best ($tag):** order $($vb.Item.orderid) - $($vb.Item.charityName)"
+                Write-Summary ''
+                Write-Summary "> $($vb.Item.rationale)"
+                Write-Summary ''
+            }
+        }
+        if ($mis.Count -gt 0) {
+            Write-Summary "#### ⚠️ Miscategorized (filed wrong track) - $($mis.Count) application(s)"
+            Write-Summary ''
+            Write-Summary '_These filed the wrong onboarding product for their legal status; they are excluded from the group''s top pick. Re-file / move to the correct track before accepting._'
+            Write-Summary ''
+            Write-Summary '| score | orderid | charity | legal status | verification | why miscategorized |'
+            Write-Summary '| --- | --- | --- | --- | --- | --- |'
+            foreach ($it in $mis) {
+                $charity = ([string]$it.charityName) -replace '\|', '\\|'
+                $why = ([string]$it.categoryMismatchNote) -replace '\|', '\\|'
+                if ([string]::IsNullOrWhiteSpace($why)) { $why = 'category mismatch' }
+                $verifyCell = (Format-VerifyCell -It $it) -replace '\|', '\\|'
+                Write-Summary "| $($it.score) | $($it.orderid) | $charity | $($it.legalStatus) | $verifyCell | $why |"
+            }
+            Write-Summary ''
+        }
     }
 
     # ------- JSON artifact (deterministic) -------
@@ -853,12 +1269,17 @@ try {
     $report = [pscustomobject]@{
         mode        = $Mode
         generatedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        einVerify   = (-not $SkipEinVerify)
+        einApiBase  = $EinApiBaseUrl
         groups      = @(
             foreach ($k in $groups.Keys) {
+                $vb = $groups[$k].verifiedBest
                 [pscustomobject]@{
-                    pid          = [int]$k
-                    label        = $groups[$k].label
-                    applications = @($groups[$k].items)
+                    pid            = [int]$k
+                    label          = $groups[$k].label
+                    applications   = @($groups[$k].ok)
+                    miscategorized = @($groups[$k].mis)
+                    verifiedBest   = if ($vb) { [pscustomobject]@{ orderid = [string]$vb.Item.orderid; verified = [bool]$vb.Verified; note = [string]$vb.Note } } else { $null }
                 }
             }
         )
@@ -889,6 +1310,16 @@ try {
         if ($summaryItem) {
             Write-Summary "- **order $id** - $($summaryItem.charityName) (pid $($summaryItem.pid), score $($summaryItem.score))"
             Write-Host "Pre-accept: order $id => $($summaryItem.rationale)"
+            # Prominent (non-blocking) warning if this order looks miscategorized or
+            # its IRS-registered name differs greatly from the application name.
+            if ($summaryItem.categoryMismatch -or $summaryItem.nameMismatch) {
+                $flags = @()
+                if ($summaryItem.categoryMismatch) { $flags += "MISCATEGORIZED ($($summaryItem.categoryMismatchNote))" }
+                if ($summaryItem.nameMismatch) { $flags += "NAME MISMATCH vs IRS ('$($summaryItem.irsName)')" }
+                $warn = "  - ⚠️ WARNING: order $id is flagged -- $($flags -join '; '). Proceeding to accept as explicitly requested; verify the track/legitimacy is correct."
+                Write-Summary $warn
+                Write-Warning "order ${id}: $($flags -join '; ')"
+            }
         }
         else {
             Write-Summary "- **order $id** - not found among pending onboarding (pid $PreProductId/$FullProductId) applications"

@@ -292,3 +292,137 @@ Describe 'Get-ApplicationRanking' {
         $ranked[1].orderid | Should -Be '1002'
     }
 }
+
+Describe 'Legal-status normalization' {
+    It 'maps the documented values to canonical buckets' {
+        Get-NormalizedLegalStatus -Value '501c(3) Nonprofit'            | Should -Be 'full'
+        Get-NormalizedLegalStatus -Value '4. 501c3 General Organization' | Should -Be 'full'
+        Get-NormalizedLegalStatus -Value 'pre-501c(3) Nonprofit'        | Should -Be 'pre'
+        Get-NormalizedLegalStatus -Value 'US State Recognized Nonprofit' | Should -Be 'other'
+        Get-NormalizedLegalStatus -Value 'US Not-For-Profit'            | Should -Be 'other'
+        Get-NormalizedLegalStatus -Value 'Other Charitable Organization' | Should -Be 'other'
+        Get-NormalizedLegalStatus -Value ''                            | Should -Be 'unknown'
+    }
+}
+
+Describe 'Category mismatch (legal status vs product track)' {
+    It 'flags a full-501c3 legal status filed on the pre-501c3 track (pid 16)' {
+        $cm = Get-CategoryMismatch -ProductPid 16 -LegalStatus 'full'
+        $cm.IsMismatch | Should -BeTrue
+        $cm.Note       | Should -Match 'pre-501'
+    }
+
+    It 'reinforces the mismatch when an IRS-verified 501(c)(3) EIN sits on the pre track' {
+        (Get-CategoryMismatch -ProductPid 16 -LegalStatus 'unknown' -EinIs501c3 $true).IsMismatch | Should -BeTrue
+    }
+
+    It 'flags a pre/other legal status filed on the full-501c3 track (pid 33)' {
+        (Get-CategoryMismatch -ProductPid 33 -LegalStatus 'pre').IsMismatch   | Should -BeTrue
+        (Get-CategoryMismatch -ProductPid 33 -LegalStatus 'other').IsMismatch | Should -BeTrue
+    }
+
+    It 'does NOT flag an unknown legal status with no EIN signal' {
+        (Get-CategoryMismatch -ProductPid 16 -LegalStatus 'unknown').IsMismatch | Should -BeFalse
+        (Get-CategoryMismatch -ProductPid 33 -LegalStatus 'unknown').IsMismatch | Should -BeFalse
+    }
+
+    It 'a pre-501c3 order with a full 501(c)(3) legal status is categoryMismatch and excluded from the top pick' {
+        # order 695 pattern: filed pre-501c3 (pid 16) but legal status is a full 501(c)(3).
+        $misfiled = [pscustomobject]@{
+            orderid = '695'; ordernum = 'ORD695'; clientid = '695'; pid = 16
+            productName = 'FFC Pre-501c3 Application'; charityName = 'Junior League of Greenville'
+            fields = (New-Fields @{
+                    'Organization Name'                              = 'Junior League of Greenville'
+                    'What is the legal status of your organization?' = '501c(3) Nonprofit'
+                    'EIN'                                            = '27-2634719'
+                    'Mission'                                        = $script:GoodMission
+                })
+        }
+        $scoredMis = Get-ApplicationScore -Application $misfiled
+        $scoredMis.categoryMismatch | Should -BeTrue
+        $scoredMis.legalStatus      | Should -Be 'full'
+
+        # A genuinely pre-501c3 application on the same track.
+        $scoredOk = Get-ApplicationScore -Application $script:Complete16
+        $scoredOk.categoryMismatch  | Should -BeFalse
+
+        $split = Split-ByCategory -ScoredApplications @($scoredMis, $scoredOk)
+        @($split.Ok | ForEach-Object { $_.orderid })             | Should -Not -Contain '695'
+        @($split.Miscategorized | ForEach-Object { $_.orderid }) | Should -Contain '695'
+        # The miscategorized app can never be the group's top pick.
+        $split.Ok[0].orderid | Should -Be '1001'
+    }
+}
+
+Describe 'Live EIN verification (ProPublica, mocked)' {
+    It 'treats subsection_code 3 as a verified 501(c)(3)' {
+        Mock -CommandName Invoke-RestMethod -MockWith {
+            [pscustomobject]@{ organization = [pscustomobject]@{ ein = 272634719; name = 'JUNIOR LEAGUE OF GREENVILLE NC INC'; subsection_code = 3; ruling_date = '201101' } }
+        }
+        $cache = @{}
+        $v = Invoke-ProPublicaEin -Ein '27-2634719' -BaseUrl 'https://stub.test/orgs' -Cache $cache -PaceMs 0
+        $v.Verified       | Should -BeTrue
+        $v.Is501c3        | Should -BeTrue
+        $v.SubsectionCode | Should -Be 3
+        $v.Name           | Should -Match 'JUNIOR LEAGUE'
+        Should -Invoke -CommandName Invoke-RestMethod -Times 1 -Exactly
+    }
+
+    It 'caches per EIN (second lookup makes no call)' {
+        Mock -CommandName Invoke-RestMethod -MockWith {
+            [pscustomobject]@{ organization = [pscustomobject]@{ subsection_code = 3 } }
+        }
+        $cache = @{}
+        Invoke-ProPublicaEin -Ein '27-2634719' -BaseUrl 'https://stub.test/orgs' -Cache $cache -PaceMs 0 | Out-Null
+        Invoke-ProPublicaEin -Ein '27-2634719' -BaseUrl 'https://stub.test/orgs' -Cache $cache -PaceMs 0 | Out-Null
+        Should -Invoke -CommandName Invoke-RestMethod -Times 1 -Exactly
+    }
+
+    It 'treats a 404 / lookup error as unverified' {
+        Mock -CommandName Invoke-RestMethod -MockWith { throw 'Response status code does not indicate success: 404 (Not Found).' }
+        $cache = @{}
+        $v = Invoke-ProPublicaEin -Ein '99-9999999' -BaseUrl 'https://stub.test/orgs' -Cache $cache -PaceMs 0
+        $v.Verified | Should -BeFalse
+        $v.Is501c3  | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Candid/GuideStar link checks' {
+    It 'extracts an EIN from a candid profile slug' {
+        Get-EinFromCandidUrl -Value 'https://www.candid.org/profile/12-3456789' | Should -Be '123456789'
+        Get-EinFromCandidUrl -Value 'https://www.guidestar.org/profile/no-ein'  | Should -Be ''
+    }
+
+    It 'notes a candid-slug EIN that disagrees with the EIN field' {
+        Mock -CommandName Invoke-RestMethod -MockWith { [pscustomobject]@{ organization = [pscustomobject]@{ subsection_code = 3; name = 'Bright Future Foundation' } } }
+        Mock -CommandName Invoke-WebRequest  -MockWith { [pscustomobject]@{ StatusCode = 200 } }
+        $app = [pscustomobject]@{
+            orderid = '4100'; charityName = 'Bright Future Foundation'; pid = 16
+            fields = (New-Fields @{
+                    'EIN'                        = '12-3456789'
+                    'GuideStar / Candid Profile' = 'https://www.candid.org/profile/98-7654321'
+                })
+        }
+        $v = Get-ApplicationVerification -Application $app -EinBaseUrl 'https://stub.test/orgs'
+        $v.guidestarEinMismatch | Should -BeTrue
+    }
+}
+
+Describe '-SkipEinVerify makes zero network calls' {
+    It 'never calls Invoke-RestMethod or Invoke-WebRequest when skipped' {
+        Mock -CommandName Invoke-RestMethod -MockWith { throw 'should not be called' }
+        Mock -CommandName Invoke-WebRequest  -MockWith { throw 'should not be called' }
+        $app = [pscustomobject]@{
+            orderid = '5100'; charityName = 'Skip Test Org'; pid = 16
+            fields = (New-Fields @{
+                    'EIN'                        = '12-3456789'
+                    'GuideStar / Candid Profile' = 'https://www.candid.org/profile/12-3456789'
+                })
+        }
+        $v = Get-ApplicationVerification -Application $app -SkipEinVerify
+        $v.einChecked       | Should -BeFalse
+        $v.guidestarChecked | Should -BeFalse
+        Should -Invoke -CommandName Invoke-RestMethod -Times 0 -Exactly
+        Should -Invoke -CommandName Invoke-WebRequest  -Times 0 -Exactly
+    }
+}

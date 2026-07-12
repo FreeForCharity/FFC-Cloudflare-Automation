@@ -16,8 +16,12 @@
       2. GetClientsProducts pid=<16|33> (paged) -> the onboarding services with
          their captured custom-field VALUES; each service carries the orderid
          that links it back to a pending order. (Application answers live in
-         product custom fields, NOT client-level fields -- companyname is empty;
-         see repo CLAUDE.md "Where application answers live".)
+         product custom fields, NOT client-level fields; see repo CLAUDE.md
+         "Where application answers live".)
+      2b. GetClientsDetails clientid=<id> (memoized per client) -> the
+         authoritative charity display name (companyname, falling back to the
+         applicant's firstname+lastname). The custom fields rarely carry a usable
+         org name, so without this every row read "(unknown org)".
       3. Score each application 0-100 against a documented rubric (see
          Get-ApplicationScore) and emit a ranked table per group.
 
@@ -524,6 +528,11 @@ function Get-ApplicationScore {
         if ($person.IsAllCaps) { $penalty += 15; $penalties.Add('charity name is a person (ALLCAPS) -15') }
         else { $penalty += 8; $penalties.Add('charity name looks like a person -8') }
     }
+    elseif ([bool]$Application.companyIsPersonName) {
+        # The client companyname is a placeholder that just repeats the applicant's
+        # own name -- a real charity name is missing.
+        $penalty += 8; $penalties.Add('company name matches applicant name -8')
+    }
     if ($boardPlaceholder) { $penalty += 10; $penalties.Add('placeholder LinkedIn in a board slot -10') }
 
     # Duplicate contact values reused across roles (emails/phones).
@@ -588,16 +597,73 @@ function Get-ApplicationRanking {
         @{ Expression = { [int64]($_.orderid) }; Descending = $false })
 }
 
+function Get-ClientNameParts {
+    # Extract the org/person name pieces from a WHMCS GetClientsDetails response,
+    # tolerant of the flat shape and the older `client`-nested shape. companyname
+    # is the authoritative charity display name for onboarding applications (the
+    # product custom fields rarely carry a usable org name -- see
+    # Get-CharityDisplayName). Returns @{ CompanyName; FirstName; LastName; FullName }.
+    [OutputType([pscustomobject])]
+    param([Parameter()]$Details)
+    $company = ''; $first = ''; $last = ''
+    if ($Details) {
+        $node = $Details
+        if ($Details.PSObject.Properties['client'] -and $Details.client) { $node = $Details.client }
+        if ($node.PSObject.Properties['companyname'] -and $node.companyname) { $company = [string]$node.companyname }
+        if ($node.PSObject.Properties['firstname'] -and $node.firstname) { $first = [string]$node.firstname }
+        if ($node.PSObject.Properties['lastname'] -and $node.lastname) { $last = [string]$node.lastname }
+    }
+    return [pscustomobject]@{
+        CompanyName = $company.Trim()
+        FirstName   = $first.Trim()
+        LastName    = $last.Trim()
+        FullName    = ("$first $last").Trim()
+    }
+}
+
 function Get-CharityDisplayName {
-    # Resolve the charity/org name from the onboarding custom fields (companyname
-    # is empty on these applications). Falls back to the order name (the
-    # applicant's own name) prefixed so it is never mistaken for the org.
+    # Resolve the charity/org display name. The client's companyname (from
+    # GetClientsDetails) is authoritative; the onboarding custom fields are a
+    # secondary source (they seldom carry a usable org name); the applicant's own
+    # name is the last-resort fallback so a blank name never surfaces.
     [OutputType([string])]
-    param([Parameter()]$Fields, [string]$FallbackName)
+    param([Parameter()]$Fields, [string]$CompanyName, [string]$FallbackName)
+    # 1. Authoritative: the client-record companyname.
+    if (-not (Test-PlaceholderValue -Value $CompanyName)) { return $CompanyName.Trim() }
+    # 2. Secondary: a custom-field-derived org name, if ever populated.
     $org = Get-FieldValue -Fields $Fields -Pattern $script:FieldPatterns.OrgName
     if (-not (Test-PlaceholderValue -Value $org)) { return $org }
+    # 3. Fallback: the applicant's own name (firstname lastname).
     if (-not [string]::IsNullOrWhiteSpace($FallbackName)) { return $FallbackName }
     return '(unknown org)'
+}
+
+function Get-WhmcsClientDetails {
+    # Fetch a client record via WHMCS GetClientsDetails, memoized per clientid so
+    # a client shared across several pending orders is only fetched once. Returns
+    # the raw API response (or $null on a missing/failed lookup). Reuses the same
+    # auth/gateway plumbing as every other call in this runner.
+    param(
+        [Parameter(Mandatory = $true)][string]$Api,
+        [Parameter(Mandatory = $true)][hashtable]$Auth,
+        [Parameter()][string]$ClientId,
+        [Parameter(Mandatory = $true)][hashtable]$Cache
+    )
+    if ([string]::IsNullOrWhiteSpace($ClientId)) { return $null }
+    if ($Cache.ContainsKey($ClientId)) { return $Cache[$ClientId] }
+    $body = $Auth.Clone()
+    $body.action = 'GetClientsDetails'
+    $body.clientid = $ClientId
+    $body.stats = $false
+    $details = $null
+    try {
+        $details = Invoke-WhmcsApi -ApiUrl $Api -Body $body
+    }
+    catch {
+        Write-Warning "GetClientsDetails failed for client ${ClientId}: $($_.Exception.Message)"
+    }
+    $Cache[$ClientId] = $details
+    return $details
 }
 
 # When dot-sourced (unit tests), stop here: only the functions are needed.
@@ -658,6 +724,9 @@ function Get-PendingOnboardingApplications {
     Write-Host "Pending orders found: $($pendingOrders.Count)"
 
     # 2) Onboarding services per pid, joined to pending orders via orderid.
+    #    A per-client GetClientsDetails cache supplies the authoritative charity
+    #    display name (companyname) without re-fetching a shared client.
+    $clientCache = @{}
     $apps = [System.Collections.Generic.List[object]]::new()
     foreach ($productPid in $ProductPids) {
         $start = 0
@@ -675,15 +744,29 @@ function Get-PendingOnboardingApplications {
                 if ([string]::IsNullOrWhiteSpace($orderId) -or -not $pendingOrders.ContainsKey($orderId)) { continue }
                 $order = $pendingOrders[$orderId]
                 $fields = Get-CustomFieldNodes -Node $svc
-                $charity = Get-CharityDisplayName -Fields $fields -FallbackName ''
+                $clientId = [string]$order.userid
+                # Authoritative charity name: the client-record companyname (falls
+                # back to the applicant's name), fetched once per client.
+                $clientDetails = Get-WhmcsClientDetails -Api $Api -Auth $Auth -ClientId $clientId -Cache $clientCache
+                $nameParts = Get-ClientNameParts -Details $clientDetails
+                $charity = Get-CharityDisplayName -Fields $fields -CompanyName $nameParts.CompanyName -FallbackName $nameParts.FullName
+                # Quality signal: the displayed charity name is literally the
+                # applicant's own name (blank/placeholder companyname, or a
+                # companyname that just repeats firstname+lastname).
+                $companyIsPerson = $false
+                if (-not [string]::IsNullOrWhiteSpace($nameParts.FullName) -and
+                    $charity.Trim().ToLowerInvariant() -eq $nameParts.FullName.ToLowerInvariant()) {
+                    $companyIsPerson = $true
+                }
                 $apps.Add([pscustomobject]@{
-                        orderid     = $orderId
-                        ordernum    = [string]$order.ordernum
-                        clientid    = [string]$order.userid
-                        pid         = [int]$productPid
-                        productName = [string]$svc.name
-                        charityName = $charity
-                        fields      = $fields
+                        orderid             = $orderId
+                        ordernum            = [string]$order.ordernum
+                        clientid            = $clientId
+                        pid                 = [int]$productPid
+                        productName         = [string]$svc.name
+                        charityName         = $charity
+                        companyIsPersonName = $companyIsPerson
+                        fields              = $fields
                     })
             }
             $start += $page.Count

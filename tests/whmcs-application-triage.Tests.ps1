@@ -217,6 +217,70 @@ Describe 'Get-ApplicationScore (pid 33)' {
     }
 }
 
+Describe 'Charity name from client companyname (GetClientsDetails)' {
+    It 'Get-ClientNameParts reads companyname from a flat response' {
+        $details = [pscustomobject]@{
+            result = 'success'; companyname = 'Bright Future Foundation'
+            firstname = 'Jane'; lastname = 'Rivers'
+        }
+        $parts = Get-ClientNameParts -Details $details
+        $parts.CompanyName | Should -Be 'Bright Future Foundation'
+        $parts.FullName    | Should -Be 'Jane Rivers'
+    }
+
+    It 'Get-ClientNameParts reads companyname from a client-nested response' {
+        $details = [pscustomobject]@{
+            result = 'success'
+            client = [pscustomobject]@{ companyname = 'Riverside Relief Fund'; firstname = 'Mark'; lastname = 'Stone' }
+        }
+        (Get-ClientNameParts -Details $details).CompanyName | Should -Be 'Riverside Relief Fund'
+    }
+
+    It 'Get-CharityDisplayName prefers companyname over custom fields and person fallback' {
+        $fields = New-Fields @{ 'Organization Name' = '' }
+        Get-CharityDisplayName -Fields $fields -CompanyName 'Helping Hands Society' -FallbackName 'Jane Rivers' |
+            Should -Be 'Helping Hands Society'
+    }
+
+    It 'Get-CharityDisplayName falls back to the applicant name when companyname is blank' {
+        $fields = New-Fields @{ 'Organization Name' = '' }
+        Get-CharityDisplayName -Fields $fields -CompanyName '' -FallbackName 'Jane Rivers' |
+            Should -Be 'Jane Rivers'
+    }
+
+    It 'Get-WhmcsClientDetails uses companyname and caches per clientid (mocked GetClientsDetails)' {
+        Mock -CommandName Invoke-WhmcsApi -MockWith {
+            [pscustomobject]@{ result = 'success'; companyname = 'Coastal Care Alliance'; firstname = 'Pat'; lastname = 'Lee' }
+        }
+        $cache = @{}
+        $d1 = Get-WhmcsClientDetails -Api 'https://freeforcharity.org/hub/includes/api.php' -Auth @{ identifier = 'x'; secret = 'y' } -ClientId '382' -Cache $cache
+        $d2 = Get-WhmcsClientDetails -Api 'https://freeforcharity.org/hub/includes/api.php' -Auth @{ identifier = 'x'; secret = 'y' } -ClientId '382' -Cache $cache
+
+        $charity = Get-CharityDisplayName -Fields @() -CompanyName (Get-ClientNameParts -Details $d1).CompanyName -FallbackName (Get-ClientNameParts -Details $d1).FullName
+        $charity | Should -Be 'Coastal Care Alliance'
+        $charity | Should -Not -Be '(unknown org)'
+        $d2 | Should -Be $d1
+        # Second lookup is served from the cache -> only one API call.
+        Should -Invoke -CommandName Invoke-WhmcsApi -Times 1 -Exactly
+    }
+
+    It 'penalizes a companyname that just repeats the applicant name' {
+        # A 4-word name is not caught by Test-PersonNameCompany, so this exercises
+        # the companyIsPersonName signal in isolation.
+        $app = [pscustomobject]@{
+            orderid = '3001'; ordernum = 'ORD3001'; clientid = '382'; pid = 16
+            productName = 'FFC Pre-501c3 Application'; charityName = 'Maria De La Cruz'
+            companyIsPersonName = $true
+            fields              = (New-Fields @{
+                    'Organization Name' = ''
+                    'Mission'           = $script:GoodMission
+                })
+        }
+        $r = Get-ApplicationScore -Application $app
+        ($r.penalties -join ' ') | Should -Match 'company name matches applicant name'
+    }
+}
+
 Describe 'Get-ApplicationRanking' {
     It 'orders by score descending then orderid ascending' {
         $scored = @(

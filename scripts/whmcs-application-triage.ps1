@@ -357,7 +357,15 @@ function Get-MissionQuality {
 
 $script:FieldPatterns = @{
     OrgName     = 'organi[sz]ation.*name|charity.*name|legal.*name|nonprofit.*name|name of (your )?(the )?(organi[sz]ation|charity|nonprofit)'
-    Ein         = '\bEIN\b|employer identification|tax\s*id'
+    # EIN field NAME match. Deliberately case-SENSITIVE for the bare 'EIN' acronym
+    # (so 'EINNumber', 'Org EIN', 'Tax ID / EIN' all match) while the word-boundary
+    # 'ein' alternative and the spelled-out phrases stay case-insensitive. The pre-
+    # 501c3 product (pid 16) labels this 'What is your organization's EIN number?';
+    # the full-501c3 product (pid 33) labels it differently, so resolution is by
+    # NAME (see Resolve-EinFieldValue), never by a hard-coded field id. Matched with
+    # [regex]::IsMatch (NOT PowerShell -match) so the case-sensitive 'EIN' branch is
+    # honoured and everyday words containing 'ein' (e.g. 'Being...') do not match.
+    Ein         = '(?i:\bein\b|employer\s*identification|tax[\s-]*id)|EIN'
     Guidestar   = 'guidestar|candid'
     Facebook    = 'facebook'
     LinkedIn    = 'linkedin'
@@ -504,6 +512,90 @@ function Get-EinFromCandidUrl {
     return ''
 }
 
+function Resolve-EinFieldValue {
+    # Resolve the EIN custom-field VALUE by NAME (fieldname LIKE '%EIN%' / employer
+    # identification / tax id), robust to the differing EIN label on pid 16 vs pid 33.
+    # Mirrors the by-name resolution used for every other field -- the EIN field id is
+    # NEVER hard-coded. When a per-pid $FieldIdCache is supplied the resolved field id
+    # is remembered so later applications of the same product read their EIN directly.
+    # Among name-matching fields a valid-looking EIN wins, else the first populated one.
+    [OutputType([string])]
+    param(
+        [Parameter()]$Fields,
+        [Parameter()][int]$ProductPid = 0,
+        [Parameter()][hashtable]$FieldIdCache
+    )
+    $all = @($Fields | Where-Object { $_ })
+    if ($all.Count -eq 0) { return '' }
+
+    # Fast path: a field id already resolved for this product.
+    if ($FieldIdCache -and $ProductPid -ne 0 -and $FieldIdCache.ContainsKey($ProductPid)) {
+        $cachedId = [string]$FieldIdCache[$ProductPid]
+        $hit = @($all | Where-Object { [string]$_.id -eq $cachedId }) | Select-Object -First 1
+        if ($hit -and -not [string]::IsNullOrWhiteSpace([string]$hit.value)) { return ([string]$hit.value).Trim() }
+    }
+
+    # Name-match candidates (case-sensitive 'EIN' acronym + spelled-out phrases).
+    $named = @($all | Where-Object { [regex]::IsMatch([string]$_.name, $script:FieldPatterns.Ein) })
+    if ($named.Count -eq 0) { return '' }
+
+    $chosen = @($named | Where-Object { Test-ValidEin -Value ([string]$_.value) }) | Select-Object -First 1
+    if (-not $chosen) { $chosen = @($named | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.value) }) | Select-Object -First 1 }
+    if (-not $chosen) { $chosen = $named[0] }
+
+    if ($FieldIdCache -and $ProductPid -ne 0 -and $chosen -and -not [string]::IsNullOrWhiteSpace([string]$chosen.id)) {
+        $FieldIdCache[$ProductPid] = [string]$chosen.id
+    }
+    return ([string]$chosen.value).Trim()
+}
+
+function Get-ApplicationEin {
+    # Robust EIN resolution feeding BOTH scoring and live verification.
+    #   1) EIN custom field, resolved by NAME (Resolve-EinFieldValue, cached per pid).
+    #   2) FALLBACK: when the EIN field is blank/invalid but a Candid/GuideStar profile
+    #      URL is present, derive the EIN from the profile slug (Get-EinFromCandidUrl)
+    #      and use it -- source 'candid'. Several pid-33 applications have live Candid
+    #      profiles whose slug embeds the EIN even though the EIN field read blank,
+    #      which previously scored every one of them as 'missing/invalid EIN'.
+    # Returns @{ Raw; FieldRaw; Digits; Formatted; Source } (Source: 'field'|'candid'|'').
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter()]$Fields,
+        [Parameter()][int]$ProductPid = 0,
+        [Parameter()][hashtable]$FieldIdCache
+    )
+    $result = [pscustomobject]@{ Raw = ''; FieldRaw = ''; Digits = ''; Formatted = ''; Source = '' }
+    $fieldVal = Resolve-EinFieldValue -Fields $Fields -ProductPid $ProductPid -FieldIdCache $FieldIdCache
+    $result.FieldRaw = $fieldVal
+
+    if (Test-ValidEin -Value $fieldVal) {
+        $result.Raw = $fieldVal
+        $result.Source = 'field'
+    }
+    else {
+        # Candid-slug fallback (only when the field did not yield a usable EIN).
+        $gsValue = Get-FieldValue -Fields $Fields -Pattern $script:FieldPatterns.Guidestar
+        $candidEin = Get-EinFromCandidUrl -Value $gsValue
+        if ($candidEin.Length -eq 9) {
+            $result.Raw = $candidEin
+            $result.Source = 'candid'
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($fieldVal)) {
+            # Preserve the (invalid) field value so downstream can still report it.
+            $result.Raw = $fieldVal
+            $result.Source = 'field'
+        }
+    }
+
+    # Normalize to ######### / ##-#######.
+    $digits = ([string]$result.Raw -replace '\D', '')
+    if ($digits.Length -eq 9) {
+        $result.Digits = $digits
+        $result.Formatted = $digits.Substring(0, 2) + '-' + $digits.Substring(2)
+    }
+    return $result
+}
+
 function Test-NameMismatch {
     # True when two org names share NO significant token (they "differ greatly").
     # Common org keywords / stopwords are stripped first so a shared 'Foundation'
@@ -592,7 +684,10 @@ function Get-ApplicationScore {
     $fill = [ordered]@{}
 
     $fill.fillRate = Get-FieldFillRate -Fields $fields
-    $fill.ein = if (Test-ValidEin -Value (Get-FieldValue -Fields $fields -Pattern $script:FieldPatterns.Ein)) { 1.0 } else { 0.0 }
+    # EIN resolved robustly by NAME across both products, with a Candid-slug fallback
+    # when the field is blank/invalid but a Candid/GuideStar profile embeds the EIN.
+    $einInfo = Get-ApplicationEin -Fields $fields -ProductPid $productPid
+    $fill.ein = if (Test-ValidEin -Value $einInfo.Raw) { 1.0 } else { 0.0 }
 
     $gsValues = @(Get-FieldValues -Fields $fields -Pattern $script:FieldPatterns.Guidestar)
     $gsValid = @($gsValues | Where-Object { Test-GuidestarUrl -Value $_ }).Count
@@ -720,18 +815,22 @@ function Get-ApplicationScore {
         $verifyNotes.Add('GuideStar/Candid profile EIN does not match the EIN field')
     }
 
-    # Human-readable verification summary for the rationale.
+    # Human-readable verification summary for the rationale. The EIN source (field vs
+    # derived from the Candid link) is appended so a Candid-derived EIN is explicit.
+    $einSource = [string](& $prop 'einSource')
+    if ([string]::IsNullOrWhiteSpace($einSource)) { $einSource = [string]$einInfo.Source }
+    $einSrcTxt = if ($einSource -eq 'candid') { ' (EIN derived from Candid link)' } else { '' }
     $einTxt =
-    if (-not $einChecked) { 'EIN not checked' }
-    elseif (-not $einVerified) { 'EIN unverified (not found at IRS/ProPublica)' }
+    if (-not $einChecked) { "EIN not checked$einSrcTxt" }
+    elseif (-not $einVerified) { "EIN unverified (not found at IRS/ProPublica)$einSrcTxt" }
     elseif ($einIs501c3 -eq $true) {
         $extra = @()
         if ($subsectionCode) { $extra += "subsection $subsectionCode" }
         if ($rulingDate) { $extra += "ruling $rulingDate" }
         $suffix = if ($extra.Count -gt 0) { ' (' + ($extra -join ', ') + ')' } else { '' }
-        "EIN verified 501(c)(3)$suffix"
+        "EIN verified 501(c)(3)$suffix$einSrcTxt"
     }
-    else { "EIN verified but not a 501(c)(3) (subsection $subsectionCode)" }
+    else { "EIN verified but not a 501(c)(3) (subsection $subsectionCode)$einSrcTxt" }
 
     $rationale = "Score $score/100 (pid $productPid). Strong: $strongTxt. Gaps: $gapTxt.$penTxt $einTxt."
     if ($verifyNotes.Count -gt 0) { $rationale += ' ' + ($verifyNotes -join '. ') + '.' }
@@ -753,6 +852,7 @@ function Get-ApplicationScore {
         einChecked           = $einChecked
         einVerified          = $einVerified
         einIs501c3           = $einIs501c3
+        einSource            = $einSource
         irsName              = $irsName
         subsectionCode       = $subsectionCode
         rulingDate           = $rulingDate
@@ -896,12 +996,14 @@ function Get-ApplicationVerification {
         [string]$EinBaseUrl = 'https://projects.propublica.org/nonprofits/api/v2/organizations',
         [hashtable]$EinCache = @{},
         [hashtable]$UrlCache = @{},
+        [hashtable]$FieldIdCache = @{},
         [int]$TimeoutSec = 8
     )
     $out = @{
         einChecked           = $false
         einVerified          = $false
         einIs501c3           = $null
+        einSource            = ''
         irsName              = ''
         subsectionCode       = $null
         rulingDate           = $null
@@ -913,7 +1015,11 @@ function Get-ApplicationVerification {
     if ($SkipEinVerify) { return $out }
 
     $fields = @($Application.fields)
-    $einValue = Get-FieldValue -Fields $fields -Pattern $script:FieldPatterns.Ein
+    # Resolve the EIN robustly by NAME across both products; fall back to the Candid
+    # slug when the field is blank/invalid but a Candid/GuideStar profile embeds it.
+    $einInfo = Get-ApplicationEin -Fields $fields -ProductPid ([int]$Application.pid) -FieldIdCache $FieldIdCache
+    $einValue = $einInfo.Raw
+    $out.einSource = $einInfo.Source
     if (Test-ValidEin -Value $einValue) {
         $out.einChecked = $true
         $v = Invoke-ProPublicaEin -Ein $einValue -BaseUrl $EinBaseUrl -Cache $EinCache -TimeoutSec $TimeoutSec
@@ -931,8 +1037,10 @@ function Get-ApplicationVerification {
     if (-not [string]::IsNullOrWhiteSpace($gsValue)) {
         $out.guidestarChecked = $true
         $out.guidestarLive = Invoke-UrlLiveness -Url $gsValue -Cache $UrlCache -TimeoutSec $TimeoutSec
+        # Mismatch is judged against the EIN *field* value (not a Candid-derived one),
+        # so a Candid-sourced EIN never "disagrees" with its own slug.
         $candidEin = Get-EinFromCandidUrl -Value $gsValue
-        $einDigits = ([string]$einValue -replace '\D', '')
+        $einDigits = ([string]$einInfo.FieldRaw -replace '\D', '')
         if ($candidEin.Length -eq 9 -and $einDigits.Length -eq 9 -and $candidEin -ne $einDigits) {
             $out.guidestarEinMismatch = $true
         }
@@ -1162,9 +1270,10 @@ try {
     }
     $einCache = @{}
     $urlCache = @{}
+    $einFieldIdCache = @{}
     $scored = foreach ($a in $rawApps) {
         $verify = Get-ApplicationVerification -Application $a -SkipEinVerify:$SkipEinVerify `
-            -EinBaseUrl $EinApiBaseUrl -EinCache $einCache -UrlCache $urlCache
+            -EinBaseUrl $EinApiBaseUrl -EinCache $einCache -UrlCache $urlCache -FieldIdCache $einFieldIdCache
         foreach ($kv in $verify.GetEnumerator()) {
             $a | Add-Member -NotePropertyName $kv.Key -NotePropertyValue $kv.Value -Force
         }

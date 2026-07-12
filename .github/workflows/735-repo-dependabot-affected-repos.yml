@@ -18,6 +18,13 @@ permissions:
   contents: write
   pull-requests: write
 
+# Serialize: a manual dispatch overlapping the weekly run (or two dispatches)
+# would otherwise both force-push the fixed data/dependabot-affected-repos
+# branch and clobber each other's PR.
+concurrency:
+  group: dependabot-affected-repos
+  cancel-in-progress: false
+
 jobs:
   update:
     name: Update repo inventory
@@ -62,4 +69,7 @@ jobs:
         if: steps.cpr.outputs.pull-request-number
         env:
           GH_TOKEN: ${{ secrets.CBM_TOKEN }}
-        run: gh pr merge --auto --merge "${{ steps.cpr.outputs.pull-request-number }}"
+        # No explicit merge method: main has a merge-queue ruleset, which
+        # rejects `--merge`/`--squash`/`--rebase` ("the merge strategy for
+        # main is set by the merge queue"). Let the queue pick the method.
+        run: gh pr merge --auto "${{ steps.cpr.outputs.pull-request-number }}"

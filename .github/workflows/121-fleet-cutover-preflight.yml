@@ -13,15 +13,17 @@ on:
     inputs:
       domains:
         description: >-
-          Comma-separated root domains to check. Leave blank to use the full 13-domain FFC-EX list
-          (excluding amargraves.org placeholder) — the same default as workflow 120.
+          Comma-separated root domains to check. Leave blank to use the fleet default list from
+          config/ffc-ex-cutover-domains.json (excluding amargraves.org placeholder) — the same
+          default as workflow 120.
         required: false
         type: string
         default: ''
       origin:
         description: >-
           GitHub Pages origin being cut over to. Only valid with a single domain; leave blank to
-          derive https://freeforcharity.github.io/FFC-EX-<domain>/ per domain.
+          resolve the real FFC-EX repo name via the GitHub API and derive
+          https://freeforcharity.github.io/<repo>/ per domain.
         required: false
         type: string
         default: ''
@@ -58,12 +60,15 @@ jobs:
           INPUT_DOMAINS: ${{ inputs.domains }}
           INPUT_ORIGIN: ${{ inputs.origin }}
           INPUT_MARKER: ${{ inputs.marker }}
+          # Authenticates the FFC-EX repo-name lookup (mixed-case repo names)
+          # so origin derivation doesn't fall back to the lowercase guess.
+          GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
 
-          # Same default list as workflow 120's cname-flip / dns-flip jobs.
-          default_domains='aprilhansen.com,armstrongacesbaseball.org,coronadonationalforestheritagesociety.org,falloutshelterecovillage.org,nj4israel.org,savewatersaveplanet.org,bucktownbullsbaseball.org,bulldogztowing.com,browncanyonranch.org,instituteofforgiveness.org,americanlegionpost64.org,southamptonfriends.org,foxtrotenterprises.com'
+          # Same default list as workflow 120's jobs — single source of truth.
+          default_domains=$(jq -r '.domains | join(",")' config/ffc-ex-cutover-domains.json)
 
           domains="${INPUT_DOMAINS:-}"
           if [ -z "$domains" ]; then

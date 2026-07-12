@@ -8,8 +8,8 @@ on:
     inputs:
       domains:
         description: >-
-          Comma-separated root domains to cut over. Leave blank to use the full 13-domain FFC-EX
-          list (excluding amargraves.org placeholder).
+          Comma-separated root domains to cut over. Leave blank to use the fleet default list from
+          config/ffc-ex-cutover-domains.json (excluding amargraves.org placeholder).
         required: false
         type: string
         default: ''
@@ -71,15 +71,10 @@ jobs:
       - name: Flip public/CNAME (skip DNS in this job)
         shell: pwsh
         run: |
-          $defaultDomains = @(
-            'aprilhansen.com', 'armstrongacesbaseball.org',
-            'coronadonationalforestheritagesociety.org',
-            'falloutshelterecovillage.org', 'nj4israel.org',
-            'savewatersaveplanet.org', 'bucktownbullsbaseball.org',
-            'bulldogztowing.com', 'browncanyonranch.org',
-            'instituteofforgiveness.org', 'americanlegionpost64.org',
-            'southamptonfriends.org', 'foxtrotenterprises.com'
-          ) -join ','
+          # Fleet default list — single source of truth shared with workflow 121.
+          $defaultDomains = (
+            Get-Content -Raw config/ffc-ex-cutover-domains.json | ConvertFrom-Json
+          ).domains -join ','
           $domainsInput = '${{ inputs.domains }}'
           if ([string]::IsNullOrWhiteSpace($domainsInput)) { $domainsInput = $defaultDomains }
 
@@ -120,15 +115,10 @@ jobs:
       - name: Flip Cloudflare apex DNS (skip CNAME in this job)
         shell: pwsh
         run: |
-          $defaultDomains = @(
-            'aprilhansen.com', 'armstrongacesbaseball.org',
-            'coronadonationalforestheritagesociety.org',
-            'falloutshelterecovillage.org', 'nj4israel.org',
-            'savewatersaveplanet.org', 'bucktownbullsbaseball.org',
-            'bulldogztowing.com', 'browncanyonranch.org',
-            'instituteofforgiveness.org', 'americanlegionpost64.org',
-            'southamptonfriends.org', 'foxtrotenterprises.com'
-          ) -join ','
+          # Fleet default list — single source of truth shared with workflow 121.
+          $defaultDomains = (
+            Get-Content -Raw config/ffc-ex-cutover-domains.json | ConvertFrom-Json
+          ).domains -join ','
           $domainsInput = '${{ inputs.domains }}'
           if ([string]::IsNullOrWhiteSpace($domainsInput)) { $domainsInput = $defaultDomains }
 
@@ -156,6 +146,9 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.CBM_TOKEN }}
     steps:
+      # Needed to read config/ffc-ex-cutover-domains.json (the fleet default list).
+      - uses: actions/checkout@v5
+
       - name: Validate CBM_TOKEN
         shell: bash
         run: |
@@ -180,8 +173,9 @@ jobs:
         run: |
           set -uo pipefail
 
-          # Same default list as the cname-flip and dns-flip jobs above.
-          default_domains="aprilhansen.com armstrongacesbaseball.org coronadonationalforestheritagesociety.org falloutshelterecovillage.org nj4israel.org savewatersaveplanet.org bucktownbullsbaseball.org bulldogztowing.com browncanyonranch.org instituteofforgiveness.org americanlegionpost64.org southamptonfriends.org foxtrotenterprises.com"
+          # Same default list as the cname-flip and dns-flip jobs above —
+          # single source of truth shared with workflow 121.
+          default_domains=$(jq -r '.domains | join(" ")' config/ffc-ex-cutover-domains.json)
 
           domains_input="${{ inputs.domains }}"
           if [ -z "$domains_input" ]; then

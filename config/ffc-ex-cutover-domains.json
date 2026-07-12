@@ -1,0 +1,18 @@
+{
+  "$comment": "Single source of truth for the FFC-EX fleet cutover default domain list (excludes the amargraves.org placeholder). Read at runtime by workflows 120 (bulk cutover) and 121 (fleet preflight) — never re-embed this list in a workflow; scripts/tests/cutover-domains-config.Tests.ps1 fails CI if one does.",
+  "domains": [
+    "aprilhansen.com",
+    "armstrongacesbaseball.org",
+    "coronadonationalforestheritagesociety.org",
+    "falloutshelterecovillage.org",
+    "nj4israel.org",
+    "savewatersaveplanet.org",
+    "bucktownbullsbaseball.org",
+    "bulldogztowing.com",
+    "browncanyonranch.org",
+    "instituteofforgiveness.org",
+    "americanlegionpost64.org",
+    "southamptonfriends.org",
+    "foxtrotenterprises.com"
+  ]
+}

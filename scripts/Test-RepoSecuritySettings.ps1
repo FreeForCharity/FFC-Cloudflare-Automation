@@ -151,6 +151,25 @@ foreach ($r in $Repo) {
         }
         if (-not $pass) { $failures++ }
     }
+
+    # An expected feature that is entirely ABSENT from the block (not merely
+    # disabled) must also fail. The loop above only sees keys present in the
+    # API response, so without this a repo missing e.g. secret_scanning_push_
+    # protection (common on public repos or when never enabled) would slip
+    # through as "passed."
+    foreach ($exp in $Expected) {
+        if ($featureNames -notcontains $exp) {
+            Write-Host ("  !! {0,-50} {1,-10} [expected:enabled]" -f $exp, 'absent') -ForegroundColor Red
+            $findings += [pscustomobject]@{
+                Repo     = $r
+                Feature  = $exp
+                Status   = 'absent'
+                Expected = 'enabled'
+                Pass     = $false
+            }
+            $failures++
+        }
+    }
 }
 
 Write-Host "`n=== Summary ===" -ForegroundColor Cyan

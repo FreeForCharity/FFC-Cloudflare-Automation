@@ -149,7 +149,11 @@ if ($LASTEXITCODE -ne 0) {
 $payload = [ordered]@{
     required_status_checks           = [ordered]@{
         strict   = $true
-        contexts = $StatusCheckContexts
+        # @(...) forces array shape so a single-element -StatusCheckContexts
+        # still serializes as a JSON array (GitHub requires contexts to be an
+        # array; ConvertTo-Json can otherwise unwrap a 1-element array to a
+        # scalar and the PUT would 422).
+        contexts = @($StatusCheckContexts)
     }
     enforce_admins                   = $true
     required_pull_request_reviews    = [ordered]@{

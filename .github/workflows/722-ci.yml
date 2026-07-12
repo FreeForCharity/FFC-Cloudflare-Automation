@@ -213,6 +213,20 @@ jobs:
             throw "Invoke-Formatter check failed. Run Invoke-Formatter locally to update files."
           }
 
+      - name: Run PowerShell unit tests (Pester)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path scripts/tests)) {
+            Write-Host 'No scripts/tests directory; skipping Pester.'
+            exit 0
+          }
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version.Major -ge 5 })) {
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck
+          }
+          Invoke-Pester -Path scripts/tests -Output Detailed -CI
+
       - name: Check for sensitive files
         run: |
           echo "Checking for accidentally committed sensitive files..."

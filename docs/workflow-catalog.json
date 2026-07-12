@@ -922,6 +922,27 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 225,
+      "title": "WHMCS - Domain Order URL Verify",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "225-whmcs-domain-order-url-verify.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Read-only liveness check for pending domain orders (pids 39 register / 41 transfer). Pulls the \"Live GitHub Pages URL of your validated website\" custom field (ids 171/173) from each pending order's service and verifies the URL is live: host must be *.github.io and HTTP GET must return 200 (PASS/FAIL). A footer-marker regex is also matched against the body as a WARN-only heuristic (cut-over sites don't carry the literal footer text). The Gate-3 checklist and the WHMCS attestation field (id 172) are not machine-read yet (future work). Emits a per-order table to the job summary + a CSV artifact. No order writes are performed (never accepts/cancels; see issue #681).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "report-only; GETs charity-supplied URLs; never accepts/cancels an order",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 - Domain Preflight (Read-only)",
       "apis": [

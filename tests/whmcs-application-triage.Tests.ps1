@@ -426,3 +426,98 @@ Describe '-SkipEinVerify makes zero network calls' {
         Should -Invoke -CommandName Invoke-WebRequest  -Times 0 -Exactly
     }
 }
+
+Describe 'Robust EIN resolution by NAME (both products)' {
+    It 'reads the pid-16 EIN field (regression: the working case still works)' {
+        $info = Get-ApplicationEin -Fields $script:Complete16.fields -ProductPid 16
+        $info.Source    | Should -Be 'field'
+        $info.Formatted | Should -Be '12-3456789'
+    }
+
+    It 'resolves a pid-33 EIN field that uses a DIFFERENT label' {
+        # pid 33 does not label it 'EIN'; the value must still resolve by name.
+        $fields = New-Fields @{
+            'Organization Name'                         = 'Meridian Care Collective'
+            "What is your organization's Tax ID (EIN)?" = '81-2345678'
+            'GuideStar Profile'                         = 'https://www.guidestar.org/profile/meridian'
+        }
+        $info = Get-ApplicationEin -Fields $fields -ProductPid 33
+        $info.Source    | Should -Be 'field'
+        $info.Formatted | Should -Be '81-2345678'
+    }
+
+    It 'does NOT match everyday field names that merely contain the letters e-i-n' {
+        $fields = New-Fields @{ 'Are you being sponsored by another org?' = 'Yes' }
+        Resolve-EinFieldValue -Fields $fields -ProductPid 33 | Should -Be ''
+    }
+
+    It 'caches the resolved EIN field id per pid' {
+        $cache = @{}
+        $fields = New-Fields @{ 'Employer Identification Number' = '81-2345678' }
+        Resolve-EinFieldValue -Fields $fields -ProductPid 33 -FieldIdCache $cache | Should -Be '81-2345678'
+        $cache.ContainsKey(33) | Should -BeTrue
+    }
+}
+
+Describe 'Candid-slug EIN fallback (pid 33 blank EIN field)' {
+    It 'derives the EIN from the Candid slug when the EIN field is blank' {
+        $fields = New-Fields @{
+            'Organization Name'                         = 'Harbor Light Mission'
+            "What is your organization's Tax ID (EIN)?" = ''
+            'Candid Profile'                            = 'https://www.candid.org/profile/8675309/harbor-light-mission-45-6789012'
+        }
+        $info = Get-ApplicationEin -Fields $fields -ProductPid 33
+        $info.Source    | Should -Be 'candid'
+        $info.Formatted | Should -Be '45-6789012'
+    }
+
+    It 'feeds the Candid-derived EIN into the live verification path' {
+        Mock -CommandName Invoke-RestMethod -MockWith {
+            [pscustomobject]@{ organization = [pscustomobject]@{ name = 'HARBOR LIGHT MISSION'; subsection_code = 3; ruling_date = '201505' } }
+        }
+        Mock -CommandName Invoke-WebRequest -MockWith { [pscustomobject]@{ StatusCode = 200 } }
+        $app = [pscustomobject]@{
+            orderid = '2100'; charityName = 'Harbor Light Mission'; pid = 33
+            fields = (New-Fields @{
+                    "What is your organization's Tax ID (EIN)?" = ''
+                    'Candid Profile'                            = 'https://www.candid.org/profile/8675309/harbor-light-mission-45-6789012'
+                })
+        }
+        $v = Get-ApplicationVerification -Application $app -EinBaseUrl 'https://stub.test/orgs'
+        $v.einSource  | Should -Be 'candid'
+        $v.einChecked | Should -BeTrue
+        $v.einVerified | Should -BeTrue
+        $v.einIs501c3 | Should -BeTrue
+        Should -Invoke -CommandName Invoke-RestMethod -Times 1 -Exactly
+    }
+
+    It 'scores a pid-33 app with a blank EIN field but a Candid EIN as having a valid EIN' {
+        $app = [pscustomobject]@{
+            orderid = '2101'; ordernum = 'ORD2101'; clientid = '701'; pid = 33
+            productName = 'FFC 501c3 Application'; charityName = 'Harbor Light Mission'
+            fields = (New-Fields @{
+                    'Organization Name'                         = 'Harbor Light Mission'
+                    "What is your organization's Tax ID (EIN)?" = ''
+                    'Candid Profile'                            = 'https://www.candid.org/profile/8675309/harbor-light-mission-45-6789012'
+                })
+        }
+        $r = Get-ApplicationScore -Application $app
+        $r.breakdown.ein.fill | Should -Be 1
+        $r.einSource          | Should -Be 'candid'
+        $r.topGaps            | Should -Not -Contain 'missing/invalid EIN'
+    }
+
+    It 'still flags a genuinely missing EIN (no field, no Candid slug) as a gap' {
+        $app = [pscustomobject]@{
+            orderid = '2102'; ordernum = 'ORD2102'; clientid = '702'; pid = 33
+            productName = 'FFC 501c3 Application'; charityName = 'No Ein Org'
+            fields = (New-Fields @{
+                    'Organization Name' = 'No Ein Org'
+                    'Candid Profile'    = 'https://www.candid.org/profile/no-ein-here'
+                })
+        }
+        $r = Get-ApplicationScore -Application $app
+        $r.breakdown.ein.fill | Should -Be 0
+        $r.topGaps            | Should -Contain 'missing/invalid EIN'
+    }
+}

@@ -523,6 +523,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 118 | Domain - Registrar Lock / Unlock [WHMCS] | `118-whmcs-domain-lock.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 119 | DNS - Bulk Staging CNAME -> GitHub Pages (FFC-EX) [CF] | `119-bulk-staging-cname-github-pages.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write |
 | 120 | DNS + GH Pages - Bulk Cutover staging -> Apex (FFC-EX) [CF+GH] | `120-bulk-cutover-to-github-pages.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write / ✅ github-prod |
+| 121 | DNS + GH Pages - Fleet Cutover Preflight (FFC-EX) | `121-fleet-cutover-preflight.yml` | workflow_dispatch | Reads | none (no credentials) |
 ### 2xx — WHMCS
 
 | # | Workflow | File | Triggers | Safety | Approval env |

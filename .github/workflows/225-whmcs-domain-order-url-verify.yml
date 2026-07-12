@@ -7,8 +7,10 @@ run-name: 'WHMCS Domain Order URL Verify'
 # the URL is live: host must be *.github.io and HTTP GET must return 200
 # (PASS/FAIL). A footer-marker regex is also matched against the body as a
 # WARN-only heuristic (cut-over sites don't carry the literal footer text).
-# Emits a per-order table to the job summary + a CSV artifact. No order
-# writes are performed (never accepts/cancels; see issue #681).
+# The Gate-3 checklist and the WHMCS attestation field (id 172) are not
+# machine-read yet (future work). Emits a per-order table to the job summary
+# + a CSV artifact. No order writes are performed (never accepts/cancels;
+# see issue #681).
 
 on:
   workflow_dispatch:

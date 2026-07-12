@@ -56,6 +56,15 @@ export const GH_PAGES_IPV4 = new Set([
   '185.199.111.153',
 ]);
 
+// GitHub Pages apex AAAA records (documented, stable) — the FFC DNS standard
+// uses apex AAAA + www CNAME, so an AAAA-only apex must still classify as Pages.
+export const GH_PAGES_IPV6 = new Set([
+  '2606:50c0:8000::153',
+  '2606:50c0:8001::153',
+  '2606:50c0:8002::153',
+  '2606:50c0:8003::153',
+]);
+
 // Cloudflare proxies return addresses in these ranges (104.16.0.0/13 &
 // 172.64.0.0/13 are the common ones); enough to *label* the current host.
 // /13 = second octet 16-23 and 64-71 respectively — kept tight so the label
@@ -65,7 +74,9 @@ export function isCloudflare(ip) {
 }
 
 export function classify(host) {
-  if (host.ips.some((ip) => GH_PAGES_IPV4.has(ip))) return 'GitHub Pages';
+  if (host.ips.some((ip) => GH_PAGES_IPV4.has(ip) || GH_PAGES_IPV6.has(ip.toLowerCase()))) {
+    return 'GitHub Pages';
+  }
   if (host.chain.some((c) => /\.github\.io$/i.test(c.cname))) return 'GitHub Pages (CNAME)';
   if (host.ips.some(isCloudflare)) return 'Cloudflare (proxied)';
   if (host.ips.length) return `other (${host.ips.join(', ')})`;
@@ -145,6 +156,8 @@ async function selfTest() {
     classify({ chain: [{ from: 'www.x.org', cname: 'freeforcharity.github.io' }], ips: [] }),
     'GitHub Pages (CNAME)',
   );
+  assert.equal(classify({ chain: [], ips: ['2606:50c0:8000::153'] }), 'GitHub Pages');
+  assert.equal(classify({ chain: [], ips: ['2606:50C0:8003::153'] }), 'GitHub Pages');
   assert.equal(classify({ chain: [], ips: ['104.18.3.2'] }), 'Cloudflare (proxied)');
   assert.equal(classify({ chain: [], ips: ['203.0.113.7'] }), 'other (203.0.113.7)');
   assert.equal(classify({ chain: [], ips: [] }), 'unresolved');
@@ -241,11 +254,12 @@ async function doh(name, type) {
   throw new Error(`DoH lookup failed for ${name}/${type}: ${lastErr}`);
 }
 
-// Follow CNAME chains to the terminal A records, collecting the chain.
+// Follow CNAME chains to the terminal A/AAAA records, collecting the chain.
 // DoH JSON answers carry a numeric record `type`; a single response can mix
 // types (e.g. a CNAME followed by the A records it resolves to), so always
-// filter by type (CNAME = 5, A = 1) rather than trusting Answer[0] — otherwise
-// an IP could be mistaken for the next hostname.
+// filter by type (CNAME = 5, A = 1, AAAA = 28) rather than trusting Answer[0]
+// — otherwise an IP could be mistaken for the next hostname. AAAA is queried
+// when there are no A records: the FFC DNS standard is apex AAAA + www CNAME.
 async function resolveHost(host) {
   const chain = [];
   let current = host;
@@ -257,7 +271,12 @@ async function resolveHost(host) {
       continue;
     }
     const a = await doh(current, 'A');
-    return { chain, terminal: current, ips: a.filter((r) => r.type === 1).map((r) => r.data) };
+    let ips = a.filter((r) => r.type === 1).map((r) => r.data);
+    if (!ips.length) {
+      const aaaa = await doh(current, 'AAAA');
+      ips = aaaa.filter((r) => r.type === 28).map((r) => r.data.toLowerCase());
+    }
+    return { chain, terminal: current, ips };
   }
   return { chain, terminal: current, ips: [] };
 }
@@ -325,8 +344,13 @@ async function preflightDomain(domain, origin, marker) {
     const apex = await resolveHost(domain);
     apexClass = classify(apex);
     for (const c of apex.chain) record('info', `CNAME ${c.from} → ${c.cname}`);
-    record('info', `${domain} A → ${apex.ips.join(', ') || '(none)'}`);
-    record('info', `${domain} currently served by: ${apexClass}`);
+    record('info', `${domain} A/AAAA → ${apex.ips.join(', ') || '(none)'}`);
+    if (apexClass === 'unresolved') {
+      // No A/AAAA at the apex — a go verdict here would be a false green.
+      record(false, `${domain} apex resolves`, 'no A/AAAA records (NXDOMAIN/NODATA)');
+    } else {
+      record('info', `${domain} currently served by: ${apexClass}`);
+    }
   } catch (err) {
     record(false, `${domain} resolves`, err.message);
   }
@@ -354,7 +378,8 @@ async function preflightDomain(domain, origin, marker) {
       record(caaOk, "CAA allows Let's Encrypt (GitHub Pages HTTPS)", issuers.join(' | '));
     }
   } catch (err) {
-    record('info', 'CAA lookup', err.message);
+    // Can't verify that Let's Encrypt issuance isn't blocked — stay conservative.
+    record(false, 'CAA lookup', err.message);
   }
 
   // 4. If DNS already points at Pages, verify the live domain over HTTPS.

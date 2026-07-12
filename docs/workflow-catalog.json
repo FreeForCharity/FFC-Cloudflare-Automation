@@ -959,6 +959,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 226,
+      "title": "WHMCS - Application Triage (rank + accept onboarding orders)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "226-whmcs-application-triage.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Ranks PENDING charity onboarding applications by completeness/quality, separately for pre-501(c)(3) (pid 16) and full 501(c)(3) (pid 33), and can ACCEPT specific $0 onboarding orders via the WHMCS API so the charity gets the acceptance email. Default mode 'report' is READ-ONLY (never calls AcceptOrder). Mode 'approve' requires an explicit comma-separated orderids list and accepts ONLY those ids (no accept-all, no accept-top-N). Bound to the whmcs-prod environment, so every run pauses at the approval gate (the safety checkpoint); a report run pausing there is expected and fine.",
+      "safetyLevel": "Writes (report default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "report=read-only ranking; approve accepts ONLY listed $0 orderids (no accept-all/top-N)",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 - Domain Preflight (Read-only)",
       "apis": [

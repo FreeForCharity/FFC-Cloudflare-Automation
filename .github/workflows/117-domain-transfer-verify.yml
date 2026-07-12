@@ -38,7 +38,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # CF read token from Key Vault via OIDC (verification is read-only).
       - uses: ./.github/actions/cloudflare-tokens-from-kv

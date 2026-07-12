@@ -39,7 +39,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Regenerate dependabot-affected-repos.json
         shell: pwsh

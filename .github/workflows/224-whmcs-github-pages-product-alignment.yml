@@ -37,7 +37,7 @@ jobs:
   list-domains:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: List GitHub Pages (FFC-EX) domains
         shell: pwsh
@@ -60,7 +60,7 @@ jobs:
     runs-on: windows-latest
     environment: whmcs-prod
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v6
         with:

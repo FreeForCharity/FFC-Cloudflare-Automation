@@ -57,7 +57,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.CBM_TOKEN }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate CBM_TOKEN
         shell: bash
@@ -103,7 +103,7 @@ jobs:
       # the script uses SkipCname switch below to avoid GitHub API calls.
       GH_TOKEN: 'skipped-cname-phase'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
@@ -147,7 +147,7 @@ jobs:
       GH_TOKEN: ${{ secrets.CBM_TOKEN }}
     steps:
       # Needed to read config/ffc-ex-cutover-domains.json (the fleet default list).
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate CBM_TOKEN
         shell: bash

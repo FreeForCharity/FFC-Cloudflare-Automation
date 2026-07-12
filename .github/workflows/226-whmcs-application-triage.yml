@@ -1,30 +1,38 @@
 name: '226. WHMCS - Application Triage (rank + accept onboarding orders) [WHMCS]'
 run-name: 'WHMCS Application Triage (${{ inputs.mode }})'
 
-# Ranks PENDING charity onboarding applications by completeness/quality,
-# separately for pre-501(c)(3) (pid 16) and full 501(c)(3) (pid 33), and can
-# ACCEPT specific $0 onboarding orders via the WHMCS API so the charity gets the
-# acceptance email. Default mode 'report' is READ-ONLY (never calls AcceptOrder).
-# Mode 'approve' requires an explicit comma-separated orderids list and accepts
-# ONLY those ids (no accept-all, no accept-top-N). Bound to the whmcs-prod
-# environment, so every run pauses at the approval gate (the safety checkpoint);
-# a report run pausing there is expected and fine.
+# Ranks PENDING charity onboarding applications by the mission-weighted FFC
+# READINESS score (the operator's definition of "best"), separately for
+# pre-501(c)(3) (pid 16) and full 501(c)(3) (pid 33). It can ACCEPT specific $0
+# onboarding orders (approve) so the charity gets the acceptance email, and can
+# RECONCILE duplicate / miscategorized orders (reconcile) by cancelling only the
+# explicitly-listed orders and emailing those applicants a paste-ready re-file
+# email. Modes 'report' and 'reconcile-report' are READ-ONLY. The mutating modes
+# 'approve' and 'reconcile' each require an explicit comma-separated orderids
+# list and act ONLY on those ids (no accept-all / cancel-all). Bound to the
+# whmcs-prod environment, so every run pauses at the approval gate (the safety
+# checkpoint); a read-only run pausing there is expected and fine.
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'report = read-only ranking (default); approve = accept the listed orderids'
+        description:
+          'report = read-only ranking (default); approve = accept the listed orderids;
+          reconcile-report = read-only duplicate/miscategorized plan; reconcile = cancel the listed
+          orderids + email those applicants to re-file'
         required: false
         type: choice
         options:
           - report
           - approve
+          - reconcile-report
+          - reconcile
         default: report
       orderids:
         description:
-          "approve-only: comma-separated WHMCS order ids to accept (e.g. '1234,1240'). Ignored in
-          report mode."
+          "approve = order ids to ACCEPT; reconcile = order ids to CANCEL (e.g. '1234,1240').
+          Ignored in report / reconcile-report."
         required: false
         type: string
         default: ''

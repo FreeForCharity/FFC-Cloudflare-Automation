@@ -55,6 +55,24 @@ each `_new` body is pasted in per
 
 (Product ids match `config/whmcs-onboarding-products.json` at the repo root.)
 
+### Reconcile / cleanup emails
+
+| WHMCS template ID | File                          | Sent by                                                   |
+| ----------------- | ----------------------------- | --------------------------------------------------------- |
+| **123**           | `123_application_refile.html` | `scripts/whmcs-application-triage.ps1` (`reconcile` mode) |
+
+**Template 123 — "FFC - Application Re-file / Duplicate Cleanup".** Sent to the applicant when the
+Application Triage runner (`reconcile` mode) cancels a duplicate or wrong-track pending onboarding
+order so they can re-submit on the correct form. This body carries a `{$prior_answers}` placeholder:
+the runner **injects** it at send time with a paste-ready `Question: Answer` list built from _that
+application&rsquo;s own submitted onboarding field values_ (blank/placeholder fields skipped), then
+sends the composed HTML via the WHMCS `SendEmail` API as a custom message. `{$prior_answers}` is
+**not** a native WHMCS merge field — only this runner resolves it; every other merge field
+(`{$client_first_name}`, `{$whmcs_link}`, `{$signature}`, …) is left intact for WHMCS. The runner
+prefers the **live** WHMCS template (id 123) fetched via `GetEmailTemplates` and falls back to this
+versioned file when the live template is unavailable. Email is sent **before** the order is
+cancelled — a failed send aborts the cancel, so an order is never cancelled silently.
+
 ### Product welcome emails (sent on product/service activation)
 
 | File                                    | Product                                                 |

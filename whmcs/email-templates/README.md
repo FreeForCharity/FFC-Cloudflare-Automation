@@ -17,6 +17,14 @@ code lives in **emails only**.
 - The FFC websites' banned-phrase guards do **not** cover the code itself, so no automation will
   catch a leak — this warning is the control.
 
+**No committed template actually contains the code.** The `_new` acceptance templates
+(`tmpl_115_new` / `tmpl_116_new`) reference "the discount code from this email" and carry an
+explicit `{DISCOUNT_CODE — ...}` placeholder line instead — when applying them in the admin, the
+code line must be copied over from the **current live** template (or delivered by WHMCS promotion
+settings) per [`../docs/apply-email-templates.md`](../docs/apply-email-templates.md). **If the live
+template has no code and no promotion mechanism supplies one, that is a production bug to escalate**
+— the public onboarding journey promises the code arrives in this email.
+
 ## `_new` files: corrected gated-journey versions (PENDING)
 
 Files ending in `_new` are the **gated-journey-corrected** versions produced for

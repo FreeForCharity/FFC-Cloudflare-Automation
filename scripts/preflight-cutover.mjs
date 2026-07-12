@@ -19,7 +19,8 @@
  *   - Do CAA records let GitHub's certificate authority (Let's Encrypt) issue,
  *     or would HTTPS provisioning silently fail?
  *   - Is the GitHub Pages origin we're cutting TO actually healthy?
- *   - Once DNS is changed: is the custom domain live over HTTPS?
+ *   - Once DNS is changed: is the custom domain live over HTTPS — including
+ *     www, which the fleet DNS standard requires (www CNAME -> Pages)?
  *
  * Usage:
  *   node scripts/preflight-cutover.mjs --domains=example.org
@@ -29,11 +30,16 @@
  *        --marker="Example Charity"
  *   node scripts/preflight-cutover.mjs --self-test
  *
- * When --origin is omitted it is derived from the FFC-EX repo naming
- * convention: https://freeforcharity.github.io/FFC-EX-<domain>/ (an explicit
- * --origin is only accepted in single-domain mode). --marker is an optional
- * content substring to require in the served HTML; when omitted, content
- * checks are skipped and the verdict rests on DNS + HTTP status alone.
+ * When --origin is omitted, the FFC-EX repo's REAL name is resolved via the
+ * GitHub API (repo names are mixed-case in places — e.g. FFC-EX-SRRN.net,
+ * FFC-EX-AllTypeTowing.com) and the origin derived from it:
+ * https://freeforcharity.github.io/<repo>/. When the API is unavailable
+ * (unauthenticated / rate-limited) it falls back to the lowercase
+ * naming-convention guess with a warning row. Set GITHUB_TOKEN (or GH_TOKEN)
+ * to authenticate the lookup. An explicit --origin is only accepted in
+ * single-domain mode. --marker is an optional content substring to require in
+ * the served HTML; when omitted, content checks are skipped and the verdict
+ * rests on DNS + HTTP status alone.
  *
  * Writes a markdown verdict table to $GITHUB_STEP_SUMMARY when set.
  *
@@ -42,6 +48,8 @@
  *   1  one or more domains have blockers
  *   2  invalid usage / self-test failure / crash
  */
+
+import { pathToFileURL } from 'node:url';
 
 // --------------------------------------------------------------------------
 // Pure classification / verdict logic (exercised by --self-test and Pester).
@@ -83,15 +91,44 @@ export function classify(host) {
   return 'unresolved';
 }
 
-// CAA answers -> may Let's Encrypt (GitHub Pages' CA) issue?
-export function caaAllowsLetsEncrypt(caaRecords) {
-  if (!caaRecords.length) return true; // no CAA = any CA may issue
-  return caaRecords.some((d) => /letsencrypt\.org/i.test(d));
+// A DoH answer section can mix record types (e.g. a CNAME at the queried name
+// plus the records it resolves to, or RRSIGs), so a CAA read must keep only
+// real CAA answers (type 257) before looking at their data — the same
+// type-filtering rule resolveHost applies to CNAME/A/AAAA answers.
+export function caaRecordsFromAnswers(answers) {
+  return answers.filter((a) => a.type === 257).map((a) => a.data);
 }
 
-// Derive the default GitHub Pages origin from the FFC-EX repo naming convention.
+// CAA record data -> the issue/issuewild property matches, if any.
+// Data arrives as e.g. `0 issue "letsencrypt.org"` (flags, tag, value).
+function caaIssuanceProperties(caaRecords) {
+  return caaRecords
+    .map((d) => /^\s*\d+\s+(issue|issuewild)\s+"?([^"]*)"?\s*$/i.exec(String(d)))
+    .filter(Boolean);
+}
+
+// CAA records -> may Let's Encrypt (GitHub Pages' CA) issue?
+// Per RFC 8659 §4.2 only `issue`/`issuewild` properties restrict issuance; a
+// CAA RRset carrying none of them (e.g. iodef-only) leaves issuance
+// unrestricted. So: no records, or no issue/issuewild properties -> any CA may
+// issue; otherwise at least one issue/issuewild must name letsencrypt.org.
+export function caaAllowsLetsEncrypt(caaRecords) {
+  const issuance = caaIssuanceProperties(caaRecords);
+  if (!issuance.length) return true;
+  return issuance.some((m) => /letsencrypt\.org/i.test(m[2]));
+}
+
+// GitHub Pages project origin for a repo — preserves the repo name's case.
+export function originForRepo(repoName) {
+  return `https://freeforcharity.github.io/${repoName}/`;
+}
+
+// Fallback origin from the FFC-EX repo naming convention. Real fleet repos are
+// mixed-case in places, so this lowercase guess is only used when the actual
+// repo name can't be resolved via the GitHub API (see resolveRepoName) and no
+// explicit --origin was given.
 export function defaultOrigin(domain) {
-  return `https://freeforcharity.github.io/FFC-EX-${domain}/`;
+  return originForRepo(`FFC-EX-${domain}`);
 }
 
 // Normalize a --domains value: strip scheme/paths, trim, drop empties, dedupe.
@@ -141,27 +178,76 @@ export function caaOutcome({ records = [], error = '' }) {
       detail: "none set — any CA may issue (Let's Encrypt OK)",
     };
   }
+  const restrictsIssuance = caaIssuanceProperties(records).length > 0;
   return {
     ok: caaOk,
     caaOk,
     name: "CAA allows Let's Encrypt (GitHub Pages HTTPS)",
-    detail: records.join(' | '),
+    detail: restrictsIssuance
+      ? records.join(' | ')
+      : `${records.join(' | ')} — no issue/issuewild properties, issuance unrestricted (RFC 8659)`,
   };
 }
 
 /**
+ * Pure classification of the Pages origin probe (made with redirect:
+ * 'manual'). A 200 is healthy. A redirect is ALSO healthy when it targets the
+ * domain being cut over: fleet-wide the FFC-EX repos set a Pages custom
+ * domain (cname = staging.<domain>), so the github.io origin 301s there —
+ * that redirect is proof the origin exists and is bound to the right site,
+ * not a failure. Any other status, or a redirect to an unrelated host, is
+ * unhealthy. The redirect target is returned so callers can record it.
+ */
+export function originProbeOutcome({ domain, status, location = '', error = '' }) {
+  if (error) return { healthy: false, redirectTarget: '', detail: error };
+  if (status === 200) return { healthy: true, redirectTarget: '', detail: 'HTTP 200' };
+  if ([301, 302, 307, 308].includes(status) && location) {
+    let host = '';
+    try {
+      host = new URL(location).hostname.toLowerCase();
+    } catch {
+      // unparsable Location — treated as off-domain below
+    }
+    if (host === domain || host.endsWith(`.${domain}`)) {
+      return {
+        healthy: true,
+        redirectTarget: location,
+        detail: `origin healthy (redirects to ${location} — the repo's configured Pages domain)`,
+      };
+    }
+    return {
+      healthy: false,
+      redirectTarget: location,
+      detail: `HTTP ${status} redirects off-domain to ${location || '(no Location header)'}`,
+    };
+  }
+  return { healthy: false, redirectTarget: '', detail: `HTTP ${status}` };
+}
+
+/**
  * The go/no-go verdict for one domain.
- *   originHealthy  the GitHub Pages origin returns 200 (and the marker, if any)
+ *   originHealthy  the GitHub Pages origin returns 200 or redirects to the
+ *                  repo's configured Pages domain (and serves the marker, if any)
  *   pointedAtPages apex classification starts with "GitHub Pages"
  *   blockerCount   number of failed (ok === false) checks recorded
- * Returns { code, ok, label }: READY / CUTOVER_COMPLETE are ok; NOT_READY is not.
+ *   wwwHealthy     post-cutover only: www CNAMEs to Pages or still serves the
+ *                  site. Defaults to true so pre-cutover verdicts (where www is
+ *                  informational) are unaffected.
+ * Returns { code, ok, label }: READY / CUTOVER_COMPLETE are ok; NOT_READY and
+ * CUTOVER_INCOMPLETE_WWW are not.
  */
-export function computeVerdict({ originHealthy, pointedAtPages, blockerCount }) {
+export function computeVerdict({ originHealthy, pointedAtPages, blockerCount, wwwHealthy = true }) {
   if (!originHealthy) {
     return { code: 'NOT_READY_ORIGIN', ok: false, label: 'NOT READY — Pages origin unhealthy' };
   }
   if (pointedAtPages && blockerCount === 0) {
-    return { code: 'CUTOVER_COMPLETE', ok: true, label: 'CUTOVER COMPLETE — live on Pages' };
+    return wwwHealthy
+      ? { code: 'CUTOVER_COMPLETE', ok: true, label: 'CUTOVER COMPLETE — live on Pages' }
+      : {
+          code: 'CUTOVER_INCOMPLETE_WWW',
+          ok: false,
+          label: 'CUTOVER INCOMPLETE — apex live on Pages but www unhealthy',
+        };
   }
   if (!pointedAtPages) {
     return blockerCount === 0
@@ -199,13 +285,37 @@ async function selfTest() {
   assert.equal(classify({ chain: [], ips: ['203.0.113.7'] }), 'other (203.0.113.7)');
   assert.equal(classify({ chain: [], ips: [] }), 'unresolved');
 
-  // caaAllowsLetsEncrypt: empty = permissive; must include letsencrypt.org.
+  // caaRecordsFromAnswers: DoH answers can mix record types — keep CAA (257) only.
+  assert.deepEqual(
+    caaRecordsFromAnswers([
+      { type: 5, data: 'alias.example.net' },
+      { type: 257, data: '0 issue "letsencrypt.org"' },
+      { type: 46, data: 'CAA 13 2 3600 ...' },
+    ]),
+    ['0 issue "letsencrypt.org"'],
+  );
+  assert.deepEqual(caaRecordsFromAnswers([{ type: 5, data: 'alias.example.net' }]), []);
+
+  // caaAllowsLetsEncrypt: empty = permissive; iodef-only does not restrict
+  // issuance (RFC 8659 §4.2); with issue/issuewild present, one must name
+  // letsencrypt.org.
   assert.equal(caaAllowsLetsEncrypt([]), true);
   assert.equal(caaAllowsLetsEncrypt(['0 issue "letsencrypt.org"']), true);
+  assert.equal(caaAllowsLetsEncrypt(['0 issuewild "letsencrypt.org"']), true);
   assert.equal(caaAllowsLetsEncrypt(['0 issue "digicert.com"']), false);
   assert.equal(caaAllowsLetsEncrypt(['0 issue "digicert.com"', '0 issue "letsencrypt.org"']), true);
+  assert.equal(caaAllowsLetsEncrypt(['0 iodef "mailto:security@example.org"']), true);
+  assert.equal(
+    caaAllowsLetsEncrypt(['0 iodef "mailto:security@example.org"', '0 issue "digicert.com"']),
+    false,
+  );
 
-  // defaultOrigin: FFC-EX naming convention.
+  // originForRepo / defaultOrigin: preserve repo-name case; lowercase guess as
+  // fallback (real fleet repos are mixed-case, e.g. FFC-EX-AllTypeTowing.com).
+  assert.equal(
+    originForRepo('FFC-EX-AllTypeTowing.com'),
+    'https://freeforcharity.github.io/FFC-EX-AllTypeTowing.com/',
+  );
   assert.equal(
     defaultOrigin('example.org'),
     'https://freeforcharity.github.io/FFC-EX-example.org/',
@@ -227,15 +337,52 @@ async function selfTest() {
   assert.equal(apexOutcome({ chain: [], ips: ['203.0.113.7'] }).ok, 'info');
 
   // caaOutcome: lookup failure is a blocker AND reports caaOk=false for the
-  // verdict table; empty policy is permissive; explicit policy is respected.
+  // verdict table; empty policy is permissive; explicit policy is respected;
+  // an iodef-only RRset is allowed (and says why).
   assert.equal(caaOutcome({ error: 'DoH lookup failed' }).ok, false);
   assert.equal(caaOutcome({ error: 'DoH lookup failed' }).caaOk, false);
   assert.equal(caaOutcome({ records: [] }).ok, true);
   assert.equal(caaOutcome({ records: [] }).caaOk, true);
   assert.equal(caaOutcome({ records: ['0 issue "digicert.com"'] }).ok, false);
   assert.equal(caaOutcome({ records: ['0 issue "letsencrypt.org"'] }).ok, true);
+  assert.equal(caaOutcome({ records: ['0 iodef "mailto:x@y.org"'] }).ok, true);
+  assert.match(caaOutcome({ records: ['0 iodef "mailto:x@y.org"'] }).detail, /RFC 8659/);
 
-  // computeVerdict: the four outcomes.
+  // originProbeOutcome: 200 healthy; redirect to the domain's own Pages custom
+  // domain healthy (target recorded); off-domain or unparsable redirect,
+  // non-200 status, and probe errors are unhealthy.
+  assert.equal(originProbeOutcome({ domain: 'x.org', status: 200 }).healthy, true);
+  {
+    const redirected = originProbeOutcome({
+      domain: 'x.org',
+      status: 301,
+      location: 'https://staging.x.org/',
+    });
+    assert.equal(redirected.healthy, true);
+    assert.equal(redirected.redirectTarget, 'https://staging.x.org/');
+    assert.match(redirected.detail, /origin healthy \(redirects to https:\/\/staging\.x\.org\//);
+  }
+  assert.equal(
+    originProbeOutcome({ domain: 'x.org', status: 301, location: 'https://x.org/' }).healthy,
+    true,
+  );
+  assert.equal(
+    originProbeOutcome({ domain: 'x.org', status: 301, location: 'https://evil.example.com/' })
+      .healthy,
+    false,
+  );
+  assert.equal(
+    originProbeOutcome({ domain: 'x.org', status: 301, location: 'https://evilx.org/' }).healthy,
+    false,
+  );
+  assert.equal(
+    originProbeOutcome({ domain: 'x.org', status: 301, location: '::not-a-url::' }).healthy,
+    false,
+  );
+  assert.equal(originProbeOutcome({ domain: 'x.org', status: 404 }).healthy, false);
+  assert.equal(originProbeOutcome({ domain: 'x.org', error: 'timeout' }).healthy, false);
+
+  // computeVerdict: the four base outcomes, plus the post-cutover www rule.
   assert.equal(
     computeVerdict({ originHealthy: false, pointedAtPages: false, blockerCount: 1 }).code,
     'NOT_READY_ORIGIN',
@@ -260,12 +407,45 @@ async function selfTest() {
     computeVerdict({ originHealthy: true, pointedAtPages: true, blockerCount: 1 }).ok,
     false,
   );
+  assert.equal(
+    computeVerdict({
+      originHealthy: true,
+      pointedAtPages: true,
+      blockerCount: 0,
+      wwwHealthy: false,
+    }).code,
+    'CUTOVER_INCOMPLETE_WWW',
+  );
+  assert.equal(
+    computeVerdict({
+      originHealthy: true,
+      pointedAtPages: true,
+      blockerCount: 0,
+      wwwHealthy: false,
+    }).ok,
+    false,
+  );
+  assert.equal(
+    computeVerdict({ originHealthy: true, pointedAtPages: true, blockerCount: 0, wwwHealthy: true })
+      .code,
+    'CUTOVER_COMPLETE',
+  );
+  // Pre-cutover verdicts ignore wwwHealthy (www is informational until the flip).
+  assert.equal(
+    computeVerdict({
+      originHealthy: true,
+      pointedAtPages: false,
+      blockerCount: 0,
+      wwwHealthy: false,
+    }).code,
+    'READY',
+  );
 
   console.log('self-test OK — classification + verdict logic passed');
 }
 
 // --------------------------------------------------------------------------
-// Network probes (DoH + HTTPS).
+// Network probes (DoH + HTTPS + GitHub API).
 // --------------------------------------------------------------------------
 
 function arg(name, fallback) {
@@ -334,60 +514,126 @@ async function resolveHost(host) {
   return { chain, terminal: current, ips: [] };
 }
 
-async function probeHttps(url) {
+// HTTPS probe. redirect defaults to 'follow' (final content); pass
+// redirect: 'manual' to observe a redirect instead of chasing it (used for
+// the Pages origin, whose 301 to the configured custom domain is itself the
+// signal being measured). finalUrl reports where a followed probe landed so
+// content checks can say which URL they actually inspected.
+async function probeHttps(url, { redirect = 'follow' } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
     const res = await fetch(url, {
       signal: controller.signal,
-      redirect: 'follow',
+      redirect,
       headers: { 'User-Agent': 'ffc-cutover-preflight' },
     });
     const body = await res.text();
     clearTimeout(timer);
-    return { status: res.status, server: res.headers.get('server') || '', body };
+    return {
+      status: res.status,
+      server: res.headers.get('server') || '',
+      location: res.headers.get('location') || '',
+      finalUrl: res.url || url,
+      body,
+    };
   } catch (err) {
     clearTimeout(timer);
     return { error: err?.message || String(err) };
   }
 }
 
+// Resolve the ACTUAL FFC-EX repo name (case included) for a domain via the
+// GitHub API. Repo lookups are case-insensitive server-side, so the exact GET
+// with the lowercase guess normally returns the canonical mixed-case name;
+// the org repo search is a fallback for edge cases. Returns { name } on
+// success or { error } — callers then fall back to the lowercase
+// naming-convention guess with a warning (e.g. unauthenticated + rate-limited).
+async function githubJson(url, token) {
+  const headers = {
+    accept: 'application/vnd.github+json',
+    'user-agent': 'ffc-cutover-preflight',
+  };
+  if (token) headers.authorization = `Bearer ${token}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(url, { headers, signal: controller.signal });
+    if (!res.ok) return { status: res.status };
+    return { status: res.status, json: await res.json() };
+  } catch (err) {
+    return { error: err?.message || String(err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolveRepoName(domain, token = '') {
+  const guess = `FFC-EX-${domain}`;
+  const exact = await githubJson(
+    `https://api.github.com/repos/FreeForCharity/${encodeURIComponent(guess)}`,
+    token,
+  );
+  if (exact.json?.name) return { name: exact.json.name };
+  if (exact.error) return { error: exact.error };
+  if (exact.status === 404) {
+    // Case-insensitive safety net: search the org for the repo by name.
+    const q = encodeURIComponent(`org:FreeForCharity ${guess} in:name`);
+    const search = await githubJson(`https://api.github.com/search/repositories?q=${q}`, token);
+    const hit = (search.json?.items || []).find(
+      (r) => typeof r?.name === 'string' && r.name.toLowerCase() === guess.toLowerCase(),
+    );
+    if (hit) return { name: hit.name };
+    return { error: 'repo not found (HTTP 404, and no case-insensitive match in org search)' };
+  }
+  return { error: `HTTP ${exact.status}` };
+}
+
 // --------------------------------------------------------------------------
 // Per-domain preflight.
 // --------------------------------------------------------------------------
 
-async function preflightDomain(domain, origin, marker) {
+async function preflightDomain(domain, origin, marker, originWarning = '') {
   const results = [];
   function record(ok, name, detail = '') {
     results.push({ ok, name, detail });
-    const mark = ok === true ? '✓' : ok === false ? '✗' : 'ℹ';
+    const mark = ok === true ? '✓' : ok === false ? '✗' : ok === 'warn' ? '⚠' : 'ℹ';
     console.log(detail ? `${mark} ${name} — ${detail}` : `${mark} ${name}`);
   }
 
   console.log(`\n=== ${domain} ===`);
 
   // 1. Confirm the GitHub Pages origin we're cutting TO is healthy first.
+  // Probe WITHOUT following redirects: fleet-wide the FFC-EX repos configure a
+  // Pages custom domain (cname = staging.<domain>), so the github.io origin
+  // 301s away — following it would measure the wrong host and hide origin
+  // breakage. A 301 to the repo's own configured Pages domain counts as
+  // healthy; redirects are only followed for the explicit marker check below.
   console.log('— Source origin (cutting TO) —');
-  const originProbe = await probeHttps(origin);
-  let originHealthy = false;
-  if (originProbe.error) {
-    record(false, `Pages origin reachable (${origin})`, originProbe.error);
-  } else {
+  if (originWarning) record('warn', 'Origin derivation', originWarning);
+  const originProbe = await probeHttps(origin, { redirect: 'manual' });
+  const originRes = originProbeOutcome({
+    domain,
+    status: originProbe.status,
+    location: originProbe.location,
+    error: originProbe.error,
+  });
+  let originHealthy = originRes.healthy;
+  record(originRes.healthy, `Pages origin healthy (${origin})`, originRes.detail);
+  if (marker && originRes.healthy) {
+    // Follow to the final content ONLY for the marker check, and say exactly
+    // which URL the marker was verified on.
+    const content = originRes.redirectTarget
+      ? await probeHttps(originRes.redirectTarget)
+      : originProbe;
+    const checkedUrl = content.finalUrl || originRes.redirectTarget || origin;
+    const present = !content.error && content.body.includes(marker);
     record(
-      originProbe.status === 200,
-      `Pages origin returns 200 (${origin})`,
-      `HTTP ${originProbe.status}`,
+      present,
+      'Pages origin serves the new site',
+      `marker "${marker}" ${present ? 'present' : 'MISSING'} (checked on ${checkedUrl})`,
     );
-    originHealthy = originProbe.status === 200;
-    if (marker) {
-      const present = originProbe.body.includes(marker);
-      record(
-        present,
-        'Pages origin serves the new site',
-        `marker "${marker}" ${present ? 'present' : 'MISSING'}`,
-      );
-      originHealthy = originHealthy && present;
-    }
+    originHealthy = originHealthy && present;
   }
 
   // 2. Where does the apex resolve now, and is it Pages-ready?
@@ -408,22 +654,46 @@ async function preflightDomain(domain, origin, marker) {
   } catch (err) {
     record(false, `${domain} resolves`, err.message);
   }
+  const pointedAtPages = apexClass.startsWith('GitHub Pages');
 
+  // www is part of the fleet DNS standard (www CNAME -> Pages). Pre-cutover
+  // it stays informational; post-cutover (apex already on Pages) an unhealthy
+  // www fails the verdict — the fleet promises www works after a cutover.
   let wwwClass = 'unresolved';
+  let wwwHealthy = true;
   try {
     const www = await resolveHost(`www.${domain}`);
     wwwClass = classify(www);
     record('info', `www.${domain} served by: ${wwwClass}`);
-  } catch {
+    if (pointedAtPages && !wwwClass.startsWith('GitHub Pages')) {
+      // Not CNAMEd to Pages — accept it only if it still serves the site.
+      const wwwProbe = await probeHttps(`https://www.${domain}/`);
+      const wwwServes =
+        !wwwProbe.error && wwwProbe.status < 400 && (!marker || wwwProbe.body.includes(marker));
+      wwwHealthy = wwwServes;
+      record(
+        wwwServes ? true : 'warn',
+        `www.${domain} serves the site (required post-cutover)`,
+        wwwProbe.error
+          ? wwwProbe.error
+          : `HTTP ${wwwProbe.status}${marker ? `, marker ${wwwProbe.body.includes(marker) ? 'present' : 'MISSING'}` : ''}`,
+      );
+    }
+  } catch (err) {
     wwwClass = 'no record';
-    record('info', `www.${domain} — no record`);
+    if (pointedAtPages) {
+      wwwHealthy = false;
+      record('warn', `www.${domain} lookup failed (required post-cutover)`, err.message);
+    } else {
+      record('info', `www.${domain} — no record (informational pre-cutover)`);
+    }
   }
 
   // 3. CAA — will Let's Encrypt (GitHub Pages' CA) be allowed to issue?
   console.log('— Certificate authority (CAA) —');
   let caaLookup;
   try {
-    caaLookup = { records: (await doh(domain, 'CAA')).map((r) => r.data) };
+    caaLookup = { records: caaRecordsFromAnswers(await doh(domain, 'CAA')) };
   } catch (err) {
     caaLookup = { error: err.message };
   }
@@ -433,7 +703,6 @@ async function preflightDomain(domain, origin, marker) {
 
   // 4. If DNS already points at Pages, verify the live domain over HTTPS.
   console.log('— Live domain over HTTPS —');
-  const pointedAtPages = apexClass.startsWith('GitHub Pages');
   const live = await probeHttps(`https://${domain}/`);
   let liveStatus = '';
   if (live.error) {
@@ -441,10 +710,16 @@ async function preflightDomain(domain, origin, marker) {
     record(!pointedAtPages ? 'info' : false, `https://${domain}/ reachable`, live.error);
   } else {
     liveStatus = `HTTP ${live.status}`;
+    // Pre-cutover the old host's status is informational whatever it is — a
+    // parked or suspended old host (>= 400) is often the very reason for the
+    // cutover, so it must not block a READY verdict (consistent with the
+    // unreachable case above). Post-cutover a failing status is a blocker.
     record(
-      live.status < 400,
+      pointedAtPages ? live.status < 400 : 'info',
       `https://${domain}/ responds`,
-      `HTTP ${live.status}${live.server ? ` (server: ${live.server})` : ''}`,
+      `HTTP ${live.status}${live.server ? ` (server: ${live.server})` : ''}${
+        pointedAtPages ? '' : ' — old host, informational pre-cutover'
+      }`,
     );
     if (marker) {
       const servesNew = live.body.includes(marker);
@@ -465,15 +740,17 @@ async function preflightDomain(domain, origin, marker) {
   }
 
   const blockerCount = results.filter((r) => r.ok === false).length;
-  const verdict = computeVerdict({ originHealthy, pointedAtPages, blockerCount });
+  const verdict = computeVerdict({ originHealthy, pointedAtPages, blockerCount, wwwHealthy });
   console.log(`Verdict: ${verdict.label}`);
 
   return {
     domain,
     origin,
     originHealthy,
+    originRedirect: originRes.redirectTarget || '',
     apexClass,
     wwwClass,
+    wwwHealthy,
     caaOk,
     liveStatus,
     blockerCount,
@@ -494,9 +771,11 @@ function renderTable(rows) {
     (r) =>
       `| ${[
         r.domain,
-        r.originHealthy ? 'healthy' : 'UNHEALTHY',
+        r.originHealthy
+          ? `healthy${r.originRedirect ? ` (→ ${r.originRedirect})` : ''}`
+          : 'UNHEALTHY',
         r.apexClass,
-        r.wwwClass,
+        r.wwwHealthy ? r.wwwClass : `${r.wwwClass} (UNHEALTHY)`,
         r.caaOk ? 'ok' : 'BLOCKED',
         r.liveStatus || '?',
         `${r.verdict.ok ? '✅' : '❌'} ${r.verdict.label}`,
@@ -524,12 +803,28 @@ async function main() {
     process.exit(2);
   }
   const marker = arg('marker', '');
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '';
 
   console.log(`Fleet cutover preflight — ${domains.length} domain(s)`);
 
   const rows = [];
   for (const domain of domains) {
-    rows.push(await preflightDomain(domain, originOverride || defaultOrigin(domain), marker));
+    let origin = originOverride;
+    let originWarning = '';
+    if (!origin) {
+      const repo = await resolveRepoName(domain, token);
+      if (repo.name) {
+        origin = originForRepo(repo.name);
+      } else {
+        origin = defaultOrigin(domain);
+        originWarning =
+          `could not resolve the FFC-EX repo name via the GitHub API (${repo.error}); ` +
+          `falling back to the lowercase naming-convention guess ${origin} — ` +
+          `mixed-case repos (e.g. FFC-EX-SRRN.net) may probe the wrong path. ` +
+          `Set GITHUB_TOKEN to authenticate the lookup.`;
+      }
+    }
+    rows.push(await preflightDomain(domain, origin, marker, originWarning));
   }
 
   const table = renderTable(rows);
@@ -553,7 +848,19 @@ async function main() {
   console.log(`\n✓ All ${rows.length} domain(s) are go.`);
 }
 
-main().catch((err) => {
-  console.error('\npreflight crashed:', err?.stack || err);
-  process.exit(2);
-});
+// Only run when executed as the entrypoint — the module stays importable by
+// tests (Pester drives the exported pure functions directly).
+const isEntrypoint = (() => {
+  try {
+    return import.meta.url === pathToFileURL(process.argv[1] ?? '').href;
+  } catch {
+    return false;
+  }
+})();
+
+if (isEntrypoint) {
+  main().catch((err) => {
+    console.error('\npreflight crashed:', err?.stack || err);
+    process.exit(2);
+  });
+}

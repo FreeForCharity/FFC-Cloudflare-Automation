@@ -436,6 +436,22 @@
       "categoryCode": "CF"
     },
     {
+      "number": 121,
+      "title": "DNS + GH Pages - Fleet Cutover Preflight (FFC-EX)",
+      "apis": [],
+      "file": "121-fleet-cutover-preflight.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Read-only go/no-go preflight for the FFC-EX DNS cutover \u2014 the checked companion to workflow 120 (bulk cutover staging -> apex). For each domain it confirms the GitHub Pages origin is healthy, reads live apex/www DNS over DoH, verifies CAA won't block Let's Encrypt issuance, and probes HTTPS on the target domain, then prints one verdict table (also written to the job summary). It changes nothing and loads no credentials, so it needs no environment approval gate. Run it before 120 to confirm readiness and after 120 to confirm the cutover landed.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "none (no credentials)",
+      "guard": "read-only DoH/HTTPS probes; go/no-go for 120",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
       "number": 201,
       "title": "WHMCS - Export Domains (Report)",
       "apis": [

@@ -21,6 +21,12 @@ workflows and gates, and lists the gotchas that have burned prior sessions (iden
 masked name; string-only dispatch inputs; merge-to-`main` before dispatch). The narrative runbook it
 indexes is `docs/charity-onboarding-lifecycle.md`.
 
+If the task is to **migrate an existing WordPress/legacy site to GitHub Pages** ("migrate <site>",
+"capture <site>", "static conversion", "move off HostPapa/Hostinger") — use the
+**`wordpress-to-pages-migration` skill** (`.claude/skills/wordpress-to-pages-migration/SKILL.md`):
+capture + asset localization, the `FFC-EX-<domain>` scaffold, footer standard, Pages on the default
+URL, and the workflow-121 DNS-ready verdict (epic #702).
+
 ## Picking a workflow
 
 1. **Read the catalog first**: `docs/workflow-catalog.json` (machine-readable) or the generated

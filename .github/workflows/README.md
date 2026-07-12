@@ -553,6 +553,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 223 | WHMCS - Import Cloudflare Registrar Domains as Domain Records [WHMCS+CF] | `223-whmcs-import-cloudflare-domains.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 224 | WHMCS - GitHub Pages Product Alignment [WHMCS+GH] | `224-whmcs-github-pages-product-alignment.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 225 | WHMCS - Domain Order URL Verify [WHMCS] | `225-whmcs-domain-order-url-verify.yml` | schedule, workflow_dispatch | Reads | whmcs-prod-read |
+| 226 | WHMCS - Application Triage (rank + accept onboarding orders) [WHMCS] | `226-whmcs-application-triage.yml` | workflow_dispatch | Writes (report default) | ✅ whmcs-prod |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

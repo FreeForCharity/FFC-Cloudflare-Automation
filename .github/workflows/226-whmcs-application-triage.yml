@@ -1,0 +1,92 @@
+name: '226. WHMCS - Application Triage (rank + accept onboarding orders) [WHMCS]'
+run-name: 'WHMCS Application Triage (${{ inputs.mode }})'
+
+# Ranks PENDING charity onboarding applications by completeness/quality,
+# separately for pre-501(c)(3) (pid 16) and full 501(c)(3) (pid 33), and can
+# ACCEPT specific $0 onboarding orders via the WHMCS API so the charity gets the
+# acceptance email. Default mode 'report' is READ-ONLY (never calls AcceptOrder).
+# Mode 'approve' requires an explicit comma-separated orderids list and accepts
+# ONLY those ids (no accept-all, no accept-top-N). Bound to the whmcs-prod
+# environment, so every run pauses at the approval gate (the safety checkpoint);
+# a report run pausing there is expected and fine.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'report = read-only ranking (default); approve = accept the listed orderids'
+        required: false
+        type: choice
+        options:
+          - report
+          - approve
+        default: report
+      orderids:
+        description:
+          "approve-only: comma-separated WHMCS order ids to accept (e.g. '1234,1240'). Ignored in
+          report mode."
+        required: false
+        type: string
+        default: ''
+      api_url:
+        description: 'WHMCS API endpoint'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+
+# Serialize triage runs (an approve run must never race another): latest run
+# queues behind the in-flight one rather than cancelling it.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  application_triage:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of
+      # truth). Default write scope: report reads, approve writes (AcceptOrder).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Rank (and optionally accept) onboarding applications
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          TRIAGE_MODE: ${{ inputs.mode || 'report' }}
+          TRIAGE_ORDERIDS: ${{ inputs.orderids }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # On non-dispatch triggers inputs.* are empty; default to the APIM
+          # gateway so the call stays on the static-IP path (not the origin).
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+          $mode = if ([string]::IsNullOrWhiteSpace($env:TRIAGE_MODE)) { 'report' } else { $env:TRIAGE_MODE }
+
+          New-Item -ItemType Directory -Force -Path artifacts/whmcs | Out-Null
+
+          & .\scripts\whmcs-application-triage.ps1 `
+            -ApiUrl $env:WHMCS_API_URL `
+            -Mode $mode `
+            -OrderIds $env:TRIAGE_ORDERIDS `
+            -OutputFile 'artifacts/whmcs/whmcs_application_triage.json'
+          if ($LASTEXITCODE -ne 0) { throw "Application triage failed (exit $LASTEXITCODE)." }
+
+      - name: Upload triage report artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: whmcs_application_triage
+          path: artifacts/whmcs/whmcs_application_triage*.json
+          if-no-files-found: warn

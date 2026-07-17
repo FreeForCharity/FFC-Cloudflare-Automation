@@ -979,6 +979,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 227,
+      "title": "cPanel - Deploy WHMCS Hooks (UAPI via APIM)",
+      "apis": [
+        "cPanel"
+      ],
+      "file": "227-whmcs-hooks-deploy.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Deploys the version-controlled WHMCS hooks in whmcs/hooks/*.php to the production WHMCS host, replacing the manual-FTPS runbook. Writes go through the cPanel UAPI proxied by APIM (apim-ffc-gateway-prod), whose static egress IP (20.231.116.111) is allowlisted on the IP-restricted cPanel host \u2014 so a dynamic GitHub runner IP is never blocked.  Backend:  https://webhosting1900.is.cc:2083 (cPanel UAPI)  via  /cpanel/execute/{module}/{function} Auth:     Ocp-Apim-Subscription-Key (cPanel-ops) + Authorization: cpanel <user>:<api-token> Target:   public_html/hub/includes/hooks/<file>.php  mode=verify (default) is READ-ONLY: it reads the deployed file back and reports whether it matches the repo. mode=deploy writes each file, then reads it back and fails on any mismatch.  CONFIRM BEFORE FIRST DEPLOY (flagged, sensible defaults): 1. apim-subscription-secret-name \u2014 defaults to read-all-ffc-apim-gateway-subscription-key; confirm that is the \"cPanel ops (CI)\" subscription key (or add a dedicated *-ffc-apim-cpanel-subscription-key and pass it). 2. target_dir \u2014 defaults to public_html/hub/includes/hooks (relative to the cPanel home).",
+      "safetyLevel": "Writes (verify default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "mode=verify (read-only) vs deploy; hooks input is basename-validated",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 - Domain Preflight (Read-only)",
       "apis": [

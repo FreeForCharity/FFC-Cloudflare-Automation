@@ -1,0 +1,128 @@
+name: 'cPanel secrets from Key Vault'
+description: >-
+  Authenticate to Azure via OIDC, fetch the FFC cPanel (InterServer) API user + API token + server
+  hostname and the APIM cPanel-ops subscription key from Azure Key Vault, mask them, and expose them
+  to subsequent steps as CPANEL_API_USER, CPANEL_API_TOKEN, CPANEL_SERVER, and
+  CPANEL_APIM_SUBSCRIPTION_KEY. Mirrors whmcs-secrets-from-kv. Used to call the cPanel UAPI through
+  the APIM gateway (static egress IP) so CI is never blocked by the cPanel host's IP restriction.
+
+author: 'Free For Charity'
+
+inputs:
+  scope:
+    description: >-
+      Secret scope: 'write' loads wr-all-* copies (via ffc-admin-kv-writer); 'read' loads read-all-*
+      (via ffc-admin-kv-reader). Defaults to 'read' (deploy needs only read access to the creds).
+    required: false
+    default: 'read'
+  vault-name:
+    description: 'Azure Key Vault name that holds the cPanel credentials.'
+    required: false
+    default: 'kv-ffc-admin-prod-cbm'
+  apim-subscription-secret-name:
+    description: >-
+      KV secret name of the APIM subscription key for the 'cpanel' API (the "cPanel ops (CI)"
+      subscription). Defaults to the shared gateway key. Override if a dedicated
+      '*-ffc-apim-cpanel-subscription-key' is added later.
+    required: false
+    default: 'read-all-ffc-apim-gateway-subscription-key'
+  azure-client-id:
+    description: 'OIDC client ID for the managed identity that has Get permission on the vault.'
+    required: true
+  azure-tenant-id:
+    description: 'Azure tenant ID for OIDC federation.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+        INPUT_AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        INPUT_AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ($env:INPUT_SCOPE -notin @('read', 'write')) {
+          throw "Invalid scope '$($env:INPUT_SCOPE)'. Expected 'read' or 'write'."
+        }
+        foreach ($p in @('INPUT_VAULT_NAME', 'INPUT_AZURE_CLIENT_ID', 'INPUT_AZURE_TENANT_ID')) {
+          if ([string]::IsNullOrWhiteSpace((Get-Item "env:$p").Value)) {
+            throw "Required input backing '$p' is empty."
+          }
+        }
+
+    - name: Azure login (OIDC)
+      uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        allow-no-subscriptions: true
+
+    - name: Fetch cPanel credentials from Key Vault
+      shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+        INPUT_APIM_SECRET_NAME: ${{ inputs.apim-subscription-secret-name }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $scope = $env:INPUT_SCOPE
+        $vaultName = $env:INPUT_VAULT_NAME
+        $prefix = if ($scope -eq 'write') { 'wr-all' } else { 'read-all' }
+
+        # Heredoc-delimited GITHUB_ENV write (safe for values containing newlines).
+        function Add-EnvVar {
+          param([string]$Name, [string]$Value)
+          $delim = "ghadelim_$([guid]::NewGuid().ToString('N'))"
+          if ($Value -match [regex]::Escape($delim)) {
+            throw "Refusing to write '$Name': value collides with the generated delimiter."
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "$Name<<$delim"
+          Add-Content -Path $env:GITHUB_ENV -Value $Value
+          Add-Content -Path $env:GITHUB_ENV -Value $delim
+        }
+
+        # Mask every non-blank line (::add-mask:: only covers up to the first newline).
+        function Protect-Secret {
+          param([string]$Value)
+          foreach ($line in ($Value -split "[\r\n]+")) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) { Write-Host "::add-mask::$line" }
+          }
+        }
+
+        function Get-KvSecret {
+          param([string]$Name)
+          $raw = az keyvault secret show --vault-name $vaultName --name $Name --query value -o tsv
+          if ($LASTEXITCODE -ne 0) {
+            throw "az keyvault secret show for '$Name' failed (exit $LASTEXITCODE). Check the identity's role on vault '$vaultName' and that the secret exists."
+          }
+          $val = ([string]$raw).TrimEnd([char]13, [char]10)
+          if ([string]::IsNullOrWhiteSpace($val)) {
+            throw "Key Vault secret '$Name' returned empty from vault '$vaultName'."
+          }
+          return $val
+        }
+
+        $user  = Get-KvSecret "$prefix-cbm-cpanel-ffc-interserver-user"
+        $token = Get-KvSecret "$prefix-cbm-cpanel-ffc-interserver-api-token"
+        $server = Get-KvSecret "$prefix-cbm-cpanel-ffc-interserver-server"
+        $apimKey = Get-KvSecret $env:INPUT_APIM_SECRET_NAME
+
+        Protect-Secret $user
+        Protect-Secret $token
+        Protect-Secret $server
+        Protect-Secret $apimKey
+
+        Add-EnvVar -Name 'CPANEL_API_USER' -Value $user
+        Add-EnvVar -Name 'CPANEL_API_TOKEN' -Value $token
+        Add-EnvVar -Name 'CPANEL_SERVER' -Value $server
+        Add-EnvVar -Name 'CPANEL_APIM_SUBSCRIPTION_KEY' -Value $apimKey
+
+        Write-Host "Loaded $scope-scope cPanel user + API token + server and the APIM cpanel subscription key from '$vaultName' (all masked)."
+
+branding:
+  icon: 'upload-cloud'
+  color: 'orange'

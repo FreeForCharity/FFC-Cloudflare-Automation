@@ -36,7 +36,32 @@ id 3 and on pid 33 it is id 106, but the hook looks the id up at runtime via a `
 `tblcustomfields` (`relid = <pid>`, `fieldname LIKE '%legal status%'`) and caches it per pid, so it
 keeps working if the fields are ever renumbered.
 
-## Fail-open design (why this is safe on production)
+### `ffc_promote_charity_record.php`
+
+**Rule.** WHMCS is FFC's charity CRM: each charity's reusable profile lives once at the **client**
+level (Custom Client Fields), and orders reference it. When an onboarding order (pid 16/33) is
+**accepted**, this hook copies the applicant's onboarding answers into the matching client custom
+fields, so nothing is re-entered and the footer-config bridge can read the whole footer dataset from
+one client record.
+
+Action point `AcceptOrder`. From `$vars['orderid']` it finds the onboarding service(s)
+(`tblhosting` where `orderid = <id>`, `packageid IN (16,33)`), reads their product custom-field
+values (`tblcustomfieldsvalues`, `relid = <service id>`), and writes the allowlisted ones into the
+client's fields (resolved by name, `type='client'`). Also copies the account **Company Name** →
+**Legal organization name** (best-effort — `companyname` is often empty, so this may be a no-op).
+
+- **Copy-if-empty (idempotent, self-service-safe).** A client field is written **only when empty**,
+  so re-accepting an order changes nothing and a value the charity later edits in their portal is
+  never clobbered.
+- **PII is never copied.** The onboarding form also collects board members' and the primary/technical
+  contacts' individual LinkedIn / phone / email. Those are **excluded**; only the explicit public
+  allowlist (EIN, mission, Candid ×2, public phone/email, city & state, and the charity's Facebook /
+  LinkedIn / Instagram / X / YouTube) is ever promoted.
+- **Fail-safe.** Every path is wrapped in `try/catch`; on any error it does nothing and returns — it
+  never throws, so it can never disrupt order acceptance. Worst case: a field isn't pre-filled and is
+  filled by hand.
+
+## Fail-open / fail-safe design (why this is safe on production)
 
 A broken checkout hook can break **all** orders, so this hook is deliberately **fail-open**:
 
@@ -51,10 +76,11 @@ full-501(c)(3) match, so a fuzzy answer is not treated as a hard 501(c)(3).
 
 ## Deploy (FTPS)
 
-The hook is deployed to the production WHMCS hooks directory:
+The hooks are deployed to the production WHMCS hooks directory:
 
 ```
 public_html/hub/includes/hooks/ffc_status_product_match.php
+public_html/hub/includes/hooks/ffc_promote_charity_record.php
 ```
 
 Edit the file **here**, get it reviewed via PR, run `php -l` on it, then upload it over FTPS to that
@@ -63,14 +89,16 @@ immediately; no restart.
 
 ## Rollback
 
-Delete the deployed file:
+Delete the deployed file (per hook):
 
 ```
 public_html/hub/includes/hooks/ffc_status_product_match.php
+public_html/hub/includes/hooks/ffc_promote_charity_record.php
 ```
 
-Removing the file removes the behavior instantly — no config change, no restart. (The canonical copy
-stays here in git.)
+Removing a file removes that behavior instantly — no config change, no restart. (The canonical copies
+stay here in git.) `ffc_promote_charity_record.php` is also idempotent (copy-if-empty), so removing
+it only stops future pre-fills; it never has to be "undone."
 
 ## Manual test plan
 
@@ -86,3 +114,21 @@ Use a **$0 test order** (do not complete a real paid order):
 
 If anything blocks unexpectedly, delete the deployed file (see **Rollback**) — the fail-open design
 means removing it can only ever relax validation, never tighten it.
+
+### `ffc_promote_charity_record.php`
+
+Use a **$0 test order** on an onboarding product for a test client whose client custom fields start
+empty:
+
+1. Place a **501(c)(3) Charity Onboarding** ($0, pid 33) order for the test client, filling EIN,
+   mission, public phone/email, city & state, and the socials.
+2. **Accept** the order (admin → Accept Order, or the API/triage runner).
+3. Open the client's profile → **Custom Fields**: EIN, Brief mission, Candid links, Public phone,
+   Public email, City & state, and the Facebook/LinkedIn/Instagram/X/YouTube fields should now be
+   **pre-filled** from the order.
+4. Confirm **no PII leaked**: the board/primary/technical contacts' individual phone/email/LinkedIn
+   must **not** appear in any client field.
+5. Edit one client field by hand, then re-accept (or accept a second onboarding order) → the
+   hand-edited value must be **preserved** (copy-if-empty).
+
+Verify `php -l ffc_promote_charity_record.php` is clean before uploading.

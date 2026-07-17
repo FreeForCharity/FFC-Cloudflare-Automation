@@ -39,16 +39,24 @@ keeps working if the fields are ever renumbered.
 ### `ffc_promote_charity_record.php`
 
 **Rule.** WHMCS is FFC's charity CRM: each charity's reusable profile lives once at the **client**
-level (Custom Client Fields), and orders reference it. When an onboarding order (pid 16/33) is
-**accepted**, this hook copies the applicant's onboarding answers into the matching client custom
-fields, so nothing is re-entered and the footer-config bridge can read the whole footer dataset from
-one client record.
+level (Custom Client Fields), and orders reference it. The **order is the charity's certified
+submission and the human-review gate** — an admin reviews the answers before accepting. **Acceptance
+is the trigger:** this hook then copies the certified answers into the matching client custom fields,
+so the CRM only ever holds reviewed data and nothing is re-entered.
 
-Action point `AcceptOrder`. From `$vars['orderid']` it finds the onboarding service(s)
-(`tblhosting` where `orderid = <id>`, `packageid IN (16,33)`), reads their product custom-field
-values (`tblcustomfieldsvalues`, `relid = <service id>`), and writes the allowlisted ones into the
-client's fields (resolved by name, `type='client'`). Also copies the account **Company Name** →
-**Legal organization name** (best-effort — `companyname` is often empty, so this may be a no-op).
+It fires for two order kinds:
+
+- **Onboarding** (pid 16 pre-501c3 / pid 33 full-501c3) → footer / identity data (EIN, mission,
+  Candid ×2, public phone/email, city & state, Facebook/LinkedIn/Instagram/X/YouTube).
+- **Website** (pid 40) → site body / SEO / integration data (tagline, description, short
+  description, SEO keywords, brand color, founding year, alternate names, Zeffy/Idealist/Microsoft-
+  Form URLs).
+
+Action point `AcceptOrder`. From `$vars['orderid']` it finds the service(s) (`tblhosting` where
+`orderid = <id>`, `packageid IN (16,33,40)`), reads their product custom-field values
+(`tblcustomfieldsvalues`, `relid = <service id>`), and writes the allowlisted ones into the client's
+fields (resolved by name, `type='client'`). Also copies the account **Company Name** → **Legal
+organization name** (best-effort — `companyname` is often empty, so this may be a no-op).
 
 - **Copy-if-empty (idempotent, self-service-safe).** A client field is written **only when empty**,
   so re-accepting an order changes nothing and a value the charity later edits in their portal is

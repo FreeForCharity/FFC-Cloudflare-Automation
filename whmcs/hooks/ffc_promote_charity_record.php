@@ -13,8 +13,14 @@
  *   so the charity never re-enters them and the footer-config bridge can read
  *   the whole footer dataset from one GetClientsDetails call.
  *
- *       pid 16  = Pre-501(c)(3) Charity Onboarding
- *       pid 33  = 501(c)(3) Charity Onboarding
+ *       pid 16  = Pre-501(c)(3) Charity Onboarding   (footer/identity data)
+ *       pid 33  = 501(c)(3) Charity Onboarding       (footer/identity data)
+ *       pid 40  = Charity Website                    (site body / SEO / integrations)
+ *
+ *   The order is the charity's CERTIFIED submission and the human-review gate:
+ *   an admin reviews the answers before accepting the order. Acceptance is the
+ *   trigger — this hook then promotes the certified answers into the client
+ *   record, so the CRM only ever holds reviewed-and-approved data.
  *
  *   Fields copied (public footer / identity data ONLY):
  *       onboarding field (slug or legacy name)  →  client custom field
@@ -32,6 +38,11 @@
  *       social-x                                 →  X (Twitter) URL
  *       social-youtube                           →  YouTube URL
  *       (client account Company Name)            →  Legal organization name
+ *
+ *   From the WEBSITE order (pid 40), the site body / SEO / integration answers:
+ *       tagline / site-description / site-short-description / seo-keywords /
+ *       brand-color / founding-year / alternate-names / zeffy-donation-url /
+ *       idealist-url / microsoft-form-url        →  matching client fields.
  *
  *   PII IS NEVER COPIED. The onboarding form also collects board members' and
  *   the primary/technical contacts' INDIVIDUAL LinkedIn / phone / email. Those
@@ -89,8 +100,10 @@ if (!defined('WHMCS')) {
 }
 
 add_hook('AcceptOrder', 1, function ($vars) {
-    // Onboarding product ids whose answers feed the client record.
-    $ONBOARDING_PIDS = [16, 33];
+    // Product ids whose accepted-order answers feed the client CRM record.
+    // Onboarding (16 pre-501c3, 33 full-501c3) carries footer/identity data;
+    // the website order (40) carries site body / SEO / integration data.
+    $COPY_SOURCE_PIDS = [16, 33, 40];
 
     try {
         $orderId = isset($vars['orderid']) ? (int) $vars['orderid'] : 0;
@@ -116,6 +129,18 @@ add_hook('AcceptOrder', 1, function ($vars) {
             'instagram'         => 'instagram',
             'x'                 => 'x (twitter)',
             'youtube'           => 'youtube',
+            // Site body / SEO / integrations (from the website order, pid 40).
+            // Each fragment is chosen to hit exactly one client field.
+            'tagline'                => 'tagline',
+            'site-description'       => 'site description',
+            'site-short-description' => 'short description',
+            'seo-keywords'           => 'keyword',
+            'brand-color'            => 'brand color',
+            'founding-year'          => 'year founded',
+            'alternate-names'        => 'also known',
+            'zeffy'                  => 'zeffy',
+            'idealist'               => 'idealist',
+            'microsoft-form'         => 'microsoft form',
             'legal-name'        => 'legal organization name',
         ];
 
@@ -166,6 +191,17 @@ add_hook('AcceptOrder', 1, function ($vars) {
                 'social-instagram' => 'instagram',
                 'social-x'         => 'x',
                 'social-youtube'   => 'youtube',
+                // Website order (pid 40) site body / SEO / integrations.
+                'tagline'                => 'tagline',
+                'site-description'       => 'site-description',
+                'site-short-description' => 'site-short-description',
+                'seo-keywords'           => 'seo-keywords',
+                'brand-color'            => 'brand-color',
+                'founding-year'          => 'founding-year',
+                'alternate-names'        => 'alternate-names',
+                'zeffy-donation-url'     => 'zeffy',
+                'idealist-url'           => 'idealist',
+                'microsoft-form-url'     => 'microsoft-form',
             ];
             if ($slug !== '' && isset($slugMap[$slug])) {
                 return $slugMap[$slug];
@@ -225,7 +261,7 @@ add_hook('AcceptOrder', 1, function ($vars) {
         // The onboarding services provisioned by this order.
         $services = Capsule::table('tblhosting')
             ->where('orderid', $orderId)
-            ->whereIn('packageid', $ONBOARDING_PIDS)
+            ->whereIn('packageid', $COPY_SOURCE_PIDS)
             ->get();
 
         foreach ($services as $service) {

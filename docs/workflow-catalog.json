@@ -980,7 +980,7 @@
     },
     {
       "number": 227,
-      "title": "cPanel - Deploy WHMCS Hooks (UAPI via APIM)",
+      "title": "cPanel - Deploy WHMCS Hooks (FTPS/lftp)",
       "apis": [
         "cPanel"
       ],
@@ -991,7 +991,7 @@
       "environments": [
         "whmcs-prod"
       ],
-      "description": "Deploys the version-controlled WHMCS hooks in whmcs/hooks/*.php to the production WHMCS host, replacing the manual-FTPS runbook. Writes go through the cPanel UAPI proxied by APIM (apim-ffc-gateway-prod), whose static egress IP (20.231.116.111) is allowlisted on the IP-restricted cPanel host \u2014 so a dynamic GitHub runner IP is never blocked.  Backend:  https://webhosting1900.is.cc:2083 (cPanel UAPI)  via  /cpanel/execute/{module}/{function} Auth:     Ocp-Apim-Subscription-Key (cPanel-ops) + Authorization: cpanel <user>:<api-token> Target:   public_html/hub/includes/hooks/<file>.php  mode=verify (default) is READ-ONLY: it reads the deployed file back and reports whether it matches the repo. mode=deploy writes each file, then reads it back and fails on any mismatch.  CONFIRM BEFORE FIRST DEPLOY (flagged, sensible defaults): 1. apim-subscription-secret-name \u2014 defaults to read-all-ffc-apim-gateway-subscription-key; confirm that is the \"cPanel ops (CI)\" subscription key (or add a dedicated *-ffc-apim-cpanel-subscription-key and pass it). 2. target_dir \u2014 defaults to public_html/hub/includes/hooks (relative to the cPanel home).",
+      "description": "Deploys the version-controlled WHMCS hooks in whmcs/hooks/*.php to the production cPanel host, replacing the manual-FTPS runbook. It uses the SAME proven transport as the freeforcharity.org website deploy (deploy-cpanel.yml): GH OIDC -> Azure -> Key Vault (kv-ffc-admin-prod-cbm) -> MAIN cPanel FTP creds -> lftp over FTPS (AUTH TLS). The MAIN account is homed at the account root, so it can write into ~/public_html/hub/includes/hooks/. Creds are piped to lftp via stdin (never argv).  Target:   public_html/hub/includes/hooks/<file>.php  (relative to the cPanel home) KV creds: wr-all-cbm-cpanel-ffc-interserver-ftp-{host,port,user,password}  mode=verify (default) is READ-ONLY: it connects (proving auth+connectivity), downloads the deployed hooks, and reports whether each matches the repo (or is not deployed yet). mode=deploy uploads each hook first, then downloads + compares and fails on any mismatch.",
       "safetyLevel": "Writes (verify default)",
       "approvalEnv": "\u2705 whmcs-prod",
       "guard": "mode=verify (read-only) vs deploy; hooks input is basename-validated",

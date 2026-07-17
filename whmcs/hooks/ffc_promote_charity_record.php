@@ -141,6 +141,7 @@ add_hook('AcceptOrder', 1, function ($vars) {
             'zeffy'                  => 'zeffy',
             'idealist'               => 'idealist',
             'microsoft-form'         => 'microsoft form',
+            'template-choice'        => 'template choice',
             'legal-name'        => 'legal organization name',
         ];
 
@@ -202,6 +203,7 @@ add_hook('AcceptOrder', 1, function ($vars) {
                 'zeffy-donation-url'     => 'zeffy',
                 'idealist-url'           => 'idealist',
                 'microsoft-form-url'     => 'microsoft-form',
+                'template-choice'        => 'template-choice',
             ];
             if ($slug !== '' && isset($slugMap[$slug])) {
                 return $slugMap[$slug];

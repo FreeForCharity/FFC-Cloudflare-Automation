@@ -6,11 +6,11 @@ later steps. Mirrors [`whmcs-secrets-from-kv`](../whmcs-secrets-from-kv/).
 
 Exports (all masked, via `GITHUB_ENV`):
 
-| Env var | KV secret (`{scope}` = `read-all` / `wr-all`) |
-| --- | --- |
-| `CPANEL_API_USER` | `{scope}-cbm-cpanel-ffc-interserver-user` |
-| `CPANEL_API_TOKEN` | `{scope}-cbm-cpanel-ffc-interserver-api-token` |
-| `CPANEL_SERVER` | `{scope}-cbm-cpanel-ffc-interserver-server` (e.g. `webhosting1900.is.cc`) |
+| Env var                        | KV secret (`{scope}` = `read-all` / `wr-all`)                                                |
+| ------------------------------ | -------------------------------------------------------------------------------------------- |
+| `CPANEL_API_USER`              | `{scope}-cbm-cpanel-ffc-interserver-user`                                                    |
+| `CPANEL_API_TOKEN`             | `{scope}-cbm-cpanel-ffc-interserver-api-token`                                               |
+| `CPANEL_SERVER`                | `{scope}-cbm-cpanel-ffc-interserver-server` (e.g. `webhosting1900.is.cc`)                    |
 | `CPANEL_APIM_SUBSCRIPTION_KEY` | `apim-subscription-secret-name` input (default `read-all-ffc-apim-gateway-subscription-key`) |
 
 ## Why via APIM

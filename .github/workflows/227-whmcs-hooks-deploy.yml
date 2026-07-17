@@ -1,5 +1,5 @@
-name: '227. WHMCS - Deploy Hooks (cPanel UAPI via APIM) [WHMCS]'
-run-name: 'WHMCS Deploy Hooks (${{ inputs.mode }})'
+name: '227. cPanel - Deploy WHMCS Hooks (UAPI via APIM) [cPanel]'
+run-name: 'cPanel Deploy WHMCS Hooks (${{ inputs.mode }})'
 
 # Deploys the version-controlled WHMCS hooks in whmcs/hooks/*.php to the production
 # WHMCS host, replacing the manual-FTPS runbook. Writes go through the cPanel UAPI
@@ -24,7 +24,8 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'verify = read-only (deployed vs repo); deploy = write the hook files to production'
+        description:
+          'verify = read-only (deployed vs repo); deploy = write the hook files to production'
         required: false
         type: choice
         options:
@@ -32,7 +33,7 @@ on:
           - deploy
         default: verify
       hooks:
-        description: "Comma-separated hook filenames (blank = all whmcs/hooks/*.php)."
+        description: 'Comma-separated hook filenames (blank = all whmcs/hooks/*.php).'
         required: false
         type: string
         default: ''
@@ -101,18 +102,51 @@ jobs:
             'Authorization'             = "cpanel $($env:CPANEL_API_USER):$($env:CPANEL_API_TOKEN)"
           }
 
-          # Select files.
-          if ([string]::IsNullOrWhiteSpace($env:HOOKS)) {
-            $files = Get-ChildItem -Path 'whmcs/hooks/*.php'
-          } else {
-            $files = $env:HOOKS.Split(',') | ForEach-Object {
-              $n = $_.Trim()
-              $p = Join-Path 'whmcs/hooks' $n
-              if (-not (Test-Path -LiteralPath $p)) { throw "requested hook '$n' not found at $p" }
-              Get-Item -LiteralPath $p
+          # --- Harden the hook selection (path-traversal defense) ---------------
+          # Every requested entry MUST be a bare *.php basename (no '/', '\', '..')
+          # and MUST resolve to an existing file DIRECTLY under whmcs/hooks/. The
+          # validated basename is the ONLY value used for the remote `file` param.
+          # This runs BEFORE any network call so a bad name never reaches cPanel.
+          $hooksRoot = (Resolve-Path -LiteralPath 'whmcs/hooks').ProviderPath
+
+          function Resolve-HookFile {
+            param([string]$Requested)
+            $name = ([string]$Requested).Trim()
+            if ($name -notmatch '^[A-Za-z0-9._-]+\.php$') {
+              Write-Host "::error::invalid hook name '$Requested' — must be a bare *.php basename (no path separators or '..')"
+              return $null
             }
+            $full = Join-Path $hooksRoot $name
+            if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+              Write-Host "::error::requested hook '$name' not found directly under whmcs/hooks/"
+              return $null
+            }
+            # Defense-in-depth: the resolved path's parent must be exactly the hooks root.
+            $resolved = (Resolve-Path -LiteralPath $full).ProviderPath
+            if ((Split-Path -Parent $resolved) -ne $hooksRoot) {
+              Write-Host "::error::hook '$name' resolves outside whmcs/hooks/ ($resolved)"
+              return $null
+            }
+            return $resolved
           }
-          if (-not $files) { throw 'no hook files selected' }
+
+          # Same validation whether HOOKS is blank (glob) or an explicit list.
+          if ([string]::IsNullOrWhiteSpace($env:HOOKS)) {
+            $requested = (Get-ChildItem -Path (Join-Path $hooksRoot '*.php') -File).Name
+          } else {
+            $requested = $env:HOOKS.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
+          }
+          if (-not $requested) { Write-Host '::error::no hook files selected'; exit 1 }
+
+          $files = @()
+          $invalid = 0
+          foreach ($r in $requested) {
+            $resolved = Resolve-HookFile $r
+            if ($null -eq $resolved) { $invalid++; continue }
+            $files += [pscustomobject]@{ Name = (Split-Path -Leaf $resolved); FullName = $resolved }
+          }
+          if ($invalid -gt 0) { exit 1 }
+          if (-not $files) { Write-Host '::error::no valid hook files selected'; exit 1 }
 
           # Normalize to LF and strip a single trailing newline for a stable byte compare
           # (cPanel round-trips content verbatim; this only avoids EOL/CRLF false mismatches).

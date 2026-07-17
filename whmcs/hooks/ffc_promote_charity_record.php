@@ -11,11 +11,22 @@
  *   onboarding order is ACCEPTED (approved), it copies the answers the charity
  *   gave on the onboarding product form into the matching client custom fields,
  *   so the charity never re-enters them and the footer-config bridge can read
- *   the whole footer dataset from one GetClientsDetails call.
+ *   the whole footer dataset from the client's custom fields. (The bridge reader
+ *   — ffcadmin PR #628 — reads WHMCS custom fields via GetClientsProducts, NOT a
+ *   single GetClientsDetails call, because GetClientsDetails returns client
+ *   custom fields without their names.)
  *
  *       pid 16  = Pre-501(c)(3) Charity Onboarding   (footer/identity data)
  *       pid 33  = 501(c)(3) Charity Onboarding       (footer/identity data)
- *       pid 40  = Charity Website                    (site body / SEO / integrations)
+ *       pid 40  = the charity website product whose accepted order carries the
+ *                 site body / SEO / integration answers (referred to as "Hosted
+ *                 by GitHub Pages" in docs/whmcs-product-catalog.md)
+ *
+ *   NOTE: the catalog is internally inconsistent about pid 40 — the prose in
+ *   docs/whmcs-product-catalog.md and config/whmcs-catalog-products.json call it
+ *   "Hosted by GitHub Pages", while a JSON snippet in that same doc lists it with
+ *   pid: null. Reconciling that mapping is out of scope for this PR; this hook
+ *   copies from whichever product carries the website answers on pid 40.
  *
  *   The order is the charity's CERTIFIED submission and the human-review gate:
  *   an admin reviews the answers before accepting the order. Acceptance is the
@@ -102,7 +113,9 @@ if (!defined('WHMCS')) {
 add_hook('AcceptOrder', 1, function ($vars) {
     // Product ids whose accepted-order answers feed the client CRM record.
     // Onboarding (16 pre-501c3, 33 full-501c3) carries footer/identity data;
-    // the website order (40) carries site body / SEO / integration data.
+    // pid 40 is the charity website product (site body / SEO / integrations;
+    // "Hosted by GitHub Pages" in docs/whmcs-product-catalog.md — whose pid-40
+    // mapping is inconsistent and out of scope for this PR).
     $COPY_SOURCE_PIDS = [16, 33, 40];
 
     try {
@@ -154,13 +167,43 @@ add_hook('AcceptOrder', 1, function ($vars) {
             }
             $id = null;
             try {
-                $row = Capsule::table('tblcustomfields')
+                // An exact (case-insensitive) fieldname match wins outright.
+                $exact = Capsule::table('tblcustomfields')
                     ->where('type', 'client')
-                    ->whereRaw('LOWER(fieldname) LIKE ?', ['%' . $key . '%'])
+                    ->whereRaw('LOWER(fieldname) = ?', [$key])
                     ->orderBy('id')
                     ->first();
-                if ($row !== null && isset($row->id)) {
-                    $id = (int) $row->id;
+                if ($exact !== null && isset($exact->id)) {
+                    $id = (int) $exact->id;
+                } else {
+                    // Otherwise fall back to LIKE, but require EXACTLY ONE match.
+                    // If the fragment is ambiguous (matches >1 client field) we
+                    // skip it and log — a missing pre-fill is safe, writing into
+                    // the wrong field is not.
+                    $matches = Capsule::table('tblcustomfields')
+                        ->where('type', 'client')
+                        ->whereRaw('LOWER(fieldname) LIKE ?', ['%' . $key . '%'])
+                        ->orderBy('id')
+                        ->get();
+                    $firstId = null;
+                    $matchCount = 0;
+                    foreach ($matches as $m) {
+                        if (isset($m->id)) {
+                            if ($matchCount === 0) {
+                                $firstId = (int) $m->id;
+                            }
+                            $matchCount++;
+                        }
+                    }
+                    if ($matchCount === 1) {
+                        $id = $firstId;
+                    } elseif ($matchCount > 1) {
+                        error_log(
+                            'ffc_promote_charity_record: ambiguous client field fragment "'
+                            . $key . '" matched ' . $matchCount
+                            . ' fields; skipping to avoid writing the wrong field.'
+                        );
+                    }
                 }
             } catch (\Throwable $e) {
                 $id = null;
@@ -220,6 +263,13 @@ add_hook('AcceptOrder', 1, function ($vars) {
                 return 'mission';
             }
             if (strpos($lower, 'guidestar') !== false || strpos($lower, 'candid') !== false) {
+                // pid 33 has TWO legacy GuideStar fields: "Public GuideStar
+                // Profile Link" (the Candid profile URL) and "GuideStar 'Full
+                // Profile' Link" (the direct / shared link). Disambiguate so the
+                // full-profile link lands in guidestar-direct, not the profile URL.
+                if (strpos($lower, 'full profile') !== false) {
+                    return 'guidestar-direct';
+                }
                 return 'guidestar-profile';
             }
             if (strpos($lower, 'charity facebook') !== false) {
@@ -285,29 +335,42 @@ add_hook('AcceptOrder', 1, function ($vars) {
                 // ignore — pre-fill only
             }
 
-            // Product field definitions for this pid (id → fieldname).
+            // Product field definitions for this pid (id → fieldname). Build a
+            // fieldid → canonical-key map for the allowlisted fields only.
             $prodFields = Capsule::table('tblcustomfields')
                 ->where('type', 'product')
                 ->where('relid', $pid)
                 ->get();
 
+            $keyByFieldId = [];
             foreach ($prodFields as $pf) {
                 $key = $canonicalKey($pf->fieldname);
                 if ($key === null || !isset($clientFieldLike[$key])) {
                     continue; // Not an allowlisted field.
                 }
+                $keyByFieldId[(int) $pf->id] = $key;
+            }
+            if (empty($keyByFieldId)) {
+                continue;
+            }
 
-                // The submitted value for this product field on this service.
-                $valRow = Capsule::table('tblcustomfieldsvalues')
-                    ->where('fieldid', (int) $pf->id)
-                    ->where('relid', $serviceId)
-                    ->first();
-                if ($valRow === null) {
-                    continue;
+            // Fetch ALL submitted values for this service in ONE query (avoids an
+            // N+1 pattern during AcceptOrder), then look them up in memory.
+            $valueByFieldId = [];
+            $valueRows = Capsule::table('tblcustomfieldsvalues')
+                ->where('relid', $serviceId)
+                ->whereIn('fieldid', array_keys($keyByFieldId))
+                ->get();
+            foreach ($valueRows as $vr) {
+                $valueByFieldId[(int) $vr->fieldid] = $vr->value;
+            }
+
+            foreach ($keyByFieldId as $fieldId => $key) {
+                if (!array_key_exists($fieldId, $valueByFieldId)) {
+                    continue; // No submitted value for this field.
                 }
-
                 $clientFieldId = $resolveClientFieldId($clientFieldLike[$key]);
-                $copyIfEmpty($clientFieldId, $clientId, $valRow->value);
+                $copyIfEmpty($clientFieldId, $clientId, $valueByFieldId[$fieldId]);
             }
         }
     } catch (\Throwable $e) {

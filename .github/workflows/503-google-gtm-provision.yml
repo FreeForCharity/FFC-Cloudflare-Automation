@@ -37,6 +37,10 @@ on:
         description: 'Charity POC email to delegate container Edit/Publish (optional)'
         required: false
         type: string
+      issue_number:
+        description: 'Optional: issue number to comment the result back to'
+        required: false
+        type: string
       dry_run:
         description: 'Preview only (no create/publish)'
         required: false
@@ -46,13 +50,21 @@ on:
 permissions:
   contents: read
   id-token: write
+  issues: write
+
+# Serialize per-domain so a re-dispatch for the same site queues behind the first
+# instead of racing it, while different domains provision in parallel (a fleet
+# batch into one shared group would supersede each other and mass-cancel).
+concurrency:
+  group: 503-google-gtm-provision-${{ inputs.domain }}
+  cancel-in-progress: false
 
 jobs:
   provision:
     runs-on: windows-latest
     environment: google-prod-write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate required Azure secrets
         shell: bash
@@ -95,5 +107,38 @@ jobs:
           if ($env:META_PIXEL_ID) { $args += @('-MetaPixelId', $env:META_PIXEL_ID) }
           if ($env:GRANTEE_EMAIL) { $args += @('-GranteeEmail', $env:GRANTEE_EMAIL) }
           if ($env:DRY_RUN -ne 'false') { $args += '-DryRun' }
-          & pwsh -NoProfile -File scripts/google-gtm-provision.ps1 @args
+          $out = & pwsh -NoProfile -File scripts/google-gtm-provision.ps1 @args
+          $exit = $LASTEXITCODE
           Remove-Item $keyFile -Force -ErrorAction SilentlyContinue
+          $text = ($out | Out-String).TrimEnd()
+          Write-Host $text
+          New-Item -ItemType Directory -Force -Path artifacts/google | Out-Null
+          $text | Out-File -FilePath artifacts/google/gtm-provision-result.txt -Encoding utf8
+          if ($exit -ne 0) { throw "GTM provisioning failed (exit $exit)." }
+          $fence = [string][char]0x60 * 3
+          @("## GTM provision - $($env:DOMAIN)", '', $fence, $text, $fence) |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Comment result back to issue
+        if: inputs.issue_number != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          DOMAIN: ${{ inputs.domain }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $text = Get-Content -Raw artifacts/google/gtm-provision-result.txt
+          $fence = [string][char]0x60 * 3
+          $lines = @(
+            "## GTM provision - $($env:DOMAIN) (dry_run=$($env:DRY_RUN))",
+            '',
+            "Run: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)",
+            '',
+            $fence, $text.TrimEnd(), $fence
+          )
+          $bodyFile = Join-Path $env:RUNNER_TEMP 'gtm-provision-comment.md'
+          $lines | Out-File -FilePath $bodyFile -Encoding utf8
+          gh issue comment $env:ISSUE_NUMBER --repo $env:GITHUB_REPOSITORY --body-file $bodyFile
+          if ($LASTEXITCODE -ne 0) { throw "Failed to comment on issue $($env:ISSUE_NUMBER) (exit $LASTEXITCODE)." }

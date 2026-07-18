@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Validate required secrets
         shell: bash
@@ -65,7 +65,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC. Workflow is
       # read-only (audit + preflight), so scope: read loads READ_ALL tokens.

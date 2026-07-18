@@ -1,0 +1,64 @@
+name: '731. Repo - Actions Run Metrics (30d per-workflow stats) [GH]'
+run-name: 'Actions run metrics'
+
+# Aggregates the last 30 days of Actions runs into per-workflow stats (runs, success rate,
+# avg duration) as a JSON artifact — feeds the ffcadmin automation-metrics dashboard.
+# Read-only against the GitHub API using the ambient GITHUB_TOKEN; no environment gate.
+
+on:
+  schedule:
+    - cron: '43 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate run stats
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const since = new Date(Date.now() - 30 * 24 * 3600e3).toISOString();
+            const per = new Map();
+            let page = 1, fetched = 0;
+            for (;;) {
+              const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner, repo: context.repo.repo,
+                created: `>=${since}`, per_page: 100, page,
+              });
+              for (const r of data.workflow_runs) {
+                const k = r.name || r.path;
+                if (!per.has(k)) per.set(k, { runs: 0, success: 0, failure: 0, cancelled: 0, totalSec: 0 });
+                const s = per.get(k);
+                s.runs++;
+                if (r.conclusion === 'success') s.success++;
+                else if (r.conclusion === 'failure') s.failure++;
+                else if (r.conclusion === 'cancelled') s.cancelled++;
+                if (r.run_started_at && r.updated_at)
+                  s.totalSec += Math.max(0, (new Date(r.updated_at) - new Date(r.run_started_at)) / 1000);
+              }
+              fetched += data.workflow_runs.length;
+              if (data.workflow_runs.length < 100 || fetched >= 2000) break;
+              page++;
+            }
+            const workflows = [...per.entries()].map(([name, s]) => ({
+              name, runs: s.runs,
+              successRate: s.runs ? +(s.success / s.runs).toFixed(3) : null,
+              failures: s.failure, cancelled: s.cancelled,
+              avgDurationSec: s.runs ? Math.round(s.totalSec / s.runs) : null,
+            })).sort((a, b) => b.runs - a.runs);
+            const out = { generatedAt: new Date().toISOString(), windowDays: 30, totalRuns: fetched, workflows };
+            require('fs').writeFileSync('actions-run-metrics.json', JSON.stringify(out, null, 2));
+            core.summary.addHeading('Actions run metrics (30d)')
+              .addRaw(`Total runs: ${fetched}; workflows: ${workflows.length}`).write();
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: actions-run-metrics
+          path: actions-run-metrics.json
+          retention-days: 90
+          if-no-files-found: error

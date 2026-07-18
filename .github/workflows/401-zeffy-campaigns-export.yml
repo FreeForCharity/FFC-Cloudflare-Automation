@@ -19,7 +19,7 @@ jobs:
     environment: zeffy-prod
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Zeffy organization API key from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/zeffy-secrets-from-kv

@@ -3,7 +3,8 @@ run-name: 'Google Analytics Report'
 
 # Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers
 # it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe:
-# aggregate metrics only. Requires the google-prod-read environment + the Wave 0 foundation.
+# aggregate metrics only. Requires the google-prod-read environment (report) and the approval-gated
+# github-prod environment (delivery, CBM_TOKEN) + the Wave 0 foundation.
 
 on:
   schedule:
@@ -21,11 +22,20 @@ permissions:
   id-token: write
 
 jobs:
+  # Fail-closed connectivity gate: prove OIDC -> KV -> GA4 before generating any report.
+  smoke:
+    uses: ./.github/workflows/501-google-api-smoke.yml
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
+
   report:
+    needs: smoke
     runs-on: windows-latest
     environment: google-prod-read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate required Azure secrets
         shell: bash
@@ -43,6 +53,22 @@ jobs:
           azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
 
+      - name: Seed time-series history from ffcadmin (public repo, no auth)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'ga-out'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          foreach ($site in @('freeforcharity.org', 'ffcadmin.org')) {
+            $url = "https://raw.githubusercontent.com/FreeForCharity/FFC-IN-ffcadmin.org/main/public/data/google-analytics/$site.timeseries.json"
+            try {
+              Invoke-WebRequest -Uri $url -OutFile (Join-Path $out "$site.timeseries.json") -ErrorAction Stop
+              Write-Host "Seeded history for $site"
+            } catch {
+              Write-Host "No existing history for $site (first run) - starting fresh"
+            }
+          }
+
       - name: Generate GA reports (both primary sites)
         shell: pwsh
         env:
@@ -55,9 +81,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           $days = [int]$env:DAYS
           if (-not $env:FFC_PROP) { throw 'vars.GA_PROPERTY_ID_PRIMARY is not set.' }
-          & pwsh -NoProfile -File scripts/google-analytics-report.ps1 -SiteLabel 'freeforcharity.org' -PropertyId $env:FFC_PROP -Days $days -OutPath (Join-Path $out 'freeforcharity.org.json')
+          & pwsh -NoProfile -File scripts/google-analytics-report.ps1 -SiteLabel 'freeforcharity.org' -PropertyId $env:FFC_PROP -Days $days -Hostname 'freeforcharity.org' -OutPath (Join-Path $out 'freeforcharity.org.json')
           if ($env:ADMIN_PROP) {
-            & pwsh -NoProfile -File scripts/google-analytics-report.ps1 -SiteLabel 'ffcadmin.org' -PropertyId $env:ADMIN_PROP -Days $days -OutPath (Join-Path $out 'ffcadmin.org.json')
+            & pwsh -NoProfile -File scripts/google-analytics-report.ps1 -SiteLabel 'ffcadmin.org' -PropertyId $env:ADMIN_PROP -Days $days -Hostname 'ffcadmin.org' -OutPath (Join-Path $out 'ffcadmin.org.json')
           } else {
             Write-Host '::warning::vars.GA_PROPERTY_ID_FFCADMIN not set; skipping ffcadmin.org'
           }
@@ -71,14 +97,20 @@ jobs:
   deliver:
     needs: report
     runs-on: ubuntu-latest
+    environment: github-prod
     steps:
+      # Checkout gives the deliver job the current workflow catalog so the public
+      # copies on ffcadmin (src/data render + /data stable URL) refresh in the
+      # same daily PR as the GA data — one reviewable sync pipe (backlog #554).
+      - uses: actions/checkout@v7
+
       - name: Download reports
         uses: actions/download-artifact@v7
         with:
           name: ga-reports
           path: ga-out
 
-      - name: Open/update PR into FFC-IN-ffcadmin.org
+      - name: Open/update daily data-sync PR into FFC-IN-ffcadmin.org
         env:
           GH_TOKEN: ${{ secrets.CBM_TOKEN }}
         run: |
@@ -87,15 +119,27 @@ jobs:
           git config --global user.email 'automation@freeforcharity.org'
           git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/FreeForCharity/FFC-IN-ffcadmin.org.git" target
           cd target
-          git checkout -B chore/ga-data-sync
-          mkdir -p public/data/google-analytics
+          # True idempotency: base on the existing sync branch when it exists, so a re-run
+          # with identical content produces no new commit and no PR churn.
+          if git fetch origin chore/ga-data-sync --depth 1 2>/dev/null; then
+            git checkout -B chore/ga-data-sync origin/chore/ga-data-sync
+          else
+            git checkout -B chore/ga-data-sync
+          fi
+          mkdir -p public/data/google-analytics src/data public/data
           cp ../ga-out/*.json public/data/google-analytics/
-          git add public/data/google-analytics
-          if git diff --cached --quiet; then echo 'No GA data changes; skipping PR.'; exit 0; fi
-          git commit -m "chore(analytics): refresh GA data ($(date -u +%F))"
-          git push -f origin chore/ga-data-sync
+          cp ../docs/workflow-catalog.json src/data/workflow-catalog.json
+          cp ../docs/workflow-catalog.json public/data/workflow-catalog.json
+          git add public/data src/data/workflow-catalog.json
+          if git diff --cached --quiet; then echo 'No data changes vs the sync branch; skipping.'; exit 0; fi
+          git commit -m "chore(data): daily sync — GA metrics + time-series + workflow catalog ($(date -u +%F))"
+          git push origin chore/ga-data-sync
           if ! gh pr view chore/ga-data-sync --repo FreeForCharity/FFC-IN-ffcadmin.org >/dev/null 2>&1; then
             gh pr create --repo FreeForCharity/FFC-IN-ffcadmin.org --base main --head chore/ga-data-sync \
-              --title 'chore(analytics): refresh GA data' \
-              --body 'Automated GA4 aggregate metrics for freeforcharity.org + ffcadmin.org (source: 49. Google - Analytics Report). PII-safe aggregates only.'
+              --title 'chore(data): daily data sync (GA + workflow catalog)' \
+              --body 'Automated daily sync from FFC-Cloudflare-Automation (502): GA4 aggregate metrics + time-series for the primary sites, and the generated workflow catalog for /automation + the stable /data URL. PII-safe aggregates only.'
           fi
+          # Best-effort auto-merge so the daily PR lands once ffcadmin checks pass
+          # (no-op when auto-merge is unavailable on the repo).
+          gh pr merge chore/ga-data-sync --repo FreeForCharity/FFC-IN-ffcadmin.org --merge --auto \
+            || echo 'auto-merge unavailable; PR awaits manual merge'

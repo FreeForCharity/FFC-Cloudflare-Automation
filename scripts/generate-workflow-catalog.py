@@ -148,9 +148,35 @@ def render_markdown(cat):
     return "\n".join(out)
 
 
+def validate_decision_guide(cat):
+    """Every workflow number referenced by config/workflow-decision-guide.json must exist."""
+    path = "config/workflow-decision-guide.json"
+    try:
+        guide = json.load(open(path, encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    known = {w["number"] for w in cat["workflows"]}
+    errors = []
+    for intent in guide.get("intents", []):
+        refs = list(intent.get("workflows", []))
+        if intent.get("safeFirst"):
+            refs.append(intent["safeFirst"])
+        for n in refs:
+            if n not in known:
+                errors.append(f"{path}: intent '{intent['intent']}' references unknown workflow {n}")
+    return errors
+
+
 def main():
     check = "--check" in sys.argv
     cat = build()
+
+    guide_errors = validate_decision_guide(cat)
+    if guide_errors:
+        print("Decision-guide validation FAILED:")
+        for e in guide_errors:
+            print("  -", e)
+        return 1
     js = json.dumps(cat, indent=2) + "\n"
     md = render_markdown(cat)
 

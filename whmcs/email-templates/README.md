@@ -1,0 +1,92 @@
+# WHMCS Email Templates (Onboarding Journey)
+
+HTML bodies of the custom FFC onboarding/welcome emails. WHMCS stores these in its **database**
+(admin area, Setup → Email Templates), so this folder is a version-controlled mirror: edit here,
+review via PR, then apply in the admin per
+[`../docs/apply-email-templates.md`](../docs/apply-email-templates.md).
+
+## Discount code — read this first
+
+These templates contain/reference the **live FFC discount code** that charities use to bring their
+domain order to $0. Per operator decision (2026-07-12), the code appearing in this public **repo**
+is explicitly accepted — the hard rule is that it must **never appear on a public website**. The
+code lives in **emails only**.
+
+- Do **not** copy these files, or excerpts of them, into any website repo, GitHub Pages content, or
+  public page.
+- The FFC websites' banned-phrase guards do **not** cover the code itself, so no automation will
+  catch a leak — this warning is the control.
+
+**No committed template actually contains the code.** The `_new` acceptance templates
+(`tmpl_115_new` / `tmpl_116_new`) reference "the discount code from this email" and carry an
+explicit `{DISCOUNT_CODE — ...}` placeholder line instead — when applying them in the admin, the
+code line must be copied over from the **current live** template (or delivered by WHMCS promotion
+settings) per [`../docs/apply-email-templates.md`](../docs/apply-email-templates.md). **If the live
+template has no code and no promotion mechanism supplies one, that is a production bug to escalate**
+— the public onboarding journey promises the code arrives in this email.
+
+## `_new` files: corrected gated-journey versions (PENDING)
+
+Files ending in `_new` are the **gated-journey-corrected** versions produced for
+[#678](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/678). They reorder the
+journey to be website-first (site validated on its GitHub Pages address **before** the domain order)
+and are **PENDING application in the WHMCS admin** — production still sends the old versions until
+each `_new` body is pasted in per
+[`../docs/apply-email-templates.md`](../docs/apply-email-templates.md).
+
+| Current (live)                 | Corrected (pending)                |
+| ------------------------------ | ---------------------------------- |
+| `tmpl_115.html`                | `tmpl_115_new.html`                |
+| `tmpl_116.html`                | `tmpl_116_new.html`                |
+| `welcome_A_domain_pid39.html`  | `welcome_A_domain_pid39_new.html`  |
+| `welcome_C_website_pid40.html` | `welcome_C_website_pid40_new.html` |
+| `welcome_B_email_product.html` | (no correction pending)            |
+| `welcome_B1_m365.html`         | (no correction pending)            |
+| `welcome_B2_google.html`       | (no correction pending)            |
+
+## Template ID / product mapping
+
+### Onboarding acceptance emails (sent when an application product activates)
+
+| WHMCS template ID | File                                  | Product                                                   |
+| ----------------- | ------------------------------------- | --------------------------------------------------------- |
+| **115**           | `tmpl_115.html` / `tmpl_115_new.html` | pid **16** — FFC Pre-501c3 Nonprofit / Charity Onboarding |
+| **116**           | `tmpl_116.html` / `tmpl_116_new.html` | pid **33** — FFC 501c3 Nonprofit / Charity Onboarding     |
+
+(Product ids match `config/whmcs-onboarding-products.json` at the repo root.)
+
+### Reconcile / cleanup emails
+
+| WHMCS template ID | File                          | Sent by                                                   |
+| ----------------- | ----------------------------- | --------------------------------------------------------- |
+| **123**           | `123_application_refile.html` | `scripts/whmcs-application-triage.ps1` (`reconcile` mode) |
+
+**Template 123 — "FFC - Application Re-file / Duplicate Cleanup".** Sent to the applicant when the
+Application Triage runner (`reconcile` mode) cancels a duplicate or wrong-track pending onboarding
+order so they can re-submit on the correct form. This body carries a `{$prior_answers}` placeholder:
+the runner **injects** it at send time with a paste-ready `Question: Answer` list built from _that
+application&rsquo;s own submitted onboarding field values_ (blank/placeholder fields skipped), then
+sends the composed HTML via the WHMCS `SendEmail` API as a custom message. `{$prior_answers}` is
+**not** a native WHMCS merge field — only this runner resolves it; every other merge field
+(`{$client_first_name}`, `{$whmcs_link}`, `{$signature}`, …) is left intact for WHMCS. The runner
+prefers the **live** WHMCS template (id 123) fetched via `GetEmailTemplates` and falls back to this
+versioned file when the live template is unavailable. Email is sent **before** the order is
+cancelled — a failed send aborts the cancel, so an order is never cancelled silently.
+
+### Product welcome emails (sent on product/service activation)
+
+| File                                    | Product                                                 |
+| --------------------------------------- | ------------------------------------------------------- |
+| `welcome_A_domain_pid39.html` / `_new`  | pid **39** — free .org domain registration              |
+| `welcome_B_email_product.html`          | generic charity email product (provider not yet chosen) |
+| `welcome_B1_m365.html`                  | Microsoft 365 nonprofit email                           |
+| `welcome_B2_google.html`                | Google Workspace nonprofit email                        |
+| `welcome_C_website_pid40.html` / `_new` | pid **40** — free charity website (GitHub Pages)        |
+
+## Editing notes
+
+- Bodies use WHMCS merge fields (`{$client_first_name}`, `{$whmcs_url}`, `{$signature}`, ...). Keep
+  them intact.
+- Some files carry placeholder tokens (`{TRANSFER_PID}`, `{M365_PID}`, `{GOOGLE_PID}`) where the
+  product id was not final at authoring time — resolve these to real pids when applying in the
+  admin.

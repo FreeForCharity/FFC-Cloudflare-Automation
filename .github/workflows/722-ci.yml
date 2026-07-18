@@ -115,6 +115,18 @@ jobs:
         with:
           node-version: 'lts/*'
 
+      - name: Workflow logic tests (embedded scripts)
+        shell: bash
+        run: |
+          # Unit-tests the logic INSIDE workflows (github-script/bash/pwsh
+          # bodies) against fixtures — the structure checks earlier in this
+          # job can't catch behavior bugs like the PUBLIC/public
+          # visibility-enum regression. Runs after setup-node so the
+          # github-script shim executes on the pinned LTS Node, not whatever
+          # the runner image happens to preinstall.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 tests/workflow-logic/run_all.py
+
       - name: Check formatting (Prettier)
         run: |
           npx --yes prettier@3.8.1 --check . --ignore-unknown

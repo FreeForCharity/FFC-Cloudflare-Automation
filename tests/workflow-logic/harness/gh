@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Fake `gh` CLI for workflow-logic tests. Behavior is driven by TEST_* env
+# vars set per scenario; every invocation is appended to $TEST_GH_LOG so
+# tests can assert on which API calls were (or were not) made.
+#
+# Output strings simulate what the real `gh ... --jq` pipelines would print,
+# so the workflow logic downstream of gh is exercised unchanged.
+
+if [ -n "${TEST_GH_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$TEST_GH_LOG"
+fi
+
+cmd="$1"
+shift || true
+args="$*"
+
+case "$cmd" in
+  api)
+    case "$args" in
+      *orgs/*/rulesets*)
+        echo "${TEST_ORG_RULESETS:-1}"
+        ;;
+      *rules/branches/*)
+        echo "${TEST_HAS_MQ:-0}"
+        ;;
+      */teams*)
+        if [ "${TEST_TEAMS_FAIL:-}" = "1" ]; then
+          echo "simulated API failure" >&2
+          exit 1
+        fi
+        # May be multi-line to simulate --paginate emitting one line per page.
+        printf '%s\n' "${TEST_TEAMS_OUTPUT:-}"
+        ;;
+      *repos/*)
+        # settings: squash|auto|del|upd
+        echo "${TEST_REPO_SETTINGS:-false|true|true|true}"
+        ;;
+      *)
+        exit 0
+        ;;
+    esac
+    ;;
+  repo)
+    # gh repo list ... --jq → "name<TAB>visibility<TAB>defaultBranch" rows
+    printf '%s\n' "${TEST_REPO_LIST:-}"
+    ;;
+  *)
+    exit 0
+    ;;
+esac

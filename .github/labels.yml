@@ -90,3 +90,7 @@
 - name: 'whmcs:break-fix'
   description: Charity site incident; opens a high-priority WHMCS ticket
   color: 'b60205'
+
+- name: 'whmcs:triage'
+  description: Rolling WHMCS triage tracking issue (open tickets / pending orders)
+  color: 'fbca04'

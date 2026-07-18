@@ -49,8 +49,8 @@ WHOIS.
 (`examples/whmcs/onboard-501c3.example.json`) and runs AddClient → AddContact (one per roster
 person, with notification routing / sub-account logins) → AddOrder. The `product` key resolves to a
 `pid` via `config/whmcs-onboarding-products.json`. Always run with `-DryRun` first; it previews
-every call without writing. The dispatch workflow **"34. WHMCS - Charity Onboard"** runs it (dry-run
-by default).
+every call without writing. The dispatch workflow **"204. WHMCS - Charity Onboard"** runs it
+(dry-run by default).
 
 ### Onboarding products (enumerated)
 
@@ -92,7 +92,7 @@ keeps its original shape: client `{…, request}`, contacts `[{contactid, email}
 
 ## Enumerating the product catalog
 
-Run **"WHMCS - Export Products (Report)"** (`8-whmcs-export-products.yml`). The script prints a
+Run **"WHMCS - Export Products (Report)"** (`202-whmcs-export-products.yml`). The script prints a
 readable catalog (pid / gid / type / module / billing / name and the discovered custom fields per
 product) to the job log, and uploads CSVs as an artifact. Use this to identify the onboarding
 products (e.g. pre-501(c)(3) vs. existing 501(c)(3)) and confirm which need updating.

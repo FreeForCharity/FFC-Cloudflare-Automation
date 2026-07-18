@@ -1,0 +1,34 @@
+name: '107. DNS - Audit Compliance (Report) [CF]'
+run-name: 'Check Compliance: ${{ inputs.domain }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain Name (e.g., example.org)'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  audit_zone:
+    runs-on: windows-latest
+    environment: cloudflare-prod-read
+    steps:
+      - uses: actions/checkout@v7
+
+      # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Run DNS Compliance Audit
+        shell: pwsh
+        run: |
+          $Domain = "${{ inputs.domain }}"
+          .\Update-CloudflareDns.ps1 -Zone $Domain -Audit

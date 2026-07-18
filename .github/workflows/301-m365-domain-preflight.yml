@@ -1,0 +1,91 @@
+name: '301. M365 - Domain Preflight (Read-only) [M365+CF]'
+
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: Domain to validate (e.g., example.org)
+        required: true
+        type: string
+
+jobs:
+  graph:
+    runs-on: ubuntu-latest
+    environment: m365-prod
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.FFC_AZURE_CLIENT_ID }}" ]; then
+            echo "::error::FFC_AZURE_CLIENT_ID secret is not set (environment: m365-prod)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::FFC_AZURE_TENANT_ID secret is not set (environment: m365-prod)";
+            exit 1;
+          fi
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Acquire Graph token
+        id: graph
+        shell: bash
+        run: |
+          token=$(az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+          if [ -z "$token" ]; then
+            echo "::error::Failed to acquire Microsoft Graph token";
+            exit 1;
+          fi
+          echo "access_token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Run domain preflight
+        shell: pwsh
+        env:
+          GRAPH_ACCESS_TOKEN: ${{ steps.graph.outputs.access_token }}
+        run: |
+          pwsh -NoProfile -File scripts/m365-domain-preflight.ps1 -Domain "${{ inputs.domain }}" -AccessToken $env:GRAPH_ACCESS_TOKEN -SkipCloudflare
+
+  cloudflare:
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod-read
+    needs: [graph]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # F1 refactor: CF tokens from Key Vault at runtime via OIDC. Workflow is
+      # read-only (audit + preflight), so scope: read loads READ_ALL tokens.
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Run Cloudflare audit portion
+        shell: pwsh
+        run: |
+          # The composite action populates BOTH CLOUDFLARE_API_TOKEN_FFC and
+          # CLOUDFLARE_API_TOKEN_CM. scripts/m365-domain-preflight.ps1's
+          # Get-CfToken returns null when it finds multiple distinct candidates,
+          # which would silently skip the audit. Pass -CloudflareToken
+          # explicitly (prefer FFC, fall back to CM) to bypass that.
+          $cfToken = if (-not [string]::IsNullOrWhiteSpace($env:CLOUDFLARE_API_TOKEN_FFC)) {
+            $env:CLOUDFLARE_API_TOKEN_FFC
+          } else {
+            $env:CLOUDFLARE_API_TOKEN_CM
+          }
+          pwsh -NoProfile -File scripts/m365-domain-preflight.ps1 -Domain "${{ inputs.domain }}" -SkipGraph -CloudflareToken $cfToken

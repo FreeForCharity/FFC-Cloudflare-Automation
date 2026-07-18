@@ -75,9 +75,22 @@ function Invoke-WhmcsApi {
         [hashtable]$Body
     )
 
+    # SECURITY: the WHMCS credential (identifier/secret + APIM subscription key) is attached to
+    # this request, so only allow it to be sent to known WHMCS hosts. A workflow input
+    # (-ApiUrl / WHMCS_API_URL) must never redirect the credential to an arbitrary host.
+    $allowedHosts = @('apim-ffc-gateway-prod.azure-api.net', 'freeforcharity.org')
+    $parsedUri = $null
+    if (-not [Uri]::TryCreate($ApiUrl, [UriKind]::Absolute, [ref]$parsedUri) -or $parsedUri.Scheme -ne 'https' -or $allowedHosts -notcontains $parsedUri.Host) {
+        throw "Refusing to send WHMCS credentials to '$ApiUrl': host is not in the allowlist ($($allowedHosts -join ', '))."
+    }
+
     $headers = @{
         'Accept'     = 'application/json'
         'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    # When WHMCS is reached via APIM (apim-ffc-gateway-prod), its 'whmcs' API requires this key.
+    if (-not [string]::IsNullOrWhiteSpace($env:WHMCS_APIM_SUBSCRIPTION_KEY)) {
+        $headers['Ocp-Apim-Subscription-Key'] = $env:WHMCS_APIM_SUBSCRIPTION_KEY
     }
 
     # The WHMCS host's Imunify360 bot-protection intermittently challenges
@@ -88,8 +101,9 @@ function Invoke-WhmcsApi {
     # errors do not match and still fail fast.
     $transientRe = 'Imunify360|bot-protection|too many requests|temporarily unavailable|timed out|The operation has timed out|\b(429|502|503|504)\b'
     $maxAttempts = 5
-    if ($env:WHMCS_API_MAX_ATTEMPTS -and ([int]::TryParse($env:WHMCS_API_MAX_ATTEMPTS, [ref]([int]$null)))) {
-        $maxAttempts = [int]$env:WHMCS_API_MAX_ATTEMPTS
+    $parsedMax = 0
+    if ([int]::TryParse($env:WHMCS_API_MAX_ATTEMPTS, [ref]$parsedMax) -and $parsedMax -ge 1) {
+        $maxAttempts = $parsedMax
     }
     $attempt = 0
     while ($true) {

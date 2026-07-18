@@ -1,0 +1,79 @@
+name: '119. DNS - Bulk Staging CNAME -> GitHub Pages (FFC-EX) [CF]'
+run-name: 'Bulk staging CNAME -> GH Pages (dry_run=${{ inputs.dry_run }})'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domains:
+        description:
+          'Comma-separated root domains. Leave blank to use the default FFC-EX 13-domain list.'
+        required: false
+        type: string
+        default: ''
+      target:
+        description: 'CNAME target. Defaults to freeforcharity.github.io.'
+        required: false
+        type: string
+        default: 'freeforcharity.github.io'
+      dry_run:
+        description: 'Dry-run (discover only, no changes). Default: true.'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+# Serialize: this writes CNAMEs across many FFC-EX zones; parallel dispatches must not race.
+concurrency:
+  group: bulk-staging-cname-github-pages
+  cancel-in-progress: false
+
+jobs:
+  bulk-staging-cname:
+    runs-on: windows-latest
+    environment: cloudflare-prod-write
+    steps:
+      - uses: actions/checkout@v7
+
+      # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Run bulk staging CNAME wiring
+        shell: pwsh
+        run: |
+          # Default 13-domain FFC-EX staging list. Override via the 'domains' input.
+          $defaultDomains = @(
+            'aprilhansen.com',
+            'armstrongacesbaseball.org',
+            'coronadonationalforestheritagesociety.org',
+            'falloutshelterecovillage.org',
+            'nj4israel.org',
+            'savewatersaveplanet.org',
+            'bucktownbullsbaseball.org',
+            'amargraves.org',
+            'bulldogztowing.com',
+            'browncanyonranch.org',
+            'instituteofforgiveness.org',
+            'americanlegionpost64.org',
+            'southamptonfriends.org'
+          ) -join ','
+
+          $domainsInput = '${{ inputs.domains }}'
+          if ([string]::IsNullOrWhiteSpace($domainsInput)) {
+            $domainsInput = $defaultDomains
+            Write-Host "No 'domains' input provided. Using default 13-domain FFC-EX staging list."
+          }
+
+          $params = @{
+            Domains = $domainsInput
+            Target  = '${{ inputs.target }}'
+          }
+          if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun = $true }
+
+          ./scripts/bulk-staging-cname-github-pages.ps1 @params

@@ -30,11 +30,11 @@ and why transfers are dashboard-only.
 
 ## Components
 
-| Step                 | Workflow                                                     | Script                                  | Side effects                            |
-| -------------------- | ------------------------------------------------------------ | --------------------------------------- | --------------------------------------- |
-| Readiness preflight  | `14. Domain - Transfer Readiness Preflight (Report) [WHMCS]` | `scripts/domain-transfer-preflight.ps1` | None (read-only, offline)               |
-| EPP code probe       | `16. Domain - Transfer EPP/Auth Code Probe (Admin) [WHMCS]`  | `scripts/domain-transfer-epp-probe.ps1` | `execute` mode may email the registrant |
-| Post-transfer verify | `25. Domain - Post-Transfer Verification (Report) [CF]`      | `scripts/domain-transfer-verify.ps1`    | None (read-only)                        |
+| Step                 | Workflow                                                      | Script                                  | Side effects                            |
+| -------------------- | ------------------------------------------------------------- | --------------------------------------- | --------------------------------------- |
+| Readiness preflight  | `115. Domain - Transfer Readiness Preflight (Report) [WHMCS]` | `scripts/domain-transfer-preflight.ps1` | None (read-only, offline)               |
+| EPP code probe       | `116. Domain - Transfer EPP/Auth Code Probe (Admin) [WHMCS]`  | `scripts/domain-transfer-epp-probe.ps1` | `execute` mode may email the registrant |
+| Post-transfer verify | `117. Domain - Post-Transfer Verification (Report) [CF]`      | `scripts/domain-transfer-verify.ps1`    | None (read-only)                        |
 
 ## 1. Readiness preflight
 

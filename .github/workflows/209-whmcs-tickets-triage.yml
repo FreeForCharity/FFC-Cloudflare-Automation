@@ -1,0 +1,142 @@
+name: '209. WHMCS - Tickets Triage (Open/Customer-Reply) [WHMCS]'
+run-name: 'WHMCS Tickets Triage'
+
+# Read-only. Surfaces WHMCS tickets that need attention (default Open +
+# Customer-Reply) into the job summary + a CSV artifact, and can optionally
+# upsert ONE rolling tracking issue. No ticket writes are performed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      statuses:
+        description: 'Comma-separated WHMCS ticket statuses to triage'
+        required: false
+        type: string
+        default: 'Open,Customer-Reply'
+      api_url:
+        description: 'WHMCS API endpoint'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+      open_tracking_issue:
+        description: 'Upsert a rolling GitHub tracking issue with the open tickets'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    # Weekday mid-morning sweep (13:07 UTC). Adjust as needed.
+    - cron: '7 13 * * 1-5'
+
+# Latest run wins: a newer scheduled or dispatched run of this workflow cancels
+# an earlier one that is still queued or waiting at an approval gate, so
+# read-only triage runs never stack up (see #637).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+jobs:
+  tickets_triage:
+    runs-on: windows-latest
+    environment: whmcs-prod-read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Export + summarize tickets (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          GH_TOKEN: ${{ github.token }}
+          STATUSES: ${{ inputs.statuses || 'Open,Customer-Reply' }}
+          OPEN_ISSUE: ${{ inputs.open_tracking_issue }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # On scheduled runs inputs.* are empty; default to the APIM gateway so
+          # the call stays on the static-IP path (not the IP-restricted origin).
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+
+          # Mask an email for PII-safe display in the (public) job summary / issue.
+          function Format-MaskedEmail {
+            param([string]$Email)
+            if ([string]::IsNullOrWhiteSpace($Email)) { return '' }
+            $at = $Email.IndexOf('@')
+            if ($at -lt 1) { return '***' }
+            return '***' + $Email.Substring($at)
+          }
+
+          $statuses = ($env:STATUSES -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          New-Item -ItemType Directory -Force -Path artifacts/whmcs | Out-Null
+
+          $all = [System.Collections.Generic.List[object]]::new()
+          foreach ($s in $statuses) {
+            $safe = ($s -replace '[^A-Za-z0-9]', '_')
+            $out = "artifacts/whmcs/tickets_$safe.csv"
+            & pwsh -NoProfile -File .\scripts\whmcs-tickets-export.ps1 -ApiUrl $env:WHMCS_API_URL -Status $s -OutputFile $out
+            if ($LASTEXITCODE -ne 0) { throw "Tickets export failed for status '$s' (exit $LASTEXITCODE)." }
+            if (Test-Path $out) {
+              foreach ($r in (Import-Csv $out)) { $all.Add($r) }
+            }
+          }
+
+          $count = @($all).Count
+          "## WHMCS tickets triage" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Statuses: $($statuses -join ', ') - **$count** ticket(s) need attention." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          $lines = [System.Collections.Generic.List[string]]::new()
+          if ($count -gt 0) {
+            $lines.Add("| tid | dept | priority | status | subject | requester | last reply |")
+            $lines.Add("| --- | --- | --- | --- | --- | --- | --- |")
+            foreach ($t in $all) {
+              $subj = ([string]$t.subject) -replace '\|', '\\|'
+              $req = Format-MaskedEmail ([string]$t.email)
+              $lines.Add("| $($t.tid) | $($t.deptname) | $($t.priority) | $($t.status) | $subj | $req | $($t.lastreply) |")
+            }
+          } else {
+            $lines.Add("_No tickets in the selected statuses._")
+          }
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          if ($env:OPEN_ISSUE -eq 'true') {
+            $title = 'WHMCS Support: open tickets needing action'
+            $bodyLines = [System.Collections.Generic.List[string]]::new()
+            $bodyLines.Add("Rolling triage of WHMCS tickets in: $($statuses -join ', ').")
+            $bodyLines.Add("")
+            $bodyLines.Add("Last run: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)")
+            $bodyLines.Add("")
+            foreach ($l in $lines) { $bodyLines.Add($l) }
+            $bodyFile = Join-Path $env:RUNNER_TEMP 'triage-issue.md'
+            $bodyLines | Out-File -FilePath $bodyFile -Encoding utf8
+
+            $existing = gh issue list --state open --label 'whmcs:triage' --search $title --json number,title |
+              ConvertFrom-Json | Where-Object { $_.title -eq $title } | Select-Object -First 1 -ExpandProperty number
+            if ([string]::IsNullOrWhiteSpace([string]$existing)) {
+              gh issue create --title $title --label 'whmcs:triage' --body-file $bodyFile
+            } else {
+              gh issue comment $existing --body-file $bodyFile
+            }
+            if ($LASTEXITCODE -ne 0) { throw "Failed to upsert tracking issue (exit $LASTEXITCODE)." }
+          }
+
+      - name: Upload tickets CSV artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: whmcs_tickets_triage
+          path: artifacts/whmcs/tickets_*.csv
+          if-no-files-found: warn

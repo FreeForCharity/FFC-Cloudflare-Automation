@@ -3,9 +3,18 @@
 This repository uses GitHub Actions workflows to ensure code quality, security, and support DNS
 management operations.
 
-To keep the Actions UI list stable and easy to scan, workflows are prefixed with a two-digit number
-(e.g., `01.`). CI validates that every active workflow has a numeric prefix and that prefixes are
-unique.
+To keep the Actions UI list stable and easy to scan, workflows are prefixed with a three-digit
+number whose first digit is the system the workflow targets (e.g., `101.` = Cloudflare, `201.` =
+WHMCS — see the auto-generated catalog below). CI validates that every active workflow has a
+numeric prefix, that prefixes are unique, and that the catalog is regenerated.
+
+**New here?** Start with these two guides:
+
+- [docs/charity-onboarding-lifecycle.md](../../docs/charity-onboarding-lifecycle.md) — the
+  end-to-end order for bringing a charity online (domain → DNS/M365 → website → WHMCS → support).
+- [docs/workflow-safety-and-approvals.md](../../docs/workflow-safety-and-approvals.md) — which
+  workflows write live data, what `dry_run` and the environment approval gates protect, and the
+  credential/PII guarantees.
 
 ## Why some workflows are deprecated
 
@@ -25,101 +34,145 @@ Actions UI and cannot be accidentally run.
 These are the workflows administrators run manually (Actions → Run workflow) to report on or change
 domain configuration.
 
-### 01. Domain - Status (All Sources) [CF+M365]
+### 101. Domain - Status (All Sources) [CF+M365]
 
 - **Why**: quick read-only report across Cloudflare + M365.
 - **When**: use first for any domain request or troubleshooting.
 - **How**: run with `domain`, optionally provide `issue_number` to post results back.
 
-### 02. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS]
+### 102. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS]
 
 - **Why**: common onboarding path (Cloudflare zone + optional WHMCS nameserver update).
 - **When**: when a new domain should be added and pointed to the correct name servers.
 - **How**: run with `domain`; optionally enable WHMCS update.
 
-### 03. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]
+### 103. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]
 
 - **Why**: applies the standard DNS configuration and can enable DKIM (when run LIVE).
 - **When**: after reviewing status output and confirming the change is desired.
 - **How**: run with `domain`; keep `dry_run` enabled until ready to apply changes; optionally set
   `issue_number` to post results back.
 
-### 04. Domain - Export Inventory (All Sources) [CF+M365+WHMCS+WPMUDEV]
+### 104. Domain - Export Inventory (All Sources) [CF+M365+WHMCS+WPMUDEV]
 
 - **Why**: exports domain inventories from Cloudflare, M365, WHMCS, and WPMUDEV and produces a
   combined CSV.
 - **When**: reconciliation, audits, or before/after large onboarding batches.
 
-### 05–09 DNS workflows
+### 105–111 DNS workflows
 
-- **05. DNS - Manage Record (Manual / Issue Label) [CF]**: create/update/delete one record (best for
-  one-off changes).
+- **105. DNS - Manage Record (Manual / Issue Label) [CF]**: create/update/delete one record (best
+  for one-off changes).
   - Also supports an issue-triggered run when the label `run-dns-manage-record` is applied.
-- **06. DNS - Enforce Standard (DNS-only) [CF]**: apply standard DNS configuration (DNS-only).
-- **07. DNS - Audit Compliance (Report) [CF]**: report-only compliance check.
-- **08. DNS - Export Cloudflare Zones (Report) [CF]**: export zone summaries for review/audit.
-- **09. DNS - Create Zone (Admin) [CF]**: create a new Cloudflare zone (explicit account selection).
-- **10. DNS - Create Redirect Rule (Admin) [CF]**: configure a 301/302/307/308 Cloudflare Single
+- **106. DNS - Enforce Standard (DNS-only) [CF]**: apply standard DNS configuration (DNS-only).
+- **107. DNS - Audit Compliance (Report) [CF]**: report-only compliance check.
+- **108. DNS - Export Cloudflare Zones (Report) [CF]**: export zone summaries for review/audit.
+- **110. DNS - Create Zone (Admin) [CF]**: create a new Cloudflare zone (explicit account
+  selection).
+- **111. DNS - Create Redirect Rule (Admin) [CF]**: configure a 301/302/307/308 Cloudflare Single
   Redirect rule on a source zone, pointing at a target domain. Idempotent — re-running updates the
   same rule. Defaults to `dry_run=true`; flip it off to actually apply, which gates on
   `cloudflare-prod-write`.
 
-### 12–16 Registrar + Domain transfer workflows
+### 113–118 Registrar + Domain transfer workflows
 
 These cover buying new domains via Cloudflare Registrar and transferring existing eNOM domains to
 Cloudflare Registrar (project #157). See
 [docs/domain-transfer-automation.md](../../docs/domain-transfer-automation.md).
 
-- **12. Domain - Registrar Search / Check / Register (Admin, DRAFT) [CF]**: search for available
+- **113. Domain - Registrar Search / Check / Register (Admin, DRAFT) [CF]**: search for available
   names (`mode=search`), check availability/pricing, or register a brand-new domain via the
   Registrar API. Distinct from transfers. Applying the `domain-purchase-approved` label to a
   purchase request issue runs a **check-only** pass and comments the result back; a live purchase is
   gated behind `mode=execute-register` + a typed `confirm_domain`. See
   [docs/cloudflare-domain-registration.md](../../docs/cloudflare-domain-registration.md).
-- **13. Domain - Validate Cloudflare Registrar API Access (Read-only) [CF]**: probe whether the
+- **114. Domain - Validate Cloudflare Registrar API Access (Read-only) [CF]**: probe whether the
   selected token has Registrar read/write rights. Never charges.
-- **14. Domain - Transfer Readiness Preflight (Report) [WHMCS]**: read-only/offline. Exports WHMCS
+- **115. Domain - Transfer Readiness Preflight (Report) [WHMCS]**: read-only/offline. Exports WHMCS
   domains and classifies each as ready/blocked/review/done for transfer, emitting per-domain
   dashboard runbooks.
-- **16. Domain - Transfer EPP/Auth Code Probe (Admin) [WHMCS]**: determines whether a domain's
+- **116. Domain - Transfer EPP/Auth Code Probe (Admin) [WHMCS]**: determines whether a domain's
   EPP/auth code is returned inline (copy-pasteable) or only emailed. `dry-run` has no side effects;
   `execute` calls `DomainRequestEPP`.
-- **25. Domain - Post-Transfer Verification (Report) [CF]**: read-only confirmation that a transfer
-  landed (registrar = Cloudflare, nameservers on Cloudflare, site reachable). Numbered 25 because
-  15–19 are already taken; it sorts after the M365 block in the Actions list.
+- **117. Domain - Post-Transfer Verification (Report) [CF]**: read-only confirmation that a transfer
+  landed (registrar = Cloudflare, nameservers on Cloudflare, site reachable).
 
-### 20–24 M365 workflows
+### 301–305 M365 workflows
 
-- **20. M365 - Domain Preflight (Read-only) [M365+CF]**: onboarding checks.
-- **21. M365 - List Tenant Domains [M365]**: discovery/listing.
-- **22. M365 - Domain Status + DKIM (Toolbox) [M365]**: mixed utilities for domain and DKIM.
-- **23. M365 - Enable DKIM (Exchange Online) [M365+CF]**: focused DKIM enable.
-- **24. M365 - Add Tenant Domain (Admin) [M365]**: add a domain to the M365 tenant (Graph) and print
-  DNS verification records.
+- **301. M365 - Domain Preflight (Read-only) [M365+CF]**: onboarding checks.
+- **302. M365 - List Tenant Domains [M365]**: discovery/listing.
+- **303. M365 - Domain Status + DKIM (Toolbox) [M365]**: mixed utilities for domain and DKIM.
+- **304. M365 - Enable DKIM (Exchange Online) [M365+CF]**: focused DKIM enable.
+- **305. M365 - Add Tenant Domain (Admin) [M365]**: add a domain to the M365 tenant (Graph) and
+  print DNS verification records.
 
-### 30–33 WHMCS workflows
+### 201–203, 213 WHMCS export workflows
 
-- **30. WHMCS - Export Domains (Report) [WHMCS]**: export WHMCS domains for reconciliation.
-- **31. WHMCS - Export Products (Report) [WHMCS]**: export WHMCS products.
-- **32. WHMCS - Export Payment Methods (Research) [WHMCS]**: export WHMCS payment methods.
-- **33. WHMCS -> Zeffy Payments Import (Draft) [WHMCS]**: build a draft import CSV from WHMCS
+- **201. WHMCS - Export Domains (Report) [WHMCS]**: export WHMCS domains for reconciliation.
+- **202. WHMCS - Export Products (Report) [WHMCS]**: export WHMCS products.
+- **203. WHMCS - Export Payment Methods (Research) [WHMCS]**: export WHMCS payment methods.
+- **213. WHMCS -> Zeffy Payments Import (Draft) [WHMCS]**: build a draft import CSV from WHMCS
   transactions.
 
-### 40. WPMUDEV - Export Sites/Domains (Read-only) [WPMUDEV]
+### 204–212 WHMCS support, orders & products
+
+Onboarding / support (34–37) plus the support-triage, orders, and product-catalog automation
+(38–43). All run on `windows-latest` under the `whmcs-prod` environment and read credentials from
+Key Vault via the `whmcs-secrets-from-kv` action. Write workflows default to `dry_run=true`.
+
+- **204. WHMCS - Charity Onboard [WHMCS]**: AddClient + AddContact + AddOrder from an intake JSON.
+- **205. WHMCS - Open Ticket [WHMCS]** / **206. WHMCS - Issue to Ticket [WHMCS]** / **208. WHMCS -
+  Export Tickets [WHMCS]**: manual ticket open, issue→ticket (one-way), and ticket export.
+- **209. WHMCS - Tickets Triage [WHMCS]**: read-only. Surfaces Open/Customer-Reply tickets into the
+  job summary + CSV artifact; can upsert a rolling `whmcs:triage` tracking issue. See
+  [docs/whmcs-support-tickets.md](../../docs/whmcs-support-tickets.md).
+- **207. WHMCS - Ticket Respond [WHMCS]**: post a templated reply/internal note to one ticket
+  (`config/whmcs-ticket-templates.json`); dry-run by default, live reply is human-gated.
+- **210. WHMCS - Orders Triage [WHMCS]**: read-only. Summarizes orders by status (Pending/Fraud/
+  Active) and lists actionable Pending orders. See
+  [docs/whmcs-orders.md](../../docs/whmcs-orders.md).
+- **211. WHMCS - Order Update [WHMCS]**: accept/cancel/fraud one order; dry-run by default, no bulk
+  automation.
+- **212. WHMCS - Product Add [WHMCS]**: create a catalog product from
+  `config/whmcs-catalog-products.json`; dry-run by default. See
+  [docs/whmcs-product-catalog.md](../../docs/whmcs-product-catalog.md).
+
+### 601. WPMUDEV - Export Sites/Domains (Read-only) [WPMUDEV]
 
 - Export hosted sites inventory from WPMUDEV Hub API for domain reconciliation. See
   [docs/wpmudev-domain-inventory.md](../../docs/wpmudev-domain-inventory.md) for details.
 
-### 89–98 Repo workflows
+### 401–403 Zeffy - Export [ZEFFY]
 
-- **89. Repo - Create GitHub Repo [Repo]**: repo bootstrap helper.
-- **90. Repo - Deploy GitHub Pages [Repo]**: deploys the site from `main`.
-- **91. Repo - CI Validate and Test [Repo]**: workflow linting, formatting checks, and PowerShell
+Read-only pulls from the Zeffy public API via OIDC → Key Vault (key loaded by
+`zeffy-secrets-from-kv`; no key stored in GitHub). **One workflow per endpoint**, all
+**dispatch-only** (no schedule) while we evaluate the API, and **none write donor PII** to an
+artifact. Complements the one-way WHMCS→Zeffy import (workflow 213). See
+[docs/zeffy-api.md](../../docs/zeffy-api.md).
+
+- **401. Zeffy - Campaigns Export [ZEFFY]**: campaigns/events only (`GET /api/v1/campaigns`). This
+  endpoint returns no personal data, so artifact `zeffy_campaigns` is inherently safe on this public
+  repo.
+- **402. Zeffy - Payments Export (PII masked) [ZEFFY]**: payments (`GET /api/v1/payments`) with
+  donor PII **masked** (buyer email/name/company and receipt URL blanked). Artifact
+  `zeffy_payments`.
+- **403. Zeffy - Contacts Export (PII masked) [ZEFFY]**: donors (`GET /api/v1/contacts`) with PII
+  **masked** (email/name/phone/address blanked; only the pseudonymous UUID, giving totals/counts,
+  and country kept). Artifact `zeffy_contacts`.
+
+The `-IncludePii` switch on the payments/contacts scripts is for local/private runs only; no
+workflow passes it.
+
+### 720–730 Repo workflows
+
+- **720. Repo - Create GitHub Repo [Repo]**: repo bootstrap helper.
+- **721. Repo - Deploy GitHub Pages [Repo]**: deploys the site from `main`.
+- **722. Repo - CI Validate and Test [Repo]**: workflow linting, formatting checks, and PowerShell
   validation.
-- **92. Repo - CodeQL Security Analysis [Repo]**: CodeQL scanning for workflow security.
-- **93. Repo - Initialize Labels [Repo]**: initial label creation from `.github/labels.yml`.
-- **94. Repo - Sync Labels [Repo]**: keeps labels in sync when `.github/labels.yml` changes.
-- **98. Repo - Add Collaborator [Repo]**: adds (or updates) a GitHub user as a collaborator on a
+- **723. Repo - CodeQL Security Analysis [Repo]**: CodeQL scanning for workflow security.
+- **724. Repo - Initialize Labels [Repo]**: initial label creation from `.github/labels.yml`.
+- **725. Repo - Sync Labels [Repo]**: keeps labels in sync when `.github/labels.yml` changes.
+- **729. Repo - Add Collaborator [Repo]**: adds (or updates) a GitHub user as a collaborator on a
   repo at a chosen permission level (`pull`/`triage`/`push`/`maintain`/`admin`). Reusable: run it
   manually (`workflow_dispatch`) or call it from another workflow (`workflow_call`). Runs with
   `secrets.CBM_TOKEN` (environment `github-prod`), so callers need no `actions: write`.
@@ -133,7 +186,7 @@ These are kept in `.github/workflows-deprecated/` for historical reference:
 - DNS Summary Export (legacy)
 - Cloudflare Zone Add (removed)
 
-## ci.yml - Continuous Integration
+## 722-ci.yml - Continuous Integration
 
 Runs automated validation and security checks on all pull requests and pushes to main branch.
 
@@ -148,7 +201,10 @@ Runs automated validation and security checks on all pull requests and pushes to
 
 1. Checks out the code
 2. Lints GitHub Actions workflows (actionlint)
-3. Checks formatting for supported files (Prettier)
+3. Validates workflow integrity: unique name prefixes, safety-doc consistency, catalog freshness, and
+   **cross-reference resolution** (`scripts/check-workflow-references.py` — every workflow file a
+   workflow/script dispatches or depends on must exist and, if dispatched, declare `workflow_dispatch`)
+4. Checks formatting for supported files (Prettier)
 4. Validates PowerShell scripts for syntax errors (PowerShell parser)
 5. Lints PowerShell scripts (PSScriptAnalyzer)
 6. Checks PowerShell formatting (Invoke-Formatter)
@@ -158,6 +214,8 @@ Runs automated validation and security checks on all pull requests and pushes to
 This workflow ensures that:
 
 - GitHub Actions workflow YAML is well-formed and consistent (actionlint)
+- Workflow cross-references stay valid — a renumbered/renamed workflow can't leave a dangling
+  `gh workflow run <file>.yml` or `paths:` reference behind (guards the class of bug fixed in #630)
 - Common file formats (YAML/Markdown/JSON/CSS/HTML) stay consistently formatted (Prettier)
 - PowerShell scripts are syntactically correct (parser)
 - PowerShell code quality rules are enforced (PSScriptAnalyzer; CI fails on errors)
@@ -183,7 +241,7 @@ Notes:
   [.prettierignore](../../.prettierignore).
 - Prettier does not format PowerShell; PowerShell formatting is handled by Invoke-Formatter.
 
-## codeql-analysis.yml - Security Scanning
+## 723-codeql-analysis.yml - Security Scanning
 
 Performs automated security analysis using GitHub's CodeQL engine to detect security issues in
 GitHub Actions workflows.
@@ -213,39 +271,14 @@ This workflow helps identify security vulnerabilities early in the development p
 - Dangerous trigger patterns (e.g., unsafe use of privileged contexts)
 - Excessive permissions or missing least-privilege settings
 
-## Workflow Summary
+## Workflow summary
 
-| Workflow                                   | Trigger                                   | Purpose                                                                          |
-| ------------------------------------------ | ----------------------------------------- | -------------------------------------------------------------------------------- |
-| 0-domain-status.yml                        | Manual (workflow_dispatch)                | 01. Domain: Status (all sources) [CF+M365]                                       |
-| 14-domain-add-ffc-cloudflare-and-whmcs.yml | Manual (workflow_dispatch)                | 02. Domain: Add to FFC Cloudflare + WHMCS nameservers (admin) [CF+WHMCS]         |
-| 1-enforce-domain-standard.yml              | Manual (workflow_dispatch)                | 03. Domain: Enforce standard (GitHub apex + M365) [CF+M365]                      |
-| 4-domain-export-inventory.yml              | Manual (workflow_dispatch)                | 04. Domain: Export inventory (all sources) [CF+M365+WHMCS+WPMUDEV]               |
-| 3-manage-record.yml                        | Manual + issue label                      | 05. DNS: Manage a single record (plus label-gated issue trigger) [CF]            |
-| 2-enforce-standard.yml                     | Manual (workflow_dispatch)                | 06. DNS: Enforce standard (DNS-only) [CF]                                        |
-| 1-audit-compliance.yml                     | Manual (workflow_dispatch)                | 07. DNS: Audit compliance (report-only) [CF]                                     |
-| 4-export-summary.yml                       | Manual (workflow_dispatch)                | 08. DNS: Export Cloudflare zones [CF]                                            |
-| 11-cloudflare-zone-create.yml              | Manual (workflow_dispatch)                | 09. DNS: Create zone (explicit account selection) [CF]                           |
-| 15-website-provision.yml                   | Issue assigned + manual                   | 15. Website: Provision (DNS + repo + content) [CF+Repo]                          |
-| 7-m365-domain-preflight.yml                | Manual (workflow_dispatch)                | 20. M365: Domain preflight (Graph + Cloudflare audit)                            |
-| 6-m365-list-domains.yml                    | Manual (workflow_dispatch)                | 21. M365: List tenant domains                                                    |
-| 5-m365-domain-and-dkim.yml                 | Manual (workflow_dispatch)                | 22. M365: Domain status + DKIM helpers                                           |
-| 8-m365-dkim-enable.yml                     | Manual (workflow_dispatch)                | 23. M365: Enable DKIM (Exchange Online)                                          |
-| 12-m365-add-tenant-domain.yml              | Manual (workflow_dispatch)                | 24. M365: Add tenant domain and print verification DNS records                   |
-| 7-whmcs-export-domains.yml                 | Manual (workflow_dispatch)                | 30. WHMCS: Export domains                                                        |
-| 8-whmcs-export-products.yml                | Manual (workflow_dispatch)                | 31. WHMCS: Export products                                                       |
-| 9-whmcs-export-payment-methods.yml         | Manual (workflow_dispatch)                | 32. WHMCS: Export payment methods                                                |
-| 10-whmcs-zeffy-payments-import-draft.yml   | Manual (workflow_dispatch)                | 33. WHMCS -> Zeffy: Build draft import CSV                                       |
-| 13-wpmudev-export-sites.yml                | Manual (workflow_dispatch)                | 40. WPMUDEV: Export sites/domains for reconciliation                             |
-| create-repo.yml                            | Manual (workflow_dispatch)                | 89. Repo: Create GitHub repo                                                     |
-| deploy-pages.yml                           | Pushes to `main` + manual                 | 90. Repo: Deploy GitHub Pages                                                    |
-| ci.yml                                     | PRs and pushes to `main`                  | 91. Repo: Lint workflows, validate scripts, check formatting and sensitive files |
-| codeql-analysis.yml                        | PRs, pushes to `main`, weekly, and manual | 92. Repo: CodeQL scanning                                                        |
-| initialize-labels.yml                      | Manual (workflow_dispatch)                | 93. Repo: Initialize labels from `.github/labels.yml`                            |
-| sync-labels.yml                            | Push to `main` (labels.yml) + manual      | 94. Repo: Sync labels when `.github/labels.yml` changes                          |
-| 98-repo-add-collaborator.yml               | Manual + reusable (workflow_call)         | 98. Repo: Add a user as a collaborator at a chosen permission level              |
+The complete per-workflow summary (number, file, triggers, safety level, approval env) is the
+**auto-generated catalog** at the bottom of this file — regenerated by
+`scripts/generate-workflow-catalog.py` and enforced by CI. Machine-readable version:
+`docs/workflow-catalog.json` (public: <https://ffcadmin.org/automation/>).
 
-## 15-website-provision.yml - Website provisioning (DNS + repo + content)
+## 701-website-provision.yml - Website provisioning (DNS + repo + content)
 
 Provisions a charity website end-to-end after a website request issue is assigned.
 
@@ -375,7 +408,7 @@ These workflows are **not** needed anymore because the repo moved to:
 ### Cloudflare Zone Add (removed)
 
 - **Why removed**: the legacy workflow required a separate secret and had unclear safety guardrails.
-- **What replaces it**: use **09. DNS - Create Zone (Admin) [CF]**.
+- **What replaces it**: use **110. DNS - Create Zone (Admin) [CF]**.
   - It requires explicit account selection (FFC/CM) to reduce accidental duplicates.
   - It refuses to create a zone if the domain already exists in the other account.
   - It uses the `cloudflare-prod` environment secrets.
@@ -384,7 +417,7 @@ These workflows are **not** needed anymore because the repo moved to:
 
 These workflows are higher-blast-radius and should be tested with a domain you control.
 
-### 09. DNS - Create Zone (Admin) [CF]
+### 110. DNS - Create Zone (Admin) [CF]
 
 - Ensure the `cloudflare-prod` environment has both secrets:
   - `FFC_CLOUDFLARE_API_TOKEN_ZONE_AND_DNS`
@@ -397,7 +430,7 @@ These workflows are higher-blast-radius and should be tested with a domain you c
   - Zone ID
   - Assigned name servers
 
-### 24. M365 - Add Tenant Domain (Admin) [M365]
+### 305. M365 - Add Tenant Domain (Admin) [M365]
 
 - Ensure the `m365-prod` environment has:
   - `FFC_AZURE_CLIENT_ID`
@@ -405,7 +438,7 @@ These workflows are higher-blast-radius and should be tested with a domain you c
 - Run the workflow with `domain` set to a safe test domain.
 - Confirm output includes `verificationDnsRecords` and `serviceConfigurationRecords`.
 
-### 02. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS]
+### 102. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS]
 
 - This is the highest-blast-radius workflow (Cloudflare + WHMCS).
 - Prefer testing with a domain you control; keep `enforce_dry_run=false` unless you explicitly want
@@ -420,7 +453,7 @@ These workflows are higher-blast-radius and should be tested with a domain you c
 ### Legacy DNS summary export
 
 - **What it used to do**: export summaries via old tooling.
-- **What replaces it**: **08. DNS - Export Cloudflare Zones (Report) [CF]**.
+- **What replaces it**: **108. DNS - Export Cloudflare Zones (Report) [CF]**.
 
 ## Current Workflow
 
@@ -458,3 +491,125 @@ No additional setup is required for these workflows to run. However, to get the 
 - Use issue templates for all domain management requests
 - Document DNS changes in the corresponding GitHub issue
 - Test DNS changes with dry-run mode before applying
+
+<!-- catalog:begin -->
+
+## Complete workflow catalog (auto-generated)
+
+> Regenerate with `python3 scripts/generate-workflow-catalog.py` — do not hand-edit
+> this section. Machine-readable version: `docs/workflow-catalog.json`.
+
+### 1xx — Cloudflare / DNS / Domain
+
+| # | Workflow | File | Triggers | Safety | Approval env |
+| --- | --- | --- | --- | --- | --- |
+| 101 | Domain - Status (All Sources) [CF+M365] | `101-domain-status.yml` | workflow_dispatch | Reads | cloudflare-prod-read / ✅ m365-prod |
+| 102 | Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS] | `102-domain-add-ffc-cloudflare-and-whmcs.yml` | workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write / ✅ whmcs-prod |
+| 103 | Domain - Enforce Standard (GitHub Apex + M365) [CF+M365] | `103-enforce-domain-standard.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write / ✅ m365-prod |
+| 104 | Domain - Export Inventory (All Sources) [CF+M365+WHMCS+WPMUDEV] | `104-domain-export-inventory.yml` | workflow_dispatch | Reads | whmcs-prod-read / ✅ m365-prod / ✅ wpmudev-prod (+ cf-read) |
+| 105 | DNS - Manage Record (Manual / Issue Label) [CF] | `105-manage-record.yml` | issues, workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write |
+| 106 | DNS - Enforce Standard (DNS-only) [CF] | `106-enforce-standard.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write |
+| 107 | DNS - Audit Compliance (Report) [CF] | `107-audit-compliance.yml` | workflow_dispatch | Reads | cloudflare-prod-read |
+| 108 | DNS - Export Cloudflare Zones (Report) [CF] | `108-export-summary.yml` | workflow_dispatch | Reads | cloudflare-prod-read |
+| 109 | DNS - Export All Records (Full, per-record) [CF] | `109-dns-export-all-records.yml` | workflow_dispatch | Reads | cloudflare-prod-read |
+| 110 | DNS - Create Zone (Admin) [CF] | `110-cloudflare-zone-create.yml` | workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write |
+| 111 | DNS - Create Redirect Rule (Admin) [CF] | `111-dns-create-redirect-rule.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write |
+| 112 | DNS - Bulk Replace A-record IP (All Zones) [CF] | `112-dns-bulk-replace-a-ip.yml` | workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write |
+| 113 | Domain - Registrar Search / Check / Register (Admin, DRAFT) [CF] | `113-cloudflare-domain-register.yml` | issues, workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write |
+| 114 | Domain - Validate Cloudflare Registrar API Access (Read-only) [CF] | `114-cloudflare-registrar-access-check.yml` | workflow_dispatch | Reads | ✅ cloudflare-prod-write |
+| 115 | Domain - Transfer Readiness Preflight (Report) [WHMCS] | `115-domain-transfer-preflight.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 116 | Domain - Transfer EPP/Auth Code Probe (Admin) [WHMCS] | `116-domain-transfer-epp-probe.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
+| 117 | Domain - Post-Transfer Verification (Report) [CF] | `117-domain-transfer-verify.yml` | workflow_dispatch | Reads | cloudflare-prod-read |
+| 118 | Domain - Registrar Lock / Unlock [WHMCS] | `118-whmcs-domain-lock.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
+| 119 | DNS - Bulk Staging CNAME -> GitHub Pages (FFC-EX) [CF] | `119-bulk-staging-cname-github-pages.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write |
+| 120 | DNS + GH Pages - Bulk Cutover staging -> Apex (FFC-EX) [CF+GH] | `120-bulk-cutover-to-github-pages.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write / ✅ github-prod |
+| 121 | DNS + GH Pages - Fleet Cutover Preflight (FFC-EX) | `121-fleet-cutover-preflight.yml` | workflow_dispatch | Reads | none (no credentials) |
+### 2xx — WHMCS
+
+| # | Workflow | File | Triggers | Safety | Approval env |
+| --- | --- | --- | --- | --- | --- |
+| 201 | WHMCS - Export Domains (Report) [WHMCS] | `201-whmcs-export-domains.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 202 | WHMCS - Export Products (Report) [WHMCS] | `202-whmcs-export-products.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 203 | WHMCS - Export Payment Methods (Research) [WHMCS] | `203-whmcs-export-payment-methods.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 204 | WHMCS - Charity Onboard (client + contacts + order) [WHMCS] | `204-whmcs-charity-onboard.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
+| 205 | WHMCS - Open Ticket (manual) [WHMCS] | `205-whmcs-ticket-open.yml` | workflow_dispatch | Writes (gated) | ✅ whmcs-prod |
+| 206 | WHMCS - Issue to Ticket (one-way) [WHMCS] | `206-whmcs-issue-to-ticket.yml` | issues | Writes (gated) | ✅ whmcs-prod |
+| 207 | WHMCS - Ticket Respond (templated) [WHMCS] | `207-whmcs-ticket-respond.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
+| 208 | WHMCS - Export Tickets (Report) [WHMCS] | `208-whmcs-tickets-export.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 209 | WHMCS - Tickets Triage (Open/Customer-Reply) [WHMCS] | `209-whmcs-tickets-triage.yml` | schedule, workflow_dispatch | Reads | whmcs-prod-read |
+| 210 | WHMCS - Orders Triage (Pending/Fraud/Active) [WHMCS] | `210-whmcs-orders-triage.yml` | schedule, workflow_dispatch | Reads | whmcs-prod-read |
+| 211 | WHMCS - Order Update (accept/cancel/fraud) [WHMCS] | `211-whmcs-order-update.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
+| 212 | WHMCS - Product Add (catalog) [WHMCS] | `212-whmcs-product-add.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
+| 213 | WHMCS -> Zeffy Payments Import (Draft) [WHMCS] | `213-whmcs-zeffy-payments-import-draft.yml` | workflow_dispatch | Reads (builds a file) | whmcs-prod-read |
+| 214 | WHMCS - Clients Metrics (aggregate, no PII) [WHMCS] | `214-whmcs-clients-metrics.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 215 | WHMCS - Nonprofit Clients Metrics (service evidence, no PII) [WHMCS] | `215-whmcs-nonprofit-clients-metrics.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 216 | WHMCS - Activity Metrics (full history, no PII) [WHMCS] | `216-whmcs-activity-metrics.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 217 | WHMCS - Client Fields Survey (aggregate, no PII) [WHMCS] | `217-whmcs-client-fields-survey.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 218 | WHMCS - Sites-List Reconciliation + Product Alignment [WHMCS] | `218-whmcs-siteslist-reconciliation.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 219 | WHMCS - Application Detail (Client + Orders, PII-masked) [WHMCS] | `219-whmcs-application-detail.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 220 | WHMCS - Served-Per-Year Metrics (span evidence, no PII) [WHMCS] | `220-whmcs-served-metrics.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 221 | WHMCS - Application Search (find by domain/org) [WHMCS] | `221-whmcs-application-search.yml` | workflow_dispatch | Reads | ✅ whmcs-prod |
+| 222 | WHMCS - Cloudflare Registrar Product Alignment [WHMCS+CF] | `222-whmcs-product-alignment.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
+| 223 | WHMCS - Import Cloudflare Registrar Domains as Domain Records [WHMCS+CF] | `223-whmcs-import-cloudflare-domains.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
+| 224 | WHMCS - GitHub Pages Product Alignment [WHMCS+GH] | `224-whmcs-github-pages-product-alignment.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
+| 225 | WHMCS - Domain Order URL Verify [WHMCS] | `225-whmcs-domain-order-url-verify.yml` | schedule, workflow_dispatch | Reads | whmcs-prod-read |
+| 226 | WHMCS - Application Triage (rank + accept onboarding orders) [WHMCS] | `226-whmcs-application-triage.yml` | workflow_dispatch | Writes (report default) | ✅ whmcs-prod |
+| 227 | cPanel - Deploy WHMCS Hooks (FTPS/lftp) [cPanel] | `227-whmcs-hooks-deploy.yml` | workflow_dispatch | Writes (verify default) | ✅ whmcs-prod |
+### 3xx — Microsoft (M365 / Azure / Graph)
+
+| # | Workflow | File | Triggers | Safety | Approval env |
+| --- | --- | --- | --- | --- | --- |
+| 301 | M365 - Domain Preflight (Read-only) [M365+CF] | `301-m365-domain-preflight.yml` | workflow_dispatch | Reads | cloudflare-prod-read / ✅ m365-prod |
+| 302 | M365 - List Tenant Domains [M365] | `302-m365-list-domains.yml` | workflow_dispatch | Reads | ✅ m365-prod |
+| 303 | M365 - Domain Status + DKIM (Toolbox) [M365] | `303-m365-domain-and-dkim.yml` | workflow_dispatch | Reads | ✅ m365-prod |
+| 304 | M365 - Enable DKIM (Exchange Online) [M365+CF] | `304-m365-dkim-enable.yml` | workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write / ✅ m365-prod |
+| 305 | M365 - Add Tenant Domain (Admin) [M365] | `305-m365-add-tenant-domain.yml` | workflow_dispatch | Writes (dry-run default) | ✅ m365-prod |
+| 306 | Discover - Uncaptured Comms (M365, PII masked) [M365] | `306-discover-uncaptured-comms.yml` | workflow_dispatch | Reads | ✅ m365-prod |
+| 320 | Azure - Key Vault Secret Inventory (audit) [MS] | `320-azure-kv-secret-inventory.yml` | schedule, workflow_dispatch | Reads | google-prod-read (reader identity) |
+### 4xx — Zeffy
+
+| # | Workflow | File | Triggers | Safety | Approval env |
+| --- | --- | --- | --- | --- | --- |
+| 401 | Zeffy - Campaigns Export [ZEFFY] | `401-zeffy-campaigns-export.yml` | workflow_dispatch | Reads | zeffy-prod |
+| 402 | Zeffy - Payments Export (PII masked) [ZEFFY] | `402-zeffy-payments-export.yml` | workflow_dispatch | Reads | zeffy-prod |
+| 403 | Zeffy - Contacts Export (PII masked) [ZEFFY] | `403-zeffy-contacts-export.yml` | workflow_dispatch | Reads | zeffy-prod |
+### 5xx — Google
+
+| # | Workflow | File | Triggers | Safety | Approval env |
+| --- | --- | --- | --- | --- | --- |
+| 501 | Google - API Smoke (GA4 connectivity) [GOOGLE] | `501-google-api-smoke.yml` | workflow_call, workflow_dispatch | Reads | google-prod-read |
+| 502 | Google - Analytics Report (GA4 -> JSON) [GOOGLE] | `502-google-analytics-report.yml` | schedule, workflow_dispatch | Reads | google-prod-read / ✅ github-prod |
+| 503 | Google - GTM Provision (per-charity container) [GOOGLE] | `503-google-gtm-provision.yml` | workflow_dispatch | Writes (dry-run default) | ✅ google-prod-write |
+| 504 | Google - GTM Container Backups (weekly export) [GOOGLE] | `504-google-gtm-backup.yml` | schedule, workflow_dispatch | Reads | google-prod-read |
+| 505 | Google - GA4 Property Provision (per-charity) [GOOGLE] | `505-google-ga-property-provision.yml` | workflow_dispatch | Writes (dry-run default) | ✅ google-prod-write |
+### 6xx — WPMUDEV
+
+| # | Workflow | File | Triggers | Safety | Approval env |
+| --- | --- | --- | --- | --- | --- |
+| 601 | WPMUDEV - Export Sites/Domains (Read-only) [WPMUDEV] | `601-wpmudev-export-sites.yml` | workflow_dispatch | Reads | ✅ wpmudev-prod |
+### 7xx — GitHub (Website + Repo)
+
+| # | Workflow | File | Triggers | Safety | Approval env |
+| --- | --- | --- | --- | --- | --- |
+| 701 | Website - Provision (Issue Assigned) [CF+Repo] | `701-website-provision.yml` | issues | Writes (gated) | ✅ cloudflare-prod-write / ✅ github-prod |
+| 702 | Domain - Deploy Static Clone to FFC-EX Repo | `702-ffc-ex-clone-deploy.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
+| 703 | Sites List - Generate (CSV + JSON) [GH] | `703-sites-list-generate.yml` | schedule, workflow_dispatch | (repo plumbing) | — |
+| 704 | Website - Analytics Wire [GH] | `704-website-analytics-wire.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod |
+| 720 | Repo - Create GitHub Repo [Repo] | `720-create-repo.yml` | workflow_dispatch | (repo plumbing) | — |
+| 721 | Repo - Deploy GitHub Pages [Repo] | `721-deploy-pages.yml` | push, workflow_dispatch | (repo plumbing) | — |
+| 722 | Repo - CI Validate and Test [Repo] | `722-ci.yml` | merge_group, pull_request, push | (repo plumbing) | — |
+| 723 | Repo - CodeQL Security Analysis [Repo] | `723-codeql-analysis.yml` | merge_group, pull_request, push, schedule, workflow_dispatch | (repo plumbing) | — |
+| 724 | Repo - Initialize Labels [Repo] | `724-initialize-labels.yml` | workflow_dispatch | (repo plumbing) | — |
+| 725 | Repo - Sync Labels [Repo] | `725-sync-labels.yml` | push, workflow_dispatch | (repo plumbing) | — |
+| 726 | Repo - Rulesets + Settings Drift Audit [Org] | `726-repo-rulesets-drift-audit.yml` | schedule, workflow_dispatch | Reads | ✅ github-prod |
+| 727 | Repo - Phantom Revert Guard [Repo] | `727-phantom-revert-guard.yml` | merge_group, pull_request, workflow_dispatch | (repo plumbing) | — |
+| 728 | Repo - AI Agent Hooks Validate [Repo] | `728-ai-agent-hooks-validate.yml` | pull_request, push | (repo plumbing) | — |
+| 729 | Repo - Add Collaborator [Repo] | `729-repo-add-collaborator.yml` | workflow_dispatch | Writes (**live default**) | ✅ github-prod |
+| 730 | Repo - Audit Environment Approval Gates [Repo] | `730-repo-audit-environment-gates.yml` | push, workflow_dispatch | Reads | — |
+| 731 | Repo - Actions Run Metrics (30d per-workflow stats) [GH] | `731-actions-run-metrics.yml` | schedule, workflow_dispatch | Reads | — |
+| 732 | Repo - Google Workflow Failure Alert (rolling issue) [GH] | `732-google-workflow-failure-alert.yml` | workflow_run | Writes (issues only) | — |
+| 733 | Repo - Credential Rotation Reminders (quarterly) [GH] | `733-credential-rotation-reminders.yml` | schedule, workflow_dispatch | Writes (issues only) | — |
+| 734 | Repo - Stale Waiting-Run Janitor [Repo] | `734-stale-waiting-run-janitor.yml` | schedule, workflow_dispatch | Writes (cancels runs) | — |
+| 735 | Repo - Dependabot Affected Repos [Org] | `735-repo-dependabot-affected-repos.yml` | schedule, workflow_dispatch | Reads | ✅ github-prod |
+
+<!-- catalog:end -->

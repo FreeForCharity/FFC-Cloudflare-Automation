@@ -1,0 +1,71 @@
+name: '117. Domain - Post-Transfer Verification (Report) [CF]'
+run-name: 'Transfer Verify: ${{ inputs.domain }}'
+
+# READ-ONLY: confirms a domain transferred to Cloudflare Registrar landed cleanly
+# (registrar = Cloudflare, nameservers on Cloudflare, site still reachable).
+# Wraps scripts/domain-transfer-verify.ps1. Changes nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain to verify'
+        required: true
+        type: string
+      account:
+        description: 'Cloudflare account/token to use'
+        required: true
+        type: choice
+        options:
+          - FFC
+          - CM
+        default: FFC
+      require_verified:
+        description: 'Fail the run if the domain is not fully verified'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    environment: cloudflare-prod-read
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # CF read token from Key Vault via OIDC (verification is read-only).
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Run post-transfer verification
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = "${{ inputs.domain }}"
+          $account = "${{ inputs.account }}"
+
+          $scriptArgs = @('-Domain', $domain, '-Account', $account)
+          if ('${{ inputs.require_verified }}' -eq 'true') { $scriptArgs += '-RequireVerified' }
+
+          $ErrorActionPreference = 'Continue'
+          $out = & pwsh -NoProfile -File .\scripts\domain-transfer-verify.ps1 @scriptArgs
+          $exit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+
+          $summary = ($out | Out-String)
+          Write-Host $summary
+          $fence = [string][char]0x60 * 3
+          $lines = @("### Post-transfer verification: ${{ inputs.domain }} ($account)", '', ($fence + 'json'), $summary.TrimEnd(), $fence)
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          if ($exit -ne 0) { throw "Verification failed or domain not verified (exit $exit)." }

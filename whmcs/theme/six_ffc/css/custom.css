@@ -1,0 +1,55 @@
+/* *****************************************************
+
+    ** Custom Stylesheet **
+
+    Any custom styling you want to apply should be
+    defined here.
+
+***************************************************** */
+
+/* ===== Free For Charity brand (six_ffc) ===== */
+:root {
+  --ffc-primary: #2a6682;
+  --ffc-primary-dark: #22546b;
+  --ffc-accent: #f58629;
+  --ffc-accent-dark: #e0741c;
+  --ffc-yellow: #f5c045;
+}
+
+/* Header bar */
+#header { background-color: #2a6682 !important; }
+#header .top-nav > li > a { color: #ffffff !important; }
+#header .top-nav > li.primary-action > a.btn { background-color: #f58629 !important; color: #fff !important; border: none; }
+#header .logo img { max-height: 54px; width: auto; }
+#header .logo.logo-text { color: #fff !important; }
+
+/* Primary buttons site-wide */
+.btn-primary { background-color: #2a6682 !important; border-color: #22546b !important; }
+.btn-primary:hover, .btn-primary:focus { background-color: #22546b !important; border-color: #1b4457 !important; }
+
+/* Links */
+a { color: #2a6682; }
+a:hover, a:focus { color: #22546b; }
+
+/* Home hero banner */
+#home-banner { background-color: #2a6682 !important; color: #fff; padding: 45px 0 40px; }
+#home-banner h2, #home-banner p, #home-banner .lead, #home-banner strong { color: #ffffff !important; }
+#home-banner .btn-primary { background-color: #f58629 !important; border-color: #e0741c !important; color: #fff !important; }
+#home-banner .btn-primary:hover { background-color: #e0741c !important; }
+#home-banner .btn.search, #home-banner .btn.transfer { background-color: #ffffff !important; color: #2a6682 !important; border: 1px solid #ffffff !important; }
+#home-banner .btn.search:hover, #home-banner .btn.transfer:hover { background-color: #f5c045 !important; color: #22546b !important; }
+
+/* Home shortcut tiles */
+.home-shortcuts { background-color: #f4f7f9; }
+.home-shortcuts a, .home-shortcuts a p { color: #2a6682 !important; }
+.home-shortcuts a i { color: #f58629 !important; }
+.home-shortcuts a:hover, .home-shortcuts a:hover p, .home-shortcuts a:hover i { color: #22546b !important; }
+.home-shortcuts .lead { color: #2a6682; }
+
+/* Footer */
+#footer { background-color: #22546b !important; }
+#footer, #footer p, #footer a { color: #ffffff !important; }
+#footer a:hover { color: #f5c045 !important; }
+
+/* Nav hover accent */
+#main-menu .navbar-nav > li > a:hover, #main-menu .navbar-nav > li.active > a { color: #2a6682 !important; }

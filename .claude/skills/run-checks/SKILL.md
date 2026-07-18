@@ -20,7 +20,7 @@ All paths below are relative to the repo root.
 
 ## Prerequisites
 
-Python 3.11+ (the validators are stdlib-only). No `pip install` needed.
+Python 3 (the validators are stdlib-only). No `pip install` needed.
 
 ```bash
 python3 --version

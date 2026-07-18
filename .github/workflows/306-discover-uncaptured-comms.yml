@@ -62,7 +62,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Discovery failed (exit $LASTEXITCODE)." }
 
       - name: Upload pipeline artifact (PII masked)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: uncaptured-comms-pipeline
           path: artifacts/discovery/pipeline.csv

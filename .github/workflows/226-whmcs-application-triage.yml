@@ -93,7 +93,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Application triage failed (exit $LASTEXITCODE)." }
 
       - name: Upload triage report artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: whmcs_application_triage
           path: artifacts/whmcs/whmcs_application_triage*.json

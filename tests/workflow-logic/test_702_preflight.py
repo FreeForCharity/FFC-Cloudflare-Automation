@@ -153,6 +153,20 @@ def test_sibling_scan_full_domain_no_tld_false_positive():
     assert "repo_name=FFC-EX-letsdanceactivities.org" in outputs, outputs
 
 
+def test_archived_target_refused_even_with_force():
+    # Archived = read-only: the gated job would fail at push/PR after consuming
+    # an approval, and no flag makes it writable — so force must NOT bypass.
+    proc, summary, _ = run_preflight(
+        {
+            "TEST_REPO_META": '{"full_name": "FreeForCharity/FFC-EX-alltypetowing.com", "archived": true}',
+            "IN_FORCE": "true",
+        }
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "archived" in proc.stdout, proc.stdout
+    assert "Refused" in summary, summary
+
+
 def test_org_list_failure_fails_safe():
     proc, _, _ = run_preflight(
         {

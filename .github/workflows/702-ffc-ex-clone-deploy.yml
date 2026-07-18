@@ -104,6 +104,15 @@ jobs:
           fi
           canonical_name="${canonical##*/}"
 
+          # Archived repos are read-only: the gated job would fail at push/PR time after
+          # consuming a human approval. No force override — no flag makes it writable.
+          archived=$(printf '%s' "$resp" | jq -r '.archived // false' 2>/dev/null || true)
+          if [ "$archived" = "true" ]; then
+            echo "::error::$canonical is archived (read-only) — the clone would fail at push/PR time. Unarchive it in Settings (or pick the right target) before re-dispatching. force=true does not override this."
+            echo "⛔ Refused: \`$canonical\` is archived (read-only)." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
           # --- is the site already live? (canonical-case default URL + apex) ----------
           pages_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -L \
             "https://freeforcharity.github.io/${canonical_name}/" 2>/dev/null || echo "000")

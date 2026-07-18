@@ -139,7 +139,11 @@ jobs:
           else
             echo "- Force=true: sibling-domain scan skipped." >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "✅ $owner/$name is free — proceeding to the gated create." >> "$GITHUB_STEP_SUMMARY"
+          # Caveat: GITHUB_TOKEN sees public repos (and this repo) only, and GitHub returns
+          # 404 for private repos it cannot see — so a PRIVATE name collision passes this
+          # check and fails loudly at the create step instead (post-gate). Acceptable:
+          # FFC-EX charity sites are public by policy; the summary states the limit.
+          echo "✅ $owner/$name is free — proceeding to the gated create. (Check covers repos visible to GITHUB_TOKEN; a private name collision would still fail at the create step.)" >> "$GITHUB_STEP_SUMMARY"
 
   create-repo:
     runs-on: windows-latest

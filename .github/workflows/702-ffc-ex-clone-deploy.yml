@@ -91,7 +91,7 @@ jobs:
           set -e
           if [ $rc -ne 0 ]; then
             if printf '%s' "$resp" | grep -q "HTTP 404"; then
-              echo "::error::Target repo $TARGET_ORG/$name does not exist. Create it first with workflow 720 (Repo - Create GitHub Repo), then re-dispatch this clone."
+              echo "::error::Target repo $TARGET_ORG/$name does not exist — or is private and not visible to this workflow's GITHUB_TOKEN (FFC-EX charity sites are public by policy, so for those 404 means absent). Create it first with workflow 720 (Repo - Create GitHub Repo), then re-dispatch this clone."
             else
               echo "::error::Preflight could not verify $TARGET_ORG/$name (transient API error?). Failing safe rather than guessing. Details: $resp"
             fi

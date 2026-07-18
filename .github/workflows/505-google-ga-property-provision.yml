@@ -59,7 +59,7 @@ jobs:
     runs-on: windows-latest
     environment: google-prod-write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate required Azure secrets
         shell: bash

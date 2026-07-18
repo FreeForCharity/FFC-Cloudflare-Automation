@@ -1184,14 +1184,20 @@ jobs:
             }
 
             git add -A
+            # git diff --cached --quiet: 0 = no changes, 1 = changes, other = fatal error.
+            # Handle all three explicitly so a fatal diff error surfaces as a failure
+            # instead of being mistaken for "there are changes to commit".
             git diff --cached --quiet
-            if ($LASTEXITCODE -ne 0) {
+            $diffExit = $LASTEXITCODE
+            if ($diffExit -eq 1) {
               git commit -m "chore: apply footer + leadership content" | Out-Null
               if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit $LASTEXITCODE)." }
               git push origin HEAD:main
               if ($LASTEXITCODE -ne 0) { throw "git push to origin main failed (exit $LASTEXITCODE)." }
-            } else {
+            } elseif ($diffExit -eq 0) {
               Write-Host "No content changes detected; skipping commit." -ForegroundColor Yellow
+            } else {
+              throw "git diff --cached failed (exit $diffExit)."
             }
           } catch {
             Write-Warning "Content patch/push failed (non-fatal; the site itself is already provisioned): $_"

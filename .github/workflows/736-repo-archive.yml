@@ -134,10 +134,14 @@ jobs:
           fi
 
           # --- typed confirmation for a live archive ---------------------------------
-          # Trim confirm_repo the same way as repo (leading/trailing whitespace only) so a
-          # harmless copy/paste space doesn't reject a legitimate confirmation. Internal
-          # whitespace still fails the equality check against the regex-validated name.
-          confirm="$(printf '%s' "${IN_CONFIRM:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          # Normalize confirm_repo exactly like repo: strip any owner prefix, then trim
+          # leading/trailing whitespace only. The repo input accepts "name" or
+          # "owner/name", so pasting the same owner-qualified value into both fields is
+          # unambiguous intent and must confirm. Internal whitespace still fails the
+          # equality check against the regex-validated name.
+          confirm="${IN_CONFIRM:-}"
+          confirm="${confirm##*/}"
+          confirm="$(printf '%s' "$confirm" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
           if [ "$confirm" != "$name" ]; then
             echo "::error::confirm_repo ('$confirm') must exactly equal repo ('$name') for a live archive."
             exit 1

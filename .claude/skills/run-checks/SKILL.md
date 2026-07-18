@@ -1,16 +1,16 @@
 ---
 name: run-checks
-description:
+description: >-
   Smoke-validate the FFC-Cloudflare-Automation repo without touching live Cloudflare — run the
   workflow reference guard, doc-consistency check, and catalog freshness check. Use when asked to
   run, verify, smoke-test, or sanity-check this automation repo, or before dispatching a workflow.
   To actually run a charity-onboarding workflow, see the charity-onboarding skill.
 ---
 
-This repo automates Cloudflare / Microsoft 365 / GitHub operations through **81 GitHub Actions
-workflows** plus PowerShell and Python scripts. Actually _running_ a workflow dispatches it against
-live infrastructure (needs Cloudflare API tokens and approvals) — that flow is documented in the
-**`charity-onboarding` skill**.
+This repo automates Cloudflare / Microsoft 365 / GitHub operations through its fleet of **GitHub
+Actions workflows** (see `docs/workflow-catalog.json` for the live count) plus PowerShell and Python
+scripts. Actually _running_ a workflow dispatches it against live infrastructure (needs Cloudflare
+API tokens and approvals) — that flow is documented in the **`charity-onboarding` skill**.
 
 This skill is the **local smoke test**: the repo's own validators that confirm the workflow catalog,
 cross-references, and safety docs are wired correctly. They need **no secrets and touch no

@@ -10,7 +10,7 @@
       "5": "Google",
       "6": "WPMUDEV",
       "7": "GitHub (Website + Repo)",
-      "8": "Reserved",
+      "8": "Candid (GuideStar)",
       "9": "Reserved"
     },
     "tagRule": "the [TAG] lists ALL APIs the workflow CALLS (not services configured-for, not plumbing like KV auth or issue comments)"
@@ -1743,6 +1743,46 @@
       "guard": "archive-only (reversible, never deletes); `dry_run` default true; typed `confirm_repo`; org-locked + denylist",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
+    },
+    {
+      "number": 801,
+      "title": "Candid - Charity Check (EIN)",
+      "apis": [
+        "CANDID"
+      ],
+      "file": "801-candid-charity-check.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "candid-prod-read"
+      ],
+      "description": "Read-only: validates a nonprofit's IRS 501(c)(3) / Pub78 / BMF / OFAC standing via the Candid Charity Check v1 API. Used to verify an applicant's EIN during charity onboarding and to re-verify existing partners. Key comes from Azure Key Vault at run time via OIDC (candid-keys-from-kv); see docs/candid-api-and-mcp.md for the one-time setup.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "candid-prod-read",
+      "guard": "read-only IRS-status lookup; public org data only",
+      "category": "Candid (GuideStar)",
+      "categoryCode": "CANDID"
+    },
+    {
+      "number": 802,
+      "title": "Candid - Essentials Search",
+      "apis": [
+        "CANDID"
+      ],
+      "file": "802-candid-essentials-search.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "candid-prod-read"
+      ],
+      "description": "Read-only: searches Candid's nonprofit database (Essentials v4) by EIN, organization name, or keywords and reports name / EIN / location / transparency-seal level / profile URL. Used during charity onboarding to locate an applicant's Candid (GuideStar) profile and seal level. Key comes from Azure Key Vault at run time via OIDC (candid-keys-from-kv); see docs/candid-api-and-mcp.md.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "candid-prod-read",
+      "guard": "read-only profile search; public org data only",
+      "category": "Candid (GuideStar)",
+      "categoryCode": "CANDID"
     }
   ]
 }

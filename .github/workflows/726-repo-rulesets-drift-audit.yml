@@ -64,6 +64,9 @@ jobs:
             gh repo list "$org" --limit 200 --json name,isArchived,visibility,defaultBranchRef \
               --jq '.[] | select(.isArchived==false) | "\(.name)\t\(.visibility)\t\(.defaultBranchRef.name // "")"' \
             | while IFS=$'\t' read -r repo vis default; do
+              # gh returns visibility as an enum (PUBLIC/PRIVATE); normalize so
+              # the public-only checks (merge-queue, tier teams) actually fire.
+              vis=$(printf '%s' "$vis" | tr '[:upper:]' '[:lower:]')
               [ -z "$default" ] && continue
               settings=$(gh api "repos/$org/$repo" --jq '"\(.allow_squash_merge)|\(.allow_auto_merge)|\(.delete_branch_on_merge)|\(.allow_update_branch)"' 2>/dev/null || echo "?|?|?|?")
               squash=$(echo "$settings" | cut -d'|' -f1)
@@ -71,6 +74,44 @@ jobs:
               del=$(echo "$settings" | cut -d'|' -f3)
               upd=$(echo "$settings" | cut -d'|' -f4)
               has_mq=$(gh api "repos/$org/$repo/rules/branches/$default" --jq '[.[] | select(.type=="merge_queue")] | length' 2>/dev/null || echo "0")
+
+              # Team-tier drift: FFC-ORGWIDE-* tier teams should be granted on PUBLIC FFC repos.
+              # Private repos are intentionally excluded (Option C defensive isolation —
+              # private repos require explicit per-team grants by an Owner, no auto-tier).
+              # Conversely: if a PRIVATE repo has any ORGWIDE tier team granted, that's drift in
+              # the OPPOSITE direction (private should never auto-inherit). Flag both cases.
+              missing_teams=""
+              unexpected_teams=""
+              teams_check_failed=""
+              if [ "$org" = "FreeForCharity" ]; then
+                # --paginate: the teams endpoint pages at 30 by default; large repos
+                # would otherwise report false missing-teams drift. A failed fetch
+                # (auth/rate-limit/transient) must NOT read as "no teams" — flag it
+                # distinctly instead of reporting every team missing.
+                if team_grants=$(gh api --paginate "repos/$org/$repo/teams?per_page=100" --jq '[.[] | .slug] | join(",")' 2>/dev/null); then
+                  team_grants=$(printf '%s' "$team_grants" | paste -sd, -)
+                else
+                  teams_check_failed=1
+                  team_grants=""
+                fi
+                if [ -n "$teams_check_failed" ]; then
+                  : # skip membership checks entirely — result would be noise
+                elif [ "$vis" = "public" ]; then
+                  for required in ffc-orgwide-admins ffc-orgwide-maintainers ffc-orgwide-writers ffc-orgwide-triagers ffc-orgwide-readers; do
+                    case ",$team_grants," in
+                      *,$required,*) ;;
+                      *) missing_teams="${missing_teams}${required#ffc-orgwide-} ";;
+                    esac
+                  done
+                else
+                  # Private repo — flag if ANY ORGWIDE tier team is granted (shouldn't be)
+                  for unexpected in ffc-orgwide-admins ffc-orgwide-maintainers ffc-orgwide-writers ffc-orgwide-triagers ffc-orgwide-readers; do
+                    case ",$team_grants," in
+                      *,$unexpected,*) unexpected_teams="${unexpected_teams}${unexpected#ffc-orgwide-} ";;
+                    esac
+                  done
+                fi
+              fi
 
               issues=()
               [ "$squash" = "true" ] && issues+=("squash-enabled")
@@ -80,6 +121,15 @@ jobs:
               # For public repos, expect merge_queue
               if [ "$vis" = "public" ] && [ "$has_mq" = "0" ]; then
                 issues+=("no-merge-queue")
+              fi
+              if [ -n "$teams_check_failed" ]; then
+                issues+=("teams-check-failed")
+              fi
+              if [ -n "$missing_teams" ]; then
+                issues+=("missing-teams:${missing_teams% }")
+              fi
+              if [ -n "$unexpected_teams" ]; then
+                issues+=("private-repo-has-orgwide-teams:${unexpected_teams% }")
               fi
 
               issue_str="-"

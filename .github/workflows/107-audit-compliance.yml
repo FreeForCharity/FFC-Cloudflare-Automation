@@ -18,7 +18,7 @@ jobs:
     runs-on: windows-latest
     environment: cloudflare-prod-read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv

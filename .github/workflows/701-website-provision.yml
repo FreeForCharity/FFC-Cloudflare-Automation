@@ -4,6 +4,17 @@ on:
   issues:
     types: [assigned]
 
+  # Cross-repo trigger from FFCadmin's trigger-provisioning.yml, sent after an
+  # intake issue passes sponsoring-admin verification. client_payload carries:
+  # charity_title, ffcadmin_issue, issue_url, sponsor, and domain (the
+  # applicant's desired apex domain). See FFCadmin docs/migration-plan.md §1-2.
+  # client_payload keys are read exactly like workflow_dispatch inputs (the
+  # resolve step treats both as "manual"), so `domain` is required and any of
+  # the optional charity/footer fields may be supplied under the same names.
+  # An empty/missing domain fails validation with the normal admin prompt.
+  repository_dispatch:
+    types: [ffcadmin-website-provision]
+
   workflow_dispatch:
     inputs:
       domain:
@@ -127,11 +138,14 @@ jobs:
     steps:
       - name: Parse Website Request
         id: parse
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
-            const isManual = context.eventName === 'workflow_dispatch';
-            const manualInputs = context.payload.inputs || {};
+            const isDispatch = context.eventName === 'repository_dispatch';
+            const isManual = context.eventName === 'workflow_dispatch' || isDispatch;
+            const manualInputs = isDispatch
+              ? (context.payload.client_payload || {})
+              : (context.payload.inputs || {});
             const issue = context.payload.issue || {};
             const body = isManual ? '' : (issue.body || '');
             const title = isManual ? '' : (issue.title || '');
@@ -761,7 +775,7 @@ jobs:
       zone_exists_ffc: ${{ steps.check.outputs.zone_exists_ffc }}
       zone_exists_cm: ${{ steps.check.outputs.zone_exists_cm }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC. zone_check
       # only does GETs (cloudflare-zone-get.ps1), so use scope: read.
@@ -820,7 +834,7 @@ jobs:
     if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.post_comments == 'true'
     steps:
       - name: Comment start
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           # Pass values through the environment instead of inlining `${{ }}` into
           # the script body: a value containing a quote, newline or `${` would
@@ -891,7 +905,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
@@ -935,7 +949,7 @@ jobs:
       always() && needs.resolve.outputs.skip != 'true' && (needs.dns.result == 'success' ||
       needs.dns.result == 'skipped')
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate required GitHub token
         shell: pwsh
@@ -990,6 +1004,9 @@ jobs:
             }
 
             ./scripts/Create-GitHubRepo.ps1 @createParams
+            if ($LASTEXITCODE -ne 0) {
+              throw "Create-GitHubRepo.ps1 failed with exit code $LASTEXITCODE"
+            }
           }
 
   # Add the requester + technical POC as repo maintainers via the reusable
@@ -1014,7 +1031,7 @@ jobs:
     needs: [resolve, zone_check, repo]
     if: needs.resolve.outputs.skip != 'true'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate required GitHub token
         shell: pwsh
@@ -1168,7 +1185,7 @@ jobs:
       needs.maintainers.result == 'skipped') && needs.content.result == 'success'
     steps:
       - name: Comment completion
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           # See the note on the announce job: interpolate via env, not inline,
           # to avoid SyntaxError / script injection from user-derived values.

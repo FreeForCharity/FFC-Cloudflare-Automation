@@ -92,7 +92,7 @@ jobs:
     steps:
       - name: Resolve inputs
         id: r
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           # Pass dispatch inputs via env (never inline ${{ }} into the JS source)
           # to avoid breaking the script or opening an injection vector.
@@ -160,7 +160,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate inputs and confirmation
         shell: pwsh
@@ -267,7 +267,7 @@ jobs:
           path: artifacts/registrar
 
       - name: Comment result back to issue
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           ISSUE_NUMBER: ${{ needs.resolve.outputs.issue_number }}
           MODE: ${{ needs.resolve.outputs.mode }}

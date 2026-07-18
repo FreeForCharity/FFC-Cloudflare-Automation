@@ -36,7 +36,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv
@@ -67,7 +67,7 @@ jobs:
     needs: [export_whmcs]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download WHMCS export
         uses: actions/download-artifact@v7
@@ -247,7 +247,7 @@ jobs:
 
       - name: Comment summary back to issue
         if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');

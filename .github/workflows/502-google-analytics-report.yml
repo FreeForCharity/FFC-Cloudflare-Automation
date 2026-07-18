@@ -35,7 +35,7 @@ jobs:
     runs-on: windows-latest
     environment: google-prod-read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate required Azure secrets
         shell: bash
@@ -102,7 +102,7 @@ jobs:
       # Checkout gives the deliver job the current workflow catalog so the public
       # copies on ffcadmin (src/data render + /data stable URL) refresh in the
       # same daily PR as the GA data — one reviewable sync pipe (backlog #554).
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download reports
         uses: actions/download-artifact@v7

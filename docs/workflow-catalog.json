@@ -436,6 +436,22 @@
       "categoryCode": "CF"
     },
     {
+      "number": 121,
+      "title": "DNS + GH Pages - Fleet Cutover Preflight (FFC-EX)",
+      "apis": [],
+      "file": "121-fleet-cutover-preflight.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Read-only go/no-go preflight for the FFC-EX DNS cutover \u2014 the checked companion to workflow 120 (bulk cutover staging -> apex). For each domain it confirms the GitHub Pages origin is healthy, reads live apex/www DNS over DoH, verifies CAA won't block Let's Encrypt issuance, and probes HTTPS on the target domain, then prints one verdict table (also written to the job summary). It changes nothing and loads no credentials, so it needs no environment approval gate. Run it before 120 to confirm readiness and after 120 to confirm the cutover landed.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "none (no credentials)",
+      "guard": "read-only DoH/HTTPS probes; go/no-go for 120",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
       "number": 201,
       "title": "WHMCS - Export Domains (Report)",
       "apis": [
@@ -939,6 +955,46 @@
       "safetyLevel": "Reads",
       "approvalEnv": "whmcs-prod-read",
       "guard": "report-only; GETs charity-supplied URLs; never accepts/cancels an order",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 226,
+      "title": "WHMCS - Application Triage (rank + accept onboarding orders)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "226-whmcs-application-triage.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Ranks PENDING charity onboarding applications by the mission-weighted FFC READINESS score (the operator's definition of \"best\"), separately for pre-501(c)(3) (pid 16) and full 501(c)(3) (pid 33). It can ACCEPT specific $0 onboarding orders (approve) so the charity gets the acceptance email, and can RECONCILE duplicate / miscategorized orders (reconcile) by cancelling only the explicitly-listed orders and emailing those applicants a paste-ready re-file email. Modes 'report' and 'reconcile-report' are READ-ONLY. The mutating modes 'approve' and 'reconcile' each require an explicit comma-separated orderids list and act ONLY on those ids (no accept-all / cancel-all). Bound to the whmcs-prod environment, so every run pauses at the approval gate (the safety checkpoint); a read-only run pausing there is expected and fine.",
+      "safetyLevel": "Writes (report default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "report + reconcile-report read-only; approve accepts ONLY listed $0 orderids; reconcile cancels ONLY listed orderids + emails those clients a re-file email (email-first, no cancel-all)",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 227,
+      "title": "cPanel - Deploy WHMCS Hooks (FTPS/lftp)",
+      "apis": [
+        "cPanel"
+      ],
+      "file": "227-whmcs-hooks-deploy.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Deploys the version-controlled WHMCS hooks in whmcs/hooks/*.php to the production cPanel host, replacing the manual-FTPS runbook. It uses the SAME proven transport as the freeforcharity.org website deploy (deploy-cpanel.yml): GH OIDC -> Azure -> Key Vault (kv-ffc-admin-prod-cbm) -> MAIN cPanel FTP creds -> lftp over FTPS (AUTH TLS). The MAIN account is homed at the account root, so it can write into ~/public_html/hub/includes/hooks/. Creds are piped to lftp via stdin (never argv).  Target:   public_html/hub/includes/hooks/<file>.php  (relative to the cPanel home) KV creds: wr-all-cbm-cpanel-ffc-interserver-ftp-{host,port,user,password}  mode=verify (default) is READ-ONLY: it connects (proving auth+connectivity), downloads the deployed hooks, and reports whether each matches the repo (or is not deployed yet). mode=deploy uploads each hook first, then downloads + compares and fails on any mismatch.",
+      "safetyLevel": "Writes (verify default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "mode=verify (read-only) vs deploy; hooks input is basename-validated",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },

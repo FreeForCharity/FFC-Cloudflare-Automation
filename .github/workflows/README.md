@@ -523,6 +523,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 118 | Domain - Registrar Lock / Unlock [WHMCS] | `118-whmcs-domain-lock.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 119 | DNS - Bulk Staging CNAME -> GitHub Pages (FFC-EX) [CF] | `119-bulk-staging-cname-github-pages.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write |
 | 120 | DNS + GH Pages - Bulk Cutover staging -> Apex (FFC-EX) [CF+GH] | `120-bulk-cutover-to-github-pages.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write / ✅ github-prod |
+| 121 | DNS + GH Pages - Fleet Cutover Preflight (FFC-EX) | `121-fleet-cutover-preflight.yml` | workflow_dispatch | Reads | none (no credentials) |
 ### 2xx — WHMCS
 
 | # | Workflow | File | Triggers | Safety | Approval env |
@@ -552,6 +553,8 @@ No additional setup is required for these workflows to run. However, to get the 
 | 223 | WHMCS - Import Cloudflare Registrar Domains as Domain Records [WHMCS+CF] | `223-whmcs-import-cloudflare-domains.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 224 | WHMCS - GitHub Pages Product Alignment [WHMCS+GH] | `224-whmcs-github-pages-product-alignment.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 225 | WHMCS - Domain Order URL Verify [WHMCS] | `225-whmcs-domain-order-url-verify.yml` | schedule, workflow_dispatch | Reads | whmcs-prod-read |
+| 226 | WHMCS - Application Triage (rank + accept onboarding orders) [WHMCS] | `226-whmcs-application-triage.yml` | workflow_dispatch | Writes (report default) | ✅ whmcs-prod |
+| 227 | cPanel - Deploy WHMCS Hooks (FTPS/lftp) [cPanel] | `227-whmcs-hooks-deploy.yml` | workflow_dispatch | Writes (verify default) | ✅ whmcs-prod |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

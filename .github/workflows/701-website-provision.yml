@@ -1259,7 +1259,7 @@ jobs:
             if [ "$served" = "true" ]; then
               echo "✅ Live on GitHub Pages at \`https://$served_host\` (HTTP 200, \`Server: GitHub.com\`)."
             else
-              echo "⚠️ Not serving yet after ~6 min of retries. DNS/cert may still be propagating, or Pages is misconfigured — re-check in a few minutes."
+              echo "⚠️ Not serving yet after 12 probe attempts (~6–14 min depending on curl timeouts). DNS/cert may still be propagating, or Pages is misconfigured — re-check in a few minutes."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$served" != "true" ]; then

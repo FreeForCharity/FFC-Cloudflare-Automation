@@ -52,7 +52,7 @@ jobs:
           & pwsh -NoProfile -File ./scripts/cloudflare-registrar-domains.ps1 -OutputFile artifacts/cloudflare/registrar_domains.json
           if ($LASTEXITCODE -ne 0) { throw "Cloudflare registrar list failed with exit code $LASTEXITCODE." }
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: cloudflare-registrar-domains
           path: artifacts/cloudflare/registrar_domains.json
@@ -66,7 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           name: cloudflare-registrar-domains
           path: artifacts/cloudflare
@@ -94,7 +94,7 @@ jobs:
           & pwsh -NoProfile -File ./scripts/whmcs-product-alignment.ps1 @params | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
           if ($LASTEXITCODE -ne 0) { throw "Product alignment failed with exit code $LASTEXITCODE." }
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: whmcs-product-alignment
           path: artifacts/whmcs/whmcs_product_alignment.json

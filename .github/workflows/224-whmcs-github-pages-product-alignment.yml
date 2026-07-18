@@ -48,7 +48,7 @@ jobs:
           & pwsh -NoProfile -File ./scripts/github-pages-domains.ps1 -OutputFile artifacts/github/github_pages_domains.json
           if ($LASTEXITCODE -ne 0) { throw "GitHub Pages domain list failed with exit code $LASTEXITCODE." }
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: github-pages-domains
           path: artifacts/github/github_pages_domains.json
@@ -62,7 +62,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           name: github-pages-domains
           path: artifacts/github
@@ -89,7 +89,7 @@ jobs:
           & pwsh -NoProfile -File ./scripts/whmcs-product-alignment.ps1 @params | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
           if ($LASTEXITCODE -ne 0) { throw "Product alignment failed with exit code $LASTEXITCODE." }
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: whmcs-github-pages-alignment
           path: artifacts/whmcs/whmcs_github_pages_alignment.json

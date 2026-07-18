@@ -73,7 +73,7 @@ jobs:
           }
 
       - name: Upload reconciliation artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: whmcs_siteslist_reconciliation
           path: ${{ inputs.output_file }}

@@ -135,7 +135,7 @@ jobs:
           }
 
       - name: Upload tickets CSV artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: whmcs_tickets_triage
           path: artifacts/whmcs/tickets_*.csv

@@ -121,20 +121,6 @@ jobs:
           pages_live=false
           if [ "$pages_code" = "200" ]; then pages_live=true; fi
 
-          # --- sibling scan: does the org already host ANOTHER repo for this domain? ---
-          # An exact-name check is too strict: TechnologyMonastery.org (no FFC-EX prefix)
-          # was the charity's real, active Next.js site while FFC-EX-technologymonastery.org
-          # was empty. Match the FULL domain (case-insensitive) inside every org repo name —
-          # full-domain matching keeps legitimate sibling domains apart (letsdanceactivities
-          # .org vs .com do not match each other).
-          siblings=$(gh api "orgs/$TARGET_ORG/repos?per_page=100" --paginate --jq '.[].name' 2>/dev/null |
-            grep -iF -- "$IN_DOMAIN" | grep -ivx -- "$canonical_name" || true)
-          if [ -n "$siblings" ]; then
-            {
-              echo "- ⚠️ Other org repos matching \`$IN_DOMAIN\`:"
-              while IFS= read -r s; do echo "  - \`$s\`"; done <<< "$siblings"
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
 
           {
             echo "## Clone preflight — ${IN_DOMAIN}"
@@ -150,11 +136,35 @@ jobs:
             exit 1
           fi
 
-          if [ -n "$siblings" ] && [ "${IN_FORCE:-false}" != "true" ]; then
-            echo "::error::The org already hosts other repo(s) matching $IN_DOMAIN: $(printf '%s' "$siblings" | tr '\n' ' '). One of them may be the charity's real site — investigate before cloning. If this clone is deliberate, re-dispatch with force=true."
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "⛔ Refused: sibling repo(s) exist for this domain. Investigate, then re-dispatch with \`force=true\` if deliberate." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+          # --- sibling scan: does the org already host ANOTHER repo for this domain? ---
+          # An exact-name check is too strict: TechnologyMonastery.org (no FFC-EX prefix)
+          # was the charity's real, active Next.js site while FFC-EX-technologymonastery.org
+          # was empty. Match the FULL domain (case-insensitive) inside every org repo name —
+          # full-domain matching keeps legitimate sibling domains apart (letsdanceactivities
+          # .org vs .com do not match each other). The scan FAILS SAFE: an org-list API
+          # error refuses rather than silently disabling the guard. force=true skips it.
+          if [ "${IN_FORCE:-false}" != "true" ]; then
+            set +e
+            org_repos=$(gh api "orgs/$TARGET_ORG/repos?per_page=100" --paginate --jq '.[].name' 2>&1)
+            list_rc=$?
+            set -e
+            if [ $list_rc -ne 0 ]; then
+              echo "::error::Preflight could not list org repos for the sibling scan (transient API error?). Failing safe rather than guessing. Details: $org_repos"
+              exit 1
+            fi
+            siblings=$(printf '%s\n' "$org_repos" | grep -iF -- "$IN_DOMAIN" | grep -ivx -- "$canonical_name" || true)
+            if [ -n "$siblings" ]; then
+              {
+                echo "⛔ Refused: sibling org repo(s) match \`$IN_DOMAIN\` — one may be the real site:"
+                while IFS= read -r s; do echo "- \`$s\`"; done <<< "$siblings"
+                echo ""
+                echo "Investigate, then re-dispatch with \`force=true\` if this clone is deliberate."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::The org already hosts other repo(s) matching $IN_DOMAIN: $(printf '%s' "$siblings" | tr '\n' ' '). One of them may be the charity's real site — investigate before cloning. If this clone is deliberate, re-dispatch with force=true."
+              exit 1
+            fi
+          else
+            echo "- force=true: sibling-domain scan skipped." >> "$GITHUB_STEP_SUMMARY"
           fi
 
           echo "repo_name=$canonical_name" >> "$GITHUB_OUTPUT"

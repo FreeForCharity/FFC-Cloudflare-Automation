@@ -153,6 +153,19 @@ def test_sibling_scan_full_domain_no_tld_false_positive():
     assert "repo_name=FFC-EX-letsdanceactivities.org" in outputs, outputs
 
 
+def test_org_list_failure_fails_safe():
+    proc, _, _ = run_preflight(
+        {
+            "TEST_REPO_META": '{"full_name": "FreeForCharity/FFC-EX-alltypetowing.com"}',
+            "TEST_PAGES_CODE": "404",
+            "TEST_APEX_SERVER": "cloudflare",
+            "TEST_ORG_REPOS_FAIL": "1",
+        }
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "could not list org repos" in proc.stdout, proc.stdout
+
+
 def test_sibling_refusal_overridden_by_force():
     proc, _, outputs = run_preflight(
         {

@@ -97,6 +97,35 @@ def test_sibling_refusal_overridden_by_force():
     assert "is free" in summary, summary
 
 
+def test_hyphenated_domain_prefix_strip_keeps_full_domain():
+    # Only the literal FFC-EX- prefix is stripped: FFC-EX-the-trendylittlegeek.com
+    # must scan for "the-trendylittlegeek.com" (NOT "trendylittlegeek.com"), so the
+    # unrelated trendylittlegeek.com repo does not block this create.
+    proc, summary = run_preflight(
+        {
+            "IN_REPO": "FFC-EX-the-trendylittlegeek.com",
+            "TEST_REPO_META": "404",
+            "TEST_ORG_REPOS": "FFC-EX-trendylittlegeek.com",
+        }
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "is free" in summary, summary
+
+
+def test_org_list_failure_fails_safe():
+    proc, _ = run_preflight({"TEST_REPO_META": "404", "TEST_ORG_REPOS_FAIL": "1"})
+    assert proc.returncode != 0, proc.stdout
+    assert "could not list org repos" in proc.stdout, proc.stdout
+
+
+def test_org_list_failure_bypassed_by_force():
+    proc, summary = run_preflight(
+        {"TEST_REPO_META": "404", "TEST_ORG_REPOS_FAIL": "1", "IN_FORCE": "true"}
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "scan skipped" in summary, summary
+
+
 def test_sibling_scan_full_domain_no_tld_false_positive():
     proc, summary = run_preflight(
         {

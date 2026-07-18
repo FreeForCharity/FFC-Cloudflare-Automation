@@ -25,6 +25,10 @@ case "$cmd" in
         ;;
       *orgs/*/repos*)
         # Org repo listing for the preflight sibling scans (one name per line).
+        if [ "${TEST_ORG_REPOS_FAIL:-}" = "1" ]; then
+          echo "simulated org list failure" >&2
+          exit 1
+        fi
         printf '%s\n' "${TEST_ORG_REPOS:-}"
         ;;
       */teams*)

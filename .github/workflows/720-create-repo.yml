@@ -109,21 +109,35 @@ jobs:
           # --- sibling scan: does the org already host ANOTHER repo for this domain? ---
           # Exact-name checks are too strict: TechnologyMonastery.org (no FFC-EX prefix)
           # was the charity's real site while the FFC-EX-prefixed name looked free. Derive
-          # the domain from the requested name and match it (full domain, case-insensitive)
-          # against every org repo name; full-domain matching keeps legitimate sibling
-          # domains (.org vs .com) apart.
-          domain="$name"
-          case "$domain" in FFC-EX-*|ffc-ex-*) domain="${domain#*-*-}" ;; esac
-          siblings=$(gh api "orgs/$owner/repos?per_page=100" --paginate --jq '.[].name' 2>/dev/null |
-            grep -iF -- "$domain" | grep -ivx -- "$name" || true)
-          if [ -n "$siblings" ] && [ "${IN_FORCE:-false}" != "true" ]; then
-            echo "::error::The org already hosts repo(s) matching $domain: $(printf '%s' "$siblings" | tr '\n' ' '). One of them may be the real site for this domain — investigate before creating a new one. If this create is deliberate, re-dispatch with Force=true."
-            {
-              echo "## Create preflight — $owner/$name"
-              echo "⛔ Refused: sibling repo(s) match \`$domain\`:"
-              while IFS= read -r s; do echo "- \`$s\`"; done <<< "$siblings"
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+          # the domain by stripping ONLY the literal FFC-EX- prefix (hyphenated domains
+          # like the-trendylittlegeek.com must survive intact) and match it (full domain,
+          # case-insensitive) against every org repo name; full-domain matching keeps
+          # legitimate sibling domains (.org vs .com) apart. The scan FAILS SAFE: an
+          # org-list API error refuses rather than silently disabling the guard.
+          if [ "${IN_FORCE:-false}" != "true" ]; then
+            domain="$name"
+            domain="${domain#FFC-EX-}"
+            domain="${domain#ffc-ex-}"
+            set +e
+            org_repos=$(gh api "orgs/$owner/repos?per_page=100" --paginate --jq '.[].name' 2>&1)
+            list_rc=$?
+            set -e
+            if [ $list_rc -ne 0 ]; then
+              echo "::error::Preflight could not list org repos for the sibling scan (transient API error?). Failing safe rather than guessing. Details: $org_repos"
+              exit 1
+            fi
+            siblings=$(printf '%s\n' "$org_repos" | grep -iF -- "$domain" | grep -ivx -- "$name" || true)
+            if [ -n "$siblings" ]; then
+              echo "::error::The org already hosts repo(s) matching $domain: $(printf '%s' "$siblings" | tr '\n' ' '). One of them may be the real site for this domain — investigate before creating a new one. If this create is deliberate, re-dispatch with Force=true."
+              {
+                echo "## Create preflight — $owner/$name"
+                echo "⛔ Refused: sibling repo(s) match \`$domain\`:"
+                while IFS= read -r s; do echo "- \`$s\`"; done <<< "$siblings"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          else
+            echo "- Force=true: sibling-domain scan skipped." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "✅ $owner/$name is free — proceeding to the gated create." >> "$GITHUB_STEP_SUMMARY"
 

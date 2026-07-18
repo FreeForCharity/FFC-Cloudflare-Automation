@@ -80,7 +80,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Import failed for $($prop.Name) with exit code $LASTEXITCODE." }
           }
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: whmcs-import-cloudflare-domains
           path: artifacts/whmcs/

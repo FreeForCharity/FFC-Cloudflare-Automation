@@ -56,7 +56,7 @@ jobs:
             core.summary.addHeading('Actions run metrics (30d)')
               .addRaw(`Total runs: ${fetched}; workflows: ${workflows.length}`).write();
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: actions-run-metrics
           path: actions-run-metrics.json

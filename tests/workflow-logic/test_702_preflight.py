@@ -153,6 +153,34 @@ def test_sibling_scan_full_domain_no_tld_false_positive():
     assert "repo_name=FFC-EX-letsdanceactivities.org" in outputs, outputs
 
 
+def test_probe_failure_fails_safe_not_notlive():
+    # A curl-level failure (000 / empty) is a failed PROBE, not a "not live"
+    # verdict — must refuse rather than fail open past the gate.
+    proc, summary, _ = run_preflight(
+        {
+            "TEST_REPO_META": '{"full_name": "FreeForCharity/FFC-EX-alltypetowing.com"}',
+            "TEST_PAGES_CODE": "000",
+            "TEST_APEX_SERVER": "cloudflare",
+        }
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "failing safe" in proc.stdout.lower(), proc.stdout
+    assert "probes failed" in summary, summary
+
+
+def test_probe_failure_bypassed_by_force():
+    proc, _, outputs = run_preflight(
+        {
+            "TEST_REPO_META": '{"full_name": "FreeForCharity/FFC-EX-alltypetowing.com"}',
+            "TEST_PAGES_CODE": "000",
+            "TEST_APEX_SERVER": "cloudflare",
+            "IN_FORCE": "true",
+        }
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "repo_name=" in outputs, outputs
+
+
 def test_archived_target_refused_even_with_force():
     # Archived = read-only: the gated job would fail at push/PR after consuming
     # an approval, and no flag makes it writable — so force must NOT bypass.

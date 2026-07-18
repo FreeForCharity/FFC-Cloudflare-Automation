@@ -123,6 +123,15 @@ jobs:
           apex_code=$(printf '%s\n' "$apex_headers" | awk 'toupper($1) ~ /^HTTP/ { c = $2 } END { print c }')
           apex_server=$(printf '%s\n' "$apex_headers" | grep -i '^server:' | tail -n1 | sed -E 's/^[Ss]erver:[[:space:]]*//')
 
+          # Probe failures must not read as "not live" — that would fail open, exactly
+          # like the org-list case. 000/empty means the probe itself failed (network/TLS),
+          # not that the site is down; refuse unless force=true explicitly overrides.
+          if [ "${IN_FORCE:-false}" != "true" ] && { [ "$pages_code" = "000" ] || [ -z "${apex_code:-}" ]; }; then
+            echo "::error::Preflight live-site probes did not complete (default URL: HTTP $pages_code; apex: HTTP ${apex_code:-<none>}). Cannot verify whether $canonical already serves — failing safe. Re-dispatch with force=true only if you have verified the target state yourself."
+            echo "⛔ Refused: live-site probes failed (network?) — could not verify target state." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
           cutover=false
           if [ "${apex_code:-}" = "200" ] && printf '%s' "$apex_server" | grep -qi 'github'; then
             cutover=true

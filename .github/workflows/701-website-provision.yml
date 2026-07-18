@@ -127,7 +127,7 @@ jobs:
     steps:
       - name: Parse Website Request
         id: parse
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const isManual = context.eventName === 'workflow_dispatch';
@@ -820,7 +820,7 @@ jobs:
     if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.post_comments == 'true'
     steps:
       - name: Comment start
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           # Pass values through the environment instead of inlining `${{ }}` into
           # the script body: a value containing a quote, newline or `${` would
@@ -1168,7 +1168,7 @@ jobs:
       needs.maintainers.result == 'skipped') && needs.content.result == 'success'
     steps:
       - name: Comment completion
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           # See the note on the announce job: interpolate via env, not inline,
           # to avoid SyntaxError / script injection from user-derived values.

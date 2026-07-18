@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Cancel stale waiting runs
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           MAX_AGE_DAYS: ${{ github.event.inputs.max_age_days || '7' }}
           # Scheduled runs have no inputs; default to a real cancel on schedule,

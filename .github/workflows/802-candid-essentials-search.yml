@@ -1,0 +1,103 @@
+name: '802. Candid - Essentials Search [CANDID]'
+run-name: 'Candid Essentials Search: ${{ inputs.search_terms }}'
+
+# Read-only: searches Candid's nonprofit database (Essentials v4) by EIN, organization name, or
+# keywords and reports name / EIN / location / transparency-seal level / profile URL. Used during
+# charity onboarding to locate an applicant's Candid (GuideStar) profile and seal level. Key comes
+# from Azure Key Vault at run time via OIDC (candid-keys-from-kv); see docs/candid-api-and-mcp.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      search_terms:
+        description: 'Search terms: EIN, organization name, or keywords'
+        required: true
+        type: string
+      size:
+        description: 'Max results (1-25)'
+        required: false
+        type: string
+        default: '10'
+      output_file:
+        description: 'Output JSON filename (raw API response)'
+        required: false
+        type: string
+        default: 'artifacts/candid/essentials_search.json'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  essentials_search:
+    runs-on: windows-latest
+    environment: candid-prod-read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate required Azure secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID secret is not set (environment: candid-prod-read)";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID secret is not set (environment: candid-prod-read)";
+            exit 1;
+          fi
+
+      # Candid key from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/candid-keys-from-kv
+        with:
+          scope: read
+          apis: essentials
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Essentials search (read-only)
+        id: search
+        shell: pwsh
+        env:
+          INPUT_SEARCH_TERMS: ${{ inputs.search_terms }}
+          INPUT_SIZE: ${{ inputs.size }}
+          INPUT_OUTPUT_FILE: ${{ inputs.output_file }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $size = 10
+          if (-not [int]::TryParse($env:INPUT_SIZE, [ref]$size) -or $size -lt 1 -or $size -gt 25) {
+            throw "Invalid size '$($env:INPUT_SIZE)': expected an integer 1-25."
+          }
+
+          # The output path is uploaded as an artifact, so keep it inside the workspace: no
+          # absolute/rooted paths and no '..' traversal (which could exfiltrate runner files).
+          $out = $env:INPUT_OUTPUT_FILE
+          if ([string]::IsNullOrWhiteSpace($out) -or $out.Contains(':') -or [System.IO.Path]::IsPathRooted($out) -or (($out -split '[\\/]') -contains '..')) {
+            throw "Invalid output_file '$out': must be a relative path inside the workspace without '..'."
+          }
+
+          & pwsh -NoProfile -File .\scripts\candid-essentials-search.ps1 -SearchTerms $env:INPUT_SEARCH_TERMS -Size $size -OutputFile $out
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Essentials search script failed with exit code $LASTEXITCODE. See logs above."
+          }
+          if (-not (Test-Path $env:INPUT_OUTPUT_FILE)) {
+            throw "Expected output file not found: $($env:INPUT_OUTPUT_FILE)"
+          }
+
+          "## Candid Essentials search" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Search terms: $($env:INPUT_SEARCH_TERMS)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Match table is printed in the job log (step 'Essentials search')." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Raw response artifact: candid_essentials_search" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Artifacts: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)/artifacts" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload JSON Artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: candid_essentials_search
+          path: ${{ inputs.output_file }}
+          if-no-files-found: error
+          retention-days: 30

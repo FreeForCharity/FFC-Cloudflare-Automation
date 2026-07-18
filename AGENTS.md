@@ -33,7 +33,7 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
    section of `.github/workflows/README.md`. Public rendering: <https://ffcadmin.org/automation/>.
 2. **The number tells you the target system** — 3-digit, category-first: `1xx` Cloudflare/DNS/Domain
    · `2xx` WHMCS · `3xx` Microsoft · `4xx` Zeffy · `5xx` Google · `6xx` WPMUDEV · `7xx` GitHub
-   (website + repo) · `8xx/9xx` reserved.
+   (website + repo) · `8xx` Candid (GuideStar) · `9xx` reserved.
 3. **Names**: `NNN. Target - Description [TAG]`; the `[TAG]` lists every API the workflow **calls**
    (`+`-joined). "Calls" means the API actually invoked — not the service the records are _for_
    (M365 DNS written via Cloudflare = `[CF]`) and never plumbing (KV auth, posting an issue

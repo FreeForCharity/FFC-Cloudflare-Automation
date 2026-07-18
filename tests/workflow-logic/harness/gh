@@ -31,9 +31,25 @@ case "$cmd" in
         # May be multi-line to simulate --paginate emitting one line per page.
         printf '%s\n' "${TEST_TEAMS_OUTPUT:-}"
         ;;
+      "-X PATCH repos/"*)
+        # 736 archive: PATCH repos/<owner>/<name> -F archived=true
+        if [ "${TEST_PATCH_FAIL:-}" = "1" ]; then
+          echo "simulated PATCH failure" >&2
+          exit 1
+        fi
+        ;;
       *repos/*)
-        # settings: squash|auto|del|upd
-        echo "${TEST_REPO_SETTINGS:-false|true|true|true}"
+        # 736 archive GET: TEST_REPO_META is a JSON blob ("404" = not found).
+        if [ -n "${TEST_REPO_META:-}" ]; then
+          if [ "$TEST_REPO_META" = "404" ]; then
+            echo "Not Found (HTTP 404)" >&2
+            exit 1
+          fi
+          printf '%s\n' "$TEST_REPO_META"
+        else
+          # settings: squash|auto|del|upd (726 drift audit)
+          echo "${TEST_REPO_SETTINGS:-false|true|true|true}"
+        fi
         ;;
       *)
         exit 0
@@ -43,6 +59,17 @@ case "$cmd" in
   repo)
     # gh repo list ... --jq → "name<TAB>visibility<TAB>defaultBranch" rows
     printf '%s\n' "${TEST_REPO_LIST:-}"
+    ;;
+  issue)
+    # 736 archive: gh issue comment|close <n> --repo <r> ...
+    case "$args" in
+      comment*)
+        if [ "${TEST_ISSUE_COMMENT_FAIL:-}" = "1" ]; then exit 1; fi
+        ;;
+      close*)
+        if [ "${TEST_ISSUE_CLOSE_FAIL:-}" = "1" ]; then exit 1; fi
+        ;;
+    esac
     ;;
   *)
     exit 0

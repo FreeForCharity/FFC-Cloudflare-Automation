@@ -77,6 +77,7 @@ jobs:
           IN_DRY_RUN: ${{ inputs.dry_run }}
           IN_CONFIRM: ${{ inputs.confirm_repo }}
           IN_ISSUE: ${{ inputs.issue_number }}
+          THIS_REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
@@ -156,11 +157,11 @@ jobs:
             if printf '%s' "$IN_ISSUE" | grep -qE '^[0-9]+$'; then
               # Best-effort (the archive itself already succeeded), but report honestly:
               # only claim the issue was closed if the close actually succeeded.
-              gh issue comment "$IN_ISSUE" --repo "${{ github.repository }}" \
+              gh issue comment "$IN_ISSUE" --repo "$THIS_REPO" \
                 --body "Archived \`$full\` — ${IN_REASON:-no reason given}. Repo is read-only (reversible). Closing as not planned." ||
                 echo "::warning::Failed to comment on issue #$IN_ISSUE."
-              if gh issue close "$IN_ISSUE" --repo "${{ github.repository }}" --reason "not planned"; then
-                echo "- Closed issue #$IN_ISSUE in ${{ github.repository }}." >> "$GITHUB_STEP_SUMMARY"
+              if gh issue close "$IN_ISSUE" --repo "$THIS_REPO" --reason "not planned"; then
+                echo "- Closed issue #$IN_ISSUE in $THIS_REPO." >> "$GITHUB_STEP_SUMMARY"
               else
                 echo "- ⚠️ Could not close issue #$IN_ISSUE — close it manually." >> "$GITHUB_STEP_SUMMARY"
                 echo "::warning::Failed to close issue #$IN_ISSUE."

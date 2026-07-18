@@ -1179,6 +1179,9 @@ jobs:
                 -LeadershipLines @($leadership)
               $contentStatus = 'applied'
             } else {
+              # 'skipped' refers to the React template patch only. ffc-content.json
+              # (provisioning metadata) was still written above and is committed below —
+              # that is long-standing intended behavior, and the finalize comment says so.
               Write-Host 'Skipping React template patch: missing required footer/leadership inputs.' -ForegroundColor Yellow
               $contentStatus = 'skipped'
             }
@@ -1323,7 +1326,7 @@ jobs:
                 : contentStatus === 'failed'
                   ? '- ⚠️ Content patch step did not complete (non-blocking) — the site is provisioned; footer/leadership can be applied later by re-running or editing the repo.'
                   : contentStatus === 'skipped'
-                    ? '- Content patch skipped (admin-minimal provision — no footer/leadership inputs provided).'
+                    ? '- Content patch skipped (admin-minimal provision — no footer/leadership inputs provided); provisioning metadata (`ffc-content.json`) was still recorded in the repo.'
                     : '- ❔ Content step did not record a status (it may have been skipped or errored before reporting) — the site itself is provisioned.';
             const dnsManual = zoneControlled
               ? []

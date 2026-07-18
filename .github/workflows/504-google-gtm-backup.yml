@@ -42,7 +42,7 @@ jobs:
             Remove-Item $keyFile -Force -ErrorAction SilentlyContinue
           }
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: gtm-container-backups
           path: gtm-backups/*.json

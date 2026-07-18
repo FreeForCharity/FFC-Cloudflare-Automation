@@ -1,15 +1,42 @@
 # Repo notes for Claude
 
+> Agent-generic onboarding (catalog, numbering, safety model, add-a-workflow checklist) lives in
+> **AGENTS.md** — read that first. This file covers Claude-specific environment notes.
+
+## Merging: queue etiquette (validated 2026-07-01, PRs #534–#538)
+
+- `main` requires **Validate Repository** + **Phantom Revert Guard** (strict) and merges via the
+  **merge queue**, which builds a merge group and re-runs those checks (722/723 have `merge_group:`
+  triggers; 727 skips on merge groups = passing).
+- **Resolve review threads before queueing.** Copilot auto-reviews every PR; fix the real findings
+  first, then
+  `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"<id>"}){thread{isResolved}}}'`.
+  List threads: query `pullRequest(number:N){reviewThreads(first:20){nodes{id isResolved …}}}`.
+- **`gh pr merge --auto` can mask the real blocker** behind a GraphQL "rate limit" error. Use the
+  direct mutation to see the truth (unresolved conversation / CodeQL pending):
+  `gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:"<node_id>"}){mergeQueueEntry{position state}}}'`
+- GraphQL and REST have **separate rate pools** (5,000/hr each, shared account-wide). When GraphQL
+  is exhausted, reads still work via REST; check with `gh api rate_limit`.
+- Never `--admin`-merge; never push to `main` directly.
+
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 
 In a self-hosted/local remote environment the `gh` CLI is typically pre-authenticated — run
 `gh auth status` to confirm (and `gh auth login` if not). When available it acts as a real user
 (e.g. `clarkemoyer`) with `workflow` + `repo` scopes. **Prefer `gh` for anything Actions-related.**
 
-Do NOT rely on the MCP GitHub tools to run workflows: they run through a GitHub **App installation**
-whose granted scopes do not include `actions: write`, so `actions_run_trigger`/`run_workflow`
-returns `403 Resource not accessible by integration`. (MCP is fine for PRs, issues, comments,
-reviews — those are within the App installation's granted permissions.)
+**Update (validated 2026-07-06):** the MCP GitHub App installation **now has `actions: write`** —
+`actions_run_trigger` with `method: run_workflow` successfully dispatched 101/113/209/210 from the
+web sandbox (`204` queued). Two gotchas: (a) **all dispatch inputs must be strings** — a numeric
+value (e.g. `issue_number: 609`) fails with `422 Invalid value for input`; pass `"609"`. (b) MCP
+still **cannot approve environment deployment gates** (no `pending_deployments` tool, and direct
+REST stays 403 in the sandbox), so gated jobs sit at `status: waiting` until a human reviewer
+(`clarkemoyer`) approves. The paragraph below is retained as history in case scopes regress:
+
+> Previously (pre-2026-07): the App installation lacked `actions: write`, so
+> `actions_run_trigger`/`run_workflow` returned `403 Resource not accessible by integration`, and
+> the only sandbox trigger path was `issues`-event workflows. (MCP has always been fine for PRs,
+> issues, comments, reviews.)
 
 ### Claude Code on the web (sandbox) — `gh` web-flow auth does NOT work here (IMPORTANT)
 
@@ -24,15 +51,14 @@ session doesn't rediscover it the hard way:
 - Direct repo/Actions calls via that proxy auth return
   `403 "GitHub access is not enabled for this session…"` for this org, so `gh`/`curl` cannot
   dispatch workflows or approve deployments from the sandbox either.
-- The **MCP** GitHub tools are the working channel in the sandbox (scoped to this repo) — but, as
-  above, MCP lacks `actions: write`, so it still **cannot dispatch workflows or approve environment
-  deployments**. It _can_ create/assign issues, open PRs, push files, comment, and read Actions
-  runs/logs.
+- The **MCP** GitHub tools are the working channel in the sandbox (scoped to this repo). As of
+  2026-07-06 they **can dispatch `workflow_dispatch` workflows** (see the update above) and
+  create/assign issues, open PRs, push files, comment, and read Actions runs/logs.
 
-Net effect in the web sandbox: you cannot _dispatch_ a `workflow_dispatch` workflow, and you cannot
-_approve_ an environment gate. You **can** trigger any `issues`-event workflow (e.g. Website
-Provision) by creating + assigning an issue via MCP, and a human reviewer (`clarkemoyer`) approves
-any environment gates. See the next section.
+Net effect in the web sandbox: you **can dispatch workflows via MCP** (string inputs only) and
+trigger any `issues`-event workflow (e.g. Website Provision) by creating + assigning an issue via
+MCP — but you still **cannot approve an environment gate**; a human reviewer (`clarkemoyer`)
+approves those. See the next section.
 
 ### Provision a website repo + add a maintainer (primary workflow)
 
@@ -127,6 +153,47 @@ GitHub runner ──OIDC──► Azure (ffc-admin-kv-writer) ──► Key Vaul
 runner ──POST + Ocp-Apim-Subscription-Key──► APIM apim-ffc-gateway-prod (egress 20.231.116.111)
         ──► Cloudflare ──► WHMCS origin (freeforcharity.org/hub/includes/api.php)
 ```
+
+**WHMCS admin UI paths** (for direct links in issue comments/replies — the admin directory is
+renamed): `https://freeforcharity.org/hub/globaladmin/` — e.g. `clientssummary.php?userid=<id>`,
+`clientsprofile.php?userid=<id>`, `clientsservices.php?userid=<id>`,
+`orders.php?action=view&id=<orderid>`.
+
+**Where application answers live (validated 2026-07-07):** the charity-onboarding application's
+answers (org name, requested domain, mission, contacts) are **product custom fields** on the
+onboarding service — NOT client-level fields. Client `companyname` stays empty and
+`GetClientsDetails` returns client custom fields without names; use `GetClientsProducts` (workflow
+219 exports it) to read the application with field names.
+
+**Identify an application by DOMAIN, not by the triage name (validated 2026-07-07).** The masked
+triage tables (209/210) show the **applicant's personal first name**, not the org — the org name is
+only inside the mission text. Matching on a name-initial guessed from the org name will find the
+wrong charity. To find "the application for `<domain>`" use **workflow 221 (WHMCS Application
+Search)** — it sweeps `GetClientsProducts` and returns the matching client id + readable fields.
+Fastest confirm from the sandbox once `az` is authed (see below): read `GetClientsProducts` for a
+`clientid` directly via APIM. See `docs/restored-radiance-first-fullchain-retro.md`.
+
+### Azure CLI from the sandbox (device-auth) — direct WHMCS reads + Azure inspection
+
+`az` is **not preinstalled**, but you can install it into a venv and device-auth as the admin
+(`clarkemoyer@freeforcharity.org`), which unblocks direct WHMCS queries (KV creds → APIM) and Azure
+AD reads:
+
+```bash
+python3 -m venv azvenv && ./azvenv/bin/pip install -q azure-cli
+export AZURE_CONFIG_DIR="$PWD/azconfig"
+./azvenv/bin/az login --use-device-code --allow-no-subscriptions   # give the code to the user
+```
+
+- **Reads work:** `az ad app federated-credential list`, `az keyvault secret show`, and querying
+  live WHMCS by fetching the `read-all-ffc-whmcs-*` secrets and POSTing to the APIM gateway with the
+  `Ocp-Apim-Subscription-Key` header (no gate needed — this is how client 419 was confirmed).
+- **Azure AD IAM writes are BLOCKED by the harness auto-mode classifier** (creating/updating a
+  federated credential is high-severity). Provide the exact `az` command for a human to run, or ask
+  for a Bash allow-rule. Full identity inventory + repair commands:
+  **`docs/azure-oidc-federated-credentials.md`** — including the **`m365-prod` credential-subject
+  typo** (`FFC-Cloudflare-Automation-`, trailing hyphen) that breaks every M365 job with
+  `AADSTS700213`, and the `whmcs-prod-read` setup.
 
 ### Credentials come from Key Vault via OIDC (KV is master — never a GH secret copy)
 

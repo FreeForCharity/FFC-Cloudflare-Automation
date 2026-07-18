@@ -16,7 +16,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
@@ -70,7 +70,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Azure login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
@@ -133,18 +133,19 @@ jobs:
   export_whmcs:
     name: Export WHMCS domains
     runs-on: windows-latest
-    environment: whmcs-prod
+    environment: whmcs-prod-read
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv
         with:
-          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Export domains (read-only)
         shell: pwsh
@@ -173,7 +174,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: wpmudev-prod
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Export domains
         shell: pwsh
@@ -203,7 +204,7 @@ jobs:
       - export_whmcs
       - export_wpmudev
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download artifacts
         uses: actions/download-artifact@v7

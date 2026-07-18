@@ -29,7 +29,7 @@ jobs:
     environment: google-prod-read
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate required Azure secrets
         shell: bash
@@ -67,7 +67,7 @@ jobs:
 
           $token = Get-GoogleAccessToken -Scope 'https://www.googleapis.com/auth/analytics.readonly'
 
-          $uri = "https://analyticsdata.googleapis.com/v1beta/properties/$propertyId:runReport"
+          $uri = "https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:runReport"
           $body = @{
             dateRanges = @(@{ startDate = '1daysAgo'; endDate = 'today' })
             metrics    = @(@{ name = 'activeUsers' })
@@ -80,3 +80,42 @@ jobs:
           }
           Write-Host "GA OK property=$propertyId activeUsers(last1d)=$value"
           "## Google API Smoke`n`n- Property: ``$propertyId```n- activeUsers (last 1d): **$value**`n- Status: PASS" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+
+  # GSC connectivity probe (Wave 2): DWD-impersonated read of the Search Console site list.
+  # Proves scope + API enablement (searchconsole.googleapis.com enabled on ffc-api-prod
+  # 2026-07-03). Read-only; uses the read-all workspace SA key, never printed.
+  # Dispatch-only: callers reusing this workflow as a GA gate (e.g. 502) must not start
+  # depending on Search Console connectivity.
+  gsc-smoke:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    environment: google-prod-read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Search Console connectivity check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . "$env:GITHUB_WORKSPACE/scripts/google-api-common.ps1"
+          $keyFile = Join-Path $env:RUNNER_TEMP 'ws-sa.json'
+          az keyvault secret download --vault-name kv-ffc-admin-prod-cbm --name read-all-cbm-google-workspace-service-account-key --file $keyFile
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch the Workspace SA key from Key Vault.' }
+          try {
+            $tok = Get-GoogleDwdAccessToken -Subject 'clarkemoyer@freeforcharity.org' -Scope 'https://www.googleapis.com/auth/webmasters' -CredentialsPath $keyFile
+            $sites = Invoke-GoogleApi -Uri 'https://searchconsole.googleapis.com/webmasters/v3/sites' -AccessToken $tok
+            # Defensive: siteEntry is absent when the list is empty, and @($null).Count is 1.
+            $entries = if (($sites.PSObject.Properties.Name -contains 'siteEntry') -and $sites.siteEntry) { @($sites.siteEntry) } else { @() }
+            $count = $entries.Count
+            Write-Host "GSC OK properties=$count"
+            "## GSC Smoke`n`n- Properties visible: **$count**`n- Status: PASS" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          } finally {
+            Remove-Item $keyFile -Force -ErrorAction SilentlyContinue
+          }

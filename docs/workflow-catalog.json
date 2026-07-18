@@ -54,7 +54,7 @@
         "cloudflare-prod-write",
         "whmcs-prod"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 whmcs-prod",
       "guard": "\u2014",
@@ -76,7 +76,7 @@
         "cloudflare-prod-write",
         "m365-prod"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 m365-prod",
       "guard": "`dry_run` (default true)",
@@ -99,13 +99,13 @@
       "environments": [
         "cloudflare-prod-read",
         "m365-prod",
-        "whmcs-prod",
+        "whmcs-prod-read",
         "wpmudev-prod"
       ],
       "description": "",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod / \u2705 m365-prod / \u2705 wpmudev-prod (+ cf-read)",
-      "guard": "waits on whmcs-prod, m365-prod, and wpmudev-prod approvals",
+      "approvalEnv": "whmcs-prod-read / \u2705 m365-prod / \u2705 wpmudev-prod (+ cf-read)",
+      "guard": "waits on m365-prod and wpmudev-prod approvals (WHMCS job ungated)",
       "category": "Cloudflare / DNS / Domain",
       "categoryCode": "CF"
     },
@@ -124,7 +124,7 @@
         "cloudflare-prod-read",
         "cloudflare-prod-write"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
       "guard": "`dry_run` (default true); issue-label trig",
@@ -144,7 +144,7 @@
       "environments": [
         "cloudflare-prod-write"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
       "guard": "`dry_run` (default true)",
@@ -224,7 +224,7 @@
       "environments": [
         "cloudflare-prod-write"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
       "guard": "\u2014",
@@ -245,7 +245,7 @@
         "cloudflare-prod-read",
         "cloudflare-prod-write"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
       "guard": "`dry_run` (default true)",
@@ -324,11 +324,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "READ-ONLY: exports WHMCS domains, then runs scripts/domain-transfer-preflight.ps1 offline to classify each domain's readiness to transfer to Cloudflare Registrar (eNOM -> Cloudflare; project #157). Initiates no transfer and spends no money.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "\u2014",
       "category": "Cloudflare / DNS / Domain",
       "categoryCode": "CF"
@@ -436,6 +436,22 @@
       "categoryCode": "CF"
     },
     {
+      "number": 121,
+      "title": "DNS + GH Pages - Fleet Cutover Preflight (FFC-EX)",
+      "apis": [],
+      "file": "121-fleet-cutover-preflight.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Read-only go/no-go preflight for the FFC-EX DNS cutover \u2014 the checked companion to workflow 120 (bulk cutover staging -> apex). For each domain it confirms the GitHub Pages origin is healthy, reads live apex/www DNS over DoH, verifies CAA won't block Let's Encrypt issuance, and probes HTTPS on the target domain, then prints one verdict table (also written to the job summary). It changes nothing and loads no credentials, so it needs no environment approval gate. Run it before 120 to confirm readiness and after 120 to confirm the cutover landed.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "none (no credentials)",
+      "guard": "read-only DoH/HTTPS probes; go/no-go for 120",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
       "number": 201,
       "title": "WHMCS - Export Domains (Report)",
       "apis": [
@@ -446,11 +462,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "gated only by the env approval",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -466,11 +482,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "gated only by the env approval",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -486,11 +502,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "gated only by the env approval",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -586,11 +602,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "\u2014",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -607,11 +623,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "Read-only. Surfaces WHMCS tickets that need attention (default Open + Customer-Reply) into the job summary + a CSV artifact, and can optionally upsert ONE rolling tracking issue. No ticket writes are performed.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "summary masks PII",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -628,11 +644,11 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "Read-only. Summarizes WHMCS orders by status into the job summary + CSV artifacts, lists actionable Pending orders, and can optionally upsert ONE rolling tracking issue. No order writes are performed.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "summary masks PII",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
@@ -688,12 +704,297 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
       "description": "Serialize runs so two dispatches can't race on the artifacts/zeffy/* outputs.",
       "safetyLevel": "Reads (builds a file)",
-      "approvalEnv": "\u2705 whmcs-prod",
+      "approvalEnv": "whmcs-prod-read",
       "guard": "output is a draft; serialized",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 214,
+      "title": "WHMCS - Clients Metrics (aggregate, no PII)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "214-whmcs-clients-metrics.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Per-year WHMCS client-membership aggregates (new signups, cumulative members, currently-active cumulative) for the Candid Platinum \"active members\" metric series and the freeforcharity.org impact metrics. Reads GetClients but tallies only {datecreated, status} \u2014 the artifact and step summary contain aggregate integer counts only (no names, emails, or client ids). Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "aggregate counts only \u2014 no PII in artifact or summary",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 215,
+      "title": "WHMCS - Nonprofit Clients Metrics (service evidence, no PII)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "215-whmcs-nonprofit-clients-metrics.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Revalidation of the client-count metrics: classifies clients by the products/services they hold (each service has its own registration date and status), instead of the historyless client status flag \u2014 and surfaces the product catalog so \"which clients are nonprofits\" is decided from data, not assumption. Output is aggregate counts + product/group names only (no client names, emails, ids, or domains). Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "aggregate counts + product names only (no PII)",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 216,
+      "title": "WHMCS - Activity Metrics (full history, no PII)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "216-whmcs-activity-metrics.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Phase 1 of docs/whmcs-data-quality-and-metrics-plan.md: per-year ACTIVE nonprofit members from dated evidence (invoices, orders, service registrations) spanning the full 10+ years \u2014 the series status flags cannot provide. Aggregate integer counts only. Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "aggregate counts only (no PII)",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 217,
+      "title": "WHMCS - Client Fields Survey (aggregate, no PII)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "217-whmcs-client-fields-survey.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Phase 1 of docs/whmcs-data-quality-and-metrics-plan.md: throttled per-client GetClientsDetails loop measuring how the three classification signals line up \u2014 the Legal Organization Status custom field, the native client group, and charity-product evidence. Only exact legal-status vocabulary matches are counted; free-text values are never printed. Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "throttled per-client loop; vocabulary-matched values only (no PII)",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 218,
+      "title": "WHMCS - Sites-List Reconciliation + Product Alignment",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "218-whmcs-siteslist-reconciliation.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Phase 1 of docs/whmcs-data-quality-and-metrics-plan.md: joins the sites-list (WHMCS + Cloudflare + WPMUDEV + health) with live WHMCS domains/services to measure (a) the coverage gap (legacy-WP orgs with no WHMCS record) and (b) the product-alignment gap \u2014 Cloudflare domains whose client lacks the 'Domain Registered in Cloudflare' product (pid 39) and GitHub Pages sites whose client lacks 'Hosted by GitHub Pages' (pid 40). Summary is aggregate counts; the artifact carries the gap domain lists (org domains, public project data) as the Phase 2 backfill work-list. Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "aggregate summary; artifact carries org-domain gap lists only",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 219,
+      "title": "WHMCS - Application Detail (Client + Orders, PII-masked)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "219-whmcs-application-detail.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Read-only. Fetches ONE client's charity-application detail (GetClientsDetails + GetOrders) and posts the website-publishable projection (organization name, custom fields, orders/products; personal contact data masked) to the job summary and optionally back to a GitHub issue. Built so an agent/operator can read a specific application without downloading artifacts. No writes.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "single-client projection; personal contact fields always masked",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 220,
+      "title": "WHMCS - Served-Per-Year Metrics (span evidence, no PII)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "220-whmcs-served-metrics.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "\"216 v2\": FFC's services are free, so billing events undercount service delivery. This counts a member as SERVED in year Y when a charity service or registered domain was IN FORCE during Y (span from regdate to next-due/expiry; Active runs through today), emits org-level (domain-keyed) counts with current sites-list-only orgs merged in, keeps the old billing-active series for comparison, and shows invoice $0-vs-paid composition per year. Aggregate counts only. Dispatch-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "aggregate counts only (no PII)",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 221,
+      "title": "WHMCS - Application Search (find by domain/org)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "221-whmcs-application-search.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Read-only. Sweeps GetClientsProducts (all clients) and returns the onboarding application(s) whose product custom fields contain the query substring (a domain or organization name), with personal contact fields masked. This is the domain/org -> client-id lookup that 219 (which needs a client id) and the masked triage tables cannot do. Posts the matches to the job summary and optionally back to a GitHub issue. No writes.  NOTE: uses the gated `whmcs-prod` so it runs today with a single approval; once `whmcs-prod-read` is set up it can move there (read-only workflow).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "GetClientsProducts sweep; personal contact fields masked; gated until whmcs-prod-read setup",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 222,
+      "title": "WHMCS - Cloudflare Registrar Product Alignment",
+      "apis": [
+        "WHMCS",
+        "CF"
+      ],
+      "file": "222-whmcs-product-alignment.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read",
+        "whmcs-prod"
+      ],
+      "description": "Aligns a WHMCS status-marker product (default pid 39 \"Domain Registered in Cloudflare\") onto the clients who own each domain in the FFC Cloudflare Registrar account. Read-only preview by default; a live run gates on whmcs-prod.  Two jobs so each uses the identity/scope it is entitled to: 1. resolve-domains  - cloudflare-prod-read (kv-reader) pulls the authoritative registrar-domain list from the Cloudflare API. 2. align            - whmcs-prod (kv-writer) resolves each domain to its WHMCS client and, unless dry_run, places a $0 AddOrder for any client that does not already hold the product. Idempotent.  WHMCS API calls route through the APIM gateway (its IP is allow-listed at WHMCS).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "dry_run default true; $0 AddOrder of pid 39 onto registrar-domain clients; idempotent",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 223,
+      "title": "WHMCS - Import Cloudflare Registrar Domains as Domain Records",
+      "apis": [
+        "WHMCS",
+        "CF"
+      ],
+      "file": "223-whmcs-import-cloudflare-domains.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Creates a real WHMCS domain record for each Cloudflare-registered domain in the supplied domain->client map, populated with live registrar facts (expiry, nameservers, status) from the Cloudflare Registrar API. Cloudflare has no WHMCS registrar module, so the record's registrar is left None; every other field is accurate and the domain shows in the client's Domains list. Idempotent: already-populated domains are skipped; partial records are completed. Optionally accepts the client's pending onboarding order.  The domain->client map is a dispatch input (not committed) so client ids are not stored in this public repo. WHMCS calls route through the APIM gateway.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "dry_run default true; creates/populates domain records (registrar None) from CF facts",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 224,
+      "title": "WHMCS - GitHub Pages Product Alignment",
+      "apis": [
+        "WHMCS",
+        "GH"
+      ],
+      "file": "224-whmcs-github-pages-product-alignment.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Aligns the pid-40 \"Hosted by GitHub Pages\" marker onto the WHMCS clients whose sites are hosted on GitHub Pages (one per FreeForCharity/FFC-EX-<domain> repo). Sibling of 222 (Cloudflare registrar -> pid 39): same alignment engine, different source list. dry-run is a drift report (#580); a live run assigns the product (#579). Read-only preview by default; a live run gates on whmcs-prod.  1. list-domains - GitHub API (ambient token) lists the FFC-EX domains. 2. align        - whmcs-prod resolves each domain to its client and, unless dry_run, places a $0 AddOrder for any client lacking pid 40. Idempotent per (client, domain). Domains with no WHMCS record are reported, never guessed. Routes via the APIM gateway.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "dry_run default true; $0 AddOrder of pid 40 onto FFC-EX GitHub-Pages-site clients; idempotent",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 225,
+      "title": "WHMCS - Domain Order URL Verify",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "225-whmcs-domain-order-url-verify.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Read-only liveness check for pending domain orders (pids 39 register / 41 transfer). Pulls the \"Live GitHub Pages URL of your validated website\" custom field (ids 171/173) from each pending order's service and verifies the URL is live: host must be *.github.io and HTTP GET must return 200 (PASS/FAIL). A footer-marker regex is also matched against the body as a WARN-only heuristic (cut-over sites don't carry the literal footer text). The Gate-3 checklist and the WHMCS attestation field (id 172) are not machine-read yet (future work). Emits a per-order table to the job summary + a CSV artifact. No order writes are performed (never accepts/cancels; see issue #681).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "report-only; GETs charity-supplied URLs; never accepts/cancels an order",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 226,
+      "title": "WHMCS - Application Triage (rank + accept onboarding orders)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "226-whmcs-application-triage.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Ranks PENDING charity onboarding applications by the mission-weighted FFC READINESS score (the operator's definition of \"best\"), separately for pre-501(c)(3) (pid 16) and full 501(c)(3) (pid 33). It can ACCEPT specific $0 onboarding orders (approve) so the charity gets the acceptance email, and can RECONCILE duplicate / miscategorized orders (reconcile) by cancelling only the explicitly-listed orders and emailing those applicants a paste-ready re-file email. Modes 'report' and 'reconcile-report' are READ-ONLY. The mutating modes 'approve' and 'reconcile' each require an explicit comma-separated orderids list and act ONLY on those ids (no accept-all / cancel-all). Bound to the whmcs-prod environment, so every run pauses at the approval gate (the safety checkpoint); a read-only run pausing there is expected and fine.",
+      "safetyLevel": "Writes (report default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "report + reconcile-report read-only; approve accepts ONLY listed $0 orderids; reconcile cancels ONLY listed orderids + emails those clients a re-file email (email-first, no cancel-all)",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 227,
+      "title": "cPanel - Deploy WHMCS Hooks (FTPS/lftp)",
+      "apis": [
+        "cPanel"
+      ],
+      "file": "227-whmcs-hooks-deploy.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Deploys the version-controlled WHMCS hooks in whmcs/hooks/*.php to the production cPanel host, replacing the manual-FTPS runbook. It uses the SAME proven transport as the freeforcharity.org website deploy (deploy-cpanel.yml): GH OIDC -> Azure -> Key Vault (kv-ffc-admin-prod-cbm) -> MAIN cPanel FTP creds -> lftp over FTPS (AUTH TLS). The MAIN account is homed at the account root, so it can write into ~/public_html/hub/includes/hooks/. Creds are piped to lftp via stdin (never argv).  Target:   public_html/hub/includes/hooks/<file>.php  (relative to the cPanel home) KV creds: wr-all-cbm-cpanel-ffc-interserver-ftp-{host,port,user,password}  mode=verify (default) is READ-ONLY: it connects (proving auth+connectivity), downloads the deployed hooks, and reports whether each matches the repo (or is not deployed yet). mode=deploy uploads each hook first, then downloads + compares and fails on any mismatch.",
+      "safetyLevel": "Writes (verify default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "mode=verify (read-only) vs deploy; hooks input is basename-validated",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -774,7 +1075,7 @@
         "cloudflare-prod-write",
         "m365-prod"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 m365-prod",
       "guard": "\u2014",
@@ -794,7 +1095,7 @@
       "environments": [
         "m365-prod"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 m365-prod",
       "guard": "`dry_run` (default true); also gated by m365-prod approval",
@@ -818,6 +1119,27 @@
       "safetyLevel": "Reads",
       "approvalEnv": "\u2705 m365-prod",
       "guard": "PII masked; dispatch-only; org mailboxes only; waits on m365-prod approval",
+      "category": "Microsoft (M365 / Azure / Graph)",
+      "categoryCode": "MS"
+    },
+    {
+      "number": 320,
+      "title": "Azure - Key Vault Secret Inventory (audit)",
+      "apis": [
+        "MS"
+      ],
+      "file": "320-azure-kv-secret-inventory.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-read"
+      ],
+      "description": "Read-only audit of kv-ffc-admin-prod-cbm: lists every secret's name, updated date, and whether it still holds the scaffolding placeholder. Secret VALUES are never printed \u2014 only booleans/lengths derived in-process. Flags stale (>12 months) and placeholder secrets so scaffolding gaps (like the 6-week placeholder Google set) surface quickly. Runs on the google-prod-read environment because it federates the same ffc-admin-kv-reader identity; a dedicated azure-prod-read environment would need a new federated credential.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "google-prod-read (reader identity)",
+      "guard": "values never printed; placeholder/stale flags only",
       "category": "Microsoft (M365 / Azure / Graph)",
       "categoryCode": "MS"
     },
@@ -914,12 +1236,13 @@
         "workflow_dispatch"
       ],
       "environments": [
+        "github-prod",
         "google-prod-read"
       ],
-      "description": "Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe: aggregate metrics only. Requires the google-prod-read environment + the Wave 0 foundation.",
+      "description": "Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe: aggregate metrics only. Requires the google-prod-read environment (report) and the approval-gated github-prod environment (delivery, CBM_TOKEN) + the Wave 0 foundation.",
       "safetyLevel": "Reads",
-      "approvalEnv": "google-prod-read",
-      "guard": "delivers JSON to ffcadmin via PR (CBM_TOKEN); PII-safe aggregates",
+      "approvalEnv": "google-prod-read / \u2705 github-prod",
+      "guard": "delivers JSON to ffcadmin via PR (CBM_TOKEN, github-prod approval); PII-safe aggregates",
       "category": "Google",
       "categoryCode": "GOOGLE"
     },
@@ -940,6 +1263,47 @@
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 google-prod-write",
       "guard": "dry_run default true; seeds GA4/Clarity/Meta; delegates POC access",
+      "category": "Google",
+      "categoryCode": "GOOGLE"
+    },
+    {
+      "number": 504,
+      "title": "Google - GTM Container Backups (weekly export)",
+      "apis": [
+        "GOOGLE"
+      ],
+      "file": "504-google-gtm-backup.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-read"
+      ],
+      "description": "Weekly disaster-recovery export: the LIVE version of every FFC GTM container as JSON artifacts (90d retention). Read-only Tag Manager calls via DWD; charity self-service editing (container-per-charity model) makes restore points essential.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "google-prod-read",
+      "guard": "read-only exports; live-version JSON artifacts (90d)",
+      "category": "Google",
+      "categoryCode": "GOOGLE"
+    },
+    {
+      "number": 505,
+      "title": "Google - GA4 Property Provision (per-charity)",
+      "apis": [
+        "GOOGLE"
+      ],
+      "file": "505-google-ga-property-provision.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-write"
+      ],
+      "description": "Provision a per-charity GA4 property: one property under the FFC Supported Sites GA account + one web data stream for the charity's domain, reporting the measurement id (G-XXXX) that workflow 503 seeds into the charity's GTM container. Gated write: google-prod-write + dry_run defaults to true. Idempotent \u2014 an existing stream for the domain is reported instead of duplicated. See docs/google-api.md (one property per charity).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 google-prod-write",
+      "guard": "dry_run default true; one property per charity; idempotent by stream defaultUri",
       "category": "Google",
       "categoryCode": "GOOGLE"
     },
@@ -979,7 +1343,7 @@
         "cloudflare-prod-write",
         "github-prod"
       ],
-      "description": "",
+      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 github-prod",
       "guard": "`repo` chained behind `dns` approval",
@@ -1022,6 +1386,26 @@
       "safetyLevel": "",
       "approvalEnv": "",
       "guard": "",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 704,
+      "title": "Website - Analytics Wire",
+      "apis": [
+        "GH"
+      ],
+      "file": "704-website-analytics-wire.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Wire provisioned GA4 / GTM ids into one FFC-EX-<domain> website repo by opening a PR (never pushing the default branch). Detects the site type and delegates the file edits to scripts/analytics-wire.ps1: template sites get src/lib/analytics.config.ts + a rewired GTM component; static WordPress exports get the GTM snippet injected across every *.html. Idempotent: an already-wired repo yields no PR. Gated write: github-prod (uses CBM_TOKEN). See docs (analytics-provisioning skill) and issue #629 (fleet rollout).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 github-prod",
+      "guard": "opens a draft PR (never pushes); `dry_run` (default true); idempotent",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },
@@ -1156,11 +1540,13 @@
         "schedule",
         "workflow_dispatch"
       ],
-      "environments": [],
+      "environments": [
+        "github-prod"
+      ],
       "description": "",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2014",
-      "guard": "report only",
+      "approvalEnv": "\u2705 github-prod",
+      "guard": "report only; CBM_TOKEN via github-prod approval",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },
@@ -1239,6 +1625,102 @@
       "safetyLevel": "Reads",
       "approvalEnv": "\u2014",
       "guard": "report only (environment reviewer config)",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 731,
+      "title": "Repo - Actions Run Metrics (30d per-workflow stats)",
+      "apis": [
+        "GH"
+      ],
+      "file": "731-actions-run-metrics.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Aggregates the last 30 days of Actions runs into per-workflow stats (runs, success rate, avg duration) as a JSON artifact \u2014 feeds the ffcadmin automation-metrics dashboard. Read-only against the GitHub API using the ambient GITHUB_TOKEN; no environment gate.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "GITHUB_TOKEN read-only; JSON artifact",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 732,
+      "title": "Repo - Google Workflow Failure Alert (rolling issue)",
+      "apis": [
+        "GH"
+      ],
+      "file": "732-google-workflow-failure-alert.yml",
+      "triggers": [
+        "workflow_run"
+      ],
+      "environments": [],
+      "description": "Watches the Google reporting workflows (501 smoke, 502 analytics report). On failure it upserts ONE rolling alert issue; on the next success it closes that issue. Prevents a silently-stale nightly report. GitHub API only (issues), no environment gate.",
+      "safetyLevel": "Writes (issues only)",
+      "approvalEnv": "\u2014",
+      "guard": "rolling issue upsert/close; no external API",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 733,
+      "title": "Repo - Credential Rotation Reminders (quarterly)",
+      "apis": [
+        "GH"
+      ],
+      "file": "733-credential-rotation-reminders.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Opens (or refreshes) one rotation-reminder issue per credential family each quarter, each embedding its runbook link. GitHub issues only; the rotations themselves stay human/gated.",
+      "safetyLevel": "Writes (issues only)",
+      "approvalEnv": "\u2014",
+      "guard": "quarterly reminder issues; rotations stay human/gated",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 734,
+      "title": "Repo - Stale Waiting-Run Janitor",
+      "apis": [
+        "Repo"
+      ],
+      "file": "734-stale-waiting-run-janitor.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Cancels (or, in dry-run, just reports) workflow runs left in the `waiting` state \u2014 i.e. paused at an environment approval gate \u2014 for longer than max_age_days. Scheduled read/triage runs that no one approves otherwise stack up indefinitely and the Actions history stops reflecting real state (see the 209/210 backlog cleared manually on 2026-07-07, issue #637).  Read + cancel only; never approves a gate. Uses the ambient GITHUB_TOKEN.",
+      "safetyLevel": "Writes (cancels runs)",
+      "approvalEnv": "\u2014",
+      "guard": "cancels runs left waiting >N days at a gate; never approves; dispatch dry-run supported",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 735,
+      "title": "Repo - Dependabot Affected Repos",
+      "apis": [
+        "Org"
+      ],
+      "file": "735-repo-dependabot-affected-repos.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Regenerates data/dependabot-affected-repos.json (the org repo inventory that feeds the smoke-protected Dependabot waves) and delivers it as an auto-merging PR. Migrated from FFC-IN-ClarkeMoyerAdmin. Uses the github-prod environment so the PR is opened with CBM_TOKEN (a real PAT) \u2014 a PR opened by GITHUB_TOKEN does not trigger the pull_request checks / Copilot review this repo requires, so it would never satisfy branch protection. Read-only against the org; PR-only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2705 github-prod",
+      "guard": "weekly org inventory (feeds smoke-protected waves); PR-only + auto-merge",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

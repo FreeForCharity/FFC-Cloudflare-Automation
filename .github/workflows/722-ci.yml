@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Validate workflow name prefixes (Actions UI order)
         shell: bash
@@ -81,6 +81,23 @@ jobs:
           # from the workflow files; fail if a workflow change wasn't accompanied
           # by a regeneration (python3 scripts/generate-workflow-catalog.py).
           python3 scripts/generate-workflow-catalog.py --check
+
+      - name: Validate workflow cross-references resolve
+        shell: bash
+        run: |
+          # Fails when a workflow (or a helper script) dispatches / depends on a
+          # sibling workflow by a stale file name, or dispatches a workflow that
+          # has no workflow_dispatch trigger. Guards the #630 failure class.
+          python3 scripts/check-workflow-references.py
+
+      - name: Validate federated-credential expected map
+        shell: bash
+        run: |
+          # Self-check config/federated-credentials.json is well-formed (GUIDs,
+          # env slugs, no dupes). The live subject audit (--live) runs against
+          # Azure via the operator/#589 workflow; this CI step just keeps the
+          # declarative expected map honest. Guards the #625 subject-typo class.
+          python3 scripts/check-federated-credential-subjects.py
 
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v6
@@ -195,6 +212,20 @@ jobs:
             $changed | ForEach-Object { Write-Host " - $_" }
             throw "Invoke-Formatter check failed. Run Invoke-Formatter locally to update files."
           }
+
+      - name: Run PowerShell unit tests (Pester)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path scripts/tests)) {
+            Write-Host 'No scripts/tests directory; skipping Pester.'
+            exit 0
+          }
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version.Major -ge 5 })) {
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck
+          }
+          Invoke-Pester -Path scripts/tests -Output Detailed -CI
 
       - name: Check for sensitive files
         run: |

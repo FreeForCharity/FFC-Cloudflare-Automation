@@ -21,13 +21,18 @@ permissions:
   contents: read
   id-token: write
 
+# Serialize runs: a second dispatch queues behind the first instead of racing it.
+concurrency:
+  group: 204-whmcs-charity-onboard
+  cancel-in-progress: false
+
 jobs:
   onboard:
     runs-on: windows-latest
     environment: whmcs-prod
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv

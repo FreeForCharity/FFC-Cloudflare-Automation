@@ -1,0 +1,94 @@
+name: '219. WHMCS - Application Detail (Client + Orders, PII-masked) [WHMCS]'
+run-name: 'WHMCS Application Detail: client ${{ inputs.client_id }}'
+
+# Read-only. Fetches ONE client's charity-application detail (GetClientsDetails
+# + GetOrders) and posts the website-publishable projection (organization name,
+# custom fields, orders/products; personal contact data masked) to the job
+# summary and optionally back to a GitHub issue. Built so an agent/operator can
+# read a specific application without downloading artifacts. No writes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      client_id:
+        description: 'WHMCS client id (see 210 orders triage for candidates)'
+        required: true
+        type: string
+      api_url:
+        description: 'WHMCS API endpoint'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+      issue_number:
+        description: 'Optional: issue number to comment the result back to'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+jobs:
+  application_detail:
+    runs-on: windows-latest
+    environment: whmcs-prod-read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Export application detail (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          GH_TOKEN: ${{ github.token }}
+          CLIENT_ID: ${{ inputs.client_id }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+
+          $clientId = 0
+          if (-not [int]::TryParse($env:CLIENT_ID, [ref]$clientId) -or $clientId -lt 1) {
+            throw "client_id must be a positive integer (got '$($env:CLIENT_ID)')."
+          }
+
+          $out = 'artifacts/whmcs/whmcs_application_detail.json'
+          $json = & pwsh -NoProfile -File .\scripts\whmcs-application-detail.ps1 -ApiUrl $env:WHMCS_API_URL -ClientId $clientId -OutputFile $out
+          if ($LASTEXITCODE -ne 0) { throw "Application detail export failed (exit $LASTEXITCODE)." }
+
+          $fence = [string][char]0x60 * 3
+          $lines = @("## WHMCS application detail - client $clientId", '', ($fence + 'json'), (($json | Out-String).TrimEnd()), $fence)
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          if (-not [string]::IsNullOrWhiteSpace($env:ISSUE_NUMBER)) {
+            $bodyLines = [System.Collections.Generic.List[string]]::new()
+            $bodyLines.Add("## WHMCS application detail - client $clientId")
+            $bodyLines.Add('')
+            $bodyLines.Add("Run: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)")
+            $bodyLines.Add('')
+            $bodyLines.Add($fence + 'json')
+            $bodyLines.Add((($json | Out-String).TrimEnd()))
+            $bodyLines.Add($fence)
+            $bodyFile = Join-Path $env:RUNNER_TEMP 'application-detail.md'
+            $bodyLines | Out-File -FilePath $bodyFile -Encoding utf8
+            gh issue comment $env:ISSUE_NUMBER --repo $env:GITHUB_REPOSITORY --body-file $bodyFile
+            if ($LASTEXITCODE -ne 0) { throw "Failed to comment on issue $($env:ISSUE_NUMBER) (exit $LASTEXITCODE)." }
+          }
+
+      - name: Upload detail artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: whmcs_application_detail
+          path: artifacts/whmcs/whmcs_application_detail.json
+          if-no-files-found: warn

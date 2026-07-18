@@ -140,3 +140,35 @@ function Get-GoogleRows {
     if (($Response.PSObject.Properties.Name -contains 'rows') -and $Response.rows) { return @($Response.rows) }
     return @()
 }
+
+function Get-GoogleDwdAccessToken {
+    <#
+    Mints a domain-wide-delegation access token: the service account (key file at -CredentialsPath
+    or GOOGLE_APPLICATION_CREDENTIALS) impersonates -Subject for the given -Scope. Used by
+    Workspace-adjacent APIs (Search Console, Tag Manager, Admin SDK) where access is granted to the
+    impersonated admin rather than to the SA itself. Token is masked in CI and never written to disk.
+  #>
+    param(
+        [Parameter(Mandatory)][string]$Subject,
+        [Parameter(Mandatory)][string]$Scope,
+        [string]$CredentialsPath
+    )
+    $key = Resolve-GoogleCredentials -CredentialsPath $CredentialsPath
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $header = @{ alg = 'RS256'; typ = 'JWT'; kid = $key.private_key_id }
+    $claims = @{ iss = $key.client_email; sub = $Subject; scope = $Scope; aud = $key.token_uri; iat = $now; exp = $now + 3600 }
+    $headerB64 = ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes(($header | ConvertTo-Json -Compress)))
+    $claimsB64 = ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes(($claims | ConvertTo-Json -Compress)))
+    $signingInput = "$headerB64.$claimsB64"
+    $rsa = [System.Security.Cryptography.RSA]::Create()
+    try {
+        $rsa.ImportFromPem($key.private_key)
+        $sigBytes = $rsa.SignData([Text.Encoding]::ASCII.GetBytes($signingInput), [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    }
+    finally { $rsa.Dispose() }
+    $jwt = "$signingInput.$(ConvertTo-Base64Url $sigBytes)"
+    $resp = Invoke-RestMethod -Method Post -Uri $key.token_uri -Body @{ grant_type = 'urn:ietf:params:oauth:grant-type:jwt-bearer'; assertion = $jwt } -ContentType 'application/x-www-form-urlencoded' -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($resp.access_token)) { throw 'DWD token exchange returned no access_token.' }
+    if ($env:GITHUB_ACTIONS -eq 'true') { Write-Host "::add-mask::$($resp.access_token)" }
+    return $resp.access_token
+}

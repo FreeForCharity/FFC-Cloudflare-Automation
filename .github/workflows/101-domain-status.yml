@@ -34,7 +34,7 @@ jobs:
       changes_count: ${{ steps.summary.outputs.changes_count }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate required Azure secrets
         shell: bash
@@ -132,7 +132,7 @@ jobs:
       supports_email: ${{ steps.graph.outputs.supports_email }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Azure login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
@@ -675,7 +675,7 @@ jobs:
           "comment_path=$commentPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Comment results back to issue
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ github.token }}
           script: |

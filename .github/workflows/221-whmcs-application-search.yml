@@ -1,0 +1,103 @@
+name: '221. WHMCS - Application Search (find by domain/org) [WHMCS]'
+run-name: 'WHMCS Application Search: ${{ inputs.query }}'
+
+# Read-only. Sweeps GetClientsProducts (all clients) and returns the onboarding
+# application(s) whose product custom fields contain the query substring (a
+# domain or organization name), with personal contact fields masked. This is
+# the domain/org -> client-id lookup that 219 (which needs a client id) and the
+# masked triage tables cannot do. Posts the matches to the job summary and
+# optionally back to a GitHub issue. No writes.
+#
+# NOTE: uses the gated `whmcs-prod` so it runs today with a single approval;
+# once `whmcs-prod-read` is set up it can move there (read-only workflow).
+
+on:
+  workflow_dispatch:
+    inputs:
+      query:
+        description: 'Domain or organization-name substring to search for (e.g. restoredradiance)'
+        required: true
+        type: string
+      api_url:
+        description: 'WHMCS API endpoint'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+      max_matches:
+        description: 'Stop after this many matches'
+        required: false
+        default: '25'
+        type: string
+      issue_number:
+        description: 'Optional: issue number to comment the result back to'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+concurrency:
+  group: 221-whmcs-application-search
+  cancel-in-progress: false
+
+jobs:
+  application_search:
+    runs-on: windows-latest
+    environment: whmcs-prod
+    steps:
+      - uses: actions/checkout@v7
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Search applications (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          GH_TOKEN: ${{ github.token }}
+          QUERY: ${{ inputs.query }}
+          MAX_MATCHES: ${{ inputs.max_matches }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+          $max = 25
+          [void][int]::TryParse($env:MAX_MATCHES, [ref]$max)
+          if ($max -lt 1) { $max = 25 }
+
+          $out = 'artifacts/whmcs/whmcs_application_search.json'
+          $json = & pwsh -NoProfile -File .\scripts\whmcs-application-search.ps1 -ApiUrl $env:WHMCS_API_URL -Query $env:QUERY -MaxMatches $max -OutputFile $out
+          if ($LASTEXITCODE -ne 0) { throw "Application search failed (exit $LASTEXITCODE)." }
+
+          $fence = [string][char]0x60 * 3
+          $lines = @("## WHMCS application search - '$($env:QUERY)'", '', ($fence + 'json'), (($json | Out-String).TrimEnd()), $fence)
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          if (-not [string]::IsNullOrWhiteSpace($env:ISSUE_NUMBER)) {
+            $bodyLines = [System.Collections.Generic.List[string]]::new()
+            $bodyLines.Add("## WHMCS application search - '$($env:QUERY)'")
+            $bodyLines.Add('')
+            $bodyLines.Add("Run: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)")
+            $bodyLines.Add('')
+            $bodyLines.Add($fence + 'json')
+            $bodyLines.Add((($json | Out-String).TrimEnd()))
+            $bodyLines.Add($fence)
+            $bodyFile = Join-Path $env:RUNNER_TEMP 'application-search.md'
+            $bodyLines | Out-File -FilePath $bodyFile -Encoding utf8
+            gh issue comment $env:ISSUE_NUMBER --repo $env:GITHUB_REPOSITORY --body-file $bodyFile
+            if ($LASTEXITCODE -ne 0) { throw "Failed to comment on issue $($env:ISSUE_NUMBER) (exit $LASTEXITCODE)." }
+          }
+
+      - name: Upload search artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: whmcs_application_search
+          path: artifacts/whmcs/whmcs_application_search.json
+          if-no-files-found: warn

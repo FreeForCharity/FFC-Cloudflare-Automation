@@ -120,7 +120,7 @@ function Invoke-GraphGet {
 try {
     $token = if ($AccessToken) { $AccessToken } else { $env:GRAPH_ACCESS_TOKEN }
     if ([string]::IsNullOrWhiteSpace($token)) {
-        throw 'No Graph token: pass -AccessToken or set GRAPH_ACCESS_TOKEN (see 47-discover-uncaptured-comms.yml).'
+        throw 'No Graph token: pass -AccessToken or set GRAPH_ACCESS_TOKEN (see 306-discover-uncaptured-comms.yml).'
     }
 
     # Validate the requested mailboxes against the allowlist up front; fail fast on anything else.

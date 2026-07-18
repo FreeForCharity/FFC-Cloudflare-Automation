@@ -121,7 +121,7 @@ jobs:
             {
               echo "## Create preflight — $owner/$name"
               echo "⛔ Refused: sibling repo(s) match \`$domain\`:"
-              printf '%s\n' "$siblings" | sed 's/^/- `/; s/$/`/'
+              while IFS= read -r s; do echo "- \`$s\`"; done <<< "$siblings"
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi

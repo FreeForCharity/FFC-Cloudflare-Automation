@@ -132,7 +132,7 @@ jobs:
           if [ -n "$siblings" ]; then
             {
               echo "- ⚠️ Other org repos matching \`$IN_DOMAIN\`:"
-              printf '%s\n' "$siblings" | sed 's/^/  - `/; s/$/`/'
+              while IFS= read -r s; do echo "  - \`$s\`"; done <<< "$siblings"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 

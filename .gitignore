@@ -53,5 +53,14 @@ Thumbs.db
 
 # Local workflow outputs
 artifacts/
+testResults.xml
 _run_artifacts/
 _run_*/
+
+# Node / sites-list generator runtime
+node_modules/
+tmp_data/
+
+# Local Azure CLI session cache + venv (never commit — contains tokens)
+azconfig/
+azvenv/

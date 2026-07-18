@@ -23,6 +23,11 @@
   description: Request to purchase a new domain
   color: '1d76db'
 
+- name: domain-purchase-approved
+  description:
+    Admin approved a domain purchase request; triggers an automated availability/price check
+  color: '0075ca'
+
 - name: domain-remove
   description: Request to remove a domain
   color: 'd93f0b'
@@ -48,6 +53,10 @@
   description: Request to provision a new website from the template (DNS + repo + content)
   color: '0aa7a7'
 
+- name: admin-provision
+  description: Admin-only minimal provisioning (repo + apex DNS) without full charity details
+  color: '5319e7'
+
 # General Labels
 - name: bug
   description: Something isn't working
@@ -72,3 +81,16 @@
 - name: good first issue
   description: Good for newcomers
   color: '7057ff'
+
+# WHMCS Support Tickets - Used by issue templates and the issue->ticket workflow
+- name: 'whmcs:new-request'
+  description: Charity support/help request; opens a WHMCS ticket
+  color: '1d76db'
+
+- name: 'whmcs:break-fix'
+  description: Charity site incident; opens a high-priority WHMCS ticket
+  color: 'b60205'
+
+- name: 'whmcs:triage'
+  description: Rolling WHMCS triage tracking issue (open tickets / pending orders)
+  color: 'fbca04'

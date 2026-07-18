@@ -71,7 +71,7 @@ The API token needs:
 ### Step 1: Navigate to Actions
 
 1. Go to the repository **Actions** tab
-2. Select the workflow: **40. WPMUDEV - Export Sites/Domains (Read-only)**
+2. Select the workflow: **601. WPMUDEV - Export Sites/Domains (Read-only)**
 3. Click **Run workflow** (requires appropriate permissions)
 
 ### Step 2: Configure Inputs
@@ -261,8 +261,8 @@ sites.
 
 The WPMUDEV inventory is designed to complement:
 
-- **Cloudflare exports** (workflow 06): DNS zone and record summaries
-- **WHMCS exports** (workflow 07): Billing and domain ownership records
+- **Cloudflare exports** (workflow 106): DNS zone and record summaries
+- **WHMCS exports** (workflow 107): Billing and domain ownership records
 
 For cross-source reconciliation, see
 [docs/domain-inventory-reconciliation.md](domain-inventory-reconciliation.md).

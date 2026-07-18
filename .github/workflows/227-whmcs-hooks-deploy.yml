@@ -1,0 +1,231 @@
+name: '227. cPanel - Deploy WHMCS Hooks (FTPS/lftp) [cPanel]'
+run-name: 'cPanel Deploy WHMCS Hooks (${{ inputs.mode }})'
+
+# Deploys the version-controlled WHMCS hooks in whmcs/hooks/*.php to the production
+# cPanel host, replacing the manual-FTPS runbook. It uses the SAME proven transport
+# as the freeforcharity.org website deploy (deploy-cpanel.yml): GH OIDC -> Azure ->
+# Key Vault (kv-ffc-admin-prod-cbm) -> MAIN cPanel FTP creds -> lftp over FTPS
+# (AUTH TLS). The MAIN account is homed at the account root, so it can write into
+# ~/public_html/hub/includes/hooks/. Creds are piped to lftp via stdin (never argv).
+#
+#   Target:   public_html/hub/includes/hooks/<file>.php  (relative to the cPanel home)
+#   KV creds: wr-all-cbm-cpanel-ffc-interserver-ftp-{host,port,user,password}
+#
+# mode=verify (default) is READ-ONLY: it connects (proving auth+connectivity),
+# downloads the deployed hooks, and reports whether each matches the repo (or is
+# not deployed yet). mode=deploy uploads each hook first, then downloads + compares
+# and fails on any mismatch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description:
+          'verify = read-only (deployed vs repo); deploy = upload the hook files to production'
+        required: false
+        type: choice
+        options:
+          - verify
+          - deploy
+        default: verify
+      hooks:
+        description: 'Comma-separated hook filenames (blank = all whmcs/hooks/*.php).'
+        required: false
+        type: string
+        default: ''
+      target_dir:
+        description: 'cPanel directory (relative to the cPanel home) the hooks live in.'
+        required: false
+        type: string
+        default: 'public_html/hub/includes/hooks'
+
+# Serialize deploys so two uploads never race (and to be gentle on cPHulk).
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy_hooks:
+    runs-on: ubuntu-latest
+    environment: whmcs-prod
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Lint hooks (php -l)
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          php -v | head -1
+          n=0
+          for f in whmcs/hooks/*.php; do
+            echo "== php -l $f"
+            php -l "$f"
+            n=$((n + 1))
+          done
+          echo "linted $n hook file(s)"
+          test "$n" -gt 0 || {
+            echo "::error::no hook files found under whmcs/hooks/"
+            exit 1
+          }
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Load cPanel FTP credentials from Key Vault
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vault = 'kv-ffc-admin-prod-cbm'
+
+          function Get-KvSecret {
+            param([string]$Name)
+            $raw = az keyvault secret show --vault-name $vault --name $Name --query value -o tsv
+            if ($LASTEXITCODE -ne 0) {
+              throw "az keyvault secret show for '$Name' failed (exit $LASTEXITCODE). Check the identity's role on '$vault' and that the secret exists."
+            }
+            $v = ([string]$raw).TrimEnd([char]13, [char]10)
+            if ([string]::IsNullOrWhiteSpace($v)) { throw "Key Vault secret '$Name' returned empty." }
+            return $v
+          }
+
+          # Heredoc-delimited GITHUB_ENV write (safe for any value).
+          function Add-EnvVar {
+            param([string]$Name, [string]$Value)
+            $d = "ghadelim_$([guid]::NewGuid().ToString('N'))"
+            Add-Content -Path $env:GITHUB_ENV -Value "$Name<<$d"
+            Add-Content -Path $env:GITHUB_ENV -Value $Value
+            Add-Content -Path $env:GITHUB_ENV -Value $d
+          }
+
+          $ftpHost = Get-KvSecret 'wr-all-cbm-cpanel-ffc-interserver-ftp-host'
+          $ftpPort = Get-KvSecret 'wr-all-cbm-cpanel-ffc-interserver-ftp-port'
+          $ftpUser = Get-KvSecret 'wr-all-cbm-cpanel-ffc-interserver-ftp-user'
+          $ftpPw = Get-KvSecret 'wr-all-cbm-cpanel-ffc-interserver-ftp-password'
+
+          # Mask everything that could authenticate or fingerprint the host.
+          # Port is a short number (masking it would redact unrelated log text), so it is not masked.
+          Write-Host "::add-mask::$ftpHost"
+          Write-Host "::add-mask::$ftpUser"
+          Write-Host "::add-mask::$ftpPw"
+
+          Add-EnvVar 'CPANEL_FTP_HOST' $ftpHost
+          Add-EnvVar 'CPANEL_FTP_PORT' $ftpPort
+          Add-EnvVar 'CPANEL_FTP_USER' $ftpUser
+          Add-EnvVar 'CPANEL_FTP_PASSWORD' $ftpPw
+          Write-Host 'Loaded MAIN cPanel FTP creds from Key Vault (masked).'
+
+      - name: Deploy / verify hooks via FTPS (lftp)
+        shell: bash
+        env:
+          MODE: ${{ inputs.mode }}
+          HOOKS: ${{ inputs.hooks }}
+          TARGET_DIR: ${{ inputs.target_dir }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq lftp
+
+          # --- Path-traversal hardening -----------------------------------------
+          # Every requested entry MUST be a bare *.php basename (no '/', '\', '..')
+          # that exists directly under whmcs/hooks/. Validated BEFORE any network
+          # call; the basename is the only value used for the remote path.
+          shopt -s nullglob
+          declare -a NAMES=()
+          if [ -z "${HOOKS// /}" ]; then
+            for f in whmcs/hooks/*.php; do NAMES+=("$(basename "$f")"); done
+          else
+            IFS=',' read -ra REQ <<<"$HOOKS"
+            for r in "${REQ[@]}"; do
+              n="$(echo "$r" | xargs)"
+              [ -z "$n" ] && continue
+              if ! [[ "$n" =~ ^[A-Za-z0-9._-]+\.php$ ]]; then
+                echo "::error::invalid hook name '$n' — must be a bare *.php basename (no path separators or '..')"
+                exit 1
+              fi
+              if [ ! -f "whmcs/hooks/$n" ]; then
+                echo "::error::requested hook '$n' not found directly under whmcs/hooks/"
+                exit 1
+              fi
+              NAMES+=("$n")
+            done
+          fi
+          [ "${#NAMES[@]}" -gt 0 ] || {
+            echo "::error::no hook files selected"
+            exit 1
+          }
+          echo "hooks: ${NAMES[*]}"
+
+          # --- Build the single-session lftp script -----------------------------
+          # On deploy, upload each hook first. Then (both modes) mirror the remote
+          # hooks dir down for a byte-compare. One FTPS session, one connection
+          # (cPHulk-friendly). `set cmd:fail-exit true` makes an auth/connection or
+          # upload failure exit non-zero; a missing remote file just yields nothing
+          # to mirror (handled by the presence check below, not a hard failure).
+          mkdir -p remote_hooks
+          UPLOADS=""
+          if [ "$MODE" = "deploy" ]; then
+            for n in "${NAMES[@]}"; do
+              UPLOADS="${UPLOADS}put -O \"$TARGET_DIR\" \"whmcs/hooks/$n\"
+          "
+            done
+          fi
+
+          set +e
+          lftp 2>lftp.log <<LFTP
+          set ftp:ssl-allow yes
+          set ftp:ssl-force yes
+          set ftp:ssl-protect-data yes
+          set ssl:verify-certificate no
+          set net:max-retries 3
+          set net:reconnect-interval-base 5
+          set net:timeout 60
+          set cmd:fail-exit true
+          open -p "$CPANEL_FTP_PORT" -u "$CPANEL_FTP_USER","$CPANEL_FTP_PASSWORD" "ftp://$CPANEL_FTP_HOST"
+          ${UPLOADS}mirror --include-glob '*.php' "$TARGET_DIR" remote_hooks
+          bye
+          LFTP
+          LRC=$?
+          set -e
+          # Never let the password/host surface even if lftp echoes a URL on error.
+          sed -E "s#${CPANEL_FTP_USER}#***#g; s#${CPANEL_FTP_HOST}#***#g" lftp.log | tail -60 || true
+          if [ "$LRC" -ne 0 ]; then
+            echo "::error::lftp session failed (exit $LRC) — auth/connectivity or an upload error. See sanitized log above."
+            exit 1
+          fi
+
+          # --- Compare each hook: production vs repo ----------------------------
+          fail=0
+          for n in "${NAMES[@]}"; do
+            if [ -f "remote_hooks/$n" ]; then
+              # $(cat ...) strips trailing newlines; sed drops CR so CRLF/EOL never false-positives.
+              if [ "$(sed 's/\r$//' "whmcs/hooks/$n")" = "$(sed 's/\r$//' "remote_hooks/$n")" ]; then
+                echo "OK  $n — production matches repo"
+              else
+                echo "::warning::$n DIFFERS between production and repo"
+                if [ "$MODE" = "deploy" ]; then
+                  echo "::error::post-deploy mismatch for $n"
+                  fail=1
+                fi
+              fi
+            else
+              echo "::warning::$n is not deployed yet (absent on server)"
+              if [ "$MODE" = "deploy" ]; then
+                echo "::error::$n missing on server after deploy"
+                fail=1
+              fi
+            fi
+          done
+
+          [ "$fail" -eq 0 ] || {
+            echo "::error::one or more hooks failed ($MODE mode)"
+            exit 1
+          }
+          echo "Done ($MODE mode)."

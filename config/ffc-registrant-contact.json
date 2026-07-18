@@ -1,0 +1,18 @@
+{
+  "_comment": "PUBLIC registrant contact for Free For Charity (umbrella owner). PUBLIC INFORMATION ONLY: every value matches FFC's public 501(c)(3) record / public website and is the WHOIS registrant for FFC-owned charity domains. Do NOT put any individual charity's private contact details here - those live only in WHMCS (see scripts/whmcs-client-add.ps1 / whmcs-contact-add.ps1). This registrant is independent of WHMCS client records. Address sourced from freeforcharity.org.",
+  "registrant": {
+    "organization": "Free For Charity",
+    "first_name": "Clarke",
+    "last_name": "Moyer",
+    "email": "clarkemoyer@freeforcharity.org",
+    "phone": "+1.5202228104",
+    "address": {
+      "street1": "4030 Wake Forest Road",
+      "street2": "Suite 349",
+      "city": "Raleigh",
+      "state": "NC",
+      "postal_code": "27609",
+      "country": "US"
+    }
+  }
+}

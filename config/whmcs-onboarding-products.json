@@ -1,0 +1,58 @@
+{
+  "_comment": "WHMCS onboarding product map for FFC. Captured from the products enumeration (GetClientsProducts custom fields). Keys under custom_fields are the WHMCS product custom-field ids passed to AddOrder via -CustomFieldsJson. Verify against a fresh products export if WHMCS changes.",
+  "products": {
+    "pre501c3": {
+      "pid": 16,
+      "gid": 6,
+      "name": "FFC Pre-501c3 Nonprofit / Charity Onboarding",
+      "custom_fields": {
+        "3": "What is the legal status of your organization?",
+        "4": "What is your organization's mission?",
+        "5": "Do you have a domain name?",
+        "6": "What is your current/desired domain name?",
+        "7": "Do you have Web Hosting?",
+        "8": "Who is your current hosting provider?",
+        "9": "Have you been approved by TechSoup.org?",
+        "10": "Do you have a business email provider?",
+        "11": "If yes, who is your email provider?",
+        "12": "What is your GuideStar.org URL?",
+        "14": "What phone number do you want us to reach you at?",
+        "15": "What is your organization's EIN number?",
+        "16": "What is the best time to call you?"
+      }
+    },
+    "501c3": {
+      "pid": 33,
+      "gid": 6,
+      "name": "FFC 501c3 Nonprofit / Charity Onboarding",
+      "custom_fields": {
+        "83": "Board President/Chair Individual Email",
+        "82": "Board President/Chair Phone Number",
+        "81": "Board President/Chair LinkedIn Link",
+        "92": "Board Vice President / Vice Chair Individual Email",
+        "91": "Board Vice President / Vice Chair Phone Number",
+        "90": "Board Vice President / Vice Chair LinkedIn Link",
+        "86": "Board Secretary Individual Email",
+        "85": "Board Secretary Phone Number",
+        "84": "Board Secretary LinkedIn Link",
+        "89": "Board Treasurer Individual Email",
+        "88": "Board Treasurer Phone Number",
+        "87": "Board Treasurer LinkedIn Link",
+        "95": "Board Member-At-Large Individual Email",
+        "94": "Board Member-At-Large Phone Number",
+        "93": "Board Member-At-Large LinkedIn Link",
+        "98": "Primary Contact Individual Email",
+        "97": "Primary Contact Phone Number",
+        "96": "Primary Contact LinkedIn Link",
+        "101": "Technical Contact Individual Email",
+        "100": "Technical Contact Phone Number",
+        "99": "Technical Contact LinkedIn Link",
+        "102": "US Time-Zone",
+        "103": "Public GuideStar Profile Link",
+        "104": "GuideStar 'Full Profile' Link",
+        "105": "Best times to contact?",
+        "106": "What is the legal status of your organization?"
+      }
+    }
+  }
+}

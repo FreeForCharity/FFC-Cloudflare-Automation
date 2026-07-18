@@ -67,7 +67,7 @@ DKIM, and (4) validate.
 
 ### 1) Cloudflare baseline audit (read-only)
 
-- Workflow: `[DNS] 1. Report - Check Compliance` (`.github/workflows/1-audit-compliance.yml`)
+- Workflow: `[DNS] 101. Report - Check Compliance` (`.github/workflows/107-audit-compliance.yml`)
 - Input: `domain = ffcadmin.org`
 
 Expected outcome:
@@ -76,7 +76,7 @@ Expected outcome:
 
 ### 2) Enforce Cloudflare standard DNS (dry-run, then live)
 
-- Workflow: `[DNS] 2. Fix - Enforce Standard` (`.github/workflows/2-enforce-standard.yml`)
+- Workflow: `[DNS] 2. Fix - Enforce Standard` (`.github/workflows/106-enforce-standard.yml`)
 - Inputs:
   - `domain = ffcadmin.org`
   - `dry_run = true` (preview)
@@ -94,14 +94,14 @@ If the domain is not verified in the tenant yet, Microsoft will provide a verifi
 
 To discover the exact TXT record Microsoft expects:
 
-- Workflow: `[M365] Domain Status + DKIM` (`.github/workflows/5-m365-domain-and-dkim.yml`)
+- Workflow: `[M365] Domain Status + DKIM` (`.github/workflows/303-m365-domain-and-dkim.yml`)
 - Inputs:
   - `domain = ffcadmin.org`
   - `action = status`
 
 Then apply the verification TXT record in Cloudflare using:
 
-- Workflow: `[DNS] 3. Manual - Manage Record` (`.github/workflows/3-manage-record.yml`)
+- Workflow: `[DNS] 3. Manual - Manage Record` (`.github/workflows/105-manage-record.yml`)
 - Inputs (example — use the exact values shown by the status workflow):
   - `domain = ffcadmin.org`
   - `dry_run = false`
@@ -113,7 +113,7 @@ Then complete the verification in the Microsoft 365 admin UI.
 
 ### 4) Read-only M365 + Cloudflare preflight
 
-- Workflow: `M365: Domain preflight (read-only)` (`.github/workflows/7-m365-domain-preflight.yml`)
+- Workflow: `M365: Domain preflight (read-only)` (`.github/workflows/301-m365-domain-preflight.yml`)
 - Input: `domain = ffcadmin.org`
 
 Expected outcome:
@@ -123,7 +123,7 @@ Expected outcome:
 
 ### 5) End-to-end DKIM enablement (creates DKIM, sets Cloudflare DKIM CNAMEs, enables EXO DKIM)
 
-- Workflow: `M365: Enable DKIM (Exchange Online)` (`.github/workflows/8-m365-dkim-enable.yml`)
+- Workflow: `M365: Enable DKIM (Exchange Online)` (`.github/workflows/304-m365-dkim-enable.yml`)
 - Input: `domain = ffcadmin.org`
 
 This workflow performs three protected steps:
@@ -136,7 +136,7 @@ This workflow performs three protected steps:
 
 Run these after DKIM enablement:
 
-- `[DNS] 1. Report - Check Compliance` (confirms baseline DNS)
+- `[DNS] 101. Report - Check Compliance` (confirms baseline DNS)
 - `M365: Domain preflight (read-only)` (confirms selector presence)
 
 Then validate in the UI:
@@ -169,7 +169,7 @@ From the repo’s standard enforcement (`Update-CloudflareDns.ps1 -EnforceStanda
   - `_sip._tls` → `100 1 443 sipdir.online.lync.com`
   - `_sipfederationtls._tcp` → `100 1 5061 sipfed.online.lync.com`
 
-From DKIM enablement (`.github/workflows/8-m365-dkim-enable.yml`):
+From DKIM enablement (`.github/workflows/304-m365-dkim-enable.yml`):
 
 - CNAME: `selector1._domainkey` → **Microsoft-provided target**
 - CNAME: `selector2._domainkey` → **Microsoft-provided target**

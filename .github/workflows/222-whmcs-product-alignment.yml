@@ -1,0 +1,102 @@
+name: '222. WHMCS - Cloudflare Registrar Product Alignment [WHMCS+CF]'
+run-name: 'WHMCS product alignment (pid ${{ inputs.product_id }}, dry_run=${{ inputs.dry_run }})'
+
+# Aligns a WHMCS status-marker product (default pid 39 "Domain Registered in
+# Cloudflare") onto the clients who own each domain in the FFC Cloudflare
+# Registrar account. Read-only preview by default; a live run gates on whmcs-prod.
+#
+# Two jobs so each uses the identity/scope it is entitled to:
+#   1. resolve-domains  - cloudflare-prod-read (kv-reader) pulls the authoritative
+#                         registrar-domain list from the Cloudflare API.
+#   2. align            - whmcs-prod (kv-writer) resolves each domain to its WHMCS
+#                         client and, unless dry_run, places a $0 AddOrder for any
+#                         client that does not already hold the product. Idempotent.
+#
+# WHMCS API calls route through the APIM gateway (its IP is allow-listed at WHMCS).
+
+on:
+  workflow_dispatch:
+    inputs:
+      product_id:
+        description: 'WHMCS product id to align (39 = Domain Registered in Cloudflare)'
+        required: false
+        type: string
+        default: '39'
+      dry_run:
+        description: 'Preview only (place no orders)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  resolve-domains:
+    runs-on: windows-latest
+    environment: cloudflare-prod-read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: List Cloudflare registrar domains
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & pwsh -NoProfile -File ./scripts/cloudflare-registrar-domains.ps1 -OutputFile artifacts/cloudflare/registrar_domains.json
+          if ($LASTEXITCODE -ne 0) { throw "Cloudflare registrar list failed with exit code $LASTEXITCODE." }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: cloudflare-registrar-domains
+          path: artifacts/cloudflare/registrar_domains.json
+          if-no-files-found: error
+          retention-days: 7
+
+  align:
+    needs: resolve-domains
+    runs-on: windows-latest
+    environment: whmcs-prod
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: cloudflare-registrar-domains
+          path: artifacts/cloudflare
+
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Align product onto registrar-domain clients
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $params = @{
+            DomainsJson      = 'artifacts/cloudflare/registrar_domains.json'
+            ProductId        = '${{ inputs.product_id }}'
+            ApiUrl           = $env:WHMCS_API_URL
+            OutputFile       = 'artifacts/whmcs/whmcs_product_alignment.json'
+            WelcomeEmailJson = 'config/whmcs-cloudflare-domain-email.json'
+          }
+          if ('${{ inputs.dry_run }}' -eq 'false') { $params.Execute = $true }
+          & pwsh -NoProfile -File ./scripts/whmcs-product-alignment.ps1 @params | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if ($LASTEXITCODE -ne 0) { throw "Product alignment failed with exit code $LASTEXITCODE." }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: whmcs-product-alignment
+          path: artifacts/whmcs/whmcs_product_alignment.json
+          if-no-files-found: error
+          retention-days: 30

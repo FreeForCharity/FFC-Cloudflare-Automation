@@ -10,7 +10,8 @@
     The full API response is written to -OutputFile (JSON) for the workflow artifact; the console
     output and exit code carry the verdict:
       exit 0  - organization found; see printed verdict fields
-      exit 1  - request failed (auth, network, invalid EIN format)
+      exit 1  - request failed: auth, network, invalid EIN format, or unknown EIN (the API
+                returns 404 for an EIN not in its database, which fails fast — not retried)
 
 .PARAMETER Ein
     The organization's EIN. Any punctuation is accepted (462471893, 46-2471893).

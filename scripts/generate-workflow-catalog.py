@@ -28,7 +28,7 @@ CATEGORIES = {
     "5": ("Google", "GOOGLE"),
     "6": ("WPMUDEV", "WPMUDEV"),
     "7": ("GitHub (Website + Repo)", "GH"),
-    "8": ("Reserved", "-"),
+    "8": ("Candid (GuideStar)", "CANDID"),
     "9": ("Reserved", "-"),
 }
 

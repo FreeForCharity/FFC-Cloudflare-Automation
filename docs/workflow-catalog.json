@@ -10,7 +10,7 @@
       "5": "Google",
       "6": "WPMUDEV",
       "7": "GitHub (Website + Repo)",
-      "8": "Reserved",
+      "8": "Candid (GuideStar)",
       "9": "Reserved"
     },
     "tagRule": "the [TAG] lists ALL APIs the workflow CALLS (not services configured-for, not plumbing like KV auth or issue comments)"
@@ -1259,8 +1259,8 @@
       "safetyLevel": "Reads",
       "approvalEnv": "candid-prod-read",
       "guard": "read-only IRS-status lookup; public org data only",
-      "category": "Reserved",
-      "categoryCode": "-"
+      "category": "Candid (GuideStar)",
+      "categoryCode": "CANDID"
     },
     {
       "number": 802,
@@ -1279,8 +1279,8 @@
       "safetyLevel": "Reads",
       "approvalEnv": "candid-prod-read",
       "guard": "read-only profile search; public org data only",
-      "category": "Reserved",
-      "categoryCode": "-"
+      "category": "Candid (GuideStar)",
+      "categoryCode": "CANDID"
     }
   ]
 }

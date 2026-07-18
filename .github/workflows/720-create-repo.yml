@@ -21,12 +21,13 @@ on:
           - FreeForCharity/FFC_Single_Page_Template
           - FreeForCharity/FFC-IN-Single_Page_Template_Jekell
       Visibility:
-        description: 'Visibility'
+        description: 'Visibility (private repos get NO tier-team grants — Option C policy)'
         required: true
         default: 'public'
         type: choice
         options:
           - public
+          - private
       EnableIssues:
         description: 'Enable Issues'
         required: false

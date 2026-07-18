@@ -11,7 +11,7 @@ run-name: 'Archive ${{ inputs.repo }} (dry_run=${{ inputs.dry_run }})'
 #   2. dry_run defaults to true (preview only; you must pass dry_run=false)
 #   3. typed confirmation: confirm_repo must exactly equal repo
 #   4. org lock + hard denylist (refuses anything outside FreeForCharity, and always refuses
-#      the automation repo and the website template)
+#      the automation repo, the website template, and the org-wide .github repo)
 #   5. github-prod environment approval gate (a human reviewer must approve the deployment)
 
 on:
@@ -19,8 +19,8 @@ on:
     inputs:
       repo:
         description:
-          'Repository to archive (name only, e.g. FFC-EX-example.org — owner is forced to
-          FreeForCharity).'
+          'Repository to archive — "name" or "owner/name" (e.g. FFC-EX-example.org); any owner
+          prefix is stripped and the owner is forced to FreeForCharity.'
         required: true
         type: string
       reason:

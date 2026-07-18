@@ -62,8 +62,10 @@ Azure Key Vault via OIDC (never GitHub secrets).
 ## GitHub API rate budget (shared — be frugal)
 
 Every agent session, scheduled task, and PAT-based workflow authenticates as the same user and
-shares **one 5,000/hr GraphQL pool and one 5,000/hr REST pool** (separate reset anchors). Concurrent
-sessions polling with GraphQL-backed commands have exhausted the pool for hours.
+shares **one REST core budget (5,000 requests/hr) and one GraphQL points budget (typically
+5,000 points/hr — cost varies per query, so heavy queries drain it faster than a request count
+suggests)**, with separate reset anchors. Concurrent sessions polling with GraphQL-backed commands
+have exhausted the points budget for hours.
 
 - **Poll with REST only**: `gh api repos/OWNER/REPO/pulls/N`, `.../commits/SHA/check-runs`,
   `.../actions/runs/ID`. The `gh pr ...` / `gh issue ...` verbs are **GraphQL** — never put them in

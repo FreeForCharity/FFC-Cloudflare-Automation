@@ -1212,6 +1212,7 @@ jobs:
       needs.dns.result == 'skipped')
     outputs:
       served: ${{ steps.probe.outputs.served }}
+      served_host: ${{ steps.probe.outputs.served_host }}
     steps:
       - name: Probe the live site on GitHub Pages
         id: probe
@@ -1221,6 +1222,7 @@ jobs:
         run: |
           set -uo pipefail
           served=false
+          served_host=''
           # Retry to allow for DNS propagation / GitHub Pages cert issuance on a brand-new
           # custom domain. Non-fatal by design: a not-yet-serving result is reported as a
           # warning, never a hard failure (a slow cert must not turn a good provision red).
@@ -1235,17 +1237,21 @@ jobs:
               echo "attempt $attempt: https://$host -> HTTP ${code:-000}, Server: ${server:-<none>}"
               if [ "${code:-}" = "200" ] && printf '%s' "$server" | grep -qi 'github'; then
                 served=true
+                served_host="$host"
                 break
               fi
             done
             if [ "$served" = "true" ]; then break; fi
             sleep 30
           done
-          echo "served=$served" >> "$GITHUB_OUTPUT"
+          {
+            echo "served=$served"
+            echo "served_host=$served_host"
+          } >> "$GITHUB_OUTPUT"
           {
             echo "### Serving check — $DOMAIN"
             if [ "$served" = "true" ]; then
-              echo "✅ Live on GitHub Pages (HTTP 200, \`Server: GitHub.com\`)."
+              echo "✅ Live on GitHub Pages at \`https://$served_host\` (HTTP 200, \`Server: GitHub.com\`)."
             else
               echo "⚠️ Not serving yet after ~6 min of retries. DNS/cert may still be propagating, or Pages is misconfigured — re-check in a few minutes."
             fi
@@ -1276,6 +1282,7 @@ jobs:
           RUN_URL: ${{ needs.resolve.outputs.run_url }}
           ZONE_CONTROLLED: ${{ needs.zone_check.outputs.zone_controlled }}
           SERVED: ${{ needs.verify.outputs.served }}
+          SERVED_HOST: ${{ needs.verify.outputs.served_host }}
           CONTENT_STATUS: ${{ needs.content.outputs.content_status }}
         with:
           script: |
@@ -1289,6 +1296,8 @@ jobs:
             // distinct from an explicit true/false (or applied/skipped/failed) result.
             const servedRaw = process.env.SERVED || '';
             const served = servedRaw === 'true';
+            // The probe accepts apex OR www; report the host that actually answered.
+            const servedHost = process.env.SERVED_HOST || domain;
             const contentStatus = process.env.CONTENT_STATUS || 'unknown';
 
             const marker = '<!-- website-provision:completed -->';
@@ -1298,9 +1307,9 @@ jobs:
             const servingNote = !zoneControlled
               ? '- Serving check skipped (DNS not pointed at GitHub Pages for this domain yet).'
               : served
-                ? `- ✅ Verified live on GitHub Pages: https://${domain} returns HTTP 200 (\`Server: GitHub.com\`).`
+                ? `- ✅ Verified live on GitHub Pages: https://${servedHost} returns HTTP 200 (\`Server: GitHub.com\`).`
                 : servedRaw === 'false'
-                  ? `- ⚠️ Not serving yet at https://${domain} — DNS/cert may still be propagating. Re-check in a few minutes; the repo and DNS are in place.`
+                  ? `- ⚠️ Not serving yet (checked https://${domain} and https://www.${domain}) — DNS/cert may still be propagating. Re-check in a few minutes; the repo and DNS are in place.`
                   : `- ❔ Serving check did not run or did not record a result — verify https://${domain} manually (see the run log).`;
             const contentNote =
               contentStatus === 'applied'

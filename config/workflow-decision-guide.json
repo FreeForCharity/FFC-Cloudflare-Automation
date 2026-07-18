@@ -1,0 +1,137 @@
+{
+  "_comment": "Task->workflow decision guide for AI agents and new admins. Validated by scripts/generate-workflow-catalog.py --check (every workflow number must exist in the catalog). safeFirst = the read-only workflow to run before the action.",
+  "intents": [
+    {
+      "intent": "Check a domain's overall health / status across systems",
+      "workflows": [101],
+      "safeFirst": null,
+      "notes": "Read-only aggregator (CF + M365). Start here for any domain request."
+    },
+    {
+      "intent": "Onboard a domain whose registrar is external (eNOM): use FFC Cloudflare DNS",
+      "workflows": [102],
+      "safeFirst": 101,
+      "notes": "Creates the CF zone and repoints nameservers at eNOM via WHMCS. Gated write."
+    },
+    {
+      "intent": "Apply the standard DNS configuration to a domain",
+      "workflows": [103, 106],
+      "safeFirst": 107,
+      "notes": "103 = GitHub apex + M365 records; 106 = DNS-only. Both dry-run by default."
+    },
+    {
+      "intent": "Add, change, or delete one DNS record",
+      "workflows": [105],
+      "safeFirst": 101,
+      "notes": "Dry-run default; also issue-label triggered."
+    },
+    {
+      "intent": "Audit DNS compliance / export zones for review",
+      "workflows": [107, 108, 109],
+      "safeFirst": null,
+      "notes": "All read-only reports."
+    },
+    {
+      "intent": "Create a redirect from one domain to another",
+      "workflows": [111],
+      "safeFirst": 101,
+      "notes": "Idempotent Cloudflare Single Redirect rule; dry-run default."
+    },
+    {
+      "intent": "Register a brand-new domain at Cloudflare Registrar",
+      "workflows": [113],
+      "safeFirst": 114,
+      "notes": "check-only mode first; live purchase needs mode=execute-register + typed confirm_domain."
+    },
+    {
+      "intent": "Transfer an existing eNOM domain to Cloudflare Registrar",
+      "workflows": [115, 116, 117],
+      "safeFirst": 115,
+      "notes": "Preflight report -> EPP/auth-code probe -> post-transfer verification. See project #157."
+    },
+    {
+      "intent": "Provision a complete new charity website (repo + DNS + Pages)",
+      "workflows": [701],
+      "safeFirst": 101,
+      "notes": "Issue-assigned trigger or dispatch; environment-gated DNS + repo jobs."
+    },
+    {
+      "intent": "Deploy a static clone of an existing site into an FFC-EX repo",
+      "workflows": [702],
+      "safeFirst": null,
+      "notes": "Serialized; writes to the target repo."
+    },
+    {
+      "intent": "Onboard a charity into WHMCS (client + contacts + order)",
+      "workflows": [204],
+      "safeFirst": 202,
+      "notes": "Product/custom-field ids come from the products export. Dry-run default."
+    },
+    {
+      "intent": "Open, reply to, or triage WHMCS support tickets",
+      "workflows": [205, 206, 207, 208, 209],
+      "safeFirst": 209,
+      "notes": "209/208 are read-only triage/export; replies (207) are templated + human-gated."
+    },
+    {
+      "intent": "Review or act on WHMCS orders",
+      "workflows": [210, 211],
+      "safeFirst": 210,
+      "notes": "210 read-only triage; 211 accepts/cancels one order, dry-run default."
+    },
+    {
+      "intent": "Check M365 email/DNS readiness or enable DKIM for a domain",
+      "workflows": [301, 302, 303, 304, 305],
+      "safeFirst": 301,
+      "notes": "301/302 read-only; 304/305 write (gated)."
+    },
+    {
+      "intent": "Export Zeffy campaigns / payments / contacts",
+      "workflows": [401, 402, 403],
+      "safeFirst": null,
+      "notes": "Read-only; donor PII masked by default on this public repo."
+    },
+    {
+      "intent": "Verify Google API connectivity (GA4)",
+      "workflows": [501],
+      "safeFirst": null,
+      "notes": "Read-only smoke; reusable gate via workflow_call."
+    },
+    {
+      "intent": "Generate the GA traffic reports for the primary sites",
+      "workflows": [502],
+      "safeFirst": 501,
+      "notes": "Read-only; delivers JSON to ffcadmin via PR."
+    },
+    {
+      "intent": "Set up GTM + default tags for a new charity site",
+      "workflows": [503],
+      "safeFirst": 501,
+      "notes": "Per-charity container model; dry-run default; google-prod-write gated."
+    },
+    {
+      "intent": "Back up all GTM containers",
+      "workflows": [504],
+      "safeFirst": null,
+      "notes": "Read-only weekly export; artifacts 90d."
+    },
+    {
+      "intent": "Audit Key Vault secrets for placeholders / staleness",
+      "workflows": [320],
+      "safeFirst": null,
+      "notes": "Read-only; values never printed."
+    },
+    {
+      "intent": "See automation platform health (runs, success rates)",
+      "workflows": [731],
+      "safeFirst": null,
+      "notes": "Read-only 30d Actions metrics artifact."
+    },
+    {
+      "intent": "Add a collaborator to an FFC repo",
+      "workflows": [729],
+      "safeFirst": null,
+      "notes": "CAUTION: dry_run defaults to FALSE on this one (documented exception); github-prod gated."
+    }
+  ]
+}

@@ -28,6 +28,7 @@ name: '727. Repo - Phantom Revert Guard [Repo]'
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
   workflow_dispatch:
     inputs:
       head_sha:
@@ -88,7 +89,7 @@ jobs:
           echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
 
       - name: Checkout PR with full history
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ steps.refs.outputs.head_sha }}

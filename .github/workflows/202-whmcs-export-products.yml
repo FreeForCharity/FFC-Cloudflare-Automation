@@ -28,16 +28,17 @@ permissions:
 jobs:
   export_products:
     runs-on: windows-latest
-    environment: whmcs-prod
+    environment: whmcs-prod-read
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv
         with:
-          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Export products + client products (read-only)
         shell: pwsh

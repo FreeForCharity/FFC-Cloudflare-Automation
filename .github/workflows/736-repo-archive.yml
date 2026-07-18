@@ -1,4 +1,4 @@
-name: '731. Repo - Archive / Application Denied (Admin) [Repo]'
+name: '736. Repo - Archive / Application Denied (Admin) [Repo]'
 run-name: 'Archive ${{ inputs.repo }} (dry_run=${{ inputs.dry_run }})'
 
 # Destructive-adjacent, so heavily guarded. This workflow ONLY archives a repository

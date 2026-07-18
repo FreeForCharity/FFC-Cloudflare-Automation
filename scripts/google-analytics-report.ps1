@@ -24,6 +24,11 @@ param(
     [Parameter(Mandatory)][string]$OutPath,
     [string]$PropertyId,
     [int]$Days = 28,
+    # Production hostname; when set, a hostname-filtered copy of the headline metrics is
+    # emitted (metricsProduction) so CI/staging traffic can be excluded from public numbers.
+    [string]$Hostname,
+    # Cap for the appended time-series history (~13 months of daily points).
+    [int]$TimeseriesCap = 400,
     [switch]$DryRun
 )
 
@@ -43,14 +48,15 @@ function Write-Report {
 
 if ($DryRun) {
     $stub = [ordered]@{
-        updatedAt  = $now
-        site       = $SiteLabel
-        propertyId = if ($PropertyId) { $PropertyId } else { 'DRYRUN' }
-        dryRun     = $true
-        range      = [ordered]@{ days = $Days; startDate = $startDate; endDate = 'today' }
-        metrics    = [ordered]@{ activeUsers = 0; newUsers = 0; sessions = 0; screenPageViews = 0; engagementRate = 0 }
-        topPages   = @()
-        channels   = @()
+        schemaVersion = 2
+        updatedAt     = $now
+        site          = $SiteLabel
+        propertyId    = if ($PropertyId) { $PropertyId } else { 'DRYRUN' }
+        dryRun        = $true
+        range         = [ordered]@{ days = $Days; startDate = $startDate; endDate = 'today' }
+        metrics       = [ordered]@{ activeUsers = 0; newUsers = 0; sessions = 0; screenPageViews = 0; engagementRate = 0; eventCount = 0; keyEvents = 0 }
+        topPages      = @()
+        channels      = @()
     }
     Write-Report -Report $stub -Path $OutPath
     return
@@ -61,24 +67,35 @@ if ([string]::IsNullOrWhiteSpace($PropertyId)) {
 }
 
 $token = Get-GoogleAccessToken -Scope 'https://www.googleapis.com/auth/analytics.readonly'
-$uri = "https://analyticsdata.googleapis.com/v1beta/properties/$PropertyId:runReport"
+# NOTE: ${} braces are required — "$PropertyId:runReport" would parse ':' as a scope separator
+# and silently produce an empty variable (404 from the API).
+$uri = "https://analyticsdata.googleapis.com/v1beta/properties/${PropertyId}:runReport"
 
-# Headline metrics (no dimensions -> single aggregate row; PII-safe).
-$headline = Invoke-GoogleApi -Method POST -Uri $uri -AccessToken $token -Body @{
-    dateRanges = @(@{ startDate = $startDate; endDate = 'today' })
-    metrics    = @(
-        @{ name = 'activeUsers' }, @{ name = 'newUsers' }, @{ name = 'sessions' },
-        @{ name = 'screenPageViews' }, @{ name = 'engagementRate' }
-    )
+# Headline metrics (no dimensions -> single aggregate row; PII-safe). eventCount/keyEvents
+# extend the schema (schemaVersion 2) for outcome metrics alongside traffic.
+$metricNames = @('activeUsers', 'newUsers', 'sessions', 'screenPageViews', 'engagementRate', 'eventCount', 'keyEvents')
+
+function Get-HeadlineMetrics {
+    param([string]$FilterHostname)
+    $reqBody = @{
+        dateRanges = @(@{ startDate = $startDate; endDate = 'today' })
+        metrics    = @($metricNames | ForEach-Object { @{ name = $_ } })
+    }
+    if ($FilterHostname) {
+        # Match apex + www so both serving forms count as production traffic.
+        $reqBody.dimensionFilter = @{ filter = @{ fieldName = 'hostName'; inListFilter = @{ values = @($FilterHostname, "www.$FilterHostname") } } }
+    }
+    $resp = Invoke-GoogleApi -Method POST -Uri $uri -AccessToken $token -Body $reqBody
+    $respRows = Get-GoogleRows $resp
+    $vals = [ordered]@{}
+    for ($i = 0; $i -lt $metricNames.Count; $i++) {
+        $vals[$metricNames[$i]] = if ($respRows.Count) { $respRows[0].metricValues[$i].value } else { 0 }
+    }
+    return $vals
 }
 
-$metricNames = @('activeUsers', 'newUsers', 'sessions', 'screenPageViews', 'engagementRate')
-$headlineRows = Get-GoogleRows $headline
-$metrics = [ordered]@{}
-for ($i = 0; $i -lt $metricNames.Count; $i++) {
-    $v = if ($headlineRows.Count) { $headlineRows[0].metricValues[$i].value } else { 0 }
-    $metrics[$metricNames[$i]] = $v
-}
+$metrics = Get-HeadlineMetrics
+$metricsProduction = if ($Hostname) { Get-HeadlineMetrics -FilterHostname $Hostname } else { $null }
 
 # Top pages by views (pagePath is page-level, not user-level -> safe to publish).
 $pagesResp = Invoke-GoogleApi -Method POST -Uri $uri -AccessToken $token -Body @{
@@ -106,13 +123,38 @@ foreach ($r in (Get-GoogleRows $chResp)) {
 }
 
 $report = [ordered]@{
-    updatedAt  = $now
-    site       = $SiteLabel
-    propertyId = $PropertyId
-    dryRun     = $false
-    range      = [ordered]@{ days = $Days; startDate = $startDate; endDate = 'today' }
-    metrics    = $metrics
-    topPages   = $topPages
-    channels   = $channels
+    schemaVersion = 2
+    updatedAt     = $now
+    site          = $SiteLabel
+    propertyId    = $PropertyId
+    dryRun        = $false
+    range         = [ordered]@{ days = $Days; startDate = $startDate; endDate = 'today' }
+    metrics       = $metrics
+    topPages      = $topPages
+    channels      = $channels
+}
+if ($null -ne $metricsProduction) {
+    $report.productionHostname = $Hostname
+    $report.metricsProduction = $metricsProduction
 }
 Write-Report -Report $report -Path $OutPath
+
+# Time-series history: append today's headline snapshot to <OutPath>.timeseries.json
+# (one point per UTC day; same-day reruns replace; capped at -TimeseriesCap points).
+$tsPath = [System.IO.Path]::ChangeExtension($OutPath, $null).TrimEnd('.') + '.timeseries.json'
+$today = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-dd')
+$history = @()
+if (Test-Path $tsPath) {
+    try { $history = @((Get-Content $tsPath -Raw | ConvertFrom-Json)) } catch { $history = @() }
+}
+$history = @($history | Where-Object { $_.date -ne $today })
+$snapshot = if ($null -ne $metricsProduction) { $metricsProduction } else { $metrics }
+$history += [ordered]@{
+    date            = $today
+    activeUsers     = $snapshot['activeUsers']
+    sessions        = $snapshot['sessions']
+    screenPageViews = $snapshot['screenPageViews']
+}
+if ($history.Count -gt $TimeseriesCap) { $history = @($history | Select-Object -Last $TimeseriesCap) }
+($history | ConvertTo-Json -Depth 5 -AsArray) | Set-Content -Path $tsPath -Encoding utf8
+Write-Host "Appended time-series point for $today -> $tsPath ($($history.Count) points)"

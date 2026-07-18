@@ -12,6 +12,11 @@ on:
         required: true
         type: string
 
+# Serialize runs: a second dispatch queues behind the first instead of racing it.
+concurrency:
+  group: 304-m365-dkim-enable
+  cancel-in-progress: false
+
 jobs:
   exo_check:
     runs-on: ubuntu-latest
@@ -27,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Validate required secrets
         shell: bash
@@ -90,7 +95,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
@@ -122,7 +127,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Azure login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3

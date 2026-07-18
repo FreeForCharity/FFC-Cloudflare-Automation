@@ -153,6 +153,21 @@ def test_sibling_scan_full_domain_no_tld_false_positive():
     assert "repo_name=FFC-EX-letsdanceactivities.org" in outputs, outputs
 
 
+def test_missing_server_header_is_noncutover_not_a_crash():
+    # No Server header is a valid non-cutover outcome; under set -e/pipefail
+    # the grep pipeline must not kill the preflight.
+    proc, _, outputs = run_preflight(
+        {
+            "TEST_REPO_META": '{"full_name": "FreeForCharity/FFC-EX-alltypetowing.com"}',
+            "TEST_PAGES_CODE": "404",
+            "TEST_APEX_CODE": "200",
+            "TEST_APEX_NO_SERVER": "1",
+        }
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "repo_name=FFC-EX-AllTypeTowing.com" in outputs or "repo_name=FFC-EX-alltypetowing.com" in outputs, outputs
+
+
 def test_probe_failure_fails_safe_not_notlive():
     # A curl-level failure (000 / empty) is a failed PROBE, not a "not live"
     # verdict — must refuse rather than fail open past the gate.

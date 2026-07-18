@@ -24,6 +24,10 @@ case "$url" in
     printf '%s' "${TEST_PAGES_CODE:-404}"
     ;;
   *)
-    printf 'HTTP/2 %s\r\nserver: %s\r\n' "${TEST_APEX_CODE:-200}" "${TEST_APEX_SERVER:-cloudflare}"
+    if [ "${TEST_APEX_NO_SERVER:-}" = "1" ]; then
+      printf 'HTTP/2 %s\r\n' "${TEST_APEX_CODE:-200}"
+    else
+      printf 'HTTP/2 %s\r\nserver: %s\r\n' "${TEST_APEX_CODE:-200}" "${TEST_APEX_SERVER:-cloudflare}"
+    fi
     ;;
 esac

@@ -23,8 +23,10 @@ case "$cmd" in
       *rules/branches/*)
         echo "${TEST_HAS_MQ:-0}"
         ;;
-      *orgs/*/repos*)
-        # Org repo listing for the preflight sibling scans (one name per line).
+      orgs/*/repos\?* | orgs/*/repos\ * | orgs/*/repos)
+        # Org repo LISTING for the preflight sibling scans (one name per line).
+        # Deliberately does NOT match orgs/<org>/teams/<team>/repos/... — those
+        # must keep routing to the */teams* branch below.
         if [ "${TEST_ORG_REPOS_FAIL:-}" = "1" ]; then
           echo "simulated org list failure" >&2
           exit 1

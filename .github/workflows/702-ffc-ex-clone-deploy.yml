@@ -121,7 +121,9 @@ jobs:
           # a live site through).
           apex_headers=$(curl -sSIL --max-time 20 "https://${IN_DOMAIN}/" 2>/dev/null | tr -d '\r' || true)
           apex_code=$(printf '%s\n' "$apex_headers" | awk 'toupper($1) ~ /^HTTP/ { c = $2 } END { print c }')
-          apex_server=$(printf '%s\n' "$apex_headers" | grep -i '^server:' | tail -n1 | sed -E 's/^[Ss]erver:[[:space:]]*//')
+          # '|| true': a response with no Server header is a valid non-cutover outcome —
+          # under set -e/pipefail the failing grep would otherwise kill the whole preflight.
+          apex_server=$(printf '%s\n' "$apex_headers" | grep -i '^server:' | tail -n1 | sed -E 's/^[^:]*:[[:space:]]*//' || true)
 
           # Probe failures must not read as "not live" — that would fail open, exactly
           # like the org-list case. 000/empty means the probe itself failed (network/TLS),

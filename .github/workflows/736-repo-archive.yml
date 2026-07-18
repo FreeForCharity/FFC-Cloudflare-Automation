@@ -154,10 +154,17 @@ jobs:
           # --- optionally close a linked issue in THIS repo --------------------------
           if [ -n "${IN_ISSUE:-}" ]; then
             if printf '%s' "$IN_ISSUE" | grep -qE '^[0-9]+$'; then
+              # Best-effort (the archive itself already succeeded), but report honestly:
+              # only claim the issue was closed if the close actually succeeded.
               gh issue comment "$IN_ISSUE" --repo "${{ github.repository }}" \
-                --body "Archived \`$full\` — ${IN_REASON:-no reason given}. Repo is read-only (reversible). Closing as not planned." || true
-              gh issue close "$IN_ISSUE" --repo "${{ github.repository }}" --reason "not planned" || true
-              echo "- Closed issue #$IN_ISSUE in ${{ github.repository }}." >> "$GITHUB_STEP_SUMMARY"
+                --body "Archived \`$full\` — ${IN_REASON:-no reason given}. Repo is read-only (reversible). Closing as not planned." ||
+                echo "::warning::Failed to comment on issue #$IN_ISSUE."
+              if gh issue close "$IN_ISSUE" --repo "${{ github.repository }}" --reason "not planned"; then
+                echo "- Closed issue #$IN_ISSUE in ${{ github.repository }}." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "- ⚠️ Could not close issue #$IN_ISSUE — close it manually." >> "$GITHUB_STEP_SUMMARY"
+                echo "::warning::Failed to close issue #$IN_ISSUE."
+              fi
             else
               echo "::warning::issue_number '$IN_ISSUE' is not numeric; skipped closing an issue."
             fi

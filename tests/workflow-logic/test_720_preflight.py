@@ -69,6 +69,46 @@ def test_free_name_proceeds():
     assert "is free" in summary, summary
 
 
+def test_sibling_repo_for_same_domain_refused_without_force():
+    # Name is free, but an un-prefixed org repo already serves this domain —
+    # the exact trap that created a redundant FFC-EX-technologymonastery.org.
+    proc, summary = run_preflight(
+        {
+            "IN_REPO": "FFC-EX-technologymonastery.org",
+            "TEST_REPO_META": "404",
+            "TEST_ORG_REPOS": "TechnologyMonastery.org",
+        }
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "TechnologyMonastery.org" in proc.stdout, proc.stdout
+    assert "sibling" in summary.lower(), summary
+
+
+def test_sibling_refusal_overridden_by_force():
+    proc, summary = run_preflight(
+        {
+            "IN_REPO": "FFC-EX-technologymonastery.org",
+            "TEST_REPO_META": "404",
+            "TEST_ORG_REPOS": "TechnologyMonastery.org",
+            "IN_FORCE": "true",
+        }
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "is free" in summary, summary
+
+
+def test_sibling_scan_full_domain_no_tld_false_positive():
+    proc, summary = run_preflight(
+        {
+            "IN_REPO": "FFC-EX-letsdanceactivities.org",
+            "TEST_REPO_META": "404",
+            "TEST_ORG_REPOS": "FFC-EX-letsdanceactivities.com\ntrendylittlegeek.com",
+        }
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "is free" in summary, summary
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

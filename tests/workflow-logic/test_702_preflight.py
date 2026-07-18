@@ -121,6 +121,53 @@ def test_not_yet_live_proceeds_with_canonical_casing():
     assert "repo_name=FFC-EX-AllTypeTowing.com" in outputs, outputs
 
 
+def test_sibling_repo_for_same_domain_refused_without_force():
+    # The TechnologyMonastery.org shape: an un-prefixed org repo is the charity's
+    # real site while the FFC-EX target is empty. Must refuse and name it.
+    proc, summary, _ = run_preflight(
+        {
+            "IN_DOMAIN": "technologymonastery.org",
+            "TEST_REPO_META": '{"full_name": "FreeForCharity/FFC-EX-technologymonastery.org"}',
+            "TEST_PAGES_CODE": "404",
+            "TEST_APEX_SERVER": "cloudflare",
+            "TEST_ORG_REPOS": "TechnologyMonastery.org\nFFC-EX-other.org",
+        }
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "TechnologyMonastery.org" in proc.stdout, proc.stdout
+    assert "sibling" in summary.lower(), summary
+
+
+def test_sibling_scan_full_domain_no_tld_false_positive():
+    # letsdanceactivities.com must NOT block letsdanceactivities.org.
+    proc, _, outputs = run_preflight(
+        {
+            "IN_DOMAIN": "letsdanceactivities.org",
+            "TEST_REPO_META": '{"full_name": "FreeForCharity/FFC-EX-letsdanceactivities.org"}',
+            "TEST_PAGES_CODE": "404",
+            "TEST_APEX_SERVER": "cloudflare",
+            "TEST_ORG_REPOS": "FFC-EX-letsdanceactivities.com",
+        }
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "repo_name=FFC-EX-letsdanceactivities.org" in outputs, outputs
+
+
+def test_sibling_refusal_overridden_by_force():
+    proc, _, outputs = run_preflight(
+        {
+            "IN_DOMAIN": "technologymonastery.org",
+            "TEST_REPO_META": '{"full_name": "FreeForCharity/FFC-EX-technologymonastery.org"}',
+            "TEST_PAGES_CODE": "404",
+            "TEST_APEX_SERVER": "cloudflare",
+            "TEST_ORG_REPOS": "TechnologyMonastery.org",
+            "IN_FORCE": "true",
+        }
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "repo_name=" in outputs, outputs
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

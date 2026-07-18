@@ -121,6 +121,21 @@ jobs:
           pages_live=false
           if [ "$pages_code" = "200" ]; then pages_live=true; fi
 
+          # --- sibling scan: does the org already host ANOTHER repo for this domain? ---
+          # An exact-name check is too strict: TechnologyMonastery.org (no FFC-EX prefix)
+          # was the charity's real, active Next.js site while FFC-EX-technologymonastery.org
+          # was empty. Match the FULL domain (case-insensitive) inside every org repo name —
+          # full-domain matching keeps legitimate sibling domains apart (letsdanceactivities
+          # .org vs .com do not match each other).
+          siblings=$(gh api "orgs/$TARGET_ORG/repos?per_page=100" --paginate --jq '.[].name' 2>/dev/null |
+            grep -iF -- "$IN_DOMAIN" | grep -ivx -- "$canonical_name" || true)
+          if [ -n "$siblings" ]; then
+            {
+              echo "- ⚠️ Other org repos matching \`$IN_DOMAIN\`:"
+              printf '%s\n' "$siblings" | sed 's/^/  - `/; s/$/`/'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
           {
             echo "## Clone preflight — ${IN_DOMAIN}"
             echo "- Target repo: \`$canonical\` (exists)"
@@ -132,6 +147,13 @@ jobs:
             echo "::error::$canonical already serves a live site (default URL HTTP $pages_code; apex ${apex_code:-000}/${apex_server:-none}). Re-cloning would supersede a completed migration. If that is deliberate, re-dispatch with force=true."
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "⛔ Refused: target already live. Re-dispatch with \`force=true\` only if regenerating deliberately." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          if [ -n "$siblings" ] && [ "${IN_FORCE:-false}" != "true" ]; then
+            echo "::error::The org already hosts other repo(s) matching $IN_DOMAIN: $(printf '%s' "$siblings" | tr '\n' ' '). One of them may be the charity's real site — investigate before cloning. If this clone is deliberate, re-dispatch with force=true."
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "⛔ Refused: sibling repo(s) exist for this domain. Investigate, then re-dispatch with \`force=true\` if deliberate." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 

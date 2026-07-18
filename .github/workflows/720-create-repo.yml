@@ -51,6 +51,13 @@ on:
         description: 'Custom Domain (CNAME) - Leave empty to auto-detect based on PagesDomainType'
         required: false
         type: string
+      Force:
+        description:
+          'Create even though other org repos match this domain (preflight lists them). Leave false
+          unless you have confirmed none of them is the real site for this domain.'
+        required: false
+        default: false
+        type: boolean
       DryRun:
         description: 'Dry Run (Preview only)'
         required: false
@@ -71,6 +78,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           IN_REPO: ${{ inputs.RepoName }}
+          IN_FORCE: ${{ inputs.Force }}
         shell: bash
         run: |
           set -euo pipefail
@@ -95,6 +103,26 @@ jobs:
           fi
           if ! printf '%s' "$resp" | grep -q "HTTP 404"; then
             echo "::error::Preflight could not verify $owner/$name (transient API error?). Failing safe rather than guessing. Details: $resp"
+            exit 1
+          fi
+
+          # --- sibling scan: does the org already host ANOTHER repo for this domain? ---
+          # Exact-name checks are too strict: TechnologyMonastery.org (no FFC-EX prefix)
+          # was the charity's real site while the FFC-EX-prefixed name looked free. Derive
+          # the domain from the requested name and match it (full domain, case-insensitive)
+          # against every org repo name; full-domain matching keeps legitimate sibling
+          # domains (.org vs .com) apart.
+          domain="$name"
+          case "$domain" in FFC-EX-*|ffc-ex-*) domain="${domain#*-*-}" ;; esac
+          siblings=$(gh api "orgs/$owner/repos?per_page=100" --paginate --jq '.[].name' 2>/dev/null |
+            grep -iF -- "$domain" | grep -ivx -- "$name" || true)
+          if [ -n "$siblings" ] && [ "${IN_FORCE:-false}" != "true" ]; then
+            echo "::error::The org already hosts repo(s) matching $domain: $(printf '%s' "$siblings" | tr '\n' ' '). One of them may be the real site for this domain — investigate before creating a new one. If this create is deliberate, re-dispatch with Force=true."
+            {
+              echo "## Create preflight — $owner/$name"
+              echo "⛔ Refused: sibling repo(s) match \`$domain\`:"
+              printf '%s\n' "$siblings" | sed 's/^/- `/; s/$/`/'
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           echo "✅ $owner/$name is free — proceeding to the gated create." >> "$GITHUB_STEP_SUMMARY"

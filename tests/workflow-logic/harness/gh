@@ -23,6 +23,10 @@ case "$cmd" in
       *rules/branches/*)
         echo "${TEST_HAS_MQ:-0}"
         ;;
+      *orgs/*/repos*)
+        # Org repo listing for the preflight sibling scans (one name per line).
+        printf '%s\n' "${TEST_ORG_REPOS:-}"
+        ;;
       */teams*)
         if [ "${TEST_TEAMS_FAIL:-}" = "1" ]; then
           echo "simulated API failure" >&2

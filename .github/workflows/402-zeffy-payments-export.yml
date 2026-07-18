@@ -61,7 +61,7 @@ jobs:
           "- $f : $n row(s)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload payments CSV artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: zeffy_payments
           path: artifacts/zeffy/zeffy_payments.csv

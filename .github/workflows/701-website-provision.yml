@@ -4,6 +4,17 @@ on:
   issues:
     types: [assigned]
 
+  # Cross-repo trigger from FFCadmin's trigger-provisioning.yml, sent after an
+  # intake issue passes sponsoring-admin verification. client_payload carries:
+  # charity_title, ffcadmin_issue, issue_url, sponsor, and domain (the
+  # applicant's desired apex domain). See FFCadmin docs/migration-plan.md §1-2.
+  # client_payload keys are read exactly like workflow_dispatch inputs (the
+  # resolve step treats both as "manual"), so `domain` is required and any of
+  # the optional charity/footer fields may be supplied under the same names.
+  # An empty/missing domain fails validation with the normal admin prompt.
+  repository_dispatch:
+    types: [ffcadmin-website-provision]
+
   workflow_dispatch:
     inputs:
       domain:
@@ -130,8 +141,11 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
-            const isManual = context.eventName === 'workflow_dispatch';
-            const manualInputs = context.payload.inputs || {};
+            const isDispatch = context.eventName === 'repository_dispatch';
+            const isManual = context.eventName === 'workflow_dispatch' || isDispatch;
+            const manualInputs = isDispatch
+              ? (context.payload.client_payload || {})
+              : (context.payload.inputs || {});
             const issue = context.payload.issue || {};
             const body = isManual ? '' : (issue.body || '');
             const title = isManual ? '' : (issue.title || '');
@@ -990,6 +1004,9 @@ jobs:
             }
 
             ./scripts/Create-GitHubRepo.ps1 @createParams
+            if ($LASTEXITCODE -ne 0) {
+              throw "Create-GitHubRepo.ps1 failed with exit code $LASTEXITCODE"
+            }
           }
 
   # Add the requester + technical POC as repo maintainers via the reusable

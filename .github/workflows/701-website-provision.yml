@@ -1204,7 +1204,7 @@ jobs:
             $contentStatus = 'failed'
           }
 
-          "content_status=$contentStatus" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "content_status=$contentStatus" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   verify:
     runs-on: ubuntu-latest

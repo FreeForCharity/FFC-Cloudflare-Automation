@@ -64,6 +64,9 @@ jobs:
             gh repo list "$org" --limit 200 --json name,isArchived,visibility,defaultBranchRef \
               --jq '.[] | select(.isArchived==false) | "\(.name)\t\(.visibility)\t\(.defaultBranchRef.name // "")"' \
             | while IFS=$'\t' read -r repo vis default; do
+              # gh returns visibility as an enum (PUBLIC/PRIVATE); normalize so
+              # the public-only checks (merge-queue, tier teams) actually fire.
+              vis=$(printf '%s' "$vis" | tr '[:upper:]' '[:lower:]')
               [ -z "$default" ] && continue
               settings=$(gh api "repos/$org/$repo" --jq '"\(.allow_squash_merge)|\(.allow_auto_merge)|\(.delete_branch_on_merge)|\(.allow_update_branch)"' 2>/dev/null || echo "?|?|?|?")
               squash=$(echo "$settings" | cut -d'|' -f1)

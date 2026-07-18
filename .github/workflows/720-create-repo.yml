@@ -148,4 +148,10 @@ jobs:
         run: |
           echo "::notice::Repo is ${{ inputs.Visibility }} — skipping FFC-ORGWIDE-* tier team grants."
           echo "::notice::Private repos require explicit team grants by an Owner. Manage at:"
-          echo "::notice::  https://github.com/FreeForCharity/${{ inputs.RepoName }}/settings/access"
+          # RepoName may already be owner-qualified; only prefix the org when bare.
+          repo_input="${{ inputs.RepoName }}"
+          case "$repo_input" in
+            */*) full="$repo_input" ;;
+            *)   full="FreeForCharity/$repo_input" ;;
+          esac
+          echo "::notice::  https://github.com/$full/settings/access"

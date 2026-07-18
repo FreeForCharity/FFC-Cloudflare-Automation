@@ -13,10 +13,10 @@ so we can align Cloudflare DNS with what Microsoft 365 expects.
 
 GitHub Actions workflows (manual `workflow_dispatch`):
 
-- Domain status + DKIM: `.github/workflows/5-m365-domain-and-dkim.yml`
-- List all tenant domains: `.github/workflows/6-m365-list-domains.yml`
+- Domain status + DKIM: `.github/workflows/303-m365-domain-and-dkim.yml`
+- List all tenant domains: `.github/workflows/302-m365-list-domains.yml`
 - Enable DKIM (create selector CNAMEs in Cloudflare and enable signing):
-  `.github/workflows/8-m365-dkim-enable.yml`
+  `.github/workflows/304-m365-dkim-enable.yml`
 
 ## End-to-end testing
 

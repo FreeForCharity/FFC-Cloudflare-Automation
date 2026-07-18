@@ -1,0 +1,39 @@
+name: 'Support Request (new request)'
+description: 'A new support/help request for a charity. Opens a WHMCS ticket.'
+title: 'Support: <short summary>'
+labels: ['whmcs:new-request']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This opens a **WHMCS support ticket** (department: Support) linked to the charity.
+        Fill in the charity's contact email so the ticket is associated correctly.
+  - type: input
+    id: charity_email
+    attributes:
+      label: Charity contact email
+      description: The email of the charity contact / WHMCS client.
+      placeholder: contact@charity.org
+    validations:
+      required: true
+  - type: input
+    id: charity_name
+    attributes:
+      label: Charity / contact name
+      placeholder: Jane Doe (Example Charity)
+    validations:
+      required: false
+  - type: input
+    id: domain
+    attributes:
+      label: Domain / site (if applicable)
+      placeholder: example.org
+    validations:
+      required: false
+  - type: textarea
+    id: details
+    attributes:
+      label: Request details
+      description: What does the charity need?
+    validations:
+      required: true

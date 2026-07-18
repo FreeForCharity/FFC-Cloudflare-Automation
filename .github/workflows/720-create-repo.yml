@@ -1,0 +1,135 @@
+name: '720. Repo - Create GitHub Repo [Repo]'
+
+on:
+  workflow_dispatch:
+    inputs:
+      RepoName:
+        description: 'Name of the new repository (Format: FFC-EX-<domainname>)'
+        required: true
+        type: string
+      Description:
+        description: 'Description of the repository'
+        required: false
+        default: 'Created via automation'
+        type: string
+      TemplateRepo:
+        description: 'Template repository to use'
+        required: true
+        default: 'FreeForCharity/FFC_Single_Page_Template'
+        type: choice
+        options:
+          - FreeForCharity/FFC_Single_Page_Template
+          - FreeForCharity/FFC-IN-Single_Page_Template_Jekell
+      Visibility:
+        description: 'Visibility'
+        required: true
+        default: 'public'
+        type: choice
+        options:
+          - public
+      EnableIssues:
+        description: 'Enable Issues'
+        required: false
+        default: true
+        type: boolean
+      EnablePages:
+        description: 'Enable GitHub Pages'
+        required: false
+        default: false
+        type: boolean
+      PagesDomainType:
+        description: 'GitHub Pages domain configuration'
+        required: false
+        default: 'apex'
+        type: choice
+        options:
+          - apex
+          - staging
+          - github-default
+      CNAME:
+        description: 'Custom Domain (CNAME) - Leave empty to auto-detect based on PagesDomainType'
+        required: false
+        type: string
+      DryRun:
+        description: 'Dry Run (Preview only)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  create-repo:
+    runs-on: windows-latest
+    environment: github-prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Create Repository
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }} # Needs repo creation permissions
+        run: |
+          $params = @{
+              RepoName            = "${{ inputs.RepoName }}"
+              Description         = "${{ inputs.Description }}"
+              TemplateRepo        = "${{ inputs.TemplateRepo }}"
+              Visibility          = "${{ inputs.Visibility }}"
+              EnableIssues        = [System.Convert]::ToBoolean("${{ inputs.EnableIssues }}")
+              EnablePages         = [System.Convert]::ToBoolean("${{ inputs.EnablePages }}")
+              PagesDomainType     = "${{ inputs.PagesDomainType }}"
+              DryRun              = [System.Convert]::ToBoolean("${{ inputs.DryRun }}")
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace("${{ inputs.CNAME }}")) {
+              $params.Add("CNAME", "${{ inputs.CNAME }}")
+          }
+
+          ./scripts/Create-GitHubRepo.ps1 @params
+
+      - name: Grant FFC-ORGWIDE-* tier teams default access (PUBLIC repos only)
+        if: ${{ inputs.DryRun != true && inputs.Visibility == 'public' }}
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+        shell: pwsh
+        run: |
+          # Auto-grant FFC-ORGWIDE-* tier teams on PUBLIC repos only.
+          # Private repos start with zero team grants — by design (Option C
+          # defensive isolation). Explicit team access on private repos must
+          # be granted out-of-band by an Owner, ensuring conscious decision
+          # about who can see sensitive internal/admin/payment data.
+          # See: FFC-IN-Zeffy-Management, FFC-IN-ClarkeMoyerAdmin, etc.
+          $repo = "${{ inputs.RepoName }}"
+          $teams = @(
+            @{ slug = 'ffc-orgwide-admins';      permission = 'admin'    },
+            @{ slug = 'ffc-orgwide-maintainers'; permission = 'maintain' },
+            @{ slug = 'ffc-orgwide-writers';     permission = 'push'     },
+            @{ slug = 'ffc-orgwide-triagers';    permission = 'triage'   },
+            @{ slug = 'ffc-orgwide-readers';     permission = 'pull'     }
+          )
+          $fails = 0
+          foreach ($t in $teams) {
+            $slug = $t.slug
+            $perm = $t.permission
+            try {
+              gh api -X PUT "orgs/FreeForCharity/teams/$slug/repos/FreeForCharity/$repo" -f "permission=$perm" | Out-Null
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "  [OK] $slug -> $perm on $repo"
+              } else {
+                Write-Host "  [WARN] $slug grant returned exit $LASTEXITCODE"
+                $fails++
+              }
+            } catch {
+              Write-Host "  [FAIL] $slug : $_"
+              $fails++
+            }
+          }
+          if ($fails -gt 0) {
+            Write-Host "::warning::$fails team grants failed; drift-audit will catch on next run."
+          }
+
+      - name: Skip team grants for PRIVATE repo (Option C policy)
+        if: ${{ inputs.DryRun != true && inputs.Visibility != 'public' }}
+        shell: bash
+        run: |
+          echo "::notice::Repo is ${{ inputs.Visibility }} — skipping FFC-ORGWIDE-* tier team grants."
+          echo "::notice::Private repos require explicit team grants by an Owner. Manage at:"
+          echo "::notice::  https://github.com/FreeForCharity/${{ inputs.RepoName }}/settings/access"

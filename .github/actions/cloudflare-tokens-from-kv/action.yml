@@ -49,7 +49,7 @@ runs:
         }
 
     - name: Azure login (OIDC)
-      uses: azure/login@v2
+      uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
       with:
         client-id: ${{ inputs.azure-client-id }}
         tenant-id: ${{ inputs.azure-tenant-id }}
@@ -66,6 +66,16 @@ runs:
         $scope = $env:INPUT_SCOPE
         $vaultName = $env:INPUT_VAULT_NAME
         $prefix = if ($scope -eq 'write') { 'wr-all' } else { 'read-all' }
+
+        # GitHub's ::add-mask:: only masks up to the first newline, so a multi-line value would
+        # leak its later lines (and a line beginning with '::' could be read as a workflow
+        # command). Mask each non-blank line of the secret individually.
+        function Protect-Secret {
+          param([string]$Value)
+          foreach ($line in ($Value -split "[\r\n]+")) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) { Write-Host "::add-mask::$line" }
+          }
+        }
 
         $ffcName = "$prefix-ffc-cloudflare-api-token-zone-and-dns"
         $cmName = "$prefix-cm-cloudflare-api-token-zone-and-dns"
@@ -93,13 +103,27 @@ runs:
         }
 
         # Mask before any further use so they cannot appear in logs.
-        Write-Host "::add-mask::$ffc"
-        Write-Host "::add-mask::$cm"
+        Protect-Secret $ffc
+        Protect-Secret $cm
+
+        # Write to GITHUB_ENV with a randomized heredoc delimiter (matching the WHMCS/Zeffy
+        # secrets-from-kv actions) so a token that ever contains a newline (or a line that looks
+        # like a delimiter) cannot inject extra env vars into later steps.
+        function Add-EnvVar {
+          param([string]$Name, [string]$Value)
+          $delim = "ghadelim_$([guid]::NewGuid().ToString('N'))"
+          if ($Value -match [regex]::Escape($delim)) {
+            throw "Refusing to write '$Name': value collides with the generated heredoc delimiter."
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "$Name<<$delim"
+          Add-Content -Path $env:GITHUB_ENV -Value $Value
+          Add-Content -Path $env:GITHUB_ENV -Value $delim
+        }
 
         # Export to GITHUB_ENV so subsequent steps see them as plain env vars,
         # matching the pre-refactor interface (CLOUDFLARE_API_TOKEN_FFC / _CM).
-        Add-Content -Path $env:GITHUB_ENV -Value "CLOUDFLARE_API_TOKEN_FFC=$ffc"
-        Add-Content -Path $env:GITHUB_ENV -Value "CLOUDFLARE_API_TOKEN_CM=$cm"
+        Add-EnvVar -Name 'CLOUDFLARE_API_TOKEN_FFC' -Value $ffc
+        Add-EnvVar -Name 'CLOUDFLARE_API_TOKEN_CM' -Value $cm
 
         Write-Host "Loaded $scope-scope Cloudflare tokens from KV vault '$vaultName' (values masked)."
 

@@ -53,6 +53,11 @@ Before contributing, ensure you have:
    ```bash
    git remote add upstream https://github.com/FreeForCharity/FFC-Cloudflare-Automation.git
    ```
+4. Enable the shared git hooks (a `pre-commit` secret/sensitive-file scan; see
+   [`.githooks/README.md`](.githooks/README.md)):
+   ```bash
+   scripts/install-git-hooks.sh        # macOS/Linux  (or: pwsh scripts/install-git-hooks.ps1 on Windows)
+   ```
 
 ## Tooling
 

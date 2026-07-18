@@ -1,0 +1,104 @@
+name: '212. WHMCS - Product Add (catalog) [WHMCS]'
+run-name: 'WHMCS Product Add (${{ inputs.product_key }})'
+
+# Create a catalog (status-marker) product. Dry-run by default. A live
+# (dry_run=false) create requires the target product group id (gid) and the API
+# credential's AddProduct permission (see whmcs-product-capability-check.ps1).
+
+on:
+  workflow_dispatch:
+    inputs:
+      product_key:
+        description: 'Catalog product key from config/whmcs-catalog-products.json'
+        required: true
+        type: choice
+        options:
+          - domain_registered_cloudflare
+          - hosted_github_pages
+      gid:
+        description: 'WHMCS product group id (overrides config; required if config gid is null)'
+        required: false
+        type: string
+        default: ''
+      run_capability_check:
+        description: 'First probe whether the credential can call AddProduct (read-only)'
+        required: false
+        type: boolean
+        default: true
+      dry_run:
+        description: 'Preview only (no product write)'
+        required: false
+        type: boolean
+        default: true
+      api_url:
+        description: 'WHMCS API endpoint'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+
+permissions:
+  contents: read
+  id-token: write
+
+# Serialize runs: a second dispatch queues behind the first instead of racing it.
+concurrency:
+  group: 212-whmcs-product-add
+  cancel-in-progress: false
+
+jobs:
+  product_add:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Add catalog product
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          PRODUCT_KEY: ${{ inputs.product_key }}
+          GID_INPUT: ${{ inputs.gid }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ('${{ inputs.run_capability_check }}' -eq 'true') {
+            $cap = & pwsh -NoProfile -File .\scripts\whmcs-product-capability-check.ps1 -ApiUrl $env:WHMCS_API_URL
+            if ($LASTEXITCODE -ne 0) { throw "Capability check failed (exit $LASTEXITCODE)." }
+            $cap
+            "## AddProduct capability" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            ($cap | Out-String) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+
+          $cfg = Get-Content -Raw .\config\whmcs-catalog-products.json | ConvertFrom-Json
+          $p = $cfg.products.$($env:PRODUCT_KEY)
+          if ($null -eq $p) { throw "No product '$($env:PRODUCT_KEY)' in whmcs-catalog-products.json." }
+
+          $gid = $null
+          if (-not [string]::IsNullOrWhiteSpace($env:GID_INPUT)) { $gid = [int]$env:GID_INPUT }
+          elseif ($null -ne $p.gid) { $gid = [int]$p.gid }
+          else { throw "No gid for '$($env:PRODUCT_KEY)': set it in config or pass the gid input (groups are created in the WHMCS admin UI)." }
+
+          $whatArgs = @('-NoProfile', '-File', '.\scripts\whmcs-product-add.ps1',
+            '-Name', [string]$p.name, '-GroupId', $gid, '-Type', [string]$p.type, '-PaymentType', [string]$p.paymenttype)
+          if (-not [string]::IsNullOrWhiteSpace([string]$p.description)) { $whatArgs += @('-Description', [string]$p.description) }
+          if ($p.hidden -eq $true) { $whatArgs += '-Hidden' }
+          if ('${{ inputs.dry_run }}' -ne 'false') { $whatArgs += '-DryRun' }
+
+          $out = & pwsh @whatArgs
+          if ($LASTEXITCODE -ne 0) { throw "Product add failed (exit $LASTEXITCODE). Output: $out" }
+          $out
+
+          "## WHMCS product add" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Product: $($p.name) (key $($env:PRODUCT_KEY))" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Group id: $gid" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Dry run: ${{ inputs.dry_run }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "After a live create, copy the returned pid into config/whmcs-catalog-products.json." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

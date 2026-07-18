@@ -4,7 +4,12 @@ param(
     [string]$Domain,
 
     [Parameter()]
-    [string]$AccessToken
+    [string]$AccessToken,
+
+    # Preview only: never create the domain. If the domain is absent, report what would be created
+    # and exit without the POST. If it already exists, the run is read-only either way.
+    [Parameter()]
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
@@ -80,6 +85,10 @@ try {
     $existing = Get-DomainIfExists -Domain $Domain -Token $token
 
     if (-not $existing) {
+        if ($DryRun) {
+            Write-Host ("DRY-RUN: domain '{0}' is not in the tenant; would create it (POST /domains) and then print its DNS verification records. Re-run with dry_run=false to apply." -f $Domain) -ForegroundColor Yellow
+            exit 0
+        }
         Write-Host 'Domain not found in tenant; creating...' -ForegroundColor Yellow
         $created = Invoke-Graph -Method 'POST' -Uri 'https://graph.microsoft.com/v1.0/domains' -Token $token -Body @{ id = $Domain }
         $existing = $created

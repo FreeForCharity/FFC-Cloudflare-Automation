@@ -1,0 +1,64 @@
+name: '732. Repo - Google Workflow Failure Alert (rolling issue) [GH]'
+run-name:
+  'Failure alert: ${{ github.event.workflow_run.name }} (${{ github.event.workflow_run.conclusion
+  }})'
+
+# Watches the Google reporting workflows (501 smoke, 502 analytics report). On failure it
+# upserts ONE rolling alert issue; on the next success it closes that issue. Prevents a
+# silently-stale nightly report. GitHub API only (issues), no environment gate.
+
+on:
+  workflow_run:
+    workflows:
+      - '501. Google - API Smoke (GA4 connectivity) [GOOGLE]'
+      - '502. Google - Analytics Report (GA4 -> JSON) [GOOGLE]'
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Upsert or close rolling alert issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const marker = '<!-- google-workflow-failure-alert -->';
+            const title = '🚨 Google reporting workflow failing';
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'google-api,bug', per_page: 50,
+            });
+            const existing = open.find(i => i.body && i.body.includes(marker));
+            if (run.conclusion === 'success') {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number,
+                  body: `✅ Recovered: [${run.name} run](${run.html_url}) succeeded. Auto-closing.`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: existing.number, state: 'closed',
+                });
+              }
+              return;
+            }
+            if (run.conclusion !== 'failure') return; // ignore cancelled/skipped
+            const line = `- ${new Date().toISOString()} — **${run.name}** [run ${run.run_number}](${run.html_url}) → ${run.conclusion}`;
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number, body: line,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, labels: ['google-api', 'bug'],
+                body: `${marker}\nA Google reporting workflow is failing. This rolling issue auto-closes on the next green run.\n\n${line}\n\n_Managed by 732. Repo - Google Workflow Failure Alert._`,
+              });
+            }

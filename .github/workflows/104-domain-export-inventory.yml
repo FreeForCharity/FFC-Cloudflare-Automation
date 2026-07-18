@@ -16,7 +16,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
@@ -56,7 +56,7 @@ jobs:
           Write-Host "Merged $($merged.Count) unique zones into domain_summary.csv"
 
       - name: Upload artifact (Cloudflare)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain-inventory-cloudflare
           path: domain_summary.csv
@@ -70,7 +70,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Azure login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
@@ -124,7 +124,7 @@ jobs:
           "- Output: $output" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload artifact (M365)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain-inventory-m365
           path: m365_domains.csv
@@ -133,18 +133,19 @@ jobs:
   export_whmcs:
     name: Export WHMCS domains
     runs-on: windows-latest
-    environment: whmcs-prod
+    environment: whmcs-prod-read
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv
         with:
-          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Export domains (read-only)
         shell: pwsh
@@ -162,7 +163,7 @@ jobs:
           }
 
       - name: Upload artifact (WHMCS)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain-inventory-whmcs
           path: whmcs_domains.csv
@@ -173,7 +174,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: wpmudev-prod
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Export domains
         shell: pwsh
@@ -188,7 +189,7 @@ jobs:
           }
 
       - name: Upload artifact (WPMUDEV)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain-inventory-wpmudev
           path: wpmudev_domains.csv
@@ -203,10 +204,10 @@ jobs:
       - export_whmcs
       - export_wpmudev
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: inventory
 
@@ -282,7 +283,7 @@ jobs:
           "- Output: $out" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload artifact (combined)
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain-inventory-all-sources
           path: domain_inventory_all_sources.csv

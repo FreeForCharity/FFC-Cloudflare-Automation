@@ -42,16 +42,17 @@ permissions:
 jobs:
   siteslist_reconciliation:
     runs-on: windows-latest
-    environment: whmcs-prod
+    environment: whmcs-prod-read
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv
         with:
-          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Reconcile WHMCS with the sites-list (read-only)
         shell: pwsh
@@ -72,7 +73,7 @@ jobs:
           }
 
       - name: Upload reconciliation artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: whmcs_siteslist_reconciliation
           path: ${{ inputs.output_file }}

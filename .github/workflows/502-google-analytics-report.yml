@@ -3,7 +3,8 @@ run-name: 'Google Analytics Report'
 
 # Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers
 # it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe:
-# aggregate metrics only. Requires the google-prod-read environment + the Wave 0 foundation.
+# aggregate metrics only. Requires the google-prod-read environment (report) and the approval-gated
+# github-prod environment (delivery, CBM_TOKEN) + the Wave 0 foundation.
 
 on:
   schedule:
@@ -34,7 +35,7 @@ jobs:
     runs-on: windows-latest
     environment: google-prod-read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate required Azure secrets
         shell: bash
@@ -87,7 +88,7 @@ jobs:
             Write-Host '::warning::vars.GA_PROPERTY_ID_FFCADMIN not set; skipping ffcadmin.org'
           }
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: ga-reports
           path: ga-out/*.json
@@ -96,14 +97,15 @@ jobs:
   deliver:
     needs: report
     runs-on: ubuntu-latest
+    environment: github-prod
     steps:
       # Checkout gives the deliver job the current workflow catalog so the public
       # copies on ffcadmin (src/data render + /data stable URL) refresh in the
       # same daily PR as the GA data — one reviewable sync pipe (backlog #554).
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download reports
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ga-reports
           path: ga-out

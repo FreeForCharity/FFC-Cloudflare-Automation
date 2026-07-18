@@ -70,7 +70,7 @@ jobs:
       domain_id: ${{ steps.check.outputs.domain_id }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv
@@ -123,7 +123,7 @@ jobs:
       ns2: ${{ steps.meta.outputs.ns2 }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Metadata
         id: meta
@@ -187,7 +187,7 @@ jobs:
       ns2: ${{ steps.meta.outputs.ns2 }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Metadata
         id: meta
@@ -244,7 +244,7 @@ jobs:
       issues_count: ${{ steps.summary.outputs.issues_count }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
@@ -291,7 +291,7 @@ jobs:
           "issues_count=$($issues.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload Cloudflare outputs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain-add-cloudflare
           path: ${{ steps.enforce.outputs.out_dir }}/*.txt
@@ -307,7 +307,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv
@@ -343,13 +343,13 @@ jobs:
 
     steps:
       - name: Download Cloudflare artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: domain-add-cloudflare
           path: artifacts/domain-add/cloudflare
 
       - name: Comment results back to issue
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');

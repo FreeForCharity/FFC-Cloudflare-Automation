@@ -34,7 +34,7 @@ jobs:
       changes_count: ${{ steps.summary.outputs.changes_count }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate required Azure secrets
         shell: bash
@@ -116,7 +116,7 @@ jobs:
           "changes_count=$($changes.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload Cloudflare outputs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: cloudflare-domain-status
           path: ${{ steps.run.outputs.out_dir }}/*.txt
@@ -132,7 +132,7 @@ jobs:
       supports_email: ${{ steps.graph.outputs.supports_email }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Azure login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
@@ -212,7 +212,7 @@ jobs:
           exit 0
 
       - name: Upload M365 outputs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: m365-domain-status
           path: ${{ steps.preflight.outputs.out_dir }}/*.txt
@@ -224,13 +224,13 @@ jobs:
 
     steps:
       - name: Download Cloudflare artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: cloudflare-domain-status
           path: artifacts/cloudflare
 
       - name: Download M365 artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: m365-domain-status
           path: artifacts/m365
@@ -446,13 +446,13 @@ jobs:
 
     steps:
       - name: Download Cloudflare artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: cloudflare-domain-status
           path: artifacts/cloudflare
 
       - name: Download M365 artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: m365-domain-status
           path: artifacts/m365
@@ -675,7 +675,7 @@ jobs:
           "comment_path=$commentPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Comment results back to issue
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ github.token }}
           script: |

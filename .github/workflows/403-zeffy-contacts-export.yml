@@ -22,7 +22,7 @@ jobs:
     environment: zeffy-prod
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Zeffy organization API key from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/zeffy-secrets-from-kv
@@ -54,7 +54,7 @@ jobs:
           "- $f : $n row(s)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload contacts CSV artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: zeffy_contacts
           path: artifacts/zeffy/zeffy_contacts.csv

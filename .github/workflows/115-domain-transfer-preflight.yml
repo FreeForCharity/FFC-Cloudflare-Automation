@@ -30,19 +30,20 @@ permissions:
 jobs:
   export_whmcs:
     runs-on: windows-latest
-    environment: whmcs-prod
+    environment: whmcs-prod-read
     permissions:
       contents: read
       id-token: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv
         with:
-          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Export WHMCS domains (read-only)
         shell: pwsh
@@ -55,7 +56,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "WHMCS export failed (exit $LASTEXITCODE)." }
 
       - name: Upload WHMCS export
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: transfer-whmcs-domains
           path: artifacts/transfer/whmcs_domains.csv
@@ -66,10 +67,10 @@ jobs:
     needs: [export_whmcs]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download WHMCS export
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: transfer-whmcs-domains
           path: artifacts/transfer
@@ -229,7 +230,7 @@ jobs:
           $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload preflight results
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: domain-transfer-preflight
           path: |
@@ -246,7 +247,7 @@ jobs:
 
       - name: Comment summary back to issue
         if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');

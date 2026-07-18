@@ -11,6 +11,22 @@ Cloudflare (DNS/registrar), WHMCS (billing/support), Microsoft 365, Zeffy, Googl
 WPMUDEV, and the FFC GitHub org itself. PowerShell-first scripts in `scripts/`, credentials from
 Azure Key Vault via OIDC (never GitHub secrets).
 
+## Onboarding a charity (start here for the full chain)
+
+If the task is to **onboard / provision / "set up the repo for" a charity or domain** — or you just
+need to know which workflow does which onboarding step — use the **`charity-onboarding` skill**
+(`.claude/skills/charity-onboarding/SKILL.md`). It is the ordered map (Phase 0 find-the-application
+→ domain → DNS/M365 → website repo → rebrand → analytics → WHMCS → support), names the exact
+workflows and gates, and lists the gotchas that have burned prior sessions (identify by domain not
+masked name; string-only dispatch inputs; merge-to-`main` before dispatch). The narrative runbook it
+indexes is `docs/charity-onboarding-lifecycle.md`.
+
+If the task is to **migrate an existing WordPress/legacy site to GitHub Pages** ("migrate <site>",
+"capture <site>", "static conversion", "move off HostPapa/Hostinger") — use the
+**`wordpress-to-pages-migration` skill** (`.claude/skills/wordpress-to-pages-migration/SKILL.md`):
+capture + asset localization, the `FFC-EX-<domain>` scaffold, footer standard, Pages on the default
+URL, and the workflow-121 DNS-ready verdict (epic #702).
+
 ## Picking a workflow
 
 1. **Read the catalog first**: `docs/workflow-catalog.json` (machine-readable) or the generated
@@ -28,8 +44,9 @@ Azure Key Vault via OIDC (never GitHub secrets).
 ## Safety model (summary — full doc: `docs/workflow-safety-and-approvals.md`)
 
 1. Read vs write credential scopes (`read-all-*` vs `wr-all-*` Key Vault secrets).
-2. Environment approval gates — write envs (and some read envs like `whmcs-prod`, `m365-prod`,
-   `wpmudev-prod`) pause at `waiting` for a human reviewer.
+2. Environment approval gates — write envs (and some read envs like `m365-prod`, `wpmudev-prod`)
+   pause at `waiting` for a human reviewer. Read-only WHMCS workflows use the ungated
+   `whmcs-prod-read`.
 3. `dry_run` defaults to **true** on write workflows; live requires `dry_run=false`.
 4. Typed confirmation for the highest-stakes actions (e.g. domain registration).
 5. Key Vault is the **single source of truth** for credentials; rotation = new KV version, no GitHub

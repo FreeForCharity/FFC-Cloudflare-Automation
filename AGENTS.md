@@ -62,8 +62,8 @@ Azure Key Vault via OIDC (never GitHub secrets).
 ## GitHub API rate budget (shared — be frugal)
 
 Every agent session, scheduled task, and PAT-based workflow authenticates as the same user and
-shares **one REST core budget (5,000 requests/hr) and one GraphQL points budget (typically
-5,000 points/hr — cost varies per query, so heavy queries drain it faster than a request count
+shares **one REST core budget (5,000 requests/hr) and one GraphQL points budget (typically 5,000
+points/hr — cost varies per query, so heavy queries drain it faster than a request count
 suggests)**, with separate reset anchors. Concurrent sessions polling with GraphQL-backed commands
 have exhausted the points budget for hours.
 

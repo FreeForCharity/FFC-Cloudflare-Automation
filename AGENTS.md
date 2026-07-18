@@ -76,6 +76,22 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
 5. Write workflows: `dry_run` input defaulting to `true`, a `concurrency` group
    (`cancel-in-progress: false`), and an approval-gated environment.
 
+## GitHub API rate budget (shared — be frugal)
+
+Every agent session, scheduled task, and PAT-based workflow authenticates as the same user and
+shares **one REST core budget (5,000 requests/hr) and one GraphQL points budget (typically 5,000
+points/hr — cost varies per query, so heavy queries drain it faster than a request count
+suggests)**, with separate reset anchors. Concurrent sessions polling with GraphQL-backed commands
+have exhausted the points budget for hours.
+
+- **Poll with REST only**: `gh api repos/OWNER/REPO/pulls/N`, `.../commits/SHA/check-runs`,
+  `.../actions/runs/ID`. The `gh pr ...` / `gh issue ...` verbs are **GraphQL** — never put them in
+  a loop.
+- One consolidated watcher per concern, interval ≥ 60s, bounded iterations.
+- GraphQL is for the few mutations that need it (`enqueuePullRequest`, `resolveReviewThread`) —
+  single-shot; on `RATE_LIMIT`, read `gh api rate_limit` and wait for the reset instead of retrying.
+- Create/close issues and comments via REST (`gh api .../issues --method POST`).
+
 ## Dispatch / watch / approve recipes
 
 ```bash

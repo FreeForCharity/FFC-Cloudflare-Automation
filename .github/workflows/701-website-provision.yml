@@ -1030,6 +1030,11 @@ jobs:
     environment: github-prod
     needs: [resolve, zone_check, repo]
     if: needs.resolve.outputs.skip != 'true'
+    # Best-effort by design: content patching is cosmetic polish on an already-provisioned
+    # site. The inner try/catch covers the patch/commit/push, but earlier steps (clone,
+    # gh auth setup-git) can still fail the job — continue-on-error ensures no content
+    # failure ever overrides a successful repo/DNS provision or blocks finalize.
+    continue-on-error: true
     outputs:
       content_status: ${{ steps.apply.outputs.content_status }}
     steps:
@@ -1280,7 +1285,10 @@ jobs:
             const repoUrl = `${context.serverUrl}/${repoFull}`;
             const runUrl = process.env.RUN_URL;
             const zoneControlled = process.env.ZONE_CONTROLLED === 'true';
-            const served = process.env.SERVED === 'true';
+            // Empty means the job didn't run or died before writing its output —
+            // distinct from an explicit true/false (or applied/skipped/failed) result.
+            const servedRaw = process.env.SERVED || '';
+            const served = servedRaw === 'true';
             const contentStatus = process.env.CONTENT_STATUS || 'unknown';
 
             const marker = '<!-- website-provision:completed -->';
@@ -1291,13 +1299,17 @@ jobs:
               ? '- Serving check skipped (DNS not pointed at GitHub Pages for this domain yet).'
               : served
                 ? `- ✅ Verified live on GitHub Pages: https://${domain} returns HTTP 200 (\`Server: GitHub.com\`).`
-                : `- ⚠️ Not serving yet at https://${domain} — DNS/cert may still be propagating. Re-check in a few minutes; the repo and DNS are in place.`;
+                : servedRaw === 'false'
+                  ? `- ⚠️ Not serving yet at https://${domain} — DNS/cert may still be propagating. Re-check in a few minutes; the repo and DNS are in place.`
+                  : `- ❔ Serving check did not run or did not record a result — verify https://${domain} manually (see the run log).`;
             const contentNote =
               contentStatus === 'applied'
                 ? '- Content (footer + leadership) was applied to the React template and recorded in `ffc-content.json`.'
                 : contentStatus === 'failed'
                   ? '- ⚠️ Content patch step did not complete (non-blocking) — the site is provisioned; footer/leadership can be applied later by re-running or editing the repo.'
-                  : '- Content patch skipped (admin-minimal provision — no footer/leadership inputs provided).';
+                  : contentStatus === 'skipped'
+                    ? '- Content patch skipped (admin-minimal provision — no footer/leadership inputs provided).'
+                    : '- ❔ Content step did not record a status (it may have been skipped or errored before reporting) — the site itself is provisioned.';
             const dnsManual = zoneControlled
               ? []
               : [

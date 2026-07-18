@@ -85,7 +85,10 @@ jobs:
           repo_raw="${IN_REPO:-}"
           # Accept either "name" or "owner/name"; strip any owner and force our org.
           name="${repo_raw##*/}"
-          name="$(printf '%s' "$name" | tr -d '[:space:]')"
+          # Trim leading/trailing whitespace ONLY — stripping internal whitespace could
+          # silently retarget (e.g. "FFC-EX-foo bar" -> "FFC-EX-foobar"); the name regex
+          # below rejects internal whitespace instead.
+          name="$(printf '%s' "$name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
           if [ -z "$name" ]; then echo '::error::repo is empty.'; exit 1; fi
           if ! printf '%s' "$name" | grep -qE '^[A-Za-z0-9._-]+$'; then
             echo "::error::Invalid repository name: $name"; exit 1

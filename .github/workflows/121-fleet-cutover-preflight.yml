@@ -1,0 +1,86 @@
+name: '121. DNS + GH Pages - Fleet Cutover Preflight (FFC-EX)'
+run-name: 'Fleet cutover preflight (domains=${{ inputs.domains }})'
+
+# Read-only go/no-go preflight for the FFC-EX DNS cutover — the checked companion
+# to workflow 120 (bulk cutover staging -> apex). For each domain it confirms the
+# GitHub Pages origin is healthy, reads live apex/www DNS over DoH, verifies CAA
+# won't block Let's Encrypt issuance, and probes HTTPS on the target domain, then
+# prints one verdict table (also written to the job summary). It changes nothing
+# and loads no credentials, so it needs no environment approval gate. Run it
+# before 120 to confirm readiness and after 120 to confirm the cutover landed.
+on:
+  workflow_dispatch:
+    inputs:
+      domains:
+        description: >-
+          Comma-separated root domains to check. Leave blank to use the fleet default list from
+          config/ffc-ex-cutover-domains.json (excluding amargraves.org placeholder) — the same
+          default as workflow 120.
+        required: false
+        type: string
+        default: ''
+      origin:
+        description: >-
+          GitHub Pages origin being cut over to. Only valid with a single domain; leave blank to
+          resolve the real FFC-EX repo name via the GitHub API and derive
+          https://freeforcharity.github.io/<repo>/ per domain.
+        required: false
+        type: string
+        default: ''
+      marker:
+        description: >-
+          Optional content marker (e.g. the charity name) that the served HTML must contain. Leave
+          blank to skip content checks (DNS + HTTP status only).
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: DNS/HTTPS fleet preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Run fleet cutover preflight
+        # Pass the workflow inputs through the environment rather than
+        # interpolating them into the shell command, so a value containing
+        # shell metacharacters (e.g. $(...)) can't be executed.
+        env:
+          INPUT_DOMAINS: ${{ inputs.domains }}
+          INPUT_ORIGIN: ${{ inputs.origin }}
+          INPUT_MARKER: ${{ inputs.marker }}
+          # Authenticates the FFC-EX repo-name lookup (mixed-case repo names)
+          # so origin derivation doesn't fall back to the lowercase guess.
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Same default list as workflow 120's jobs — single source of truth.
+          default_domains=$(jq -r '.domains | join(",")' config/ffc-ex-cutover-domains.json)
+
+          domains="${INPUT_DOMAINS:-}"
+          if [ -z "$domains" ]; then
+            domains="$default_domains"
+          fi
+
+          args=("--domains=$domains")
+          if [ -n "${INPUT_ORIGIN:-}" ]; then
+            args+=("--origin=$INPUT_ORIGIN")
+          fi
+          if [ -n "${INPUT_MARKER:-}" ]; then
+            args+=("--marker=$INPUT_MARKER")
+          fi
+
+          node scripts/preflight-cutover.mjs "${args[@]}"

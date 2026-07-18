@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: cloudflare-prod
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: FreeForCharity/FFC-IN-ClarkeMoyerAdmin/.github/actions/cloudflare-tokens-from-kv@main
         with:

@@ -3,7 +3,7 @@
 This repository includes a GitHub Actions workflow that checks (and optionally enforces) a baseline
 DNS configuration for a zone in Cloudflare.
 
-- Workflow: `.github/workflows/2-enforce-standard.yml`
+- Workflow: `.github/workflows/106-enforce-standard.yml`
 - Script: `Update-CloudflareDns.ps1`
 
 ## How it runs
@@ -50,7 +50,7 @@ DKIM note:
 - DKIM selector records (`selector1._domainkey` / `selector2._domainkey`) are intentionally **not**
   part of Enforce Standard.
 - DKIM selectors are created/updated by the M365 DKIM workflow:
-  `.github/workflows/8-m365-dkim-enable.yml`.
+  `.github/workflows/304-m365-dkim-enable.yml`.
 
 DMARC monitoring note:
 

@@ -1,0 +1,35 @@
+{
+  "_comment": "Templated WHMCS ticket responses used by workflow 39 (whmcs-ticket-respond). 'internal': true -> AddTicketNote (staff-only); false -> AddTicketReply (client-visible, requires a WHMCS admin username). Bodies are intentionally generic with no PII; the workflow appends an optional extra_message. Edit/extend keys here without touching the workflow.",
+  "templates": {
+    "ack_new_request": {
+      "internal": false,
+      "subject_prefix": "[New Request]",
+      "body": "Thank you for contacting Free For Charity support. We have received your request and a volunteer will follow up shortly. If you have additional details (the affected domain, screenshots, or steps to reproduce), please reply to this ticket and they will be added to the record."
+    },
+    "ack_break_fix": {
+      "internal": false,
+      "subject_prefix": "[Break/Fix]",
+      "body": "Thank you for reporting this issue with your site. We have logged it as a break/fix request and a volunteer is reviewing it. We will reply here with progress. If the site is fully down, please confirm the affected domain so we can prioritize."
+    },
+    "need_info": {
+      "internal": false,
+      "subject_prefix": "[Info Needed]",
+      "body": "To continue with your request we need a little more information. Could you please reply with the affected domain, what you expected to happen, and what actually happened (including any error message)? Once we have that we can proceed."
+    },
+    "internal_note": {
+      "internal": true,
+      "subject_prefix": "",
+      "body": "Triage note: reviewed via the WHMCS tickets triage workflow. Recording current assessment and next action below."
+    },
+    "international_techsoup": {
+      "internal": false,
+      "subject_prefix": "[Eligibility]",
+      "body": "Thank you for reaching out, and for the important work your organization does. Unfortunately, Free For Charity is only able to support nonprofits registered in the United States, so we are not able to provide our services for your organization, and I'm sorry to disappoint you. A great alternative is TechSoup, which supports nonprofits internationally through its global partner network - you can find your country's partner and the resources available to you at https://www.techsoup.org. We've closed out the related request on our side. Wishing you and your team all the best with your mission."
+    },
+    "international_note": {
+      "internal": true,
+      "subject_prefix": "",
+      "body": "International charity (country of record outside the United States) - not eligible for FFC services per policy. Referred to TechSoup (https://www.techsoup.org) and any related order(s) cancelled. See docs/whmcs-support-tickets.md."
+    }
+  }
+}

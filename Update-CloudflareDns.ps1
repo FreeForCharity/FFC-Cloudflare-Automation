@@ -112,6 +112,12 @@ param(
     [Parameter(ParameterSetName = 'Audit')]
     [switch]$ProxyGitHubPages,
 
+    [Parameter(ParameterSetName = 'ExportAll', Mandatory = $true)]
+    [switch]$ExportAll,
+
+    [Parameter(ParameterSetName = 'ExportAll')]
+    [string]$OutputFile = 'dns_records_full.csv',
+
     [string]$Token,
 
     [switch]$DryRun
@@ -652,6 +658,22 @@ try {
     # 1. Resolve Zone ID
     $ZoneId = Get-ZoneId -ZoneName $Zone
     Write-Verbose "Found Zone ID: $ZoneId"
+
+    # --- EXPORT ALL Operation (read-only full record dump) ---
+    # Surfaces the complete, paginated record set (the same Get-AllDnsRecords
+    # the Audit path fetches) to stdout AND a CSV artifact. Unlike -List, this
+    # is not name-filtered, so it returns every record in the zone.
+    if ($ExportAll) {
+        $allRecords = Get-AllDnsRecords -ZoneId $ZoneId
+        $projected = $allRecords |
+            Select-Object id, type, name, content, proxied, ttl, priority |
+            Sort-Object type, name
+        Write-Host "Full DNS record export for zone '$Zone' ($($projected.Count) records):" -ForegroundColor Cyan
+        $projected | Format-Table -AutoSize
+        $projected | Export-Csv -Path $OutputFile -NoTypeInformation -Encoding utf8
+        Write-Host "Exported $($projected.Count) records to $OutputFile" -ForegroundColor Green
+        return
+    }
 
     # 2. Resolve Full Record Name
     if ($Name -eq '@') {

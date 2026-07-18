@@ -1,0 +1,170 @@
+name: 'WHMCS secrets from Key Vault'
+description: >-
+  Authenticate to Azure via OIDC, fetch the FFC WHMCS API identifier and secret (and, via APIM, the
+  subscription key) from Azure Key Vault, mask them, and expose them to subsequent steps as the env
+  vars WHMCS_API_IDENTIFIER, WHMCS_API_SECRET, and WHMCS_APIM_SUBSCRIPTION_KEY. Replaces direct
+  consumption of GH Environment Secret copies of the WHMCS credential.
+
+author: 'Free For Charity'
+
+inputs:
+  scope:
+    description: >-
+      Token scope: 'write' loads wr-all-* secrets (via the ffc-admin-kv-writer identity); 'read'
+      loads read-all-* secrets (via ffc-admin-kv-reader). WHMCS is a single credential, so the
+      values are identical; scope only selects which identity/secret copy is used. Defaults to
+      'write'.
+    required: false
+    default: 'write'
+  vault-name:
+    description: 'Azure Key Vault name that holds the WHMCS credential.'
+    required: false
+    default: 'kv-ffc-admin-prod-cbm'
+  azure-client-id:
+    description: 'OIDC client ID for the managed identity that has Get permission on the vault.'
+    required: true
+  azure-tenant-id:
+    description: 'Azure tenant ID for OIDC federation.'
+    required: true
+  load-apim-subscription-key:
+    description: >-
+      When 'true' (default), also fetch the APIM subscription key
+      ('{scope}-ffc-apim-whmcs-subscription-key') and export it as WHMCS_APIM_SUBSCRIPTION_KEY. The
+      WHMCS workflows call the API through APIM ('apim-ffc-gateway-prod'), whose 'whmcs' API
+      requires this key. Set to 'false' only when calling the WHMCS origin directly (not via APIM).
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+        INPUT_AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        INPUT_AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ($env:INPUT_SCOPE -notin @('read', 'write')) {
+          throw "Invalid scope '$($env:INPUT_SCOPE)'. Expected 'read' or 'write'."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_VAULT_NAME)) {
+          throw "Input 'vault-name' is empty."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_CLIENT_ID)) {
+          throw "Input 'azure-client-id' is empty. Pass vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID (a repository-level Variable) from the caller."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_TENANT_ID)) {
+          throw "Input 'azure-tenant-id' is empty. Pass vars.WR_ALL_FFC_AZURE_TENANT_ID (a repository-level Variable) from the caller."
+        }
+
+    - name: Azure login (OIDC)
+      uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        allow-no-subscriptions: true
+
+    - name: Fetch WHMCS credential from Key Vault
+      shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+        INPUT_LOAD_APIM_KEY: ${{ inputs.load-apim-subscription-key }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        $scope = $env:INPUT_SCOPE
+        $vaultName = $env:INPUT_VAULT_NAME
+        $prefix = if ($scope -eq 'write') { 'wr-all' } else { 'read-all' }
+
+        $identifierName = "$prefix-ffc-whmcs-api-identifier"
+        $secretName = "$prefix-ffc-whmcs-api-secret"
+
+        # Writes a value to GITHUB_ENV using GitHub's heredoc-delimited format so a value that ever
+        # contains a newline (or a line that looks like a delimiter) cannot inject extra env vars
+        # into later steps. The delimiter is randomized per value.
+        function Add-EnvVar {
+          param([string]$Name, [string]$Value)
+          $delim = "ghadelim_$([guid]::NewGuid().ToString('N'))"
+          if ($Value -match [regex]::Escape($delim)) {
+            throw "Refusing to write '$Name': value collides with the generated heredoc delimiter."
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "$Name<<$delim"
+          Add-Content -Path $env:GITHUB_ENV -Value $Value
+          Add-Content -Path $env:GITHUB_ENV -Value $delim
+        }
+
+        # GitHub's ::add-mask:: only masks up to the first newline, so a multi-line value would
+        # leak its later lines (and a line beginning with '::' could be read as a workflow
+        # command). Mask each non-blank line of the secret individually.
+        function Protect-Secret {
+          param([string]$Value)
+          foreach ($line in ($Value -split "[\r\n]+")) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) { Write-Host "::add-mask::$line" }
+          }
+        }
+
+        # az is an external command — $ErrorActionPreference does NOT cause it to throw
+        # on non-zero exit. Check $LASTEXITCODE explicitly after each az invocation so a
+        # KV permission/auth failure surfaces as a step failure instead of an empty value.
+        $idRaw = az keyvault secret show --vault-name $vaultName --name $identifierName --query value -o tsv
+        if ($LASTEXITCODE -ne 0) {
+          throw "az keyvault secret show for '$identifierName' failed (exit $LASTEXITCODE). Check the identity's role on vault '$vaultName' and that the secret exists."
+        }
+        $secRaw = az keyvault secret show --vault-name $vaultName --name $secretName --query value -o tsv
+        if ($LASTEXITCODE -ne 0) {
+          throw "az keyvault secret show for '$secretName' failed (exit $LASTEXITCODE). Check the identity's role on vault '$vaultName' and that the secret exists."
+        }
+
+        # az ... -o tsv returns the raw, unquoted value with a trailing newline; strip only the
+        # trailing CR/LF so a credential that legitimately begins or ends with spaces/tabs, or
+        # contains a quote, is preserved exactly.
+        $identifier = ([string]$idRaw).TrimEnd([char]13, [char]10)
+        $secret = ([string]$secRaw).TrimEnd([char]13, [char]10)
+
+        if ([string]::IsNullOrWhiteSpace($identifier)) {
+          throw "Key Vault secret '$identifierName' returned empty from vault '$vaultName'."
+        }
+        if ([string]::IsNullOrWhiteSpace($secret)) {
+          throw "Key Vault secret '$secretName' returned empty from vault '$vaultName'."
+        }
+        if ($identifier -eq 'PLACEHOLDER-SET-VIA-AZURE-PORTAL' -or $secret -eq 'PLACEHOLDER-SET-VIA-AZURE-PORTAL') {
+          throw "Key Vault '$prefix-ffc-whmcs-api-*' still holds the scaffolding placeholder. Set the real WHMCS identifier and secret in '$vaultName' before running."
+        }
+
+        # Mask before any further use so they cannot appear in logs.
+        Protect-Secret $identifier
+        Protect-Secret $secret
+
+        # Export to GITHUB_ENV so subsequent steps see them as plain env vars,
+        # matching the names downstream WHMCS scripts already expect.
+        Add-EnvVar -Name 'WHMCS_API_IDENTIFIER' -Value $identifier
+        Add-EnvVar -Name 'WHMCS_API_SECRET' -Value $secret
+
+        # The WHMCS workflows call WHMCS through APIM (apim-ffc-gateway-prod), whose 'whmcs' API
+        # requires a subscription key. Fetch it (same scoped naming) and export it; the WHMCS
+        # PowerShell helpers send it as the Ocp-Apim-Subscription-Key header when present.
+        $apimNote = 'not requested'
+        if ($env:INPUT_LOAD_APIM_KEY -eq 'true') {
+          $apimKeyName = "$prefix-ffc-apim-whmcs-subscription-key"
+          $apimRaw = az keyvault secret show --vault-name $vaultName --name $apimKeyName --query value -o tsv
+          if ($LASTEXITCODE -ne 0) {
+            throw "az keyvault secret show for '$apimKeyName' failed (exit $LASTEXITCODE). The WHMCS APIM API requires a subscription key; set load-apim-subscription-key to 'false' only when calling the WHMCS origin directly (not via APIM)."
+          }
+          $apimKey = ([string]$apimRaw).TrimEnd([char]13, [char]10)
+          if ([string]::IsNullOrWhiteSpace($apimKey)) {
+            throw "Key Vault secret '$apimKeyName' returned empty from vault '$vaultName'."
+          }
+          Protect-Secret $apimKey
+          Add-EnvVar -Name 'WHMCS_APIM_SUBSCRIPTION_KEY' -Value $apimKey
+          $apimNote = "loaded from '$apimKeyName'"
+        }
+
+        Write-Host "Loaded $scope-scope WHMCS identifier + secret from KV vault '$vaultName' (values masked). APIM subscription key: $apimNote."
+
+branding:
+  icon: 'cloud'
+  color: 'orange'

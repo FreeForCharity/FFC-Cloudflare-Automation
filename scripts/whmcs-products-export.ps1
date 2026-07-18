@@ -96,11 +96,24 @@ function Invoke-WhmcsApi {
         [hashtable]$Body
     )
 
+    # SECURITY: the WHMCS credential (identifier/secret + APIM subscription key) is attached to
+    # this request, so only allow it to be sent to known WHMCS hosts. A workflow input
+    # (-ApiUrl / WHMCS_API_URL) must never redirect the credential to an arbitrary host.
+    $allowedHosts = @('apim-ffc-gateway-prod.azure-api.net', 'freeforcharity.org')
+    $parsedUri = $null
+    if (-not [Uri]::TryCreate($ApiUrl, [UriKind]::Absolute, [ref]$parsedUri) -or $parsedUri.Scheme -ne 'https' -or $allowedHosts -notcontains $parsedUri.Host) {
+        throw "Refusing to send WHMCS credentials to '$ApiUrl': host is not in the allowlist ($($allowedHosts -join ', '))."
+    }
+
     $requestedResponseType = if ($Body.ContainsKey('responsetype') -and -not [string]::IsNullOrWhiteSpace($Body.responsetype)) { $Body.responsetype } else { 'json' }
 
     $headers = @{
         'Accept'     = 'application/json, application/xml;q=0.9, */*;q=0.8'
         'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    # When WHMCS is reached via APIM (apim-ffc-gateway-prod), its 'whmcs' API requires this key.
+    if (-not [string]::IsNullOrWhiteSpace($env:WHMCS_APIM_SUBSCRIPTION_KEY)) {
+        $headers['Ocp-Apim-Subscription-Key'] = $env:WHMCS_APIM_SUBSCRIPTION_KEY
     }
 
     $resp = Invoke-RestMethod -Method Post -Uri $ApiUrl -Headers $headers -Body $Body -ContentType 'application/x-www-form-urlencoded' -ErrorAction Stop
@@ -192,6 +205,28 @@ function Get-WhmcsProductsFromResponse {
     return @()
 }
 
+function ConvertTo-NodeText {
+    # Returns the inner text of an XML node, or the joined text of several nodes.
+    # Avoids '[string]$node' yielding a type name ('System.Xml.XmlElement', or
+    # 'System.Object[]' when XML property access matches multiple elements) for
+    # name/value nodes that carry child markup. See issue #440.
+    [OutputType([string])]
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [string]) { return $Value }
+    if ($Value -is [System.Xml.XmlNode]) { return $Value.InnerText }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $parts = foreach ($item in $Value) {
+            if ($null -eq $item) { continue }
+            elseif ($item -is [System.Xml.XmlNode]) { $item.InnerText }
+            else { [string]$item }
+        }
+        return ($parts -join ' ')
+    }
+    return [string]$Value
+}
+
 function ConvertTo-ProductPricingRow {
     param(
         [Parameter(Mandatory = $true)]
@@ -202,7 +237,7 @@ function ConvertTo-ProductPricingRow {
         pid                = $Product.pid
         gid                = $Product.gid
         type               = $Product.type
-        name               = $Product.name
+        name               = ConvertTo-NodeText $Product.name
         slug               = $Product.slug
         module             = $Product.module
         paytype            = $Product.paytype
@@ -261,6 +296,50 @@ function Get-WhmcsClientProductsFromResponse {
     return @()
 }
 
+function Get-CustomFieldNodes {
+    # Returns an array of @{ id; name; value } from a WHMCS node that may carry
+    # <customfields><customfield>... entries (present on GetClientsProducts and,
+    # on some installs, GetProducts). Tolerates both XML and JSON shapes.
+    param($Node)
+
+    if (-not $Node) { return @() }
+
+    $cf = $null
+    try { $cf = $Node.customfields } catch {}
+    if (-not $cf) { return @() }
+
+    $entries = @()
+    try {
+        if ($cf.customfield) { $entries = @($cf.customfield) }
+        elseif ($cf -is [System.Array]) { $entries = @($cf) }
+    }
+    catch {}
+
+    $out = @()
+    foreach ($e in $entries) {
+        if (-not $e) { continue }
+        $id = $null; $name = $null; $value = $null
+        try { $id = [string]$e.id } catch {}
+        try { $name = ConvertTo-NodeText $e.name } catch {}
+        if ([string]::IsNullOrWhiteSpace($name)) { try { $name = ConvertTo-NodeText $e.translated_name } catch {} }
+        try { $value = ConvertTo-NodeText $e.value } catch {}
+        if ([string]::IsNullOrWhiteSpace($name) -and [string]::IsNullOrWhiteSpace($id)) { continue }
+        $out += [pscustomobject]@{ id = $id; name = $name; value = $value }
+    }
+    return $out
+}
+
+function ConvertTo-CustomFieldsString {
+    # Flattens custom fields to "name[id]=value; ..." for a single CSV cell.
+    param($Fields)
+    if (-not $Fields -or @($Fields).Count -eq 0) { return $null }
+    $parts = foreach ($f in $Fields) {
+        $label = if ($f.id) { "$($f.name)[$($f.id)]" } else { $f.name }
+        "$label=$($f.value)"
+    }
+    return ($parts -join '; ')
+}
+
 function ConvertTo-ClientProductRow {
     param(
         [Parameter(Mandatory = $true)]
@@ -268,11 +347,12 @@ function ConvertTo-ClientProductRow {
     )
 
     # Keep raw gateway identifiers for later Zeffy mapping.
+    $customFields = Get-CustomFieldNodes -Node $Product
     return [PSCustomObject]([ordered]@{
             serviceid          = $Product.id
             clientid           = $Product.clientid
             pid                = $Product.pid
-            name               = $Product.name
+            name               = ConvertTo-NodeText $Product.name
             groupname          = $Product.groupname
             domain             = $Product.domain
             regdate            = $Product.regdate
@@ -284,6 +364,7 @@ function ConvertTo-ClientProductRow {
             paymentmethod      = $Product.paymentmethod
             paymentmethodname  = $Product.paymentmethodname
             subscriptionid     = $Product.subscriptionid
+            customfields       = ConvertTo-CustomFieldsString -Fields $customFields
         })
 }
 
@@ -355,6 +436,44 @@ try {
 
     $clientProductsFlat = $allClientProducts | ForEach-Object { ConvertTo-ClientProductRow -Product $_ }
     $clientProductsFlat | Export-Csv -Path $ClientProductsOutputFile -NoTypeInformation -Encoding UTF8
+
+    # --- Per-product custom field discovery -------------------------------------
+    # Product custom field DEFINITIONS are not reliably exposed by GetProducts, but
+    # they DO appear on each service returned by GetClientsProducts. Aggregate the
+    # distinct custom field names (and ids) seen per pid so we can later populate
+    # them correctly at order time (AddOrder customfields).
+    $customFieldsByPid = @{}
+    foreach ($cp in $allClientProducts) {
+        $cpPid = $null
+        try { $cpPid = [string]$cp.pid } catch {}
+        if ([string]::IsNullOrWhiteSpace($cpPid)) { continue }
+        if (-not $customFieldsByPid.ContainsKey($cpPid)) { $customFieldsByPid[$cpPid] = @{} }
+        foreach ($f in (Get-CustomFieldNodes -Node $cp)) {
+            if ([string]::IsNullOrWhiteSpace($f.name)) { continue }
+            $key = if ($f.id) { "$($f.name) [id=$($f.id)]" } else { $f.name }
+            $customFieldsByPid[$cpPid][$key] = $true
+        }
+    }
+
+    # --- Readable catalog (printed to logs for enumeration) ---------------------
+    Write-Host ''
+    Write-Host '================ WHMCS PRODUCT CATALOG ================'
+    foreach ($p in ($productsFlat | Sort-Object { [int]($_.gid) }, { [int]($_.pid) })) {
+        $cycle = @()
+        if ($p.has_monthly) { $cycle += 'monthly' }
+        if ($p.has_annually) { $cycle += 'annually' }
+        $cycleStr = if ($cycle.Count) { ($cycle -join ',') } else { 'one-time/other' }
+        Write-Host ("pid={0,-4} gid={1,-3} type={2,-12} module={3,-14} [{4}] {5}" -f `
+                $p.pid, $p.gid, $p.type, ($p.module ? $p.module : '-'), $cycleStr, $p.name)
+        $pidKey = [string]$p.pid
+        if ($customFieldsByPid.ContainsKey($pidKey) -and $customFieldsByPid[$pidKey].Keys.Count -gt 0) {
+            foreach ($cf in ($customFieldsByPid[$pidKey].Keys | Sort-Object)) {
+                Write-Host ("        custom-field: {0}" -f $cf)
+            }
+        }
+    }
+    Write-Host '======================================================='
+    Write-Host ''
 
     Write-Host "Exported products: $($productsFlat.Count) -> $ProductsOutputFile"
     Write-Host "Exported client products: $($clientProductsFlat.Count) -> $ClientProductsOutputFile"

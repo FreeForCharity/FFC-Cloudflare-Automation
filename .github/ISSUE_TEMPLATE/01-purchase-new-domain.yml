@@ -344,13 +344,17 @@ body:
         ## For Administrator Use
 
         ### Pre-Purchase Checklist
-        - [ ] Domain availability confirmed
+        - [ ] Domain availability confirmed — apply the `domain-purchase-approved` label to run an
+              automated availability + price check (Workflow 12, **check only**; result is posted
+              back as a comment). A label never purchases.
         - [ ] Budget approved (FFC admin only)
         - [ ] Domain aligns with FFC mission and policies
         - [ ] No trademark or legal concerns
 
         ### Purchase Steps
-        1. [ ] Purchase domain from registrar (e.g., Namecheap, Google Domains)
+        1. [ ] Purchase the domain: run Workflow 12 with `mode=execute-register` + typed
+               `confirm_domain` (Cloudflare Registrar), or via the Cloudflare dashboard if the TLD is
+               unsupported by the API
         2. [ ] Add domain to Cloudflare account
         3. [ ] Update nameservers at registrar to Cloudflare's nameservers
         4. [ ] Configure DNS records as requested

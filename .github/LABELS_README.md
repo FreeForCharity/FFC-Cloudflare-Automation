@@ -12,13 +12,11 @@ Defines all labels used in the repository for issues, pull requests, and automat
 **Label Categories:**
 
 1. **Dependency Management** - Used by Dependabot
-
    - `dependencies` - Updates to dependencies
    - `github-actions` - Updates to GitHub Actions workflows
    - `python` - Updates to Python dependencies
 
 2. **Domain Management** - Used by issue templates and workflows
-
    - `domain-add` - Request to add a new domain
    - `domain-purchase` - Request to purchase a new domain
    - `domain-remove` - Request to remove a domain

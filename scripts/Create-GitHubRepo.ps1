@@ -142,6 +142,13 @@ function Invoke-GhCommand {
         
         # We'll rely on the shell execution.
         $result = Invoke-Expression "gh $CommandStr"
+        # Native commands (gh) do not reliably throw on failure in PowerShell, so
+        # check the exit code explicitly: every call routed through this helper is a
+        # required step, so a non-zero exit must be fatal. (Best-effort calls such as
+        # HTTPS enforcement deliberately bypass this helper.)
+        if ($LASTEXITCODE -ne 0) {
+            throw "gh command failed (exit code $LASTEXITCODE): gh $CommandStr"
+        }
         return $result
     }
 }
@@ -269,15 +276,21 @@ if ($EnablePages) {
                 Write-Host "[DRY RUN] gh api repos/$fullRepoName/pages -X PUT -F 'https_enforced=true'" -ForegroundColor Cyan
             }
             else {
-                # We use a try/catch equivalent logic or just allow it to fail non-fatally
-                # Since Invoke-GhCommand uses Invoke-Expression and script has $ErrorActionPreference = "Stop", 
-                # we need to be careful.
-                try {
-                    gh api repos/$fullRepoName/pages -X PUT -F "https_enforced=true" 2>&1 | Out-Null
+                # HTTPS enforcement is best-effort: it routinely returns a non-zero
+                # exit (HTTP 422) right after the CNAME is set because the GitHub
+                # certificate is still provisioning. Native commands do NOT throw in
+                # PowerShell, so the try/catch never fired and the failure's exit code
+                # was left in $LASTEXITCODE, which the GitHub Actions pwsh wrapper then
+                # propagated -- failing the whole step even though the repo was fully
+                # set up. Detect the exit code explicitly and clear it so a non-ready
+                # certificate doesn't fail provisioning.
+                gh api repos/$fullRepoName/pages -X PUT -F "https_enforced=true" 2>&1 | Out-Null
+                if ($LASTEXITCODE -eq 0) {
                     Write-Host "HTTPS Enforcement Enabled." -ForegroundColor Green
                 }
-                catch {
-                    Write-Warning "Could not enforce HTTPS immediately (Certificate likely provisioning). Please enable it later in Settings."
+                else {
+                    Write-Warning "Could not enforce HTTPS immediately (certificate likely provisioning). Please enable it later in Settings."
+                    $global:LASTEXITCODE = 0
                 }
             }
         }
@@ -285,3 +298,7 @@ if ($EnablePages) {
 }
 
 Write-Host "Repository setup complete!" -ForegroundColor Green
+
+# No blanket `exit 0` here: required `gh` calls fail fatally via Invoke-GhCommand,
+# and the only best-effort call (HTTPS enforcement) already clears its own stray
+# non-zero $LASTEXITCODE. Forcing a 0 exit would mask genuine earlier failures.

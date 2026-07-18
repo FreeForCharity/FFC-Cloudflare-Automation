@@ -1,0 +1,267 @@
+name: '120. DNS + GH Pages - Bulk Cutover staging -> Apex (FFC-EX) [CF+GH]'
+run-name:
+  'Bulk cutover staging->apex (dry_run=${{ inputs.dry_run }}, skip_dns=${{ inputs.skip_dns }},
+  skip_cname=${{ inputs.skip_cname }})'
+
+on:
+  workflow_dispatch:
+    inputs:
+      domains:
+        description: >-
+          Comma-separated root domains to cut over. Leave blank to use the fleet default list from
+          config/ffc-ex-cutover-domains.json (excluding amargraves.org placeholder).
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: >-
+          Dry-run (discover only — no commits, no DNS changes). Default: true. Set to false only
+          when you are ready to perform the live cutover.
+        required: false
+        type: boolean
+        default: true
+      skip_dns:
+        description: >-
+          Skip the Cloudflare DNS flip entirely. Only flip public/CNAME in the FFC-EX repo. Useful
+          for testing the GitHub side alone.
+        required: false
+        type: boolean
+        default: false
+      skip_cname:
+        description: >-
+          Skip the GitHub public/CNAME flip entirely. Only flip Cloudflare DNS. Useful if you
+          already updated CNAME via another path.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+# Serialize cutover runs: parallel dispatches would race on the same FFC-EX CNAMEs / Cloudflare DNS.
+concurrency:
+  group: bulk-cutover-github-pages
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # JOB 1: Flip public/CNAME in each FFC-EX repo (uses github-prod env's CBM_TOKEN).
+  # Skipped entirely if skip_cname=true.
+  # ---------------------------------------------------------------------------
+  cname-flip:
+    if: ${{ inputs.skip_cname != true }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: github-prod
+    env:
+      GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate CBM_TOKEN
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.CBM_TOKEN }}" ]; then
+            echo "::error::CBM_TOKEN secret is not set in environment github-prod."
+            echo "::error::Add a PAT with repo:contents:write scope to that env, or re-run with skip_cname=true."
+            exit 1
+          fi
+
+      - name: Flip public/CNAME (skip DNS in this job)
+        shell: pwsh
+        run: |
+          # Fleet default list — single source of truth shared with workflow 121.
+          $defaultDomains = (
+            Get-Content -Raw config/ffc-ex-cutover-domains.json | ConvertFrom-Json
+          ).domains -join ','
+          $domainsInput = '${{ inputs.domains }}'
+          if ([string]::IsNullOrWhiteSpace($domainsInput)) { $domainsInput = $defaultDomains }
+
+          $params = @{
+            Domains = $domainsInput
+            SkipDns = $true   # this job only flips CNAME
+          }
+          if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun = $true }
+
+          ./scripts/bulk-cutover-to-github-pages.ps1 @params
+
+  # ---------------------------------------------------------------------------
+  # JOB 2: Flip Cloudflare apex DNS (uses cloudflare-prod env's CF tokens).
+  # Depends on cname-flip success (unless skipped). Skipped entirely if skip_dns=true.
+  # ---------------------------------------------------------------------------
+  dns-flip:
+    needs: [cname-flip]
+    if:
+      ${{ always() && inputs.skip_dns != true && (needs.cname-flip.result == 'success' ||
+      needs.cname-flip.result == 'skipped') }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: cloudflare-prod-write
+    env:
+      # GH_TOKEN set to a dummy so the script doesn't error on missing var;
+      # the script uses SkipCname switch below to avoid GitHub API calls.
+      GH_TOKEN: 'skipped-cname-phase'
+    steps:
+      - uses: actions/checkout@v7
+
+      # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Flip Cloudflare apex DNS (skip CNAME in this job)
+        shell: pwsh
+        run: |
+          # Fleet default list — single source of truth shared with workflow 121.
+          $defaultDomains = (
+            Get-Content -Raw config/ffc-ex-cutover-domains.json | ConvertFrom-Json
+          ).domains -join ','
+          $domainsInput = '${{ inputs.domains }}'
+          if ([string]::IsNullOrWhiteSpace($domainsInput)) { $domainsInput = $defaultDomains }
+
+          $params = @{
+            Domains   = $domainsInput
+            SkipCname = $true   # this job only does DNS
+          }
+          if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun = $true }
+
+          ./scripts/bulk-cutover-to-github-pages.ps1 @params
+
+  # ---------------------------------------------------------------------------
+  # JOB 3: Trigger Post-Deploy Smoke Test in each FFC-EX repo after DNS flip,
+  # then wait for each to complete. Surfaces apex/DNS regressions that the
+  # in-repo smoke would otherwise miss because smoke triggers only on Deploy
+  # workflow events (and a DNS flip does not produce a Deploy event).
+  #
+  # Skipped on dry-run (no DNS actually flipped) and on dns-flip failure.
+  # ---------------------------------------------------------------------------
+  post-cutover-smoke:
+    needs: [cname-flip, dns-flip]
+    if: ${{ always() && inputs.dry_run != true && needs.dns-flip.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: github-prod
+    env:
+      GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+    steps:
+      # Needed to read config/ffc-ex-cutover-domains.json (the fleet default list).
+      - uses: actions/checkout@v7
+
+      - name: Validate CBM_TOKEN
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.CBM_TOKEN }}" ]; then
+            echo "::error::CBM_TOKEN secret is not set in environment github-prod."
+            echo "::error::Required to dispatch Post-Deploy Smoke Test in each FFC-EX repo."
+            exit 1
+          fi
+
+      - name: Wait for DNS propagation
+        shell: bash
+        run: |
+          # Apex DNS just flipped; give resolvers ~2 min before kicking the
+          # smokes. The smokes themselves do a cert-aware retry (~20 min)
+          # for the Let'\''s Encrypt provisioning window, so we don'\''t need
+          # to wait for cert here.
+          sleep 120
+
+      - name: Dispatch Post-Deploy Smoke Test in each FFC-EX repo
+        id: dispatch
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # Same default list as the cname-flip and dns-flip jobs above —
+          # single source of truth shared with workflow 121.
+          default_domains=$(jq -r '.domains | join(" ")' config/ffc-ex-cutover-domains.json)
+
+          domains_input="${{ inputs.domains }}"
+          if [ -z "$domains_input" ]; then
+            domains="$default_domains"
+          else
+            domains=$(echo "$domains_input" | tr ',' ' ')
+          fi
+
+          # Dispatch ALL smokes upfront so they run in parallel on GHA.
+          # We collect (domain, run_id) pairs then poll sequentially in the
+          # next step — the actual wait converges to the slowest single
+          # smoke (~20 min worst case for cert provisioning), not N * 20 min.
+          : > /tmp/smoke-dispatched.tsv
+          for d in $domains; do
+            repo="FreeForCharity/FFC-EX-${d}"
+            echo "Dispatching smoke for $repo ..."
+            if ! gh workflow run "Post-Deploy Smoke Test" --repo "$repo" --ref main 2>&1; then
+              echo "::warning::Could not dispatch smoke for $repo (workflow may not exist on this repo)"
+              printf '%s\tDISPATCH_FAILED\n' "$d" >> /tmp/smoke-dispatched.tsv
+              continue
+            fi
+            # Settle a few seconds so the run is registered before we grab its id.
+            sleep 5
+            run_id=$(gh run list --repo "$repo" --workflow "Post-Deploy Smoke Test" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || echo "")
+            if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+              echo "::warning::Could not locate dispatched smoke run for $repo"
+              printf '%s\tNO_RUN_ID\n' "$d" >> /tmp/smoke-dispatched.tsv
+              continue
+            fi
+            echo "  -> run $run_id (https://github.com/${repo}/actions/runs/${run_id})"
+            printf '%s\t%s\n' "$d" "$run_id" >> /tmp/smoke-dispatched.tsv
+          done
+
+          echo ""
+          echo "Dispatched:"
+          cat /tmp/smoke-dispatched.tsv
+
+      - name: Poll each smoke to completion
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # Per-repo deadline matches the smoke'\''s internal cert-retry budget
+          # (20 min) plus Playwright install + screenshot (~3 min) plus slack.
+          per_repo_deadline_seconds=1500   # 25 min
+
+          fails=0
+          dispatched=0
+          while IFS=$'\t' read -r d run_id; do
+            dispatched=$(( dispatched + 1 ))
+            repo="FreeForCharity/FFC-EX-${d}"
+            echo "::group::Smoke wait: $d"
+
+            if [ "$run_id" = "DISPATCH_FAILED" ] || [ "$run_id" = "NO_RUN_ID" ]; then
+              echo "::error::$d smoke could not be dispatched ($run_id) — treating as failure"
+              fails=$(( fails + 1 ))
+              echo "::endgroup::"
+              continue
+            fi
+
+            deadline=$(( $(date +%s) + per_repo_deadline_seconds ))
+            status="unknown"
+            while [ "$(date +%s)" -lt "$deadline" ]; do
+              status=$(gh run view "$run_id" --repo "$repo" --json status,conclusion --jq '.status + ":" + (.conclusion // "null")' 2>/dev/null || echo "error:null")
+              case "$status" in
+                in_progress:*|queued:*|waiting:*) ;;
+                *) break ;;
+              esac
+              sleep 20
+            done
+
+            if [[ "$status" == *":success" ]]; then
+              echo "✓ $d smoke passed (https://github.com/${repo}/actions/runs/${run_id})"
+            else
+              echo "::error::$d smoke FAILED — final state: $status"
+              echo "::error::See https://github.com/${repo}/actions/runs/${run_id}"
+              echo "::error::Download the smoke-visual-* artifact from that run for screenshots."
+              fails=$(( fails + 1 ))
+            fi
+            echo "::endgroup::"
+          done < /tmp/smoke-dispatched.tsv
+
+          echo ""
+          if [ "$fails" -gt 0 ]; then
+            echo "::error::$fails of $dispatched smoke tests failed after DNS cutover."
+            echo "::error::Each failed smoke uploaded screenshots as 'smoke-visual-<run>' artifacts — inspect those."
+            exit 1
+          fi
+          echo "All $dispatched smoke tests passed post-cutover."

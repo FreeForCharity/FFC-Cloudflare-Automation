@@ -48,7 +48,6 @@ responsibly disclose your findings.
 Instead, please report security vulnerabilities by:
 
 1. **GitHub Security Advisories** (Preferred):
-
    - Navigate to the Security tab of this repository
    - Click "Report a vulnerability"
    - Fill out the form with details about the vulnerability
@@ -94,13 +93,11 @@ When contributing to or using this repository:
 ### For Contributors
 
 1. **Never commit sensitive data**:
-
    - API keys, tokens, or credentials
    - Private keys or certificates
    - Environment files (`.env`, `.env.local`)
 
 2. **Use secure coding practices**:
-
    - Follow the principle of least privilege
    - Validate all inputs
    - Keep dependencies updated
@@ -112,14 +109,12 @@ When contributing to or using this repository:
 ### For Users
 
 1. **Protect your credentials**:
-
    - Never commit credentials to version control
    - Use environment variables or secret management systems
    - Rotate credentials regularly
    - Use unique credentials per environment
 
 2. **Review permissions**:
-
    - Follow least privilege principles
    - Regularly audit access
    - Remove unused credentials
@@ -157,7 +152,6 @@ vulnerabilities (with their permission).
 #### How to Securely Handle API Tokens
 
 1. **From Cloudflare Dashboard**:
-
    - Log in to https://dash.cloudflare.com
    - Go to "My Profile" → "API Tokens"
    - Create a new token or use an existing one

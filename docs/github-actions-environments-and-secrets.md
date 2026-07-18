@@ -11,6 +11,13 @@ This is used for:
 - `m365-prod` (Microsoft 365 / Graph / Exchange Online workflows)
 - `wpmudev-prod` (WPMUDEV domain/site inventory workflows)
 
+> **Current required-reviewer config (audited 2026-06-30 by workflow
+> `730. Repo - Audit Environment Approval Gates [Repo]`).** Gated (require reviewer `clarkemoyer`,
+> so jobs pause for approval): `cloudflare-prod`, `cloudflare-prod-write`, `whmcs-prod`,
+> `github-prod`, `m365-prod`, `wpmudev-prod`. Not gated (runs proceed): `cloudflare-prod-read`,
+> `zeffy-prod`. See [workflow-safety-and-approvals.md](workflow-safety-and-approvals.md) for the
+> per-workflow table; re-run workflow 730 to refresh after any change in _Settings → Environments_.
+
 ## Where to configure Environments
 
 1. In GitHub, open the repo.
@@ -48,11 +55,11 @@ Recommended Cloudflare API token permissions:
 - DMARC Management: **Edit** (optional; currently this repo does not have a routable Cloudflare API
   surface to enable/inspect DMARC Management, so enabling is done manually in the dashboard: Email >
   DMARC Management)
-- Account Rulesets: **Write** (required by workflow 10 — DNS - Create Redirect Rule)
-- Zone WAF: **Write** (required by workflow 10)
-- Dynamic URL Redirects: **Write** (required by workflow 10)
+- Account Rulesets: **Write** (required by workflow 111 — DNS - Create Redirect Rule)
+- Zone WAF: **Write** (required by workflow 111)
+- Dynamic URL Redirects: **Write** (required by workflow 111)
 
-Without the Rulesets/WAF/Dynamic-URL-Redirects permissions, workflow 10's apply step fails with
+Without the Rulesets/WAF/Dynamic-URL-Redirects permissions, workflow 111's apply step fails with
 Cloudflare error code `10000 "Authentication error"`. The dry-run / preview job still works because
 GET on the entrypoint URL doesn't require write scope.
 
@@ -77,21 +84,71 @@ custom account nameservers.
 
 Used by the WHMCS export workflows and any automation that updates WHMCS domain settings.
 
-Environment secrets (required):
+### WHMCS credential now comes from Azure Key Vault (single source of truth)
 
-- `ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` (WHMCS API secret for identifier
-  `zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu`)
+As of the AZ KV refactor, WHMCS workflows fetch the WHMCS API identifier + secret from Azure Key
+Vault at runtime via OIDC, using the `./.github/actions/whmcs-secrets-from-kv` composite action —
+the same pattern as `cloudflare-tokens-from-kv`. The action exports `WHMCS_API_IDENTIFIER`,
+`WHMCS_API_SECRET`, and `WHMCS_APIM_SUBSCRIPTION_KEY` to downstream steps, masked. Workflows no
+longer carry a copy of the WHMCS secret or hard-code the identifier inline.
 
-Environment secrets (optional):
+Variables (required for OIDC → Key Vault — these are **identifiers, not passwords**). **Repository**
+Variables are recommended (so `whmcs-prod` holds no Azure creds at all), but because the workflows
+read them via the `vars.` context, environment-level Variables on `whmcs-prod` resolve too if you'd
+rather scope them there:
 
-- `WHMCS_API_ACCESS_KEY` (if your WHMCS API configuration requires an access key)
+- `WR_ALL_FFC_AZURE_KV_CLIENT_ID` (OIDC client id of the `ffc-admin-kv-writer` identity)
+- `WR_ALL_FFC_AZURE_TENANT_ID` (Azure tenant id)
+
+Create them with those exact names; workflows read them as
+`${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}` and `${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}` (the
+`vars.` prefix is the expression context, not part of the variable name).
+
+The `whmcs-prod` environment itself holds **no** secrets after this migration (the WHMCS credential
+moved to Key Vault); it remains only to provide the deployment approval gate. The per-environment
+**federated credential** on `ffc-admin-kv-writer` is what actually authorizes the OIDC exchange.
+
+Key Vault secrets (in `kv-ffc-admin-prod-cbm`, scoped naming like the Cloudflare tokens — the action
+defaults to `write` scope / `wr-all-*`):
+
+- `wr-all-ffc-whmcs-api-identifier` / `read-all-ffc-whmcs-api-identifier` → the WHMCS API identifier
+- `wr-all-ffc-whmcs-api-secret` / `read-all-ffc-whmcs-api-secret` → the WHMCS API secret
+- `wr-all-ffc-apim-whmcs-subscription-key` / `read-all-ffc-apim-whmcs-subscription-key` → the APIM
+  `whmcs-ops` subscription key (WHMCS calls route through APIM, which requires it)
+- `wr-all-ffc-whmcs-api-url` / `read-all-ffc-whmcs-api-url` → the API endpoint (non-secret; the
+  workflows pass it inline, the action does not read it)
+
+WHMCS is a single credential, so the `read-all-*` and `wr-all-*` copies hold identical values.
+
+WHMCS API calls do not hit `freeforcharity.org` directly — they route through Azure API Management
+(`apim-ffc-gateway-prod`, static IP `20.231.116.111`) so WHMCS can allowlist one stable IP. See
+[docs/whmcs-apim-routing.md](whmcs-apim-routing.md) for that pattern (gateway URL, subscription key,
+and the required `CF-Connecting-IP` proxy-header setting in WHMCS).
+
+The OIDC identity (`ffc-admin-kv-writer`) holds **Key Vault Secrets Officer** vault-wide and a
+**federated credential** for `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:whmcs-prod`.
+Each WHMCS job sets `permissions: id-token: write`. See
+`.github/actions/whmcs-secrets-from-kv/README.md` for the full setup checklist (and the two
+remaining steps: setting the real secret value in KV and creating the two repository Variables
+above).
+
+To rotate the WHMCS credential, add a new version of the `*-ffc-whmcs-api-secret` KV secret — no
+GitHub secret update needed.
+
+#### Legacy (pre-refactor)
+
+Before the refactor the secret was held as a GH Environment Secret named
+`ZBBEPFQ5W7RCSIME0NOQOYRQIDGTKBPU` (for identifier `zbBEpfq5W7RCSImE0NOqoYrqIDGTkBPu`), with an
+optional `WHMCS_API_ACCESS_KEY`. Both are safe to remove from the `whmcs-prod` environment: nothing
+reads them — the WHMCS API access key is not used (the action no longer fetches or exports it), and
+the identifier/secret now come from Key Vault.
 
 ## `m365-prod`
 
 Used by:
 
-- `.github/workflows/5-m365-domain-and-dkim.yml`
-- `.github/workflows/6-m365-list-domains.yml`
+- `.github/workflows/303-m365-domain-and-dkim.yml`
+- `.github/workflows/302-m365-list-domains.yml`
 
 ### Identifiers vs secrets
 
@@ -110,7 +167,7 @@ Environment secrets (required for the M365 workflows in this repo):
 
 ### Split-environment preflight
 
-The preflight workflow `.github/workflows/7-m365-domain-preflight.yml` is intentionally split into
+The preflight workflow `.github/workflows/301-m365-domain-preflight.yml` is intentionally split into
 two jobs so secrets do not have to be duplicated across environments:
 
 - **Graph job** runs in `m365-prod` and requires:
@@ -133,7 +190,7 @@ Environment secrets (optional, only needed for DKIM app-only mode):
 
 ## `m365-prod`: OIDC and app prerequisites (Azure/Entra)
 
-The M365 workflows authenticate with GitHub OIDC via `azure/login@v2`, then use Azure CLI to fetch a
+The M365 workflows authenticate with GitHub OIDC via `azure/login@v3`, then use Azure CLI to fetch a
 Microsoft Graph token.
 
 This is what makes the workflow **headless**:
@@ -145,7 +202,6 @@ This is what makes the workflow **headless**:
 You must configure the Entra application referenced by `FFC_AZURE_CLIENT_ID`:
 
 - **Federated credential** (for GitHub OIDC)
-
   - Issuer: `https://token.actions.githubusercontent.com`
   - Audience: `api://AzureADTokenExchange`
   - Subject (recommended pattern when workflows use `environment: m365-prod`):
@@ -154,12 +210,10 @@ You must configure the Entra application referenced by `FFC_AZURE_CLIENT_ID`:
     changes.
 
 - **Azure subscription access**
-
   - Not required for the current M365 workflows because they set `allow-no-subscriptions: true`.
   - Only required if you add steps that manage Azure resources.
 
 - **Microsoft Graph permissions**
-
   - For the domain listing/status workflows, grant (and admin-consent) one of:
     - Application permission `Domain.Read.All` (recommended), or
     - Application permission `Directory.Read.All`
@@ -172,13 +226,11 @@ You must configure the Entra application referenced by `FFC_AZURE_CLIENT_ID`:
 ## Troubleshooting quick hits
 
 - `azure/login` fails:
-
   - Confirm the job has `permissions: id-token: write`.
   - Confirm `FFC_AZURE_CLIENT_ID` / `FFC_AZURE_TENANT_ID` are set on the `m365-prod` environment.
   - Confirm the Entra app federated credential subject matches the repo/environment.
 
 - Graph calls return `403 Forbidden`:
-
   - Confirm the Entra app has Graph **application** permissions and **admin consent**.
 
 - DKIM steps fail:
@@ -188,7 +240,7 @@ You must configure the Entra application referenced by `FFC_AZURE_CLIENT_ID`:
 ## `wpmudev-prod`
 
 Used by the WPMUDEV domain/site inventory workflow in
-`.github/workflows/13-wpmudev-export-sites.yml`.
+`.github/workflows/601-wpmudev-export-sites.yml`.
 
 ### Environment secrets
 

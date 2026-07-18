@@ -1,25 +1,26 @@
-# Cloudflare Redirect Rules (workflow 10)
+# Cloudflare Redirect Rules (workflow 111)
 
-This document describes the **`10. DNS - Create Redirect Rule (Admin) [CF]`** workflow and the
+This document describes the **`111. DNS - Create Redirect Rule (Admin) [CF]`** workflow and the
 `scripts/Set-CloudflareRedirectRule.ps1` script that backs it. Use this workflow to point a source
 domain (apex + optional `www`) at a target domain via a Cloudflare Single Redirect rule.
 
 ## When to use it
 
-- Collapsing legacy/duplicate FFC domains onto a canonical one (e.g. `ffcsites.org` → `ffcadmin.org`).
+- Collapsing legacy/duplicate FFC domains onto a canonical one (e.g. `ffcsites.org` →
+  `ffcadmin.org`).
 - Sunsetting a charity's previous URL after they choose a new name.
 - Pointing a marketing alias at a primary site without standing up a separate origin.
 
 The source zone must already exist in the Free For Charity Cloudflare account with proxied A/AAAA
-records (run `01. Domain - Status` first if unsure).
+records (run `101. Domain - Status` first if unsure).
 
 ## What the workflow does
 
 The workflow has two jobs:
 
-1. **`preview`** (always runs, environment `cloudflare-prod-read`) — fetches the current state
-   of the source zone's `http_request_dynamic_redirect` phase ruleset and prints the planned rule.
-   When `dry_run=true` this is the only job that runs, and no Cloudflare writes happen.
+1. **`preview`** (always runs, environment `cloudflare-prod-read`) — fetches the current state of
+   the source zone's `http_request_dynamic_redirect` phase ruleset and prints the planned rule. When
+   `dry_run=true` this is the only job that runs, and no Cloudflare writes happen.
 
 2. **`apply`** (runs only when `dry_run=false`, environment `cloudflare-prod-write`) — creates or
    updates the redirect rule, then smoke-tests the source domain.
@@ -29,21 +30,21 @@ The workflow has two jobs:
 For a request to `source_domain=ffcsites.org`, `target_domain=ffcadmin.org`, `include_www=true`, the
 script generates:
 
-| Field | Value |
-|---|---|
-| **Match expression** | `(http.host eq "ffcsites.org") or (http.host eq "www.ffcsites.org")` |
-| **Action** | `redirect` |
-| **Target URL expression** | `concat("https://ffcadmin.org", http.request.uri.path)` |
-| **Status code** | `301` (configurable: 301, 302, 307, 308) |
-| **Preserve query string** | `true` (configurable) |
-| **Description** | `Repoint ffcsites.org to ffcadmin.org` (used as the idempotency key) |
+| Field                     | Value                                                                |
+| ------------------------- | -------------------------------------------------------------------- |
+| **Match expression**      | `(http.host eq "ffcsites.org") or (http.host eq "www.ffcsites.org")` |
+| **Action**                | `redirect`                                                           |
+| **Target URL expression** | `concat("https://ffcadmin.org", http.request.uri.path)`              |
+| **Status code**           | `301` (configurable: 301, 302, 307, 308)                             |
+| **Preserve query string** | `true` (configurable)                                                |
+| **Description**           | `Repoint ffcsites.org to ffcadmin.org` (used as the idempotency key) |
 
 ## Dispatching the workflow
 
 ### From the CLI
 
 ```bash
-gh workflow run "10. DNS - Create Redirect Rule (Admin) [CF]" \
+gh workflow run "111. DNS - Create Redirect Rule (Admin) [CF]" \
   --repo FreeForCharity/FFC-Cloudflare-Automation \
   -f source_domain=ffcsites.org \
   -f target_domain=ffcadmin.org \
@@ -52,25 +53,25 @@ gh workflow run "10. DNS - Create Redirect Rule (Admin) [CF]" \
 
 Inputs:
 
-| Input | Required | Default | Notes |
-|---|---|---|---|
-| `source_domain` | yes | — | Zone that will redirect. Must exist in FFC Cloudflare. |
-| `target_domain` | yes | — | Destination domain (always HTTPS). |
-| `status_code` | no | `301` | One of 301 / 302 / 307 / 308. |
-| `include_www` | no | `true` | Match `www.<source>` in addition to apex. |
-| `preserve_query_string` | no | `true` | Forward query string through to target. |
-| `dry_run` | no | `true` | When true, only the preview job runs. |
+| Input                   | Required | Default | Notes                                                  |
+| ----------------------- | -------- | ------- | ------------------------------------------------------ |
+| `source_domain`         | yes      | —       | Zone that will redirect. Must exist in FFC Cloudflare. |
+| `target_domain`         | yes      | —       | Destination domain (always HTTPS).                     |
+| `status_code`           | no       | `301`   | One of 301 / 302 / 307 / 308.                          |
+| `include_www`           | no       | `true`  | Match `www.<source>` in addition to apex.              |
+| `preserve_query_string` | no       | `true`  | Forward query string through to target.                |
+| `dry_run`               | no       | `true`  | When true, only the preview job runs.                  |
 
 ### From the GitHub UI
 
-Actions → **10. DNS - Create Redirect Rule (Admin) [CF]** → **Run workflow** → fill in
+Actions → **111. DNS - Create Redirect Rule (Admin) [CF]** → **Run workflow** → fill in
 `source_domain` and `target_domain`. Leave `dry_run=true` for the first pass, review the preview
 job's logs, then re-run with `dry_run=false`.
 
 ## Verification
 
-After a successful apply the workflow's smoke step probes the source domain with `curl` and
-checks for a `Location:` header pointing at the target. You can also verify manually:
+After a successful apply the workflow's smoke step probes the source domain with `curl` and checks
+for a `Location:` header pointing at the target. You can also verify manually:
 
 ```bash
 curl -sI https://<source_domain>/foo?a=1
@@ -100,29 +101,29 @@ Cloudflare's Rulesets API is gated behind the WAF/Rulesets permissions even for 
 rules.
 
 If the token is missing these you'll see error code `10000 "Authentication error"` on the apply
-step. The dry-run / preview step still works because GET on the entrypoint URL doesn't require
-write permissions.
+step. The dry-run / preview step still works because GET on the entrypoint URL doesn't require write
+permissions.
 
 ## Gotchas
 
 ### POST vs PUT for the first rule on a zone
 
-Cloudflare doesn't allow `PUT` against a phase entrypoint that doesn't exist yet. The script
-handles this by branching:
+Cloudflare doesn't allow `PUT` against a phase entrypoint that doesn't exist yet. The script handles
+this by branching:
 
 - **No existing entrypoint** (GET returns 404) → `POST /zones/{id}/rulesets` with
   `kind: "zone", phase: "http_request_dynamic_redirect", rules: [...]`.
 - **Entrypoint exists** → `PUT /zones/{id}/rulesets/phases/http_request_dynamic_redirect/entrypoint`
   with the updated `rules` array.
 
-You may see the misleading error `request is not authorized` if a PUT hits a non-existent
-entrypoint — it actually means the resource doesn't exist for that verb.
+You may see the misleading error `request is not authorized` if a PUT hits a non-existent entrypoint
+— it actually means the resource doesn't exist for that verb.
 
 ### Source zone must be proxied
 
-If the source zone's A/AAAA records aren't proxied (orange cloud), Cloudflare never sees the
-request and can't apply the rule. Use `01. Domain - Status` or
-`06. DNS - Enforce Standard` first to ensure the apex/www records are proxied.
+If the source zone's A/AAAA records aren't proxied (orange cloud), Cloudflare never sees the request
+and can't apply the rule. Use `101. Domain - Status` or `106. DNS - Enforce Standard` first to
+ensure the apex/www records are proxied.
 
 ### Running the script locally
 
@@ -148,7 +149,7 @@ auto-detect tokens in `CLOUDFLARE_API_TOKEN_FFC` / `CLOUDFLARE_API_TOKEN_CM` env
 
 ## Related workflows
 
-- **01. Domain - Status (All Sources)** — check the source zone is in Cloudflare and proxied.
-- **05. DNS - Manage Record** — if you need to create/update the DNS records first.
-- **06. DNS - Enforce Standard** — bulk apply the FFC standard (proxied apex + www) before
-  setting up the redirect.
+- **101. Domain - Status (All Sources)** — check the source zone is in Cloudflare and proxied.
+- **105. DNS - Manage Record** — if you need to create/update the DNS records first.
+- **106. DNS - Enforce Standard** — bulk apply the FFC standard (proxied apex + www) before setting
+  up the redirect.

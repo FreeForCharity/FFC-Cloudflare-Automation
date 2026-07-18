@@ -90,6 +90,15 @@ jobs:
           # has no workflow_dispatch trigger. Guards the #630 failure class.
           python3 scripts/check-workflow-references.py
 
+      - name: Workflow logic tests (embedded scripts)
+        shell: bash
+        run: |
+          # Unit-tests the logic INSIDE workflows (github-script/bash/pwsh
+          # bodies) against fixtures — structure checks above can't catch
+          # behavior bugs like the PUBLIC/public visibility-enum regression.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 tests/workflow-logic/run_all.py
+
       - name: Validate federated-credential expected map
         shell: bash
         run: |

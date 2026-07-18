@@ -75,6 +75,10 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
    and an `environment:`.
 5. Write workflows: `dry_run` input defaulting to `true`, a `concurrency` group
    (`cancel-in-progress: false`), and an approval-gated environment.
+6. **Embedded logic gets a unit test.** If the workflow contains decision logic (a `github-script`
+   block, non-trivial bash, pwsh parsing), add a scenario under `tests/workflow-logic/` — the
+   harness extracts the real script from the YAML and runs it against fixtures (fake `gh`, mocked
+   `core`/`context`). CI runs `tests/workflow-logic/run_all.py` on every PR; see that dir's README.
 
 ## GitHub API rate budget (shared — be frugal)
 

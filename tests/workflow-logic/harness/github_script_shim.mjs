@@ -31,10 +31,20 @@ const core = {
 
 // Only the issues-event path talks to the API (idempotency comment scan);
 // the manual/dispatch paths never touch `github`. An empty paginate result
-// is the correct simulation for "no prior comments".
+// is the correct simulation for "no prior comments". createComment calls
+// are captured so tests can assert on posted comment bodies.
+const comments = [];
 const github = {
   paginate: async () => [],
-  rest: { issues: { listComments: 'listComments' } },
+  rest: {
+    issues: {
+      listComments: 'listComments',
+      createComment: async (args) => {
+        comments.push(args);
+        return { data: { id: 1 } };
+      },
+    },
+  },
 };
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -47,4 +57,4 @@ try {
   threw = String(e && e.stack ? e.stack : e);
 }
 
-console.log(JSON.stringify({ outputs, failed, notices, threw }));
+console.log(JSON.stringify({ outputs, failed, notices, threw, comments }));

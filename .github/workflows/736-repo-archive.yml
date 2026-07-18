@@ -1,0 +1,172 @@
+name: '736. Repo - Archive / Application Denied (Admin) [Repo]'
+run-name: 'Archive ${{ inputs.repo }} (dry_run=${{ inputs.dry_run }})'
+
+# Destructive-adjacent, so heavily guarded. This workflow ONLY archives a repository
+# (`archived: true`) — it NEVER deletes one. Archiving is fully reversible (a maintainer can
+# unarchive from Settings), which is the deliberate safety choice: the worst case is a repo
+# that is temporarily read-only, not data loss.
+#
+# Five guards, all must pass for a live archive:
+#   1. dispatch-only (never issue/label triggered — no accidental auto-archive)
+#   2. dry_run defaults to true (preview only; you must pass dry_run=false)
+#   3. typed confirmation: confirm_repo must exactly equal repo
+#   4. org lock + hard denylist (refuses anything outside FreeForCharity, and always refuses
+#      the automation repo, the website template, and the org-wide .github repo)
+#   5. github-prod environment approval gate (a human reviewer must approve the deployment)
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description:
+          'Repository to archive — "name" or "owner/name" (e.g. FFC-EX-example.org); any owner
+          prefix is stripped and the owner is forced to FreeForCharity.'
+        required: true
+        type: string
+      reason:
+        description:
+          'Why (e.g. "charity application denied", "domain abandoned"). Recorded in the summary.'
+        required: true
+        type: string
+      dry_run:
+        description:
+          'Preview only. Leave true to see what would happen; set false to actually archive.'
+        required: true
+        default: true
+        type: boolean
+      confirm_repo:
+        description:
+          'Type the exact repo name again to confirm a live archive (must match "repo"). Ignored on
+          dry runs.'
+        required: false
+        type: string
+      issue_number:
+        description:
+          'Optional issue number in THIS repo to close as "not planned" (e.g. the denied website
+          request).'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TARGET_ORG: FreeForCharity
+  # Repos that must never be archived by this automation, whatever is typed.
+  DENYLIST: 'FFC-Cloudflare-Automation FFC_Single_Page_Template .github'
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    environment: github-prod
+    steps:
+      - name: Validate required token
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.CBM_TOKEN }}" ]; then
+            echo '::error::CBM_TOKEN secret is not set (environment: github-prod).'
+            exit 1
+          fi
+
+      - name: Archive repository (guarded)
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+          IN_REPO: ${{ inputs.repo }}
+          IN_REASON: ${{ inputs.reason }}
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+          IN_CONFIRM: ${{ inputs.confirm_repo }}
+          IN_ISSUE: ${{ inputs.issue_number }}
+          THIS_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # --- normalize + validate the repo name ------------------------------------
+          repo_raw="${IN_REPO:-}"
+          # Accept either "name" or "owner/name"; strip any owner and force our org.
+          name="${repo_raw##*/}"
+          # Trim leading/trailing whitespace ONLY — stripping internal whitespace could
+          # silently retarget (e.g. "FFC-EX-foo bar" -> "FFC-EX-foobar"); the name regex
+          # below rejects internal whitespace instead.
+          name="$(printf '%s' "$name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [ -z "$name" ]; then echo '::error::repo is empty.'; exit 1; fi
+          if ! printf '%s' "$name" | grep -qE '^[A-Za-z0-9._-]+$'; then
+            echo "::error::Invalid repository name: $name"; exit 1
+          fi
+          full="$TARGET_ORG/$name"
+
+          # --- hard denylist ---------------------------------------------------------
+          for deny in $DENYLIST; do
+            if [ "$name" = "$deny" ]; then
+              echo "::error::Refusing to archive protected repository '$name' (denylist)."
+              exit 1
+            fi
+          done
+
+          {
+            echo "## Archive request"
+            echo "- Target: \`$full\`"
+            echo "- Reason: ${IN_REASON:-（none）}"
+            echo "- Dry run: $IN_DRY_RUN"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # --- existence + current state (read-only) ---------------------------------
+          if ! meta=$(gh api "repos/$full" 2>/dev/null); then
+            echo "| Result | \`$full\` not found (nothing to archive) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Repository $full does not exist or is not visible to the token."
+            exit 0
+          fi
+          already=$(printf '%s' "$meta" | jq -r '.archived')
+          visibility=$(printf '%s' "$meta" | jq -r '.visibility')
+          pushed=$(printf '%s' "$meta" | jq -r '.pushed_at')
+          echo "- Current state: archived=$already, visibility=$visibility, last push=$pushed" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$already" = "true" ]; then
+            echo "✅ Already archived — no change." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # --- dry run stops here ----------------------------------------------------
+          if [ "$IN_DRY_RUN" != "false" ]; then
+            echo "🔎 **Dry run** — would archive \`$full\` (set archived=true). No change made." >> "$GITHUB_STEP_SUMMARY"
+            echo "Re-run with dry_run=false and confirm_repo=$name to execute." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # --- typed confirmation for a live archive ---------------------------------
+          # Normalize confirm_repo exactly like repo: strip any owner prefix, then trim
+          # leading/trailing whitespace only. The repo input accepts "name" or
+          # "owner/name", so pasting the same owner-qualified value into both fields is
+          # unambiguous intent and must confirm. Internal whitespace still fails the
+          # equality check against the regex-validated name.
+          confirm="${IN_CONFIRM:-}"
+          confirm="${confirm##*/}"
+          confirm="$(printf '%s' "$confirm" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [ "$confirm" != "$name" ]; then
+            echo "::error::confirm_repo ('$confirm') must exactly equal repo ('$name') for a live archive."
+            exit 1
+          fi
+
+          # --- execute (reversible: archived=true, never delete) ---------------------
+          gh api -X PATCH "repos/$full" -F archived=true >/dev/null
+          echo "🗄️ Archived \`$full\` (repository is now read-only; unarchive from Settings to reverse)." >> "$GITHUB_STEP_SUMMARY"
+
+          # --- optionally close a linked issue in THIS repo --------------------------
+          if [ -n "${IN_ISSUE:-}" ]; then
+            if printf '%s' "$IN_ISSUE" | grep -qE '^[0-9]+$'; then
+              # Best-effort (the archive itself already succeeded), but report honestly:
+              # only claim the issue was closed if the close actually succeeded.
+              gh issue comment "$IN_ISSUE" --repo "$THIS_REPO" \
+                --body "Archived \`$full\` — ${IN_REASON:-no reason given}. Repo is read-only (reversible). Closing as not planned." ||
+                echo "::warning::Failed to comment on issue #$IN_ISSUE."
+              if gh issue close "$IN_ISSUE" --repo "$THIS_REPO" --reason "not planned"; then
+                echo "- Closed issue #$IN_ISSUE in $THIS_REPO." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "- ⚠️ Could not close issue #$IN_ISSUE — close it manually." >> "$GITHUB_STEP_SUMMARY"
+                echo "::warning::Failed to close issue #$IN_ISSUE."
+              fi
+            else
+              echo "::warning::issue_number '$IN_ISSUE' is not numeric; skipped closing an issue."
+            fi
+          fi

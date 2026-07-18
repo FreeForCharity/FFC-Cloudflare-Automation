@@ -79,9 +79,21 @@ jobs:
               # the OPPOSITE direction (private should never auto-inherit). Flag both cases.
               missing_teams=""
               unexpected_teams=""
+              teams_check_failed=""
               if [ "$org" = "FreeForCharity" ]; then
-                team_grants=$(gh api "repos/$org/$repo/teams" --jq '[.[] | .slug] | join(",")' 2>/dev/null || echo "")
-                if [ "$vis" = "public" ]; then
+                # --paginate: the teams endpoint pages at 30 by default; large repos
+                # would otherwise report false missing-teams drift. A failed fetch
+                # (auth/rate-limit/transient) must NOT read as "no teams" — flag it
+                # distinctly instead of reporting every team missing.
+                if team_grants=$(gh api --paginate "repos/$org/$repo/teams?per_page=100" --jq '[.[] | .slug] | join(",")' 2>/dev/null); then
+                  team_grants=$(printf '%s' "$team_grants" | paste -sd, -)
+                else
+                  teams_check_failed=1
+                  team_grants=""
+                fi
+                if [ -n "$teams_check_failed" ]; then
+                  : # skip membership checks entirely — result would be noise
+                elif [ "$vis" = "public" ]; then
                   for required in ffc-orgwide-admins ffc-orgwide-maintainers ffc-orgwide-writers ffc-orgwide-triagers ffc-orgwide-readers; do
                     case ",$team_grants," in
                       *,$required,*) ;;
@@ -106,6 +118,9 @@ jobs:
               # For public repos, expect merge_queue
               if [ "$vis" = "public" ] && [ "$has_mq" = "0" ]; then
                 issues+=("no-merge-queue")
+              fi
+              if [ -n "$teams_check_failed" ]; then
+                issues+=("teams-check-failed")
               fi
               if [ -n "$missing_teams" ]; then
                 issues+=("missing-teams:${missing_teams% }")

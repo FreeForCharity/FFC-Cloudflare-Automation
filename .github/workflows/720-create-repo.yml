@@ -97,7 +97,18 @@ jobs:
           # be granted out-of-band by an Owner, ensuring conscious decision
           # about who can see sensitive internal/admin/payment data.
           # See: FFC-IN-Zeffy-Management, FFC-IN-ClarkeMoyerAdmin, etc.
-          $repo = "${{ inputs.RepoName }}"
+          # RepoName may be owner-qualified ("owner/repo"). Tier teams exist
+          # only in FreeForCharity, so parse and skip other owners outright.
+          $repoInput = "${{ inputs.RepoName }}"
+          $owner = 'FreeForCharity'
+          $repo = $repoInput
+          if ($repoInput -like '*/*') {
+            $owner, $repo = $repoInput -split '/', 2
+          }
+          if ($owner -ne 'FreeForCharity') {
+            Write-Host "Target owner '$owner' is not FreeForCharity; tier teams do not apply. Skipping."
+            exit 0
+          }
           $teams = @(
             @{ slug = 'ffc-orgwide-admins';      permission = 'admin'    },
             @{ slug = 'ffc-orgwide-maintainers'; permission = 'maintain' },

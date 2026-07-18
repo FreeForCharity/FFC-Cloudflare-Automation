@@ -8,9 +8,10 @@ on:
   # intake issue passes sponsoring-admin verification. client_payload carries:
   # charity_title, ffcadmin_issue, issue_url, sponsor, and domain (the
   # applicant's desired apex domain). See FFCadmin docs/migration-plan.md §1-2.
-  # TODO (maintainer): map github.event.client_payload.domain into this
-  # workflow's `domain` input. It may be empty (applicant left it blank) — fall
-  # back to the workflow_dispatch `domain` input / an admin prompt in that case.
+  # client_payload keys are read exactly like workflow_dispatch inputs (the
+  # resolve step treats both as "manual"), so `domain` is required and any of
+  # the optional charity/footer fields may be supplied under the same names.
+  # An empty/missing domain fails validation with the normal admin prompt.
   repository_dispatch:
     types: [ffcadmin-website-provision]
 
@@ -140,8 +141,11 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
-            const isManual = context.eventName === 'workflow_dispatch';
-            const manualInputs = context.payload.inputs || {};
+            const isDispatch = context.eventName === 'repository_dispatch';
+            const isManual = context.eventName === 'workflow_dispatch' || isDispatch;
+            const manualInputs = isDispatch
+              ? (context.payload.client_payload || {})
+              : (context.payload.inputs || {});
             const issue = context.payload.issue || {};
             const body = isManual ? '' : (issue.body || '');
             const title = isManual ? '' : (issue.title || '');

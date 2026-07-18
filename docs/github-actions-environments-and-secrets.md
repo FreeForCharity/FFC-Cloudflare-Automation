@@ -285,3 +285,32 @@ For full documentation, see [docs/wpmudev-domain-inventory.md](wpmudev-domain-in
 - **401 Unauthorized**: Verify `FFC_WPMUDEV_GA_API_Token` is set and valid
 - **403 Forbidden**: Verify the token has read access to Hub API
 - **Incomplete results**: Check pagination logic in `scripts/wpmudev-sites-export.ps1`
+
+## `candid-prod-read`
+
+Used by the read-only Candid workflows **801. Candid - Charity Check (EIN)** and **802. Candid -
+Essentials Search**. Full runbook: [candid-api-and-mcp.md](candid-api-and-mcp.md).
+
+The Candid subscription keys live in **Azure Key Vault** (`kv-ffc-admin-prod-cbm`, secrets
+`read-all-ffc-candid-charity-check-key` / `read-all-ffc-candid-essentials-key`) and are fetched at
+run time via OIDC by `.github/actions/candid-keys-from-kv` — the keys are **never** stored as GitHub
+secrets.
+
+### Environment secrets
+
+Only the (non-key) Azure OIDC identifiers, identical to `google-prod-read`:
+
+| Secret                            | Value                                           |
+| --------------------------------- | ----------------------------------------------- |
+| `READ_ALL_FFC_AZURE_KV_CLIENT_ID` | Client ID of the `ffc-admin-kv-reader` identity |
+| `READ_ALL_FFC_AZURE_TENANT_ID`    | Azure tenant ID                                 |
+
+### Azure prerequisite
+
+Add a federated credential on `ffc-admin-kv-reader` with subject
+`repo:FreeForCharity/FFC-Cloudflare-Automation:environment:candid-prod-read`.
+
+### Reviewer gate
+
+None needed: the Candid APIs are read-only public-org-data lookups and the key cannot mutate
+anything (mirrors `cloudflare-prod-read` / `zeffy-prod`).

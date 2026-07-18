@@ -97,7 +97,8 @@ foreach ($k in $verdict.Keys) {
     Write-Host ('{0,-20}: {1}' -f $k, $v)
 }
 
-# Expose the verdict to callers (workflow step summary) as JSON on a well-known variable.
+# Expose the verdict to callers: as an ordered hashtable on a well-known script variable, and
+# (in Actions) as a flat 'Key=Value; ...' step output line.
 $script:CandidCharityCheckVerdict = $verdict
 if ($env:GITHUB_OUTPUT) {
     $flat = ($verdict.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join '; '

@@ -34,7 +34,7 @@ jobs:
     environment: candid-prod-read
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Validate required Azure secrets
         shell: bash

@@ -58,8 +58,50 @@ on:
         type: boolean
 
 jobs:
+  # Reality check BEFORE the approval gate: refuse to proceed when the repository already
+  # exists (in ANY casing — the API lookup is case-insensitive and returns the canonical
+  # name). Runs ungated so a doomed create fails fast without consuming a human approval.
+  # Added after the 2026-07-18 incident: four creates were dispatched (and approved) for
+  # repos that already existed under the same or different casing.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify target name is free
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IN_REPO: ${{ inputs.RepoName }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          repo="${IN_REPO:-}"
+          owner="FreeForCharity"
+          name="${repo##*/}"
+          if printf '%s' "$repo" | grep -q '/'; then owner="${repo%%/*}"; fi
+
+          set +e
+          resp=$(gh api "repos/$owner/$name" 2>&1)
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            canonical=$(printf '%s' "$resp" | jq -r '.full_name // empty' 2>/dev/null || true)
+            echo "::error::Repository already exists as ${canonical:-$owner/$name} — nothing to create. To regenerate its content, use workflow 702 (clone-deploy); to retire it, use 736 (archive)."
+            {
+              echo "## Create preflight — $owner/$name"
+              echo "⛔ Refused: already exists as \`${canonical:-$owner/$name}\` (lookup is case-insensitive)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if ! printf '%s' "$resp" | grep -q "HTTP 404"; then
+            echo "::error::Preflight could not verify $owner/$name (transient API error?). Failing safe rather than guessing. Details: $resp"
+            exit 1
+          fi
+          echo "✅ $owner/$name is free — proceeding to the gated create." >> "$GITHUB_STEP_SUMMARY"
+
   create-repo:
     runs-on: windows-latest
+    needs: preflight
     environment: github-prod
     steps:
       - name: Checkout

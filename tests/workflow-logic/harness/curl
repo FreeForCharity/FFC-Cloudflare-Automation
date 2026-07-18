@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Fake `curl` for workflow-logic tests. Behavior is driven by TEST_* env vars;
+# every invocation is appended to $TEST_CURL_LOG so tests can assert on probes.
+#
+# Two shapes are simulated, matching the preflight probes:
+#   - default-Pages-URL probe (`-o /dev/null -w '%{http_code}'` against github.io)
+#     -> prints TEST_PAGES_CODE (default 404)
+#   - header probe (`-sSIL` against the live domain)
+#     -> prints status line + Server header from TEST_APEX_CODE / TEST_APEX_SERVER
+
+if [ -n "${TEST_CURL_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$TEST_CURL_LOG"
+fi
+
+url=""
+for a in "$@"; do
+  case "$a" in
+    http://*|https://*) url="$a" ;;
+  esac
+done
+
+case "$url" in
+  *github.io*)
+    printf '%s' "${TEST_PAGES_CODE:-404}"
+    ;;
+  *)
+    printf 'HTTP/2 %s\r\nserver: %s\r\n' "${TEST_APEX_CODE:-200}" "${TEST_APEX_SERVER:-cloudflare}"
+    ;;
+esac

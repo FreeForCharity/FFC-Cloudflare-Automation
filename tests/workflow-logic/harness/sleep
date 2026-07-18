@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# No-op sleep so retry/backoff loops inside extracted workflow scripts run
+# instantly under test. Real sleeps would make the 701 verify probe's
+# 12-attempt loop take minutes.
+exit 0

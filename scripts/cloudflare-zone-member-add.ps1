@@ -215,16 +215,27 @@ try {
         Write-Diag "WARNING: cannot read IAM permission groups: $(Get-ProbeErrorText -Probe $pgProbe)"
     }
 
-    # 4) Find an existing resource group scoped to this zone, or plan creating one.
+    # 4) Find an existing resource group scoped to this zone, or plan creating one (paginate:
+    #    dashboard-created scoped policies each add a resource group, so accounts accumulate many).
     $zoneScopeKey = "com.cloudflare.api.account.zone.$zoneId"
     $rgId = $null
-    $rgProbe = Invoke-CfProbe -Method 'GET' -Uri "/accounts/$accountId/iam/resource_groups?per_page=100" -Token $token
-    $probes.resourceGroups = Get-ProbeState -Probe $rgProbe
-    if ($rgProbe.ok) {
-        foreach ($rg in @($rgProbe.body.result)) {
+    $rgScanned = 0
+    $rgPage = 1
+    do {
+        $rgProbe = Invoke-CfProbe -Method 'GET' -Uri "/accounts/$accountId/iam/resource_groups?per_page=100&page=$rgPage" -Token $token
+        if ($rgPage -eq 1) { $probes.resourceGroups = Get-ProbeState -Probe $rgProbe }
+        if (-not $rgProbe.ok) {
+            Write-Diag "WARNING: cannot read IAM resource groups: $(Get-ProbeErrorText -Probe $rgProbe)"
+            break
+        }
+        $rgBatch = @($rgProbe.body.result)
+        $rgScanned += $rgBatch.Count
+        foreach ($rg in $rgBatch) {
             $scopes = @($rg.scope) + @($rg.scopes) | Where-Object { $_ }
             foreach ($scope in $scopes) {
-                if (@($scope.objects | Select-Object -ExpandProperty key -ErrorAction SilentlyContinue) -contains $zoneScopeKey) {
+                $scopeKeys = @($scope.objects | Select-Object -ExpandProperty key -ErrorAction SilentlyContinue)
+                # Dashboard-created groups may put the zone key on the scope itself or in objects.
+                if ($scopeKeys -contains $zoneScopeKey -or $scope.key -eq $zoneScopeKey) {
                     $rgId = $rg.id
                     Write-Diag "Resource group for zone found: '$($rg.name)' ($rgId)"
                     break
@@ -232,10 +243,14 @@ try {
             }
             if ($rgId) { break }
         }
-        if (-not $rgId) { Write-Diag "No existing resource group scoped to $Domain; one will be created." }
-    }
-    else {
-        Write-Diag "WARNING: cannot read IAM resource groups: $(Get-ProbeErrorText -Probe $rgProbe)"
+        $rgTotalPages = 1
+        if ($rgProbe.body.result_info -and $rgProbe.body.result_info.total_pages) {
+            $rgTotalPages = [int]$rgProbe.body.result_info.total_pages
+        }
+        $rgPage++
+    } until ($rgId -or $rgPage -gt $rgTotalPages)
+    if ($probes.resourceGroups -eq 'granted' -and -not $rgId) {
+        Write-Diag "No existing resource group scoped to $Domain ($rgScanned scanned); one will be created."
     }
 
     $rgCreateBody = [ordered]@{
@@ -288,6 +303,15 @@ try {
         $status = 'already-member'
         Write-Diag "Member already exists: $Email (id: $($existingMember.id), status: $($existingMember.status)). No changes made."
         Write-Diag 'Review or adjust their access in the Cloudflare dashboard (Manage Account > Members).'
+        # Print the member's live access as a reference for how the dashboard represents a
+        # scoped policy (permission groups + resource groups), so new invites can mirror it.
+        if ($existingMember.policies) {
+            Write-Diag 'Existing member policies:'
+            Write-Diag (($existingMember.policies | ConvertTo-Json -Depth 10) -replace '(?m)^', '   ')
+        }
+        if ($existingMember.roles) {
+            Write-Diag ('Existing member roles: ' + ((@($existingMember.roles) | ForEach-Object { $_.name }) -join ', '))
+        }
     }
     elseif (-not $Execute) {
         $status = 'dry-run'

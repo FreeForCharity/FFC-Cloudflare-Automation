@@ -87,6 +87,27 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
    (e.g. #732 added a `cp ../agentic-os-status.json …` to the 502 deliver step that
    `test_502_deliver.py`'s work-dir fixture didn't seed).
 
+## Work claiming (avoid stepping on other agents)
+
+Multiple actors (scheduled conductor runs, live sessions, Copilot agents, humans) share this backlog
+and all authenticate as the same user. Before starting ANY issue:
+
+1. **Available = `is:open -label:claimed`.** The pickup query is
+   `org:FreeForCharity label:agentic-os is:open -label:claimed`. If an issue has the `claimed` label
+   or an open linked PR, it is TAKEN — pick something else.
+2. **Claim before working**: add the `claimed` label AND post one comment
+   `CLAIM: <actor> <planned-branch> <UTC timestamp>` where `<actor>` identifies you
+   (`conductor-run-N`, `live-session`, `copilot-agent`, or a human name — the shared login does not
+   identify you). Opening a PR that says `Closes #N` is also a claim (automation will sync the label
+   from linked PRs once the claim-sync workflow lands).
+3. **Release on stop**: if you abandon the work, remove the label and comment. Claims with no open
+   linked PR and no activity for 48h are considered expired and may be swept.
+4. **Fleet-wide file changes** (any file synced across the FFC-EX fleet, e.g.
+   `post-deploy-smoke.yml`): claim the hub tracking issue FIRST — every fleet sync must have one —
+   and before editing, check the target file's last commit in 2-3 fleet repos; a commit within the
+   last hour means a rollout may be in flight (two sessions racing the same fleet fix produced
+   conflicting variants on 2026-07-19).
+
 ## GitHub API rate budget (shared — be frugal)
 
 Every agent session, scheduled task, and PAT-based workflow authenticates as the same user and

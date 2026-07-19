@@ -29,7 +29,17 @@ case "$cmd" in
           echo "simulated runs list failure" >&2
           exit 1
         fi
-        echo "${TEST_WORKFLOW_RUNS:-{\"workflow_runs\":[]}}"
+        # NOTE: the default is written with an if/else, not
+        # ${TEST_WORKFLOW_RUNS:-{"workflow_runs":[]}} — bash's parser treats
+        # literal unescaped braces inside a :- default word as nested-brace
+        # markers, which corrupts the expansion in surprising ways once the
+        # variable IS set (confirmed: it silently appends a stray `}` to the
+        # real value, breaking every JSON payload here).
+        if [ -n "${TEST_WORKFLOW_RUNS:-}" ]; then
+          echo "$TEST_WORKFLOW_RUNS"
+        else
+          echo '{"workflow_runs":[]}'
+        fi
         ;;
       orgs/*/repos\?* | orgs/*/repos\ * | orgs/*/repos)
         # Org repo LISTING for the preflight sibling scans (one name per line).

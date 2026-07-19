@@ -50,6 +50,7 @@ on:
 permissions:
   contents: read
   issues: write
+  actions: read
 
 env:
   TARGET_ORG: FreeForCharity
@@ -96,9 +97,14 @@ jobs:
             echo "::error::Invalid repository name: $name"; exit 1
           fi
           full="$TARGET_ORG/$name"
+          name_lc=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
 
+          # Case-insensitive: GitHub repo name lookups are case-insensitive
+          # (ffc-cloudflare-automation resolves to FFC-Cloudflare-Automation),
+          # so a case-variant input must not bypass the denylist.
           for deny in $DENYLIST; do
-            if [ "$name" = "$deny" ]; then
+            deny_lc=$(printf '%s' "$deny" | tr '[:upper:]' '[:lower:]')
+            if [ "$name_lc" = "$deny_lc" ]; then
               echo "::error::Refusing to archive protected repository '$name' (denylist)."
               exit 1
             fi
@@ -144,9 +150,15 @@ jobs:
             echo "::error::Preflight could not list prior 736 runs to verify a matching dry-run (transient API error?). Failing safe. Details: $runs"
             exit 1
           fi
-          name_lc=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
           found=0
-          titles=$(printf '%s' "$runs" | jq -r --arg cutoff "$cutoff" '.workflow_runs[] | select(.created_at >= $cutoff) | .display_title' 2>/dev/null || true)
+          set +e
+          titles=$(printf '%s' "$runs" | jq -r --arg cutoff "$cutoff" '.workflow_runs[] | select(.created_at >= $cutoff) | .display_title')
+          titles_rc=$?
+          set -e
+          if [ $titles_rc -ne 0 ]; then
+            echo "::error::Preflight could not parse the prior-runs API response for $THIS_REPO (unexpected payload shape?). Failing safe rather than guessing. Details: $runs"
+            exit 1
+          fi
           # Extract the exact repo token from the run-name format ("Archive
           # <repo> (dry_run=true)") and normalize it the same way the repo
           # input itself is normalized above, then compare for EQUALITY —

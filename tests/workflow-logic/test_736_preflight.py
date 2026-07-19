@@ -148,6 +148,31 @@ def test_runs_list_api_failure_fails_safe():
     assert "could not list prior 736 runs" in proc.stdout.lower(), proc.stdout
 
 
+def test_unparseable_runs_payload_fails_safe_with_distinct_message():
+    # Regression anchor (Copilot review on PR #725): a technically-successful
+    # `gh api` call that returns unparseable JSON must not be silently read
+    # as "no matching runs" — that would misreport a parse failure as a
+    # legitimate refusal. It needs its own fail-safe error.
+    proc, _, _ = run_preflight(
+        {
+            "TEST_REPO_META": DORMANT_META,
+            "TEST_WORKFLOW_RUNS": "not-json-at-all",
+        }
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "could not parse the prior-runs api response" in proc.stdout.lower(), proc.stdout
+    assert "No successful dry_run=true run" not in proc.stdout, proc.stdout
+
+
+def test_denylist_is_case_insensitive():
+    # Regression anchor (Copilot review on PR #725): GitHub repo lookups are
+    # case-insensitive, so a case-variant input must not bypass the denylist.
+    proc, _, gh_log = run_preflight({"IN_REPO": "ffc-cloudflare-automation"})
+    assert proc.returncode != 0, proc.stdout
+    assert "Refusing to archive protected repository" in proc.stdout, proc.stdout
+    assert gh_log.strip() == "", gh_log
+
+
 def test_similar_named_repo_dry_run_does_not_false_positive_match():
     # Regression anchor (Copilot review on PR #725): matching must be exact
     # on the normalized repo token, not substring containment — a dry-run

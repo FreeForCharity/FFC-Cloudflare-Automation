@@ -247,12 +247,14 @@ try {
 
     # 5) Check whether the email is already a member (paginate).
     $existingMember = $null
+    $membersListed = $true
     $page = 1
     do {
         $memProbe = Invoke-CfProbe -Method 'GET' -Uri "/accounts/$accountId/members?per_page=50&page=$page" -Token $token
         if ($page -eq 1) { $probes.members = Get-ProbeState -Probe $memProbe }
         if (-not $memProbe.ok) {
             Write-Diag "WARNING: cannot list account members: $(Get-ProbeErrorText -Probe $memProbe)"
+            $membersListed = $false
             break
         }
         $members = @($memProbe.body.result)
@@ -296,15 +298,22 @@ try {
         }
         Write-Diag "2) POST /accounts/$accountId/members"
         Write-Diag (($inviteBody | ConvertTo-Json -Depth 10) -replace '(?m)^', '   ')
-        $deniedProbes = @($probes.GetEnumerator() | Where-Object { $_.Value -ne 'granted' })
+        $deniedProbes = @($probes.GetEnumerator() | Where-Object { $_.Value -eq 'denied' })
+        $errorProbes = @($probes.GetEnumerator() | Where-Object { $_.Value -eq 'error' })
         if ($deniedProbes.Count -gt 0) {
             Write-Diag ''
-            Write-Diag ("BLOCKER for live run: these probes are not granted: " + (($deniedProbes | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', '))
+            Write-Diag ("BLOCKER for live run - permission denied on: " + (($deniedProbes | ForEach-Object { $_.Key }) -join ', '))
             Write-Diag "The '$Account' token needs 'Account Members: Edit' (and IAM read) before -Execute can succeed."
+        }
+        if ($errorProbes.Count -gt 0) {
+            Write-Diag ''
+            Write-Diag ("WARNING: these probes failed for a non-permission reason (transient API error?): " + (($errorProbes | ForEach-Object { $_.Key }) -join ', '))
+            Write-Diag 'Re-run the dry run; if it persists, inspect the probe error text above before touching token permissions.'
         }
     }
     else {
         # Live run: every prerequisite must have resolved.
+        if (-not $membersListed) { throw "Cannot execute: could not list account members (probe: $($probes.members)), so the idempotency check is impossible. Refusing to risk a duplicate invite." }
         if (-not $pgId) { throw "Cannot execute: permission group id unresolved (probe: $($probes.permissionGroups))." }
         if (-not $rgId) {
             $rgCreate = Invoke-CfProbe -Method 'POST' -Uri "/accounts/$accountId/iam/resource_groups" -Token $token -Body $rgCreateBody

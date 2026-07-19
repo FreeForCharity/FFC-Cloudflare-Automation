@@ -33,6 +33,7 @@ Exit codes: 0 on success, 1 on any API/config error.
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -46,6 +47,32 @@ CONDUCTOR_LOG_LIMIT = 10
 COMMENT_TRUNCATE = 500
 API_ROOT = "https://api.github.com"
 USER_AGENT = "ffc-agentic-os-status-generator"
+HTTP_TIMEOUT = 30  # seconds; fail closed rather than hang the daily sync.
+
+# Defense-in-depth redaction for the Conductor-log bodies. The source issue
+# (#719) is already a public issue, so nothing here is a *new* disclosure — but
+# the aggregated public feed should never propagate a token that was pasted into
+# a comment by accident. Only recognizable secret shapes are masked; git SHAs,
+# run ids, and ordinary prose are deliberately left intact.
+_TOKEN_RE = re.compile(
+    r"gh[pousr]_[A-Za-z0-9]{20,}"  # GitHub PAT / OAuth / server / refresh tokens
+    r"|github_pat_[A-Za-z0-9_]{20,}"  # fine-grained PAT
+    r"|xox[baprs]-[A-Za-z0-9-]{10,}"  # Slack tokens
+    r"|AKIA[0-9A-Z]{16}"  # AWS access key id
+    r"|-----BEGIN[A-Z ]*PRIVATE KEY-----"  # PEM private key header
+)
+_ASSIGN_RE = re.compile(
+    r"((?:password|secret|api[_-]?key|token)\s*[:=]\s*)\S{8,}", re.IGNORECASE
+)
+
+
+def redact(text):
+    """Mask secret-shaped substrings in free text (see _TOKEN_RE / _ASSIGN_RE)."""
+    if not text:
+        return text
+    text = _TOKEN_RE.sub("[redacted]", text)
+    text = _ASSIGN_RE.sub(lambda m: m.group(1) + "[redacted]", text)
+    return text
 
 
 def _token():
@@ -73,8 +100,15 @@ def _parse_next_link(link_header):
 
 
 def rest_get(path_or_url, token, params=None):
-    """GET a REST endpoint, following pagination. Returns a flat list (for list
-    endpoints) — GitHub list responses are JSON arrays, so pages concatenate."""
+    """GET a REST endpoint and return the decoded JSON.
+
+    Pagination is followed **only for array (list) responses** — GitHub list
+    endpoints return a JSON array per page, so pages concatenate into one flat
+    list. A JSON **object** response (e.g. ``/actions/runs``, which wraps its
+    rows in ``{"workflow_runs": [...]}``) is returned as-is from the first page;
+    callers that need every row of such an endpoint must page it themselves. The
+    only object endpoint used here is the waiting-run list, which is bounded well
+    under one page (``per_page=100``)."""
     if path_or_url.startswith("http"):
         url = path_or_url
     else:
@@ -90,7 +124,7 @@ def rest_get(path_or_url, token, params=None):
         req.add_header("X-GitHub-Api-Version", "2022-11-28")
         req.add_header("User-Agent", USER_AGENT)
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
                 link = resp.headers.get("Link")
         except urllib.error.HTTPError as exc:
@@ -180,7 +214,7 @@ def collect_conductor_log(repo, token):
     recent = raw[-CONDUCTOR_LOG_LIMIT:]
     entries = []
     for c in recent:
-        body = c.get("body") or ""
+        body = redact(c.get("body") or "")
         truncated = len(body) > COMMENT_TRUNCATE
         entries.append(
             {

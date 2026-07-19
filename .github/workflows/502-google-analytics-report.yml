@@ -149,7 +149,7 @@ jobs:
           git push origin chore/ga-data-sync
           if ! gh pr view chore/ga-data-sync --repo FreeForCharity/FFC-IN-ffcadmin.org >/dev/null 2>&1; then
             gh pr create --repo FreeForCharity/FFC-IN-ffcadmin.org --base main --head chore/ga-data-sync \
-              --title 'chore(data): daily data sync (GA + workflow catalog)' \
+              --title 'chore(data): daily data sync (GA + workflow catalog + agentic-os status)' \
               --body 'Automated daily sync from FFC-Cloudflare-Automation (502): GA4 aggregate metrics + time-series for the primary sites, the generated workflow catalog for /automation + the stable /data URL, and the Agentic OS status feed for /agentic-os. PII-safe aggregates only.'
           fi
           # Best-effort auto-merge so the daily PR lands once ffcadmin checks pass

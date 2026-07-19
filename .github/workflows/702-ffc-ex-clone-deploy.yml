@@ -39,6 +39,13 @@ on:
         required: false
         type: boolean
         default: true
+      force:
+        description:
+          'Re-clone even though the target already serves a live site (the PR this opens would
+          supersede the existing migration). Leave false unless you are deliberately regenerating.'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -49,9 +56,143 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Reality check BEFORE the approval gate: verifies the target repo exists (resolving its
+  # canonical casing — github.io paths are case-sensitive, so a wrong-case guess probes the
+  # wrong URL) and refuses to re-clone a site that is already live unless force=true. Runs
+  # ungated so a doomed or dangerous dispatch fails fast without consuming a human approval.
+  # Added after the 2026-07-18 incident: a stale inventory led to a clone being dispatched
+  # against FFC-EX-AllTypeTowing.com, a completed migration already cut over on its apex.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      repo_name: ${{ steps.verify.outputs.repo_name }}
+    steps:
+      - name: Verify target state (exists, not already live)
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_ORG: FreeForCharity
+          IN_DOMAIN: ${{ inputs.domain }}
+          IN_REPO: ${{ inputs.ffc_ex_repo }}
+          IN_FORCE: ${{ inputs.force }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          name="${IN_REPO:-}"
+          if [ -z "$name" ]; then name="FFC-EX-${IN_DOMAIN}"; fi
+          name="${name##*/}"
+
+          # --- repo must exist (resolve canonical casing via the API) -----------------
+          set +e
+          resp=$(gh api "repos/$TARGET_ORG/$name" 2>&1)
+          rc=$?
+          set -e
+          if [ $rc -ne 0 ]; then
+            if printf '%s' "$resp" | grep -q "HTTP 404"; then
+              echo "::error::Target repo $TARGET_ORG/$name does not exist — or is private and not visible to this workflow's GITHUB_TOKEN (FFC-EX charity sites are public by policy, so for those 404 means absent). Create it first with workflow 720 (Repo - Create GitHub Repo), then re-dispatch this clone."
+            else
+              echo "::error::Preflight could not verify $TARGET_ORG/$name (transient API error?). Failing safe rather than guessing. Details: $resp"
+            fi
+            exit 1
+          fi
+          canonical=$(printf '%s' "$resp" | jq -r '.full_name // empty' 2>/dev/null || true)
+          if [ -z "$canonical" ]; then
+            echo "::error::Preflight got an unparseable response for $TARGET_ORG/$name. Failing safe."
+            exit 1
+          fi
+          canonical_name="${canonical##*/}"
+
+          # Archived repos are read-only: the gated job would fail at push/PR time after
+          # consuming a human approval. No force override — no flag makes it writable.
+          archived=$(printf '%s' "$resp" | jq -r '.archived // false' 2>/dev/null || true)
+          if [ "$archived" = "true" ]; then
+            echo "::error::$canonical is archived (read-only) — the clone would fail at push/PR time. Unarchive it in Settings (or pick the right target) before re-dispatching. force=true does not override this."
+            echo "⛔ Refused: \`$canonical\` is archived (read-only)." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # --- is the site already live? (canonical-case default URL + apex) ----------
+          pages_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -L \
+            "https://freeforcharity.github.io/${canonical_name}/" 2>/dev/null || echo "000")
+          # tr -d '\r' first: HTTP header lines end in CR, and awk would otherwise keep it
+          # in the captured status code ("200\r" != "200" — a false negative that would let
+          # a live site through).
+          apex_headers=$(curl -sSIL --max-time 20 "https://${IN_DOMAIN}/" 2>/dev/null | tr -d '\r' || true)
+          apex_code=$(printf '%s\n' "$apex_headers" | awk 'toupper($1) ~ /^HTTP/ { c = $2 } END { print c }')
+          # '|| true': a response with no Server header is a valid non-cutover outcome —
+          # under set -e/pipefail the failing grep would otherwise kill the whole preflight.
+          apex_server=$(printf '%s\n' "$apex_headers" | grep -i '^server:' | tail -n1 | sed -E 's/^[^:]*:[[:space:]]*//' || true)
+
+          # Probe failures must not read as "not live" — that would fail open, exactly
+          # like the org-list case. 000/empty means the probe itself failed (network/TLS),
+          # not that the site is down; refuse unless force=true explicitly overrides.
+          if [ "${IN_FORCE:-false}" != "true" ] && { [ "$pages_code" = "000" ] || [ -z "${apex_code:-}" ]; }; then
+            echo "::error::Preflight live-site probes did not complete (default URL: HTTP $pages_code; apex: HTTP ${apex_code:-<none>}). Cannot verify whether $canonical already serves — failing safe. Re-dispatch with force=true only if you have verified the target state yourself."
+            echo "⛔ Refused: live-site probes failed (network?) — could not verify target state." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          cutover=false
+          if [ "${apex_code:-}" = "200" ] && printf '%s' "$apex_server" | grep -qi 'github'; then
+            cutover=true
+          fi
+          pages_live=false
+          if [ "$pages_code" = "200" ]; then pages_live=true; fi
+
+
+          {
+            echo "## Clone preflight — ${IN_DOMAIN}"
+            echo "- Target repo: \`$canonical\` (exists)"
+            echo "- Default Pages URL: HTTP $pages_code"
+            echo "- Apex: HTTP ${apex_code:-000}, Server: ${apex_server:-<none>}$([ "$cutover" = "true" ] && echo ' — **cut over to GitHub Pages**')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if { [ "$cutover" = "true" ] || [ "$pages_live" = "true" ]; } && [ "${IN_FORCE:-false}" != "true" ]; then
+            echo "::error::$canonical already serves a live site (default URL HTTP $pages_code; apex ${apex_code:-000}/${apex_server:-none}). Re-cloning would supersede a completed migration. If that is deliberate, re-dispatch with force=true."
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "⛔ Refused: target already live. Re-dispatch with \`force=true\` only if regenerating deliberately." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # --- sibling scan: does the org already host ANOTHER repo for this domain? ---
+          # An exact-name check is too strict: TechnologyMonastery.org (no FFC-EX prefix)
+          # was the charity's real, active Next.js site while FFC-EX-technologymonastery.org
+          # was empty. Match the FULL domain (case-insensitive) inside every org repo name —
+          # full-domain matching keeps legitimate sibling domains apart (letsdanceactivities
+          # .org vs .com do not match each other). The scan FAILS SAFE: an org-list API
+          # error refuses rather than silently disabling the guard. force=true skips it.
+          if [ "${IN_FORCE:-false}" != "true" ]; then
+            set +e
+            org_repos=$(gh api "orgs/$TARGET_ORG/repos?per_page=100" --paginate --jq '.[].name' 2>&1)
+            list_rc=$?
+            set -e
+            if [ $list_rc -ne 0 ]; then
+              echo "::error::Preflight could not list org repos for the sibling scan (transient API error?). Failing safe rather than guessing. Details: $org_repos"
+              exit 1
+            fi
+            siblings=$(printf '%s\n' "$org_repos" | grep -iF -- "$IN_DOMAIN" | grep -ivx -- "$canonical_name" || true)
+            if [ -n "$siblings" ]; then
+              {
+                echo "⛔ Refused: sibling org repo(s) match \`$IN_DOMAIN\` — one may be the real site:"
+                while IFS= read -r s; do echo "- \`$s\`"; done <<< "$siblings"
+                echo ""
+                echo "Investigate, then re-dispatch with \`force=true\` if this clone is deliberate."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::The org already hosts other repo(s) matching $IN_DOMAIN: $(printf '%s' "$siblings" | tr '\n' ' '). One of them may be the charity's real site — investigate before cloning. If this clone is deliberate, re-dispatch with force=true."
+              exit 1
+            fi
+          else
+            echo "- force=true: sibling-domain scan skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "repo_name=$canonical_name" >> "$GITHUB_OUTPUT"
+
   clone-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: preflight
     # CBM_TOKEN (cross-repo PAT) lives in the github-prod environment.
     environment: github-prod
     steps:
@@ -70,8 +211,9 @@ jobs:
       - name: Resolve target repo
         id: target
         run: |
-          repo="${{ inputs.ffc_ex_repo }}"
-          if [ -z "$repo" ]; then repo="FFC-EX-${{ inputs.domain }}"; fi
+          # Canonical casing resolved by the preflight job (github.io paths and display
+          # are case-sensitive even though the git/API layer is not).
+          repo="${{ needs.preflight.outputs.repo_name }}"
           echo "repo=$repo" >> "$GITHUB_OUTPUT"
           echo "branch=clone/static-from-live-$(date +%Y%m%d%H%M%S)" >> "$GITHUB_OUTPUT"
 

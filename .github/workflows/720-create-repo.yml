@@ -51,6 +51,13 @@ on:
         description: 'Custom Domain (CNAME) - Leave empty to auto-detect based on PagesDomainType'
         required: false
         type: string
+      Force:
+        description:
+          'Create even though other org repos match this domain (preflight lists them). Leave false
+          unless you have confirmed none of them is the real site for this domain.'
+        required: false
+        default: false
+        type: boolean
       DryRun:
         description: 'Dry Run (Preview only)'
         required: false
@@ -58,8 +65,89 @@ on:
         type: boolean
 
 jobs:
+  # Reality check BEFORE the approval gate: refuse to proceed when the repository already
+  # exists (in ANY casing — the API lookup is case-insensitive and returns the canonical
+  # name). Runs ungated so a doomed create fails fast without consuming a human approval.
+  # Added after the 2026-07-18 incident: four creates were dispatched (and approved) for
+  # repos that already existed under the same or different casing.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify target name is free
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IN_REPO: ${{ inputs.RepoName }}
+          IN_FORCE: ${{ inputs.Force }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          repo="${IN_REPO:-}"
+          owner="FreeForCharity"
+          name="${repo##*/}"
+          if printf '%s' "$repo" | grep -q '/'; then owner="${repo%%/*}"; fi
+
+          set +e
+          resp=$(gh api "repos/$owner/$name" 2>&1)
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            canonical=$(printf '%s' "$resp" | jq -r '.full_name // empty' 2>/dev/null || true)
+            echo "::error::Repository already exists as ${canonical:-$owner/$name} — nothing to create. To regenerate its content, use workflow 702 (clone-deploy); to retire it, use 736 (archive)."
+            {
+              echo "## Create preflight — $owner/$name"
+              echo "⛔ Refused: already exists as \`${canonical:-$owner/$name}\` (lookup is case-insensitive)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if ! printf '%s' "$resp" | grep -q "HTTP 404"; then
+            echo "::error::Preflight could not verify $owner/$name (transient API error?). Failing safe rather than guessing. Details: $resp"
+            exit 1
+          fi
+
+          # --- sibling scan: does the org already host ANOTHER repo for this domain? ---
+          # Exact-name checks are too strict: TechnologyMonastery.org (no FFC-EX prefix)
+          # was the charity's real site while the FFC-EX-prefixed name looked free. Derive
+          # the domain by stripping ONLY the literal FFC-EX- prefix (hyphenated domains
+          # like the-trendylittlegeek.com must survive intact) and match it (full domain,
+          # case-insensitive) against every org repo name; full-domain matching keeps
+          # legitimate sibling domains (.org vs .com) apart. The scan FAILS SAFE: an
+          # org-list API error refuses rather than silently disabling the guard.
+          if [ "${IN_FORCE:-false}" != "true" ]; then
+            domain="$name"
+            domain="${domain#FFC-EX-}"
+            domain="${domain#ffc-ex-}"
+            set +e
+            org_repos=$(gh api "orgs/$owner/repos?per_page=100" --paginate --jq '.[].name' 2>&1)
+            list_rc=$?
+            set -e
+            if [ $list_rc -ne 0 ]; then
+              echo "::error::Preflight could not list org repos for the sibling scan (transient API error?). Failing safe rather than guessing. Details: $org_repos"
+              exit 1
+            fi
+            siblings=$(printf '%s\n' "$org_repos" | grep -iF -- "$domain" | grep -ivx -- "$name" || true)
+            if [ -n "$siblings" ]; then
+              echo "::error::The org already hosts repo(s) matching $domain: $(printf '%s' "$siblings" | tr '\n' ' '). One of them may be the real site for this domain — investigate before creating a new one. If this create is deliberate, re-dispatch with Force=true."
+              {
+                echo "## Create preflight — $owner/$name"
+                echo "⛔ Refused: sibling repo(s) match \`$domain\`:"
+                while IFS= read -r s; do echo "- \`$s\`"; done <<< "$siblings"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          else
+            echo "- Force=true: sibling-domain scan skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # Caveat: GITHUB_TOKEN sees public repos (and this repo) only, and GitHub returns
+          # 404 for private repos it cannot see — so a PRIVATE name collision passes this
+          # check and fails loudly at the create step instead (post-gate). Acceptable:
+          # FFC-EX charity sites are public by policy; the summary states the limit.
+          echo "✅ $owner/$name is free — proceeding to the gated create. (Check covers repos visible to GITHUB_TOKEN; a private name collision would still fail at the create step.)" >> "$GITHUB_STEP_SUMMARY"
+
   create-repo:
     runs-on: windows-latest
+    needs: preflight
     environment: github-prod
     steps:
       - name: Checkout

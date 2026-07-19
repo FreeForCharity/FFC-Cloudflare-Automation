@@ -1,0 +1,166 @@
+name: '737. Repo - Claim Sync [Repo]'
+run-name: 'Claim sync: ${{ github.event_name }}'
+
+# Mechanizes the AGENTS.md work-claiming protocol (available = `is:open
+# -label:claimed`). Two independent triggers:
+#
+#   1. Event-driven label sync (pull_request): parse Closes/Fixes/Refs #N from
+#      the PR body and add `claimed` to those open hub issues while the PR is
+#      active; remove it when the last open linked PR closes/merges.
+#   2. Daily sweep (schedule): release stale hand-labeled claims — issues
+#      labeled `claimed` with no open linked PR and no activity for 48h — across
+#      the hub AND ffcadmin, so an abandoned claim frees itself.
+#
+# Writes issues/labels only; no external API; ungated. The decision logic lives
+# in scripts/claim-sync-lib.js (unit-tested in tests/workflow-logic/).
+
+on:
+  pull_request:
+    types: [opened, reopened, closed, converted_to_draft, ready_for_review]
+  schedule:
+    - cron: '47 5 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Sweep: report only; do not remove labels or comment'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claim-sync-${{ github.event_name }}-${{ github.event.pull_request.number || 'sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  # --- Half 1: event-driven label sync (linked PR -> claimed) -----------------
+  label-sync:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Sync claimed label from linked PR
+        uses: actions/github-script@v9
+        env:
+          PR_ACTION: ${{ github.event.action }}
+        with:
+          script: |
+            const lib = require(`${process.env.GITHUB_WORKSPACE}/scripts/claim-sync-lib.js`);
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const action = process.env.PR_ACTION;
+            const linked = lib.extractLinkedIssues(pr.body || '').all;
+            if (!linked.length) {
+              core.info(`PR #${pr.number}: no linked issues; nothing to sync.`);
+              return;
+            }
+
+            const hasLabel = (issue) =>
+              (issue.labels || []).some((l) => (l.name || l) === lib.CLAIM_LABEL);
+
+            if (action !== 'closed') {
+              // PR active (opened/reopened/ready_for_review/converted_to_draft):
+              // ensure every linked OPEN issue is claimed.
+              for (const n of linked) {
+                const { data: issue } = await github.rest.issues
+                  .get({ owner, repo, issue_number: n })
+                  .catch(() => ({ data: null }));
+                if (!issue || issue.state !== 'open' || issue.pull_request) continue;
+                if (hasLabel(issue)) continue;
+                await github.rest.issues.addLabels({
+                  owner, repo, issue_number: n, labels: [lib.CLAIM_LABEL],
+                });
+                core.info(`Claimed #${n} (linked from PR #${pr.number}).`);
+              }
+              return;
+            }
+
+            // PR closed/merged: release each linked issue that no OTHER open PR
+            // still claims.
+            const openPrs = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            for (const n of linked) {
+              const { data: issue } = await github.rest.issues
+                .get({ owner, repo, issue_number: n })
+                .catch(() => ({ data: null }));
+              if (!issue || issue.state !== 'open' || issue.pull_request) continue;
+              if (!hasLabel(issue)) continue;
+              const otherClaim = openPrs.some(
+                (p) => p.number !== pr.number && lib.extractLinkedIssues(p.body || '').all.includes(n),
+              );
+              if (otherClaim) continue;
+              await github.rest.issues.removeLabel({
+                owner, repo, issue_number: n, name: lib.CLAIM_LABEL,
+              }).catch(() => {});
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: n,
+                body: `🔓 Claim released — linked PR #${pr.number} ${pr.merged ? 'merged' : 'closed'} and no other open PR references this issue. Available again (\`is:open -label:claimed\`).`,
+              });
+              core.info(`Released #${n} (PR #${pr.number} closed).`);
+            }
+
+  # --- Half 2: daily sweep of expired claims (hub + ffcadmin) -----------------
+  sweep:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Release expired claims
+        uses: actions/github-script@v9
+        # CBM_TOKEN so the sweep can read/mutate issues in ffcadmin too, not just
+        # the hub (the ambient GITHUB_TOKEN is scoped to this repo).
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run || 'false' }}
+        with:
+          github-token: ${{ secrets.CBM_TOKEN }}
+          script: |
+            const lib = require(`${process.env.GITHUB_WORKSPACE}/scripts/claim-sync-lib.js`);
+            const dryRun = String(process.env.DRY_RUN) === 'true';
+            const now = Date.now();
+            const targets = [
+              { owner: 'FreeForCharity', repo: 'FFC-Cloudflare-Automation' },
+              { owner: 'FreeForCharity', repo: 'FFC-IN-ffcadmin.org' },
+            ];
+            const released = [];
+            for (const t of targets) {
+              const claimed = await github.paginate(github.rest.issues.listForRepo, {
+                owner: t.owner, repo: t.repo, state: 'open', labels: lib.CLAIM_LABEL, per_page: 100,
+              });
+              const issues = claimed.filter((i) => !i.pull_request);
+              if (!issues.length) continue;
+              const openPrs = await github.paginate(github.rest.pulls.list, {
+                owner: t.owner, repo: t.repo, state: 'open', per_page: 100,
+              });
+              for (const issue of issues) {
+                const hasOpenLinkedPR = openPrs.some(
+                  (p) => lib.extractLinkedIssues(p.body || '').all.includes(issue.number),
+                );
+                const lastActivityMs = new Date(issue.updated_at).getTime();
+                if (!lib.decideRelease({ hasOpenLinkedPR, lastActivityMs, nowMs: now, thresholdMs: lib.EXPIRY_MS })) {
+                  continue;
+                }
+                released.push(`${t.repo}#${issue.number}`);
+                if (dryRun) continue;
+                await github.rest.issues.removeLabel({
+                  owner: t.owner, repo: t.repo, issue_number: issue.number, name: lib.CLAIM_LABEL,
+                }).catch(() => {});
+                await github.rest.issues.createComment({
+                  owner: t.owner, repo: t.repo, issue_number: issue.number,
+                  body: `🔓 Claim expired — no open linked PR and no activity for 48h. Label \`${lib.CLAIM_LABEL}\` removed; available again (\`is:open -label:claimed\`).`,
+                });
+              }
+            }
+            core.summary
+              .addHeading(`Claim sweep — ${released.length} expired claim(s)${dryRun ? ' (dry-run)' : ''}`)
+              .addRaw(released.length ? released.map((r) => `- ${r}`).join('\n') : 'No expired claims. All claims active.')
+              .write();
+            console.log(`${dryRun ? 'Would release' : 'Released'} ${released.length} expired claim(s).`);

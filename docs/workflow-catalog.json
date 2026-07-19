@@ -1745,6 +1745,26 @@
       "categoryCode": "GH"
     },
     {
+      "number": 737,
+      "title": "Repo - Claim Sync",
+      "apis": [
+        "Repo"
+      ],
+      "file": "737-claim-sync.yml",
+      "triggers": [
+        "pull_request",
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Mechanizes the AGENTS.md work-claiming protocol (available = `is:open -label:claimed`). Two independent triggers:  1. Event-driven label sync (pull_request): parse Closes/Fixes/Refs #N from the PR body and add `claimed` to those open hub issues while the PR is active; remove it when the last open linked PR closes/merges. 2. Daily sweep (schedule): release stale hand-labeled claims \u2014 issues labeled `claimed` with no open linked PR and no activity for 48h \u2014 across the hub AND ffcadmin, so an abandoned claim frees itself.  Writes issues/labels only; no external API; ungated. The decision logic lives in scripts/claim-sync-lib.js (unit-tested in tests/workflow-logic/).",
+      "safetyLevel": "Writes (issues/labels only)",
+      "approvalEnv": "\u2014",
+      "guard": "syncs `claimed` label from linked PRs (pull_request event, GITHUB_TOKEN) + daily sweep of expired claims (no open linked PR + 48h idle) across hub + ffcadmin (CBM_TOKEN); no external API, ungated; sweep `dry_run` via dispatch",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 801,
       "title": "Candid - Charity Check (EIN)",
       "apis": [

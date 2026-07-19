@@ -57,6 +57,11 @@
   description: Admin-only minimal provisioning (repo + apex DNS) without full charity details
   color: '5319e7'
 
+# Agentic OS - Work claiming (mechanized by 737. Repo - Claim Sync)
+- name: claimed
+  description: An agent or human is actively working this issue (open linked PR or a CLAIM comment)
+  color: 'bfd4f2'
+
 # General Labels
 - name: bug
   description: Something isn't working

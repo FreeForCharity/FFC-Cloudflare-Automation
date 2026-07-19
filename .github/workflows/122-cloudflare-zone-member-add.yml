@@ -1,0 +1,115 @@
+name: '122. Cloudflare - Zone Member Add (Domain Admin) [CF]'
+run-name:
+  'Zone Member Add: ${{ inputs.email }} -> ${{ inputs.domain }} (dry_run=${{ inputs.dry_run }})'
+
+# Invite an email address as a Cloudflare account member whose access is scoped to a single zone
+# (IAM member policies: permission group + zone resource group). Used to hand a charity's contact
+# domain-admin rights over just their own domain, e.g. so they can run their Microsoft 365 DNS
+# setup themselves. Dry-run by default; idempotent (an existing member is reported, never changed).
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Zone the member should administer (e.g., example.org)'
+        required: true
+        type: string
+      email:
+        description: 'Email address to invite as a Cloudflare account member'
+        required: true
+        type: string
+      permission_group:
+        description: 'IAM permission group to grant, scoped to the zone'
+        required: false
+        type: string
+        default: 'Domain Administrator'
+      dry_run:
+        description: 'Preview only (no invite). Default true; set false to actually invite.'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Serialize runs: a second dispatch queues behind the first instead of racing it.
+concurrency:
+  group: 122-cloudflare-zone-member-add
+  cancel-in-progress: false
+
+jobs:
+  # Always runs: read-token dry run. Prints the exact planned operations and
+  # doubles as a token/permission capability check (IAM probes report
+  # granted/denied without failing the preview).
+  preview:
+    runs-on: windows-latest
+    environment: cloudflare-prod-read
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Preview zone member invite (dry run)
+        shell: pwsh
+        # Untrusted/user-supplied values are passed via env (never interpolated directly into the
+        # script body) so they cannot break out of the string and inject PowerShell.
+        env:
+          INPUT_DOMAIN: ${{ inputs.domain }}
+          INPUT_EMAIL: ${{ inputs.email }}
+          INPUT_PERMISSION_GROUP: ${{ inputs.permission_group }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pg = if ([string]::IsNullOrWhiteSpace($env:INPUT_PERMISSION_GROUP)) { 'Domain Administrator' } else { $env:INPUT_PERMISSION_GROUP }
+          $scriptArgs = @(
+            '-NoProfile', '-File', 'scripts/cloudflare-zone-member-add.ps1',
+            '-Domain', $env:INPUT_DOMAIN,
+            '-Email', $env:INPUT_EMAIL,
+            '-PermissionGroupName', $pg
+          )
+          & pwsh @scriptArgs
+          if ($LASTEXITCODE -ne 0) { throw "cloudflare-zone-member-add preview failed (exit $LASTEXITCODE)." }
+
+  # Gated live run: only when dry_run=false, behind the cloudflare-prod-write
+  # approval environment, with the write-scope tokens.
+  apply:
+    needs: preview
+    if: ${{ inputs.dry_run == false }}
+    runs-on: windows-latest
+    environment: cloudflare-prod-write
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Invite zone member (live)
+        shell: pwsh
+        env:
+          INPUT_DOMAIN: ${{ inputs.domain }}
+          INPUT_EMAIL: ${{ inputs.email }}
+          INPUT_PERMISSION_GROUP: ${{ inputs.permission_group }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pg = if ([string]::IsNullOrWhiteSpace($env:INPUT_PERMISSION_GROUP)) { 'Domain Administrator' } else { $env:INPUT_PERMISSION_GROUP }
+          $scriptArgs = @(
+            '-NoProfile', '-File', 'scripts/cloudflare-zone-member-add.ps1',
+            '-Domain', $env:INPUT_DOMAIN,
+            '-Email', $env:INPUT_EMAIL,
+            '-PermissionGroupName', $pg,
+            '-Execute'
+          )
+          & pwsh @scriptArgs
+          if ($LASTEXITCODE -ne 0) { throw "cloudflare-zone-member-add failed (exit $LASTEXITCODE)." }

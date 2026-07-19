@@ -452,6 +452,27 @@
       "categoryCode": "CF"
     },
     {
+      "number": 122,
+      "title": "Cloudflare - Zone Member Add (Domain Admin)",
+      "apis": [
+        "CF"
+      ],
+      "file": "122-cloudflare-zone-member-add.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read",
+        "cloudflare-prod-write"
+      ],
+      "description": "Invite an email address as a Cloudflare account member whose access is scoped to a single zone (IAM member policies: permission group + zone resource group). Used to hand a charity's contact domain-admin rights over just their own domain, e.g. so they can run their Microsoft 365 DNS setup themselves. Dry-run by default; idempotent (an existing member is reported, never changed).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "cloudflare-prod-read / \u2705 cloudflare-prod-write",
+      "guard": "`dry_run` (default true); preview job always runs read-only; idempotent (existing member = no change)",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
       "number": 201,
       "title": "WHMCS - Export Domains (Report)",
       "apis": [
@@ -1543,7 +1564,7 @@
       "environments": [
         "github-prod"
       ],
-      "description": "",
+      "description": "Daily read-only audit of FreeForCharity org repository rulesets and settings drift (branch protections, merge queues, Actions policies) against the documented standard, reported as issues via CBM_TOKEN under the github-prod approval gate.  Supersede-on-newer (#722): these daily runs pause at an approval gate; without this, unapproved runs pile up ~12-deep until the janitor reaps them at 7 days. cancel-in-progress cancels the older queued/waiting run the moment the next scheduled run starts, so at most ONE run ever waits at the gate. Ref-scoped so a dispatch from a PR branch can never cancel main's scheduled run. Trade-off (accepted): cancel-in-progress could interrupt an EXECUTING run, but execution lasts minutes against a 24h cadence \u2014 in practice only gate-waiting runs are ever superseded; janitor 734 remains the backstop.",
       "safetyLevel": "Reads",
       "approvalEnv": "\u2705 github-prod",
       "guard": "report only; CBM_TOKEN via github-prod approval",

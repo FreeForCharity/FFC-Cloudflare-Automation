@@ -132,7 +132,9 @@ jobs:
           # True idempotency: base on the existing sync branch when it exists, so a re-run
           # with identical content produces no new commit and no PR churn.
           if git fetch origin chore/ga-data-sync --depth 1 2>/dev/null; then
-            git checkout -B chore/ga-data-sync origin/chore/ga-data-sync
+            # Shallow single-branch clone: the fetch lands only in FETCH_HEAD —
+            # no origin/chore/ga-data-sync tracking ref is created.
+            git checkout -B chore/ga-data-sync FETCH_HEAD
           else
             git checkout -B chore/ga-data-sync
           fi
@@ -147,7 +149,13 @@ jobs:
           if git diff --cached --quiet; then echo 'No data changes vs the sync branch; skipping.'; exit 0; fi
           git commit -m "chore(data): daily sync — GA metrics + time-series + workflow catalog + agentic-os status ($(date -u +%F))"
           git push origin chore/ga-data-sync
-          if ! gh pr view chore/ga-data-sync --repo FreeForCharity/FFC-IN-ffcadmin.org >/dev/null 2>&1; then
+          # Only skip creation when an OPEN PR already exists for the branch.
+          # `gh pr view <branch>` resolves the most recent PR in ANY state, so
+          # after the first sync PR merges (branch left undeleted) it matches the
+          # merged PR and the daily PR is never opened again (#737). List by
+          # head + open-state instead, which returns nothing once the prior PR
+          # has merged.
+          if [ -z "$(gh pr list --repo FreeForCharity/FFC-IN-ffcadmin.org --head chore/ga-data-sync --state open --json number --jq '.[].number')" ]; then
             gh pr create --repo FreeForCharity/FFC-IN-ffcadmin.org --base main --head chore/ga-data-sync \
               --title 'chore(data): daily data sync (GA + workflow catalog + agentic-os status)' \
               --body 'Automated daily sync from FFC-Cloudflare-Automation (502): GA4 aggregate metrics + time-series for the primary sites, the generated workflow catalog for /automation + the stable /data URL, and the Agentic OS status feed for /agentic-os. PII-safe aggregates only.'

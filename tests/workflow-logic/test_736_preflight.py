@@ -43,7 +43,13 @@ BASE_ENV = {
 
 
 def _recent_runs(display_titles: list[str]) -> str:
-    """Build a fake `runs` API payload with created_at inside the last 48h."""
+    """Build a fake `runs` API payload that always passes the 48h cutoff.
+
+    Uses a fixed far-future `created_at` (rather than computing "now") so the
+    test never goes stale/flaky with the passage of real time; the preflight
+    script's own cutoff math is exercised separately and isn't what this
+    helper is testing.
+    """
     return json.dumps(
         {
             "workflow_runs": [
@@ -140,6 +146,22 @@ def test_runs_list_api_failure_fails_safe():
     )
     assert proc.returncode != 0, proc.stdout
     assert "could not list prior 736 runs" in proc.stdout.lower(), proc.stdout
+
+
+def test_similar_named_repo_dry_run_does_not_false_positive_match():
+    # Regression anchor (Copilot review on PR #725): matching must be exact
+    # on the normalized repo token, not substring containment — a dry-run
+    # for "FFC-EX-example.org.uk" must NOT satisfy a live archive of
+    # "FFC-EX-example.org".
+    runs = _recent_runs(["Archive FFC-EX-example.org.uk (dry_run=true)"])
+    proc, _, _ = run_preflight(
+        {
+            "TEST_REPO_META": DORMANT_META,
+            "TEST_WORKFLOW_RUNS": runs,
+        }
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "No successful dry_run=true run" in proc.stdout, proc.stdout
 
 
 def test_matching_dry_run_proceeds():

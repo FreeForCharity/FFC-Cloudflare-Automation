@@ -452,6 +452,27 @@
       "categoryCode": "CF"
     },
     {
+      "number": 122,
+      "title": "Cloudflare - Zone Member Add (Domain Admin)",
+      "apis": [
+        "CF"
+      ],
+      "file": "122-cloudflare-zone-member-add.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read",
+        "cloudflare-prod-write"
+      ],
+      "description": "Invite an email address as a Cloudflare account member whose access is scoped to a single zone (IAM member policies: permission group + zone resource group). Used to hand a charity's contact domain-admin rights over just their own domain, e.g. so they can run their Microsoft 365 DNS setup themselves. Dry-run by default; idempotent (an existing member is reported, never changed).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "cloudflare-prod-read / \u2705 cloudflare-prod-write",
+      "guard": "`dry_run` (default true); preview job always runs read-only; idempotent (existing member = no change)",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
       "number": 201,
       "title": "WHMCS - Export Domains (Report)",
       "apis": [

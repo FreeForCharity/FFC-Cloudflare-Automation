@@ -613,6 +613,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 734 | Repo - Stale Waiting-Run Janitor [Repo] | `734-stale-waiting-run-janitor.yml` | schedule, workflow_dispatch | Writes (cancels runs) | — |
 | 735 | Repo - Dependabot Affected Repos [Org] | `735-repo-dependabot-affected-repos.yml` | schedule, workflow_dispatch | Reads | ✅ github-prod |
 | 736 | Repo - Archive / Application Denied (Admin) [Repo] | `736-repo-archive.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod |
+| 737 | Repo - Claim Sync [Repo] | `737-claim-sync.yml` | pull_request, schedule, workflow_dispatch | Writes (issues/labels only) | — |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

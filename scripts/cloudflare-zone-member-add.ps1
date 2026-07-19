@@ -79,8 +79,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Diagnostics go to stderr so stdout is strictly the final JSON object.
+# AllowEmptyString: blank lines are used as separators in the dry-run output.
 function Write-Diag {
-    param([Parameter(Mandatory = $true)][string]$Message)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Message)
     [Console]::Error.WriteLine($Message)
 }
 

@@ -82,14 +82,25 @@ Pick the path that matches the domain's origin:
 
 ## Phase 2 — Standard DNS + Microsoft 365 email ⏸ waits for approval
 
+> **Decide the Microsoft path FIRST** — internal (FFC tenant) vs external (charity's own tenant);
+> see the internal-vs-external section in [m365-domain-and-dkim.md](m365-domain-and-dkim.md). A
+> domain verifies in only **one** Microsoft tenant: the `3xx` **M365 (FFC Tenant)** workflows act on
+> FFC's own tenant, and running `305` for an external-tenant charity blocks them from adding the
+> domain to theirs. For external charities: they add the domain in their own admin.microsoft.com;
+> FFC only writes DNS records (`103` with `skip_m365=true`, or `105` for their tenant-specific
+> verification TXT / DKIM CNAMEs) — or invites their contact as a zone-scoped Cloudflare Domain
+> Admin with **122. Cloudflare - Zone Member Add** so they self-serve DNS.
+
 - **Run (dry-run first):** **103. Domain - Enforce Standard (GitHub Apex + M365)**. This applies the
   FFC-standard records — GitHub Pages apex A/AAAA + `www` CNAME, and M365 MX/SPF/DMARC — and can
   enable DKIM. It **defaults to `dry_run=true`**; read the preview, then re-run with `dry_run=false`
-  and approve the `cloudflare-prod-write` / `m365-prod` gate. See
-  [enforce-standard-workflow.md](enforce-standard-workflow.md).
-- **Add the domain to the M365 tenant** if it isn't already: **305. M365 - Add Tenant Domain**, then
-  enable mail auth with **304. M365 - Enable DKIM**. Verify with **301. M365 - Domain Preflight** /
-  **303. M365 - Domain Status + DKIM**. See [m365-domain-and-dkim.md](m365-domain-and-dkim.md) and
+  and approve the `cloudflare-prod-write` / `m365-prod` gate. **Note:** its `exo_check`/`exo_enable`
+  jobs act on the **FFC tenant's** Exchange Online (DKIM create/enable) — pass `skip_m365=true` for
+  external-tenant charities. See [enforce-standard-workflow.md](enforce-standard-workflow.md).
+- **FFC-tenant email only — add the domain to the FFC M365 tenant** if it isn't already: **305. M365
+  (FFC Tenant) - Add Tenant Domain (INTERNAL ONLY)**, then enable mail auth with **304. M365 (FFC
+  Tenant) - Enable DKIM**. Verify with **301. M365 (FFC Tenant) - Domain Preflight** / **303. M365
+  (FFC Tenant) - Domain Status + DKIM**. See [m365-domain-and-dkim.md](m365-domain-and-dkim.md) and
   the combined runbook
   [end-to-end-testing-m365-cloudflare.md](end-to-end-testing-m365-cloudflare.md).
 - **Done when:** **107. DNS - Audit Compliance** reports the domain compliant, and DKIM validates.
@@ -153,8 +164,8 @@ Pick the path that matches the domain's origin:
 - **Zone already exists** (Phase 0/1 shows a Cloudflare zone): skip creation and go straight to
   Phase 2 enforce-standard to true-up the records. Don't re-run 02/09 against an existing zone.
 - **M365 domain verification pending** (Phase 2): the domain reads unverified until the verification
-  records propagate. Re-run **301. M365 - Domain Preflight** to recheck; don't enable DKIM (**23**)
-  until the domain is verified.
+  records propagate. Re-run **301. M365 (FFC Tenant) - Domain Preflight** to recheck; don't enable
+  DKIM (**304**) until the domain is verified.
 - **Maintainer login dropped** (Phase 3): if the provision run logs
   `Skipping invalid GitHub username for maintainer`, the issue body almost certainly had prose
   **after** the last `###` field (it gets slurped into the field value). Fix the body and re-assign,
@@ -184,8 +195,9 @@ Bringing `examplecharity.org` online from scratch:
 2. File **template 01** to buy the domain → **12. Registrar Register** with `mode=execute-register`
    and `confirm_domain=examplecharity.org` → ⏸ approve `cloudflare-prod-write` → zone created.
 3. **03. Enforce Standard** dry-run → review the planned GitHub Pages + M365 records → re-run with
-   `dry_run=false` → ⏸ approve → records applied. **24. Add Tenant Domain** + **23. Enable DKIM**,
-   then verify with **301. M365 - Domain Preflight**.
+   `dry_run=false` → ⏸ approve → records applied. (FFC-tenant email:) **305. Add Tenant Domain
+   (INTERNAL ONLY)** + **304. Enable DKIM**, then verify with **301. M365 (FFC Tenant) - Domain
+   Preflight**.
 4. File and **assign template 02** → **701. Website - Provision** → ⏸ approve DNS; the chained
    `repo` job then creates `FFC-EX-examplecharity.org`, enables Pages, and adds the maintainer.
 5. **204. WHMCS - Charity Onboard** dry-run → confirm the client/contacts/order preview →

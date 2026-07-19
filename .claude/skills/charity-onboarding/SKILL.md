@@ -80,8 +80,9 @@ file names — the two differ. Map display→file via
 > `3xx` workflows are **`M365 (FFC Tenant)`** — they act on **FFC's own tenant**. A domain verifies
 > in only ONE tenant, so running `305` for a charity that has/wants **their own** Microsoft tenant
 > **blocks them from adding it to theirs**. External-tenant charities: they add the domain in their
-> own admin.microsoft.com; FFC only writes DNS records (`105`/`103`) — or invites their contact as a
-> zone-scoped Cloudflare Domain Admin with **`122. Cloudflare - Zone Member Add`** to self-serve.
+> own admin.microsoft.com; FFC only writes DNS records (`105`, or `103` with `skip_m365=true` —
+> 103's exo jobs act on the FFC tenant) — or invites their contact as a zone-scoped Cloudflare
+> Domain Admin with **`122. Cloudflare - Zone Member Add`** to self-serve.
 
 - **`103. Domain - Enforce Standard (GitHub Apex + M365)`** — GitHub Pages apex A/AAAA + `www`, plus
   M365 MX/SPF/DMARC. **Defaults to `dry_run=true`** — read the preview, then re-run `dry_run=false`

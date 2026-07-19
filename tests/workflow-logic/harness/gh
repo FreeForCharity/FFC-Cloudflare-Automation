@@ -23,6 +23,14 @@ case "$cmd" in
       *rules/branches/*)
         echo "${TEST_HAS_MQ:-0}"
         ;;
+      *actions/workflows/*/runs*)
+        # 736 preflight: list prior runs to find a matching successful dry-run.
+        if [ "${TEST_RUNS_FAIL:-}" = "1" ]; then
+          echo "simulated runs list failure" >&2
+          exit 1
+        fi
+        echo "${TEST_WORKFLOW_RUNS:-{\"workflow_runs\":[]}}"
+        ;;
       orgs/*/repos\?* | orgs/*/repos\ * | orgs/*/repos)
         # Org repo LISTING for the preflight sibling scans (one name per line).
         # Deliberately does NOT match orgs/<org>/teams/<team>/repos/... — those
@@ -71,13 +79,22 @@ case "$cmd" in
     printf '%s\n' "${TEST_REPO_LIST:-}"
     ;;
   issue)
-    # 736 archive: gh issue comment|close <n> --repo <r> ...
+    # 736 archive: gh issue comment|close|list <n|--repo r> ...
     case "$args" in
       comment*)
         if [ "${TEST_ISSUE_COMMENT_FAIL:-}" = "1" ]; then exit 1; fi
         ;;
       close*)
         if [ "${TEST_ISSUE_CLOSE_FAIL:-}" = "1" ]; then exit 1; fi
+        ;;
+      list*)
+        # 736 preflight: search open issues referencing the target repo name.
+        # Output is pre-formatted, as if --jq already ran (see file header).
+        if [ "${TEST_ISSUE_LIST_FAIL:-}" = "1" ]; then
+          echo "simulated issue list failure" >&2
+          exit 1
+        fi
+        printf '%s\n' "${TEST_OPEN_ISSUES:-}"
         ;;
     esac
     ;;

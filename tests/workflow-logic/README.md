@@ -24,6 +24,7 @@ the next quiet production failure.
 | `test_701_parse.py`       | 701 website-provision `resolve` script  | all three event paths (manual, `repository_dispatch` client_payload, issues), domain normalization, loud failure on missing domain, no comment-posting for non-issue runs (refs #419)                       |
 | `test_726_drift_audit.py` | 726 drift audit bash                    | **PUBLIC/private visibility-enum regression** (the bug that silenced `no-merge-queue` in #667), paginated teams fetch, distinct `teams-check-failed` vs false `missing-teams`, Option C private-repo checks |
 | `test_720_owner_parse.py` | 720 create-repo tier-team grants (pwsh) | owner-qualified `RepoName` parsing, foreign-owner skip makes zero API calls, all five tier teams granted                                                                                                    |
+| `test_736_preflight.py`   | 736 archive `preflight` job             | live archive requires a matching successful dry-run within 48h; fails fast on missing/already-archived; warns (non-blocking) on recent push/Pages/open-issue references; dry runs bypass all checks         |
 
 ## Running
 

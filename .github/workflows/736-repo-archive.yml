@@ -57,8 +57,144 @@ env:
   DENYLIST: 'FFC-Cloudflare-Automation FFC_Single_Page_Template .github'
 
 jobs:
+  # Reality check BEFORE the approval gate. Only applies to a live archive
+  # (dry_run=false) — a dry run is itself the evidence this preflight later
+  # requires, so it always passes through untouched. Added after the
+  # 2026-07-18 incident: a dry_run=false archive of an ACTIVE repo (pushed 25
+  # minutes earlier, Pages enabled, referenced by an open issue) reached the
+  # gate because the only dry-run that day targeted a different, nonexistent
+  # repo — nothing verified the live target matched what had been previewed.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify target state and matching dry-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_ORG: FreeForCharity
+          IN_REPO: ${{ inputs.repo }}
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+          THIS_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Dry runs are the evidence a later live archive needs — they are
+          # never blocked here (the archive job's own dry-run branch reports
+          # the preview).
+          if [ "${IN_DRY_RUN:-true}" != "false" ]; then
+            echo "ℹ️ Dry run — preflight checks apply only to a live (dry_run=false) archive." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # --- normalize + validate the repo name (mirrors the archive job) ----------
+          repo_raw="${IN_REPO:-}"
+          name="${repo_raw##*/}"
+          name="$(printf '%s' "$name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [ -z "$name" ]; then echo '::error::repo is empty.'; exit 1; fi
+          if ! printf '%s' "$name" | grep -qE '^[A-Za-z0-9._-]+$'; then
+            echo "::error::Invalid repository name: $name"; exit 1
+          fi
+          full="$TARGET_ORG/$name"
+
+          for deny in $DENYLIST; do
+            if [ "$name" = "$deny" ]; then
+              echo "::error::Refusing to archive protected repository '$name' (denylist)."
+              exit 1
+            fi
+          done
+
+          echo "## Archive preflight — $full" >> "$GITHUB_STEP_SUMMARY"
+
+          # --- must exist, must not already be archived (fail fast, no wasted gate) --
+          set +e
+          meta=$(gh api "repos/$full" 2>&1)
+          rc=$?
+          set -e
+          if [ $rc -ne 0 ]; then
+            if printf '%s' "$meta" | grep -q "HTTP 404"; then
+              echo "::error::Repository $full does not exist (or is private and not visible to this workflow's GITHUB_TOKEN) — nothing to archive."
+              echo "⛔ Refused: \`$full\` not found." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::Preflight could not verify $full (transient API error?). Failing safe rather than guessing. Details: $meta"
+            fi
+            exit 1
+          fi
+          name_field=$(printf '%s' "$meta" | jq -r '.name // empty' 2>/dev/null || true)
+          if [ -z "$name_field" ]; then
+            echo "::error::Preflight got an unparseable response for $full. Failing safe rather than guessing."
+            exit 1
+          fi
+          already=$(printf '%s' "$meta" | jq -r '.archived // false' 2>/dev/null || echo false)
+          if [ "$already" = "true" ]; then
+            echo "::error::$full is already archived — a live archive would be a no-op."
+            echo "⛔ Refused: \`$full\` is already archived." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          pushed=$(printf '%s' "$meta" | jq -r '.pushed_at // empty' 2>/dev/null || true)
+          has_pages=$(printf '%s' "$meta" | jq -r '.has_pages // false' 2>/dev/null || echo false)
+
+          # --- require a matching successful dry_run=true run within 48h -------------
+          cutoff=$(date -u -d '48 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          set +e
+          runs=$(gh api "repos/$THIS_REPO/actions/workflows/736-repo-archive.yml/runs?status=success&per_page=30" 2>&1)
+          runs_rc=$?
+          set -e
+          if [ $runs_rc -ne 0 ]; then
+            echo "::error::Preflight could not list prior 736 runs to verify a matching dry-run (transient API error?). Failing safe. Details: $runs"
+            exit 1
+          fi
+          name_lc=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
+          found=0
+          titles=$(printf '%s' "$runs" | jq -r --arg cutoff "$cutoff" '.workflow_runs[] | select(.created_at >= $cutoff) | .display_title' 2>/dev/null || true)
+          while IFS= read -r title; do
+            [ -z "$title" ] && continue
+            title_lc=$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]')
+            if printf '%s' "$title_lc" | grep -q 'dry_run=true' && printf '%s' "$title_lc" | grep -qF -- "$name_lc"; then
+              found=1
+              break
+            fi
+          done <<< "$titles"
+          if [ "$found" -ne 1 ]; then
+            echo "::error::No successful dry_run=true run of 736 for '$name' found in the last 48h. Dispatch with dry_run=true first, review the preview, then re-dispatch with dry_run=false for the same repo."
+            echo "⛔ Refused: no matching dry-run within 48h for \`$name\`." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "- Matching dry-run: found within the last 48h." >> "$GITHUB_STEP_SUMMARY"
+
+          # --- advisory warnings: does this still look like a live/active repo? ------
+          if [ -n "${pushed:-}" ]; then
+            pushed_epoch=$(date -u -d "$pushed" +%s 2>/dev/null || echo 0)
+            cutoff7_epoch=$(date -u -d '7 days ago' +%s)
+            if [ "$pushed_epoch" -gt "$cutoff7_epoch" ]; then
+              echo "::warning::$full was pushed to on $pushed (within the last 7 days) — verify it is really abandoned before archiving."
+              echo "- ⚠️ Pushed within the last 7 days ($pushed)." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          if [ "$has_pages" = "true" ]; then
+            echo "::warning::$full has GitHub Pages enabled — a live site may still depend on it."
+            echo "- ⚠️ GitHub Pages is enabled." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          set +e
+          open_titles=$(gh issue list --repo "$THIS_REPO" --state open --search "$name" --json number,title --jq '.[] | "#\(.number) \(.title)"' 2>&1)
+          list_rc=$?
+          set -e
+          if [ $list_rc -ne 0 ]; then
+            echo "::warning::Preflight could not search open issues for '$name' (non-fatal, proceeding). Details: $open_titles"
+          elif [ -n "$open_titles" ]; then
+            echo "::warning::Open issue(s) in this repo reference '$name' — verify none of them depends on the target still existing."
+            {
+              echo "- ⚠️ Open issue(s) referencing \`$name\`:"
+              while IFS= read -r t; do echo "  - $t"; done <<< "$open_titles"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "✅ Preflight passed — proceeding to the gated archive." >> "$GITHUB_STEP_SUMMARY"
+
   archive:
     runs-on: ubuntu-latest
+    needs: preflight
     environment: github-prod
     steps:
       - name: Validate required token

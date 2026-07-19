@@ -79,6 +79,13 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
    block, non-trivial bash, pwsh parsing), add a scenario under `tests/workflow-logic/` — the
    harness extracts the real script from the YAML and runs it against fixtures (fake `gh`, mocked
    `core`/`context`). CI runs `tests/workflow-logic/run_all.py` on every PR; see that dir's README.
+7. **Editing an already-tested step? Update its fixture in the same PR.** The workflow-logic harness
+   extracts the _live_ script from the YAML, so changing a step's bash (new file copied, new env
+   var, new `gh` subcommand) breaks that module's fixtures — and it surfaces only in the merge
+   group, after review. Before editing a workflow, grep `tests/workflow-logic/` for its file name;
+   if a module extracts the step you're touching, extend its fixture seeding/shim in the same PR
+   (e.g. #732 added a `cp ../agentic-os-status.json …` to the 502 deliver step that
+   `test_502_deliver.py`'s work-dir fixture didn't seed).
 
 ## GitHub API rate budget (shared — be frugal)
 

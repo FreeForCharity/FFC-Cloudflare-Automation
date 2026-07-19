@@ -1,4 +1,9 @@
-name: '304. M365 - Enable DKIM (Exchange Online) [M365+CF]'
+name: '304. M365 (FFC Tenant) - Enable DKIM (Exchange Online) [M365+CF]'
+
+# INTERNAL (FFC Microsoft tenant): enables DKIM in FFC's Exchange Online and writes the
+# selector CNAMEs to Cloudflare. Only valid for domains that live in the FFC tenant. A charity
+# with their own Microsoft tenant enables DKIM in their own admin center; FFC only carries the
+# DNS records (or the charity manages DNS themselves after a workflow-122 domain-admin invite).
 
 permissions:
   contents: read

@@ -1021,7 +1021,7 @@
     },
     {
       "number": 301,
-      "title": "M365 - Domain Preflight (Read-only)",
+      "title": "M365 (FFC Tenant) - Domain Preflight (Read-only)",
       "apis": [
         "M365",
         "CF"
@@ -1034,7 +1034,7 @@
         "cloudflare-prod-read",
         "m365-prod"
       ],
-      "description": "",
+      "description": "INTERNAL (FFC Microsoft tenant): reads domain status from the FFC M365 tenant via Graph. For charities running their OWN Microsoft tenant this preflight does not apply - their tenant, their admin center. See docs/m365-domain-and-dkim.md (internal vs external).",
       "safetyLevel": "Reads",
       "approvalEnv": "cloudflare-prod-read / \u2705 m365-prod",
       "guard": "M365 job waits on m365-prod approval",
@@ -1043,7 +1043,7 @@
     },
     {
       "number": 302,
-      "title": "M365 - List Tenant Domains",
+      "title": "M365 (FFC Tenant) - List Tenant Domains",
       "apis": [
         "M365"
       ],
@@ -1063,7 +1063,7 @@
     },
     {
       "number": 303,
-      "title": "M365 - Domain Status + DKIM (Toolbox)",
+      "title": "M365 (FFC Tenant) - Domain Status + DKIM (Toolbox)",
       "apis": [
         "M365"
       ],
@@ -1083,7 +1083,7 @@
     },
     {
       "number": 304,
-      "title": "M365 - Enable DKIM (Exchange Online)",
+      "title": "M365 (FFC Tenant) - Enable DKIM (Exchange Online)",
       "apis": [
         "M365",
         "CF"
@@ -1096,7 +1096,7 @@
         "cloudflare-prod-write",
         "m365-prod"
       ],
-      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
+      "description": "INTERNAL (FFC Microsoft tenant): enables DKIM in FFC's Exchange Online and writes the selector CNAMEs to Cloudflare. Only valid for domains that live in the FFC tenant. A charity with their own Microsoft tenant enables DKIM in their own admin center; FFC only carries the DNS records (or the charity manages DNS themselves after a workflow-122 domain-admin invite).",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 m365-prod",
       "guard": "\u2014",
@@ -1105,7 +1105,7 @@
     },
     {
       "number": 305,
-      "title": "M365 - Add Tenant Domain (Admin)",
+      "title": "M365 (FFC Tenant) - Add Tenant Domain (INTERNAL ONLY)",
       "apis": [
         "M365"
       ],
@@ -1116,7 +1116,7 @@
       "environments": [
         "m365-prod"
       ],
-      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
+      "description": "INTERNAL ONLY: adds the domain to the FFC Microsoft 365 tenant. NEVER run this for a charity that has (or will have) their own Microsoft tenant - a domain can only be verified in ONE tenant at a time, so adding it here blocks the charity from adding it to theirs. External charities add the domain in their own admin.microsoft.com first; FFC's role is DNS records only (workflow 105/103) or a Cloudflare domain-admin invite (workflow 122) so they can self-serve. See docs/m365-domain-and-dkim.md (internal vs external).",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 m365-prod",
       "guard": "`dry_run` (default true); also gated by m365-prod approval",
@@ -1125,7 +1125,7 @@
     },
     {
       "number": 306,
-      "title": "Discover - Uncaptured Comms (M365, PII masked)",
+      "title": "Discover - Uncaptured Comms (FFC Tenant M365, PII masked)",
       "apis": [
         "M365"
       ],

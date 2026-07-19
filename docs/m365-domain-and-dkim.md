@@ -3,6 +3,35 @@
 This repo primarily enforces DNS in Cloudflare. These scripts are the start of **M365-side** checks
 so we can align Cloudflare DNS with what Microsoft 365 expects.
 
+## Internal (FFC tenant) vs external (charity's own tenant) — read this first
+
+There are two very different kinds of "Microsoft" work in this repo, and mixing them up has real
+consequences:
+
+- **Internal / FFC-tenant workflows — `301`–`306` (named `M365 (FFC Tenant) - …`).** These
+  authenticate to **FFC's own Microsoft 365 tenant** (Graph / Exchange Online) and act on it: `305`
+  **adds a domain to the FFC tenant**, `304` enables DKIM in FFC's Exchange Online, `301`–`303` read
+  FFC-tenant state. Only use these for domains whose mailboxes FFC itself hosts.
+- **External-focused work — DNS records + delegated access.** For a charity that runs (or will run)
+  **their own** Microsoft tenant, FFC's role is only:
+  - put the DNS records they need into Cloudflare (`105` for individual records such as the
+    `MS=msXXXXXXXX` verification TXT and DKIM selector CNAMEs the charity gets from _their_ admin
+    center; `103` **with `skip_m365=true`** for the tenant-agnostic MX/SPF/DMARC standard), and/or
+  - hand their contact **zone-scoped Cloudflare access** with
+    `122. Cloudflare - Zone Member Add (Domain Admin)` so they can manage the records themselves.
+
+> **`103` is a hybrid — its default includes FFC-tenant jobs.** The `cloudflare_enforce` job writes
+> tenant-agnostic DNS and is safe for any domain, but the `exo_check`/`exo_enable` jobs run
+> `m365-dkim.ps1` against **FFC's Exchange Online** (`-CreateIfMissing`, and `-Enable` on live runs)
+> unless you pass `skip_m365=true`. `101` and `104` also carry `m365-prod` jobs, but those are
+> **reads** of FFC-tenant state (domain status / tenant domain export) — safe, just FFC-scoped.
+
+> **The one-tenant rule (why `305` is INTERNAL ONLY):** a domain can be verified in **one**
+> Microsoft 365 tenant at a time. If `305` adds a charity's domain to the FFC tenant, that charity
+> can no longer verify it in their own tenant until it is removed from FFC's. For an external
+> charity, **they add the domain in their own <https://admin.microsoft.com> first**; nothing
+> tenant-side happens on FFC's side at all.
+
 ## What this includes
 
 - Tenant discovery: `scripts/m365-tenant-discovery.ps1`

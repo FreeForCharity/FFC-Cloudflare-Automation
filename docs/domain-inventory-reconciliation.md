@@ -71,7 +71,8 @@ Otherwise, you can export each source individually:
 If you want to include tenant domains (for email onboarding drift), use the all-sources inventory
 workflow above, or the M365 listing workflow:
 
-- **302. M365 - List Tenant Domains [M365]** (`.github/workflows/302-m365-list-domains.yml`)
+- **302. M365 (FFC Tenant) - List Tenant Domains [M365]**
+  (`.github/workflows/302-m365-list-domains.yml`)
 
 ### 103. WHMCS Export
 

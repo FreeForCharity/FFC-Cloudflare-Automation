@@ -97,14 +97,19 @@ Cloudflare Registrar (project #157). See
 - **117. Domain - Post-Transfer Verification (Report) [CF]**: read-only confirmation that a transfer
   landed (registrar = Cloudflare, nameservers on Cloudflare, site reachable).
 
-### 301–305 M365 workflows
+### 301–306 M365 (FFC Tenant) workflows — INTERNAL
 
-- **301. M365 - Domain Preflight (Read-only) [M365+CF]**: onboarding checks.
-- **302. M365 - List Tenant Domains [M365]**: discovery/listing.
-- **303. M365 - Domain Status + DKIM (Toolbox) [M365]**: mixed utilities for domain and DKIM.
-- **304. M365 - Enable DKIM (Exchange Online) [M365+CF]**: focused DKIM enable.
-- **305. M365 - Add Tenant Domain (Admin) [M365]**: add a domain to the M365 tenant (Graph) and
-  print DNS verification records.
+These act on **FFC's own Microsoft 365 tenant**. Do not run them for charities that use their own
+Microsoft tenant — see the internal-vs-external section in `docs/m365-domain-and-dkim.md`.
+
+- **301. M365 (FFC Tenant) - Domain Preflight (Read-only) [M365+CF]**: onboarding checks.
+- **302. M365 (FFC Tenant) - List Tenant Domains [M365]**: discovery/listing.
+- **303. M365 (FFC Tenant) - Domain Status + DKIM (Toolbox) [M365]**: mixed utilities for domain
+  and DKIM.
+- **304. M365 (FFC Tenant) - Enable DKIM (Exchange Online) [M365+CF]**: focused DKIM enable.
+- **305. M365 (FFC Tenant) - Add Tenant Domain (INTERNAL ONLY) [M365]**: add a domain to the FFC
+  M365 tenant (Graph) and print DNS verification records. A domain verifies in only ONE tenant —
+  never run this for a charity with their own Microsoft tenant.
 
 ### 201–203, 213 WHMCS export workflows
 
@@ -430,8 +435,10 @@ These workflows are higher-blast-radius and should be tested with a domain you c
   - Zone ID
   - Assigned name servers
 
-### 305. M365 - Add Tenant Domain (Admin) [M365]
+### 305. M365 (FFC Tenant) - Add Tenant Domain (INTERNAL ONLY) [M365]
 
+- **Internal only**: this adds the domain to the FFC tenant. Never run it for a charity that has
+  (or will have) their own Microsoft tenant.
 - Ensure the `m365-prod` environment has:
   - `FFC_AZURE_CLIENT_ID`
   - `FFC_AZURE_TENANT_ID`
@@ -560,12 +567,12 @@ No additional setup is required for these workflows to run. However, to get the 
 
 | # | Workflow | File | Triggers | Safety | Approval env |
 | --- | --- | --- | --- | --- | --- |
-| 301 | M365 - Domain Preflight (Read-only) [M365+CF] | `301-m365-domain-preflight.yml` | workflow_dispatch | Reads | cloudflare-prod-read / ✅ m365-prod |
-| 302 | M365 - List Tenant Domains [M365] | `302-m365-list-domains.yml` | workflow_dispatch | Reads | ✅ m365-prod |
-| 303 | M365 - Domain Status + DKIM (Toolbox) [M365] | `303-m365-domain-and-dkim.yml` | workflow_dispatch | Reads | ✅ m365-prod |
-| 304 | M365 - Enable DKIM (Exchange Online) [M365+CF] | `304-m365-dkim-enable.yml` | workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write / ✅ m365-prod |
-| 305 | M365 - Add Tenant Domain (Admin) [M365] | `305-m365-add-tenant-domain.yml` | workflow_dispatch | Writes (dry-run default) | ✅ m365-prod |
-| 306 | Discover - Uncaptured Comms (M365, PII masked) [M365] | `306-discover-uncaptured-comms.yml` | workflow_dispatch | Reads | ✅ m365-prod |
+| 301 | M365 (FFC Tenant) - Domain Preflight (Read-only) [M365+CF] | `301-m365-domain-preflight.yml` | workflow_dispatch | Reads | cloudflare-prod-read / ✅ m365-prod |
+| 302 | M365 (FFC Tenant) - List Tenant Domains [M365] | `302-m365-list-domains.yml` | workflow_dispatch | Reads | ✅ m365-prod |
+| 303 | M365 (FFC Tenant) - Domain Status + DKIM (Toolbox) [M365] | `303-m365-domain-and-dkim.yml` | workflow_dispatch | Reads | ✅ m365-prod |
+| 304 | M365 (FFC Tenant) - Enable DKIM (Exchange Online) [M365+CF] | `304-m365-dkim-enable.yml` | workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write / ✅ m365-prod |
+| 305 | M365 (FFC Tenant) - Add Tenant Domain (INTERNAL ONLY) [M365] | `305-m365-add-tenant-domain.yml` | workflow_dispatch | Writes (dry-run default) | ✅ m365-prod |
+| 306 | Discover - Uncaptured Comms (FFC Tenant M365, PII masked) [M365] | `306-discover-uncaptured-comms.yml` | workflow_dispatch | Reads | ✅ m365-prod |
 | 320 | Azure - Key Vault Secret Inventory (audit) [MS] | `320-azure-kv-secret-inventory.yml` | schedule, workflow_dispatch | Reads | google-prod-read (reader identity) |
 ### 4xx — Zeffy
 
@@ -613,6 +620,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 734 | Repo - Stale Waiting-Run Janitor [Repo] | `734-stale-waiting-run-janitor.yml` | schedule, workflow_dispatch | Writes (cancels runs) | — |
 | 735 | Repo - Dependabot Affected Repos [Org] | `735-repo-dependabot-affected-repos.yml` | schedule, workflow_dispatch | Reads | ✅ github-prod |
 | 736 | Repo - Archive / Application Denied (Admin) [Repo] | `736-repo-archive.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod |
+| 737 | Repo - Claim Sync [Repo] | `737-claim-sync.yml` | pull_request, schedule, workflow_dispatch | Writes (issues/labels only) | — |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

@@ -10,9 +10,13 @@ on:
 # Supersede-on-newer (#722): these daily runs pause at an approval gate; without
 # this, unapproved runs pile up ~12-deep until the janitor reaps them at 7 days.
 # cancel-in-progress cancels the older queued/waiting run the moment the next
-# scheduled run starts, so at most ONE run ever waits at the gate.
+# scheduled run starts, so at most ONE run ever waits at the gate. Ref-scoped
+# so a dispatch from a PR branch can never cancel main's scheduled run.
+# Trade-off (accepted): cancel-in-progress could interrupt an EXECUTING run,
+# but execution lasts minutes against a 24h cadence — in practice only
+# gate-waiting runs are ever superseded; janitor 734 remains the backstop.
 concurrency:
-  group: ${{ github.workflow }}-supersede
+  group: ${{ github.workflow }}-${{ github.ref }}-supersede
   cancel-in-progress: true
 
 permissions:

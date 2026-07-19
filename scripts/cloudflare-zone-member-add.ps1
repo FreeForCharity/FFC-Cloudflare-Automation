@@ -9,13 +9,19 @@
       1. Resolve account id            -> GET  /accounts (single-account guard)
       2. Resolve zone id by name       -> GET  /zones?name=<domain>
       3. Resolve permission group      -> GET  /accounts/{id}/iam/permission_groups?name=...
-      4. Find/create zone resource grp -> GET/POST /accounts/{id}/iam/resource_groups
-      5. Check existing membership     -> GET  /accounts/{id}/members (paginated)
-      6. Invite member (scoped policy) -> POST /accounts/{id}/members
+      4. Check existing membership     -> GET  /accounts/{id}/members (paginated)
+      5. Invite member (scoped policy) -> POST /accounts/{id}/members
+
+    The invite policy carries the zone scope INLINE in resource_groups
+    (scope.key = com.cloudflare.api.account.zone.<zoneId>, objects: "*"),
+    which is exactly how the dashboard's "Individual Domains" picker stores
+    it (an adhoc resource group; verified against a live dashboard-created
+    member policy). Adhoc groups do not appear in the account's
+    /iam/resource_groups listing, so no pre-create or lookup is needed.
 
     Safety model:
-      - Default is DRY RUN: steps 1-5 run (read-only) and the exact POST payloads
-        are printed, but nothing is created. Pass -Execute for the live invite.
+      - Default is DRY RUN: steps 1-4 run (read-only) and the exact POST payload
+        is printed, but nothing is created. Pass -Execute for the live invite.
       - Idempotent: if the email is already a member (any status), the script
         reports the existing member + policies and makes NO changes.
       - Read probes that fail with 401/403 are reported as 'denied' (the token
@@ -24,10 +30,9 @@
 
     Token permissions required for the live run (on the account token):
       - Account Members: Edit  (invite)
-      - Account Resource Groups / IAM: Edit (create the zone resource group)
     The zone/DNS-scoped tokens used by most workflows can resolve the zone but
-    will show 'denied' on the IAM/member probes; that outcome means the KV token
-    needs those permissions added before a live run can succeed.
+    will show 'denied' on the member probes; that outcome means the KV token
+    needs that permission added before a live run can succeed.
 
 .PARAMETER Domain
     Zone name the member should administer (e.g., example.org).
@@ -43,13 +48,12 @@
     CLOUDFLARE_API_TOKEN_CM (same convention as the other cloudflare-*.ps1).
 
 .PARAMETER Execute
-    Actually create the resource group (if missing) and send the invite.
-    Without this switch the script is a dry run.
+    Actually send the invite. Without this switch the script is a dry run.
 
 .OUTPUTS
     Human-readable progress on the host stream and a single JSON verdict object
     on stdout (fields: domain, email, mode, status, accountId, zoneId,
-    permissionGroupId, resourceGroupId, probes).
+    permissionGroupId, probes).
 
 .EXAMPLE
     pwsh -File scripts/cloudflare-zone-member-add.ps1 -Domain example.org -Email person@example.com
@@ -215,53 +219,7 @@ try {
         Write-Diag "WARNING: cannot read IAM permission groups: $(Get-ProbeErrorText -Probe $pgProbe)"
     }
 
-    # 4) Find an existing resource group scoped to this zone, or plan creating one (paginate:
-    #    dashboard-created scoped policies each add a resource group, so accounts accumulate many).
-    $zoneScopeKey = "com.cloudflare.api.account.zone.$zoneId"
-    $rgId = $null
-    $rgScanned = 0
-    $rgPage = 1
-    do {
-        $rgProbe = Invoke-CfProbe -Method 'GET' -Uri "/accounts/$accountId/iam/resource_groups?per_page=100&page=$rgPage" -Token $token
-        if ($rgPage -eq 1) { $probes.resourceGroups = Get-ProbeState -Probe $rgProbe }
-        if (-not $rgProbe.ok) {
-            Write-Diag "WARNING: cannot read IAM resource groups: $(Get-ProbeErrorText -Probe $rgProbe)"
-            break
-        }
-        $rgBatch = @($rgProbe.body.result)
-        $rgScanned += $rgBatch.Count
-        foreach ($rg in $rgBatch) {
-            $scopes = @($rg.scope) + @($rg.scopes) | Where-Object { $_ }
-            foreach ($scope in $scopes) {
-                $scopeKeys = @($scope.objects | Select-Object -ExpandProperty key -ErrorAction SilentlyContinue)
-                # Dashboard-created groups may put the zone key on the scope itself or in objects.
-                if ($scopeKeys -contains $zoneScopeKey -or $scope.key -eq $zoneScopeKey) {
-                    $rgId = $rg.id
-                    Write-Diag "Resource group for zone found: '$($rg.name)' ($rgId)"
-                    break
-                }
-            }
-            if ($rgId) { break }
-        }
-        $rgTotalPages = 1
-        if ($rgProbe.body.result_info -and $rgProbe.body.result_info.total_pages) {
-            $rgTotalPages = [int]$rgProbe.body.result_info.total_pages
-        }
-        $rgPage++
-    } until ($rgId -or $rgPage -gt $rgTotalPages)
-    if ($probes.resourceGroups -eq 'granted' -and -not $rgId) {
-        Write-Diag "No existing resource group scoped to $Domain ($rgScanned scanned); one will be created."
-    }
-
-    $rgCreateBody = [ordered]@{
-        name  = "zone:$Domain"
-        scope = [ordered]@{
-            key     = "com.cloudflare.api.account.$accountId"
-            objects = @([ordered]@{ key = $zoneScopeKey })
-        }
-    }
-
-    # 5) Check whether the email is already a member (paginate).
+    # 4) Check whether the email is already a member (paginate).
     $existingMember = $null
     $membersListed = $true
     $page = 1
@@ -284,6 +242,8 @@ try {
         $page++
     } until ($existingMember -or $page -gt $totalPages)
 
+    # Inline zone scope, mirroring the shape of a dashboard-created ("Individual
+    # Domains") member policy: an adhoc resource group whose scope key IS the zone.
     $inviteBody = [ordered]@{
         email    = $Email
         status   = 'pending'
@@ -291,7 +251,14 @@ try {
             [ordered]@{
                 access            = 'allow'
                 permission_groups = @([ordered]@{ id = $pgId })
-                resource_groups   = @([ordered]@{ id = $rgId })
+                resource_groups   = @(
+                    [ordered]@{
+                        scope = [ordered]@{
+                            key     = "com.cloudflare.api.account.zone.$zoneId"
+                            objects = @([ordered]@{ key = '*' })
+                        }
+                    }
+                )
             }
         )
     }
@@ -316,19 +283,15 @@ try {
     elseif (-not $Execute) {
         $status = 'dry-run'
         Write-Diag ''
-        Write-Diag '=== DRY RUN - no changes made. Planned operations: ==='
-        if (-not $rgId) {
-            Write-Diag "1) POST /accounts/$accountId/iam/resource_groups"
-            Write-Diag (($rgCreateBody | ConvertTo-Json -Depth 10) -replace '(?m)^', '   ')
-        }
-        Write-Diag "2) POST /accounts/$accountId/members"
+        Write-Diag '=== DRY RUN - no changes made. Planned operation: ==='
+        Write-Diag "POST /accounts/$accountId/members"
         Write-Diag (($inviteBody | ConvertTo-Json -Depth 10) -replace '(?m)^', '   ')
         $deniedProbes = @($probes.GetEnumerator() | Where-Object { $_.Value -eq 'denied' })
         $errorProbes = @($probes.GetEnumerator() | Where-Object { $_.Value -eq 'error' })
         if ($deniedProbes.Count -gt 0) {
             Write-Diag ''
             Write-Diag ("BLOCKER for live run - permission denied on: " + (($deniedProbes | ForEach-Object { $_.Key }) -join ', '))
-            Write-Diag "The '$Account' token needs 'Account Members: Edit' (and IAM read) before -Execute can succeed."
+            Write-Diag "The '$Account' token needs 'Account Members: Edit' before -Execute can succeed."
         }
         if ($errorProbes.Count -gt 0) {
             Write-Diag ''
@@ -340,16 +303,6 @@ try {
         # Live run: every prerequisite must have resolved.
         if (-not $membersListed) { throw "Cannot execute: could not list account members (probe: $($probes.members)), so the idempotency check is impossible. Refusing to risk a duplicate invite." }
         if (-not $pgId) { throw "Cannot execute: permission group id unresolved (probe: $($probes.permissionGroups))." }
-        if (-not $rgId -and $probes.resourceGroups -ne 'granted') { throw "Cannot execute: could not list IAM resource groups (probe: $($probes.resourceGroups)), so an existing zone resource group cannot be ruled out. Refusing to risk creating a duplicate." }
-        if (-not $rgId) {
-            $rgCreate = Invoke-CfProbe -Method 'POST' -Uri "/accounts/$accountId/iam/resource_groups" -Token $token -Body $rgCreateBody
-            if (-not $rgCreate.ok) {
-                throw "Failed to create resource group for zone '$Domain': $(Get-ProbeErrorText -Probe $rgCreate)"
-            }
-            $rgId = $rgCreate.body.result.id
-            Write-Diag "Created resource group 'zone:$Domain' ($rgId)"
-            $inviteBody.policies[0].resource_groups = @([ordered]@{ id = $rgId })
-        }
         $invite = Invoke-CfProbe -Method 'POST' -Uri "/accounts/$accountId/members" -Token $token -Body $inviteBody
         if (-not $invite.ok) {
             throw "Failed to invite '$Email': $(Get-ProbeErrorText -Probe $invite)"
@@ -368,7 +321,6 @@ try {
         zoneId            = $zoneId
         permissionGroup   = $PermissionGroupName
         permissionGroupId = $pgId
-        resourceGroupId   = $rgId
         probes            = $probes
     }
     $verdict | ConvertTo-Json -Depth 6

@@ -13,6 +13,15 @@ No network: git talks to a **local bare repo** (via `url.<file://>.insteadOf`)
 and `gh` is the fake harness shim. Reverting the #733 fix line
 (`git checkout -B chore/ga-data-sync FETCH_HEAD` → `... origin/chore/ga-data-sync`)
 makes `test_sync_branch_exists_bases_on_fetch_head` fail (exit 128).
+
+The PR-existence guard (#737): `gh pr view <branch>` resolves the most recent PR
+in ANY state, so once the first sync PR merges (branch left undeleted) it matches
+the merged PR and the daily PR is never re-opened. The guard now lists by head +
+`--state open`, so it only reuses a genuinely open PR. The fake `gh` drives the
+open-PR check with `TEST_OPEN_PR` (the open PR number, empty = none) and the
+legacy any-state `pr view` with `TEST_PR_EXISTS`; `test_merged_pr_no_open_pr_...`
+sets `TEST_PR_EXISTS=1` + `TEST_OPEN_PR=""` so reverting the guard to `pr view`
+makes it fail (no `pr create`).
 """
 
 from __future__ import annotations
@@ -154,7 +163,7 @@ def _origin_head(origin: pathlib.Path, branch: str) -> str | None:
 # --- Scenario 1: sync branch exists on origin (the #733 regression case) -------
 def test_sync_branch_exists_bases_on_fetch_head():
     proc, gh_log, origin, ctx = run_deliver(
-        sync_branch=True, sync_matches_source=False, gh_env={"TEST_PR_EXISTS": "1"}
+        sync_branch=True, sync_matches_source=False, gh_env={"TEST_OPEN_PR": "645"}
     )
     with ctx:
         # The fix must survive a shallow single-branch clone: no exit 128, no fatal.
@@ -162,7 +171,7 @@ def test_sync_branch_exists_bases_on_fetch_head():
         assert "fatal" not in (proc.stdout + proc.stderr).lower(), proc.stderr
         assert "No data changes" not in proc.stdout, proc.stdout
         # New content was committed and pushed onto the existing sync branch,
-        # and the existing PR was reused (no create) then auto-merged.
+        # and the existing open PR was reused (no create) then auto-merged.
         assert _origin_head(origin, SYNC_BRANCH) is not None
         assert "pr merge" in gh_log, gh_log
         assert "pr create" not in gh_log, gh_log
@@ -171,12 +180,12 @@ def test_sync_branch_exists_bases_on_fetch_head():
 # --- Scenario 2: sync branch absent → fresh branch, open a new PR --------------
 def test_sync_branch_absent_creates_fresh_branch_and_pr():
     proc, gh_log, origin, ctx = run_deliver(
-        sync_branch=False, sync_matches_source=False, gh_env={"TEST_PR_EXISTS": ""}
+        sync_branch=False, sync_matches_source=False, gh_env={"TEST_OPEN_PR": ""}
     )
     with ctx:
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert "No data changes" not in proc.stdout, proc.stdout
-        # Branch created on origin and a fresh PR opened (view failed → create).
+        # Branch created on origin and a fresh PR opened (no open PR → create).
         assert _origin_head(origin, SYNC_BRANCH) is not None
         assert "pr create" in gh_log, gh_log
         assert "pr merge" in gh_log, gh_log
@@ -185,7 +194,7 @@ def test_sync_branch_absent_creates_fresh_branch_and_pr():
 # --- Scenario 3: no data changes → early exit, no push, no PR churn ------------
 def test_no_data_changes_early_exit():
     proc, gh_log, origin, ctx = run_deliver(
-        sync_branch=True, sync_matches_source=True, gh_env={"TEST_PR_EXISTS": "1"}
+        sync_branch=True, sync_matches_source=True, gh_env={"TEST_OPEN_PR": "645"}
     )
     with ctx:
         before = _origin_head(origin, SYNC_BRANCH)
@@ -196,6 +205,44 @@ def test_no_data_changes_early_exit():
         assert _origin_head(origin, SYNC_BRANCH) == before
         assert "pr create" not in gh_log, gh_log
         assert "pr merge" not in gh_log, gh_log
+
+
+# --- Scenario 4: merged PR, branch left undeleted, no open PR (#737) -----------
+# The branch still exists remotely (never deleted after the prior sync PR merged),
+# so `pr view` matches the *merged* PR (TEST_PR_EXISTS=1) — but there is NO open
+# PR (TEST_OPEN_PR=""). The open-state guard must still open a new PR; the old
+# `pr view` guard would have skipped it, stranding the pushed data on the branch.
+def test_merged_pr_no_open_pr_still_creates():
+    proc, gh_log, origin, ctx = run_deliver(
+        sync_branch=True,
+        sync_matches_source=False,
+        gh_env={"TEST_PR_EXISTS": "1", "TEST_OPEN_PR": ""},
+    )
+    with ctx:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "No data changes" not in proc.stdout, proc.stdout
+        assert _origin_head(origin, SYNC_BRANCH) is not None
+        # A merged-but-no-open PR must NOT suppress creation of the daily PR.
+        assert "pr create" in gh_log, gh_log
+        assert "pr merge" in gh_log, gh_log
+
+
+# --- Scenario 5: an open PR already exists → idempotent re-run, no duplicate ----
+# Even if a stale merged PR is also findable via `pr view` (TEST_PR_EXISTS=1), the
+# presence of an open PR (TEST_OPEN_PR set) means the guard reuses it — exactly
+# one PR per cycle, no churn on repeated runs.
+def test_open_pr_is_idempotent_no_duplicate():
+    proc, gh_log, origin, ctx = run_deliver(
+        sync_branch=True,
+        sync_matches_source=False,
+        gh_env={"TEST_PR_EXISTS": "1", "TEST_OPEN_PR": "645"},
+    )
+    with ctx:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "No data changes" not in proc.stdout, proc.stdout
+        assert _origin_head(origin, SYNC_BRANCH) is not None
+        assert "pr create" not in gh_log, gh_log
+        assert "pr merge" in gh_log, gh_log
 
 
 # Sanity: the fixtures we assert "no change" against are actually byte-identical

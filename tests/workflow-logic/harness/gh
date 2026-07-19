@@ -89,12 +89,20 @@ case "$cmd" in
     printf '%s\n' "${TEST_REPO_LIST:-}"
     ;;
   pr)
-    # 502 deliver: gh pr view|create|merge chore/ga-data-sync --repo <r> ...
+    # 502 deliver: gh pr list|view|create|merge chore/ga-data-sync --repo <r> ...
     sub="$1"
     case "$sub" in
+      list)
+        # `gh pr list --head <branch> --state open --json number --jq '.[].number'`:
+        # prints the OPEN PR number(s) for the branch, one per line, or nothing.
+        # TEST_OPEN_PR holds the open PR number (empty = no open PR). This is the
+        # #737 guard — distinct from `pr view`, which also matches merged PRs.
+        printf '%s\n' "${TEST_OPEN_PR:-}"
+        ;;
       view)
-        # A daily PR exists only when TEST_PR_EXISTS=1; otherwise the branch has
-        # no open PR yet (real gh exits non-zero), which drives `pr create`.
+        # A PR exists in ANY state (incl. merged) only when TEST_PR_EXISTS=1;
+        # otherwise real gh exits non-zero. Retained so the #737 regression test
+        # can prove `pr view` and `pr list --state open` diverge on a merged PR.
         [ "${TEST_PR_EXISTS:-}" = "1" ] && exit 0 || exit 1
         ;;
       create)

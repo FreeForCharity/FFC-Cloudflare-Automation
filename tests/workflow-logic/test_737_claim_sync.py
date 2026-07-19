@@ -147,7 +147,7 @@ def test_workflow_requires_lib_and_has_both_triggers():
     assert "schedule" in on, on
     assert "workflow_dispatch" in on, on
     assert set(on["pull_request"]["types"]) >= {
-        "opened", "reopened", "closed", "converted_to_draft", "ready_for_review",
+        "opened", "reopened", "edited", "closed", "converted_to_draft", "ready_for_review",
     }, on["pull_request"]
     jobs = wf["jobs"]
     assert "label-sync" in jobs and "sweep" in jobs, list(jobs)

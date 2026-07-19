@@ -16,7 +16,7 @@ run-name: 'Claim sync: ${{ github.event_name }}'
 
 on:
   pull_request:
-    types: [opened, reopened, closed, converted_to_draft, ready_for_review]
+    types: [opened, reopened, edited, closed, converted_to_draft, ready_for_review]
   schedule:
     - cron: '47 5 * * *'
   workflow_dispatch:
@@ -55,6 +55,18 @@ jobs:
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request;
             const action = process.env.PR_ACTION;
+
+            // Bounded pager: cap at maxPages so a busy repo can't turn one run
+            // into hundreds of REST calls (AGENTS.md: bounded pagination only).
+            const listOpen = async (method, params, maxPages = 5) => {
+              const out = [];
+              for (let page = 1; page <= maxPages; page++) {
+                const { data } = await method({ ...params, per_page: 100, page });
+                out.push(...data);
+                if (data.length < 100) break;
+              }
+              return out;
+            };
             const linked = lib.extractLinkedIssues(pr.body || '').all;
             if (!linked.length) {
               core.info(`PR #${pr.number}: no linked issues; nothing to sync.`);
@@ -65,8 +77,10 @@ jobs:
               (issue.labels || []).some((l) => (l.name || l) === lib.CLAIM_LABEL);
 
             if (action !== 'closed') {
-              // PR active (opened/reopened/ready_for_review/converted_to_draft):
-              // ensure every linked OPEN issue is claimed.
+              // PR active (opened/reopened/edited/ready_for_review/
+              // converted_to_draft): ensure every linked OPEN issue is claimed.
+              // (A reference removed via `edited` is reconciled by the sweep,
+              // which sees no open linked PR for that issue.)
               for (const n of linked) {
                 const { data: issue } = await github.rest.issues
                   .get({ owner, repo, issue_number: n })
@@ -83,9 +97,7 @@ jobs:
 
             // PR closed/merged: release each linked issue that no OTHER open PR
             // still claims.
-            const openPrs = await github.paginate(github.rest.pulls.list, {
-              owner, repo, state: 'open', per_page: 100,
-            });
+            const openPrs = await listOpen(github.rest.pulls.list, { owner, repo, state: 'open' });
             for (const n of linked) {
               const { data: issue } = await github.rest.issues
                 .get({ owner, repo, issue_number: n })
@@ -128,19 +140,33 @@ jobs:
             const lib = require(`${process.env.GITHUB_WORKSPACE}/scripts/claim-sync-lib.js`);
             const dryRun = String(process.env.DRY_RUN) === 'true';
             const now = Date.now();
+
+            // Bounded pager (see label-sync): cap pages so a daily sweep of two
+            // repos can't spike the shared REST budget. `labels=claimed` already
+            // keeps the issue result set tiny.
+            const listOpen = async (method, params, maxPages = 5) => {
+              const out = [];
+              for (let page = 1; page <= maxPages; page++) {
+                const { data } = await method({ ...params, per_page: 100, page });
+                out.push(...data);
+                if (data.length < 100) break;
+              }
+              return out;
+            };
+
             const targets = [
               { owner: 'FreeForCharity', repo: 'FFC-Cloudflare-Automation' },
               { owner: 'FreeForCharity', repo: 'FFC-IN-ffcadmin.org' },
             ];
             const released = [];
             for (const t of targets) {
-              const claimed = await github.paginate(github.rest.issues.listForRepo, {
-                owner: t.owner, repo: t.repo, state: 'open', labels: lib.CLAIM_LABEL, per_page: 100,
+              const claimed = await listOpen(github.rest.issues.listForRepo, {
+                owner: t.owner, repo: t.repo, state: 'open', labels: lib.CLAIM_LABEL,
               });
               const issues = claimed.filter((i) => !i.pull_request);
               if (!issues.length) continue;
-              const openPrs = await github.paginate(github.rest.pulls.list, {
-                owner: t.owner, repo: t.repo, state: 'open', per_page: 100,
+              const openPrs = await listOpen(github.rest.pulls.list, {
+                owner: t.owner, repo: t.repo, state: 'open',
               });
               for (const issue of issues) {
                 const hasOpenLinkedPR = openPrs.some(

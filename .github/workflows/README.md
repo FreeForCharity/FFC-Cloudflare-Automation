@@ -524,6 +524,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 119 | DNS - Bulk Staging CNAME -> GitHub Pages (FFC-EX) [CF] | `119-bulk-staging-cname-github-pages.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write |
 | 120 | DNS + GH Pages - Bulk Cutover staging -> Apex (FFC-EX) [CF+GH] | `120-bulk-cutover-to-github-pages.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write / ✅ github-prod |
 | 121 | DNS + GH Pages - Fleet Cutover Preflight (FFC-EX) | `121-fleet-cutover-preflight.yml` | workflow_dispatch | Reads | none (no credentials) |
+| 122 | Cloudflare - Zone Member Add (Domain Admin) [CF] | `122-cloudflare-zone-member-add.yml` | workflow_dispatch | Writes (dry-run default) | cloudflare-prod-read / ✅ cloudflare-prod-write |
 ### 2xx — WHMCS
 
 | # | Workflow | File | Triggers | Safety | Approval env |

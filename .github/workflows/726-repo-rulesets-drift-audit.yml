@@ -7,6 +7,14 @@ on:
     - cron: '0 13 * * *'
   workflow_dispatch:
 
+# Supersede-on-newer (#722): these daily runs pause at an approval gate; without
+# this, unapproved runs pile up ~12-deep until the janitor reaps them at 7 days.
+# cancel-in-progress cancels the older queued/waiting run the moment the next
+# scheduled run starts, so at most ONE run ever waits at the gate.
+concurrency:
+  group: ${{ github.workflow }}-supersede
+  cancel-in-progress: true
+
 permissions:
   contents: read
   issues: write

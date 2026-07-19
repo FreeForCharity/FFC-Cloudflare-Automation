@@ -110,6 +110,16 @@ jobs:
           name: ga-reports
           path: ga-out
 
+      # Generate the Agentic OS status feed (backlog #723) so it rides the same
+      # daily sync PR as the GA data + workflow catalog — one reviewable pipe,
+      # no new gate. REST-only, PII-safe aggregates; CBM_TOKEN just reads.
+      - name: Generate Agentic OS status feed
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/generate-agentic-os-status.py --output agentic-os-status.json
+
       - name: Open/update daily data-sync PR into FFC-IN-ffcadmin.org
         env:
           GH_TOKEN: ${{ secrets.CBM_TOKEN }}
@@ -132,9 +142,12 @@ jobs:
           cp ../ga-out/*.json public/data/google-analytics/
           cp ../docs/workflow-catalog.json src/data/workflow-catalog.json
           cp ../docs/workflow-catalog.json public/data/workflow-catalog.json
-          git add public/data src/data/workflow-catalog.json
+          # Agentic OS status feed for the /agentic-os page (src render + stable /data URL).
+          cp ../agentic-os-status.json src/data/agentic-os-status.json
+          cp ../agentic-os-status.json public/data/agentic-os-status.json
+          git add public/data src/data/workflow-catalog.json src/data/agentic-os-status.json
           if git diff --cached --quiet; then echo 'No data changes vs the sync branch; skipping.'; exit 0; fi
-          git commit -m "chore(data): daily sync — GA metrics + time-series + workflow catalog ($(date -u +%F))"
+          git commit -m "chore(data): daily sync — GA metrics + time-series + workflow catalog + agentic-os status ($(date -u +%F))"
           git push origin chore/ga-data-sync
           # Only skip creation when an OPEN PR already exists for the branch.
           # `gh pr view <branch>` resolves the most recent PR in ANY state, so
@@ -144,8 +157,8 @@ jobs:
           # has merged.
           if [ -z "$(gh pr list --repo FreeForCharity/FFC-IN-ffcadmin.org --head chore/ga-data-sync --state open --json number --jq '.[].number')" ]; then
             gh pr create --repo FreeForCharity/FFC-IN-ffcadmin.org --base main --head chore/ga-data-sync \
-              --title 'chore(data): daily data sync (GA + workflow catalog)' \
-              --body 'Automated daily sync from FFC-Cloudflare-Automation (502): GA4 aggregate metrics + time-series for the primary sites, and the generated workflow catalog for /automation + the stable /data URL. PII-safe aggregates only.'
+              --title 'chore(data): daily data sync (GA + workflow catalog + agentic-os status)' \
+              --body 'Automated daily sync from FFC-Cloudflare-Automation (502): GA4 aggregate metrics + time-series for the primary sites, the generated workflow catalog for /automation + the stable /data URL, and the Agentic OS status feed for /agentic-os. PII-safe aggregates only.'
           fi
           # Best-effort auto-merge so the daily PR lands once ffcadmin checks pass
           # (no-op when auto-merge is unavailable on the repo).

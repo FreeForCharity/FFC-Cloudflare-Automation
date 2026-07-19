@@ -88,6 +88,25 @@ case "$cmd" in
     # gh repo list ... --jq → "name<TAB>visibility<TAB>defaultBranch" rows
     printf '%s\n' "${TEST_REPO_LIST:-}"
     ;;
+  pr)
+    # 502 deliver: gh pr view|create|merge chore/ga-data-sync --repo <r> ...
+    sub="$1"
+    case "$sub" in
+      view)
+        # A daily PR exists only when TEST_PR_EXISTS=1; otherwise the branch has
+        # no open PR yet (real gh exits non-zero), which drives `pr create`.
+        [ "${TEST_PR_EXISTS:-}" = "1" ] && exit 0 || exit 1
+        ;;
+      create)
+        if [ "${TEST_PR_CREATE_FAIL:-}" = "1" ]; then echo "simulated pr create failure" >&2; exit 1; fi
+        ;;
+      merge)
+        # --merge --auto: real gh exits non-zero when auto-merge is unavailable;
+        # the workflow tolerates that with `|| echo ...`.
+        if [ "${TEST_PR_MERGE_FAIL:-}" = "1" ]; then echo "auto-merge unavailable" >&2; exit 1; fi
+        ;;
+    esac
+    ;;
   issue)
     # 736 archive: gh issue comment|close|list <n|--repo r> ...
     case "$args" in

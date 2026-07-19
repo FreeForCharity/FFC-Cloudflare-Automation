@@ -45,7 +45,8 @@ def _write(path: pathlib.Path, text: str) -> None:
 
 
 def _seed_target_files(root: pathlib.Path, ga_body: str, catalog_body: str) -> None:
-    """Lay out the three synced files under a repo working tree at `root`."""
+    """Lay out the four synced paths (2 GA reports + 2 workflow-catalog copies)
+    the deliver step writes, under a repo working tree at `root`."""
     for name in GA_FILES:
         _write(root / "public" / "data" / "google-analytics" / name, ga_body)
     _write(root / "src" / "data" / "workflow-catalog.json", catalog_body)

@@ -1,6 +1,12 @@
 name: '103. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]'
 run-name: 'Enforce Domain Standard: ${{ inputs.domain }}'
 
+# HYBRID - Cloudflare DNS + FFC-tenant M365. The cloudflare_enforce job writes tenant-agnostic DNS
+# (apex/www, MX/SPF/DMARC) and is safe for any domain. The exo_check/exo_enable jobs act on the
+# FFC Microsoft tenant's Exchange Online (DKIM create/enable) - for a charity running their OWN
+# Microsoft tenant, dispatch with skip_m365=true so only DNS is touched. See
+# docs/m365-domain-and-dkim.md (internal vs external).
+
 on:
   workflow_dispatch:
     inputs:
@@ -22,8 +28,8 @@ on:
         default: false
       skip_m365:
         description:
-          'Skip Microsoft 365 jobs (DKIM check, set, enable). Use for CF-only domains with no M365
-          tenant.'
+          'Skip Microsoft 365 jobs (DKIM check, set, enable) - they act on the FFC tenant. Use for
+          CF-only domains with no M365 tenant AND for charities running their own Microsoft tenant.'
         type: boolean
         default: false
       issue_number:

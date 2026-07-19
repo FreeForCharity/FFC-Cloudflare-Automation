@@ -97,14 +97,19 @@ Cloudflare Registrar (project #157). See
 - **117. Domain - Post-Transfer Verification (Report) [CF]**: read-only confirmation that a transfer
   landed (registrar = Cloudflare, nameservers on Cloudflare, site reachable).
 
-### 301–305 M365 workflows
+### 301–306 M365 (FFC Tenant) workflows — INTERNAL
 
-- **301. M365 - Domain Preflight (Read-only) [M365+CF]**: onboarding checks.
-- **302. M365 - List Tenant Domains [M365]**: discovery/listing.
-- **303. M365 - Domain Status + DKIM (Toolbox) [M365]**: mixed utilities for domain and DKIM.
-- **304. M365 - Enable DKIM (Exchange Online) [M365+CF]**: focused DKIM enable.
-- **305. M365 - Add Tenant Domain (Admin) [M365]**: add a domain to the M365 tenant (Graph) and
-  print DNS verification records.
+These act on **FFC's own Microsoft 365 tenant**. Do not run them for charities that use their own
+Microsoft tenant — see the internal-vs-external section in `docs/m365-domain-and-dkim.md`.
+
+- **301. M365 (FFC Tenant) - Domain Preflight (Read-only) [M365+CF]**: onboarding checks.
+- **302. M365 (FFC Tenant) - List Tenant Domains [M365]**: discovery/listing.
+- **303. M365 (FFC Tenant) - Domain Status + DKIM (Toolbox) [M365]**: mixed utilities for domain
+  and DKIM.
+- **304. M365 (FFC Tenant) - Enable DKIM (Exchange Online) [M365+CF]**: focused DKIM enable.
+- **305. M365 (FFC Tenant) - Add Tenant Domain (INTERNAL ONLY) [M365]**: add a domain to the FFC
+  M365 tenant (Graph) and print DNS verification records. A domain verifies in only ONE tenant —
+  never run this for a charity with their own Microsoft tenant.
 
 ### 201–203, 213 WHMCS export workflows
 
@@ -430,8 +435,10 @@ These workflows are higher-blast-radius and should be tested with a domain you c
   - Zone ID
   - Assigned name servers
 
-### 305. M365 - Add Tenant Domain (Admin) [M365]
+### 305. M365 (FFC Tenant) - Add Tenant Domain (INTERNAL ONLY) [M365]
 
+- **Internal only**: this adds the domain to the FFC tenant. Never run it for a charity that has
+  (or will have) their own Microsoft tenant.
 - Ensure the `m365-prod` environment has:
   - `FFC_AZURE_CLIENT_ID`
   - `FFC_AZURE_TENANT_ID`

@@ -76,11 +76,19 @@ file names — the two differ. Map display→file via
 
 ## Phase 2 — DNS + Microsoft 365 email ⏸
 
+> **Which Microsoft path? Decide FIRST** (`docs/m365-domain-and-dkim.md`, internal vs external). The
+> `3xx` workflows are **`M365 (FFC Tenant)`** — they act on **FFC's own tenant**. A domain verifies
+> in only ONE tenant, so running `305` for a charity that has/wants **their own** Microsoft tenant
+> **blocks them from adding it to theirs**. External-tenant charities: they add the domain in their
+> own admin.microsoft.com; FFC only writes DNS records (`105`/`103`) — or invites their contact as a
+> zone-scoped Cloudflare Domain Admin with **`122. Cloudflare - Zone Member Add`** to self-serve.
+
 - **`103. Domain - Enforce Standard (GitHub Apex + M365)`** — GitHub Pages apex A/AAAA + `www`, plus
   M365 MX/SPF/DMARC. **Defaults to `dry_run=true`** — read the preview, then re-run `dry_run=false`
   and approve the gate.
-- Add the domain to the tenant if new: **`305. M365 - Add Tenant Domain`**, then
-  **`304. M365 - Enable DKIM`**; verify with **`301`/`303`**.
+- **FFC-tenant email only:** add the domain to the FFC tenant if new:
+  **`305. M365 (FFC Tenant) - Add Tenant Domain (INTERNAL ONLY)`**, then
+  **`304. M365 (FFC Tenant) - Enable DKIM`**; verify with **`301`/`303`**.
 - **M365 was broken by a federated-credential typo** (`AADSTS700213`). If any m365 job fails Azure
   login, it's almost certainly that — see the repair in `docs/azure-oidc-federated-credentials.md`.
 

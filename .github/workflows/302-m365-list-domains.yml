@@ -1,4 +1,4 @@
-name: '302. M365 - List Tenant Domains [M365]'
+name: '302. M365 (FFC Tenant) - List Tenant Domains [M365]'
 run-name: 'M365: List tenant domains'
 
 on:

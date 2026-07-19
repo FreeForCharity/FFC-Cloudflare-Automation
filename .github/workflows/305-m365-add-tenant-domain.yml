@@ -1,4 +1,11 @@
-name: '305. M365 - Add Tenant Domain (Admin) [M365]'
+name: '305. M365 (FFC Tenant) - Add Tenant Domain (INTERNAL ONLY) [M365]'
+
+# INTERNAL ONLY: adds the domain to the FFC Microsoft 365 tenant. NEVER run this for a charity
+# that has (or will have) their own Microsoft tenant - a domain can only be verified in ONE
+# tenant at a time, so adding it here blocks the charity from adding it to theirs. External
+# charities add the domain in their own admin.microsoft.com first; FFC's role is DNS records
+# only (workflow 105/103) or a Cloudflare domain-admin invite (workflow 122) so they can
+# self-serve. See docs/m365-domain-and-dkim.md (internal vs external).
 run-name: 'M365: Add domain ${{ inputs.domain }}'
 
 on:

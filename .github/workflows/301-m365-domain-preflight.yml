@@ -1,4 +1,8 @@
-name: '301. M365 - Domain Preflight (Read-only) [M365+CF]'
+name: '301. M365 (FFC Tenant) - Domain Preflight (Read-only) [M365+CF]'
+
+# INTERNAL (FFC Microsoft tenant): reads domain status from the FFC M365 tenant via Graph.
+# For charities running their OWN Microsoft tenant this preflight does not apply - their
+# tenant, their admin center. See docs/m365-domain-and-dkim.md (internal vs external).
 
 permissions:
   contents: read

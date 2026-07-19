@@ -31,7 +31,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: claim-sync-${{ github.event_name }}-${{ github.event.pull_request.number || 'sweep' }}
+  # Per-PR for label sync; a single shared 'sweep' group for BOTH the scheduled
+  # and dispatched sweeps so they serialize (never double-comment/double-remove
+  # on the same issue). event_name is deliberately omitted from the sweep key.
+  group: claim-sync-${{ github.event.pull_request.number || 'sweep' }}
   cancel-in-progress: false
 
 jobs:
@@ -44,14 +47,27 @@ jobs:
       issues: write
       pull-requests: read
     steps:
+      # Pin to the PR BASE (reviewed default-branch code), not the PR head, so
+      # this issues:write job never executes claim-sync-lib.js as modified by the
+      # PR under review. Post-merge the base always carries the lib; on the PR
+      # that first introduces it the require is guarded below (bootstrap).
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
       - name: Sync claimed label from linked PR
         uses: actions/github-script@v9
         env:
           PR_ACTION: ${{ github.event.action }}
         with:
           script: |
-            const lib = require(`${process.env.GITHUB_WORKSPACE}/scripts/claim-sync-lib.js`);
+            const libPath = `${process.env.GITHUB_WORKSPACE}/scripts/claim-sync-lib.js`;
+            let lib;
+            try {
+              lib = require(libPath);
+            } catch (e) {
+              core.info('claim-sync-lib.js not on the base ref yet (pre-merge bootstrap); skipping.');
+              return;
+            }
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request;
             const action = process.env.PR_ACTION;
@@ -79,8 +95,9 @@ jobs:
             if (action !== 'closed') {
               // PR active (opened/reopened/edited/ready_for_review/
               // converted_to_draft): ensure every linked OPEN issue is claimed.
-              // (A reference removed via `edited` is reconciled by the sweep,
-              // which sees no open linked PR for that issue.)
+              // (A reference REMOVED via `edited` is not un-claimed here; the
+              // daily sweep eventually releases it once the issue has no open
+              // linked PR AND is idle for the 48h expiry threshold.)
               for (const n of linked) {
                 const { data: issue } = await github.rest.issues
                   .get({ owner, repo, issue_number: n })

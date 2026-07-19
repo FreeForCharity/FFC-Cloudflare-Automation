@@ -54,12 +54,19 @@ HTTP_TIMEOUT = 30  # seconds; fail closed rather than hang the daily sync.
 # the aggregated public feed should never propagate a token that was pasted into
 # a comment by accident. Only recognizable secret shapes are masked; git SHAs,
 # run ids, and ordinary prose are deliberately left intact.
+# A full PEM block: BEGIN header, base64 body, and END footer. Matched FIRST and
+# non-greedily so the entire key material is masked, not just the header line. A
+# fallback for a key whose END line was cut off (e.g. a truncated paste) masks
+# the header plus any following base64/whitespace run.
+_PEM_RE = re.compile(
+    r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----"
+    r"|-----BEGIN[ A-Z]*PRIVATE KEY-----[\sA-Za-z0-9+/=]*",
+)
 _TOKEN_RE = re.compile(
     r"gh[pousr]_[A-Za-z0-9]{20,}"  # GitHub PAT / OAuth / server / refresh tokens
     r"|github_pat_[A-Za-z0-9_]{20,}"  # fine-grained PAT
     r"|xox[baprs]-[A-Za-z0-9-]{10,}"  # Slack tokens
     r"|AKIA[0-9A-Z]{16}"  # AWS access key id
-    r"|-----BEGIN[A-Z ]*PRIVATE KEY-----"  # PEM private key header
 )
 _ASSIGN_RE = re.compile(
     r"((?:password|secret|api[_-]?key|token)\s*[:=]\s*)\S{8,}", re.IGNORECASE
@@ -67,9 +74,11 @@ _ASSIGN_RE = re.compile(
 
 
 def redact(text):
-    """Mask secret-shaped substrings in free text (see _TOKEN_RE / _ASSIGN_RE)."""
+    """Mask secret-shaped substrings in free text (PEM blocks, opaque tokens,
+    and password/secret/token assignments — see the module-level regexes)."""
     if not text:
         return text
+    text = _PEM_RE.sub("[redacted]", text)
     text = _TOKEN_RE.sub("[redacted]", text)
     text = _ASSIGN_RE.sub(lambda m: m.group(1) + "[redacted]", text)
     return text
@@ -84,19 +93,51 @@ def _token():
     return tok
 
 
-def _parse_next_link(link_header):
-    """Return the rel=\"next\" URL from a GitHub Link header, or None."""
+def _link_rel(link_header, rel):
+    """Return the URL for a given ``rel`` (e.g. "next", "last", "prev") from a
+    GitHub Link header, or None."""
     if not link_header:
         return None
+    target = f'rel="{rel}"'
     for part in link_header.split(","):
         segments = part.split(";")
         if len(segments) < 2:
             continue
         url = segments[0].strip().lstrip("<").rstrip(">")
         for seg in segments[1:]:
-            if seg.strip() == 'rel="next"':
+            if seg.strip() == target:
                 return url
     return None
+
+
+def _build_url(path_or_url, params=None):
+    if path_or_url.startswith("http"):
+        url = path_or_url
+    else:
+        url = f"{API_ROOT}/{path_or_url.lstrip('/')}"
+    if params:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}{urllib.parse.urlencode(params)}"
+    return url
+
+
+def _request(path_or_url, token, params=None):
+    """Perform ONE GET and return ``(payload, link_header)``. No pagination."""
+    url = _build_url(path_or_url, params)
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    req.add_header("User-Agent", USER_AGENT)
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+            return payload, resp.headers.get("Link")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace").strip()
+        raise SystemExit(f"error: GitHub API {exc.code} for {url}: {detail}")
+    except urllib.error.URLError as exc:
+        raise SystemExit(f"error: could not reach GitHub API ({url}): {exc.reason}")
 
 
 def rest_get(path_or_url, token, params=None):
@@ -109,35 +150,15 @@ def rest_get(path_or_url, token, params=None):
     callers that need every row of such an endpoint must page it themselves. The
     only object endpoint used here is the waiting-run list, which is bounded well
     under one page (``per_page=100``)."""
-    if path_or_url.startswith("http"):
-        url = path_or_url
-    else:
-        url = f"{API_ROOT}/{path_or_url.lstrip('/')}"
-        if params:
-            url = f"{url}?{urllib.parse.urlencode(params)}"
-
+    url = _build_url(path_or_url, params)
     results = []
     while url:
-        req = urllib.request.Request(url)
-        req.add_header("Authorization", f"Bearer {token}")
-        req.add_header("Accept", "application/vnd.github+json")
-        req.add_header("X-GitHub-Api-Version", "2022-11-28")
-        req.add_header("User-Agent", USER_AGENT)
-        try:
-            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-                link = resp.headers.get("Link")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace").strip()
-            raise SystemExit(f"error: GitHub API {exc.code} for {url}: {detail}")
-        except urllib.error.URLError as exc:
-            raise SystemExit(f"error: could not reach GitHub API ({url}): {exc.reason}")
-
+        payload, link = _request(url, token)
         if isinstance(payload, list):
             results.extend(payload)
         else:
             return payload
-        url = _parse_next_link(link)
+        url = _link_rel(link, "next")
     return results
 
 
@@ -204,12 +225,24 @@ def collect_in_flight_prs(repo, token):
 
 def collect_conductor_log(repo, token):
     """The last N comments on the pinned Conductor log issue, oldest→newest,
-    each body truncated to keep the feed compact and PII-safe-by-brevity."""
-    raw = rest_get(
-        f"repos/{repo}/issues/{CONDUCTOR_LOG_ISSUE}/comments",
-        token,
-        params={"per_page": "100"},
-    )
+    each body redacted + truncated to keep the feed compact and PII-safe.
+
+    Fetches only the **last** page (and the previous one if the last holds fewer
+    than N), not the whole thread — so cost stays ~constant (2–3 requests) as
+    #719 accumulates hundreds of comments, instead of paging all of them daily."""
+    path = f"repos/{repo}/issues/{CONDUCTOR_LOG_ISSUE}/comments"
+    first, link = _request(path, token, params={"per_page": "100"})
+    raw = first if isinstance(first, list) else []
+    last_url = _link_rel(link, "last")
+    if last_url:
+        last_page, last_link = _request(last_url, token)
+        raw = last_page if isinstance(last_page, list) else []
+        if len(raw) < CONDUCTOR_LOG_LIMIT:
+            prev_url = _link_rel(last_link, "prev")
+            if prev_url:
+                prev_page, _ = _request(prev_url, token)
+                if isinstance(prev_page, list):
+                    raw = prev_page + raw
     raw.sort(key=lambda c: c["created_at"])
     recent = raw[-CONDUCTOR_LOG_LIMIT:]
     entries = []

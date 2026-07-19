@@ -315,6 +315,7 @@ try {
         # Live run: every prerequisite must have resolved.
         if (-not $membersListed) { throw "Cannot execute: could not list account members (probe: $($probes.members)), so the idempotency check is impossible. Refusing to risk a duplicate invite." }
         if (-not $pgId) { throw "Cannot execute: permission group id unresolved (probe: $($probes.permissionGroups))." }
+        if (-not $rgId -and $probes.resourceGroups -ne 'granted') { throw "Cannot execute: could not list IAM resource groups (probe: $($probes.resourceGroups)), so an existing zone resource group cannot be ruled out. Refusing to risk creating a duplicate." }
         if (-not $rgId) {
             $rgCreate = Invoke-CfProbe -Method 'POST' -Uri "/accounts/$accountId/iam/resource_groups" -Token $token -Body $rgCreateBody
             if (-not $rgCreate.ok) {

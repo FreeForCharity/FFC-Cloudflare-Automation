@@ -7,6 +7,11 @@ on:
     - cron: '0 13 * * *'
   workflow_dispatch:
 
+# Daily read-only audit of FreeForCharity org repository rulesets and settings
+# drift (branch protections, merge queues, Actions policies) against the
+# documented standard, reported as issues via CBM_TOKEN under the github-prod
+# approval gate.
+#
 # Supersede-on-newer (#722): these daily runs pause at an approval gate; without
 # this, unapproved runs pile up ~12-deep until the janitor reaps them at 7 days.
 # cancel-in-progress cancels the older queued/waiting run the moment the next

@@ -64,6 +64,11 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   error. The `enqueuePullRequest` mutation returns the true reason (unresolved conversation, CodeQL
   still running, …).
 - Never merge with `--admin`; never push to `main`.
+- **Safety-table conflicts are normal, not a red flag.** Prettier reflows every row of
+  `docs/workflow-safety-and-approvals.md` when a new cell widens a column, so two PRs that each "add
+  one row" conflict across the whole table. Resolve by taking `main`'s table, re-inserting your row
+  after its numeric neighbor, then `npx prettier --write` the file and re-run
+  `python3 scripts/check-workflow-doc-consistency.py` + the catalog generator to confirm no drift.
 
 ## Adding or changing a workflow
 

@@ -151,6 +151,31 @@ Describe 'preflight-cutover.mjs exported logic (mocked shapes)' {
         }
     }
 
+    Context 'basePath artifact check (issue #748)' {
+        It 'flags root-relative /FFC-EX-… href/src refs as a blocker' {
+            $expr = '(() => { const r = m.basePathOutcome({body:' +
+            '"<link href=\"/FFC-EX-x.org/_next/x.css\">"}); ' +
+            'return r.ok === false && r.refs.length === 1 && /404 at the apex root/.test(r.detail); })()'
+            Test-PreflightExpr $expr | Should -BeTrue
+        }
+
+        It 'passes an export with no basePath (root-relative) refs' {
+            Test-PreflightExpr 'm.basePathOutcome({body:"<link href=\"/_next/x.css\">"}).ok === true' |
+                Should -BeTrue
+        }
+
+        It 'exempts an absolute external URL that merely contains the repo name' {
+            $expr = 'm.basePathArtifactRefs(' +
+            '"<a href=\"https://github.com/FreeForCharity/FFC-EX-x.org/blob/main/LICENSE\">L</a>"' +
+            ').length === 0'
+            Test-PreflightExpr $expr | Should -BeTrue
+        }
+
+        It 'warns (does not block) when the export body cannot be fetched' {
+            Test-PreflightExpr 'm.basePathOutcome({error:"timeout"}).ok === "warn"' | Should -BeTrue
+        }
+    }
+
     Context 'post-cutover www requirement' {
         It 'fails the verdict when the apex is on Pages but www is unhealthy' {
             $expr = '(() => { const v = m.computeVerdict({originHealthy:true,pointedAtPages:true,' +

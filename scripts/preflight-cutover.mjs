@@ -19,6 +19,10 @@
  *   - Do CAA records let GitHub's certificate authority (Let's Encrypt) issue,
  *     or would HTTPS provisioning silently fail?
  *   - Is the GitHub Pages origin we're cutting TO actually healthy?
+ *   - Was the export built WITHOUT the github.io project basePath? A build
+ *     that still emits root-relative "/FFC-EX-<repo>/…" asset/link refs serves
+ *     fine on the project URL but 404s everything at the apex root after the
+ *     cutover (issue #748) — a hard blocker 121/120's DNS checks can't see.
  *   - Once DNS is changed: is the custom domain live over HTTPS — including
  *     www, which the fleet DNS standard requires (www CNAME -> Pages)?
  *
@@ -257,6 +261,62 @@ export function computeVerdict({ originHealthy, pointedAtPages, blockerCount, ww
   return { code: 'NOT_READY', ok: false, label: `NOT READY — ${blockerCount} blocker(s)` };
 }
 
+// Detect root-relative references that still carry the project basePath in the
+// served export, e.g. href="/FFC-EX-example.org/_next/static/…" or
+// src="/FFC-EX-example.org/…". A build produced with the github.io project
+// basePath works on the default Pages URL (/FFC-EX-<repo>/) but 404s EVERY
+// asset and internal link the moment the apex cutover lands, because at the
+// domain root the correct path is "/_next/…", not "/FFC-EX-<repo>/_next/…"
+// (issue #748; fixed by the conditional-basePath pattern in FFC-EX PR #43).
+//
+// Only ROOT-RELATIVE refs count — the value must begin with "/FFC-EX-". An
+// absolute external URL that merely contains the repo name (e.g. a GitHub
+// LICENSE link https://github.com/FreeForCharity/FFC-EX-example.org/blob/…)
+// starts with a scheme, so the leading-slash anchor exempts it. Returns the
+// deduped list of offending attribute values.
+export function basePathArtifactRefs(body) {
+  const re = /\b(?:href|src)\s*=\s*["'](\/FFC-EX-[^"']*)["']/gi;
+  const out = new Set();
+  let m;
+  while ((m = re.exec(String(body || ''))) !== null) out.add(m[1]);
+  return [...out];
+}
+
+/**
+ * Pure outcome of the basePath artifact check on the served export HTML.
+ *   { ok: true }   no root-relative /FFC-EX-… refs — assets resolve at the root
+ *   { ok: false }  basePath refs present — a hard blocker for 120 (they 404 at
+ *                  the apex root after cutover); the offending refs are returned
+ *   { ok: 'warn' } the export body couldn't be fetched, so identity is
+ *                  unverifiable — non-blocking (origin health is judged
+ *                  separately), but surfaced so the gap is visible
+ */
+export function basePathOutcome({ body = '', error = '' }) {
+  if (error) {
+    return {
+      ok: 'warn',
+      refs: [],
+      detail: `could not fetch the export to check basePath refs: ${error}`,
+    };
+  }
+  const refs = basePathArtifactRefs(body);
+  if (!refs.length) {
+    return {
+      ok: true,
+      refs: [],
+      detail: 'no basePath (root-relative /FFC-EX-…) refs — assets resolve at the apex root',
+    };
+  }
+  const sample = refs.slice(0, 3).join(', ');
+  return {
+    ok: false,
+    refs,
+    detail:
+      `${refs.length} root-relative basePath ref(s) would 404 at the apex root after cutover ` +
+      `(e.g. ${sample}) — rebuild with the conditional-basePath pattern (issue #748) before 120`,
+  };
+}
+
 // --------------------------------------------------------------------------
 // Self-test (offline; no network). Run via --self-test or the Pester wrapper.
 // --------------------------------------------------------------------------
@@ -441,6 +501,46 @@ async function selfTest() {
     'READY',
   );
 
+  // basePathArtifactRefs: flags root-relative /FFC-EX-… href/src values,
+  // dedupes them, and exempts absolute external URLs that merely contain the
+  // repo name (they start with a scheme, not "/").
+  assert.deepEqual(
+    basePathArtifactRefs(
+      '<link href="/FFC-EX-example.org/_next/static/x.css">' +
+        '<script src="/FFC-EX-example.org/_next/chunk.js"></script>' +
+        '<a href="/FFC-EX-example.org/about/">About</a>',
+    ),
+    [
+      '/FFC-EX-example.org/_next/static/x.css',
+      '/FFC-EX-example.org/_next/chunk.js',
+      '/FFC-EX-example.org/about/',
+    ],
+  );
+  assert.deepEqual(basePathArtifactRefs('<link href="/_next/static/x.css">'), []);
+  // External LICENSE-style link containing the repo name is NOT root-relative.
+  assert.deepEqual(
+    basePathArtifactRefs(
+      '<a href="https://github.com/FreeForCharity/FFC-EX-example.org/blob/main/LICENSE">LICENSE</a>',
+    ),
+    [],
+  );
+  // Dedupe repeated refs; tolerate whitespace/single quotes around the value.
+  assert.deepEqual(
+    basePathArtifactRefs("<img src = '/FFC-EX-x.org/a.png'><img src='/FFC-EX-x.org/a.png'>"),
+    ['/FFC-EX-x.org/a.png'],
+  );
+
+  // basePathOutcome: clean export passes; basePath refs are a blocker (ok=false)
+  // and are reported; an unfetchable body warns without blocking.
+  assert.equal(basePathOutcome({ body: '<link href="/_next/x.css">' }).ok, true);
+  {
+    const bad = basePathOutcome({ body: '<link href="/FFC-EX-x.org/_next/x.css">' });
+    assert.equal(bad.ok, false);
+    assert.deepEqual(bad.refs, ['/FFC-EX-x.org/_next/x.css']);
+    assert.match(bad.detail, /404 at the apex root/);
+  }
+  assert.equal(basePathOutcome({ error: 'timeout' }).ok, 'warn');
+
   console.log('self-test OK — classification + verdict logic passed');
 }
 
@@ -620,20 +720,34 @@ async function preflightDomain(domain, origin, marker, originWarning = '') {
   });
   let originHealthy = originRes.healthy;
   record(originRes.healthy, `Pages origin healthy (${origin})`, originRes.detail);
-  if (marker && originRes.healthy) {
-    // Follow to the final content ONLY for the marker check, and say exactly
-    // which URL the marker was verified on.
+  if (originRes.healthy) {
+    // Fetch the served export ONCE (following any redirect to the repo's
+    // configured Pages domain) and reuse it for both the basePath artifact
+    // check and the optional marker check; say exactly which URL was inspected.
     const content = originRes.redirectTarget
       ? await probeHttps(originRes.redirectTarget)
       : originProbe;
     const checkedUrl = content.finalUrl || originRes.redirectTarget || origin;
-    const present = !content.error && content.body.includes(marker);
-    record(
-      present,
-      'Pages origin serves the new site',
-      `marker "${marker}" ${present ? 'present' : 'MISSING'} (checked on ${checkedUrl})`,
-    );
-    originHealthy = originHealthy && present;
+
+    // basePath artifact check: a build carrying the github.io project basePath
+    // serves /FFC-EX-<repo>/… root-relative refs that 404 at the apex root the
+    // moment the cutover lands (issue #748). This is blind to DNS/Pages
+    // plumbing, so 121/120's dry-run never caught it — a hard blocker for 120.
+    const bpRes = basePathOutcome({
+      body: content.error ? '' : content.body,
+      error: content.error,
+    });
+    record(bpRes.ok, `Export has no basePath refs (checked on ${checkedUrl})`, bpRes.detail);
+
+    if (marker) {
+      const present = !content.error && content.body.includes(marker);
+      record(
+        present,
+        'Pages origin serves the new site',
+        `marker "${marker}" ${present ? 'present' : 'MISSING'} (checked on ${checkedUrl})`,
+      );
+      originHealthy = originHealthy && present;
+    }
   }
 
   // 2. Where does the apex resolve now, and is it Pages-ready?

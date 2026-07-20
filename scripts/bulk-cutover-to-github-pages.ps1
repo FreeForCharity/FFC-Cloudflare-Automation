@@ -76,7 +76,12 @@ param(
         '185.199.111.153'
     ),
 
-    [string]$HostPapaIp = '216.222.200.253'
+    [string]$HostPapaIp = '216.222.200.253',
+
+    # Target of the standard www CNAME (FFC org Pages host). #774: the dns-flip
+    # upserts www alongside the apex A records — the first live cutover shipped
+    # without www because only the apex was written here.
+    [string]$WwwTarget = 'freeforcharity.github.io'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -214,15 +219,16 @@ function Set-GhFileContent {
         [Parameter(Mandatory)][string]$Repo,
         [Parameter(Mandatory)][string]$FilePath,
         [Parameter(Mandatory)][string]$NewContent,
-        [Parameter(Mandatory)][string]$Sha,
+        # Omit Sha to CREATE the file (GitHub contents API: PUT without sha).
+        [string]$Sha,
         [Parameter(Mandatory)][string]$CommitMessage
     )
     $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($NewContent))
     $body = @{
         message = $CommitMessage
         content = $encoded
-        sha     = $Sha
     }
+    if (-not [string]::IsNullOrWhiteSpace($Sha)) { $body.sha = $Sha }
     return Invoke-Gh -Method PUT -Path "/repos/$Repo/contents/$FilePath" -Body $body
 }
 
@@ -291,20 +297,25 @@ foreach ($domain in $domainList) {
         Write-Host "[$domain] STEP 1 — CNAME flip in $repo"
 
         try {
-            # #767: switch-style repos (deploy workflow declares a custom_domain
-            # input; the CNAME is BUILD-emitted, never committed) get the
-            # variable+dispatch strategy — committing public/CNAME there would
-            # be inert or fight the switch.
+            # #767/#774: switch-style repos (deploy workflow declares a
+            # custom_domain input; the build derives basePath from the domain
+            # signal). Operator ruling 2026-07-20: the committed public/CNAME
+            # file is the SOURCE OF TRUTH (GitHub Pages standard), so this path
+            # commits the file (which triggers the push deploy) and sets the
+            # CUSTOM_DOMAIN variable only as a fallback for file-less builds.
+            # The Pages custom-domain binding is deliberately NOT set here:
+            # binding before DNS is clean stalls Let's Encrypt issuance (state
+            # 'none'). The 120 workflow's post-DNS job binds + cert-kicks.
             $deployWf = Get-GhFileInfo -Repo $repo -FilePath '.github/workflows/deploy.yml'
             $switchStyle = ($null -ne $deployWf) -and ($deployWf.Content -match 'custom_domain')
-            $fileInfo = if ($switchStyle) { $null } else { Get-GhFileInfo -Repo $repo -FilePath 'public/CNAME' }
+            $fileInfo = Get-GhFileInfo -Repo $repo -FilePath 'public/CNAME'
 
             if ($switchStyle) {
                 Write-Host "[$domain]   Switch-style repo (deploy.yml declares custom_domain)."
                 if ($DryRun) {
-                    Write-Host "[$domain]   [DRY-RUN] Would set repo variable CUSTOM_DOMAIN=$domain, set the Pages binding, and dispatch deploy.yml (build-emitted CNAME strategy)"
+                    Write-Host "[$domain]   [DRY-RUN] Would set repo variable CUSTOM_DOMAIN=$domain and commit public/CNAME='$domain' (push triggers deploy; binding is set post-DNS by the workflow)"
                     $result.CnameStatus = 'DRY-RUN'
-                    $result.CnameDetail = "Would set var CUSTOM_DOMAIN=$domain + dispatch deploy (switch-style)"
+                    $result.CnameDetail = "Would set var CUSTOM_DOMAIN=$domain + commit public/CNAME (switch-style)"
                 }
                 else {
                     Write-Host "[$domain]   Setting repo variable CUSTOM_DOMAIN=$domain"
@@ -314,14 +325,17 @@ foreach ($domain in $domainList) {
                     catch {
                         $null = Invoke-Gh -Method POST -Path "/repos/$repo/actions/variables" -Body @{ name = 'CUSTOM_DOMAIN'; value = $domain }
                     }
-                    # Workflow-deployed Pages do NOT take their binding from the
-                    # artifact's CNAME file (branch builds only) - set it explicitly.
-                    Write-Host "[$domain]   Setting Pages custom-domain binding to $domain"
-                    $null = Invoke-Gh -Method PUT -Path "/repos/$repo/pages" -Body @{ cname = $domain }
-                    Write-Host "[$domain]   Dispatching deploy.yml with custom_domain=$domain"
-                    $null = Invoke-Gh -Method POST -Path "/repos/$repo/actions/workflows/deploy.yml/dispatches" -Body @{ ref = 'main'; inputs = @{ custom_domain = $domain } }
+                    if ($fileInfo -and $fileInfo.Content -eq $domain) {
+                        Write-Host "[$domain]   public/CNAME already '$domain' — no commit needed."
+                    }
+                    else {
+                        Write-Host "[$domain]   Committing public/CNAME='$domain' (source of truth; push triggers deploy)"
+                        $commitMsg = "chore: commit CNAME $domain as custom-domain source of truth`n`n[automated cutover #774]"
+                        $null = Set-GhFileContent -Repo $repo -FilePath 'public/CNAME' `
+                            -NewContent "$domain`n" -Sha $(if ($fileInfo) { $fileInfo.Sha } else { '' }) -CommitMessage $commitMsg
+                    }
                     $result.CnameStatus = 'OK'
-                    $result.CnameDetail = "Set var CUSTOM_DOMAIN=$domain + Pages binding + dispatched deploy (switch-style)"
+                    $result.CnameDetail = "Set var CUSTOM_DOMAIN=$domain + committed public/CNAME (switch-style; binding post-DNS)"
                 }
             }
             elseif ($null -eq $fileInfo) {
@@ -524,6 +538,53 @@ foreach ($domain in $domainList) {
                             $createdMsg = if ($toCreate.Count -gt 0) { "Created $($toCreate.Count) GH Pages record(s)" } else { '' }
                             $result.DnsDetail = "$deletedMsg$createdMsg".TrimEnd(' ;')
                         }
+                    }
+                }
+
+                # --- www CNAME upsert (#774) ---
+                # The apex/www standard is BOTH: apex A x4 AND www CNAME -> the
+                # org Pages host (dns-only, so Pages can serve the redirect and
+                # issue the www SAN cert). Runs even when the apex was already
+                # correct — the first live cutover shipped apex-only.
+                $wwwName = "www.$domain"
+                $encodedWww = [uri]::EscapeDataString($wwwName)
+                $wwwResp = Invoke-Cf -Method GET -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records?name=$encodedWww&per_page=50"
+                $wwwRecords = @(if ($wwwResp.success -and $wwwResp.result) { $wwwResp.result } else { @() })
+                $wwwGood = @($wwwRecords | Where-Object { $_.type -eq 'CNAME' -and $_.content -eq $WwwTarget -and -not $_.proxied })
+
+                if ($wwwGood.Count -gt 0 -and $wwwRecords.Count -eq $wwwGood.Count) {
+                    Write-Host "[$domain]   www already correct: CNAME -> $WwwTarget (dns-only)."
+                }
+                elseif ($wwwRecords.Count -gt 0) {
+                    Write-Warning "[$domain]   www has $($wwwRecords.Count) unexpected record(s) — left untouched (fix manually or via 106):"
+                    foreach ($r in $wwwRecords) {
+                        Write-Warning ("    - {0} {1} -> {2} (proxied={3})" -f $r.type, $r.name, $r.content, $r.proxied)
+                    }
+                    $result.DnsDetail = "$($result.DnsDetail); www UNEXPECTED ($($wwwRecords.Count) record(s) left untouched)".TrimStart('; ')
+                }
+                elseif ($DryRun) {
+                    Write-Host "[$domain]   [DRY-RUN] Would CREATE CNAME $wwwName -> $WwwTarget (proxied=false)"
+                    $result.DnsDetail = "$($result.DnsDetail); would create www CNAME".TrimStart('; ')
+                }
+                else {
+                    Write-Host "[$domain]   Creating CNAME $wwwName -> $WwwTarget (proxied=false)..."
+                    $wwwBody = @{
+                        type    = 'CNAME'
+                        name    = 'www'
+                        content = $WwwTarget
+                        ttl     = 1
+                        proxied = $false
+                    }
+                    $wwwCreate = Invoke-Cf -Method POST -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records" -Body $wwwBody
+                    if ($wwwCreate.success) {
+                        Write-Host "[$domain]   Created www CNAME."
+                        $result.DnsDetail = "$($result.DnsDetail); created www CNAME".TrimStart('; ')
+                    }
+                    else {
+                        $msg = ($wwwCreate.errors | ConvertTo-Json -Depth 4 -Compress)
+                        Write-Warning "[$domain]   www CREATE failed: $msg"
+                        $result.DnsStatus = 'FAIL'
+                        $result.DnsDetail = "$($result.DnsDetail); www CREATE failed: $msg".TrimStart('; ')
                     }
                 }
             }

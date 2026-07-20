@@ -291,9 +291,40 @@ foreach ($domain in $domainList) {
         Write-Host "[$domain] STEP 1 — CNAME flip in $repo"
 
         try {
-            $fileInfo = Get-GhFileInfo -Repo $repo -FilePath 'public/CNAME'
+            # #767: switch-style repos (deploy workflow declares a custom_domain
+            # input; the CNAME is BUILD-emitted, never committed) get the
+            # variable+dispatch strategy — committing public/CNAME there would
+            # be inert or fight the switch.
+            $deployWf = Get-GhFileInfo -Repo $repo -FilePath '.github/workflows/deploy.yml'
+            $switchStyle = ($null -ne $deployWf) -and ($deployWf.Content -match 'custom_domain')
+            $fileInfo = if ($switchStyle) { $null } else { Get-GhFileInfo -Repo $repo -FilePath 'public/CNAME' }
 
-            if ($null -eq $fileInfo) {
+            if ($switchStyle) {
+                Write-Host "[$domain]   Switch-style repo (deploy.yml declares custom_domain)."
+                if ($DryRun) {
+                    Write-Host "[$domain]   [DRY-RUN] Would set repo variable CUSTOM_DOMAIN=$domain, set the Pages binding, and dispatch deploy.yml (build-emitted CNAME strategy)"
+                    $result.CnameStatus = 'DRY-RUN'
+                    $result.CnameDetail = "Would set var CUSTOM_DOMAIN=$domain + dispatch deploy (switch-style)"
+                }
+                else {
+                    Write-Host "[$domain]   Setting repo variable CUSTOM_DOMAIN=$domain"
+                    try {
+                        $null = Invoke-Gh -Method PATCH -Path "/repos/$repo/actions/variables/CUSTOM_DOMAIN" -Body @{ name = 'CUSTOM_DOMAIN'; value = $domain }
+                    }
+                    catch {
+                        $null = Invoke-Gh -Method POST -Path "/repos/$repo/actions/variables" -Body @{ name = 'CUSTOM_DOMAIN'; value = $domain }
+                    }
+                    # Workflow-deployed Pages do NOT take their binding from the
+                    # artifact's CNAME file (branch builds only) - set it explicitly.
+                    Write-Host "[$domain]   Setting Pages custom-domain binding to $domain"
+                    $null = Invoke-Gh -Method PUT -Path "/repos/$repo/pages" -Body @{ cname = $domain }
+                    Write-Host "[$domain]   Dispatching deploy.yml with custom_domain=$domain"
+                    $null = Invoke-Gh -Method POST -Path "/repos/$repo/actions/workflows/deploy.yml/dispatches" -Body @{ ref = 'main'; inputs = @{ custom_domain = $domain } }
+                    $result.CnameStatus = 'OK'
+                    $result.CnameDetail = "Set var CUSTOM_DOMAIN=$domain + Pages binding + dispatched deploy (switch-style)"
+                }
+            }
+            elseif ($null -eq $fileInfo) {
                 Write-Warning "[$domain] public/CNAME not found in $repo — skipping CNAME step."
                 $result.CnameStatus = 'SKIP'
                 $result.CnameDetail = 'public/CNAME not found in repo'

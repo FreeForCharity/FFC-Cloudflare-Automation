@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["@anthropic/claude-code-playwright"],
+      "note": "Playwright MCP - Browser automation for site testing, screenshots, accessibility audits. Also available as Claude Code plugin via /install-plugin playwright."
+    }
+  }
+}

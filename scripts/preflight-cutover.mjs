@@ -225,6 +225,22 @@ export function originProbeOutcome({ domain, status, location = '', error = '' }
 }
 
 /**
+ * #766: does the exported HTML still carry root-relative project-basePath
+ * references (href/src starting with /FFC-EX-<repo>/)? Such an artifact 404s
+ * every asset the moment it serves at the apex root — the failure class the
+ * 2026-07-19 live-proof found on technomonasteries. External URLs that merely
+ * contain the repo name (GitHub LICENSE links etc.) do not match: the pattern
+ * requires the attribute value to START with the root-relative prefix.
+ */
+export function basePathMismatch(html, repoName) {
+  if (!html || !repoName) return { mismatch: false, count: 0 };
+  // Repo names only contain [A-Za-z0-9.-]; the dot is the sole regex metachar.
+  const re = new RegExp(`(?:href|src)="/${repoName.replace(/\./g, '\\.')}/`, 'g');
+  const matches = html.match(re) || [];
+  return { mismatch: matches.length > 0, count: matches.length };
+}
+
+/**
  * The go/no-go verdict for one domain.
  *   originHealthy  the GitHub Pages origin returns 200 or redirects to the
  *                  repo's configured Pages domain (and serves the marker, if any)
@@ -441,6 +457,26 @@ async function selfTest() {
     'READY',
   );
 
+  // basePathMismatch (#766): root-relative refs flag; external URLs with the
+  // repo name in the PATH of another host do not.
+  assert.equal(
+    basePathMismatch('<a href="/FFC-EX-x.org/about/">a</a>', 'FFC-EX-x.org').mismatch,
+    true,
+  );
+  assert.equal(
+    basePathMismatch('<script src="/FFC-EX-x.org/_next/a.js"></script>', 'FFC-EX-x.org').count,
+    1,
+  );
+  assert.equal(
+    basePathMismatch(
+      '<a href="https://github.com/Org/FFC-EX-x.org/blob/main/LICENSE">L</a>',
+      'FFC-EX-x.org',
+    ).mismatch,
+    false,
+  );
+  assert.equal(basePathMismatch('<a href="/about/">a</a>', 'FFC-EX-x.org').mismatch, false);
+  assert.equal(basePathMismatch('', 'FFC-EX-x.org').mismatch, false);
+
   console.log('self-test OK — classification + verdict logic passed');
 }
 
@@ -634,6 +670,31 @@ async function preflightDomain(domain, origin, marker, originWarning = '') {
       `marker "${marker}" ${present ? 'present' : 'MISSING'} (checked on ${checkedUrl})`,
     );
     originHealthy = originHealthy && present;
+  }
+
+  // 1b. #766: the artifact itself must be apex-ready — root-relative
+  // project-basePath refs mean the export was built for the project URL and
+  // would 404 all assets at the apex. Hard blocker.
+  if (originRes.healthy) {
+    const repoName = (() => {
+      try {
+        return new URL(origin).pathname.replaceAll('/', '') || '';
+      } catch {
+        return '';
+      }
+    })();
+    const artifact = originRes.redirectTarget
+      ? await probeHttps(originRes.redirectTarget)
+      : await probeHttps(origin);
+    const bp = basePathMismatch(artifact.body || '', repoName);
+    record(
+      !bp.mismatch,
+      'Artifact apex-ready (no project-basePath refs)',
+      bp.mismatch
+        ? `${bp.count} root-relative /${repoName}/ href/src ref(s) — rebuild with the custom-domain switch before cutover`
+        : 'exported HTML is root-relative-clean',
+    );
+    if (bp.mismatch) originHealthy = false;
   }
 
   // 2. Where does the apex resolve now, and is it Pages-ready?

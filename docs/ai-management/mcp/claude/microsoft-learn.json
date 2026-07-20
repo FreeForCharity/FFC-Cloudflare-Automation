@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "microsoft-learn": {
+      "type": "http",
+      "url": "https://learn.microsoft.com/api/mcp",
+      "note": "Microsoft Learn MCP - Access M365 documentation, Azure guides, PowerShell references, DKIM/email configuration docs. No auth required."
+    }
+  }
+}

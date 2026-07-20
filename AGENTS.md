@@ -59,8 +59,8 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
 - **Review threads must be resolved before the queue accepts a PR.** Fix real findings first, then
   resolve via GraphQL: `resolveReviewThread(input:{threadId:…})`.
 - **Copilot re-reviews every push and can file fresh threads.** After pushing fixes, re-poll
-  `reviewThreads` before promoting or queueing — one resolution pass is not enough (a 2026-07-20
-  PR needed three rounds).
+  `reviewThreads` before promoting or queueing — one resolution pass is not enough (a 2026-07-20 PR
+  needed three rounds).
 - **Supersession check before ready+queue.** Before promoting a PR, grep `main` for the
   function/capability names the PR adds — a same-purpose implementation may have landed on `main`
   after the PR branched (on 2026-07-20, #772's basePath probe duplicated `basePathMismatch` merged

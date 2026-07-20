@@ -8,8 +8,10 @@ run-name: 'Claim sync: ${{ github.event_name }}'
 #      the PR body and add `claimed` to those open hub issues while the PR is
 #      active; remove it when the last open linked PR closes/merges.
 #   2. Daily sweep (schedule): release stale hand-labeled claims — issues
-#      labeled `claimed` with no open linked PR and no activity for 48h — across
-#      the hub AND ffcadmin, so an abandoned claim frees itself.
+#      labeled `claimed` with no open linked PR and no activity for 48h — in
+#      this repo, so an abandoned claim frees itself. (ffcadmin needs its own
+#      sweep: cross-repo writes require CBM_TOKEN, which lives only in the
+#      gated github-prod environment — unusable for an ungated daily job.)
 #
 # Writes issues/labels only; no external API; ungated. The decision logic lives
 # in scripts/claim-sync-lib.js (unit-tested in tests/workflow-logic/).
@@ -135,31 +137,35 @@ jobs:
               core.info(`Released #${n} (PR #${pr.number} closed).`);
             }
 
-  # --- Half 2: daily sweep of expired claims (hub + ffcadmin) -----------------
+  # --- Half 2: daily sweep of expired claims (this repo) ----------------------
   sweep:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      issues: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
       - name: Release expired claims
         uses: actions/github-script@v9
-        # CBM_TOKEN so the sweep can read/mutate issues in ffcadmin too, not just
-        # the hub (the ambient GITHUB_TOKEN is scoped to this repo).
+        # Ambient GITHUB_TOKEN (issues: write) — hub-only. CBM_TOKEN is an
+        # environment secret in gated github-prod, so it is EMPTY here on
+        # schedule events (first scheduled fire 2026-07-20 failed on exactly
+        # that); an ungated daily sweep cannot use it, and cross-repo mutation
+        # of ffcadmin is therefore out of scope for this job.
         env:
           DRY_RUN:
             ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run || 'false'
             }}
         with:
-          github-token: ${{ secrets.CBM_TOKEN }}
           script: |
             const lib = require(`${process.env.GITHUB_WORKSPACE}/scripts/claim-sync-lib.js`);
             const dryRun = String(process.env.DRY_RUN) === 'true';
             const now = Date.now();
 
-            // Bounded pager (see label-sync): cap pages so a daily sweep of two
-            // repos can't spike the shared REST budget. `labels=claimed` already
+            // Bounded pager (see label-sync): cap pages so the daily sweep
+            // can't spike the shared REST budget. `labels=claimed` already
             // keeps the issue result set tiny.
             const listOpen = async (method, params, maxPages = 5) => {
               const out = [];
@@ -173,7 +179,6 @@ jobs:
 
             const targets = [
               { owner: 'FreeForCharity', repo: 'FFC-Cloudflare-Automation' },
-              { owner: 'FreeForCharity', repo: 'FFC-IN-ffcadmin.org' },
             ];
             const released = [];
             for (const t of targets) {

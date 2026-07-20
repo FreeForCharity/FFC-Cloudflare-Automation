@@ -20,7 +20,34 @@ WF_GLOB = ".github/workflows/*.yml"
 DOC = "docs/workflow-safety-and-approvals.md"
 
 # Display numbers intentionally NOT in the operator safety table (CI / repo plumbing).
-EXCLUDE = {"703", "720", "721", "722", "723", "724", "725", "727", "728"}
+EXCLUDE = {"721", "722", "723", "724", "725", "727", "728"}
+
+# Environments with required reviewers (approval gates). Source of truth: the
+# "Environment approval gates" layer in docs/workflow-safety-and-approvals.md,
+# audited by workflow 730. A workflow that pauses at one of these gates is
+# operator-facing by definition and must NOT be in EXCLUDE — the gate approver
+# needs a safety-table row to judge the run against (703 hid this way until
+# 2026-07-20). Update alongside the doc after any Settings → Environments change.
+GATED_ENVS = {
+    "cloudflare-prod",
+    "cloudflare-prod-write",
+    "github-prod",
+    "m365-prod",
+    "whmcs-prod",
+    "wpmudev-prod",
+}
+
+
+def declared_environments(txt):
+    """Environment names a workflow YAML declares (inline and block forms)."""
+    envs = set(re.findall(r"^\s*environment:\s*['\"]?([A-Za-z0-9_-]+)['\"]?\s*$", txt, re.M))
+    envs.discard("name")  # block form: `environment:` followed by `name:`
+    for m in re.finditer(r"^\s*environment:\s*$", txt, re.M):
+        rest = txt[m.end() :]
+        n = re.search(r"^\s*name:\s*['\"]?([A-Za-z0-9_-]+)", rest, re.M)
+        if n:
+            envs.add(n.group(1))
+    return envs
 
 
 def two(n):
@@ -60,6 +87,17 @@ def main():
             continue
         if num not in covered:
             errors.append(f"workflow {num} ({f}) has no row in {DOC}")
+
+    # Excluded workflows must not sit behind an approval gate — a gated run needs
+    # a safety-table row for the approver to judge it against.
+    for num in sorted(EXCLUDE & set(wf_nums)):
+        f = wf_nums[num]
+        gated = declared_environments(open(f, encoding="utf-8-sig").read()) & GATED_ENVS
+        if gated:
+            errors.append(
+                f"workflow {num} ({f}) is in EXCLUDE but declares gated "
+                f"environment(s) {sorted(gated)}; add a row to {DOC} instead"
+            )
 
     # Phantom rows: every table number must map to a real workflow.
     for num in sorted(covered):

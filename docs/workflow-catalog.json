@@ -1404,9 +1404,9 @@
         "github-prod"
       ],
       "description": "Generates the merged FFC sites list from the WHMCS / Cloudflare / WPMUDEV exports plus the curated base list, runs per-domain health checks, and commits both sites-list/sites_list.csv and sites-list/sites_list.json.  This repo owns the export environments (whmcs-prod, cloudflare-prod-read, wpmudev-prod) and the GitHub PAT (CBM_TOKEN in github-prod) needed to dispatch the sibling export workflows, so generation lives here. Downstream consumers (e.g. ffcadmin.org) pull the published files from this repo.",
-      "safetyLevel": "",
-      "approvalEnv": "",
-      "guard": "",
+      "safetyLevel": "Writes (data PR only)",
+      "approvalEnv": "\u2705 github-prod",
+      "guard": "dispatches read-only exports 201/108/601 (601 waits on its own wpmudev-prod gate); regenerates `sites-list/` CSV+JSON; opens a data PR (never pushes to `main`); weekly Mon 08:00Z + dispatch; serialized concurrency group",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },
@@ -1444,9 +1444,9 @@
         "github-prod"
       ],
       "description": "",
-      "safetyLevel": "",
-      "approvalEnv": "",
-      "guard": "",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 github-prod",
+      "guard": "dispatch-only; creates an FFC-EX repo from a template (no dry_run \u2014 gate is the only stop); duplicate-repo warning text in inputs; visibility/Pages options set at creation",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

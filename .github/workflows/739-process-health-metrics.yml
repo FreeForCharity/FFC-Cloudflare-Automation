@@ -1,0 +1,153 @@
+name: '739. Repo - Process Health Metrics Report [GH]'
+run-name: 'Process health metrics report'
+
+# Weekly, read-only "monitor the monitors" report for the Agentic OS
+# (process-assurance epic #752, issue #756). A REST sweep of THIS repo turns the
+# backlog + data-pipeline signals into a metrics object and posts it as a new
+# comment on the Conductor log (#719) — the comment thread is the visible trend
+# history. Each comment embeds its metrics in a hidden data block; the next run
+# reads the most recent block to render week-over-week deltas ("trends over
+# absolute numbers"). The same JSON is uploaded as an artifact for later
+# ffcadmin rendering (#723).
+#
+# Read-only: the ambient GITHUB_TOKEN reads issues + Actions runs and writes ONE
+# comment on #719 in this repo. No external API, no environment gate, no push to
+# `main`. Aggregation/trend/render logic lives in
+# scripts/process-health-metrics-lib.js (unit-tested under tests/workflow-logic/).
+
+on:
+  schedule:
+    # Weekly, Monday 06:00 UTC (ahead of the 738 drift audit at 07:00).
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+env:
+  # Data-pipeline workflows tracked for the success-rate metric, by file-number
+  # prefix: 502 = daily GA + data-sync PR, 703 = fleet sites-list generate.
+  # Extend as pipelines land (campaigns registry #746, fleet refresh).
+  PIPELINE_NUMBERS: '502,703'
+  LOG_ISSUE: '719'
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for the metrics library)
+        uses: actions/checkout@v7
+
+      - name: Gather, compute, and post the weekly report
+        uses: actions/github-script@v9
+        env:
+          PIPELINE_NUMBERS: ${{ env.PIPELINE_NUMBERS }}
+          LOG_ISSUE: ${{ env.LOG_ISSUE }}
+        with:
+          script: |
+            const fs = require('fs');
+            const lib = require('./scripts/process-health-metrics-lib.js');
+            const { owner, repo } = context.repo;
+            const nowMs = Date.now();
+            const nowIso = new Date(nowMs).toISOString();
+            const throughputCut = new Date(nowMs - lib.THROUGHPUT_WINDOW_DAYS * 86400e3);
+            const pipelineCut = new Date(nowMs - lib.PIPELINE_WINDOW_DAYS * 86400e3);
+
+            // Issues API returns PRs too; drop them everywhere.
+            const isIssue = (i) => i && !i.pull_request;
+
+            // Open issues carrying a given label (all pages; the backlog is small).
+            async function openWithLabel(label) {
+              const all = await github.paginate(github.rest.issues.listForRepo, {
+                owner, repo, state: 'open', labels: label, per_page: 100,
+              });
+              return all.filter(isIssue);
+            }
+
+            // Issues with a label closed within the throughput window. `since`
+            // (updated_at) bounds the fetch; closed_at bounds the count.
+            async function closedWithLabel(label) {
+              const all = await github.paginate(github.rest.issues.listForRepo, {
+                owner, repo, state: 'closed', labels: label,
+                since: throughputCut.toISOString(), per_page: 100,
+              });
+              return all.filter(
+                (i) => isIssue(i) && i.closed_at && new Date(i.closed_at) >= throughputCut,
+              );
+            }
+
+            const smokeOpen = await openWithLabel('smoke-failure');
+            const smokeClosed = await closedWithLabel('smoke-failure');
+            const claimedOpen = await openWithLabel('claimed');
+            const agenticOpen = await openWithLabel('agentic-os');
+            const agenticClosed = await closedWithLabel('agentic-os');
+
+            // Data-pipeline runs in the pipeline window, matched by file-number
+            // prefix on the run path (robust to display-name edits).
+            const nums = (process.env.PIPELINE_NUMBERS || '')
+              .split(',').map((s) => s.trim()).filter(Boolean);
+            const matchesPipeline = (p) => {
+              const base = (p || '').split('/').pop() || '';
+              return nums.some((n) => base.startsWith(n + '-'));
+            };
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner, repo, created: `>=${pipelineCut.toISOString()}`, per_page: 100,
+            });
+            const pipelineRuns = runs
+              .filter((r) => matchesPipeline(r.path) && r.conclusion) // exclude in-progress
+              .map((r) => ({ name: r.name || r.path, conclusion: r.conclusion }));
+
+            const metrics = lib.computeMetrics({
+              nowIso,
+              smokeOpen: smokeOpen.map((i) => ({ created_at: i.created_at })),
+              smokeClosedRecent: smokeClosed.map((i) => ({
+                created_at: i.created_at, closed_at: i.closed_at,
+              })),
+              claimedOpen: claimedOpen.map((i) => ({ created_at: i.created_at })),
+              agenticOpen: agenticOpen.length,
+              agenticClosedRecent: agenticClosed.length,
+              pipelineRuns,
+            });
+
+            // Previous metrics: newest hidden data block among #719's comments.
+            const logIssue = Number(process.env.LOG_ISSUE);
+            let previous = null;
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: logIssue, per_page: 100,
+              });
+              previous = lib.extractPreviousMetrics(comments);
+            } catch (e) {
+              core.warning(`Could not read #${logIssue} comments for trend baseline: ${e.message}`);
+            }
+
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = lib.renderReport(metrics, previous, { runUrl });
+
+            fs.writeFileSync('process-health-metrics.json', JSON.stringify(metrics, null, 2));
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: logIssue, body,
+            });
+            core.summary
+              .addHeading('Process health metrics (weekly)')
+              .addRaw(
+                `Open smoke failures: ${metrics.smokeFailures.open}; open claims: ` +
+                  `${metrics.claims.open}; agentic-os backlog: ${metrics.agenticOs.open}; ` +
+                  `data-pipeline success: ${metrics.dataPipeline.success}/${metrics.dataPipeline.runs}. ` +
+                  `Posted to #${logIssue}.`,
+              )
+              .write();
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: process-health-metrics
+          path: process-health-metrics.json
+          retention-days: 90
+          if-no-files-found: error

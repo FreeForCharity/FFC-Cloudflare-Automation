@@ -1,0 +1,181 @@
+name: '738. Repo - Fleet Smoke Engine Drift Audit [Org]'
+run-name: 'Fleet Smoke Engine Drift Audit'
+
+# Weekly byte-identity audit of the canonical post-deploy smoke engine across the
+# FFC fleet. Two fix variants once raced into the fleet (2026-07-19), so this
+# mechanically compares every deployed `.github/workflows/post-deploy-smoke.yml`
+# against the canonical copy in FFC-IN-FFC_Single_Page_Template@main and upserts a
+# single rolling issue on divergence (auto-closing when the fleet is uniform).
+#
+# Read-only: GITHUB_TOKEN reads public repo contents org-wide and lists the org's
+# public repos; the only write is the rolling issue in THIS repo. No external API,
+# no environment gate. Comparison/report logic lives in
+# scripts/fleet-smoke-drift-lib.js (unit-tested under tests/workflow-logic/).
+
+on:
+  schedule:
+    # Weekly, Monday 07:00 UTC
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CANONICAL_REPO: FreeForCharity/FFC-IN-FFC_Single_Page_Template
+  SMOKE_PATH: .github/workflows/post-deploy-smoke.yml
+  ORG: FreeForCharity
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout (for the comparison library)
+        uses: actions/checkout@v7
+
+      - name: Gather smoke-engine hashes across the fleet
+        id: gather
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # Echoes one of: the sha256 hex of the raw file; the sentinel ABSENT
+          # when the file is missing (404); or ERROR:<msg> on any other fetch
+          # failure (auth/rate-limit/transient). Callers switch on these three.
+          fetch_hash() {
+            local repo="$1" out rc
+            out=$(gh api "repos/${repo}/contents/${SMOKE_PATH}" \
+                    -H "Accept: application/vnd.github.raw" 2>/tmp/err)
+            rc=$?
+            if [ "$rc" -ne 0 ]; then
+              if grep -qi "Not Found" /tmp/err; then
+                echo "ABSENT"
+              else
+                echo "ERROR:$(head -c 200 /tmp/err | tr '\n' ' ')"
+              fi
+              return 0
+            fi
+            printf '%s' "$out" | sha256sum | cut -d' ' -f1
+          }
+
+          canonical_hash=$(fetch_hash "$CANONICAL_REPO")
+          case "$canonical_hash" in
+            ABSENT|ERROR:*)
+              echo "::error::Could not read canonical smoke workflow from $CANONICAL_REPO ($canonical_hash)"
+              exit 1
+              ;;
+          esac
+          echo "Canonical $CANONICAL_REPO -> $canonical_hash"
+          echo "canonical_hash=$canonical_hash" >> "$GITHUB_OUTPUT"
+
+          # Fleet = every non-archived FFC-EX-* repo + the Footer-Only template.
+          # The canonical Single-Page template is the baseline, not a comparand.
+          mapfile -t repos < <(
+            gh repo list "$ORG" --limit 1000 --no-archived \
+              --json name --jq '.[].name' \
+            | grep -E '^(FFC-EX-|FFC-IN-Footer_Only_Template$)' | sort -u
+          )
+          echo "Fleet size: ${#repos[@]}"
+
+          entries="/tmp/entries.json"
+          echo "[]" > "$entries"
+          for repo in "${repos[@]}"; do
+            [ -z "$repo" ] && continue
+            full="${ORG}/${repo}"
+            h=$(fetch_hash "$full")
+            case "$h" in
+              ABSENT)
+                jq --arg r "$full" '. += [{"repo":$r,"hash":null}]' "$entries" > "$entries.tmp" && mv "$entries.tmp" "$entries"
+                echo "  $full -> (absent)"
+                ;;
+              ERROR:*)
+                msg="${h#ERROR:}"
+                jq --arg r "$full" --arg e "$msg" '. += [{"repo":$r,"error":$e}]' "$entries" > "$entries.tmp" && mv "$entries.tmp" "$entries"
+                echo "::warning::$full smoke fetch failed: $msg"
+                ;;
+              *)
+                jq --arg r "$full" --arg h "$h" '. += [{"repo":$r,"hash":$h}]' "$entries" > "$entries.tmp" && mv "$entries.tmp" "$entries"
+                echo "  $full -> $h"
+                ;;
+            esac
+          done
+          echo "entries_file=$entries" >> "$GITHUB_OUTPUT"
+
+      - name: Analyze + upsert/close rolling issue
+        uses: actions/github-script@v9
+        env:
+          CANONICAL_HASH: ${{ steps.gather.outputs.canonical_hash }}
+          ENTRIES_FILE: ${{ steps.gather.outputs.entries_file }}
+        with:
+          script: |
+            const fs = require('fs');
+            const lib = require('./scripts/fleet-smoke-drift-lib.js');
+
+            const canonicalHash = process.env.CANONICAL_HASH;
+            const entries = JSON.parse(fs.readFileSync(process.env.ENTRIES_FILE, 'utf8'));
+            const analysis = lib.analyze(canonicalHash, entries);
+            core.notice(
+              `divergent=${analysis.divergent.length} matching=${analysis.matching.length} ` +
+                `missing=${analysis.missing.length} unreadable=${analysis.unreadable.length}`,
+            );
+
+            const { owner, repo } = context.repo;
+
+            // Find the rolling issue by its marker (search independent of labels,
+            // which may not exist on first run).
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            const existing = open.find((i) => i.body && i.body.includes(lib.MARKER));
+
+            if (!analysis.hasDrift) {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: existing.number,
+                  body: `✅ Recovered: the fleet smoke engine is byte-identical across all deployed repos ([run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})). Auto-closing.`,
+                });
+                await github.rest.issues.update({
+                  owner, repo, issue_number: existing.number, state: 'closed', state_reason: 'completed',
+                });
+                core.notice(`Closed rolling issue #${existing.number}`);
+              } else {
+                core.notice('No drift and no open rolling issue — nothing to do.');
+              }
+              return;
+            }
+
+            // Ensure the unified-triage labels exist (the hub may not carry them
+            // yet) before applying them on either the create OR update path — an
+            // upsert must converge the labels too, not only the body (e.g. if a
+            // label was stripped manually or predates this workflow).
+            const labelColors = { 'smoke-failure': 'b60205', 'priority: high': 'd93f0b', 'agentic-os': '5319e7' };
+            for (const name of lib.ISSUE_LABELS) {
+              try {
+                await github.rest.issues.createLabel({ owner, repo, name, color: labelColors[name] || 'ededed' });
+              } catch (e) {
+                if (e.status !== 422) throw e; // 422 = already exists
+              }
+            }
+
+            const body = lib.renderBody(analysis, canonicalHash, new Date().toISOString());
+            if (existing) {
+              await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
+              // Additive so any human-added labels survive; restores stripped triage labels.
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: existing.number, labels: lib.ISSUE_LABELS,
+              });
+              core.notice(`Updated rolling issue #${existing.number} (${analysis.divergent.length} divergent)`);
+              return;
+            }
+
+            const created = await github.rest.issues.create({
+              owner, repo, title: lib.ISSUE_TITLE, labels: lib.ISSUE_LABELS, body,
+            });
+            core.notice(`Opened rolling issue #${created.data.number} (${analysis.divergent.length} divergent)`);

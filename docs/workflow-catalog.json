@@ -1786,6 +1786,25 @@
       "categoryCode": "GH"
     },
     {
+      "number": 738,
+      "title": "Repo - Fleet Smoke Engine Drift Audit",
+      "apis": [
+        "Org"
+      ],
+      "file": "738-fleet-smoke-engine-drift-audit.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Weekly byte-identity audit of the canonical post-deploy smoke engine across the FFC fleet. Two fix variants once raced into the fleet (2026-07-19), so this mechanically compares every deployed `.github/workflows/post-deploy-smoke.yml` against the canonical copy in FFC-IN-FFC_Single_Page_Template@main and upserts a single rolling issue on divergence (auto-closing when the fleet is uniform).  Read-only: GITHUB_TOKEN reads public repo contents org-wide and lists the org's public repos; the only write is the rolling issue in THIS repo. No external API, no environment gate. Comparison/report logic lives in scripts/fleet-smoke-drift-lib.js (unit-tested under tests/workflow-logic/).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "weekly SHA-256 byte-identity audit of `post-deploy-smoke.yml` across the fleet vs canonical (FFC-IN-FFC_Single_Page_Template@main); rolling issue upsert/close on divergence; GITHUB_TOKEN (public reads + own-repo issue), no external API, ungated",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 801,
       "title": "Candid - Charity Check (EIN)",
       "apis": [

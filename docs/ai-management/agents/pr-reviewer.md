@@ -27,6 +27,7 @@ checklist.
 ### 2. Asset Path Patterns (Next.js Repos)
 
 - Images must use the `assetPath()` helper function, never hardcoded paths:
+
   ```tsx
   // CORRECT
   <Image src={assetPath('/images/hero.jpg')} alt="..." />
@@ -35,6 +36,7 @@ checklist.
   <Image src="/images/hero.jpg" alt="..." />
   <Image src="/FFC-EX-example.org/images/hero.jpg" alt="..." />
   ```
+
 - The `assetPath()` function handles the GitHub Pages base path prefix automatically.
 
 ### 3. Security Checks

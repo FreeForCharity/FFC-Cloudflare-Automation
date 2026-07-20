@@ -39,13 +39,13 @@ The domain apex should have these A records pointing to GitHub Pages:
 
 ### 3. Microsoft 365 Email Records
 
-| Type  | Name                 | Content                                                  | Priority |
-| ----- | -------------------- | -------------------------------------------------------- | -------- |
-| MX    | @                    | `<domain>.mail.protection.outlook.com`                   | 0        |
-| TXT   | @                    | `v=spf1 include:spf.protection.outlook.com -all`         | --       |
-| CNAME | selector1._domainkey | `selector1-<domain>._domainkey.<tenant>.onmicrosoft.com` | --       |
-| CNAME | selector2._domainkey | `selector2-<domain>._domainkey.<tenant>.onmicrosoft.com` | --       |
-| TXT   | _dmarc               | `v=DMARC1; p=reject; rua=mailto:dmarc@<domain>`          | --       |
+| Type  | Name                  | Content                                                  | Priority |
+| ----- | --------------------- | -------------------------------------------------------- | -------- |
+| MX    | @                     | `<domain>.mail.protection.outlook.com`                   | 0        |
+| TXT   | @                     | `v=spf1 include:spf.protection.outlook.com -all`         | --       |
+| CNAME | selector1.\_domainkey | `selector1-<domain>._domainkey.<tenant>.onmicrosoft.com` | --       |
+| CNAME | selector2.\_domainkey | `selector2-<domain>._domainkey.<tenant>.onmicrosoft.com` | --       |
+| TXT   | \_dmarc               | `v=DMARC1; p=reject; rua=mailto:dmarc@<domain>`          | --       |
 
 ### 4. Additional Checks
 
@@ -71,14 +71,14 @@ Produce a markdown table summarizing findings:
 ```markdown
 ## DNS Audit: example.org
 
-| Check           | Type  | Name                 | Expected                                       | Actual                                         | Status  |
-| --------------- | ----- | -------------------- | ---------------------------------------------- | ---------------------------------------------- | ------- |
-| GitHub Pages A  | A     | @                    | 185.199.108.153                                | 185.199.108.153                                | PASS    |
-| GitHub Pages A  | A     | @                    | 185.199.109.153                                | --                                             | MISSING |
-| MX Record       | MX    | @                    | example.org.mail.protection.outlook.com        | example.org.mail.protection.outlook.com        | PASS    |
-| SPF             | TXT   | @                    | v=spf1 include:spf.protection.outlook.com -all | v=spf1 include:spf.protection.outlook.com -all | PASS    |
-| DKIM Selector 1 | CNAME | selector1._domainkey | (present)                                      | --                                             | MISSING |
-| DMARC           | TXT   | _dmarc               | v=DMARC1; p=reject...                          | v=DMARC1; p=none...                            | WARN    |
+| Check           | Type  | Name                  | Expected                                       | Actual                                         | Status  |
+| --------------- | ----- | --------------------- | ---------------------------------------------- | ---------------------------------------------- | ------- |
+| GitHub Pages A  | A     | @                     | 185.199.108.153                                | 185.199.108.153                                | PASS    |
+| GitHub Pages A  | A     | @                     | 185.199.109.153                                | --                                             | MISSING |
+| MX Record       | MX    | @                     | example.org.mail.protection.outlook.com        | example.org.mail.protection.outlook.com        | PASS    |
+| SPF             | TXT   | @                     | v=spf1 include:spf.protection.outlook.com -all | v=spf1 include:spf.protection.outlook.com -all | PASS    |
+| DKIM Selector 1 | CNAME | selector1.\_domainkey | (present)                                      | --                                             | MISSING |
+| DMARC           | TXT   | \_dmarc               | v=DMARC1; p=reject...                          | v=DMARC1; p=none...                            | WARN    |
 
 ### Summary
 

@@ -60,7 +60,7 @@ file does and where it is auto-loaded.
   server connections, and environment variables.
 - **Content**: JSON configuration for permissions and MCP servers.
 
-### .claude/rules/*.md
+### .claude/rules/\*.md
 
 - **Location**: `.claude/rules/` directory
 - **Consumer**: Claude Code
@@ -69,7 +69,7 @@ file does and where it is auto-loaded.
   allows fine-grained, context-sensitive instructions.
 - **Content**: Markdown files with specific rules for file types or directories.
 
-### .claude/agents/*.md
+### .claude/agents/\*.md
 
 - **Location**: `.claude/agents/` directory
 - **Consumer**: Claude Code (custom agents)

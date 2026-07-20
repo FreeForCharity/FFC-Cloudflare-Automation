@@ -137,7 +137,7 @@ jobs:
               core.info(`Released #${n} (PR #${pr.number} closed).`);
             }
 
-  # --- Half 2: daily sweep of expired claims (hub + ffcadmin) -----------------
+  # --- Half 2: daily sweep of expired claims (this repo) ----------------------
   sweep:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -164,8 +164,8 @@ jobs:
             const dryRun = String(process.env.DRY_RUN) === 'true';
             const now = Date.now();
 
-            // Bounded pager (see label-sync): cap pages so a daily sweep of two
-            // repos can't spike the shared REST budget. `labels=claimed` already
+            // Bounded pager (see label-sync): cap pages so the daily sweep
+            // can't spike the shared REST budget. `labels=claimed` already
             // keeps the issue result set tiny.
             const listOpen = async (method, params, maxPages = 5) => {
               const out = [];

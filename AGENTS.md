@@ -68,6 +68,10 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   whose PR merged moments ago silently **re-creates the auto-deleted branch** — the tell is
   `[new branch]` in push output for a push you meant as an update. If you see it, delete the
   resurrected branch and stop.
+- **Fetch refs individually.** `git fetch origin main <agent-branch>` aborts the **entire** fetch
+  with "couldn't find remote ref" if the second ref was never pushed — leaving `origin/main` stale,
+  so a clean branch falsely appears N commits ahead of main (seen 2026-07-20 on the #748 worker
+  run). Fetch `main` on its own before comparing against it.
 - Enter the queue with `gh pr merge <n> --merge --auto`, or directly:
   `gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:"<node_id>"}){mergeQueueEntry{position state}}}'`
 - **Debugging tip:** `gh pr merge --auto` can mask the real blocker behind a GraphQL "rate limit"
@@ -117,6 +121,11 @@ and all authenticate as the same user. Before starting ANY issue:
    from linked PRs once the claim-sync workflow lands).
 3. **Release on stop**: if you abandon the work, remove the label and comment. Claims with no open
    linked PR and no activity for 48h are considered expired and may be swept.
+   - **Multi-repo / multi-part issues: claim your portion, not the issue.** Post the
+     `CLAIM: <actor> …` comment scoped to the part you are taking (name the repo/portion) and do
+     **not** add the exclusive `claimed` label — the remainder must stay visible in the pickup
+     query. When you finish, comment what you shipped and what remains (pattern validated on #748,
+     2026-07-20).
 4. **Fleet-wide file changes** (any file synced across the FFC-EX fleet, e.g.
    `post-deploy-smoke.yml`): claim the hub tracking issue FIRST — every fleet sync must have one —
    and before editing, check the target file's last commit in 2-3 fleet repos; a commit within the

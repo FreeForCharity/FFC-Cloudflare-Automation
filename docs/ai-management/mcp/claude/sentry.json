@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "sentry": {
+      "type": "http",
+      "url": "https://mcp.sentry.dev/sse",
+      "note": "Sentry MCP - Error monitoring, root cause analysis, issue tracking. Uses OAuth authentication.",
+      "docs": "https://docs.sentry.io/product/sentry-mcp/"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "cloudflare": {
+      "type": "http",
+      "url": "https://dash.cloudflare.com/mcp",
+      "note": "Cloudflare MCP - DNS management, zone analysis, analytics. Requires Cloudflare API token or OAuth.",
+      "docs": "https://developers.cloudflare.com/agents/model-context-protocol/"
+    }
+  }
+}

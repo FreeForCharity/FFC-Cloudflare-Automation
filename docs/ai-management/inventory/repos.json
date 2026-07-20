@@ -1,0 +1,1098 @@
+﻿{
+    "lastAudit":  "2026-02-16T14:47:30.5722716-05:00",
+    "repos":  [
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-IN-AI-Management",
+                      "basePath":  "/FFC-IN-AI-Management"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "aariasblueelephant.org",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-aariasblueelephant.org",
+                      "basePath":  "/FFC-EX-aariasblueelephant.org"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  true,
+                                                                                        "type":  "file"
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "powershell-infra",
+                      "name":  "FFC-Cloudflare-Automation",
+                      "basePath":  "/FFC-Cloudflare-Automation"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-IN-Single_Page_Template_Jekell",
+                      "basePath":  "/FFC-IN-Single_Page_Template_Jekell"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-IN-Single_Page_Template_HTML",
+                      "basePath":  "/FFC-IN-Single_Page_Template_HTML"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC_Single_Page_Template",
+                      "basePath":  "/FFC_Single_Page_Template"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "SRRN.net",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-SRRN.net",
+                      "basePath":  "/FFC-EX-SRRN.net"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "thecrookedhouse.net",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-thecrookedhouse.net",
+                      "basePath":  "/FFC-EX-thecrookedhouse.net"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "sporting2Impact.org",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-sporting2Impact.org",
+                      "basePath":  "/FFC-EX-sporting2Impact.org"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "technomonasteries.org",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-technomonasteries.org",
+                      "basePath":  "/FFC-EX-technomonasteries.org"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "nittanypost245.org",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-nittanypost245.org",
+                      "basePath":  "/FFC-EX-nittanypost245.org"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "slopestohope.org",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-slopestohope.org",
+                      "basePath":  "/FFC-EX-slopestohope.org"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "legioninthewoods.org",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-legioninthewoods.org",
+                      "basePath":  "/FFC-EX-legioninthewoods.org"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-IN-ffcadmin.org",
+                      "basePath":  "/FFC-IN-ffcadmin.org"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "freedomrisingusa.org",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-freedomrisingusa.org",
+                      "basePath":  "/FFC-EX-freedomrisingusa.org"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "freeforcharity-web",
+                      "basePath":  "/freeforcharity-web"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "AllTypeTowing.com",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-AllTypeTowing.com",
+                      "basePath":  "/FFC-EX-AllTypeTowing.com"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "bintobetter.org",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-bintobetter.org",
+                      "basePath":  "/FFC-EX-bintobetter.org"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "PAGboosters.org",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-PAGboosters.org",
+                      "basePath":  "/FFC-EX-PAGboosters.org"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-IN-Zeffy-Management",
+                      "basePath":  "/FFC-IN-Zeffy-Management"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "powershell-infra",
+                      "name":  "FFC-Static-Site-Capture-Tools",
+                      "basePath":  "/FFC-Static-Site-Capture-Tools"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "powershell-infra",
+                      "name":  "FFC-IN-Antigravity-Static-site-agent",
+                      "basePath":  "/FFC-IN-Antigravity-Static-site-agent"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  "SRRN-Static-site-conversion",
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-EX-SRRN-Static-site-conversion",
+                      "basePath":  "/FFC-EX-SRRN-Static-site-conversion"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-Technology-Directory",
+                      "basePath":  "/FFC-Technology-Directory"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  true,
+                                                                                "type":  "file"
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FreeForCharity.org",
+                      "basePath":  "/FreeForCharity.org"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "TechnologyMonastery.org",
+                      "basePath":  "/TechnologyMonastery.org"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-MicrosoftBot",
+                      "basePath":  "/FFC-MicrosoftBot"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "FreeForCharity",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "FFC-Discussions",
+                      "basePath":  "/FFC-Discussions"
+                  },
+                  {
+                      "aiConfigs":  {
+                                        "GEMINI.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".github/agents/AI_AGENT_INSTRUCTIONS.md":  {
+                                                                                        "present":  false
+                                                                                    },
+                                        ".claude/agents":  {
+                                                               "present":  false
+                                                           },
+                                        "CLAUDE.md":  {
+                                                          "present":  false
+                                                      },
+                                        "AGENTS.md":  {
+                                                          "present":  false
+                                                      },
+                                        ".claude/settings.json":  {
+                                                                      "present":  false
+                                                                  },
+                                        ".github/copilot-instructions.md":  {
+                                                                                "present":  false
+                                                                            },
+                                        ".claude/rules":  {
+                                                              "present":  false
+                                                          },
+                                        ".copilot/mcp-config.json":  {
+                                                                         "present":  false
+                                                                     }
+                                    },
+                      "org":  "koenig-childhood-cancer-foundation",
+                      "domain":  null,
+                      "lastSync":  null,
+                      "type":  "base",
+                      "name":  "KCCF-web",
+                      "basePath":  "/KCCF-web"
+                  }
+              ],
+    "organizations":  [
+                          "FreeForCharity",
+                          "koenig-childhood-cancer-foundation"
+                      ]
+}

@@ -28,7 +28,8 @@
     The script will operate on staging.<each-domain>.
 
 .PARAMETER Target
-    The CNAME target. Defaults to 'freeforcharity.github.io'.
+    The CNAME target. Defaults to the canonical FFC org Pages host from
+    scripts/cloudflare-api-common.ps1 ('freeforcharity.github.io').
 
 .PARAMETER DryRun
     Discover-only mode. Lists what records would be deleted and what CNAME
@@ -47,81 +48,25 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Domains,
 
-    [string]$Target = 'freeforcharity.github.io',
+    # Defaults to the canonical FFC org Pages host from
+    # scripts/cloudflare-api-common.ps1 (#778) — resolved after the shared
+    # lib is dot-sourced below.
+    [string]$Target,
 
     [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
 
-$tokens = @()
-if ($env:CLOUDFLARE_API_TOKEN_FFC) { $tokens += @{ name = 'FFC'; token = $env:CLOUDFLARE_API_TOKEN_FFC } }
-if ($env:CLOUDFLARE_API_TOKEN_CM) { $tokens += @{ name = 'CM'; token = $env:CLOUDFLARE_API_TOKEN_CM } }
+# Shared Cloudflare helpers (#778): Invoke-CfApi, Resolve-CfZone,
+# Get-CfDnsRecords, Get-CfEnvTokens, Get-GhPagesWwwTarget.
+. (Join-Path $PSScriptRoot 'cloudflare-api-common.ps1')
+
+if ([string]::IsNullOrWhiteSpace($Target)) { $Target = Get-GhPagesWwwTarget }
+
+$tokens = @(Get-CfEnvTokens)
 if ($tokens.Count -eq 0) {
     throw 'No Cloudflare tokens found. Set CLOUDFLARE_API_TOKEN_FFC and/or CLOUDFLARE_API_TOKEN_CM.'
-}
-
-function Invoke-Cf {
-    param(
-        [Parameter(Mandatory)][string]$Method,
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$Token,
-        $Body
-    )
-    $url = "https://api.cloudflare.com/client/v4$Path"
-    $headers = @{ Authorization = "Bearer $Token"; 'Content-Type' = 'application/json' }
-    $params = @{ Method = $Method; Uri = $url; Headers = $headers; TimeoutSec = 30 }
-    if ($null -ne $Body) { $params.Body = ($Body | ConvertTo-Json -Depth 6 -Compress) }
-    return Invoke-RestMethod @params
-}
-
-function Resolve-Zone {
-    param(
-        [Parameter(Mandatory)][string]$Domain
-    )
-    foreach ($t in $tokens) {
-        try {
-            $encoded = [uri]::EscapeDataString($Domain)
-            $resp = Invoke-Cf -Method GET -Token $t.token -Path "/zones?name=$encoded"
-            if ($resp.success -and $resp.result -and $resp.result.Count -gt 0) {
-                return [pscustomobject]@{
-                    Account  = $t.name
-                    Token    = $t.token
-                    ZoneId   = $resp.result[0].id
-                    ZoneName = $resp.result[0].name
-                }
-            }
-        }
-        catch {
-            # try next token
-        }
-    }
-    return $null
-}
-
-function Get-RecordsAtName {
-    param(
-        [Parameter(Mandatory)][string]$ZoneId,
-        [Parameter(Mandatory)][string]$Token,
-        [Parameter(Mandatory)][string]$Fqdn
-    )
-    $records = @()
-    $page = 1
-    while ($true) {
-        $encoded = [uri]::EscapeDataString($Fqdn)
-        $resp = Invoke-Cf -Method GET -Token $Token -Path "/zones/$ZoneId/dns_records?name=$encoded&per_page=50&page=$page"
-        if (-not $resp.success) {
-            throw "Failed to list records for $Fqdn : $($resp.errors | ConvertTo-Json -Depth 4 -Compress)"
-        }
-        if ($resp.result) { $records += $resp.result }
-        $totalPages = 1
-        if ($resp.result_info -and $resp.result_info.total_pages) {
-            $totalPages = [int]$resp.result_info.total_pages
-        }
-        if ($page -ge $totalPages) { break }
-        $page += 1
-    }
-    return $records
 }
 
 Write-Host '=== Bulk staging.<domain> -> GitHub Pages CNAME wiring ==='
@@ -141,7 +86,7 @@ foreach ($domain in $domainList) {
     $fqdn = "staging.$domain"
     Write-Host "--- [$domain] ---"
 
-    $zone = Resolve-Zone -Domain $domain
+    $zone = Resolve-CfZone -Domain $domain -Tokens $tokens
     if (-not $zone) {
         Write-Warning "[$domain] Zone not found via any available token. Skipping."
         $results += [pscustomobject]@{
@@ -157,7 +102,7 @@ foreach ($domain in $domainList) {
     Write-Host "[$domain] Zone resolved via $($zone.Account) token (zone id $($zone.ZoneId))"
 
     try {
-        $existing = @(Get-RecordsAtName -ZoneId $zone.ZoneId -Token $zone.Token -Fqdn $fqdn)
+        $existing = @(Get-CfDnsRecords -ZoneId $zone.ZoneId -Token $zone.Token -Name $fqdn)
     }
     catch {
         Write-Warning "[$domain] List failed: $($_.Exception.Message)"
@@ -208,16 +153,12 @@ foreach ($domain in $domainList) {
             continue
         }
         try {
-            $resp = Invoke-Cf -Method DELETE -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records/$($r.id)"
-            if ($resp.success) {
-                Write-Host "  Deleted $($r.type) $($r.name) -> $($r.content)"
-                $deletedCount += 1
-            }
-            else {
-                $msg = ($resp.errors | ConvertTo-Json -Depth 4 -Compress)
-                Write-Warning "  DELETE failed for id $($r.id): $msg"
-                $deleteErrors += $msg
-            }
+            # Invoke-CfApi throws on any failure (with the Cloudflare JSON
+            # errors in the message), so a single catch covers both HTTP and
+            # envelope failures.
+            $null = Invoke-CfApi -Method DELETE -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records/$($r.id)"
+            Write-Host "  Deleted $($r.type) $($r.name) -> $($r.content)"
+            $deletedCount += 1
         }
         catch {
             Write-Warning "  DELETE error for id $($r.id): $($_.Exception.Message)"
@@ -258,29 +199,15 @@ foreach ($domain in $domainList) {
     }
 
     try {
-        $resp = Invoke-Cf -Method POST -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records" -Body $body
-        if ($resp.success) {
-            Write-Host "  Created CNAME $fqdn -> $Target (proxied=false)"
-            $results += [pscustomobject]@{
-                Domain  = $domain
-                Fqdn    = $fqdn
-                Status  = 'OK'
-                Detail  = 'CNAME created'
-                Deleted = $deletedCount
-                Created = $true
-            }
-        }
-        else {
-            $msg = ($resp.errors | ConvertTo-Json -Depth 4 -Compress)
-            Write-Warning "  CREATE failed: $msg"
-            $results += [pscustomobject]@{
-                Domain  = $domain
-                Fqdn    = $fqdn
-                Status  = 'FAIL'
-                Detail  = "Create error: $msg"
-                Deleted = $deletedCount
-                Created = $false
-            }
+        $null = Invoke-CfApi -Method POST -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records" -Body $body
+        Write-Host "  Created CNAME $fqdn -> $Target (proxied=false)"
+        $results += [pscustomobject]@{
+            Domain  = $domain
+            Fqdn    = $fqdn
+            Status  = 'OK'
+            Detail  = 'CNAME created'
+            Deleted = $deletedCount
+            Created = $true
         }
     }
     catch {

@@ -41,8 +41,9 @@
     Skip the Cloudflare DNS flip entirely (useful when only testing the CNAME step).
 
 .PARAMETER GhPagesIps
-    Override the 4 GH Pages anycast IPs. Defaults are the current canonical set:
-    185.199.108.153, 185.199.109.153, 185.199.110.153, 185.199.111.153
+    Override the 4 GH Pages anycast IPs. Defaults to the canonical set from
+    scripts/cloudflare-api-common.ps1 (185.199.108-111.153), resolved after
+    the shared lib is dot-sourced.
 
 .PARAMETER HostPapaIp
     The legacy HostPapa IP to delete from Cloudflare apex A records.
@@ -69,17 +70,31 @@ param(
 
     [switch]$SkipCname,
 
-    [string[]]$GhPagesIps = @(
-        '185.199.108.153',
-        '185.199.109.153',
-        '185.199.110.153',
-        '185.199.111.153'
-    ),
+    # Defaults to the canonical set from scripts/cloudflare-api-common.ps1
+    # (#778) — resolved after the shared lib is dot-sourced below, because
+    # param defaults are evaluated before the lib is loaded.
+    [string[]]$GhPagesIps,
 
-    [string]$HostPapaIp = '216.222.200.253'
+    [string]$HostPapaIp = '216.222.200.253',
+
+    # Target of the standard www CNAME (FFC org Pages host). #774: the dns-flip
+    # upserts www alongside the apex A records — the first live cutover shipped
+    # without www because only the apex was written here. Defaults to the
+    # canonical target from scripts/cloudflare-api-common.ps1 (#778).
+    [string]$WwwTarget
 )
 
 $ErrorActionPreference = 'Stop'
+
+# ---------------------------------------------------------------------------
+# Shared Cloudflare helpers (#778): REST plumbing (Invoke-CfApi), zone
+# resolution (Resolve-CfZone), record listing (Get-CfDnsRecords), and the
+# canonical GitHub Pages IP set + www target.
+# ---------------------------------------------------------------------------
+. (Join-Path $PSScriptRoot 'cloudflare-api-common.ps1')
+
+if (-not $GhPagesIps -or $GhPagesIps.Count -eq 0) { $GhPagesIps = @(Get-GhPagesIps) }
+if ([string]::IsNullOrWhiteSpace($WwwTarget)) { $WwwTarget = Get-GhPagesWwwTarget }
 
 # ---------------------------------------------------------------------------
 # Zones that are NOT accessible via FFC/CM Cloudflare tokens.
@@ -93,9 +108,7 @@ $ManualCfZones = @{
 # ---------------------------------------------------------------------------
 # Token setup
 # ---------------------------------------------------------------------------
-$cfTokens = @()
-if ($env:CLOUDFLARE_API_TOKEN_FFC) { $cfTokens += @{ name = 'FFC'; token = $env:CLOUDFLARE_API_TOKEN_FFC } }
-if ($env:CLOUDFLARE_API_TOKEN_CM) { $cfTokens += @{ name = 'CM'; token = $env:CLOUDFLARE_API_TOKEN_CM } }
+$cfTokens = @(Get-CfEnvTokens)
 
 $ghToken = $env:GH_TOKEN
 if (-not $SkipCname -and [string]::IsNullOrWhiteSpace($ghToken)) {
@@ -108,67 +121,8 @@ if ($SkipCname -and $SkipDns) {
     throw 'Both -SkipCname and -SkipDns are set — nothing to do.'
 }
 
-# ---------------------------------------------------------------------------
-# Helpers — Cloudflare REST
-# ---------------------------------------------------------------------------
-function Invoke-Cf {
-    param(
-        [Parameter(Mandatory)][string]$Method,
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$Token,
-        $Body
-    )
-    $url = "https://api.cloudflare.com/client/v4$Path"
-    $headers = @{ Authorization = "Bearer $Token"; 'Content-Type' = 'application/json' }
-    $params = @{ Method = $Method; Uri = $url; Headers = $headers; TimeoutSec = 30 }
-    if ($null -ne $Body) { $params.Body = ($Body | ConvertTo-Json -Depth 6 -Compress) }
-    return Invoke-RestMethod @params
-}
-
-function Resolve-CfZone {
-    param([Parameter(Mandatory)][string]$Domain)
-    foreach ($t in $cfTokens) {
-        try {
-            $encoded = [uri]::EscapeDataString($Domain)
-            $resp = Invoke-Cf -Method GET -Token $t.token -Path "/zones?name=$encoded"
-            if ($resp.success -and $resp.result -and $resp.result.Count -gt 0) {
-                return [pscustomobject]@{
-                    Account  = $t.name
-                    Token    = $t.token
-                    ZoneId   = $resp.result[0].id
-                    ZoneName = $resp.result[0].name
-                }
-            }
-        }
-        catch { <# try next token #> }
-    }
-    return $null
-}
-
-function Get-ApexARecords {
-    param(
-        [Parameter(Mandatory)][string]$ZoneId,
-        [Parameter(Mandatory)][string]$Token,
-        [Parameter(Mandatory)][string]$Domain
-    )
-    $records = @()
-    $page = 1
-    while ($true) {
-        $encoded = [uri]::EscapeDataString($Domain)
-        $resp = Invoke-Cf -Method GET -Token $Token -Path "/zones/$ZoneId/dns_records?type=A&name=$encoded&per_page=50&page=$page"
-        if (-not $resp.success) {
-            throw "Failed to list apex A records for $Domain : $($resp.errors | ConvertTo-Json -Depth 4 -Compress)"
-        }
-        if ($resp.result) { $records += $resp.result }
-        $totalPages = 1
-        if ($resp.result_info -and $resp.result_info.total_pages) {
-            $totalPages = [int]$resp.result_info.total_pages
-        }
-        if ($page -ge $totalPages) { break }
-        $page += 1
-    }
-    return $records
-}
+# Cloudflare REST helpers (Invoke-CfApi / Resolve-CfZone / Get-CfDnsRecords)
+# come from scripts/cloudflare-api-common.ps1, dot-sourced above (#778).
 
 # ---------------------------------------------------------------------------
 # Helpers — GitHub REST
@@ -214,15 +168,16 @@ function Set-GhFileContent {
         [Parameter(Mandatory)][string]$Repo,
         [Parameter(Mandatory)][string]$FilePath,
         [Parameter(Mandatory)][string]$NewContent,
-        [Parameter(Mandatory)][string]$Sha,
+        # Omit Sha to CREATE the file (GitHub contents API: PUT without sha).
+        [string]$Sha,
         [Parameter(Mandatory)][string]$CommitMessage
     )
     $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($NewContent))
     $body = @{
         message = $CommitMessage
         content = $encoded
-        sha     = $Sha
     }
+    if (-not [string]::IsNullOrWhiteSpace($Sha)) { $body.sha = $Sha }
     return Invoke-Gh -Method PUT -Path "/repos/$Repo/contents/$FilePath" -Body $body
 }
 
@@ -238,6 +193,10 @@ if ($cfTokens.Count -gt 0) {
     Write-Host "CF Tokens   : $(($cfTokens | ForEach-Object { $_.name }) -join ', ')"
 }
 Write-Host ''
+
+# Network-optional drift check: warn (never fail) if the canonical Pages IPv4
+# set in the shared lib no longer matches api.github.com/meta (#778).
+$null = Test-GhPagesIpsCurrent
 
 $domainList = ($Domains -split '[,\s]+') |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
@@ -271,8 +230,8 @@ foreach ($domain in $domainList) {
     if ($manualAccount) {
         Write-Warning "[$domain] Zone lives in $manualAccount — not accessible via FFC/CM tokens."
         Write-Warning "[$domain] DNS flip: flip apex A records MANUALLY in the $manualAccount CF dashboard."
-        Write-Warning "[$domain]   Delete : 216.222.200.253"
-        Write-Warning "[$domain]   Create : 185.199.108.153 / .109.153 / .110.153 / .111.153 (proxied=false)"
+        Write-Warning "[$domain]   Delete : $HostPapaIp"
+        Write-Warning "[$domain]   Create : $($GhPagesIps -join ' / ') (proxied=false)"
         $result.DnsStatus = 'SKIP-MANUAL'
         $result.DnsDetail = "Zone in $manualAccount — flip apex A manually in CF dashboard"
         # Still do the CNAME flip via GH API (that works regardless of CF account)
@@ -291,20 +250,25 @@ foreach ($domain in $domainList) {
         Write-Host "[$domain] STEP 1 — CNAME flip in $repo"
 
         try {
-            # #767: switch-style repos (deploy workflow declares a custom_domain
-            # input; the CNAME is BUILD-emitted, never committed) get the
-            # variable+dispatch strategy — committing public/CNAME there would
-            # be inert or fight the switch.
+            # #767/#774: switch-style repos (deploy workflow declares a
+            # custom_domain input; the build derives basePath from the domain
+            # signal). Operator ruling 2026-07-20: the committed public/CNAME
+            # file is the SOURCE OF TRUTH (GitHub Pages standard), so this path
+            # commits the file (which triggers the push deploy) and sets the
+            # CUSTOM_DOMAIN variable only as a fallback for file-less builds.
+            # The Pages custom-domain binding is deliberately NOT set here:
+            # binding before DNS is clean stalls Let's Encrypt issuance (state
+            # 'none'). The 120 workflow's post-DNS job binds + cert-kicks.
             $deployWf = Get-GhFileInfo -Repo $repo -FilePath '.github/workflows/deploy.yml'
             $switchStyle = ($null -ne $deployWf) -and ($deployWf.Content -match 'custom_domain')
-            $fileInfo = if ($switchStyle) { $null } else { Get-GhFileInfo -Repo $repo -FilePath 'public/CNAME' }
+            $fileInfo = Get-GhFileInfo -Repo $repo -FilePath 'public/CNAME'
 
             if ($switchStyle) {
                 Write-Host "[$domain]   Switch-style repo (deploy.yml declares custom_domain)."
                 if ($DryRun) {
-                    Write-Host "[$domain]   [DRY-RUN] Would set repo variable CUSTOM_DOMAIN=$domain, set the Pages binding, and dispatch deploy.yml (build-emitted CNAME strategy)"
+                    Write-Host "[$domain]   [DRY-RUN] Would set repo variable CUSTOM_DOMAIN=$domain and commit public/CNAME='$domain' (push triggers deploy; binding is set post-DNS by the workflow)"
                     $result.CnameStatus = 'DRY-RUN'
-                    $result.CnameDetail = "Would set var CUSTOM_DOMAIN=$domain + dispatch deploy (switch-style)"
+                    $result.CnameDetail = "Would set var CUSTOM_DOMAIN=$domain + commit public/CNAME (switch-style)"
                 }
                 else {
                     Write-Host "[$domain]   Setting repo variable CUSTOM_DOMAIN=$domain"
@@ -314,14 +278,17 @@ foreach ($domain in $domainList) {
                     catch {
                         $null = Invoke-Gh -Method POST -Path "/repos/$repo/actions/variables" -Body @{ name = 'CUSTOM_DOMAIN'; value = $domain }
                     }
-                    # Workflow-deployed Pages do NOT take their binding from the
-                    # artifact's CNAME file (branch builds only) - set it explicitly.
-                    Write-Host "[$domain]   Setting Pages custom-domain binding to $domain"
-                    $null = Invoke-Gh -Method PUT -Path "/repos/$repo/pages" -Body @{ cname = $domain }
-                    Write-Host "[$domain]   Dispatching deploy.yml with custom_domain=$domain"
-                    $null = Invoke-Gh -Method POST -Path "/repos/$repo/actions/workflows/deploy.yml/dispatches" -Body @{ ref = 'main'; inputs = @{ custom_domain = $domain } }
+                    if ($fileInfo -and $fileInfo.Content -eq $domain) {
+                        Write-Host "[$domain]   public/CNAME already '$domain' — no commit needed."
+                    }
+                    else {
+                        Write-Host "[$domain]   Committing public/CNAME='$domain' (source of truth; push triggers deploy)"
+                        $commitMsg = "chore: commit CNAME $domain as custom-domain source of truth`n`n[automated cutover #774]"
+                        $null = Set-GhFileContent -Repo $repo -FilePath 'public/CNAME' `
+                            -NewContent "$domain`n" -Sha $(if ($fileInfo) { $fileInfo.Sha } else { '' }) -CommitMessage $commitMsg
+                    }
                     $result.CnameStatus = 'OK'
-                    $result.CnameDetail = "Set var CUSTOM_DOMAIN=$domain + Pages binding + dispatched deploy (switch-style)"
+                    $result.CnameDetail = "Set var CUSTOM_DOMAIN=$domain + committed public/CNAME (switch-style; binding post-DNS)"
                 }
             }
             elseif ($null -eq $fileInfo) {
@@ -405,7 +372,7 @@ foreach ($domain in $domainList) {
         Write-Host "[$domain] STEP 2 — DNS flip in Cloudflare"
 
         try {
-            $zone = Resolve-CfZone -Domain $domain
+            $zone = Resolve-CfZone -Domain $domain -Tokens $cfTokens
             if (-not $zone) {
                 Write-Warning "[$domain]   Zone not found via any available CF token."
                 $result.DnsStatus = 'SKIP'
@@ -414,7 +381,7 @@ foreach ($domain in $domainList) {
             else {
                 Write-Host "[$domain]   Zone resolved via $($zone.Account) token (id $($zone.ZoneId))"
 
-                $apexRecords = @(Get-ApexARecords -ZoneId $zone.ZoneId -Token $zone.Token -Domain $domain)
+                $apexRecords = @(Get-CfDnsRecords -ZoneId $zone.ZoneId -Token $zone.Token -Type A -Name $domain)
                 Write-Host "[$domain]   Found $($apexRecords.Count) apex A record(s):"
                 foreach ($r in $apexRecords) {
                     Write-Host ("    - A {0} -> {1} (proxied={2}, ttl={3}, id={4})" -f $r.name, $r.content, $r.proxied, $r.ttl, $r.id)
@@ -467,19 +434,15 @@ foreach ($domain in $domainList) {
                     else {
                         $dnsErrors = @()
 
-                        # Delete HostPapa record(s)
+                        # Delete HostPapa record(s). Invoke-CfApi throws on any
+                        # failure (with the Cloudflare JSON errors in the
+                        # message), so a single catch covers both HTTP and
+                        # envelope failures.
                         foreach ($r in $toDelete) {
                             Write-Host "[$domain]   Deleting A -> $($r.content) (id=$($r.id))..."
                             try {
-                                $delResp = Invoke-Cf -Method DELETE -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records/$($r.id)"
-                                if ($delResp.success) {
-                                    Write-Host "[$domain]   Deleted A -> $($r.content)"
-                                }
-                                else {
-                                    $msg = ($delResp.errors | ConvertTo-Json -Depth 4 -Compress)
-                                    Write-Warning "[$domain]   DELETE failed: $msg"
-                                    $dnsErrors += "DELETE $($r.content): $msg"
-                                }
+                                $null = Invoke-CfApi -Method DELETE -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records/$($r.id)"
+                                Write-Host "[$domain]   Deleted A -> $($r.content)"
                             }
                             catch {
                                 Write-Warning "[$domain]   DELETE error: $($_.Exception.Message)"
@@ -498,15 +461,8 @@ foreach ($domain in $domainList) {
                                 proxied = $false
                             }
                             try {
-                                $createResp = Invoke-Cf -Method POST -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records" -Body $body
-                                if ($createResp.success) {
-                                    Write-Host "[$domain]   Created A -> $ip"
-                                }
-                                else {
-                                    $msg = ($createResp.errors | ConvertTo-Json -Depth 4 -Compress)
-                                    Write-Warning "[$domain]   CREATE failed for $ip : $msg"
-                                    $dnsErrors += "CREATE $ip : $msg"
-                                }
+                                $null = Invoke-CfApi -Method POST -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records" -Body $body
+                                Write-Host "[$domain]   Created A -> $ip"
                             }
                             catch {
                                 Write-Warning "[$domain]   CREATE error for $ip : $($_.Exception.Message)"
@@ -524,6 +480,50 @@ foreach ($domain in $domainList) {
                             $createdMsg = if ($toCreate.Count -gt 0) { "Created $($toCreate.Count) GH Pages record(s)" } else { '' }
                             $result.DnsDetail = "$deletedMsg$createdMsg".TrimEnd(' ;')
                         }
+                    }
+                }
+
+                # --- www CNAME upsert (#774) ---
+                # The apex/www standard is BOTH: apex A x4 AND www CNAME -> the
+                # org Pages host (dns-only, so Pages can serve the redirect and
+                # issue the www SAN cert). Runs even when the apex was already
+                # correct — the first live cutover shipped apex-only.
+                $wwwName = "www.$domain"
+                $wwwRecords = @(Get-CfDnsRecords -ZoneId $zone.ZoneId -Token $zone.Token -Name $wwwName)
+                $wwwGood = @($wwwRecords | Where-Object { $_.type -eq 'CNAME' -and $_.content -eq $WwwTarget -and -not $_.proxied })
+
+                if ($wwwGood.Count -gt 0 -and $wwwRecords.Count -eq $wwwGood.Count) {
+                    Write-Host "[$domain]   www already correct: CNAME -> $WwwTarget (dns-only)."
+                }
+                elseif ($wwwRecords.Count -gt 0) {
+                    Write-Warning "[$domain]   www has $($wwwRecords.Count) unexpected record(s) — left untouched (fix manually or via 106):"
+                    foreach ($r in $wwwRecords) {
+                        Write-Warning ("    - {0} {1} -> {2} (proxied={3})" -f $r.type, $r.name, $r.content, $r.proxied)
+                    }
+                    $result.DnsDetail = "$($result.DnsDetail); www UNEXPECTED ($($wwwRecords.Count) record(s) left untouched)".TrimStart('; ')
+                }
+                elseif ($DryRun) {
+                    Write-Host "[$domain]   [DRY-RUN] Would CREATE CNAME $wwwName -> $WwwTarget (proxied=false)"
+                    $result.DnsDetail = "$($result.DnsDetail); would create www CNAME".TrimStart('; ')
+                }
+                else {
+                    Write-Host "[$domain]   Creating CNAME $wwwName -> $WwwTarget (proxied=false)..."
+                    $wwwBody = @{
+                        type    = 'CNAME'
+                        name    = 'www'
+                        content = $WwwTarget
+                        ttl     = 1
+                        proxied = $false
+                    }
+                    try {
+                        $null = Invoke-CfApi -Method POST -Token $zone.Token -Path "/zones/$($zone.ZoneId)/dns_records" -Body $wwwBody
+                        Write-Host "[$domain]   Created www CNAME."
+                        $result.DnsDetail = "$($result.DnsDetail); created www CNAME".TrimStart('; ')
+                    }
+                    catch {
+                        Write-Warning "[$domain]   www CREATE failed: $($_.Exception.Message)"
+                        $result.DnsStatus = 'FAIL'
+                        $result.DnsDetail = "$($result.DnsDetail); www CREATE failed: $($_.Exception.Message)".TrimStart('; ')
                     }
                 }
             }
@@ -568,11 +568,13 @@ if ($dnsManual -gt 0) {
     foreach ($r in ($results | Where-Object { $_.DnsStatus -eq 'SKIP-MANUAL' })) {
         Write-Host "  $($r.Domain) — $($ManualCfZones[$r.Domain])"
         Write-Host "    Dashboard : https://dash.cloudflare.com"
-        Write-Host "    DELETE    : A @ 216.222.200.253"
-        Write-Host "    CREATE    : A @ 185.199.108.153"
-        Write-Host "               A @ 185.199.109.153"
-        Write-Host "               A @ 185.199.110.153"
-        Write-Host "               A @ 185.199.111.153"
+        Write-Host "    DELETE    : A @ $HostPapaIp"
+        $ipIdx = 0
+        foreach ($ip in $GhPagesIps) {
+            if ($ipIdx -eq 0) { Write-Host "    CREATE    : A @ $ip" }
+            else { Write-Host "               A @ $ip" }
+            $ipIdx++
+        }
         Write-Host "    proxied   : false (DNS-only)"
         Write-Host ''
     }
@@ -609,11 +611,13 @@ if ($env:GITHUB_STEP_SUMMARY) {
         foreach ($r in ($results | Where-Object { $_.DnsStatus -eq 'SKIP-MANUAL' })) {
             $lines += "### $($r.Domain) — $($ManualCfZones[$r.Domain])"
             $lines += '```'
-            $lines += 'DELETE : A @ 216.222.200.253'
-            $lines += 'CREATE : A @ 185.199.108.153  (proxied=false)'
-            $lines += '         A @ 185.199.109.153'
-            $lines += '         A @ 185.199.110.153'
-            $lines += '         A @ 185.199.111.153'
+            $lines += "DELETE : A @ $HostPapaIp"
+            $ipIdx = 0
+            foreach ($ip in $GhPagesIps) {
+                if ($ipIdx -eq 0) { $lines += "CREATE : A @ $ip  (proxied=false)" }
+                else { $lines += "         A @ $ip" }
+                $ipIdx++
+            }
             $lines += '```'
             $lines += ''
         }

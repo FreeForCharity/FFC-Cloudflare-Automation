@@ -158,6 +158,49 @@ jobs:
             exit 1
           fi
 
+      - name: Bind Pages custom domain + cert kick (post-DNS)
+        shell: bash
+        run: |
+          set -uo pipefail
+          # #774: the Pages custom-domain binding is set AFTER the DNS flip.
+          # Binding while stale records still resolve stalls Let's Encrypt in
+          # state 'none' (seen live on the first cutover). Idempotent: a
+          # same-value PUT is safe, and legacy branch-built repos already
+          # bound via their committed CNAME simply no-op. If the cert is
+          # stalled, re-bind (null -> domain) to restart issuance — the
+          # proven remedy from the technologymonastery cutover.
+          default_domains=$(jq -r '.domains | join(" ")' config/ffc-ex-cutover-domains.json)
+          domains_input="${{ inputs.domains }}"
+          if [ -z "$domains_input" ]; then
+            domains="$default_domains"
+          else
+            domains=$(echo "$domains_input" | tr ',' ' ')
+          fi
+          for d in $domains; do
+            repo="FreeForCharity/FFC-EX-${d}"
+            echo "::group::Bind + cert kick: $d"
+            if ! gh api -X PUT "repos/$repo/pages" -f cname="$d" >/dev/null 2>&1; then
+              echo "::warning::Could not set Pages binding for $repo (Pages disabled, or domain not verified?)"
+              echo "::endgroup::"
+              continue
+            fi
+            sleep 10
+            state=$(gh api "repos/$repo/pages" --jq '.https_certificate.state // "none"' 2>/dev/null || echo unknown)
+            echo "cert state after bind: $state"
+            case "$state" in
+              none|errored)
+                echo "cert stalled ($state) — re-binding to restart issuance"
+                echo '{"cname":null}' | gh api -X PUT "repos/$repo/pages" --input - >/dev/null
+                sleep 5
+                gh api -X PUT "repos/$repo/pages" -f cname="$d" >/dev/null
+                sleep 10
+                state=$(gh api "repos/$repo/pages" --jq '.https_certificate.state // "none"' 2>/dev/null || echo unknown)
+                echo "cert state after re-bind: $state"
+                ;;
+            esac
+            echo "::endgroup::"
+          done
+
       - name: Wait for DNS propagation
         shell: bash
         run: |

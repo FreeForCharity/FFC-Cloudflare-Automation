@@ -1,6 +1,7 @@
 # Sentry MCP Setup Guide
 
-The Sentry MCP server provides AI coding tools with access to error monitoring, issue triage, and root cause analysis for applications instrumented with Sentry.
+The Sentry MCP server provides AI coding tools with access to error monitoring, issue triage, and
+root cause analysis for applications instrumented with Sentry.
 
 ## What It Provides
 
@@ -12,11 +13,11 @@ The Sentry MCP server provides AI coding tools with access to error monitoring, 
 
 ## Server Details
 
-| Detail | Value |
-|--------|-------|
-| Remote URL | `https://mcp.sentry.dev/mcp` |
-| Transport | Streamable HTTP |
-| Authentication | OAuth (Sentry account) |
+| Detail         | Value                        |
+| -------------- | ---------------------------- |
+| Remote URL     | `https://mcp.sentry.dev/mcp` |
+| Transport      | Streamable HTTP              |
+| Authentication | OAuth (Sentry account)       |
 
 ## Setup for Claude Code
 
@@ -66,9 +67,12 @@ The OAuth token is cached locally, so you should only need to do this once per m
 }
 ```
 
-4. Sentry MCP uses OAuth, so no static token is needed. The authentication flow will occur when Copilot Agent first tries to use Sentry tools.
+4. Sentry MCP uses OAuth, so no static token is needed. The authentication flow will occur when
+   Copilot Agent first tries to use Sentry tools.
 
-**Note**: For Copilot Agent, OAuth may require a Sentry auth token stored as an environment secret if the OAuth flow is not supported in the Copilot Agent context. Check Sentry's documentation for the latest authentication options.
+**Note**: For Copilot Agent, OAuth may require a Sentry auth token stored as an environment secret
+if the OAuth flow is not supported in the Copilot Agent context. Check Sentry's documentation for
+the latest authentication options.
 
 Alternative with auth token:
 
@@ -120,10 +124,10 @@ Using Sentry, list the organizations and projects I have access to.
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| OAuth flow does not complete | Ensure your browser can reach sentry.io; check for popup blockers |
-| "No projects found" | Verify your Sentry account has at least one project configured |
-| Auth token rejected | Regenerate the token and ensure it has the required scopes |
-| MCP server unreachable | Verify `https://mcp.sentry.dev/mcp` is accessible from your network |
-| Stale OAuth token | Delete the cached token and re-authenticate (check Claude Code's MCP cache) |
+| Issue                        | Solution                                                                    |
+| ---------------------------- | --------------------------------------------------------------------------- |
+| OAuth flow does not complete | Ensure your browser can reach sentry.io; check for popup blockers           |
+| "No projects found"          | Verify your Sentry account has at least one project configured              |
+| Auth token rejected          | Regenerate the token and ensure it has the required scopes                  |
+| MCP server unreachable       | Verify `https://mcp.sentry.dev/mcp` is accessible from your network         |
+| Stale OAuth token            | Delete the cached token and re-authenticate (check Claude Code's MCP cache) |

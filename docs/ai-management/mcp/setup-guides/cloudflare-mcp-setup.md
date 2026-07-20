@@ -1,6 +1,7 @@
 # Cloudflare MCP Setup Guide
 
-The Cloudflare MCP server provides AI coding tools with direct access to Cloudflare's API for DNS management, zone analytics, WAF rules, and more.
+The Cloudflare MCP server provides AI coding tools with direct access to Cloudflare's API for DNS
+management, zone analytics, WAF rules, and more.
 
 ## What It Provides
 
@@ -50,7 +51,8 @@ CLOUDFLARE_API_TOKEN=your-token-here
 
 ### Option C: OAuth (browser-based)
 
-Cloudflare MCP supports OAuth authentication. When configured without a token, it will prompt you to authenticate via browser:
+Cloudflare MCP supports OAuth authentication. When configured without a token, it will prompt you to
+authenticate via browser:
 
 ```json
 {
@@ -66,7 +68,8 @@ Cloudflare MCP supports OAuth authentication. When configured without a token, i
 ## Setup for GitHub Copilot Agent
 
 1. Navigate to your repository on GitHub.
-2. Go to **Settings** > **Copilot** > **MCP Servers** (or the equivalent Copilot Agent configuration).
+2. Go to **Settings** > **Copilot** > **MCP Servers** (or the equivalent Copilot Agent
+   configuration).
 3. Add a new MCP server configuration:
 
 ```json
@@ -94,7 +97,8 @@ Cloudflare MCP supports OAuth authentication. When configured without a token, i
 4. Set **Zone Resources** to "All zones" (or restrict to specific FFC zones).
 5. Copy the token and store it securely.
 
-**Important**: The token should have the minimum permissions needed. For read-only auditing, use DNS: Read and Zone: Read only.
+**Important**: The token should have the minimum permissions needed. For read-only auditing, use
+DNS: Read and Zone: Read only.
 
 ## Verification
 
@@ -120,9 +124,9 @@ Using the Cloudflare MCP, list the DNS zones in my account.
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| "Unauthorized" error | Check that your API token is valid and has the correct permissions |
-| "Zone not found" | Ensure the token has access to the zone in question |
-| MCP server not appearing | Restart Claude Code or reload the Copilot Agent session |
-| Timeout errors | Cloudflare API may be rate-limiting; wait and retry |
+| Issue                    | Solution                                                           |
+| ------------------------ | ------------------------------------------------------------------ |
+| "Unauthorized" error     | Check that your API token is valid and has the correct permissions |
+| "Zone not found"         | Ensure the token has access to the zone in question                |
+| MCP server not appearing | Restart Claude Code or reload the Copilot Agent session            |
+| Timeout errors           | Cloudflare API may be rate-limiting; wait and retry                |

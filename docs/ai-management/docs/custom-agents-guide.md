@@ -1,17 +1,20 @@
 # Custom Agents Guide
 
-Custom agents are specialized AI personas defined as markdown files. They provide focused behavior, tool access, and domain knowledge for specific tasks within FFC projects.
+Custom agents are specialized AI personas defined as markdown files. They provide focused behavior,
+tool access, and domain knowledge for specific tasks within FFC projects.
 
 ## What Are Custom Agents?
 
-A custom agent is a markdown file placed in `.claude/agents/` within a repository. Each file defines:
+A custom agent is a markdown file placed in `.claude/agents/` within a repository. Each file
+defines:
 
 - A **role** (what the agent does)
 - **Tools** the agent should use
 - **Instructions** for behavior, tone, and output format
 - **Context** about the domain it operates in
 
-When invoked, the agent overrides the default Claude Code behavior with the specialized persona defined in the file.
+When invoked, the agent overrides the default Claude Code behavior with the specialized persona
+defined in the file.
 
 ## Where Do They Live?
 
@@ -39,7 +42,8 @@ Or reference the agent when starting a session:
 claude --agent dns-audit
 ```
 
-The agent file is loaded and its instructions replace the default system prompt additions for that session.
+The agent file is loaded and its instructions replace the default system prompt additions for that
+session.
 
 ## FFC Custom Agents
 
@@ -50,12 +54,14 @@ The agent file is loaded and its instructions replace the default system prompt 
 **Purpose**: Audit DNS records for an FFC-managed domain using the Cloudflare MCP server.
 
 **Capabilities**:
+
 - List all DNS records for a zone
 - Compare records against expected values (GitHub Pages CNAME, MX records for M365)
 - Flag misconfigurations or missing records
 - Generate a summary report
 
 **Typical invocation**:
+
 ```
 /agent dns-audit
 > Audit DNS for legioninthewoods.org
@@ -70,6 +76,7 @@ The agent file is loaded and its instructions replace the default system prompt 
 **Purpose**: Check the health and status of an FFC charity website.
 
 **Capabilities**:
+
 - Load the site in Playwright and check for errors
 - Verify SSL certificate validity
 - Check page load performance
@@ -77,6 +84,7 @@ The agent file is loaded and its instructions replace the default system prompt 
 - Screenshot the homepage for visual review
 
 **Typical invocation**:
+
 ```
 /agent site-health
 > Check health of slopestohope.org
@@ -91,12 +99,14 @@ The agent file is loaded and its instructions replace the default system prompt 
 **Purpose**: Coordinate changes that span multiple FFC repositories.
 
 **Capabilities**:
+
 - Read inventory from repos.json
 - Plan multi-repo changes
 - Create consistent PRs across repos using the GitHub MCP
 - Track sync status
 
 **Typical invocation**:
+
 ```
 /agent cross-repo-sync
 > Update the footer copyright year across all EX repos
@@ -111,12 +121,14 @@ The agent file is loaded and its instructions replace the default system prompt 
 **Purpose**: Review pull requests with FFC-specific standards in mind.
 
 **Capabilities**:
+
 - Analyze PR diffs for security issues (exposed tokens, missing .env entries)
 - Check adherence to FFC coding conventions
 - Verify commit message format (Conventional Commits)
 - Suggest improvements
 
 **Typical invocation**:
+
 ```
 /agent pr-reviewer
 > Review PR #42 on FFC-EX-legioninthewoods.org
@@ -131,12 +143,14 @@ The agent file is loaded and its instructions replace the default system prompt 
 **Purpose**: Help new FFC volunteers understand the project structure and get started.
 
 **Capabilities**:
+
 - Explain the FFC mission and tech stack
 - Walk through repo structure
 - Guide setup of development environment
 - Point to relevant documentation
 
 **Typical invocation**:
+
 ```
 /agent onboarding
 > I'm new to FFC. Help me get started with the legioninthewoods.org site.
@@ -152,31 +166,40 @@ The agent file is loaded and its instructions replace the default system prompt 
 # Agent Name
 
 ## Role
+
 Describe what this agent does and its expertise.
 
 ## Tools
+
 List the MCP servers or tools this agent should use:
+
 - Cloudflare MCP (for DNS operations)
 - Playwright (for browser testing)
 - GitHub MCP (for repo operations)
 
 ## Instructions
+
 Step-by-step behavioral instructions:
+
 1. Always start by...
 2. When asked to...
 3. Never...
 
 ## Context
+
 Background information the agent needs:
+
 - FFC manages domains via Cloudflare
 - Sites are hosted on GitHub Pages or WPMUDEV
 - Email is through M365
 
 ## Output Format
+
 Describe the expected output format (e.g., markdown table, JSON, summary report).
 ```
 
 3. Test the agent locally:
+
 ```bash
 claude --agent my-agent
 ```
@@ -187,11 +210,14 @@ claude --agent my-agent
 
 Custom agents are managed as templates in this repository (`FFC-IN-AI-Management`):
 
-1. Agent templates live in `templates/base/.claude/agents/` (for agents that go to every repo) or `templates/overlays/{type}/.claude/agents/` (for type-specific agents).
+1. Agent templates live in `templates/base/.claude/agents/` (for agents that go to every repo) or
+   `templates/overlays/{type}/.claude/agents/` (for type-specific agents).
 
-2. The `Sync-AIConfigs.ps1` script assembles and deploys agent files to target repos along with all other AI configuration files.
+2. The `Sync-AIConfigs.ps1` script assembles and deploys agent files to target repos along with all
+   other AI configuration files.
 
-3. Template variables (`{{REPO_NAME}}`, `{{DOMAIN_NAME}}`) are replaced with repo-specific values during sync.
+3. Template variables (`{{REPO_NAME}}`, `{{DOMAIN_NAME}}`) are replaced with repo-specific values
+   during sync.
 
 4. Changes are delivered via pull request, never pushed directly to main.
 

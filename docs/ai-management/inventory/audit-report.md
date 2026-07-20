@@ -4,37 +4,37 @@ Generated: 2026-02-16 14:47:30
 
 ## Summary
 
-| Org | Repo | Type | CLAUDE.md | AGENTS.md | GEMINI.md | copilot-instructions | .claude/settings | .claude/rules | .claude/agents | mcp-config | AI_AGENT_INSTRUCTIONS |
-|-----|------|------|-----------|-----------|-----------|---------------------|-----------------|---------------|----------------|------------|----------------------|
-| FreeForCharity | FFC-IN-AI-Management | base | - | - | - | - | - | - | - | - | - |
-| FreeForCharity | FFC-EX-aariasblueelephant.org | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC-Cloudflare-Automation | powershell-infra | - | - | - | - | - | - | - | - | Yes |
-| FreeForCharity | FFC-IN-Single_Page_Template_Jekell | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC-IN-Single_Page_Template_HTML | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC_Single_Page_Template | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC-EX-SRRN.net | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC-EX-thecrookedhouse.net | base | - | - | - | - | - | - | - | - | - |
-| FreeForCharity | FFC-EX-sporting2Impact.org | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC-EX-technomonasteries.org | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC-EX-nittanypost245.org | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC-EX-slopestohope.org | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC-EX-legioninthewoods.org | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC-IN-ffcadmin.org | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC-EX-freedomrisingusa.org | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | freeforcharity-web | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC-EX-AllTypeTowing.com | base | - | - | - | - | - | - | - | - | - |
-| FreeForCharity | FFC-EX-bintobetter.org | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | FFC-EX-PAGboosters.org | base | - | - | - | - | - | - | - | - | - |
-| FreeForCharity | FFC-IN-Zeffy-Management | base | - | - | - | - | - | - | - | - | - |
-| FreeForCharity | FFC-Static-Site-Capture-Tools | powershell-infra | - | - | - | - | - | - | - | - | - |
-| FreeForCharity | FFC-IN-Antigravity-Static-site-agent | powershell-infra | - | - | - | - | - | - | - | - | - |
-| FreeForCharity | FFC-EX-SRRN-Static-site-conversion | base | - | - | - | - | - | - | - | - | - |
-| FreeForCharity | FFC-Technology-Directory | base | - | - | - | - | - | - | - | - | - |
-| FreeForCharity | FreeForCharity.org | base | - | - | - | Yes | - | - | - | - | - |
-| FreeForCharity | TechnologyMonastery.org | base | - | - | - | - | - | - | - | - | - |
-| FreeForCharity | FFC-MicrosoftBot | base | - | - | - | - | - | - | - | - | - |
-| FreeForCharity | FFC-Discussions | base | - | - | - | - | - | - | - | - | - |
-| koenig-childhood-cancer-foundation | KCCF-web | base | - | - | - | - | - | - | - | - | - |
+| Org                                | Repo                                 | Type             | CLAUDE.md | AGENTS.md | GEMINI.md | copilot-instructions | .claude/settings | .claude/rules | .claude/agents | mcp-config | AI_AGENT_INSTRUCTIONS |
+| ---------------------------------- | ------------------------------------ | ---------------- | --------- | --------- | --------- | -------------------- | ---------------- | ------------- | -------------- | ---------- | --------------------- |
+| FreeForCharity                     | FFC-IN-AI-Management                 | base             | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-aariasblueelephant.org        | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-Cloudflare-Automation            | powershell-infra | -         | -         | -         | -                    | -                | -             | -              | -          | Yes                   |
+| FreeForCharity                     | FFC-IN-Single_Page_Template_Jekell   | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-IN-Single_Page_Template_HTML     | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC_Single_Page_Template             | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-SRRN.net                      | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-thecrookedhouse.net           | base             | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-sporting2Impact.org           | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-technomonasteries.org         | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-nittanypost245.org            | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-slopestohope.org              | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-legioninthewoods.org          | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-IN-ffcadmin.org                  | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-freedomrisingusa.org          | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | freeforcharity-web                   | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-AllTypeTowing.com             | base             | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-bintobetter.org               | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-PAGboosters.org               | base             | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-IN-Zeffy-Management              | base             | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-Static-Site-Capture-Tools        | powershell-infra | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-IN-Antigravity-Static-site-agent | powershell-infra | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-EX-SRRN-Static-site-conversion   | base             | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-Technology-Directory             | base             | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FreeForCharity.org                   | base             | -         | -         | -         | Yes                  | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | TechnologyMonastery.org              | base             | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-MicrosoftBot                     | base             | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
+| FreeForCharity                     | FFC-Discussions                      | base             | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
+| koenig-childhood-cancer-foundation | KCCF-web                             | base             | -         | -         | -         | -                    | -                | -             | -              | -          | -                     |
 
 ## Legend
 
@@ -42,5 +42,5 @@ Generated: 2026-02-16 14:47:30
 - **-**: Not present
 
 ---
-*Report generated by `scripts/Audit-AIConfigs.ps1`*
 
+_Report generated by `scripts/Audit-AIConfigs.ps1`_

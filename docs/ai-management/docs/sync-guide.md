@@ -1,27 +1,34 @@
 # Sync Guide: Auditing and Deploying AI Configs
 
-This guide walks through the day-to-day use of the audit and sync scripts that keep AI configuration files consistent across all FFC repositories.
+This guide walks through the day-to-day use of the audit and sync scripts that keep AI configuration
+files consistent across all FFC repositories.
 
 ## Prerequisites
 
 Before running any scripts, ensure you have:
 
 1. **PowerShell 5.1+** (Windows) or **PowerShell 7+** (cross-platform)
+
    ```powershell
    $PSVersionTable.PSVersion
    ```
 
 2. **GitHub CLI (`gh`) authenticated**
+
    ```powershell
    gh auth status
    ```
+
    If not authenticated:
+
    ```powershell
    gh auth login
    ```
+
    Ensure your token has `repo` scope for all target organizations.
 
-3. **Access to target organizations** -- your GitHub account must be a member of `FreeForCharity` and `koenig-childhood-cancer-foundation` (or whichever orgs you target).
+3. **Access to target organizations** -- your GitHub account must be a member of `FreeForCharity`
+   and `koenig-childhood-cancer-foundation` (or whichever orgs you target).
 
 ## Step 1: Running the Audit
 
@@ -34,10 +41,10 @@ cd path\to\FFC-IN-AI-Management
 
 ### Options
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `-Organizations` | `@("FreeForCharity", "koenig-childhood-cancer-foundation")` | GitHub orgs to scan |
-| `-OutputPath` | `"inventory"` | Directory for output files |
+| Parameter        | Default                                                     | Description                |
+| ---------------- | ----------------------------------------------------------- | -------------------------- |
+| `-Organizations` | `@("FreeForCharity", "koenig-childhood-cancer-foundation")` | GitHub orgs to scan        |
+| `-OutputPath`    | `"inventory"`                                               | Directory for output files |
 
 ### Example: Audit a single org
 
@@ -50,15 +57,16 @@ cd path\to\FFC-IN-AI-Management
 The audit produces two files:
 
 - **`inventory/repos.json`** -- Machine-readable inventory with every repo's AI config status.
-- **`inventory/audit-report.md`** -- Human-readable markdown table showing presence/absence of each config file.
+- **`inventory/audit-report.md`** -- Human-readable markdown table showing presence/absence of each
+  config file.
 
 ## Step 2: Understanding the Audit Report
 
 Open `inventory/audit-report.md` to see a table like:
 
-| Org | Repo | Type | CLAUDE.md | AGENTS.md | GEMINI.md | copilot-instructions | ... |
-|-----|------|------|-----------|-----------|-----------|---------------------|-----|
-| FreeForCharity | FFC-EX-legioninthewoods.org | base | Yes | - | - | Yes | ... |
+| Org            | Repo                        | Type | CLAUDE.md | AGENTS.md | GEMINI.md | copilot-instructions | ... |
+| -------------- | --------------------------- | ---- | --------- | --------- | --------- | -------------------- | --- |
+| FreeForCharity | FFC-EX-legioninthewoods.org | base | Yes       | -         | -         | Yes                  | ... |
 
 - **Yes** means the file or directory is present.
 - **-** means it is not present.
@@ -81,6 +89,7 @@ Before making any changes, always preview with `-DryRun`:
 ```
 
 The dry-run output shows:
+
 - Which repos would be targeted
 - Which files would be created or updated
 - The first 80 characters of each file (for quick verification)
@@ -118,10 +127,12 @@ You then review and merge each PR as normal.
 If a target repo has local modifications to AI config files that conflict with the synced versions:
 
 1. The PR will show merge conflicts in the GitHub UI.
-2. Resolve conflicts manually in the PR, keeping any repo-specific customizations that should be preserved.
+2. Resolve conflicts manually in the PR, keeping any repo-specific customizations that should be
+   preserved.
 3. If the repo needs permanent deviations from the template, consider:
    - Adding a new overlay type for that class of repo
-   - Adding the repo-specific content to the overlay's `.patch` file so it is appended rather than replaced
+   - Adding the repo-specific content to the overlay's `.patch` file so it is appended rather than
+     replaced
 
 ## Adding New Repos to Inventory
 

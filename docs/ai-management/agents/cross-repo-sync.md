@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Check AI configuration status across all FFC repositories. Produce an inventory of
-which repos have which AI config files, identify repos that need updates, and flag
-any repos that are missing required configurations.
+Check AI configuration status across all FFC repositories. Produce an inventory of which repos have
+which AI config files, identify repos that need updates, and flag any repos that are missing
+required configurations.
 
 ## Context
 
@@ -19,8 +19,8 @@ FFC-IN-AI-Management repository. This agent checks what is present and what is m
 
 ## Instructions
 
-When invoked, query all repositories across the FFC organizations and check for the
-presence of AI configuration files.
+When invoked, query all repositories across the FFC organizations and check for the presence of AI
+configuration files.
 
 ### 1. Enumerate Repositories
 
@@ -39,17 +39,17 @@ Exclude archived repositories from the audit.
 
 For each active repository, check for the presence of these files:
 
-| File | Required | Purpose |
-|------|----------|---------|
-| `CLAUDE.md` | Yes | Claude Code instructions |
-| `AGENTS.md` | Yes | Universal AI agent baseline |
-| `GEMINI.md` | Yes | Google Gemini instructions |
-| `.github/copilot-instructions.md` | Yes | GitHub Copilot instructions |
-| `.claude/settings.json` | Yes | Claude Code permissions |
-| `.claude/rules/` | Recommended | Claude Code behavioral rules |
-| `.claude/agents/` | Recommended | Custom agent definitions |
-| `.copilot/mcp-config.json` | Recommended | Copilot MCP server config |
-| `.github/agents/AI_AGENT_INSTRUCTIONS.md` | Infra repos only | Security instructions |
+| File                                      | Required         | Purpose                      |
+| ----------------------------------------- | ---------------- | ---------------------------- |
+| `CLAUDE.md`                               | Yes              | Claude Code instructions     |
+| `AGENTS.md`                               | Yes              | Universal AI agent baseline  |
+| `GEMINI.md`                               | Yes              | Google Gemini instructions   |
+| `.github/copilot-instructions.md`         | Yes              | GitHub Copilot instructions  |
+| `.claude/settings.json`                   | Yes              | Claude Code permissions      |
+| `.claude/rules/`                          | Recommended      | Claude Code behavioral rules |
+| `.claude/agents/`                         | Recommended      | Custom agent definitions     |
+| `.copilot/mcp-config.json`                | Recommended      | Copilot MCP server config    |
+| `.github/agents/AI_AGENT_INSTRUCTIONS.md` | Infra repos only | Security instructions        |
 
 Use `gh api` to check file existence:
 
@@ -81,20 +81,20 @@ Generated: 2026-02-16
 
 ### FreeForCharity
 
-| Repository | Type | CLAUDE.md | AGENTS.md | GEMINI.md | copilot-instructions | .claude/ | Status |
-|-----------|------|-----------|-----------|-----------|---------------------|----------|--------|
-| FFC-EX-legioninthewoods.org | base | Yes | Yes | Yes | Yes | Yes | Current |
-| FFC-EX-example.org | base | Yes | No | No | Yes | No | Needs Update |
-| FFC-Cloudflare-Automation | ps-infra | Yes | Yes | Yes | Yes | Yes | Current |
+| Repository                  | Type     | CLAUDE.md | AGENTS.md | GEMINI.md | copilot-instructions | .claude/ | Status       |
+| --------------------------- | -------- | --------- | --------- | --------- | -------------------- | -------- | ------------ |
+| FFC-EX-legioninthewoods.org | base     | Yes       | Yes       | Yes       | Yes                  | Yes      | Current      |
+| FFC-EX-example.org          | base     | Yes       | No        | No        | Yes                  | No       | Needs Update |
+| FFC-Cloudflare-Automation   | ps-infra | Yes       | Yes       | Yes       | Yes                  | Yes      | Current      |
 
 ### Summary
 
-| Status | Count |
-|--------|-------|
-| Current (all files present) | 18 |
-| Needs Update (some files missing) | 8 |
-| No Config (no AI files at all) | 2 |
-| Archived (skipped) | 3 |
+| Status                            | Count |
+| --------------------------------- | ----- |
+| Current (all files present)       | 18    |
+| Needs Update (some files missing) | 8     |
+| No Config (no AI files at all)    | 2     |
+| Archived (skipped)                | 3     |
 
 ### Repos Needing Updates
 
@@ -106,5 +106,5 @@ Generated: 2026-02-16
 
 - This agent reads data only -- it does not make changes to any repository.
 - To actually deploy updates, use the `Sync-AIConfigs.ps1` script.
-- Rate limits: GitHub API has rate limits. If checking many repos, the agent should
-  handle 403 responses gracefully and report which repos could not be checked.
+- Rate limits: GitHub API has rate limits. If checking many repos, the agent should handle 403
+  responses gracefully and report which repos could not be checked.

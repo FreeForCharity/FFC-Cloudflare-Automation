@@ -4,28 +4,33 @@ You are working on a **Free For Charity (FFC)** project.
 
 ## Mission
 
-Free For Charity provides free websites and domain management for verified 501(c)(3) nonprofit organizations. FFC volunteers build, host, and maintain websites so nonprofits can focus on their missions instead of technology overhead.
+Free For Charity provides free websites and domain management for verified 501(c)(3) nonprofit
+organizations. FFC volunteers build, host, and maintain websites so nonprofits can focus on their
+missions instead of technology overhead.
 
 ## Core Services and Platforms
 
-| Service | Purpose | Notes |
-|---------|---------|-------|
-| **Cloudflare** | DNS management, CDN, SSL, Workers | All FFC domains route through Cloudflare |
+| Service           | Purpose                                | Notes                                    |
+| ----------------- | -------------------------------------- | ---------------------------------------- |
+| **Cloudflare**    | DNS management, CDN, SSL, Workers      | All FFC domains route through Cloudflare |
 | **Microsoft 365** | Email (Exchange Online), collaboration | Nonprofit tenant via M365 for Nonprofits |
-| **WHMCS** | Billing, domain registration tracking | Internal admin tool |
-| **WPMUDEV** | WordPress hosting and plugins | Used for WordPress-based charity sites |
-| **GitHub** | Source repos, GitHub Pages, Actions | All code lives in FreeForCharity org |
+| **WHMCS**         | Billing, domain registration tracking  | Internal admin tool                      |
+| **WPMUDEV**       | WordPress hosting and plugins          | Used for WordPress-based charity sites   |
+| **GitHub**        | Source repos, GitHub Pages, Actions    | All code lives in FreeForCharity org     |
 
 ## Security Rules
 
 - **NEVER** expose API tokens, secrets, or credentials in code or output.
-- Use **GitHub Secrets** for CI/CD pipelines and **`.env` files** (git-ignored) for local development.
+- Use **GitHub Secrets** for CI/CD pipelines and **`.env` files** (git-ignored) for local
+  development.
 - Do not commit `.env`, `credentials.json`, or any file containing tokens.
 - If you need a secret value, ask the operator to configure it — do not generate placeholder tokens.
 
 ## Project-Specific Instructions
 
-Always check the **repo's own `CLAUDE.md`** file for project-specific instructions that supplement or override these global defaults. The repo-level file takes precedence for any conflicting guidance.
+Always check the **repo's own `CLAUDE.md`** file for project-specific instructions that supplement
+or override these global defaults. The repo-level file takes precedence for any conflicting
+guidance.
 
 ## Common Conventions (All FFC Repos)
 
@@ -37,7 +42,9 @@ Always check the **repo's own `CLAUDE.md`** file for project-specific instructio
 
 ## Custom Agents
 
-Custom agents may be defined in `.claude/agents/` within individual repos. These are markdown files that provide specialized behavior (e.g., DNS auditing, site health checks). Invoke them with `/agent <name>` if available.
+Custom agents may be defined in `.claude/agents/` within individual repos. These are markdown files
+that provide specialized behavior (e.g., DNS auditing, site health checks). Invoke them with
+`/agent <name>` if available.
 
 ## MCP Servers
 

@@ -1,10 +1,14 @@
 # Copilot Agent MCP Setup Guide
 
-This guide walks through the complete setup for configuring MCP servers in GitHub Copilot Agent mode. Copilot Agent can connect to external MCP servers (Cloudflare, Sentry, etc.) to extend its capabilities beyond code generation.
+This guide walks through the complete setup for configuring MCP servers in GitHub Copilot Agent
+mode. Copilot Agent can connect to external MCP servers (Cloudflare, Sentry, etc.) to extend its
+capabilities beyond code generation.
 
 ## Overview
 
-GitHub Copilot Agent supports MCP servers through repository-level configuration. You configure the servers in the GitHub UI, store authentication tokens as environment secrets, and Copilot Agent connects to them during agent sessions.
+GitHub Copilot Agent supports MCP servers through repository-level configuration. You configure the
+servers in the GitHub UI, store authentication tokens as environment secrets, and Copilot Agent
+connects to them during agent sessions.
 
 ## Prerequisites
 
@@ -20,7 +24,8 @@ GitHub Copilot Agent supports MCP servers through repository-level configuration
 
 ## Step 2: Create the Copilot Environment
 
-MCP server authentication tokens are stored as **environment secrets** in a special `copilot` environment.
+MCP server authentication tokens are stored as **environment secrets** in a special `copilot`
+environment.
 
 1. Go to **Settings** > **Environments**.
 2. Click **New environment**.
@@ -35,11 +40,11 @@ For each MCP server that requires authentication, add the token as a secret:
 2. Click **Add secret**.
 3. Add the following secrets as needed:
 
-| Secret Name | Description | Where to Get It |
-|-------------|-------------|-----------------|
+| Secret Name            | Description                                    | Where to Get It                                |
+| ---------------------- | ---------------------------------------------- | ---------------------------------------------- |
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token with DNS/Zone permissions | Cloudflare Dashboard > My Profile > API Tokens |
-| `GITHUB_TOKEN` | GitHub PAT (if cross-org access needed) | GitHub Settings > Developer Settings > PATs |
-| `SENTRY_AUTH_TOKEN` | Sentry auth token (if not using OAuth) | Sentry > Settings > API > Auth Tokens |
+| `GITHUB_TOKEN`         | GitHub PAT (if cross-org access needed)        | GitHub Settings > Developer Settings > PATs    |
+| `SENTRY_AUTH_TOKEN`    | Sentry auth token (if not using OAuth)         | Sentry > Settings > API > Auth Tokens          |
 
 **Note**: Do not add secrets you do not need. Only add tokens for MCP servers you plan to configure.
 
@@ -81,7 +86,8 @@ Create a file `.copilot/mcp-config.json` in the repository root:
 }
 ```
 
-Commit this file to the repository. Environment variable references (e.g., `${CLOUDFLARE_API_TOKEN}`) are resolved from the `copilot` environment secrets at runtime.
+Commit this file to the repository. Environment variable references (e.g.,
+`${CLOUDFLARE_API_TOKEN}`) are resolved from the `copilot` environment secrets at runtime.
 
 ## Step 5: Validate Configuration
 
@@ -95,7 +101,8 @@ Commit this file to the repository. Environment variable references (e.g., `${CL
 Using the Cloudflare MCP, list the DNS zones in my account.
 ```
 
-If the MCP server is configured correctly, Copilot Agent should execute the request and return results.
+If the MCP server is configured correctly, Copilot Agent should execute the request and return
+results.
 
 ### Validation checklist
 
@@ -110,9 +117,11 @@ If the MCP server is configured correctly, Copilot Agent should execute the requ
 ### Minimal: Cloudflare only
 
 **Environment secrets**:
+
 - `CLOUDFLARE_API_TOKEN`
 
 **MCP config** (`.copilot/mcp-config.json`):
+
 ```json
 {
   "mcpServers": {
@@ -130,11 +139,13 @@ If the MCP server is configured correctly, Copilot Agent should execute the requ
 ### Full stack: All Tier 1 servers
 
 **Environment secrets**:
+
 - `CLOUDFLARE_API_TOKEN`
 - `GITHUB_TOKEN`
 - `SENTRY_AUTH_TOKEN`
 
 **MCP config** (`.copilot/mcp-config.json`):
+
 ```json
 {
   "mcpServers": {
@@ -174,11 +185,11 @@ Rather than configuring each repo manually, use the sync pipeline:
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| "MCP server not found" | Verify the URL is correct and accessible |
-| "Unauthorized" or "Forbidden" | Check that the secret name matches the `${}` reference exactly |
-| Copilot Agent does not show MCP tools | Ensure Agent mode is enabled for the repo; refresh the session |
-| Secret not resolving | Verify the secret is in the `copilot` environment specifically, not repo-level |
-| Tools work but return empty results | The API token may lack required permissions; regenerate with correct scopes |
-| Changes to config not taking effect | Copilot Agent may cache configurations; start a new chat session |
+| Issue                                 | Solution                                                                       |
+| ------------------------------------- | ------------------------------------------------------------------------------ |
+| "MCP server not found"                | Verify the URL is correct and accessible                                       |
+| "Unauthorized" or "Forbidden"         | Check that the secret name matches the `${}` reference exactly                 |
+| Copilot Agent does not show MCP tools | Ensure Agent mode is enabled for the repo; refresh the session                 |
+| Secret not resolving                  | Verify the secret is in the `copilot` environment specifically, not repo-level |
+| Tools work but return empty results   | The API token may lack required permissions; regenerate with correct scopes    |
+| Changes to config not taking effect   | Copilot Agent may cache configurations; start a new chat session               |

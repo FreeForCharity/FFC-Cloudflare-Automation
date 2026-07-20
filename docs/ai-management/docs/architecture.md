@@ -1,6 +1,7 @@
 # Architecture: Template System and Sync Pipeline
 
-This document explains how FFC-IN-AI-Management assembles and deploys AI configuration files across the FFC repository fleet.
+This document explains how FFC-IN-AI-Management assembles and deploys AI configuration files across
+the FFC repository fleet.
 
 ## Base + Overlay Template System
 
@@ -35,7 +36,9 @@ For each target repo, the sync script:
 
 ### .patch Files
 
-If an overlay directory contains a file named `CLAUDE.md.patch`, its content is appended to the end of the base `CLAUDE.md` rather than replacing it. This allows overlays to extend base files without duplicating their content.
+If an overlay directory contains a file named `CLAUDE.md.patch`, its content is appended to the end
+of the base `CLAUDE.md` rather than replacing it. This allows overlays to extend base files without
+duplicating their content.
 
 Example:
 
@@ -44,26 +47,29 @@ templates/base/CLAUDE.md                     # Base instructions for all repos
 templates/overlays/powershell-infra/CLAUDE.md.patch   # Additional PowerShell-specific guidance
 ```
 
-Result: The target repo receives a `CLAUDE.md` that contains the base content followed by the patch content.
+Result: The target repo receives a `CLAUDE.md` that contains the base content followed by the patch
+content.
 
 ## Template Variable Replacement
 
 After assembly, the sync script performs variable substitution on every file:
 
-| Variable | Source | Example |
-|----------|--------|---------|
-| `{{REPO_NAME}}` | `repos.json` entry `.name` | `FFC-EX-legioninthewoods.org` |
-| `{{DOMAIN_NAME}}` | `repos.json` entry `.domain` | `legioninthewoods.org` |
-| `{{BASE_PATH}}` | `repos.json` entry `.basePath` | `/FFC-EX-legioninthewoods.org` |
+| Variable          | Source                         | Example                        |
+| ----------------- | ------------------------------ | ------------------------------ |
+| `{{REPO_NAME}}`   | `repos.json` entry `.name`     | `FFC-EX-legioninthewoods.org`  |
+| `{{DOMAIN_NAME}}` | `repos.json` entry `.domain`   | `legioninthewoods.org`         |
+| `{{BASE_PATH}}`   | `repos.json` entry `.basePath` | `/FFC-EX-legioninthewoods.org` |
 
 Variables that resolve to `null` or empty are replaced with an empty string.
 
 ## Inventory-Driven Deployment
 
-The sync script reads `inventory/repos.json` to determine which repos to target and what metadata to inject. The inventory is maintained in two ways:
+The sync script reads `inventory/repos.json` to determine which repos to target and what metadata to
+inject. The inventory is maintained in two ways:
 
 1. **Manual entry** -- add repos directly to `repos.json`.
-2. **Audit script** -- run `Audit-AIConfigs.ps1` to scan GitHub orgs and rebuild the inventory automatically.
+2. **Audit script** -- run `Audit-AIConfigs.ps1` to scan GitHub orgs and rebuild the inventory
+   automatically.
 
 Each repo entry includes:
 

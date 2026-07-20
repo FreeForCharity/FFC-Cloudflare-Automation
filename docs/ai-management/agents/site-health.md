@@ -2,21 +2,19 @@
 
 ## Purpose
 
-Validate GitHub Pages deployments for FFC charity websites. Check that sites are
-accessible, HTTPS is working, custom domains resolve correctly, and key page elements
-are present.
+Validate GitHub Pages deployments for FFC charity websites. Check that sites are accessible, HTTPS
+is working, custom domains resolve correctly, and key page elements are present.
 
 ## Context
 
-FFC charity websites are Next.js static exports deployed to GitHub Pages with custom
-domains managed through Cloudflare DNS. Each site should be accessible via HTTPS on
-its custom domain, load without errors, and contain standard navigation and content
-elements.
+FFC charity websites are Next.js static exports deployed to GitHub Pages with custom domains managed
+through Cloudflare DNS. Each site should be accessible via HTTPS on its custom domain, load without
+errors, and contain standard navigation and content elements.
 
 ## Instructions
 
-When invoked, accept one or more URLs (or domain names) to check. For each site,
-perform the following validation steps:
+When invoked, accept one or more URLs (or domain names) to check. For each site, perform the
+following validation steps:
 
 ### 1. HTTPS and Connectivity
 
@@ -36,14 +34,14 @@ perform the following validation steps:
 
 Check for the presence of standard FFC site elements:
 
-| Element | How to Check |
-|---------|-------------|
+| Element             | How to Check                           |
+| ------------------- | -------------------------------------- |
 | Navigation / Header | Look for `<nav>` or `<header>` element |
-| Footer | Look for `<footer>` element |
-| Main content area | Look for `<main>` element |
-| Page title | `<title>` tag is set and non-empty |
-| Charity name | Appears in title or heading |
-| Contact information | Email or phone visible on page |
+| Footer              | Look for `<footer>` element            |
+| Main content area   | Look for `<main>` element              |
+| Page title          | `<title>` tag is set and non-empty     |
+| Charity name        | Appears in title or heading            |
+| Contact information | Email or phone visible on page         |
 
 ### 4. Content Quality
 
@@ -80,26 +78,28 @@ Produce a summary table for each site checked:
 
 ### example.org
 
-| Check | Result | Details |
-|-------|--------|---------|
-| HTTPS | PASS | 200 OK, loaded in 1.2s |
-| SSL Certificate | PASS | Valid, expires 2026-08-15, Let's Encrypt |
-| Custom Domain | PASS | example.org resolves correctly |
-| HTTP -> HTTPS Redirect | PASS | 301 redirect to https://example.org |
-| Navigation | PASS | <nav> element found |
-| Footer | PASS | <footer> element found |
-| Main Content | PASS | <main> element found |
-| Page Title | PASS | "Example Charity - Free For Charity" |
-| Mixed Content | PASS | No mixed content detected |
-| Console Errors | WARN | 1 warning: "DevTools failed to load..." |
-| Images Alt Text | FAIL | 2 images missing alt attributes |
+| Check                  | Result | Details                                  |
+| ---------------------- | ------ | ---------------------------------------- |
+| HTTPS                  | PASS   | 200 OK, loaded in 1.2s                   |
+| SSL Certificate        | PASS   | Valid, expires 2026-08-15, Let's Encrypt |
+| Custom Domain          | PASS   | example.org resolves correctly           |
+| HTTP -> HTTPS Redirect | PASS   | 301 redirect to https://example.org      |
+| Navigation             | PASS   | <nav> element found                      |
+| Footer                 | PASS   | <footer> element found                   |
+| Main Content           | PASS   | <main> element found                     |
+| Page Title             | PASS   | "Example Charity - Free For Charity"     |
+| Mixed Content          | PASS   | No mixed content detected                |
+| Console Errors         | WARN   | 1 warning: "DevTools failed to load..."  |
+| Images Alt Text        | FAIL   | 2 images missing alt attributes          |
 
 ### Summary
+
 - Sites checked: 1
 - Passing: 9/11
 - Warnings: 1
 - Failures: 1
 
 ### Recommendations
+
 1. Add alt text to images on the homepage
 ```

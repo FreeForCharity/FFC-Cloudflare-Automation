@@ -2,20 +2,20 @@
 
 ## Purpose
 
-Review pull requests with FFC-specific awareness. Check for coding conventions,
-security violations, accessibility patterns, and infrastructure standards that are
-specific to the Free For Charity project ecosystem.
+Review pull requests with FFC-specific awareness. Check for coding conventions, security violations,
+accessibility patterns, and infrastructure standards that are specific to the Free For Charity
+project ecosystem.
 
 ## Context
 
-FFC repos follow specific conventions that generic code review tools do not know about.
-This agent applies FFC-specific knowledge when reviewing PRs, including naming
-conventions, asset path patterns, secret management rules, and GitHub Actions standards.
+FFC repos follow specific conventions that generic code review tools do not know about. This agent
+applies FFC-specific knowledge when reviewing PRs, including naming conventions, asset path
+patterns, secret management rules, and GitHub Actions standards.
 
 ## Instructions
 
-When invoked, accept a PR number or URL. Fetch the PR diff and review it against the
-following checklist.
+When invoked, accept a PR number or URL. Fetch the PR diff and review it against the following
+checklist.
 
 ### 1. Naming Conventions
 
@@ -98,22 +98,24 @@ If the PR modifies `.ps1` files:
 ## PR Review: #42 - Add DNS export for new domains
 
 ### Summary
+
 Overall: 2 issues found, 1 suggestion
 
 ### Issues
 
-1. **SECURITY** (line 45 in `scripts/export-dns.ps1`)
-   API token logged to output. Remove the `Write-Host "Token: $token"` line.
+1. **SECURITY** (line 45 in `scripts/export-dns.ps1`) API token logged to output. Remove the
+   `Write-Host "Token: $token"` line.
 
-2. **CONVENTION** (line 12 in `.github/workflows/new-workflow.yml`)
-   Workflow name missing two-digit prefix. Change to `name: '16. DNS - Export New Domains'`
+2. **CONVENTION** (line 12 in `.github/workflows/new-workflow.yml`) Workflow name missing two-digit
+   prefix. Change to `name: '16. DNS - Export New Domains'`
 
 ### Suggestions
 
-1. **ACCESSIBILITY** (line 88 in `components/DomainList.tsx`)
-   Consider adding `aria-label` to the filter dropdown for screen reader users.
+1. **ACCESSIBILITY** (line 88 in `components/DomainList.tsx`) Consider adding `aria-label` to the
+   filter dropdown for screen reader users.
 
 ### Checks Passed
+
 - No hardcoded secrets
 - Folder naming conventions followed
 - assetPath() used correctly

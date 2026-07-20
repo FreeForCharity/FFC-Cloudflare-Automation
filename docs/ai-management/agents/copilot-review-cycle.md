@@ -2,16 +2,15 @@
 
 ## Purpose
 
-Automate the GitHub Copilot code review feedback loop. Request a Copilot review,
-wait for results, fix all inline comments, commit, and repeat until Copilot has
-no more feedback. Produce a summary of all rounds when done.
+Automate the GitHub Copilot code review feedback loop. Request a Copilot review, wait for results,
+fix all inline comments, commit, and repeat until Copilot has no more feedback. Produce a summary of
+all rounds when done.
 
 ## Context
 
-GitHub Copilot code review runs as a PR check and leaves inline comments on
-specific lines. This agent automates the tedious cycle of: read comments, fix
-code, commit, re-request review, wait, check again. The goal is a clean Copilot
-review with zero inline comments.
+GitHub Copilot code review runs as a PR check and leaves inline comments on specific lines. This
+agent automates the tedious cycle of: read comments, fix code, commit, re-request review, wait,
+check again. The goal is a clean Copilot review with zero inline comments.
 
 ## Instructions
 
@@ -40,8 +39,8 @@ gh api repos/{owner}/{repo}/pulls/{pr}/requested_reviewers \
   -f "reviewers[]=copilot-pull-request-reviewer" 2>/dev/null || true
 ```
 
-Note: Copilot review may trigger automatically on push. Check if a review is
-already in progress before requesting one.
+Note: Copilot review may trigger automatically on push. Check if a review is already in progress
+before requesting one.
 
 #### Step 2: Wait for the Review to Complete
 
@@ -57,8 +56,7 @@ Or poll the reviews API:
 gh api repos/{owner}/{repo}/pulls/{pr}/reviews
 ```
 
-Wait until the Copilot code review check completes. Do NOT proceed until the
-review is finished.
+Wait until the Copilot code review check completes. Do NOT proceed until the review is finished.
 
 #### Step 3: Read Inline Comments
 
@@ -68,8 +66,8 @@ Fetch all review comments on the PR:
 gh api repos/{owner}/{repo}/pulls/{pr}/comments
 ```
 
-Filter for comments from `copilot-pull-request-reviewer` or bot accounts
-associated with Copilot. Extract:
+Filter for comments from `copilot-pull-request-reviewer` or bot accounts associated with Copilot.
+Extract:
 
 - The file path
 - The line number(s)
@@ -94,7 +92,8 @@ For each inline comment:
 Common Copilot feedback patterns:
 
 - **React keys**: Use stable, unique keys. For static arrays, `index` is acceptable.
-- **Accessibility**: Add `scope="col"` to `<th>`, add `<caption>` to tables, add `aria-*` attributes.
+- **Accessibility**: Add `scope="col"` to `<th>`, add `<caption>` to tables, add `aria-*`
+  attributes.
 - **Type safety**: Add proper TypeScript types, avoid `any`.
 - **Performance**: Memoize expensive operations, avoid unnecessary re-renders.
 - **Security**: Sanitize inputs, avoid `dangerouslySetInnerHTML`.
@@ -114,8 +113,8 @@ Push to the PR branch. **Set timeout to 60 seconds for push commands.**
 
 #### Step 6: Check for New Review
 
-After pushing, Copilot will typically re-review automatically. If not, request
-a new review (Step 1). Then go back to Step 2.
+After pushing, Copilot will typically re-review automatically. If not, request a new review (Step
+1). Then go back to Step 2.
 
 ### Exit Condition
 
@@ -128,9 +127,7 @@ When done, output a markdown summary:
 ```markdown
 ## Copilot Review Cycle Summary
 
-**PR:** #NNN — <title>
-**Total Rounds:** N
-**Total Comments Addressed:** N
+**PR:** #NNN — <title> **Total Rounds:** N **Total Comments Addressed:** N
 
 ### Round 1
 
@@ -158,15 +155,14 @@ When done, output a markdown summary:
 
 - **Never cancel long-running commands.** Set timeouts to 180+ seconds for builds.
 - **Do not argue with Copilot.** Just fix what it asks for, even if debatable.
-- **Track comment IDs** to distinguish new comments from old unresolved threads.
-  Copilot sometimes leaves old threads unresolved even after fixes — focus on
-  whether the LATEST review generated NEW comments.
-- **Duplicate file warnings** from renames are not actionable. Note them in the
-  summary but do not try to fix them.
-- **Run `pnpm run format` before committing** to avoid formatting-only comments
-  on the next round.
-- If a Copilot comment is unclear or contradicts a previous fix, use your best
-  judgment and note it in the summary.
+- **Track comment IDs** to distinguish new comments from old unresolved threads. Copilot sometimes
+  leaves old threads unresolved even after fixes — focus on whether the LATEST review generated NEW
+  comments.
+- **Duplicate file warnings** from renames are not actionable. Note them in the summary but do not
+  try to fix them.
+- **Run `pnpm run format` before committing** to avoid formatting-only comments on the next round.
+- If a Copilot comment is unclear or contradicts a previous fix, use your best judgment and note it
+  in the summary.
 
 ## Tools
 

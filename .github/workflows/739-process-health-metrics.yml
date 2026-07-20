@@ -62,20 +62,33 @@ jobs:
             // Issues API returns PRs too; drop them everywhere.
             const isIssue = (i) => i && !i.pull_request;
 
-            // Open issues carrying a given label (all pages; the backlog is small).
+            // Bounded manual pager (a labeled backlog should be small, but never
+            // scan unboundedly): cap at MAX_ISSUE_PAGES so the weekly job stays
+            // cheap even if a label ever balloons.
+            const MAX_ISSUE_PAGES = 10;
+            async function listIssuesBounded(params) {
+              const out = [];
+              for (let pg = 1; pg <= MAX_ISSUE_PAGES; pg++) {
+                const { data } = await github.rest.issues.listForRepo({
+                  ...params, per_page: 100, page: pg,
+                });
+                out.push(...data);
+                if (data.length < 100) break;
+              }
+              return out;
+            }
+
+            // Open issues carrying a given label.
             async function openWithLabel(label) {
-              const all = await github.paginate(github.rest.issues.listForRepo, {
-                owner, repo, state: 'open', labels: label, per_page: 100,
-              });
+              const all = await listIssuesBounded({ owner, repo, state: 'open', labels: label });
               return all.filter(isIssue);
             }
 
             // Issues with a label closed within the throughput window. `since`
             // (updated_at) bounds the fetch; closed_at bounds the count.
             async function closedWithLabel(label) {
-              const all = await github.paginate(github.rest.issues.listForRepo, {
-                owner, repo, state: 'closed', labels: label,
-                since: throughputCut.toISOString(), per_page: 100,
+              const all = await listIssuesBounded({
+                owner, repo, state: 'closed', labels: label, since: throughputCut.toISOString(),
               });
               return all.filter(
                 (i) => isIssue(i) && i.closed_at && new Date(i.closed_at) >= throughputCut,

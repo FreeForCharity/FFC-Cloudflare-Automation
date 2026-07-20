@@ -31,14 +31,14 @@ param(
 
 # Files and directories to check in each repo
 $aiConfigFiles = @(
-    @{ Path = "CLAUDE.md";                              Type = "file" },
-    @{ Path = "AGENTS.md";                              Type = "file" },
-    @{ Path = "GEMINI.md";                              Type = "file" },
-    @{ Path = ".github/copilot-instructions.md";        Type = "file" },
-    @{ Path = ".claude/settings.json";                  Type = "file" },
-    @{ Path = ".claude/rules";                          Type = "dir"  },
-    @{ Path = ".claude/agents";                         Type = "dir"  },
-    @{ Path = ".copilot/mcp-config.json";               Type = "file" },
+    @{ Path = "CLAUDE.md"; Type = "file" },
+    @{ Path = "AGENTS.md"; Type = "file" },
+    @{ Path = "GEMINI.md"; Type = "file" },
+    @{ Path = ".github/copilot-instructions.md"; Type = "file" },
+    @{ Path = ".claude/settings.json"; Type = "file" },
+    @{ Path = ".claude/rules"; Type = "dir" },
+    @{ Path = ".claude/agents"; Type = "dir" },
+    @{ Path = ".copilot/mcp-config.json"; Type = "file" },
     @{ Path = ".github/agents/AI_AGENT_INSTRUCTIONS.md"; Type = "file" }
 )
 
@@ -115,13 +115,13 @@ foreach ($org in $Organizations) {
         }
 
         $allRepos += @{
-            org        = $org
-            name       = $repoName
-            type       = $repoType
-            domain     = $domain
-            basePath   = $basePath
-            aiConfigs  = $aiConfigs
-            lastSync   = $null
+            org       = $org
+            name      = $repoName
+            type      = $repoType
+            domain    = $domain
+            basePath  = $basePath
+            aiConfigs = $aiConfigs
+            lastSync  = $null
         }
     }
 }

@@ -79,7 +79,7 @@ Write-Host "Targets: $($targets.Count) repo(s)" -ForegroundColor Cyan
 
 # ---------- Template paths ----------
 $templateRoot = Join-Path $PSScriptRoot "..\templates"
-$basePath      = Join-Path $templateRoot "base"
+$basePath = Join-Path $templateRoot "base"
 
 # ---------- Helper: read a local template file ----------
 function Get-TemplateContent {
@@ -100,7 +100,8 @@ function Get-TemplateFiles {
             $full = $_.FullName
             if ($full.Length -gt ($resolved.Length + 1)) {
                 $relative = $full.Substring($resolved.Length + 1) -replace '\\', '/'
-            } else {
+            }
+            else {
                 $relative = $_.Name
             }
             $files[$relative] = Get-Content $_.FullName -Raw -Encoding UTF8
@@ -117,13 +118,13 @@ function Resolve-TemplateVars {
     )
 
     $result = $Content
-    $result = $result -replace '\{\{REPO_NAME\}\}',   $Repo.name
+    $result = $result -replace '\{\{REPO_NAME\}\}', $Repo.name
     $domain = if ($Repo.domain) { $Repo.domain } else { "" }
     $domainSuffix = if ($Repo.domain) { " for $($Repo.domain)" } else { "" }
-    $base   = if ($Repo.basePath) { $Repo.basePath } else { "/$($Repo.name)" }
+    $base = if ($Repo.basePath) { $Repo.basePath } else { "/$($Repo.name)" }
     $result = $result -replace '\{\{DOMAIN_SUFFIX\}\}', $domainSuffix
-    $result = $result -replace '\{\{DOMAIN_NAME\}\}',   $domain
-    $result = $result -replace '\{\{BASE_PATH\}\}',     $base
+    $result = $result -replace '\{\{DOMAIN_NAME\}\}', $domain
+    $result = $result -replace '\{\{BASE_PATH\}\}', $base
 
     # Trim trailing whitespace per line (prevents Prettier failures when variables resolve to empty)
     $lines = $result -split "`n" | ForEach-Object { $_.TrimEnd() }
@@ -191,7 +192,7 @@ function Set-RepoFile {
 
 # ---------- Process each target repo ----------
 foreach ($repo in $targets) {
-    $org  = if ($repo.org) { $repo.org } else { $Organization }
+    $org = if ($repo.org) { $repo.org } else { $Organization }
     $name = $repo.name
     $type = if ($repo.type) { $repo.type } else { Get-RepoType -RepoName $name }
 

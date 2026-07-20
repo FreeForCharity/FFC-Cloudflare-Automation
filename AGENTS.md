@@ -58,6 +58,16 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   merges go through the **merge queue**, which builds a merge group and re-runs those checks.
 - **Review threads must be resolved before the queue accepts a PR.** Fix real findings first, then
   resolve via GraphQL: `resolveReviewThread(input:{threadId:…})`.
+- **Supersession check before ready+queue.** Before promoting a PR, grep `main` for the
+  function/capability names the PR adds — a same-purpose implementation may have landed on `main`
+  after the PR branched (on 2026-07-20, #772's basePath probe duplicated `basePathMismatch` merged
+  40 minutes earlier in #773; only the merge conflict stopped a double-ship). PRs that say `Refs #N`
+  instead of `Closes #N` never sync the `claimed` label, so the claim protocol will not warn you —
+  the grep is the check.
+- **Re-check the PR is still open before pushing to its branch.** Merging main into an agent branch
+  whose PR merged moments ago silently **re-creates the auto-deleted branch** — the tell is
+  `[new branch]` in push output for a push you meant as an update. If you see it, delete the
+  resurrected branch and stop.
 - Enter the queue with `gh pr merge <n> --merge --auto`, or directly:
   `gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:"<node_id>"}){mergeQueueEntry{position state}}}'`
 - **Debugging tip:** `gh pr merge --auto` can mask the real blocker behind a GraphQL "rate limit"

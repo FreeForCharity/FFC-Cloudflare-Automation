@@ -116,13 +116,29 @@ jobs:
             });
 
             // Previous metrics: newest hidden data block among #719's comments.
+            // #719 is the long-lived Conductor log, so we must NOT paginate its
+            // full history. The listComments endpoint has no sort/direction, so
+            // bound the read by a `since` window instead: this report runs weekly,
+            // so the prior baseline is always recent. A lookback wide enough to
+            // absorb a few skipped runs plus a hard page cap keeps the read
+            // bounded no matter how long the log grows; extractPreviousMetrics
+            // keeps the latest data block among what we fetch (comments come back
+            // oldest-first). Missing the baseline just renders "first report"
+            // (no trend) — acceptable degradation vs. an unbounded scan.
             const logIssue = Number(process.env.LOG_ISSUE);
+            const BASELINE_LOOKBACK_DAYS = 28;
+            const MAX_BASELINE_PAGES = 10;
+            const since = new Date(nowMs - BASELINE_LOOKBACK_DAYS * 86400e3).toISOString();
             let previous = null;
             try {
-              const comments = await github.paginate(github.rest.issues.listComments, {
-                owner, repo, issue_number: logIssue, per_page: 100,
-              });
-              previous = lib.extractPreviousMetrics(comments);
+              for (let bp = 1; bp <= MAX_BASELINE_PAGES; bp++) {
+                const { data } = await github.rest.issues.listComments({
+                  owner, repo, issue_number: logIssue, since, per_page: 100, page: bp,
+                });
+                const found = lib.extractPreviousMetrics(data);
+                if (found) previous = found; // ascending order → last page with a block wins
+                if (data.length < 100) break;
+              }
             } catch (e) {
               core.warning(`Could not read #${logIssue} comments for trend baseline: ${e.message}`);
             }

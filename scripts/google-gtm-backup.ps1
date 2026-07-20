@@ -36,13 +36,42 @@ if ($env:GITHUB_ACTIONS -eq 'true') { Write-Host "::add-mask::$token" }
 $auth = @{ Authorization = "Bearer $token" }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
+function Get-HttpStatus($ErrorRecord) {
+    try { return [int]$ErrorRecord.Exception.Response.StatusCode } catch { return 0 }
+}
+
+# Tag Manager enforces a 'Queries' quota of 30/min per project+user; the fleet sweep
+# outgrew it (2 consecutive weekly 429 failures, #789). Pace every call and retry 429s.
+$script:lastCall = [DateTimeOffset]::MinValue
+function Invoke-GtmApi {
+    param([Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][hashtable]$Headers)
+    $sinceMs = ([DateTimeOffset]::UtcNow - $script:lastCall).TotalMilliseconds
+    if ($sinceMs -lt 2100) { Start-Sleep -Milliseconds (2100 - [int]$sinceMs) }
+    $delays = @(30, 60, 120)
+    for ($try = 0; ; $try++) {
+        try {
+            $script:lastCall = [DateTimeOffset]::UtcNow
+            return Invoke-RestMethod -Uri $Uri -Headers $Headers
+        }
+        catch {
+            if ((Get-HttpStatus $_) -eq 429 -and $try -lt $delays.Count) {
+                Write-Warning "429 from $Uri — retry $($try + 1)/$($delays.Count) in $($delays[$try])s"
+                Start-Sleep -Seconds $delays[$try]
+                continue
+            }
+            throw
+        }
+    }
+}
+
 $index = @()
-$accts = (Invoke-RestMethod -Uri "$base/accounts" -Headers $auth).account
+$failed = @()
+$accts = (Invoke-GtmApi -Uri "$base/accounts" -Headers $auth).account
 foreach ($a in $accts) {
-    $containers = (Invoke-RestMethod -Uri "$base/$($a.path)/containers" -Headers $auth).container
+    $containers = (Invoke-GtmApi -Uri "$base/$($a.path)/containers" -Headers $auth).container
     foreach ($c in @($containers)) {
         try {
-            $live = Invoke-RestMethod -Uri "$base/$($c.path)/versions:live" -Headers $auth
+            $live = Invoke-GtmApi -Uri "$base/$($c.path)/versions:live" -Headers $auth
             $file = Join-Path $OutDir "$($c.publicId).json"
             ($live | ConvertTo-Json -Depth 30) | Set-Content -Path $file -Encoding utf8
             $index += [ordered]@{
@@ -52,11 +81,24 @@ foreach ($a in $accts) {
             Write-Host "BACKED_UP $($c.publicId) ($($c.name)) v$($live.containerVersionId)"
         }
         catch {
-            Write-Warning "No live version for $($c.publicId) ($($c.name)): $($_.Exception.Message)"
-            $index += [ordered]@{ publicId = $c.publicId; name = $c.name; account = $a.name; versionId = $null; file = $null }
+            if ((Get-HttpStatus $_) -eq 404) {
+                # Genuinely unpublished container — expected for not-yet-live charities.
+                Write-Warning "No live version for $($c.publicId) ($($c.name)) — skipped"
+                $index += [ordered]@{ publicId = $c.publicId; name = $c.name; account = $a.name; versionId = $null; file = $null }
+            }
+            else {
+                Write-Warning "FAILED $($c.publicId) ($($c.name)): $($_.Exception.Message)"
+                $failed += "$($c.publicId) ($($c.name))"
+                $index += [ordered]@{ publicId = $c.publicId; name = $c.name; account = $a.name; versionId = $null; file = $null; error = $_.Exception.Message }
+            }
         }
     }
 }
 @{ generatedAt = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'); containers = $index } |
     ConvertTo-Json -Depth 5 | Set-Content (Join-Path $OutDir 'index.json') -Encoding utf8
-Write-Host "RESULT containers=$($index.Count) outDir=$OutDir"
+Write-Host "RESULT containers=$($index.Count) failed=$($failed.Count) outDir=$OutDir"
+if ($failed.Count -gt 0) {
+    # A partial backup must not report success — name what was missed and fail at the end.
+    Write-Error "Backup incomplete: $($failed.Count) container(s) failed after retries: $($failed -join ', ')"
+    exit 1
+}

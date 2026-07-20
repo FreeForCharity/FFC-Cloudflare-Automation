@@ -18,6 +18,9 @@
 - GraphQL and REST have **separate rate pools** (5,000/hr each, shared account-wide). When GraphQL
   is exhausted, reads still work via REST; check with `gh api rate_limit`.
 - Never `--admin`-merge; never push to `main` directly.
+- **Format with the CI-pinned prettier.** `722-ci.yml` checks with `npx --yes prettier@3.8.1`;
+  plain `npx prettier` fetches the latest version, whose Markdown reflow differs — producing
+  local-pass/CI-fail loops. Always run `npx --yes prettier@3.8.1 --write <files>`.
 
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 

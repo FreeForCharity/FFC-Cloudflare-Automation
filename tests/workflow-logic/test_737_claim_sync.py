@@ -153,11 +153,20 @@ def test_workflow_requires_lib_and_has_both_triggers():
     assert "label-sync" in jobs and "sweep" in jobs, list(jobs)
 
 
-def test_sweep_covers_hub_and_ffcadmin():
+def test_sweep_uses_ambient_token_hub_only():
+    # CBM_TOKEN lives only in the gated github-prod environment, so it is empty
+    # on schedule events — the sweep must run on the ambient GITHUB_TOKEN and
+    # therefore can only mutate this repo (2026-07-20 first-fire failure).
     raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
     assert "FFC-Cloudflare-Automation" in raw, raw
-    assert "FFC-IN-ffcadmin.org" in raw, raw
-    assert "secrets.CBM_TOKEN" in raw, "cross-repo sweep needs CBM_TOKEN"
+    assert "secrets.CBM_TOKEN" not in raw, (
+        "sweep must not reference CBM_TOKEN: it is an environment secret in "
+        "gated github-prod and evaluates empty in an ungated scheduled job"
+    )
+    wf = load_workflow(WF_FILE)
+    sweep = wf["jobs"]["sweep"]
+    assert sweep.get("environment") is None, "daily sweep must stay ungated"
+    assert sweep["permissions"].get("issues") == "write", sweep["permissions"]
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

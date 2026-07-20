@@ -126,6 +126,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $ApiBase = 'https://api.cloudflare.com/client/v4'
 
+# Shared Cloudflare helpers (#778): single source for the GitHub Pages IP sets
+# and the www CNAME target. NOTE: this engine intentionally keeps its own
+# richer Invoke-CfApi (defined below, which overrides the library's version);
+# converging the REST plumbing is deferred to a follow-up to keep this change
+# reviewable.
+. (Join-Path $PSScriptRoot 'scripts/cloudflare-api-common.ps1')
+
+# Guard the -ProxyGitHubPages footgun (evidence: first live cutover, #774).
+if ($ProxyGitHubPages) {
+    Write-Warning "-ProxyGitHubPages is set: proxied (orange-cloud) apex records MASK GitHub Pages behind Cloudflare edge IPs and BLOCK Let's Encrypt certificate issuance for the custom domain (observed live during the first cutover — issue #774). The FFC GitHub Pages standard is DNS-only (grey cloud); only proceed if you intend Cloudflare to front this site."
+}
+
 # --- Authenticate ---
 function Get-AuthToken {
     param([AllowNull()][string]$ZoneName)
@@ -729,7 +741,7 @@ try {
             @{ Name = "enterpriseregistration.$Zone"; Content = 'enterpriseregistration.windows.net'; Proxied = $false },
             @{ Name = "lyncdiscover.$Zone"; Content = 'webdir.online.lync.com'; Proxied = $false },
             @{ Name = "sip.$Zone"; Content = 'sipdir.online.lync.com'; Proxied = $false },
-            @{ Name = "www.$Zone"; Content = 'freeforcharity.github.io'; Proxied = $githubPagesProxied }
+            @{ Name = "www.$Zone"; Content = (Get-GhPagesWwwTarget); Proxied = $githubPagesProxied }
         )
 
         foreach ($req in $requiredCnames) {
@@ -816,9 +828,9 @@ try {
         }
         else { Write-Warning "[MISSING] DMARC Record (_dmarc.$Zone)" }
 
-        # 4. GitHub Pages (A + AAAA Records)
-        $ghV4Ips = @('185.199.108.153', '185.199.109.153', '185.199.110.153', '185.199.111.153')
-        $ghV6Ips = @('2606:50c0:8000::153', '2606:50c0:8001::153', '2606:50c0:8002::153', '2606:50c0:8003::153')
+        # 4. GitHub Pages (A + AAAA Records) — canonical sets from the shared lib (#778)
+        $ghV4Ips = @(Get-GhPagesIps)
+        $ghV6Ips = @(Get-GhPagesIpv6s)
 
         $aRecords = $allRecords | Where-Object { $_.type -eq 'A' -and $_.name -eq $Zone }
         $missingV4 = $ghV4Ips | Where-Object { $_ -notin $aRecords.content }
@@ -856,21 +868,10 @@ try {
         if ($GitHubPagesOnly) {
             Write-Host "GitHubPagesOnly enabled: will only update apex A/AAAA + www CNAME. MX/TXT/SRV/etc will not be modified." -ForegroundColor Yellow
 
-            $desiredA = @(
-                '185.199.108.153',
-                '185.199.109.153',
-                '185.199.110.153',
-                '185.199.111.153'
-            )
-
-            $desiredAAAA = @(
-                '2606:50c0:8000::153',
-                '2606:50c0:8001::153',
-                '2606:50c0:8002::153',
-                '2606:50c0:8003::153'
-            )
-
-            $wwwTarget = 'freeforcharity.github.io'
+            # Canonical GitHub Pages targets from the shared lib (#778)
+            $desiredA = @(Get-GhPagesIps)
+            $desiredAAAA = @(Get-GhPagesIpv6s)
+            $wwwTarget = Get-GhPagesWwwTarget
             $apexFqdn = $Zone
             $wwwFqdn = "www.$Zone"
             $pagesProxied = [bool]$ProxyGitHubPages
@@ -1028,7 +1029,7 @@ try {
         }
 
         $m365MxTarget = (($Zone -replace '\.', '-') + '.mail.protection.outlook.com')
-        $wwwTarget = 'freeforcharity.github.io'
+        $wwwTarget = Get-GhPagesWwwTarget
 
         # GitHub Pages should be DNS-only by default to allow GitHub to validate and issue SSL.
         # Use -ProxyGitHubPages to preserve the ability to orange-cloud these records if needed.
@@ -1052,23 +1053,20 @@ try {
 
             # Microsoft 365 / Teams (SRV)
             @{ Type = 'SRV'; Name = '_sip._tls'; Data = @{ service = '_sip'; proto = '_tls'; name = $Zone; priority = 100; weight = 1; port = 443; target = 'sipdir.online.lync.com' } },
-            @{ Type = 'SRV'; Name = '_sipfederationtls._tcp'; Data = @{ service = '_sipfederationtls'; proto = '_tcp'; name = $Zone; priority = 100; weight = 1; port = 5061; target = 'sipfed.online.lync.com' } },
-            
-            # GitHub Pages (Apex)
-            @{ Type = 'A'; Name = '@'; Content = '185.199.108.153'; Proxied = $githubPagesProxied },
-            @{ Type = 'A'; Name = '@'; Content = '185.199.109.153'; Proxied = $githubPagesProxied },
-            @{ Type = 'A'; Name = '@'; Content = '185.199.110.153'; Proxied = $githubPagesProxied },
-            @{ Type = 'A'; Name = '@'; Content = '185.199.111.153'; Proxied = $githubPagesProxied },
-
-            # GitHub Pages (Apex IPv6)
-            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8000::153'; Proxied = $githubPagesProxied },
-            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8001::153'; Proxied = $githubPagesProxied },
-            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8002::153'; Proxied = $githubPagesProxied },
-            @{ Type = 'AAAA'; Name = '@'; Content = '2606:50c0:8003::153'; Proxied = $githubPagesProxied },
-            
-            # GitHub Pages (WWW)
-            @{ Type = 'CNAME'; Name = 'www'; Content = $wwwTarget; Proxied = $githubPagesProxied }
+            @{ Type = 'SRV'; Name = '_sipfederationtls._tcp'; Data = @{ service = '_sipfederationtls'; proto = '_tcp'; name = $Zone; priority = 100; weight = 1; port = 5061; target = 'sipfed.online.lync.com' } }
         )
+
+        # GitHub Pages apex A/AAAA + www CNAME — generated from the shared lib
+        # (#778) so the Pages IP set has exactly one source. Appended in the
+        # same order the literals used to be (A x4, AAAA x4, www) so the
+        # enforcement output is unchanged.
+        foreach ($ghIp in @(Get-GhPagesIps)) {
+            $standards += @{ Type = 'A'; Name = '@'; Content = $ghIp; Proxied = $githubPagesProxied }
+        }
+        foreach ($ghIp6 in @(Get-GhPagesIpv6s)) {
+            $standards += @{ Type = 'AAAA'; Name = '@'; Content = $ghIp6; Proxied = $githubPagesProxied }
+        }
+        $standards += @{ Type = 'CNAME'; Name = 'www'; Content = $wwwTarget; Proxied = $githubPagesProxied }
 
         foreach ($std in $standards) {
             $recName = if ($std.Name -eq '@') { $Zone } else { "$($std.Name).$Zone" }

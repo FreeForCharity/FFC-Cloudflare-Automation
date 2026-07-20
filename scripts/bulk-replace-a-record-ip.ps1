@@ -46,25 +46,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$tokens = @()
-if ($env:CLOUDFLARE_API_TOKEN_FFC) { $tokens += @{ name = 'FFC'; token = $env:CLOUDFLARE_API_TOKEN_FFC } }
-if ($env:CLOUDFLARE_API_TOKEN_CM) { $tokens += @{ name = 'CM'; token = $env:CLOUDFLARE_API_TOKEN_CM } }
+# Shared Cloudflare helpers (#778): Invoke-CfApi, Get-CfEnvTokens,
+# Get-CfDnsRecords (server-side type+content filtering).
+. (Join-Path $PSScriptRoot 'cloudflare-api-common.ps1')
+
+$tokens = @(Get-CfEnvTokens)
 if ($tokens.Count -eq 0) {
     throw 'No Cloudflare tokens found. Set CLOUDFLARE_API_TOKEN_FFC and/or CLOUDFLARE_API_TOKEN_CM.'
-}
-
-function Invoke-Cf {
-    param(
-        [Parameter(Mandatory)][string]$Method,
-        [Parameter(Mandatory)][string]$Path,
-        [string]$Token,
-        $Body
-    )
-    $url = "https://api.cloudflare.com/client/v4$Path"
-    $headers = @{ Authorization = "Bearer $Token"; 'Content-Type' = 'application/json' }
-    $params = @{ Method = $Method; Uri = $url; Headers = $headers }
-    if ($null -ne $Body) { $params.Body = ($Body | ConvertTo-Json -Depth 6 -Compress) }
-    return Invoke-RestMethod @params
 }
 
 function Get-AllZones {
@@ -72,35 +60,14 @@ function Get-AllZones {
     $zones = @()
     $page = 1
     while ($true) {
-        $resp = Invoke-Cf -Method GET -Token $Token -Path "/zones?per_page=50&page=$page"
-        if (-not $resp.success) { throw "Failed to list zones: $($resp.errors | ConvertTo-Json -Depth 4)" }
+        # Invoke-CfApi throws on failure with the Cloudflare errors included.
+        $resp = Invoke-CfApi -Method GET -Token $Token -Path "/zones?per_page=50&page=$page"
         $zones += $resp.result
         $totalPages = $resp.result_info.total_pages
         if ($page -ge $totalPages) { break }
         $page += 1
     }
     return $zones
-}
-
-function Get-MatchingARecords {
-    param(
-        [Parameter(Mandatory)][string]$ZoneId,
-        [Parameter(Mandatory)][string]$Token,
-        [Parameter(Mandatory)][string]$Ip
-    )
-    # Cloudflare supports server-side filtering on type+content
-    $records = @()
-    $page = 1
-    while ($true) {
-        $path = "/zones/$ZoneId/dns_records?type=A&content=$Ip&per_page=50&page=$page"
-        $resp = Invoke-Cf -Method GET -Token $Token -Path $path
-        if (-not $resp.success) { throw "Failed to list records: $($resp.errors | ConvertTo-Json -Depth 4)" }
-        $records += $resp.result
-        $totalPages = $resp.result_info.total_pages
-        if ($page -ge $totalPages) { break }
-        $page += 1
-    }
-    return $records
 }
 
 Write-Host "=== Bulk A-record IP replacement ==="
@@ -118,13 +85,13 @@ foreach ($t in $tokens) {
     Write-Host "[Account: $($t.name)] Found $($zones.Count) zones"
     foreach ($z in $zones) {
         try {
-            $matches = Get-MatchingARecords -ZoneId $z.id -Token $t.token -Ip $OldIp
+            $matchingRecords = @(Get-CfDnsRecords -ZoneId $z.id -Token $t.token -Type A -Content $OldIp)
         }
         catch {
             Write-Warning "[$($t.name) :: $($z.name)] List failed: $($_.Exception.Message)"
             continue
         }
-        foreach ($r in $matches) {
+        foreach ($r in $matchingRecords) {
             $plan += [pscustomobject]@{
                 Account    = $t.name
                 Token      = $t.token
@@ -188,16 +155,12 @@ foreach ($p in $plan) {
         proxied = $p.Proxied
     }
     try {
-        $resp = Invoke-Cf -Method PATCH -Token $p.Token -Path "/zones/$($p.ZoneId)/dns_records/$($p.RecordId)" -Body $body
-        if ($resp.success) {
-            Write-Host "OK   [$($p.Account)] $($p.Zone) :: $($p.Name) -> $NewIp"
-            $succeeded += $p
-        }
-        else {
-            $msg = ($resp.errors | ConvertTo-Json -Depth 4 -Compress)
-            Write-Warning "FAIL [$($p.Account)] $($p.Zone) :: $($p.Name) -> $msg"
-            $failed += $p
-        }
+        # Invoke-CfApi throws on any failure (with the Cloudflare JSON errors
+        # in the message), so a single catch covers both HTTP and envelope
+        # failures.
+        $null = Invoke-CfApi -Method PATCH -Token $p.Token -Path "/zones/$($p.ZoneId)/dns_records/$($p.RecordId)" -Body $body
+        Write-Host "OK   [$($p.Account)] $($p.Zone) :: $($p.Name) -> $NewIp"
+        $succeeded += $p
     }
     catch {
         Write-Warning "FAIL [$($p.Account)] $($p.Zone) :: $($p.Name) -> $($_.Exception.Message)"

@@ -302,7 +302,7 @@ foreach ($domain in $domainList) {
             if ($switchStyle) {
                 Write-Host "[$domain]   Switch-style repo (deploy.yml declares custom_domain)."
                 if ($DryRun) {
-                    Write-Host "[$domain]   [DRY-RUN] Would set repo variable CUSTOM_DOMAIN=$domain and dispatch deploy.yml (build-emitted CNAME strategy)"
+                    Write-Host "[$domain]   [DRY-RUN] Would set repo variable CUSTOM_DOMAIN=$domain, set the Pages binding, and dispatch deploy.yml (build-emitted CNAME strategy)"
                     $result.CnameStatus = 'DRY-RUN'
                     $result.CnameDetail = "Would set var CUSTOM_DOMAIN=$domain + dispatch deploy (switch-style)"
                 }
@@ -314,10 +314,14 @@ foreach ($domain in $domainList) {
                     catch {
                         $null = Invoke-Gh -Method POST -Path "/repos/$repo/actions/variables" -Body @{ name = 'CUSTOM_DOMAIN'; value = $domain }
                     }
+                    # Workflow-deployed Pages do NOT take their binding from the
+                    # artifact's CNAME file (branch builds only) - set it explicitly.
+                    Write-Host "[$domain]   Setting Pages custom-domain binding to $domain"
+                    $null = Invoke-Gh -Method PUT -Path "/repos/$repo/pages" -Body @{ cname = $domain }
                     Write-Host "[$domain]   Dispatching deploy.yml with custom_domain=$domain"
                     $null = Invoke-Gh -Method POST -Path "/repos/$repo/actions/workflows/deploy.yml/dispatches" -Body @{ ref = 'main'; inputs = @{ custom_domain = $domain } }
                     $result.CnameStatus = 'OK'
-                    $result.CnameDetail = "Set var CUSTOM_DOMAIN=$domain + dispatched deploy (switch-style)"
+                    $result.CnameDetail = "Set var CUSTOM_DOMAIN=$domain + Pages binding + dispatched deploy (switch-style)"
                 }
             }
             elseif ($null -eq $fileInfo) {

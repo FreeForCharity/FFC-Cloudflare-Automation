@@ -110,6 +110,17 @@ def test_empty_inputs_use_null_not_zero_for_means():
     assert m["dataPipeline"]["byWorkflow"] == [], m
 
 
+def test_missing_or_invalid_nowiso_throws():
+    # Fail fast instead of emitting NaN ages / "Generated: undefined".
+    for bad in ({}, {"nowIso": ""}, {"nowIso": "not-a-date"}):
+        try:
+            compute(bad)
+        except AssertionError as e:
+            assert "nowIso" in str(e), e
+            continue
+        raise AssertionError(f"expected computeMetrics to throw for input {bad}")
+
+
 def test_future_created_at_clamps_to_zero_age():
     # A clock-skewed created_at must not produce a negative age.
     m = compute({

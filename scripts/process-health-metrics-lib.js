@@ -58,7 +58,13 @@ function ageDays(fromIso, nowIso) {
  *                        workflow's policy, not the lib's).
  */
 function computeMetrics(input) {
-  const nowIso = input.nowIso;
+  const nowIso = input && input.nowIso;
+  // Fail fast on a missing/invalid report time rather than silently emitting
+  // NaN ages and a "Generated: undefined" report — the workflow always passes a
+  // valid ISO stamp, so a bad value means a caller bug worth surfacing loudly.
+  if (!nowIso || Number.isNaN(new Date(nowIso).getTime())) {
+    throw new Error('computeMetrics: input.nowIso must be a valid ISO timestamp');
+  }
   const smokeOpen = input.smokeOpen || [];
   const smokeClosedRecent = input.smokeClosedRecent || [];
   const claimedOpen = input.claimedOpen || [];

@@ -96,12 +96,26 @@ jobs:
               const base = (p || '').split('/').pop() || '';
               return nums.some((n) => base.startsWith(n + '-'));
             };
-            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-              owner, repo, created: `>=${pipelineCut.toISOString()}`, per_page: 100,
-            });
-            const pipelineRuns = runs
-              .filter((r) => matchesPipeline(r.path) && r.conclusion) // exclude in-progress
-              .map((r) => ({ name: r.name || r.path, conclusion: r.conclusion }));
+            // Bounded read (mirrors 731): filter to completed runs server-side
+            // and cap total fetched so a busy week can't blow up this weekly job.
+            const createdFilter = `>=${pipelineCut.toISOString()}`;
+            const MAX_RUNS = 2000;
+            const pipelineRuns = [];
+            let runPage = 1;
+            let runsFetched = 0;
+            for (;;) {
+              const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+                owner, repo, created: createdFilter, status: 'completed', per_page: 100, page: runPage,
+              });
+              for (const r of data.workflow_runs) {
+                if (matchesPipeline(r.path) && r.conclusion) {
+                  pipelineRuns.push({ name: r.name || r.path, conclusion: r.conclusion });
+                }
+              }
+              runsFetched += data.workflow_runs.length;
+              if (data.workflow_runs.length < 100 || runsFetched >= MAX_RUNS) break;
+              runPage++;
+            }
 
             const metrics = lib.computeMetrics({
               nowIso,

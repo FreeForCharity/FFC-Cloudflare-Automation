@@ -192,13 +192,14 @@ jobs:
             -Type $Type `
             -Content $Content `
             -Ttl 1
-            
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "SUCCESS: DNS operation completed." -ForegroundColor Green
-          } else {
-            Write-Error "FAILURE: Operation failed."
-            exit 1
-          }
+
+          # #777: do NOT check $LASTEXITCODE here. An in-process .ps1 call only
+          # sets it if the script itself runs a native command or calls exit —
+          # after a successful run it is stale (from az in the KV action) and
+          # falsely reported FAILURE on verified-successful writes. On failure
+          # the script's own `exit 1` (in its catch) already fails this step,
+          # so reaching this line means the operation succeeded.
+          Write-Host "SUCCESS: DNS operation completed." -ForegroundColor Green
 
       - name: Post-Change Compliance Audit
         shell: pwsh

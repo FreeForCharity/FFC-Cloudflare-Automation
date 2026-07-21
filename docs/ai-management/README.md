@@ -25,9 +25,10 @@ Remaining work from the migration, each a candidate follow-up issue. Verified ag
 tree on 2026-07-21; the counts below are lingering `FFC-IN-AI-Management` references that a scoped
 grep still finds in each directory.
 
-- [ ] **LIVE agent correction** — `agents/cross-repo-sync.md` still names FFC-IN-AI-Management as
-      the repository it audits (1 ref); retarget it to the hub as the canonical config source.
-      `mcp/` and `managed/` are already reference-clean, so this is the only LIVE-tier correction
+- [x] **LIVE agent correction** — `agents/cross-repo-sync.md` named FFC-IN-AI-Management as the
+      repository it audits; retargeted to the hub (`FFC-Cloudflare-Automation`) as the canonical
+      config source, with the wound-down repo kept as a clearly-historical provenance reference.
+      `mcp/` and `managed/` were already reference-clean, so this was the only LIVE-tier correction
       outstanding.
 - [ ] **`docs/` historical annotation** — `architecture.md`, `custom-agents-guide.md`, and
       `sync-guide.md` describe FFC-IN-AI-Management as the system of record and the retired

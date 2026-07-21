@@ -14,8 +14,10 @@ FFC manages ~30 repositories across three GitHub organizations:
 - **koenig-childhood-cancer-foundation** -- charity website (1 repo)
 - **clarkemoyer** -- research sites and personal projects (~8 repos)
 
-Each repo should have a standard set of AI configuration files deployed from the
-FFC-IN-AI-Management repository. This agent checks what is present and what is missing.
+Each repo should have a standard set of AI configuration files. The canonical source for these
+configs is the **FFC-Cloudflare-Automation** hub, which superseded the wound-down
+`FFC-IN-AI-Management` repository as the system of record (see this directory's `README.md` for the
+migration provenance). This agent checks what is present and what is missing.
 
 ## Instructions
 

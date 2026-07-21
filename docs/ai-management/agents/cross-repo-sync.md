@@ -16,8 +16,8 @@ FFC manages ~30 repositories across three GitHub organizations:
 
 Each repo should have a standard set of AI configuration files. The canonical source for these
 configs is the **FFC-Cloudflare-Automation** hub, which superseded the wound-down
-`FFC-IN-AI-Management` repository as the system of record (see this directory's `README.md` for the
-migration provenance). This agent checks what is present and what is missing.
+`FFC-IN-AI-Management` repository as the system of record (see the migration provenance in the
+parent `docs/ai-management/README.md`). This agent checks what is present and what is missing.
 
 ## Instructions
 

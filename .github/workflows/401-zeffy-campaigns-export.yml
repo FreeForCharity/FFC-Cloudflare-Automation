@@ -16,9 +16,11 @@ run-name: 'Zeffy Campaigns Export'
 on:
   workflow_dispatch:
 
+# Least-privilege default for the whole workflow: the export job only needs to
+# read the repo (checkout) and mint an OIDC token. The write/PR scopes needed to
+# publish the data PR are granted narrowly to the gated `deliver` job below.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
   id-token: write
 
 jobs:
@@ -72,6 +74,10 @@ jobs:
     needs: zeffy_campaigns_export
     runs-on: ubuntu-latest
     environment: github-prod
+    # Only this gated job gets write + PR scopes (create-pull-request).
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
 
@@ -97,9 +103,8 @@ jobs:
           node-version: 'lts/*'
 
       - name: Generate public campaign list (title/url/status, no PII)
-        run:
-          node scripts/zeffy-campaigns-to-public-json.js artifacts/zeffy/zeffy_campaigns.csv
-          docs/data/ffc-zeffy-campaigns.json
+        run: |
+          node scripts/zeffy-campaigns-to-public-json.js artifacts/zeffy/zeffy_campaigns.csv docs/data/ffc-zeffy-campaigns.json
 
       - name: Open data update PR
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8

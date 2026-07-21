@@ -152,7 +152,16 @@ def test_deliver_job_wired():
     assert "deliver" in jobs, list(jobs)
     deliver = jobs["deliver"]
     assert deliver.get("environment") == "github-prod"
-    assert "zeffy_campaigns_export" in deliver.get("needs", [])
+    # `needs` may be a scalar string or a list in workflow YAML; normalize to a
+    # list before membership-testing so a single-string dep can't substring-match.
+    needs = deliver.get("needs", [])
+    needs = [needs] if isinstance(needs, str) else list(needs)
+    assert needs == ["zeffy_campaigns_export"], needs
+    # Only the gated deliver job carries write/PR scopes (least privilege).
+    assert deliver.get("permissions") == {
+        "contents": "write",
+        "pull-requests": "write",
+    }, deliver.get("permissions")
 
 
 def test_deliver_runs_the_transform_to_the_public_path():

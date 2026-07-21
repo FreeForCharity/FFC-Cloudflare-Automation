@@ -38,7 +38,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout (for the comparison library)
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: Gather smoke-engine hashes across the fleet
         id: gather

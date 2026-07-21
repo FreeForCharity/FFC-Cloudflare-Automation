@@ -775,7 +775,7 @@ jobs:
       zone_exists_ffc: ${{ steps.check.outputs.zone_exists_ffc }}
       zone_exists_cm: ${{ steps.check.outputs.zone_exists_cm }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC. zone_check
       # only does GETs (cloudflare-zone-get.ps1), so use scope: read.
@@ -905,7 +905,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv
@@ -949,7 +949,7 @@ jobs:
       always() && needs.resolve.outputs.skip != 'true' && (needs.dns.result == 'success' ||
       needs.dns.result == 'skipped')
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Validate required GitHub token
         shell: pwsh
@@ -1038,7 +1038,7 @@ jobs:
     outputs:
       content_status: ${{ steps.apply.outputs.content_status }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Validate required GitHub token
         shell: pwsh

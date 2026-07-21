@@ -61,7 +61,10 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
+    # Comma/space-separated root domains. Optional at bind time so the script
+    # can be dot-sourced by the Pester tests (see the runner guard below); the
+    # main body throws if it is empty on a real run.
+    [Parameter()]
     [string]$Domains,
 
     [switch]$DryRun,
@@ -85,6 +88,39 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# ---------------------------------------------------------------------------
+# Pure decision: which CNAME-flip strategy applies to an FFC-EX repo (#767).
+#   'switch-style'  — the repo's deploy workflow declares a `custom_domain`
+#                     input, so basePath/CNAME are BUILD-derived from the domain
+#                     signal. The flip sets the CUSTOM_DOMAIN repo variable and
+#                     commits public/CNAME as the source of truth.
+#   'legacy-commit' — no such input (or no deploy workflow at all): the
+#                     committed public/CNAME file is flipped directly.
+# Kept as a pure function of the deploy-workflow text so the selection is unit
+# testable with no GitHub API calls.
+# ---------------------------------------------------------------------------
+function Get-CnameFlipStrategy {
+    [OutputType([string])]
+    param(
+        # Raw text of the repo's .github/workflows/deploy.yml, or $null/'' when
+        # the file does not exist.
+        [AllowNull()]
+        [string]$DeployWorkflowContent
+    )
+    if (-not [string]::IsNullOrWhiteSpace($DeployWorkflowContent) -and ($DeployWorkflowContent -match 'custom_domain')) {
+        return 'switch-style'
+    }
+    return 'legacy-commit'
+}
+
+# When dot-sourced (e.g. by the Pester tests in scripts/tests), expose the pure
+# helpers above and stop before running the cutover body.
+if ($MyInvocation.InvocationName -eq '.') { return }
+
+if ([string]::IsNullOrWhiteSpace($Domains)) {
+    throw 'Domains parameter is required (comma/space-separated root domains).'
+}
 
 # ---------------------------------------------------------------------------
 # Shared Cloudflare helpers (#778): REST plumbing (Invoke-CfApi), zone
@@ -260,7 +296,10 @@ foreach ($domain in $domainList) {
             # binding before DNS is clean stalls Let's Encrypt issuance (state
             # 'none'). The 120 workflow's post-DNS job binds + cert-kicks.
             $deployWf = Get-GhFileInfo -Repo $repo -FilePath '.github/workflows/deploy.yml'
-            $switchStyle = ($null -ne $deployWf) -and ($deployWf.Content -match 'custom_domain')
+            $deployContent = if ($deployWf) { $deployWf.Content } else { $null }
+            $flipStrategy = Get-CnameFlipStrategy -DeployWorkflowContent $deployContent
+            $switchStyle = $flipStrategy -eq 'switch-style'
+            Write-Host "[$domain]   CNAME flip strategy: $flipStrategy"
             $fileInfo = Get-GhFileInfo -Repo $repo -FilePath 'public/CNAME'
 
             if ($switchStyle) {

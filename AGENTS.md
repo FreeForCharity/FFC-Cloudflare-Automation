@@ -75,7 +75,9 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   with "couldn't find remote ref" if the second ref was never pushed — leaving `origin/main` stale,
   so a clean branch falsely appears N commits ahead of main (seen 2026-07-20 on the #748 worker
   run). Fetch `main` on its own before comparing against it.
-- Enter the queue with `gh pr merge <n> --merge --auto`, or directly:
+- Enter the queue with `gh pr merge <n> --auto` — no strategy flag: the queue sets it, and passing
+  `--merge` is rejected with "The merge strategy for main is set by the merge queue" (confirmed on
+  hub + ffcadmin, 2026-07-20). Confirm with `.auto_merge != null` on the PR. Or enqueue directly:
   `gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:"<node_id>"}){mergeQueueEntry{position state}}}'`
 - **Debugging tip:** `gh pr merge --auto` can mask the real blocker behind a GraphQL "rate limit"
   error. The `enqueuePullRequest` mutation returns the true reason (unresolved conversation, CodeQL

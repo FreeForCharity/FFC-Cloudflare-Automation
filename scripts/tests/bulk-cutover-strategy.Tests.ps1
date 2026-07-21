@@ -56,7 +56,11 @@ Describe 'Get-CnameFlipStrategy (workflow 120 cname-flip)' {
 }
 
 Describe 'workflow 120 cname-flip uses the pure strategy selector' {
-    It 'the bulk-cutover script invokes Get-CnameFlipStrategy (no drift from the tested logic)' {
-        Get-Content -Raw $script:ScriptPath | Should -Match 'Get-CnameFlipStrategy -DeployWorkflowContent'
+    It 'the bulk-cutover script invokes Get-CnameFlipStrategy at a real call site (no drift from the tested logic)' {
+        # Match the actual assignment (not a bare substring that a comment or
+        # string literal could satisfy) so the test fails if the runner stops
+        # calling the tested selector.
+        Get-Content -Raw $script:ScriptPath |
+            Should -Match '\$flipStrategy = Get-CnameFlipStrategy -DeployWorkflowContent'
     }
 }

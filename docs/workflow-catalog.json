@@ -1175,12 +1175,13 @@
         "workflow_dispatch"
       ],
       "environments": [
+        "github-prod",
         "zeffy-prod"
       ],
-      "description": "Read-only export of Zeffy campaigns/events (GET /api/v1/campaigns) via OIDC -> Key Vault. This endpoint returns NO personal data (forms/events only: title, target, volume, dates, URLs), so the uploaded artifact is inherently safe to keep on this public repo. Dispatch-only (no schedule) while we are testing the API. One workflow per endpoint.",
-      "safetyLevel": "Reads",
-      "approvalEnv": "zeffy-prod",
-      "guard": "PII masked; never `-IncludePii`",
+      "description": "Read-only export of Zeffy campaigns/events (GET /api/v1/campaigns) via OIDC -> Key Vault. This endpoint returns NO personal data (forms/events only: title, target, volume, dates, URLs), so the uploaded artifact is inherently safe to keep on this public repo. Dispatch-only (no schedule) while we are testing the API. One workflow per endpoint.  The `deliver` job additionally publishes a public, PII-free campaign list (docs/data/ffc-zeffy-campaigns.json \u2014 title/url/status only) as a reviewable data-update PR, so the fleet smoke engine can classify a detected donation surface as ffc-interim (FFC-owned campaign) vs charity-specific (#744). Mirrors the 502 export->deliver split (github-prod gate, CBM_TOKEN) and the 703 same-repo peter-evans data-PR pattern.",
+      "safetyLevel": "Reads (+ PR delivery)",
+      "approvalEnv": "zeffy-prod \u2192 \u2705 github-prod (deliver)",
+      "guard": "PII masked; the published `docs/data/ffc-zeffy-campaigns.json` is title/url/status only (no financials); `deliver` opens a reviewable data PR via CBM_TOKEN",
       "category": "Zeffy",
       "categoryCode": "ZEFFY"
     },

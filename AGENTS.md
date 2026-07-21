@@ -82,6 +82,14 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
 - **Debugging tip:** `gh pr merge --auto` can mask the real blocker behind a GraphQL "rate limit"
   error. The `enqueuePullRequest` mutation returns the true reason (unresolved conversation, CodeQL
   still running, …).
+- **Once a PR is in the queue, a branch-level check failure does NOT dequeue it — leave the branch
+  alone.** Promoting a draft re-runs branch CI, and Phantom Revert Guard can fail there (branch
+  behind `main`) while `.auto_merge` reads null — which looks like a bounce but is not: the merge
+  group re-runs the required checks against `main` and merges anyway (seen on #797, 2026-07-21).
+  Queued branches also reject pushes ("protected branch hook declined") and the update-branch API
+  returns 422 "dequeue the associated pull request". Before syncing any "behind" branch, probe queue
+  membership first (that 422, or `enqueuePullRequest` saying "already in the queue"); only merge
+  `main` into a branch that is genuinely out of the queue.
 - Never merge with `--admin`; never push to `main`.
 - **Safety-table conflicts are normal, not a red flag.** Prettier reflows every row of
   `docs/workflow-safety-and-approvals.md` when a new cell widens a column, so two PRs that each "add

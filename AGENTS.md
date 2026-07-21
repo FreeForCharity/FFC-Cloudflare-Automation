@@ -77,7 +77,9 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   run). Fetch `main` on its own before comparing against it.
 - Enter the queue with `gh pr merge <n> --auto` — no strategy flag: the queue sets it, and passing
   `--merge` is rejected with "The merge strategy for main is set by the merge queue" (confirmed on
-  hub + ffcadmin, 2026-07-20). Confirm with `.auto_merge != null` on the PR. Or enqueue directly:
+  hub + ffcadmin, 2026-07-20). `.auto_merge != null` confirms the enqueue took, but null does NOT
+  prove a dequeue (it can read null while queued — see below); the authoritative probe is the
+  `enqueuePullRequest` mutation ("already in the queue"). Or enqueue directly:
   `gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:"<node_id>"}){mergeQueueEntry{position state}}}'`
 - **Debugging tip:** `gh pr merge --auto` can mask the real blocker behind a GraphQL "rate limit"
   error. The `enqueuePullRequest` mutation returns the true reason (unresolved conversation, CodeQL

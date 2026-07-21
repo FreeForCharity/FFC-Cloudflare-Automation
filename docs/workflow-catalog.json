@@ -1805,6 +1805,25 @@
       "categoryCode": "GH"
     },
     {
+      "number": 739,
+      "title": "Repo - Process Health Metrics Report",
+      "apis": [
+        "GH"
+      ],
+      "file": "739-process-health-metrics.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Weekly, read-only \"monitor the monitors\" report for the Agentic OS (process-assurance epic #752, issue #756). A REST sweep of THIS repo turns the backlog + data-pipeline signals into a metrics object and posts it as a new comment on the Conductor log (#719) \u2014 the comment thread is the visible trend history. Each comment embeds its metrics in a hidden data block; the next run reads the most recent block to render week-over-week deltas (\"trends over absolute numbers\"). The same JSON is uploaded as an artifact for later ffcadmin rendering (#723).  Read-only: the ambient GITHUB_TOKEN reads issues + Actions runs and writes ONE comment on #719 in this repo. No external API, no environment gate, no push to `main`. Aggregation/trend/render logic lives in scripts/process-health-metrics-lib.js (unit-tested under tests/workflow-logic/).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "weekly \"monitor the monitors\" REST sweep (backlog + data-pipeline signals) posted as a new comment on #719 with week-over-week trends (baseline read from the prior comment's hidden data block); JSON artifact; GITHUB_TOKEN (own-repo issue/Actions reads + one comment), no external API, ungated",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 801,
       "title": "Candid - Charity Check (EIN)",
       "apis": [

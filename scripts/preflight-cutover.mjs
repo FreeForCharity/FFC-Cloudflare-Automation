@@ -57,6 +57,11 @@ import { pathToFileURL } from 'node:url';
 
 // GitHub Pages apex A records (documented, stable). A domain served by Pages
 // at the apex resolves to these; a www host CNAMEs to <org>.github.io.
+//
+// Canonical source of truth: scripts/cloudflare-api-common.ps1 (#778). This is
+// a Node script and cannot call that PowerShell library, so these sets are a
+// mirror — scripts/check-github-pages-ip-consistency.py fails CI if they drift.
+// Keep GH_PAGES_IPV4 / GH_PAGES_IPV6 in step with the .ps1 lib.
 export const GH_PAGES_IPV4 = new Set([
   '185.199.108.153',
   '185.199.109.153',

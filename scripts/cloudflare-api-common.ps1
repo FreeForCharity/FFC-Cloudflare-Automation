@@ -36,6 +36,8 @@ $script:CfApiBase = 'https://api.cloudflare.com/client/v4'
 # ---------------------------------------------------------------------------
 # Canonical GitHub Pages DNS targets (single source of truth — issue #778).
 # Do NOT copy these values into other scripts; consume the Get-* functions.
+# The one unavoidable mirror is scripts/preflight-cutover.mjs (Node, can't call
+# pwsh); scripts/check-github-pages-ip-consistency.py fails CI if it drifts.
 # ---------------------------------------------------------------------------
 $script:GhPagesIps = @(
     '185.199.108.153',

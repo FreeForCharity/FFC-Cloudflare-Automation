@@ -99,6 +99,15 @@ jobs:
           # declarative expected map honest. Guards the #625 subject-typo class.
           python3 scripts/check-federated-credential-subjects.py
 
+      - name: Validate GitHub Pages IP sets are in sync
+        shell: bash
+        run: |
+          # scripts/cloudflare-api-common.ps1 is the single source of truth for
+          # the GitHub Pages apex IP sets + www target (#778). The Node preflight
+          # (scripts/preflight-cutover.mjs) can't call the PowerShell lib, so it
+          # mirrors those sets — this guard fails if the two ever drift.
+          python3 scripts/check-github-pages-ip-consistency.py
+
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v6
         with:

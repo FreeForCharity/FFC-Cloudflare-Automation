@@ -61,6 +61,6 @@ Describe 'workflow 120 cname-flip uses the pure strategy selector' {
         # string literal could satisfy) so the test fails if the runner stops
         # calling the tested selector.
         Get-Content -Raw $script:ScriptPath |
-            Should -Match '\$flipStrategy = Get-CnameFlipStrategy -DeployWorkflowContent'
+            Should -Match '\$flipStrategy\s*=\s*Get-CnameFlipStrategy\s+-DeployWorkflowContent'
     }
 }

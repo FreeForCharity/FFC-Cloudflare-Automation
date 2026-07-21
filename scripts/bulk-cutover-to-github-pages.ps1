@@ -87,8 +87,6 @@ param(
     [string]$WwwTarget
 )
 
-$ErrorActionPreference = 'Stop'
-
 # ---------------------------------------------------------------------------
 # Pure decision: which CNAME-flip strategy applies to an FFC-EX repo (#767).
 #   'switch-style'  — the repo's deploy workflow declares a `custom_domain`
@@ -117,6 +115,10 @@ function Get-CnameFlipStrategy {
 # When dot-sourced (e.g. by the Pester tests in scripts/tests), expose the pure
 # helpers above and stop before running the cutover body.
 if ($MyInvocation.InvocationName -eq '.') { return }
+
+# Normal execution only below here. Kept under the dot-source guard so that
+# dot-sourcing the script (Pester) has no side effects on the caller scope.
+$ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($Domains)) {
     throw 'Domains parameter is required (comma/space-separated root domains).'

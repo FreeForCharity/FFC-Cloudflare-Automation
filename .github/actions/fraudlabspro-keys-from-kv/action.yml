@@ -1,0 +1,125 @@
+name: 'FraudLabs Pro API key from Key Vault'
+description: >-
+  Authenticate to Azure via OIDC, fetch the FFC FraudLabs Pro API key from Azure Key Vault, mask it,
+  and expose it to subsequent steps as the env var FRAUDLABSPRO_API_KEY. Mirrors candid-keys-from-kv
+  / whmcs-secrets-from-kv: Key Vault is the single source of truth — the key is never copied into a
+  GitHub secret. Used by workflow 228 (WHMCS Fraud Review). FraudLabs Pro exposes a single account
+  API key, so there is no per-product selection.
+
+author: 'Free For Charity'
+
+inputs:
+  scope:
+    description: >-
+      Key scope: 'read' loads the read-all-* secret (via the KV-reader identity); 'write' loads the
+      wr-all-* secret (via ffc-admin-kv-writer). The FraudLabs Pro review is read-only, so this
+      defaults to 'read'. The values are identical between scopes; scope only selects which
+      identity/secret copy is used.
+    required: false
+    default: 'read'
+  vault-name:
+    description: 'Azure Key Vault name that holds the FraudLabs Pro API key.'
+    required: false
+    default: 'kv-ffc-admin-prod-cbm'
+  azure-client-id:
+    description: 'OIDC client ID for the managed identity that has Get permission on the vault.'
+    required: true
+  azure-tenant-id:
+    description: 'Azure tenant ID for OIDC federation.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+        INPUT_AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        INPUT_AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ($env:INPUT_SCOPE -notin @('read', 'write')) {
+          throw "Invalid scope '$($env:INPUT_SCOPE)'. Expected 'read' or 'write'."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_VAULT_NAME)) {
+          throw "Input 'vault-name' is empty."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_CLIENT_ID)) {
+          throw "Input 'azure-client-id' is empty. Pass secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID (read) or vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID (write) from the caller."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:INPUT_AZURE_TENANT_ID)) {
+          throw "Input 'azure-tenant-id' is empty. Pass the matching READ_ALL/WR_ALL Azure tenant id from the caller."
+        }
+
+    - name: Azure login (OIDC)
+      uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        allow-no-subscriptions: true
+
+    - name: Fetch FraudLabs Pro API key from Key Vault
+      shell: pwsh
+      env:
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_VAULT_NAME: ${{ inputs.vault-name }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        $scope = $env:INPUT_SCOPE
+        $vaultName = $env:INPUT_VAULT_NAME
+        $prefix = if ($scope -eq 'write') { 'wr-all' } else { 'read-all' }
+
+        # Writes a value to GITHUB_ENV using GitHub's heredoc-delimited format so a value that ever
+        # contains a newline (or a line that looks like a delimiter) cannot inject extra env vars
+        # into later steps. The delimiter is randomized per value.
+        function Add-EnvVar {
+          param([string]$Name, [string]$Value)
+          $delim = "ghadelim_$([guid]::NewGuid().ToString('N'))"
+          if ($Value -match [regex]::Escape($delim)) {
+            throw "Refusing to write '$Name': value collides with the generated heredoc delimiter."
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "$Name<<$delim"
+          Add-Content -Path $env:GITHUB_ENV -Value $Value
+          Add-Content -Path $env:GITHUB_ENV -Value $delim
+        }
+
+        # GitHub's ::add-mask:: only masks up to the first newline, so a multi-line value would
+        # leak its later lines (and a line beginning with '::' could be read as a workflow
+        # command). Mask each non-blank line of the secret individually.
+        function Protect-Secret {
+          param([string]$Value)
+          foreach ($line in ($Value -split "[\r\n]+")) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) { Write-Host "::add-mask::$line" }
+          }
+        }
+
+        $secretName = "$prefix-ffc-fraudlabspro-api-key"
+
+        # az is an external command — $ErrorActionPreference does NOT cause it to throw on non-zero
+        # exit. Check $LASTEXITCODE explicitly so a KV permission/auth failure surfaces as a step
+        # failure instead of an empty value.
+        $raw = az keyvault secret show --vault-name $vaultName --name $secretName --query value -o tsv
+        if ($LASTEXITCODE -ne 0) {
+          throw "az keyvault secret show for '$secretName' failed (exit $LASTEXITCODE). Check the identity's role on vault '$vaultName' and that the secret exists (see docs/fraudlabspro-api.md for the one-time setup)."
+        }
+
+        # az ... -o tsv returns the raw value with a trailing newline; strip only trailing CR/LF.
+        $key = ([string]$raw).TrimEnd([char]13, [char]10)
+
+        if ([string]::IsNullOrWhiteSpace($key)) {
+          throw "Key Vault secret '$secretName' returned empty from vault '$vaultName'."
+        }
+        if ($key -eq 'PLACEHOLDER-SET-VIA-AZURE-PORTAL') {
+          throw "Key Vault secret '$secretName' still holds the scaffolding placeholder. Set the real FraudLabs Pro API key (from your FraudLabs Pro account) in '$vaultName' before running (see docs/fraudlabspro-api.md)."
+        }
+
+        Protect-Secret $key
+        Add-EnvVar -Name 'FRAUDLABSPRO_API_KEY' -Value $key
+        Write-Host "Loaded $scope-scope FraudLabs Pro key from KV vault '$vaultName' (value masked): FRAUDLABSPRO_API_KEY (from '$secretName')."
+
+branding:
+  icon: 'shield'
+  color: 'orange'

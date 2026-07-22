@@ -1,0 +1,140 @@
+name: '228. WHMCS - Fraud Review (FraudLabs Pro) [FRAUDLABS+WHMCS]'
+run-name: 'WHMCS Fraud Review (FraudLabs Pro)'
+
+# Read-only. For each WHMCS Fraud-status order, reads its stored FraudLabs Pro verdict and emits a
+# triage row with a RECOMMENDED action (clear-recommended / hold-for-human / review-manually). It
+# performs NO order writes — clearing an approved false positive is a separate, gated action via
+# workflow 211. See issue #813.
+#
+# Scaffolding is inert until provisioned (docs/fraudlabspro-api.md): the FraudLabs Pro key must be
+# loaded into Key Vault as 'read-all-ffc-fraudlabspro-api-key' and the 'fraudlabspro-prod-read'
+# environment + federated credential created. Until then the review job fails fast with a clear
+# message, exactly like the Candid scaffolding (801/802).
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'WHMCS API endpoint (orders read)'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+      order_id_field:
+        description: 'WHMCS order field sent to FraudLabs Pro as the order id (ordernum or id)'
+        required: false
+        type: string
+        default: 'ordernum'
+      dry_run:
+        description: 'Read-only review (228 never writes; live clearing is done via workflow 211)'
+        required: false
+        type: boolean
+        default: true
+
+# Latest run wins: a newer dispatched run cancels an earlier one still queued, so read-only reviews
+# never stack up (mirrors 210).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  fetch_fraud_orders:
+    runs-on: windows-latest
+    environment: whmcs-prod-read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Export Fraud-status orders (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+          New-Item -ItemType Directory -Force -Path artifacts/whmcs | Out-Null
+          & pwsh -NoProfile -File .\scripts\whmcs-orders-export.ps1 -ApiUrl $env:WHMCS_API_URL -Status 'Fraud' -OutputFile artifacts/whmcs/orders_Fraud.csv
+          if ($LASTEXITCODE -ne 0) { throw "Fraud orders export failed (exit $LASTEXITCODE)." }
+          if (-not (Test-Path artifacts/whmcs/orders_Fraud.csv)) {
+            # No Fraud orders → still hand an empty CSV to the review job so it reports a clear queue.
+            '' | Out-File -FilePath artifacts/whmcs/orders_Fraud.csv -Encoding utf8
+          }
+
+      - name: Upload Fraud orders artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: fraud-orders
+          path: artifacts/whmcs/orders_Fraud.csv
+          if-no-files-found: warn
+
+  fraud_review:
+    needs: fetch_fraud_orders
+    runs-on: windows-latest
+    environment: fraudlabspro-prod-read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate required Azure secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID secret is not set (environment: fraudlabspro-prod-read); see docs/fraudlabspro-api.md";
+            exit 1;
+          fi
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID secret is not set (environment: fraudlabspro-prod-read); see docs/fraudlabspro-api.md";
+            exit 1;
+          fi
+
+      - name: Download Fraud orders artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: fraud-orders
+          path: artifacts/whmcs
+
+      # FraudLabs Pro key from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/fraudlabspro-keys-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: FraudLabs Pro review (read-only)
+        shell: pwsh
+        env:
+          INPUT_ORDER_ID_FIELD: ${{ inputs.order_id_field }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:INPUT_DRY_RUN -ne 'true') {
+            Write-Host "::notice::228 performs a read-only review only; clear approved false positives via workflow 211 (gated on whmcs-prod)."
+          }
+          $field = $env:INPUT_ORDER_ID_FIELD
+          if ([string]::IsNullOrWhiteSpace($field)) { $field = 'ordernum' }
+          & pwsh -NoProfile -File .\scripts\whmcs-fraud-review.ps1 `
+            -OrdersCsv artifacts/whmcs/orders_Fraud.csv `
+            -OutputFile artifacts/whmcs/fraud_review.csv `
+            -SummaryFile $env:GITHUB_STEP_SUMMARY `
+            -OrderIdField $field
+          if ($LASTEXITCODE -ne 0) { throw "Fraud review failed (exit $LASTEXITCODE)." }
+
+      - name: Upload Fraud review artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: whmcs_fraud_review
+          path: artifacts/whmcs/fraud_review.csv
+          if-no-files-found: warn
+          retention-days: 30

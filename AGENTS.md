@@ -64,9 +64,10 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
 - **Supersession check before ready+queue.** Before promoting a PR, grep `main` for the
   function/capability names the PR adds — a same-purpose implementation may have landed on `main`
   after the PR branched (on 2026-07-20, #772's basePath probe duplicated `basePathMismatch` merged
-  40 minutes earlier in #773; only the merge conflict stopped a double-ship). PRs that say `Refs #N`
-  instead of `Closes #N` never sync the `claimed` label, so the claim protocol will not warn you —
-  the grep is the check.
+  40 minutes earlier in #773; only the merge conflict stopped a double-ship). The claim-sync
+  workflow (737) labels linked issues from `Refs #N` as well as `Closes #N`, but the `claimed` label
+  only tells you a PR exists — it says nothing about what has already landed on `main` — so the grep
+  is still the check.
 - **Re-check the PR is still open before pushing to its branch.** Merging main into an agent branch
   whose PR merged moments ago silently **re-creates the auto-deleted branch** — the tell is
   `[new branch]` in push output for a push you meant as an update. If you see it, delete the
@@ -140,7 +141,11 @@ and all authenticate as the same user. Before starting ANY issue:
      `CLAIM: <actor> …` comment scoped to the part you are taking (name the repo/portion) and do
      **not** add the exclusive `claimed` label — the remainder must stay visible in the pickup
      query. When you finish, comment what you shipped and what remains (pattern validated on #748,
-     2026-07-20).
+     2026-07-20). Caveat: the claim-sync workflow (737) will still add the exclusive label while
+     your `Refs #N` PR is open (it parses `Refs` too, seen on #806 → epic #752, 2026-07-22) and
+     auto-releases it only once the **last** open linked PR merges or closes (it checks all open PR
+     bodies before removing) — during an open scoped PR, treat the label as advisory and the
+     scoped-claim comment as the source of truth for what portion is taken.
 4. **Fleet-wide file changes** (any file synced across the FFC-EX fleet, e.g.
    `post-deploy-smoke.yml`): claim the hub tracking issue FIRST — every fleet sync must have one —
    and before editing, check the target file's last commit in 2-3 fleet repos; a commit within the

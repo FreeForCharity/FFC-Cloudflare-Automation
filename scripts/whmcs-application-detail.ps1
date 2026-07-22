@@ -68,6 +68,10 @@ function Format-MaskedCustomValue {
     if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
     $t = $Value.Trim()
     if ($t -match '^[^@\s]+@[^@\s]+\.[^@\s]+$') { return Format-MaskedEmail $t }
+    # An EIN is public (IRS BMF / GuideStar publish it), so it must NOT be
+    # masked — but its NN-NNNNNNN shape (9 digits, one hyphen) otherwise trips
+    # the generic phone matcher below. Pass EIN-shaped values through first.
+    if ($t -match '^\d{2}-?\d{7}$') { return $t }
     if ($t -match '^\+?[0-9 ()\-\.]{7,}$') { return '***' }
     return $t
 }

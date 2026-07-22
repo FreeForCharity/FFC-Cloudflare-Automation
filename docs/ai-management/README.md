@@ -30,10 +30,10 @@ grep still finds in each directory.
       config source, with the wound-down repo kept as a clearly-historical provenance reference.
       `mcp/` and `managed/` were already reference-clean, so this was the only LIVE-tier correction
       outstanding.
-- [ ] **`docs/` historical annotation** — `architecture.md`, `custom-agents-guide.md`, and
-      `sync-guide.md` describe FFC-IN-AI-Management as the system of record and the retired
-      push-sync model (3 files). Prefer a "historical — superseded, see the
-      `archive/sync-ai-configs-2026-04` tag" banner over rewriting archived prose.
+- [x] **`docs/` historical annotation** — `architecture.md`, `custom-agents-guide.md`, and
+      `sync-guide.md` each carry a "historical — superseded, see the
+      `archive/sync-ai-configs-2026-04` tag" banner directly under their title, pointing readers to
+      the hub as the canonical home; the archived prose is otherwise left byte-for-byte intact.
 - [ ] **`scripts/` revive-or-retire decision** — the DORMANT AI-config PowerShell
       (`Sync-AIConfigs.ps1`, `Audit-AIConfigs.ps1`, `Install-ManagedSettings.ps1`,
       `Get-RepoType.ps1`) still targets the source repo; decide whether to rebuild fleet config sync

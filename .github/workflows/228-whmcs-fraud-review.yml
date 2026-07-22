@@ -68,8 +68,9 @@ jobs:
           & pwsh -NoProfile -File .\scripts\whmcs-orders-export.ps1 -ApiUrl $env:WHMCS_API_URL -Status 'Fraud' -OutputFile artifacts/whmcs/orders_Fraud.csv
           if ($LASTEXITCODE -ne 0) { throw "Fraud orders export failed (exit $LASTEXITCODE)." }
           if (-not (Test-Path artifacts/whmcs/orders_Fraud.csv)) {
-            # No Fraud orders → still hand an empty CSV to the review job so it reports a clear queue.
-            '' | Out-File -FilePath artifacts/whmcs/orders_Fraud.csv -Encoding utf8
+            # No Fraud orders → hand the review job a truly empty (0-byte) file so its Import-Csv
+            # yields zero rows (a blank-line file has no header) and it reports a clear queue.
+            New-Item -ItemType File -Force -Path artifacts/whmcs/orders_Fraud.csv | Out-Null
           }
 
       - name: Upload Fraud orders artifact

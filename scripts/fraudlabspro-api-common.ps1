@@ -128,6 +128,11 @@ function Get-FraudReviewRecommendation {
 
     .PARAMETER Amount
         The order amount. $0 marks the free onboarding order that dominates FFC's queue.
+
+    .PARAMETER AmountKnown
+        Whether -Amount was actually parsed from the order (vs. defaulted). When the amount is
+        missing or unparseable this is $false, and an APPROVE never yields 'clear-recommended' — the
+        policy stays conservative and asks for a human when the data is incomplete.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -135,7 +140,9 @@ function Get-FraudReviewRecommendation {
 
         [string]$FraudLabsStatus,
 
-        [decimal]$Amount = 0
+        [decimal]$Amount = 0,
+
+        [bool]$AmountKnown = $true
     )
 
     $whmcs = ([string]$WhmcsStatus).Trim()
@@ -157,15 +164,16 @@ function Get-FraudReviewRecommendation {
             }
         }
         'APPROVE' {
-            if ($Amount -eq [decimal]0) {
+            if ($AmountKnown -and $Amount -eq [decimal]0) {
                 return [pscustomobject]@{
                     Recommendation = 'clear-recommended'
                     Reason         = 'FraudLabs Pro APPROVE on a $0 onboarding order — likely false positive; recommend clearing via workflow 211.'
                 }
             }
+            $amountDesc = if ($AmountKnown) { 'order amount is ' + $Amount + ' (not a $0 onboarding order)' } else { 'order amount is missing or unparseable' }
             return [pscustomobject]@{
                 Recommendation = 'review-manually'
-                Reason         = "FraudLabs Pro APPROVE but order amount is $Amount (not a $0 onboarding order) — human review before clearing."
+                Reason         = "FraudLabs Pro APPROVE but $amountDesc — human review before clearing."
             }
         }
         'REVIEW' {

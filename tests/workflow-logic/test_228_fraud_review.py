@@ -20,12 +20,15 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 COMMON = REPO_ROOT / "scripts" / "fraudlabspro-api-common.ps1"
 
 
-def recommend(whmcs_status: str, fraudlabs_status: str, amount: str) -> str:
+def recommend(
+    whmcs_status: str, fraudlabs_status: str, amount: str, amount_known: bool | None = None
+) -> str:
     """Dot-source the shipped script and return the Recommendation for one scenario."""
+    known = "" if amount_known is None else f" -AmountKnown ${str(amount_known).lower()}"
     script = (
         f". '{COMMON}'; "
         f"$r = Get-FraudReviewRecommendation "
-        f"-WhmcsStatus '{whmcs_status}' -FraudLabsStatus '{fraudlabs_status}' -Amount {amount}; "
+        f"-WhmcsStatus '{whmcs_status}' -FraudLabsStatus '{fraudlabs_status}' -Amount {amount}{known}; "
         f"Write-Output \"REC=$($r.Recommendation)\""
     )
     proc = subprocess.run(
@@ -54,6 +57,11 @@ def test_approve_status_is_case_insensitive():
 def test_fraud_approve_nonzero_amount_needs_manual_review():
     # A non-$0 order is not the free onboarding pattern — never auto-cleared.
     assert recommend("Fraud", "APPROVE", "49.99") == "review-manually"
+
+
+def test_fraud_approve_unknown_amount_needs_manual_review():
+    # A missing/unparseable amount must NOT be treated as $0 — stay conservative (Copilot #817).
+    assert recommend("Fraud", "APPROVE", "0", amount_known=False) == "review-manually"
 
 
 def test_fraud_reject_holds_for_human():

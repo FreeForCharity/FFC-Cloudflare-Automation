@@ -97,8 +97,11 @@ if ($orders.Count -gt 0) {
 $reviewRows = [System.Collections.Generic.List[object]]::new()
 foreach ($o in $orders) {
     $orderId = [string]$o.$OrderIdField
+    # Distinguish "parsed as 0" (a real $0 onboarding order) from "missing/unparseable amount". Only
+    # a KNOWN $0 may be recommended for clearing; an unknown amount stays conservative (see #813).
     $amount = [decimal]0
-    [decimal]::TryParse([string]$o.amount, [ref]$amount) | Out-Null
+    $amountRaw = [string]$o.amount
+    $amountKnown = (-not [string]::IsNullOrWhiteSpace($amountRaw)) -and [decimal]::TryParse($amountRaw, [ref]$amount)
 
     $flStatus = ''
     $flScore = ''
@@ -123,7 +126,7 @@ foreach ($o in $orders) {
         }
     }
 
-    $rec = Get-FraudReviewRecommendation -WhmcsStatus ([string]$o.status) -FraudLabsStatus $flStatus -Amount $amount
+    $rec = Get-FraudReviewRecommendation -WhmcsStatus ([string]$o.status) -FraudLabsStatus $flStatus -Amount $amount -AmountKnown $amountKnown
     $reason = $rec.Reason
     if (-not [string]::IsNullOrWhiteSpace($flError)) {
         $reason = "$reason (lookup note: $flError)"

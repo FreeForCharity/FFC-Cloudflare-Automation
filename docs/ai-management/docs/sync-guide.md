@@ -1,5 +1,13 @@
 # Sync Guide: Auditing and Deploying AI Configs
 
+> **Historical — superseded.** This document is a byte-for-byte migration from the wound-down
+> `FFC-IN-AI-Management` repo and describes the **retired push-sync model** — the audit/sync
+> PowerShell scripts and the `FFC-IN-AI-Management` working directory it references are no longer
+> the live config-distribution path. It is retained for provenance only; the pipeline is archived at
+> the `archive/sync-ai-configs-2026-04` tag, and whether to rebuild fleet config sync on the hub is
+> an open decision (`docs/ai-management/README.md`, `scripts/` tranche). See
+> [`../README.md`](../README.md) for the migration status table.
+
 This guide walks through the day-to-day use of the audit and sync scripts that keep AI configuration
 files consistent across all FFC repositories.
 

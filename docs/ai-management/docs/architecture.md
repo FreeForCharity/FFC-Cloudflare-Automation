@@ -1,5 +1,12 @@
 # Architecture: Template System and Sync Pipeline
 
+> **Historical — superseded.** This document is a byte-for-byte migration from the wound-down
+> `FFC-IN-AI-Management` repo and describes the **retired push-sync model** for distributing AI
+> config across the fleet. It is retained for provenance only; the push pipeline it documents is
+> archived at the `archive/sync-ai-configs-2026-04` tag. The hub (`FFC-Cloudflare-Automation`) is
+> now the canonical home for AI config — see [`../README.md`](../README.md) for the migration status
+> table.
+
 This document explains how FFC-IN-AI-Management assembles and deploys AI configuration files across
 the FFC repository fleet.
 

@@ -2,7 +2,7 @@
 
 Design spec for a custom **WHMCS MCP server** so Claude sessions can do WHMCS application lookups
 conversationally instead of round-tripping through GitHub Actions workflows (219/221) and reading
-job logs. Tracks issue
+job logs, tracking issue
 [#770](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/770).
 
 This document resolves the design decisions and scopes the build into tranches. It commits **no

@@ -137,8 +137,11 @@ def check_consumer(path: str, text: str, banned_ips: list[str]) -> list[str]:
                 f"consolidated into {PS_LIB} (#778); call the shared function instead"
             )
 
+    # Case-insensitive: IPv6 literals are hex and a pasted copy may differ only
+    # in casing (e.g. 2606:50C0:...), which must still be caught.
+    lowered = text.lower()
     for ip in banned_ips:
-        if ip in text:
+        if ip.lower() in lowered:
             problems.append(
                 f"{path}: contains GitHub Pages IP literal '{ip}' — the canonical "
                 f"set lives only in {PS_LIB}; reach it via Get-GhPagesIps / "
@@ -177,6 +180,8 @@ $ips = @(Get-GhPagesIps)
     )
     consumer_private_func = consumer_ok + "\nfunction Invoke-Cf { param($m) }\n"
     consumer_ip_literal = consumer_ok + "\n$apex = '185.199.108.153'\n"
+    # IPv6 pasted with different hex casing must still be rejected.
+    consumer_ipv6_mixedcase = consumer_ok + "\n$aaaa = '2606:50C0:8000::153'\n"
     lib_missing_func = lib_ok.replace("function Resolve-CfZone { }", "")
 
     banned = parse_ps_ip_literals(lib_ok)
@@ -194,6 +199,8 @@ $ips = @(Get-GhPagesIps)
         errors.append("false-negative: a private `function Invoke-Cf` was allowed")
     if not check_consumer("x.ps1", consumer_ip_literal, banned):
         errors.append("false-negative: a pasted Pages IP literal was allowed")
+    if not check_consumer("x.ps1", consumer_ipv6_mixedcase, banned):
+        errors.append("false-negative: a mixed-case IPv6 Pages literal was allowed")
     if not check_lib(lib_missing_func):
         errors.append("false-negative: a library missing a required function was allowed")
 

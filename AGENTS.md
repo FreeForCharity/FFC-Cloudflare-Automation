@@ -143,8 +143,9 @@ and all authenticate as the same user. Before starting ANY issue:
      query. When you finish, comment what you shipped and what remains (pattern validated on #748,
      2026-07-20). Caveat: the claim-sync workflow (737) will still add the exclusive label while
      your `Refs #N` PR is open (it parses `Refs` too, seen on #806 → epic #752, 2026-07-22) and
-     auto-releases it when the PR merges or closes — during an open scoped PR, treat the label as
-     advisory and the scoped-claim comment as the source of truth for what portion is taken.
+     auto-releases it only once the **last** open linked PR merges or closes (it checks all open PR
+     bodies before removing) — during an open scoped PR, treat the label as advisory and the
+     scoped-claim comment as the source of truth for what portion is taken.
 4. **Fleet-wide file changes** (any file synced across the FFC-EX fleet, e.g.
    `post-deploy-smoke.yml`): claim the hub tracking issue FIRST — every fleet sync must have one —
    and before editing, check the target file's last commit in 2-3 fleet repos; a commit within the

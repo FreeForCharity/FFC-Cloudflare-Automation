@@ -72,9 +72,12 @@ const github = {
     actions: {
       listWorkflowRunsForRepo: async (args) => {
         listCalls.push({ status: args.status, per_page: args.per_page, page: args.page });
+        // Honor the caller's requested page size (fall back to the API default)
+        // so pagination tests stay faithful if the script changes per_page.
+        const perPage = Number(args.per_page) || PER_PAGE;
         const page = args.page || 1;
-        const start = (page - 1) * PER_PAGE;
-        const slice = runs.slice(start, start + PER_PAGE);
+        const start = (page - 1) * perPage;
+        const slice = runs.slice(start, start + perPage);
         return { data: { total_count: runs.length, workflow_runs: slice } };
       },
       cancelWorkflowRun: async (args) => {

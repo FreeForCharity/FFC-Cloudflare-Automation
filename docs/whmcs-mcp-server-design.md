@@ -65,7 +65,8 @@ known WHMCS hosts. Port the allowlist from `scripts/whmcs-api-common.ps1` exactl
 
 Reuse the same transient-retry posture too (the WHMCS origin's Imunify360 bot-protection
 intermittently challenges non-allowlisted IPs; the APIM path avoids it, but a bounded exponential
-backoff on `429/502/503/504`/timeout keeps parity with the scripts).
+backoff on `429`, `502`, `503`, and `504` responses (and on request timeouts) keeps parity with the
+scripts).
 
 ## Tool surface (read-only v1)
 

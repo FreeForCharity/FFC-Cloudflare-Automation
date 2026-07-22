@@ -85,8 +85,10 @@ BANNED_CONSUMER_FUNCS = [
 ]
 
 _QUOTED = re.compile(r"['\"]([^'\"]+)['\"]")
-# PowerShell is case-insensitive; a dot-source is `. <path>` at line start.
-_DOTSOURCE = re.compile(r"(?im)^\s*\.\s+.*cloudflare-api-common\.ps1")
+# PowerShell is case-insensitive; a dot-source is `. <path>` at line start. The
+# lookahead pins the filename's end (quote / whitespace / `)` / EOL) so a
+# lookalike such as 'cloudflare-api-common.ps1.bak' does not satisfy the guard.
+_DOTSOURCE = re.compile(r"(?im)^\s*\.\s+.*cloudflare-api-common\.ps1(?=['\"\s)]|$)")
 
 
 def parse_ps_ip_literals(text: str) -> list[str]:
@@ -187,6 +189,10 @@ $ips = @(Get-GhPagesIps)
     consumer_no_dotsource = consumer_ok.replace(
         ". (Join-Path $PSScriptRoot 'cloudflare-api-common.ps1')", "# (lib not sourced)"
     )
+    # A lookalike filename must not be accepted as sourcing the real library.
+    consumer_dotsource_lookalike = consumer_ok.replace(
+        "cloudflare-api-common.ps1'", "cloudflare-api-common.ps1.bak'"
+    )
     consumer_private_func = consumer_ok + "\nfunction Invoke-Cf { param($m) }\n"
     # A scope-qualified definition is still a real function; must not slip past.
     consumer_scoped_func = consumer_ok + "\nfunction script:Invoke-CfApi { param($m) }\n"
@@ -206,6 +212,8 @@ $ips = @(Get-GhPagesIps)
         errors.append("false-positive: a compliant consumer was flagged")
     if not check_consumer("x.ps1", consumer_no_dotsource, banned):
         errors.append("false-negative: a consumer NOT sourcing the lib was allowed")
+    if not check_consumer("x.ps1", consumer_dotsource_lookalike, banned):
+        errors.append("false-negative: a lookalike '.ps1.bak' dot-source was accepted")
     if not check_consumer("x.ps1", consumer_private_func, banned):
         errors.append("false-negative: a private `function Invoke-Cf` was allowed")
     if not check_consumer("x.ps1", consumer_scoped_func, banned):

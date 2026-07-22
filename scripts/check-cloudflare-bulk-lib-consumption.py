@@ -104,8 +104,17 @@ def parse_ps_ip_literals(text: str) -> list[str]:
 
 
 def _defines(func: str, text: str) -> bool:
-    """True if `text` has a `function <func>` definition (case-insensitive)."""
-    return re.search(rf"(?im)^\s*function\s+{re.escape(func)}\b", text) is not None
+    """True if `text` has a `function <func>` definition (case-insensitive).
+
+    Allows an optional PowerShell scope qualifier (`global:` / `local:` /
+    `script:` / `private:`) so a scoped definition like
+    `function script:Invoke-CfApi` — a real function PowerShell would honour —
+    can't slip a re-introduced private helper past the guard.
+    """
+    return re.search(
+        rf"(?im)^\s*function\s+(?:(?:global|local|script|private):)?{re.escape(func)}\b",
+        text,
+    ) is not None
 
 
 def check_lib(text: str) -> list[str]:
@@ -179,6 +188,8 @@ $ips = @(Get-GhPagesIps)
         ". (Join-Path $PSScriptRoot 'cloudflare-api-common.ps1')", "# (lib not sourced)"
     )
     consumer_private_func = consumer_ok + "\nfunction Invoke-Cf { param($m) }\n"
+    # A scope-qualified definition is still a real function; must not slip past.
+    consumer_scoped_func = consumer_ok + "\nfunction script:Invoke-CfApi { param($m) }\n"
     consumer_ip_literal = consumer_ok + "\n$apex = '185.199.108.153'\n"
     # IPv6 pasted with different hex casing must still be rejected.
     consumer_ipv6_mixedcase = consumer_ok + "\n$aaaa = '2606:50C0:8000::153'\n"
@@ -197,6 +208,8 @@ $ips = @(Get-GhPagesIps)
         errors.append("false-negative: a consumer NOT sourcing the lib was allowed")
     if not check_consumer("x.ps1", consumer_private_func, banned):
         errors.append("false-negative: a private `function Invoke-Cf` was allowed")
+    if not check_consumer("x.ps1", consumer_scoped_func, banned):
+        errors.append("false-negative: a scope-qualified `function script:Invoke-CfApi` was allowed")
     if not check_consumer("x.ps1", consumer_ip_literal, banned):
         errors.append("false-negative: a pasted Pages IP literal was allowed")
     if not check_consumer("x.ps1", consumer_ipv6_mixedcase, banned):

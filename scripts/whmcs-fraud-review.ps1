@@ -85,7 +85,13 @@ function Get-FlpField {
 if (-not (Test-Path $OrdersCsv)) {
     throw "Orders CSV not found: $OrdersCsv"
 }
-$orders = @(Import-Csv -Path $OrdersCsv)
+# A zero-order queue arrives as an empty CSV (Export-Csv writes no header for an empty set, and the
+# workflow's fallback writes a 0-byte file). Import-Csv on a headerless/empty file is ambiguous, so
+# short-circuit it deterministically: an empty file means zero orders — report a clear queue.
+$orders = @()
+if ((Get-Item -LiteralPath $OrdersCsv).Length -gt 0) {
+    $orders = @(Import-Csv -Path $OrdersCsv)
+}
 
 $key = $null
 if ($orders.Count -gt 0) {

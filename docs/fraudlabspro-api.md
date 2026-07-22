@@ -55,8 +55,11 @@ A `clear-recommended` order is one a reviewer can clear with one tap via workflo
 
 ## One-time provisioning (KV secret + environment + federated credential)
 
-Nothing here lives in a GitHub secret — Key Vault is the single source of truth, consumed at runtime
-via OIDC (identical pattern to `docs/candid-api-and-mcp.md`). Steps, all done once by an admin:
+The sensitive value — the **FraudLabs Pro API key** — never lives in a GitHub secret; Key Vault is
+its single source of truth, consumed at runtime via OIDC (identical pattern to
+`docs/candid-api-and-mcp.md`). The Azure OIDC identifiers added in step 3 are non-secret GUIDs
+(client/tenant ids) that happen to be stored as environment secrets. Steps, all done once by an
+admin:
 
 1. **Get a FraudLabs Pro API key** from the FraudLabs Pro account that owns the WHMCS module
    (Account → API Key). One account key covers the read API.

@@ -108,6 +108,16 @@ jobs:
           # mirrors those sets — this guard fails if the two ever drift.
           python3 scripts/check-github-pages-ip-consistency.py
 
+      - name: Validate Cloudflare bulk scripts route through the shared library
+        shell: bash
+        run: |
+          # #778 consolidated the Cloudflare REST plumbing + Pages IP set into
+          # scripts/cloudflare-api-common.ps1 ("one Invoke-Cf across 112/119/120;
+          # zero copies of the Pages IP list outside the lib"). This guard fails
+          # if a bulk script re-grows private plumbing, pastes a Pages IP literal,
+          # or stops dot-sourcing the library.
+          python3 scripts/check-cloudflare-bulk-lib-consumption.py
+
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v6
         with:

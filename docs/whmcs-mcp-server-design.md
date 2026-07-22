@@ -72,13 +72,13 @@ backoff on `429/502/503/504`/timeout keeps parity with the scripts).
 Every tool maps to a WHMCS API action the repo already calls, and returns **PII-masked** output (see
 below). No tool performs a write.
 
-| MCP tool                   | WHMCS action(s)               | Mirrors                                         | Purpose                                                                                  |
-| -------------------------- | ----------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `whmcs_application_search` | `GetClientsProducts` (swept)  | `scripts/whmcs-application-search.ps1` (wf 221) | Find the onboarding application(s) matching a domain or org name; the flagship use case. |
-| `whmcs_application_detail` | `GetClientsProducts` (one id) | `scripts/whmcs-application-detail.ps1`          | Read one application's readable fields (mission, desired domain, legal status).          |
-| `whmcs_client_products`    | `GetClientsProducts`          | wf 219                                          | List a client's services with product custom fields (names + masked values).             |
-| `whmcs_client_lookup`      | `GetClients`                  | `Find-WhmcsClientIdByEmail`                     | Resolve a client id by email/domain (masked contact fields).                             |
-| `whmcs_products_catalog`   | `GetProducts`                 | `scripts/whmcs-products-export.ps1`             | Non-PII product/custom-field catalog for field-name discovery.                           |
+| MCP tool                   | WHMCS action(s)                                                   | Mirrors                                         | Purpose                                                                                                          |
+| -------------------------- | ----------------------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `whmcs_application_search` | `GetClientsProducts` (swept)                                      | `scripts/whmcs-application-search.ps1` (wf 221) | Find the onboarding application(s) matching a domain or org name; the flagship use case.                         |
+| `whmcs_application_detail` | `GetClientsDetails` + `GetOrders` + `GetClientsProducts` (one id) | `scripts/whmcs-application-detail.ps1`          | Read one application's readable fields (mission, desired domain, legal status).                                  |
+| `whmcs_client_products`    | `GetClientsProducts`                                              | wf 219                                          | List a client's services with product custom fields (names + masked values).                                     |
+| `whmcs_client_lookup`      | `GetClients`                                                      | `Find-WhmcsClientIdByEmail`                     | Resolve a client id by exact email match (masked contact fields); the mirrored helper does not do domain lookup. |
+| `whmcs_products_catalog`   | `GetProducts`                                                     | `scripts/whmcs-products-export.ps1`             | Non-PII product/custom-field catalog for field-name discovery.                                                   |
 
 **Identify by domain, not by masked name.** The triage tables (209/210) show the applicant's
 personal first name, not the org; the org name is only inside the mission text. So

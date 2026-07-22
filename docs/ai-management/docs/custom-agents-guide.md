@@ -1,12 +1,12 @@
 # Custom Agents Guide
 
-> **Historical — superseded.** This document is a byte-for-byte migration from the wound-down
-> `FFC-IN-AI-Management` repo and still names that repo as where custom agents are managed. The
-> canonical fleet agent definitions now live in the hub (`FFC-Cloudflare-Automation`) under
-> `docs/ai-management/agents/` (LIVE), and the push-sync mechanics referenced here are archived at
-> the `archive/sync-ai-configs-2026-04` tag. The custom-agent concepts below remain accurate; treat
-> any FFC-IN-AI-Management path or sync reference as historical. See [`../README.md`](../README.md)
-> for the migration status table.
+> **Historical — superseded.** The content below this banner is a byte-for-byte migration from the
+> wound-down `FFC-IN-AI-Management` repo and still names that repo as where custom agents are
+> managed. The canonical fleet agent definitions now live in the hub (`FFC-Cloudflare-Automation`)
+> under `docs/ai-management/agents/` (LIVE), and the push-sync mechanics referenced here are
+> archived at the `archive/sync-ai-configs-2026-04` tag. The custom-agent concepts below remain
+> accurate; treat any FFC-IN-AI-Management path or sync reference as historical. See
+> [`../README.md`](../README.md) for the migration status table.
 
 Custom agents are specialized AI personas defined as markdown files. They provide focused behavior,
 tool access, and domain knowledge for specific tasks within FFC projects.

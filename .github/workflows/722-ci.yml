@@ -119,7 +119,7 @@ jobs:
           python3 scripts/check-cloudflare-bulk-lib-consumption.py
 
       - name: Setup Go (for actionlint)
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: 'stable'
 

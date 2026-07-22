@@ -90,6 +90,20 @@ _QUOTED = re.compile(r"['\"]([^'\"]+)['\"]")
 # lookalike such as 'cloudflare-api-common.ps1.bak' does not satisfy the guard.
 _DOTSOURCE = re.compile(r"(?im)^\s*\.\s+.*cloudflare-api-common\.ps1(?=['\"\s)]|$)")
 
+_BLOCK_COMMENT = re.compile(r"<#.*?#>", re.S)
+
+
+def _strip_block_comments(text: str) -> str:
+    """Drop PowerShell block comments (`<# ... #>`) so a dot-source or a
+    `function` definition that lives only inside a comment example is not
+    mistaken for real code. Pragmatic regex parsing — good enough for these
+    scripts. IP-literal scanning still runs on the RAW text, so a Pages IP
+    copied even into a comment is caught. (Line comments can't trigger the
+    dot-source / function-def checks anyway: both anchor at line start on `.`
+    or `function`, and a `#` line comment starts with `#`.)
+    """
+    return _BLOCK_COMMENT.sub("", text)
+
 
 def parse_ps_ip_literals(text: str) -> list[str]:
     """The canonical Pages IPv4+IPv6 literals from the library (no new copy)."""
@@ -121,9 +135,10 @@ def _defines(func: str, text: str) -> bool:
 
 def check_lib(text: str) -> list[str]:
     """Problems with the library itself (missing functions the consumers need)."""
+    code = _strip_block_comments(text)
     problems: list[str] = []
     for func in REQUIRED_LIB_FUNCS:
-        if not _defines(func, text):
+        if not _defines(func, code):
             problems.append(
                 f"{PS_LIB}: expected `function {func}` is missing — bulk scripts "
                 f"that call it would break (rename it in the consumers too)"
@@ -134,15 +149,19 @@ def check_lib(text: str) -> list[str]:
 def check_consumer(path: str, text: str, banned_ips: list[str]) -> list[str]:
     """Problems with one bulk consumer (must route through the library)."""
     problems: list[str] = []
+    # Dot-source and function-def checks run on the comment-stripped code so a
+    # commented-out example can neither satisfy the dot-source requirement nor
+    # trip a private-plumbing false positive.
+    code = _strip_block_comments(text)
 
-    if not _DOTSOURCE.search(text):
+    if not _DOTSOURCE.search(code):
         problems.append(
             f"{path}: does not dot-source {PS_LIB} "
             f"(expected a line like `. (Join-Path $PSScriptRoot 'cloudflare-api-common.ps1')`)"
         )
 
     for func in BANNED_CONSUMER_FUNCS:
-        if _defines(func, text):
+        if _defines(func, code):
             problems.append(
                 f"{path}: defines a private `function {func}` — this plumbing was "
                 f"consolidated into {PS_LIB} (#778); call the shared function instead"
@@ -193,6 +212,13 @@ $ips = @(Get-GhPagesIps)
     consumer_dotsource_lookalike = consumer_ok.replace(
         "cloudflare-api-common.ps1'", "cloudflare-api-common.ps1.bak'"
     )
+    # A dot-source that survives only inside a block comment is NOT real loading.
+    consumer_dotsource_commented = consumer_ok.replace(
+        ". (Join-Path $PSScriptRoot 'cloudflare-api-common.ps1')",
+        "<#\n. (Join-Path $PSScriptRoot 'cloudflare-api-common.ps1')\n#>",
+    )
+    # A commented-out private function is not a real definition (no false pos).
+    consumer_commented_func = consumer_ok + "\n<#\nfunction Invoke-Cf { param($m) }\n#>\n"
     consumer_private_func = consumer_ok + "\nfunction Invoke-Cf { param($m) }\n"
     # A scope-qualified definition is still a real function; must not slip past.
     consumer_scoped_func = consumer_ok + "\nfunction script:Invoke-CfApi { param($m) }\n"
@@ -214,6 +240,10 @@ $ips = @(Get-GhPagesIps)
         errors.append("false-negative: a consumer NOT sourcing the lib was allowed")
     if not check_consumer("x.ps1", consumer_dotsource_lookalike, banned):
         errors.append("false-negative: a lookalike '.ps1.bak' dot-source was accepted")
+    if not check_consumer("x.ps1", consumer_dotsource_commented, banned):
+        errors.append("false-negative: a dot-source only inside a block comment was accepted")
+    if check_consumer("x.ps1", consumer_commented_func, banned):
+        errors.append("false-positive: a commented-out private function was flagged")
     if not check_consumer("x.ps1", consumer_private_func, banned):
         errors.append("false-negative: a private `function Invoke-Cf` was allowed")
     if not check_consumer("x.ps1", consumer_scoped_func, banned):

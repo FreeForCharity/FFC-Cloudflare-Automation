@@ -43,6 +43,6 @@ grep still finds in each directory.
       `managed/` is gated.
 - [x] **`inventory/` supersession** — the HISTORICAL 2026-02-16 repo snapshot (`audit-report.md`,
       `repos.json`) is dated and has no live successor for AI-config presence, so it is kept as a
-      clearly-labeled archive: `audit-report.md` carries a "historical — superseded" banner under
+      clearly-labeled archive: `audit-report.md` carries a "Historical — superseded" banner under
       its title and a new `inventory/README.md` labels the whole directory (covering the
       `repos.json` data file, left byte-for-byte). Both point back to this migration status table.

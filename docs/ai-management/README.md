@@ -41,5 +41,8 @@ grep still finds in each directory.
 - [ ] **`managed/` org-policy review (Clarke-gated)** — confirm the deployed org-policy source
       (`CLAUDE.md` + managed settings) is current for the hub. Reference-clean today; any change to
       `managed/` is gated.
-- [ ] **`inventory/` supersession** — the HISTORICAL 2026-era repo snapshot is dated; either point
-      readers to a live inventory source or keep it as a clearly labeled archive.
+- [x] **`inventory/` supersession** — the HISTORICAL 2026-02-16 repo snapshot (`audit-report.md`,
+      `repos.json`) is dated and has no live successor for AI-config presence, so it is kept as a
+      clearly-labeled archive: `audit-report.md` carries a "Historical — superseded" banner under
+      its title and a new `inventory/README.md` labels the whole directory (covering the
+      `repos.json` data file, left byte-for-byte). Both point back to this migration status table.

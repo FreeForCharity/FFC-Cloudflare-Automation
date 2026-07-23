@@ -87,7 +87,7 @@ jobs:
           download_latest 601-wpmudev-export-sites.yml  wpmudev-domain-inventory tmp_data/wpmudev-domain-inventory
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 'lts/*'
 

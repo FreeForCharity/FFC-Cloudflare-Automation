@@ -35,6 +35,7 @@ from __future__ import annotations
 import datetime
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -175,18 +176,26 @@ def test_reminder_body_carries_runbook_kv_and_rotation_guidance():
 # --- YAML-level contract guards (no node needed) ---------------------------
 
 
-def test_family_and_marker_literals_present_in_the_engine():
-    # If a family key or the marker template drifts, the test's copy would go
-    # stale silently — keep it honest against the shipped script.
+def test_family_and_marker_prefix_present_in_the_engine():
+    # Assert on the *stable* marker prefix (`<!-- rotation-`) and each family
+    # key, not the `${q}` variable name: a non-semantic rename (e.g. q ->
+    # quarter) must not break this. A real change to the marker *format* is
+    # already caught by the functional tests above, whose `_marker()` helper
+    # would no longer match the created issue bodies.
     script = step_github_script(WORKFLOW, JOB, STEP)
-    assert "rotation-${f.key}-${q}" in script, "marker template drifted"
+    assert "<!-- rotation-" in script, "marker prefix drifted"
     for k in FAMILY_KEYS:
         assert f"'{k}'" in script or f'"{k}"' in script, f"family {k} missing"
 
 
 def test_labels_are_security_only():
+    # The label value is already validated functionally above (created issues
+    # carry exactly ['security']); this guard keeps the shipped script honest and
+    # tolerates either quote style so a non-semantic reformat doesn't trip it.
     script = step_github_script(WORKFLOW, JOB, STEP)
-    assert "labels: ['security']" in script, "rotation issues must be security-labelled"
+    assert re.search(
+        r"""labels:\s*\[\s*['"]security['"]\s*\]""", script
+    ), "rotation issues must be security-labelled"
 
 
 def test_permissions_are_issue_write_contents_read_only():

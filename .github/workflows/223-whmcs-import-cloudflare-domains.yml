@@ -41,7 +41,7 @@ jobs:
     runs-on: windows-latest
     environment: whmcs-prod
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - uses: ./.github/actions/cloudflare-tokens-from-kv
         with:

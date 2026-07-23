@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (for the metrics library)
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: Gather, compute, and post the weekly report
         uses: actions/github-script@v9

@@ -24,7 +24,7 @@ jobs:
     environment: whmcs-prod-read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv

@@ -53,7 +53,7 @@ jobs:
       # this issues:write job never executes claim-sync-lib.js as modified by the
       # PR under review. Post-merge the base always carries the lib; on the PR
       # that first introduces it the require is guarded below (bootstrap).
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
       - name: Sync claimed label from linked PR
@@ -146,7 +146,7 @@ jobs:
       issues: write
       pull-requests: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Release expired claims
         uses: actions/github-script@v9
         # Ambient GITHUB_TOKEN (issues: write) — hub-only. CBM_TOKEN is an

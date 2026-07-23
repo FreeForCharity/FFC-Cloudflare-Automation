@@ -35,7 +35,7 @@ jobs:
     runs-on: windows-latest
     environment: cloudflare-prod-write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # F1 refactor: CF tokens from Key Vault at runtime via OIDC.
       - uses: ./.github/actions/cloudflare-tokens-from-kv

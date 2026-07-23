@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: github-prod
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Validate CBM_TOKEN
         env:

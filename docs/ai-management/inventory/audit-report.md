@@ -1,5 +1,13 @@
 ﻿# AI Configuration Audit Report
 
+> **Historical — superseded.** This is a **point-in-time snapshot** of AI-configuration presence
+> across FFC repositories, generated `2026-02-16` by the retired `scripts/Audit-AIConfigs.ps1` from
+> the wound-down `FFC-IN-AI-Management` repo. It is **not maintained** and does not reflect the
+> current fleet (repos have since been added, renamed, and adopted `.claude/` config). There is no
+> live successor inventory for AI-config presence today; this snapshot is retained as a
+> clearly-labeled archive for provenance only. Do not treat its rows as current. See
+> [`../README.md`](../README.md) for the migration status table and the `inventory/` disposition.
+
 Generated: 2026-02-16 14:47:30
 
 ## Summary

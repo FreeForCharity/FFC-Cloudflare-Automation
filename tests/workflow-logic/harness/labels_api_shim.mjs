@@ -35,7 +35,10 @@
 //                             per-label write failure is swallowed
 //
 // Emits one JSON result line:
-//   { threw, getLabelCalls, updateCalls, createCalls, fsReads, logs, errors }
+//   { threw, failed, getLabelCalls, updateCalls, createCalls, fsReads, logs, errors }
+// `failed` is the captured core.setFailed(...) message (null if never called) —
+// present so tests can assert step-failure semantics even if the script stops
+// throwing and starts using core.setFailed, matching the sibling shims.
 
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -61,6 +64,7 @@ const updateCalls = [];
 const createCalls = [];
 const logs = [];
 const errors = [];
+let failed = null;
 
 // Capture console output so the only stdout line is the final JSON result.
 const emit = process.stdout.write.bind(process.stdout);
@@ -89,7 +93,12 @@ const requireShim = (name) => {
 
 const core = {
   setOutput: () => {},
-  setFailed: () => {},
+  // Capture setFailed like the sibling shims: if 724's script ever switches from
+  // throwing/console.error to core.setFailed(...), tests can assert step failure
+  // even when nothing throws (today the script uses console.error, so this stays null).
+  setFailed: (m) => {
+    failed = String(m);
+  },
   notice: () => {},
   warning: () => {},
   info: () => {},
@@ -141,6 +150,7 @@ try {
 emit(
   JSON.stringify({
     threw,
+    failed,
     getLabelCalls,
     updateCalls,
     createCalls,

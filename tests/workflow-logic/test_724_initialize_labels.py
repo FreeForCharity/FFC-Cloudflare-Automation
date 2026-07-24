@@ -129,6 +129,7 @@ def test_write_failure_is_swallowed_and_sweep_continues():
     # exists and updates cleanly. One label's write failure must not abort.
     r = _run([_label("a"), _label("b")], existing=["a", "b"], write_fail="a")
     assert r["threw"] is None, r
+    assert r["failed"] is None, r  # swallowed per-label failure never fails the step
     assert r["updateCalls"] == ["b"], r  # 'a' failed; 'b' still updated
     assert any("Failed to process label a" in e for e in r["errors"]), r
 

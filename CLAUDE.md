@@ -22,6 +22,38 @@
   `npx prettier` fetches the latest version, whose Markdown reflow differs — producing
   local-pass/CI-fail loops. Always run `npx --yes prettier@3.8.1 --write <files>`.
 
+## Verifying tests: CI is authoritative, local runs may be false-red
+
+- **`tests/workflow-logic/` cannot be run reliably from every local sandbox.** In the Windows
+  git-bash environment the Conductor runs in, `python3 tests/workflow-logic/run_all.py` reports most
+  modules failing with `harness crashed:` and a node abort —
+  `Assertion failed: ncrypto::CSPRNG(nullptr, 0)`. A plain `node -e "…"` works fine; only the
+  harness-spawned node dies, so this is an environment/entropy problem, **not** a test defect.
+  Pure-python assertions in the same modules still pass.
+- **Treat a local red here as no signal at all.** The authority is CI's **Validate Repository**
+  check, which runs the same suite on `ubuntu-latest`. Verified 2026-07-24: the identical tree that
+  failed ~17 modules locally passed `Validate Repository` in CI (PR #828).
+- Never "fix" a test, or hold a PR, on the strength of a local harness crash — confirm against CI
+  first.
+
+## Board & PR-creation env facts (validated 2026-07-24)
+
+- **The public "Agentic OS" board (org project #9) has NO automation.** Its only enabled built-in
+  workflow is `Auto-add sub-issues to project`; label/item auto-add is absent, and `Item closed` and
+  `Pull request merged` are **disabled**. So **neither issues nor PRs auto-add, and statuses never
+  self-update** — every item and every status is placed by hand. Do not assume a new `agentic-os`
+  issue reached the board. Check:
+  ```bash
+  gh api graphql -f query='query{organization(login:"FreeForCharity"){projectV2(number:9){workflows(first:20){nodes{name enabled}}}}}'
+  ```
+- **Push the branch before opening the PR.** On 2026-07-24, `POST /repos/…/pulls` returned **HTTP
+  500 with an empty body** for >20 minutes, across **multiple FFC repos**
+  (`FFC-IN-freeforcharity.org` and `FFC-Cloudflare-Automation`) and all three clients (`gh`, REST,
+  GitHub MCP), with full and minimal bodies alike. Not auth, not rate limit, and githubstatus.com
+  reported all-operational throughout — so treat "GitHub is green" as no guarantee that PR creation
+  works. Because the work was committed and pushed first, nothing was lost: the branches simply wait
+  for their PRs. **Adopt commit-and-push-first as the default order.**
+
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 
 In a self-hosted/local remote environment the `gh` CLI is typically pre-authenticated — run

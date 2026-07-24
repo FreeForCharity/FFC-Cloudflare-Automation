@@ -12,6 +12,14 @@ run-name: 'WHMCS Fraud Review (FraudLabs Pro)'
 # message, exactly like the Candid scaffolding (801/802).
 
 on:
+  # Daily automated fraud check (issue #813 item 2): weekday mid-morning, aligned with the 209/210
+  # triage crons (distinct minute so read-only sweeps never stack). The scheduled run performs the
+  # same read-only review and then upserts ONE rolling tracking issue listing the current
+  # Fraud-status orders + their FraudLabs verdicts (self-closing when the queue is clear). While the
+  # FraudLabs Pro key is un-provisioned the review job fails fast (scaffold-inert), so the tracking
+  # job — which `needs` it — is skipped: no tracking issue is opened until 228 is live.
+  schedule:
+    - cron: '27 13 * * 1-5'
   workflow_dispatch:
     inputs:
       api_url:
@@ -139,3 +147,107 @@ jobs:
           path: artifacts/whmcs/fraud_review.csv
           if-no-files-found: warn
           retention-days: 30
+
+  # Daily rolling tracking issue (issue #813 item 2). Only on the scheduled run — a manual dispatch
+  # stays a pure review (artifact + step summary) and never mutates the tracking issue. Mirrors the
+  # 732 rolling-issue state machine: upsert ONE issue while Fraud orders remain, auto-close it on the
+  # first scheduled run that finds the queue clear. Ambient GITHUB_TOKEN, hub-only (no gate).
+  tracking_issue:
+    needs: fraud_review
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download Fraud review artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: whmcs_fraud_review
+          path: artifacts/whmcs
+
+      - name: Load review summary into env
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $csv = 'artifacts/whmcs/fraud_review.csv'
+          $rows = @()
+          if ((Test-Path $csv) -and (Get-Item $csv).Length -gt 0) {
+            $rows = @(Import-Csv -Path $csv)
+          }
+          # PII stays masked: whmcs-fraud-review.ps1 already wrote `name` as an initial-only mask,
+          # and only the review columns are forwarded (no raw email/address reaches the issue).
+          $json = $rows |
+            Select-Object ordernum, userid, name, amount, whmcs_status, fraudlabs_status, fraudlabs_score, recommendation |
+            ConvertTo-Json -Compress -AsArray
+          if ([string]::IsNullOrWhiteSpace($json)) { $json = '[]' }
+          "FRAUD_REVIEW_JSON<<FRAUD_EOF" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $json | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "FRAUD_EOF" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upsert or close rolling Fraud tracking issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const marker = '<!-- whmcs-fraud-review-tracking -->';
+            const title = 'WHMCS orders held in Fraud status (FraudLabs Pro review)';
+            let rows = [];
+            try {
+              rows = JSON.parse(process.env.FRAUD_REVIEW_JSON || '[]');
+            } catch (e) {
+              core.warning(`could not parse FRAUD_REVIEW_JSON: ${e}`);
+              rows = [];
+            }
+            if (!Array.isArray(rows)) rows = [];
+
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'agentic-os,whmcs', per_page: 50,
+            });
+            const existing = open.find((i) => i.body && i.body.includes(marker));
+            const now = new Date().toISOString();
+
+            // Empty queue → nothing to track. Close the rolling issue if one is open.
+            if (rows.length === 0) {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: existing.number,
+                  body: `✅ ${now} — no WHMCS orders remain in Fraud status. Auto-closing.`,
+                });
+                await github.rest.issues.update({
+                  owner, repo, issue_number: existing.number, state: 'closed',
+                });
+              }
+              return;
+            }
+
+            // Build a masked table of the current Fraud queue.
+            const cell = (v) => String(v == null ? '' : v).replace(/\|/g, '\\|');
+            const clear = rows.filter((r) => (r.recommendation || '') === 'clear-recommended').length;
+            const lines = [
+              `Reviewed **${rows.length}** WHMCS order(s) held in **Fraud** status; **${clear}** recommended for clearing (via workflow 211, gated on \`whmcs-prod\`).`,
+              '',
+              '| order | client | name | amount | WHMCS | FraudLabs | score | recommendation |',
+              '| --- | --- | --- | --- | --- | --- | --- | --- |',
+            ];
+            for (const r of rows) {
+              lines.push(
+                `| ${cell(r.ordernum)} | ${cell(r.userid)} | ${cell(r.name)} | ${cell(r.amount)} | ${cell(r.whmcs_status)} | ${cell(r.fraudlabs_status)} | ${cell(r.fraudlabs_score)} | ${cell(r.recommendation)} |`,
+              );
+            }
+            const table = lines.join('\n');
+
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.number,
+                body: `### ${now} — Fraud queue refresh\n\n${table}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner, repo, title, labels: ['agentic-os', 'whmcs'],
+                body: `${marker}\nWHMCS orders currently held in **Fraud** status, with their FraudLabs Pro verdicts. This rolling issue auto-closes on the first scheduled run that finds the queue clear.\n\n${table}\n\n_Managed by 228. WHMCS - Fraud Review (FraudLabs Pro). Clearing a false positive is a separate, gated action via workflow 211._`,
+              });
+            }

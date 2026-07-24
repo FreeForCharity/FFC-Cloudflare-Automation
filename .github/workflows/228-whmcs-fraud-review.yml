@@ -54,7 +54,7 @@ jobs:
     environment: whmcs-prod-read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv
@@ -94,7 +94,7 @@ jobs:
     environment: fraudlabspro-prod-read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Validate required Azure secrets
         shell: bash
@@ -161,7 +161,7 @@ jobs:
       issues: write
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Download Fraud review artifact
         uses: actions/download-artifact@v8

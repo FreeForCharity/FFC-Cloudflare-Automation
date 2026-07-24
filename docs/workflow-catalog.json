@@ -1036,9 +1036,9 @@
         "whmcs-prod-read"
       ],
       "description": "Read-only. For each WHMCS Fraud-status order, reads its stored FraudLabs Pro verdict and emits a triage row with a RECOMMENDED action (clear-recommended / hold-for-human / review-manually). It performs NO order writes \u2014 clearing an approved false positive is a separate, gated action via workflow 211. See issue #813.  Scaffolding is inert until provisioned (docs/fraudlabspro-api.md): the FraudLabs Pro key must be loaded into Key Vault as 'read-all-ffc-fraudlabspro-api-key' and the 'fraudlabspro-prod-read' environment + federated credential created. Until then the review job fails fast with a clear message, exactly like the Candid scaffolding (801/802).",
-      "safetyLevel": "Reads",
+      "safetyLevel": "Writes (issues only)",
       "approvalEnv": "whmcs-prod-read + fraudlabspro-prod-read",
-      "guard": "read-only; masks PII; recommends only (never clears \u2014 clearing is via gated 211); scaffold inert until the FraudLabs Pro key + fraudlabspro-prod-read env are provisioned; daily weekday schedule upserts one rolling GitHub tracking issue (issues:write, ambient token) that self-closes when the Fraud queue clears",
+      "guard": "read-only external APIs; masks PII; recommends only (never clears \u2014 clearing is via gated 211); scaffold inert until the FraudLabs Pro key + fraudlabspro-prod-read env are provisioned; daily weekday schedule upserts one rolling GitHub tracking issue (issues:write, ambient token) that self-closes when the Fraud queue clears",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },

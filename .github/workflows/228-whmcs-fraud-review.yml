@@ -1,10 +1,12 @@
 name: '228. WHMCS - Fraud Review (FraudLabs Pro) [FRAUDLABS+WHMCS]'
 run-name: 'WHMCS Fraud Review (FraudLabs Pro)'
 
-# Read-only. For each WHMCS Fraud-status order, reads its stored FraudLabs Pro verdict and emits a
-# triage row with a RECOMMENDED action (clear-recommended / hold-for-human / review-manually). It
-# performs NO order writes — clearing an approved false positive is a separate, gated action via
-# workflow 211. See issue #813.
+# Read-only against external systems: for each WHMCS Fraud-status order, reads its stored FraudLabs
+# Pro verdict and emits a triage row with a RECOMMENDED action (clear-recommended / hold-for-human /
+# review-manually). It performs NO WHMCS/order writes — clearing a false positive is a separate,
+# gated action via workflow 211. The scheduled run additionally writes a rolling GitHub tracking
+# issue (issues:write, ambient token) listing the current Fraud queue, self-closing when it clears
+# (the tracking_issue job below). See issue #813.
 #
 # Scaffolding is inert until provisioned (docs/fraudlabspro-api.md): the FraudLabs Pro key must be
 # loaded into Key Vault as 'read-all-ffc-fraudlabspro-api-key' and the 'fraudlabspro-prod-read'

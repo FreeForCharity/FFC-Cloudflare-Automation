@@ -1042,6 +1042,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 229,
+      "title": "WHMCS - Populate Client Fields from Product Answers",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "229-whmcs-client-field-populate.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Copies a client's product custom-field answers (mission, brand color, socials, site content, ...) into their Custom Client Fields, so the data shows on the admin client profile. Read-only preview by default; a live UpdateClient write gates on whmcs-prod. Idempotent + non-destructive (existing client values are preserved unless overwrite=true). WHMCS API routes through the APIM gateway.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "dry_run default true; copies one client's product custom-field answers into their Custom Client Fields via UpdateClient; idempotent + non-destructive (existing values preserved unless overwrite=true); name map in config/whmcs-client-field-populate-map.json \u2014 verify unmapped list on dry-run before live",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 (FFC Tenant) - Domain Preflight (Read-only)",
       "apis": [

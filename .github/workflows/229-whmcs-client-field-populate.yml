@@ -1,0 +1,74 @@
+name: '229. WHMCS - Populate Client Fields from Product Answers [WHMCS]'
+run-name: 'WHMCS client-field populate (client ${{ inputs.client_id }}${{ inputs.email }}, dry_run=${{ inputs.dry_run }})'
+
+# Copies a client's product custom-field answers (mission, brand color, socials,
+# site content, ...) into their Custom Client Fields, so the data shows on the
+# admin client profile. Read-only preview by default; a live UpdateClient write
+# gates on whmcs-prod. Idempotent + non-destructive (existing client values are
+# preserved unless overwrite=true). WHMCS API routes through the APIM gateway.
+
+on:
+  workflow_dispatch:
+    inputs:
+      client_id:
+        description: 'Target WHMCS client id (leave blank to use email)'
+        required: false
+        type: string
+        default: ''
+      email:
+        description: 'Target client email (used when client id is blank)'
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: 'Preview only (send no UpdateClient write)'
+        required: false
+        type: boolean
+        default: true
+      overwrite:
+        description: 'Overwrite client fields that already have a value'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  populate:
+    runs-on: windows-latest
+    environment: whmcs-prod
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Populate client fields from product answers
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $params = @{
+            ApiUrl     = $env:WHMCS_API_URL
+            MapJson    = 'config/whmcs-client-field-populate-map.json'
+            OutputFile = 'artifacts/whmcs/whmcs_client_field_populate.json'
+          }
+          if ('${{ inputs.client_id }}' -ne '') { $params.ClientId = '${{ inputs.client_id }}' }
+          if ('${{ inputs.email }}' -ne '') { $params.Email = '${{ inputs.email }}' }
+          if ('${{ inputs.overwrite }}' -eq 'true') { $params.Overwrite = $true }
+          if ('${{ inputs.dry_run }}' -eq 'false') { $params.Execute = $true }
+          & pwsh -NoProfile -File ./scripts/whmcs-client-field-populate.ps1 @params | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if ($LASTEXITCODE -ne 0) { throw "Client-field populate failed with exit code $LASTEXITCODE." }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: whmcs-client-field-populate
+          path: artifacts/whmcs/whmcs_client_field_populate.json
+          if-no-files-found: error
+          retention-days: 30

@@ -52,6 +52,31 @@ A live change generally has to get past several of these, not just one:
    (clone-deploy), and **213** (WHMCS → Zeffy import) — so a second dispatch **queues** behind the
    first instead of racing it.
 
+## Conductor auto-approval policy (Clarke ruling, 2026-07-23)
+
+The Agentic OS **Conductor** may auto-approve a waiting deployment gate **when the run is safe**,
+and Clarke's standing rule is **"auto-approve them all if safe."** "Safe" is judged by the **run's
+actual safety level, not by the environment name:**
+
+- ✅ **Auto-approve** when the waiting job is safety-level **Reads** (see the per-workflow table
+  below), **or** a `Writes (dry-run default)` job dispatched with **`dry_run=true`**. This holds
+  **even if the job sits on a nominally-gated write environment** (e.g. `github-prod`) — a read-only
+  job on a gated env is still read-only.
+- ⛔ **Never auto-approve** a job that actually mutates: any **`Writes (gated)`** job, or a
+  `Writes (dry-run default)` job dispatched with **`dry_run=false`**. Those still get a summary +
+  recommendation sent to Clarke, and the gate is left pending until he approves in this run. No
+  response is never approval.
+
+**Canonical examples — the recurring daily gates auto-approve.** Both run on `github-prod` but are
+safety-level **Reads**, so the Conductor approves them without paging Clarke:
+
+- **726. Drift Audit** — report-only (`github-prod`, Reads).
+- **502. GA4 → JSON** — reads GA4 + emits PII-safe aggregates as a **draft** PR to ffcadmin
+  (`github-prod`, Reads; no live/external write).
+
+This resolves the run-31 vs run-32 divergence (run 31 treated `github-prod` as write-and-pending;
+run 32 approved by safety level). Safety level wins.
+
 ## Credential & data guarantees (always on)
 
 These hold for every run, independent of the layers above:

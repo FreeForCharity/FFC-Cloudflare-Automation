@@ -167,6 +167,13 @@ have exhausted the points budget for hours.
 - GraphQL is for the few mutations that need it (`enqueuePullRequest`, `resolveReviewThread`) —
   single-shot; on `RATE_LIMIT`, read `gh api rate_limit` and wait for the reset instead of retrying.
 - Create/close issues and comments via REST (`gh api .../issues --method POST`).
+- **Reading the _newest_ comments on a long issue needs `--paginate`.** The comments endpoint
+  returns at most 100 per page **oldest-first**, so on a 100+-comment issue (e.g. the Conductor Log
+  #719) an unpaginated `gh api .../comments --jq '.[-3:]'` slices the tail of page **one** — the
+  _earliest_ comments — not the latest. Use `gh api --paginate .../comments --jq '.[] | ...' | tail`
+  (or request the last page explicitly). This silently breaks "the newest `START` comment is the
+  source of truth for the run number" — a conductor run misread its own run number this way
+  (2026-07-24).
 
 ## Dispatch / watch / approve recipes
 

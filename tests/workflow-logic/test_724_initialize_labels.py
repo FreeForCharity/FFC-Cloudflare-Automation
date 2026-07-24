@@ -161,11 +161,13 @@ def test_empty_config_is_a_clean_noop():
 def test_workflow_writes_labels_only_never_touches_a_gate():
     wf = load_workflow(WORKFLOW)
     perms = wf.get("permissions", {})
-    # Label-writes only: issues + pull-requests write, nothing that could
-    # advance a deployment gate (no `deployments`, `id-token`, etc.).
+    # Reads the repo (checkout needs contents:read) and writes labels via the
+    # issues/pull-requests APIs — nothing that could advance a deployment gate
+    # (no `deployments`, `id-token`, etc.).
+    assert perms.get("contents") == "read", perms
     assert perms.get("issues") == "write", perms
     assert perms.get("pull-requests") == "write", perms
-    assert set(perms) == {"issues", "pull-requests"}, perms
+    assert set(perms) == {"contents", "issues", "pull-requests"}, perms
     # A label initializer runs no deployment and must never gate-approve.
     job = wf["jobs"][JOB]
     assert "environment" not in job, job

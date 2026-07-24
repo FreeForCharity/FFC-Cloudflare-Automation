@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  contents: read # actions/checkout needs read to fetch .github/labels.yml
   issues: write
   pull-requests: write
 

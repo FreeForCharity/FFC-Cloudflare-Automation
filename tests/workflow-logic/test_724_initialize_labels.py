@@ -42,7 +42,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import find_step, load_workflow, step_github_script  # noqa: E402
+from wf_extract import load_workflow, step_github_script  # noqa: E402
 
 WORKFLOW = "724-initialize-labels.yml"
 JOB = "create-labels"
@@ -160,7 +160,11 @@ def test_empty_config_is_a_clean_noop():
 def test_workflow_writes_labels_only_never_touches_a_gate():
     wf = load_workflow(WORKFLOW)
     perms = wf.get("permissions", {})
+    # Label-writes only: issues + pull-requests write, nothing that could
+    # advance a deployment gate (no `deployments`, `id-token`, etc.).
     assert perms.get("issues") == "write", perms
+    assert perms.get("pull-requests") == "write", perms
+    assert set(perms) == {"issues", "pull-requests"}, perms
     # A label initializer runs no deployment and must never gate-approve.
     job = wf["jobs"][JOB]
     assert "environment" not in job, job

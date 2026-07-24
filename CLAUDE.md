@@ -46,11 +46,13 @@
   ```bash
   gh api graphql -f query='query{organization(login:"FreeForCharity"){projectV2(number:9){workflows(first:20){nodes{name enabled}}}}}'
   ```
-- **Push the branch before opening the PR.** On 2026-07-24, `POST /repos/…/pulls` against
-  `FFC-IN-freeforcharity.org` returned **HTTP 500 with an empty body** for >8 minutes (21 attempts
-  across `gh`, REST, and the GitHub MCP; full and minimal bodies alike). Not auth, not rate limit,
-  and githubstatus.com reported all-operational. Because the work was committed and pushed first,
-  nothing was lost — the branch simply waits for the PR. Adopt this order generally.
+- **Push the branch before opening the PR.** On 2026-07-24, `POST /repos/…/pulls` returned **HTTP
+  500 with an empty body** for >20 minutes, across **multiple FFC repos**
+  (`FFC-IN-freeforcharity.org` and `FFC-Cloudflare-Automation`) and all three clients (`gh`, REST,
+  GitHub MCP), with full and minimal bodies alike. Not auth, not rate limit, and githubstatus.com
+  reported all-operational throughout — so treat "GitHub is green" as no guarantee that PR creation
+  works. Because the work was committed and pushed first, nothing was lost: the branches simply wait
+  for their PRs. **Adopt commit-and-push-first as the default order.**
 
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 

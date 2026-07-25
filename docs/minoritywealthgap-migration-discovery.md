@@ -26,14 +26,24 @@ technical contact, footer data (Los Angeles, CA + public phone and email), and a
 are masked in the search output by design — read them from client 444 in the WHMCS admin UI when
 generating the footer config, and **never transcribe an EIN off the public website instead**.
 
-Two gaps the application does not close:
+The single order on the account is **797** (order no. 5784969874, placed 2026-07-24 13:52:36, $0.00,
+"Free For Charity - Onboarding - FFC 501c3 Nonprofit / Charity Onboarding"). That is the id workflow
+211 takes to accept — not the client or service id.
+
+**EIN 88-3800775**, matching the Candid profile slug. Read it from the application (client 444), not
+from the charity's website: the website is not an authority on its own legal identity, and the
+footer standard treats a fabricated or transcribed EIN as a false legal claim.
+
+One gap the application does not close:
 
 - **No GitHub username for the technical contact.** Workflow 701 needs one to add the maintainer,
   and the application captures a LinkedIn URL instead. Ask before running 701 — a missing/invalid
   value is silently skipped and the repo is created without the maintainer.
-- **The service's `domain` field is empty.** The match came from custom-field content, not a
-  recorded requested-domain. Confirm `minoritywealthgap.org` is the intended domain in writing
-  rather than inferring it.
+
+**Domain confirmed 2026-07-25**: the service's `domain` field in WHMCS is empty (the 221 match came
+from custom-field content), but the operator confirmed `minoritywealthgap.org` directly with the
+charity. Worth backfilling the WHMCS field so downstream workflows key off recorded data rather than
+a conversation.
 
 Also observed: the sweep could not read **at least 6 client records** (indexes 19, 22, 23, 24, 27,
 28 — the visible tail of `unreadableIndexes`). These are the malformed-UTF-8 rows described in

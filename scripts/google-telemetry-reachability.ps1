@@ -95,14 +95,18 @@ param(
     #   charity   -> one property AND one container each, because GTM access is container-level
     #                and a charity POC self-administers only their own container
     # So a shared container is expected for internal pages and a real finding for a charity site.
+    # EXACTLY the four FFC-IN website repos. The other FFC-IN-* repos are tooling, not sites
+    # (AI-Management, Antigravity-Static-site-agent, ClarkeMoyerAdmin, Zeffy-Management,
+    # google_antigravity_agents), and two more are archived templates.
+    #
+    # Everything else is FFC-EX — a supported charity site — and gets the charity rules, including
+    # amargraves.org, technologymonastery.org and makeacalendarinvite.org. FFC-EX sites carrying
+    # the template container GTM-TQ5H8HPR ARE a real finding.
     [string[]]$InternalDomains = @(
-        'freeforcharity.org',
-        'ffcadmin.org',
-        'ffcworkingsite1.org',
-        'freeforcharity.github.io/FFC-IN-Footer_Only_Template',
-        'technologymonastery.org',
-        'amargraves.org',
-        'makeacalendarinvite.org'
+        'freeforcharity.org',                                   # FFC-IN-freeforcharity.org
+        'ffcadmin.org',                                         # FFC-IN-ffcadmin.org
+        'ffcworkingsite1.org',                                  # FFC-IN-FFC_Single_Page_Template
+        'freeforcharity.github.io/FFC-IN-Footer_Only_Template'  # FFC-IN-Footer_Only_Template
     ),
     [switch]$SkipLiveProbe
 )

@@ -1,0 +1,140 @@
+name: '740. Repo - Scheduled Workflow Failure Alert (rolling issue) [GH]'
+run-name:
+  'Failure alert: ${{ github.event.workflow_run.name }} (${{ github.event.workflow_run.conclusion
+  }})'
+
+# Watches the scheduled NON-Google hub workflows (726 drift audit, 734 janitor, 738 smoke
+# drift, and the other cron-driven monitors). On a bad conclusion it upserts ONE rolling
+# alert issue PER WATCHED WORKFLOW, and closes that issue on the next success of that same
+# workflow. The marker is keyed by workflow name precisely so a green run of one watched
+# workflow can never close another's alert — with ten workflows watched, a shared marker
+# would let a weekly job's success silently clear a daily job's outage. 732 does the same
+# job for the Google reporting workflows (501/502) — the two alerters are kept apart by
+# distinct markers and labels so neither ever closes the other's issue.
+#
+# Ambient GITHUB_TOKEN only, no environment: — the alerter must never be blocked by the very
+# gate it is watching. Reports `cancelled` as well as `failure`: a run cancelled before it
+# reaches a runner (the 2026-07-24 726 incident) executes zero steps and is exactly the kind
+# of silent breakage this workflow exists to surface.
+#
+# It does NOT alert on a declined or expired approval gate. Those also surface as run-level
+# `failure`, so the run conclusion alone cannot tell "the job broke" from "a human said no";
+# the job list can, and `actions: read` already allows reading it. See the discriminator in
+# the step below.
+
+on:
+  workflow_run:
+    workflows:
+      - '703. Sites List - Generate (CSV + JSON) [GH]'
+      - '723. Repo - CodeQL Security Analysis [Repo]'
+      - '726. Repo - Rulesets + Settings Drift Audit [Org]'
+      - '731. Repo - Actions Run Metrics (30d per-workflow stats) [GH]'
+      - '733. Repo - Credential Rotation Reminders (quarterly) [GH]'
+      - '734. Repo - Stale Waiting-Run Janitor [Repo]'
+      - '735. Repo - Dependabot Affected Repos [Org]'
+      - '737. Repo - Claim Sync [Repo]'
+      - '738. Repo - Fleet Smoke Engine Drift Audit [Org]'
+      - '739. Repo - Process Health Metrics Report [GH]'
+      - '741. Repo - Fleet Security Audit Coverage [Org]'
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Upsert or close rolling alert issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            // Keyed by workflow name: one rolling issue per watched workflow, so a success
+            // only ever closes the alert for the workflow that actually recovered.
+            const marker = `<!-- scheduled-workflow-failure-alert:${run.name} -->`;
+            const title = `🚨 Scheduled workflow failing: ${run.name}`;
+            // Only the default branch matters: a red run on a feature branch is the PR
+            // author's problem, not a fleet-wide alert.
+            const defaultBranch = (context.payload.repository || {}).default_branch || 'main';
+            if (run.head_branch && run.head_branch !== defaultBranch) {
+              core.info(`Ignoring ${run.name} on branch ${run.head_branch} (not ${defaultBranch}).`);
+              return;
+            }
+            // Conclusions that mean "nothing went wrong" — everything else (failure,
+            // cancelled, timed_out, startup_failure, action_required) is reportable.
+            // `success` is benign too but still needs the lookup below, to close an alert.
+            const BENIGN = ['skipped', 'neutral'];
+            if (BENIGN.includes(run.conclusion)) {
+              core.info(`Ignoring ${run.name} (${run.conclusion}).`);
+              return; // before the issue lookup: a guaranteed no-op should cost no API call
+            }
+            // A DECLINED OR EXPIRED APPROVAL GATE IS NOT AN OUTAGE. Three watched
+            // workflows (703/726/735) sit behind the `github-prod` gate, and a gate
+            // Clarke declines surfaces as run-level `failure` while its jobs read
+            // `cancelled`/`skipped` — identical to a real fault at the run level, which
+            // is all the payload carries. Without this check the dominant output of this
+            // alerter would be "a human said no", and an alerter that cries wolf in its
+            // first week is one nobody reads by its second (#834, #837).
+            // Discriminator: no job `failure` + at least one job `cancelled` ⇒ a declined
+            // or abandoned gate, or a `cancel-in-progress` supersession. Neither is a fault.
+            if (run.conclusion !== 'success') {
+              let jobs = null;
+              try {
+                const res = await github.rest.actions.listJobsForWorkflowRun({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  run_id: run.id, per_page: 100, filter: 'latest',
+                });
+                jobs = (res.data || {}).jobs || [];
+              } catch (e) {
+                // Fail LOUD, never silent: an unreadable job list must not swallow a real
+                // outage — that is precisely the failure mode this workflow exists to end.
+                core.warning(`Could not read jobs for run ${run.id} (${e.message}); alerting anyway.`);
+              }
+              if (jobs && jobs.length) {
+                const failed = jobs.filter(j => j.conclusion === 'failure');
+                const cancelled = jobs.filter(j => j.conclusion === 'cancelled');
+                if (failed.length === 0 && cancelled.length > 0) {
+                  core.notice(`Not alerting on ${run.name}: no job failed and ${cancelled.length} were cancelled (declined/abandoned approval gate, or a superseded run). ${run.html_url}`);
+                  return;
+                }
+              }
+            }
+            // `agentic-os,bug` is a broad pair and the backlog is long, so page at the max
+            // and sort by recency of update: a live rolling alert is touched by every new
+            // failure comment, which keeps it on the first page even as the backlog grows.
+            // Missing it would mean a duplicate alert issue rather than a missed alert.
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'agentic-os,bug', per_page: 100,
+              sort: 'updated', direction: 'desc',
+            });
+            const existing = open.find(i => i.body && i.body.includes(marker));
+            if (run.conclusion === 'success') {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number,
+                  body: `✅ Recovered: [${run.name} run](${run.html_url}) succeeded. Auto-closing.`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: existing.number, state: 'closed',
+                });
+              }
+              return;
+            }
+            const line = `- ${new Date().toISOString()} — **${run.name}** [run ${run.run_number}](${run.html_url}) → ${run.conclusion}`;
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number, body: line,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, labels: ['agentic-os', 'bug'],
+                body: `${marker}\n**${run.name}** ended in a bad conclusion. This rolling issue tracks that one workflow and auto-closes on its next green run.\n\nEach entry below records what was observed — the run's conclusion and a link. Open the run to see which job failed before assuming a cause.\n\n${line}\n\n_Managed by 740. Repo - Scheduled Workflow Failure Alert._`,
+              });
+            }

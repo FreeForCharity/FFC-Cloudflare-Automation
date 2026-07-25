@@ -85,12 +85,13 @@ $ErrorActionPreference = 'Stop'
 # written. Anything absent here is refused - that is the whole point of having a
 # single generic writer.
 $TargetMap = @{
+    # client: GetClientsDetails returns the record inline, so ReadList is $null.
     client  = @{
         WriteAction = 'UpdateClient'
         IdParam     = 'clientid'
         ReadAction  = 'GetClientsDetails'
         ReadIdParam = 'clientid'
-        ReadList    = $null      # GetClientsDetails returns the client inline
+        ReadList    = $null
         ReadChild   = 'client'
         Fields      = @('firstname', 'lastname', 'companyname', 'email', 'address1', 'address2',
             'city', 'state', 'postcode', 'country', 'phonenumber', 'notes')
@@ -105,15 +106,16 @@ $TargetMap = @{
         Fields      = @('firstname', 'lastname', 'companyname', 'email', 'address1', 'address2',
             'city', 'state', 'postcode', 'country', 'phonenumber')
     }
+    # service: the only target that also accepts customfield:<id>.
     service = @{
-        WriteAction = 'UpdateClientProduct'
-        IdParam     = 'serviceid'
-        ReadAction  = 'GetClientsProducts'
-        ReadIdParam = 'serviceid'
-        ReadList    = 'products'
-        ReadChild   = 'product'
-        Fields      = @('domain', 'dedicatedip', 'notes')
-        CustomFields = $true     # also accepts customfield:<id>
+        WriteAction  = 'UpdateClientProduct'
+        IdParam      = 'serviceid'
+        ReadAction   = 'GetClientsProducts'
+        ReadIdParam  = 'serviceid'
+        ReadList     = 'products'
+        ReadChild    = 'product'
+        Fields       = @('domain', 'dedicatedip', 'notes')
+        CustomFields = $true
     }
     domain  = @{
         WriteAction = 'UpdateClientDomain'
@@ -126,8 +128,51 @@ $TargetMap = @{
     }
 }
 
+function Get-WhmcsListItems {
+    # WHMCS returns list payloads nested ({domains:{domain:[...]}}) but sometimes
+    # FLATTENS them into keys like `domains[domain][0][id]` instead - observed on
+    # GetClientsDomains and handled the same way in domain-transfer-epp-probe.ps1.
+    # Reading only the nested shape produces a false "not found" for those.
+    param($Response, [Parameter(Mandatory = $true)][string]$ListProperty,
+        [Parameter(Mandatory = $true)][string]$ChildName)
+
+    $node = if ($Response.PSObject.Properties[$ListProperty]) { $Response.$ListProperty } else { $null }
+    $items = @(Get-WhmcsNodeList -Node $node -ChildName $ChildName)
+    if ($items.Count -gt 0) { return $items }
+
+    $rx = '^' + [regex]::Escape($ListProperty) + '\[' + [regex]::Escape($ChildName) + '\]\[(\d+)\]\[([^\]]+)\]$'
+    $byIndex = @{}
+    foreach ($prop in $Response.PSObject.Properties) {
+        $m = [regex]::Match($prop.Name, $rx)
+        if (-not $m.Success) { continue }
+        $idx = [int]$m.Groups[1].Value
+        if (-not $byIndex.ContainsKey($idx)) { $byIndex[$idx] = @{} }
+        $byIndex[$idx][$m.Groups[2].Value] = $prop.Value
+    }
+    $out = @()
+    foreach ($idx in ($byIndex.Keys | Sort-Object)) { $out += [pscustomobject]$byIndex[$idx] }
+    return $out
+}
+
+function Test-WhmcsRecordId {
+    # True when the record carries the id we asked for. WHMCS names the id field
+    # differently per record type, so check the plausible ones.
+    param($Record, [Parameter(Mandatory = $true)][string]$IdParam,
+        [Parameter(Mandatory = $true)][int]$RecordId)
+    foreach ($f in @('id', $IdParam, 'userid')) {
+        if ($Record.PSObject.Properties[$f] -and [string]$Record.$f -eq [string]$RecordId) { return $true }
+    }
+    return $false
+}
+
 function Get-WhmcsRecord {
-    # Returns the record object for the target id, or $null when absent.
+    # Returns the record for the target id, or $null when absent.
+    #
+    # The id is VERIFIED rather than assumed: a filtered read that WHMCS ignores
+    # (or that returns several rows) would otherwise hand back row 0, and this
+    # record decides both previousValue and the overwrite guard - so trusting it
+    # blindly means the guard protects the wrong record and the write lands on
+    # the right one.
     param(
         [Parameter(Mandatory = $true)][string]$ApiUrl,
         [Parameter(Mandatory = $true)][hashtable]$Auth,
@@ -140,14 +185,17 @@ function Get-WhmcsRecord {
     $resp = Invoke-WhmcsApi -ApiUrl $ApiUrl -Body $body
 
     if (-not $Spec.ReadList) {
-        # GetClientsDetails returns the record inline (and echoes the id).
-        if ($resp.PSObject.Properties[$Spec.ReadChild]) { return $resp.$($Spec.ReadChild) }
-        return $resp
+        # GetClientsDetails returns the record inline and echoes the id.
+        $record = if ($resp.PSObject.Properties[$Spec.ReadChild]) { $resp.$($Spec.ReadChild) } else { $resp }
+        if ($null -eq $record) { return $null }
+        if (Test-WhmcsRecordId -Record $record -IdParam $Spec.IdParam -RecordId $RecordId) { return $record }
+        return $null
     }
-    $node = if ($resp.PSObject.Properties[$Spec.ReadList]) { $resp.$($Spec.ReadList) } else { $null }
-    $items = @(Get-WhmcsNodeList -Node $node -ChildName $Spec.ReadChild)
-    if ($items.Count -lt 1) { return $null }
-    return $items[0]
+
+    foreach ($item in @(Get-WhmcsListItems -Response $resp -ListProperty $Spec.ReadList -ChildName $Spec.ReadChild)) {
+        if (Test-WhmcsRecordId -Record $item -IdParam $Spec.IdParam -RecordId $RecordId) { return $item }
+    }
+    return $null
 }
 
 function Get-WhmcsCustomFieldValue {

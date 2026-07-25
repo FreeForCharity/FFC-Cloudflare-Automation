@@ -87,10 +87,12 @@ jobs:
             echo "::error::max_repos must be a positive integer, got '$MAX_REPOS'"
             exit 1
           fi
-          # Base-10 normalization matters downstream: this regex accepts `08`,
-          # and `jq --argjson n 08` fails because a leading zero is not valid
-          # JSON — a confusing plan-step crash for an input validation already
-          # passed. `10#` also stops bash reading `08` as invalid octal here.
+          # `10#` because this regex accepts `08`, and bare `$((08))` is a hard
+          # bash error ("value too great for base") — an 8 is not octal. That is
+          # the guaranteed hazard. jq is NOT: `jq --argjson n 08` parses fine as
+          # 8 on the 1.7 the runners ship, so normalizing before jq is
+          # version-independence against a stricter build, not a fix for an
+          # observed failure. Stated precisely so nobody chases a non-repro.
           echo "::notice::max_repos=$((10#$MAX_REPOS))"
 
       - name: Fetch + validate the canonical security-audit.yml
@@ -163,10 +165,21 @@ jobs:
           candidates="candidates.json"
           echo "[]" > "$candidates"
 
+          # Strip ALL whitespace from the filter before matching. `a.org, b.org`
+          # is the natural way to type a list, and the substring match below
+          # would then fail on ` b.org` and quietly process one repo instead of
+          # two — a silent narrowing of exactly the kind this workflow exists to
+          # stop. Normalizing beats documenting a no-spaces rule nobody reads.
+          ONLY_REPOS="$(printf '%s' "$ONLY_REPOS" | tr -d '[:space:]')"
+          matched_filter=""
+
           while read -r name defbranch; do
             [ -z "$name" ] && continue
-            if [ -n "$ONLY_REPOS" ] && [[ ",$ONLY_REPOS," != *",$name,"* ]]; then
-              continue
+            if [ -n "$ONLY_REPOS" ]; then
+              if [[ ",$ONLY_REPOS," != *",$name,"* ]]; then
+                continue
+              fi
+              matched_filter="${matched_filter},${name}"
             fi
             full="${ORG}/${name}"
 
@@ -246,6 +259,27 @@ jobs:
             echo "  $full -> workflow=$has_wf script=$has_script lockfile=$has_lock branch=${defbranch:-unknown}"
           done < fleet.txt
 
+          # A filter entry that matched nothing is an operator error — a typo, an
+          # archived repo, an FFC-IN name — and it must not pass silently. Left
+          # unchecked it yields a smaller batch, or `targets=0`, which reads as
+          # "the fleet is already covered": the one failure this workflow must
+          # never present as success. Hard-fail rather than warn, because the
+          # plan job is ungated, cheap, and re-dispatchable.
+          if [ -n "$ONLY_REPOS" ]; then
+            unmatched=""
+            IFS=',' read -ra wanted <<< "$ONLY_REPOS"
+            for w in "${wanted[@]}"; do
+              [ -z "$w" ] && continue
+              if [[ ",$matched_filter," != *",$w,"* ]]; then
+                unmatched="${unmatched} ${w}"
+              fi
+            done
+            if [ -n "$unmatched" ]; then
+              echo "::error::only_repos named repos that are not in the non-archived FFC-EX fleet:${unmatched}"
+              exit 1
+            fi
+          fi
+
           echo "candidates_file=$candidates" >> "$GITHUB_OUTPUT"
 
       - name: Build the plan
@@ -259,8 +293,9 @@ jobs:
           set -euo pipefail
           node scripts/fleet-audit-backfill.js plan "$CANDIDATES_FILE" > plan.json
 
-          # Normalized to base 10 before it reaches jq: --argjson parses its
-          # value as JSON, and `08` is not a valid JSON number.
+          # Base-10 normalized (see the validate step): required for the bash
+          # arithmetic, and belt-and-braces for jq, which accepts `08` today but
+          # would be within spec to reject it.
           limit="$((10#$MAX_REPOS))"
 
           targets_all="$(jq '.targets | length' plan.json)"

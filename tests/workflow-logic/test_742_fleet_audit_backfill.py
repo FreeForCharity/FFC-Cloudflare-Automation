@@ -21,6 +21,7 @@ sweep also reads as covered, or the next sweep re-lists work that was done.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -729,6 +730,97 @@ def test_apply_rechecks_the_lockfile_after_the_gate():
         # And, as ever, nothing written.
         assert not (pathlib.Path(repo) / ".github" / "workflows" / "security-audit.yml").exists()
         assert (pathlib.Path(repo) / "package.json").read_text() == PKG
+
+
+def _filter_matches(only_repos: str, fleet: list) -> list:
+    """Run the workflow's own only_repos normalization + match in real bash.
+
+    The expression is extracted from the shipped YAML rather than retyped, so a
+    change to the workflow that breaks matching fails here instead of silently
+    processing the wrong repos.
+    """
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    norm = next(l.strip() for l in raw.splitlines() if l.strip().startswith("ONLY_REPOS="))
+    # ONLY_REPOS arrives through the environment, exactly as the workflow input
+    # does. Embedding it in the script text instead would mean a tab written as
+    # \t reached bash as a literal backslash-t rather than whitespace — testing
+    # the harness's quoting rather than the workflow's normalization.
+    script = f"""
+    {norm}
+    for name in {" ".join(json.dumps(f) for f in fleet)}; do
+      if [ -n "$ONLY_REPOS" ]; then
+        if [[ ",$ONLY_REPOS," != *",$name,"* ]]; then continue; fi
+      fi
+      echo "$name"
+    done
+    """
+    proc = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "ONLY_REPOS": only_repos},
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.split()
+
+
+def test_only_repos_tolerates_spaces_after_commas():
+    """`a.org, b.org` is the natural way to type a list, and the substring match
+    would otherwise fail on ` b.org` and process one repo instead of two — a
+    silent narrowing, with no warning and a smaller batch. Raised in review
+    on #842.
+    """
+    fleet = ["FFC-EX-a.org", "FFC-EX-b.org", "FFC-EX-c.org"]
+    want = ["FFC-EX-a.org", "FFC-EX-b.org"]
+    for spelling in [
+        "FFC-EX-a.org,FFC-EX-b.org",
+        "FFC-EX-a.org, FFC-EX-b.org",
+        "  FFC-EX-a.org ,  FFC-EX-b.org  ",
+        "FFC-EX-a.org,\tFFC-EX-b.org",
+    ]:
+        assert _filter_matches(spelling, fleet) == want, spelling
+
+
+def test_empty_only_repos_selects_the_whole_fleet():
+    fleet = ["FFC-EX-a.org", "FFC-EX-b.org"]
+    assert _filter_matches("", fleet) == fleet
+    assert _filter_matches("   ", fleet) == fleet
+
+
+def test_only_repos_does_not_match_on_a_partial_name():
+    """The comma delimiters must keep `FFC-EX-a.org` from selecting
+    `FFC-EX-a.org.uk`, or a filter would quietly widen."""
+    fleet = ["FFC-EX-a.org", "FFC-EX-a.org.uk"]
+    assert _filter_matches("FFC-EX-a.org", fleet) == ["FFC-EX-a.org"]
+
+
+def test_unmatched_only_repos_entry_hard_fails():
+    """A typo'd or archived name would otherwise yield a smaller batch — or
+    `targets=0`, which reads as "the fleet is already covered". That is the one
+    failure this workflow must never present as success, so it exits nonzero
+    rather than warning. Raised in review on #842.
+    """
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    assert "matched_filter" in raw, raw
+    assert "only_repos named repos that are not in the non-archived FFC-EX fleet" in raw, raw
+    # It must be an error + exit, not a warning.
+    block = raw.split('if [ -n "$unmatched" ]; then')[1].split("fi")[0]
+    assert "::error::" in block, block
+    assert "exit 1" in block, block
+
+
+def test_the_jq_comment_states_the_real_hazard():
+    """The comment previously asserted that `jq --argjson n 08` fails, which does
+    not reproduce on the jq the runners ship — sending a future reader after a
+    non-existent bug. Raised in review on #842; the fix to the test in the prior
+    round did not reach the workflow's own prose.
+    """
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    assert "value too great for base" in raw, raw
+    assert "version-independence" in raw, raw
+    # The false claim must be gone.
+    assert "fails because a leading zero is not valid" not in raw, raw
 
 
 def test_root_listing_404_gets_its_own_skip_reason():

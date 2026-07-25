@@ -197,6 +197,21 @@ already-approved gate. Drop the `--jq` on the POST and verify with:
 gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$RUN_ID --jq '.status'
 ```
 
+**"Drop the `--jq`" does not mean "discard the output" — read it for errors, just never for
+confirmation.** A conductor run on 2026-07-25 took the rule above one step too far and sent the
+approval with `> /dev/null 2>&1`, then reported it approved on the strength of the rule. It had not
+been: the command used `-f "environment_ids[]=$ENV_ID"` instead of `-F`, and `-f` sends `["<id>"]` —
+an array of **strings** — where the API requires integers. The POST rejected it, the run stayed at
+`status: waiting`, and the one place that said so had been routed to `/dev/null`.
+
+So the two halves are not interchangeable:
+
+- the **POST output** is the only place a _rejected_ approval reports itself;
+- the **run's `status`** is the only trustworthy sign an _accepted_ one took effect.
+
+Use `-F` for `environment_ids[]` (typed — `-f` is string-only and fails this endpoint silently from
+the caller's point of view), keep the POST's stderr, and still confirm from the run.
+
 ### Watch a run / read results
 
 ```bash

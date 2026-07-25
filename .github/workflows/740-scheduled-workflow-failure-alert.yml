@@ -133,9 +133,11 @@ jobs:
                 acc.push(...data);
                 if (data.length < 100) break;
                 if (pg === MAX_ISSUE_PAGES) {
-                  // Never truncate silently: past this point a missed alert is possible and
-                  // the operator needs to know the lookup was incomplete.
-                  core.warning(`Open agentic-os,bug issues exceed ${MAX_ISSUE_PAGES} pages; alert lookup may be incomplete.`);
+                  // Never truncate silently: at the cap a missed alert becomes possible and
+                  // the operator needs to know. Says "reached the cap", not "exceeded it" —
+                  // a backlog of exactly MAX_ISSUE_PAGES full pages ends here with a COMPLETE
+                  // lookup, and this warning cannot tell that case from a truncated one.
+                  core.warning(`Open agentic-os,bug issues reached the ${MAX_ISSUE_PAGES}-page lookup cap; alert lookup may be incomplete.`);
                 }
               }
               openIssues = acc;

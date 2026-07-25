@@ -67,6 +67,32 @@ jobs:
           $json = & pwsh -NoProfile -File .\scripts\whmcs-application-detail.ps1 -ApiUrl $env:WHMCS_API_URL -ClientId $clientId -OutputFile $out
           if ($LASTEXITCODE -ne 0) { throw "Application detail export failed (exit $LASTEXITCODE)." }
 
+          # Also print to the job log. The payload is already PII-masked, and a
+          # result that lives only in the step summary + artifact is unreadable
+          # to any caller working from logs (the API exposes neither).
+          Write-Host "## WHMCS application detail - client $clientId"
+          Write-Host (($json | Out-String).TrimEnd())
+
+          # Compact recap AFTER the JSON. The products block runs to hundreds of
+          # lines, and log readers fetch from the END of the log - so the orders
+          # array in the middle is unreachable in practice. These lines are what
+          # you need to act on an application (211 takes an order id, not a
+          # client or service id), so they must survive truncation.
+          try {
+            $detail = ($json | Out-String) | ConvertFrom-Json -ErrorAction Stop
+            # Drop nulls first: a client with no orders makes @($detail.orders)
+            # into @($null), which would print a blank "ORDER id=" line - a
+            # phantom order is worse than no recap at all.
+            $orderList = @($detail.orders) | Where-Object { $null -ne $_ }
+            if (-not $orderList) { Write-Host 'ORDERS: none on this client.' }
+            foreach ($o in $orderList) {
+              Write-Host "ORDER id=$($o.id) num=$($o.ordernum) status=$($o.status) date=$($o.date) amount=$($o.amount) products=$($o.products)"
+            }
+          }
+          catch {
+            Write-Warning "Could not render the orders recap: $($_.Exception.Message)"
+          }
+
           $fence = [string][char]0x60 * 3
           $lines = @("## WHMCS application detail - client $clientId", '', ($fence + 'json'), (($json | Out-String).TrimEnd()), $fence)
           $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

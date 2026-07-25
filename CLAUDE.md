@@ -57,6 +57,42 @@ json.load(open(path, encoding="utf-8"))
 Same for `pathlib.Path(p).read_text(encoding="utf-8")` and any `write_text`. This costs one failed
 call every time it is rediscovered, which has now happened more than once.
 
+## `git cat-file` / `git show` with a `.github/…` path needs `MSYS_NO_PATHCONV=1` (validated 2026-07-25)
+
+**git-bash rewrites a `rev:path` argument when the path starts with a dot.** Reading a file out of a
+branch without checking it out:
+
+```
+$ git cat-file -p "origin/claude/some-branch:.github/workflows/742-x.yml"
+fatal: Not a valid object name origin\claude\some-branch;.github\workflows\742-x.yml
+```
+
+MSYS path conversion turned the `:` into `;` and every `/` into `\`. The tell is the mangled path in
+the error — the ref is fine. It is **the leading dot in the path** that trips the heuristic, not the
+slashes in the branch name: `origin/main:docs/foo.md` works on the same command line and
+`origin/branch:.github/…` does not, so this looks like it works right up until you touch a workflow
+file. Prefix the command:
+
+```bash
+MSYS_NO_PATHCONV=1 git cat-file -p "origin/<branch>:.github/workflows/<file>.yml"
+```
+
+## `gh api` list endpoints silently truncate at `per_page` — paginate before concluding "absent"
+
+`per_page=100` returns 100 items and **no warning** that more exist. On 2026-07-25 this produced a
+false alarm mid-run: a just-merged workflow appeared to be unregistered because the repo had
+`total_count: 105` workflows and the 105th was on page 2. The near-miss is the shape to remember —
+the conclusion "the alerter did not register" was about to be reported as a defect.
+
+Two habits, both cheap:
+
+- Add `--paginate` to any `gh api` list call whose result feeds a **negative** conclusion ("X is
+  missing", "nothing is pending", "zero failures").
+- When an endpoint returns `total_count`, compare it against the length of what you actually got
+  before drawing a conclusion from the absence of something.
+
+This is the same class as the `#719` log tail needing `--paginate` to find the true run number.
+
 ## Board & PR-creation env facts (validated 2026-07-24)
 
 - **The public "Agentic OS" board (org project #9) has NO automation.** Its only enabled built-in

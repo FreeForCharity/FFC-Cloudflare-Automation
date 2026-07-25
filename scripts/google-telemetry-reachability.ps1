@@ -6,7 +6,7 @@
 .DESCRIPTION
     Read-only. Answers four questions the fleet could not previously answer:
 
-      1. Which domains have a GTM container, and is any container SHARED between sites?
+      1. Which domains have a GTM container, and is any container shared with a CHARITY site?
       2. Which domains have a GA4 property + web stream?
       3. Which domains are verified in Search Console?
       4. How much traffic does each get — ranked, so rollout order is measured, not alphabetical.
@@ -24,7 +24,15 @@
       gets treated as if it does not.
 
     GA4 properties are matched to domains by web-stream `defaultUri`, never by property display
-    name — docs/google-api.md records display names as historically unreliable.
+    name — docs/google-api.md records display names as historically unreliable. This also handles
+    the internal model correctly, where ONE property carries a stream per FFC domain rather than a
+    property per site.
+
+    TWO AUTH PATHS, and conflating them is a 401 on every call:
+      * Tag Manager, Search Console, GA4 ADMIN API — Workspace-adjacent. Need a DWD token minted
+        from the ffc-workspace-admin SA key impersonating a Workspace admin (-WorkspaceKeyPath).
+      * GA4 DATA API (traffic) — plain service-account token from ADC
+        (GOOGLE_APPLICATION_CREDENTIALS), as 501/502 use.
 
 .PARAMETER Domains
     Domains to report on. Defaults to every live domain in the convergence set.
@@ -75,6 +83,31 @@ param(
     [string]$Subject = 'clarkemoyer@freeforcharity.org',
     [int]$Days = 28,
     [string]$OutputPath = 'telemetry-reachability.json',
+    # Workspace SA key (DWD). REQUIRED for Tag Manager, Search Console and the GA4 ADMIN API:
+    # domain-wide delegation is configured on the ffc-workspace-admin service account, NOT on the
+    # analytics SA that GOOGLE_APPLICATION_CREDENTIALS points at. 501's gsc-smoke, 503 and 505 all
+    # download this key separately for exactly this reason.
+    [string]$WorkspaceKeyPath,
+    # Domains that are FFC's OWN pages rather than supported-charity sites. The analytics model
+    # differs and the difference is not inferable from the repo name:
+    #   internal  -> ONE GA4 property with a stream PER DOMAIN, and containers MAY be shared
+    #                (docs/google-api.md: "Internal sites may share or keep existing containers")
+    #   charity   -> one property AND one container each, because GTM access is container-level
+    #                and a charity POC self-administers only their own container
+    # So a shared container is expected for internal pages and a real finding for a charity site.
+    # EXACTLY the four FFC-IN website repos. The other FFC-IN-* repos are tooling, not sites
+    # (AI-Management, Antigravity-Static-site-agent, ClarkeMoyerAdmin, Zeffy-Management,
+    # google_antigravity_agents), and two more are archived templates.
+    #
+    # Everything else is FFC-EX — a supported charity site — and gets the charity rules, including
+    # amargraves.org, technologymonastery.org and makeacalendarinvite.org. FFC-EX sites carrying
+    # the template container GTM-TQ5H8HPR ARE a real finding.
+    [string[]]$InternalDomains = @(
+        'freeforcharity.org',                                   # FFC-IN-freeforcharity.org
+        'ffcadmin.org',                                         # FFC-IN-ffcadmin.org
+        'ffcworkingsite1.org',                                  # FFC-IN-FFC_Single_Page_Template
+        'freeforcharity.github.io/FFC-IN-Footer_Only_Template'  # FFC-IN-Footer_Only_Template
+    ),
     [switch]$SkipLiveProbe
 )
 
@@ -85,6 +118,11 @@ $ErrorActionPreference = 'Stop'
 # found nothing — that is the failure mode this whole report exists to expose, so the collector
 # is not allowed to commit it either.
 $script:Errors = [System.Collections.Generic.List[string]]::new()
+
+# Resolved once so every DWD call uses the same key. Left $null when not supplied, which makes
+# Get-GoogleDwdAccessToken fall back to ADC — wrong for these APIs, so the probes will fail loudly
+# rather than silently returning nothing.
+$script:WorkspaceKey = $WorkspaceKeyPath
 
 function Invoke-Probe {
     param(
@@ -100,7 +138,8 @@ function Invoke-Probe {
         # Flatten CR/LF before emitting a workflow command: a multi-line exception message would
         # otherwise terminate the ::warning:: line and let the remainder be parsed as further
         # workflow commands, corrupting the log and the step summary.
-        $safe = ($msg -replace '?
+        $safe = ($msg -replace '
+?
 ', ' ')
         Write-Host "::warning::$Label failed — $safe"
         return @{ ok = $false; value = $null; error = $msg }
@@ -179,7 +218,7 @@ function Normalize-Domain {
 
 function Get-GtmInventory {
     param([string]$AccountId, [string]$Subject)
-    $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/tagmanager.readonly'
+    $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/tagmanager.readonly' -CredentialsPath $script:WorkspaceKey
     $uri = "https://tagmanager.googleapis.com/tagmanager/v2/accounts/$AccountId/containers"
     $raw = Invoke-GooglePagedApi -Uri $uri -AccessToken $tok -CollectionName 'container'
     $containers = @()
@@ -209,7 +248,7 @@ function Get-GtmInventory {
 
 function Get-Ga4Inventory {
     param([string]$AccountName, [string]$Subject)
-    $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/analytics.readonly'
+    $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/analytics.readonly' -CredentialsPath $script:WorkspaceKey
 
     $allAccounts = Invoke-GooglePagedApi -Uri 'https://analyticsadmin.googleapis.com/v1beta/accounts' -AccessToken $tok -CollectionName 'accounts'
     $acct = $allAccounts | Where-Object { $_.displayName -eq $AccountName } | Select-Object -First 1
@@ -250,7 +289,9 @@ function Get-Ga4Inventory {
 
 function Get-Ga4Sessions {
     param([string]$PropertyName, [int]$Days, [string]$Subject)
-    $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/analytics.readonly'
+    # DATA API, not Admin: plain SA token from ADC — the same call 501's smoke and 502's report
+    # make. It does NOT use DWD.
+    $tok = Get-GoogleAccessToken -Scope 'https://www.googleapis.com/auth/analytics.readonly'
     # Pass the hashtable, NOT pre-serialized JSON: Invoke-GoogleApi runs ConvertTo-Json itself,
     # so handing it a string double-encodes the body and the API rejects it.
     $body = @{
@@ -273,7 +314,7 @@ function Get-Ga4Sessions {
 
 function Get-GscInventory {
     param([string]$Subject)
-    $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/webmasters'
+    $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/webmasters' -CredentialsPath $script:WorkspaceKey
     $resp = Invoke-GoogleApi -Uri 'https://searchconsole.googleapis.com/webmasters/v3/sites' -AccessToken $tok
     # siteEntry is absent when the list is empty, and @($null).Count is 1 — guard both.
     if (($resp.PSObject.Properties.Name -contains 'siteEntry') -and $resp.siteEntry) {
@@ -318,11 +359,20 @@ $gaAll = if ($gaProbe.ok) { @($gaProbe.value) } else { @() }
 $gscAll = if ($gscProbe.ok) { @($gscProbe.value) } else { @() }
 
 # Which GTM containers serve more than one domain — violates one-container-per-charity.
+$internalSet = @($InternalDomains | ForEach-Object { Normalize-Domain $_ })
 $sharedContainers = @()
 foreach ($c in $gtmAll) {
     $ds = @($c.domains | ForEach-Object { Normalize-Domain $_ } | Where-Object { $_ })
     if ($ds.Count -gt 1) {
-        $sharedContainers += [pscustomobject]@{ publicId = $c.publicId; domains = $ds }
+        # Sharing is only a finding when a SUPPORTED-CHARITY domain is involved. Across FFC's own
+        # pages it is the documented design, not drift — they are one organisation under one EIN.
+        $charityDomains = @($ds | Where-Object { $internalSet -notcontains $_ })
+        $sharedContainers += [pscustomobject]@{
+            publicId       = $c.publicId
+            domains        = $ds
+            allInternal    = ($charityDomains.Count -eq 0)
+            charityDomains = $charityDomains
+        }
     }
 }
 
@@ -362,23 +412,34 @@ foreach ($domain in $Domains) {
     $served = if ($SkipLiveProbe) { $null } else { Get-ServedTelemetry -Domain $d }
 
     # Provisioned-vs-served disagreement — the finding this report exists for.
+    #
+    # Only comparable when BOTH sides were actually read. If the provisioning probe 401'd or
+    # errored, "provisioned" is UNKNOWN, not empty — and emitting "served X is not provisioned"
+    # off an unknown would be a confidently wrong answer, which is the exact failure class this
+    # report was built to catch. Observed live on the first real run: all three APIs returned 401
+    # and the report still printed three "not provisioned" lines.
     $mismatches = @()
+    $gtmKnown = $gtmProbe.ok
+    $gaKnown = $gaProbe.ok
     if ($served -and $served.reachable) {
         $provisionedGtm = @($gtmMatch | ForEach-Object { $_.publicId })
-        foreach ($id in $served.gtmIds) {
-            if ($provisionedGtm -notcontains $id) { $mismatches += "served GTM $id is not provisioned for this domain" }
-        }
-        foreach ($id in $provisionedGtm) {
-            if ($served.gtmIds -notcontains $id) { $mismatches += "provisioned GTM $id is NOT present in served HTML" }
+        if ($gtmKnown) {
+            foreach ($id in $served.gtmIds) {
+                if ($provisionedGtm -notcontains $id) { $mismatches += "served GTM $id is not provisioned for this domain" }
+            }
+            foreach ($id in $provisionedGtm) {
+                if ($served.gtmIds -notcontains $id) { $mismatches += "provisioned GTM $id is NOT present in served HTML" }
+            }
         }
         # Symmetric, matching the GTM checks above. An asymmetric check would miss the more
         # alarming direction: a site serving a GA4 id that no provisioned stream accounts for —
         # traffic flowing to a property nobody is watching.
-        if ($gaStream -and ($served.gaIds -notcontains $gaStream.measurementId)) {
+        if ($gaKnown -and $gaStream -and ($served.gaIds -notcontains $gaStream.measurementId)) {
             $mismatches += "provisioned GA4 $($gaStream.measurementId) is NOT present in served HTML"
         }
         foreach ($id in $served.gaIds) {
             if ($id -match '^G-X+$') { continue }  # placeholder: already reported separately
+            if (-not $gaKnown) { continue }        # provisioning unknown — cannot call it drift
             if (-not $gaStream) {
                 $mismatches += "served GA4 $id but NO provisioned stream matches this domain"
             }
@@ -454,10 +515,24 @@ foreach ($s in $report) {
     $lines += "| $($s.domain) | $gtmCell | $gaCell | $gscCell | $tCell | $mCell |"
 }
 
-if ($sharedContainers.Count -gt 0) {
+$sharedCharity = @($sharedContainers | Where-Object { -not $_.allInternal })
+$sharedInternal = @($sharedContainers | Where-Object { $_.allInternal })
+if ($sharedCharity.Count -gt 0) {
     $lines += ''
-    $lines += '### Shared GTM containers (violates one-container-per-charity)'
-    foreach ($c in $sharedContainers) { $lines += "- ``$($c.publicId)`` → $($c.domains -join ', ')" }
+    $lines += '### Shared GTM containers involving a CHARITY site — review'
+    $lines += ''
+    $lines += 'One container per charity is required because GTM access is container-level: a shared'
+    $lines += 'container cannot delegate per-charity admin to a POC.'
+    foreach ($c in $sharedCharity) {
+        $lines += "- ``$($c.publicId)`` → $($c.domains -join ', ')  (charity: $($c.charityDomains -join ', '))"
+    }
+}
+if ($sharedInternal.Count -gt 0) {
+    $lines += ''
+    $lines += '### Shared GTM containers across FFC-internal pages — expected'
+    $lines += ''
+    $lines += 'Internal FFC pages are one organisation under one EIN, and may share containers by design.'
+    foreach ($c in $sharedInternal) { $lines += "- ``$($c.publicId)`` → $($c.domains -join ', ')" }
 }
 
 $allMismatch = @($report | Where-Object { $_.mismatches.Count -gt 0 })

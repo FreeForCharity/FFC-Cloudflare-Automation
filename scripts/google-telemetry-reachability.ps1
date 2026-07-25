@@ -27,9 +27,15 @@
     name — docs/google-api.md records display names as historically unreliable.
 
 .PARAMETER Domains
-    Domains to report on. Defaults to the four LIVE domains among the six primary sites —
-    FFC_Single_Page_Template and Footer_Only_Template are templates with no production domain,
-    so they have no telemetry to reach and are covered by source-level checks instead.
+    Domains to report on. Defaults to every live domain in the convergence set.
+
+    The templates ARE live and ARE testable: FFC_Single_Page_Template serves
+    ffcworkingsite1.org (public/CNAME), and Footer_Only_Template serves its GitHub Pages project
+    URL. Treating a template as "not a real site" is how template-only defects — the shared
+    GTM-TQ5H8HPR container, the sitemap/trailingSlash mismatch — survive to reach charity sites.
+    They get probed like anything else.
+
+    Designated low-risk test sites (safe to modify freely) are marked in the default list.
 
 .PARAMETER GtmAccountId
     FFC GTM account. Default 4702611686.
@@ -52,10 +58,17 @@
 [CmdletBinding()]
 param(
     [string[]]$Domains = @(
+        # FFC production — the proof points. Changes here are measured before the fleet follows.
         'freeforcharity.org',
         'ffcadmin.org',
+        # Templates. LIVE and testable, not abstractions: SPT serves ffcworkingsite1.org via
+        # public/CNAME; FOT serves its Pages project URL. Probed like any other site.
+        'ffcworkingsite1.org',
+        'freeforcharity.github.io/FFC-IN-Footer_Only_Template',
+        # Designated low-risk test sites — safe to modify, test and iterate on.
         'technologymonastery.org',
-        'amargraves.org'
+        'amargraves.org',
+        'makeacalendarinvite.org'
     ),
     [string]$GtmAccountId = '4702611686',
     [string]$GaAccountName = 'FFC Supported Sites',
@@ -130,12 +143,21 @@ function Invoke-GooglePagedApi {
 }
 
 function Normalize-Domain {
+    <#
+    Host, lowercased, without scheme or leading www.
+
+    A trailing PATH is preserved when present, because a GitHub Pages project URL
+    (freeforcharity.github.io/FFC-IN-Footer_Only_Template) is a real, live, testable site and
+    stripping its path would collapse every project-hosted site onto the same host. Templates are
+    not abstractions — Footer_Only_Template is served on the internet — and treating them as
+    "not real sites" is how template-only defects reach charity sites.
+  #>
     param([string]$Value)
     if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
     $d = $Value.Trim().ToLowerInvariant()
     $d = $d -replace '^https?://', ''
     $d = $d -replace '^www\.', ''
-    return ($d -replace '/.*$', '')
+    return ($d -replace '/+$', '')
 }
 
 # ---------------------------------------------------------------- GTM

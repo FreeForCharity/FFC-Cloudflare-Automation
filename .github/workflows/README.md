@@ -625,6 +625,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 738 | Repo - Fleet Smoke Engine Drift Audit [Org] | `738-fleet-smoke-engine-drift-audit.yml` | schedule, workflow_dispatch | Reads | — |
 | 739 | Repo - Process Health Metrics Report [GH] | `739-process-health-metrics.yml` | schedule, workflow_dispatch | Reads | — |
 | 741 | Repo - Fleet Security Audit Coverage [Org] | `741-fleet-security-audit-coverage.yml` | schedule, workflow_dispatch | Reads | — |
+| 742 | Repo - Fleet Security Audit Backfill [Org] | `742-fleet-security-audit-backfill.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

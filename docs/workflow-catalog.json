@@ -1867,6 +1867,26 @@
       "categoryCode": "GH"
     },
     {
+      "number": 742,
+      "title": "Repo - Fleet Security Audit Backfill",
+      "apis": [
+        "Org"
+      ],
+      "file": "742-fleet-security-audit-backfill.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Closes the coverage gap that workflow 741 measures: opens one pull request per FFC-EX repo that lacks dependency-vulnerability detection, adding BOTH halves together \u2014 `.github/workflows/security-audit.yml` and the `audit:high` script it runs.  Why a hub workflow and not 34 hand-made PRs (#838): the fleet keeps growing, and a rollout that lives here also covers the 35th repo provisioned next month. The target list is re-derived from the org listing on every dispatch, never read from a checklist, which is the failure #838 was opened about (its scope was estimated at 13 repos when the real number was 38).  Never pushes a default branch \u2014 every change goes through a PR on the target repo. Never bumps a dependency: making the vulnerabilities visible is this workflow's job, upgrading them is #822's. A newly-wired repo whose audit goes red is this working correctly.  Two-job split so a preview costs nothing and needs nobody: - plan  \u2014 ungated, GITHUB_TOKEN, read-only. `dry_run=true` (the default) stops here, so anyone can see the exact planned diff without an approval. - apply \u2014 `dry_run=false` only, gated `github-prod` (a cross-repo write genuinely needs CBM_TOKEN). Acts on the plan the gate approver saw.  Decision logic lives in scripts/fleet-audit-backfill-lib.js behind scripts/fleet-audit-backfill.js, unit-tested under tests/workflow-logic/.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 github-prod (apply job only)",
+      "guard": "closes the gap 741 measures: opens one PR per uncovered FFC-EX repo adding BOTH halves of the audit pair (`security-audit.yml` + the `audit:high` script) in a single commit, never a `partial`; cron staggered deterministically by repo name across 06:00\u201306:59, skipping the crowded `:17`; `dry_run` (default true) runs the ungated `plan` job only, so a preview needs no approval; never pushes a target's default branch and never bumps a dependency (#822 owns remediation); repos with no `package-lock.json` are reported, not wired",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 801,
       "title": "Candid - Charity Check (EIN)",
       "apis": [

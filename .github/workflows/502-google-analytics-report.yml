@@ -4,7 +4,8 @@ run-name: 'Google Analytics Report'
 # Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers
 # it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe:
 # aggregate metrics only. Requires the google-prod-read environment (report) and the approval-gated
-# github-prod environment (delivery, CBM_TOKEN) + the Wave 0 foundation.
+# github-prod environment (delivery) + the Wave 0 foundation. The delivery PAT comes from Key Vault
+# (`wr-all-cbm-github-pat`) over OIDC, never a GitHub secret — see #844.
 
 on:
   schedule:
@@ -116,6 +117,35 @@ jobs:
       # same daily PR as the GA data — one reviewable sync pipe (backlog #554).
       - uses: actions/checkout@v7.0.1
 
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Rotation is
+      # a new KV version — no GitHub change and no second copy that can drift.
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show \
+            --vault-name kv-ffc-admin-prod-cbm \
+            --name wr-all-cbm-github-pat \
+            --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+
       - name: Download reports
         uses: actions/download-artifact@v8
         with:
@@ -124,17 +154,13 @@ jobs:
 
       # Generate the Agentic OS status feed (backlog #723) so it rides the same
       # daily sync PR as the GA data + workflow catalog — one reviewable pipe,
-      # no new gate. REST-only, PII-safe aggregates; CBM_TOKEN just reads.
+      # no new gate. REST-only, PII-safe aggregates; the PAT just reads here.
       - name: Generate Agentic OS status feed
-        env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
         run: |
           set -euo pipefail
           python3 scripts/generate-agentic-os-status.py --output agentic-os-status.json
 
       - name: Open/update daily data-sync PR into FFC-IN-ffcadmin.org
-        env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
         run: |
           set -euo pipefail
           git config --global user.name 'ffc-automation[bot]'

@@ -28,19 +28,50 @@ A live change generally has to get past several of these, not just one:
    environments that require a reviewer are: **`cloudflare-prod-write`**, **`whmcs-prod`**,
    **`github-prod`**, **`m365-prod`**, and **`wpmudev-prod`** (plus a bare **`cloudflare-prod`**
    that no workflow currently uses). The environments with **no** reviewer — runs proceed without
-   pausing — are **`cloudflare-prod-read`**, **`whmcs-prod-read`**, and **`zeffy-prod`**. Because
-   `whmcs-prod`, `m365-prod`, and `wpmudev-prod` are gated at the environment level, they gate
-   **every** job that uses them. Read-only WHMCS workflows moved to the ungated
-   **`whmcs-prod-read`** (reader OIDC identity, `read-all-*` KV secrets) in 2026-07; the M365
-   list/preflight reads 301–303 and the WPMUDEV export 601 still wait on their gated envs. Re-run
-   workflow 730 after any change in _Settings → Environments_ to refresh this list. To preview or
-   clear **several** runs waiting at a gate at once, an environment reviewer can run
-   `scripts/approve-waiting-runs.py` — an operator tool that acts under your own `gh` auth (the
-   ambient `GITHUB_TOKEN` **cannot** approve gates). It defaults to a dry-run preview; pass
-   `--approve` (optionally `--environment <name>`) to act. For the idempotent Google 505/503
-   provisioning writes specifically, the structural fix is a dedicated **ungated
-   `google-prod-provision`** environment (mirroring `whmcs-prod-read`) so they don't gate at all
-   (#636).
+   pausing — are **`cloudflare-prod-read`**, **`whmcs-prod-read`**, **`google-prod-read`**, and
+   **`zeffy-prod`**, joined by **`github-prod-read`** (#834, see below). Because `whmcs-prod`,
+   `m365-prod`, and `wpmudev-prod` are gated at the environment level, they gate **every** job that
+   uses them. Read-only WHMCS workflows moved to the ungated **`whmcs-prod-read`** (reader OIDC
+   identity, `read-all-*` KV secrets) in 2026-07; the M365 list/preflight reads 301–303 and the
+   WPMUDEV export 601 still wait on their gated envs. Re-run workflow 730 after any change in
+   _Settings → Environments_ to refresh this list. To preview or clear **several** runs waiting at a
+   gate at once, an environment reviewer can run `scripts/approve-waiting-runs.py` — an operator
+   tool that acts under your own `gh` auth (the ambient `GITHUB_TOKEN` **cannot** approve gates). It
+   defaults to a dry-run preview; pass `--approve` (optionally `--environment <name>`) to act. For
+   the idempotent Google 505/503 provisioning writes specifically, the structural fix is a dedicated
+   **ungated `google-prod-provision`** environment (mirroring `whmcs-prod-read`) so they don't gate
+   at all (#636).
+
+   **`github-prod-read` — the GitHub read lane (#834).** Three of four API categories had an ungated
+   read lane; GitHub did not, so every Reads-level GitHub workflow was forced through gated
+   `github-prod`. A report-only audit that cannot finish without a human is an audit that mostly
+   does not finish: **8 of 21** scheduled runs of 502/726/735/703 failed or were cancelled in
+   2026-07, and the "successes" had sat at the gate for up to three days. 502 (`deliver`), 726 and
+   735 now run on `github-prod-read`, which has **no protection rules**. 703 stays on gated
+   `github-prod` — it is classified _Writes (data PR only)_, not Reads.
+
+   The lane has its **own** credential, `GH_REPORT_TOKEN` — never a second copy of `CBM_TOKEN` under
+   a different environment (one secret name holding two different values across environments is the
+   drift that broke the Cloudflare token for four months;
+   `tests/workflow-logic/test_env_scoped_secrets.py` enforces one environment per secret name).
+
+   **"Read" names the data these workflows consume, not the token's capabilities.** All three report
+   their findings back, and reporting plumbing is not a Write in this taxonomy (see AGENTS.md on
+   what the `[TAG]` counts) — so a literally read-only PAT would break every one of them.
+   `GH_REPORT_TOKEN` needs exactly:
+
+   | Workflow        | Reads                              | Writes (reporting only)                                                                     |
+   | --------------- | ---------------------------------- | ------------------------------------------------------------------------------------------- |
+   | 726 Drift Audit | org rulesets, repo settings, teams | **issues: write** — creates/edits drift-report issues cross-repo                            |
+   | 735 Dependabot  | org repo inventory                 | **contents + pull-requests: write** on this repo — opens and auto-merges the inventory PR   |
+   | 502 GA Report   | repo metadata (Agentic OS feed)    | **contents + pull-requests: write** on `FFC-IN-ffcadmin.org` — opens the daily data-sync PR |
+
+   What it must **not** carry is `CBM_TOKEN`'s infrastructure-mutating scope: creating, archiving,
+   or deleting repos, editing rulesets or branch protection, managing collaborators, or Pages/DNS
+   administration. That narrowing is the point of the lane. Note 735 needs a real PAT rather than
+   the ambient `GITHUB_TOKEN`, because a PR opened by `GITHUB_TOKEN` does not trigger the
+   `pull_request` checks this repo's branch protection requires.
+
 3. **`dry_run` defaults to preview.** The granular write workflows take a `dry_run` input that
    **defaults to `true`**. A dry run returns a preview (e.g. redacted JSON of what _would_ be sent)
    and performs **no** mutation. You must explicitly pass `dry_run=false` to go live.
@@ -67,15 +98,20 @@ actual safety level, not by the environment name:**
   recommendation sent to Clarke, and the gate is left pending until he approves in this run. No
   response is never approval.
 
-**Canonical examples — the recurring daily gates auto-approve.** Both run on `github-prod` but are
-safety-level **Reads**, so the Conductor approves them without paging Clarke:
+**The two canonical examples no longer gate at all (#834).** 726 (Drift Audit) and 502 (GA4 → JSON)
+used to be the recurring daily gates the Conductor auto-approved: both ran on `github-prod` but were
+safety-level **Reads**, so they were approved without paging Clarke. Both now run on the ungated
+`github-prod-read` and never reach a reviewer — which is the better outcome, because auto-approval
+only ever worked when a Conductor run happened to be live during the waiting window. When one was
+not, the run failed or was cancelled (8 of 21 scheduled runs in 2026-07).
 
-- **726. Drift Audit** — report-only (`github-prod`, Reads).
-- **502. GA4 → JSON** — reads GA4 + emits PII-safe aggregates as a **draft** PR to ffcadmin
-  (`github-prod`, Reads; no live/external write).
-
-This resolves the run-31 vs run-32 divergence (run 31 treated `github-prod` as write-and-pending;
-run 32 approved by safety level). Safety level wins.
+The ruling still stands and still governs every other gated read — it is why the policy is written
+in terms of safety level rather than environment name, and it resolved the run-31 vs run-32
+divergence (run 31 treated `github-prod` as write-and-pending; run 32 approved by safety level).
+Safety level wins. The dispatch-only gated reads it now applies to are enumerated in
+`tests/workflow-logic/test_gated_env_hygiene.py` (`DISPATCH_ONLY_GATED_READS`) — 101, 104, 114, 221,
+301–303, 306, 601. Auto-approval is the _workaround_; an ungated read lane per API category is the
+fix, and #834 shipped the GitHub one.
 
 ## Credential & data guarantees (always on)
 
@@ -169,19 +205,19 @@ the run pauses for approval, even if the action itself only reads.
 | 306     | Discover - Uncaptured Comms (M365)                    | Reads                       | ✅ m365-prod                                                 | PII masked; dispatch-only; org mailboxes only; waits on m365-prod approval                                                                                                                                                                                                                                                           |
 | 320     | Azure - KV Secret Inventory (audit)                   | Reads                       | google-prod-read (reader identity)                           | values never printed; placeholder/stale flags only                                                                                                                                                                                                                                                                                   |
 | 501     | Google - API Smoke (GA4 connectivity)                 | Reads                       | google-prod-read                                             | read-only; fails closed; reusable via `workflow_call`                                                                                                                                                                                                                                                                                |
-| 502     | Google - Analytics Report (GA4 -> JSON)               | Reads                       | google-prod-read / ✅ github-prod                            | delivers JSON to ffcadmin via PR (CBM_TOKEN, github-prod approval); PII-safe aggregates. Same PR also syncs the workflow catalog and the Agentic OS status feed (`agentic-os-status.json`, generated by `scripts/generate-agentic-os-status.py`, REST-only)                                                                          |
+| 502     | Google - Analytics Report (GA4 -> JSON)               | Reads                       | google-prod-read / github-prod-read                          | ungated end to end (#834); delivers JSON to ffcadmin via PR (GH_REPORT_TOKEN); PII-safe aggregates. Same PR also syncs the workflow catalog and the Agentic OS status feed (`agentic-os-status.json`, generated by `scripts/generate-agentic-os-status.py`, REST-only)                                                               |
 | 503     | Google - GTM Provision (per-charity)                  | Writes (dry-run default)    | ✅ google-prod-write                                         | dry_run default true; seeds GA4/Clarity/Meta; delegates POC access                                                                                                                                                                                                                                                                   |
 | 504     | Google - GTM Container Backups (weekly)               | Reads                       | google-prod-read                                             | read-only exports; live-version JSON artifacts (90d)                                                                                                                                                                                                                                                                                 |
 | 505     | Google - GA4 Property Provision                       | Writes (dry-run default)    | ✅ google-prod-write                                         | dry_run default true; one property per charity; idempotent by stream defaultUri                                                                                                                                                                                                                                                      |
 | 720     | Repo - Create GitHub Repo                             | Writes (gated)              | ✅ github-prod                                               | dispatch-only; creates an FFC-EX repo from a template (no dry_run — gate is the only stop); duplicate-repo warning text in inputs; visibility/Pages options set at creation                                                                                                                                                          |
-| 726     | Repo - Rulesets + Settings Drift Audit                | Reads                       | ✅ github-prod                                               | report only; CBM_TOKEN via github-prod approval                                                                                                                                                                                                                                                                                      |
+| 726     | Repo - Rulesets + Settings Drift Audit                | Reads                       | github-prod-read                                             | report only; ungated (#834) — GH_REPORT_TOKEN, `cancel-in-progress: false` now the gate is gone                                                                                                                                                                                                                                      |
 | 729     | Repo - Add Collaborator                               | Writes (**live default**)   | ✅ github-prod                                               | ⚠️ `dry_run` defaults to **false**                                                                                                                                                                                                                                                                                                   |
 | 730     | Repo - Audit Environment Approval Gates               | Reads                       | —                                                            | report only (environment reviewer config)                                                                                                                                                                                                                                                                                            |
 | 731     | Repo - Actions Run Metrics (30d)                      | Reads                       | —                                                            | GITHUB_TOKEN read-only; JSON artifact                                                                                                                                                                                                                                                                                                |
 | 732     | Repo - Google Workflow Failure Alert                  | Writes (issues only)        | —                                                            | rolling issue upsert/close; no external API                                                                                                                                                                                                                                                                                          |
 | 733     | Repo - Credential Rotation Reminders                  | Writes (issues only)        | —                                                            | quarterly reminder issues; rotations stay human/gated                                                                                                                                                                                                                                                                                |
 | 734     | Repo - Stale Waiting-Run Janitor                      | Writes (cancels runs)       | —                                                            | cancels runs left waiting >N days at a gate; never approves; dispatch dry-run supported                                                                                                                                                                                                                                              |
-| 735     | Repo - Dependabot Affected Repos                      | Reads                       | ✅ github-prod                                               | weekly org inventory (feeds smoke-protected waves); PR-only + auto-merge                                                                                                                                                                                                                                                             |
+| 735     | Repo - Dependabot Affected Repos                      | Reads                       | github-prod-read                                             | weekly org inventory (feeds smoke-protected waves); ungated (#834); PR-only + auto-merge via GH_REPORT_TOKEN                                                                                                                                                                                                                         |
 | 736     | Repo - Archive / Application Denied (Admin)           | Writes (dry-run default)    | ✅ github-prod                                               | ungated preflight (live archive requires a matching successful dry-run within 48h; fails fast on missing/already-archived; warns on recent push/Pages/open-issue references); archive-only (reversible, never deletes); `dry_run` default true; typed `confirm_repo`; org-locked + denylist                                          |
 | 737     | Repo - Claim Sync                                     | Writes (issues/labels only) | —                                                            | syncs `claimed` label from linked PRs (pull_request event, GITHUB_TOKEN) + daily sweep of expired claims (no open linked PR + 48h idle) in this repo (ambient GITHUB_TOKEN — CBM_TOKEN is gated-env-only and empty on schedule); no external API, ungated; sweep `dry_run` via dispatch                                              |
 | 738     | Repo - Fleet Smoke Engine Drift Audit                 | Reads                       | —                                                            | weekly SHA-256 byte-identity audit of `post-deploy-smoke.yml` across the fleet vs canonical (FFC-IN-FFC_Single_Page_Template@main); rolling issue upsert/close on divergence; GITHUB_TOKEN (public reads + own-repo issue), no external API, ungated                                                                                 |

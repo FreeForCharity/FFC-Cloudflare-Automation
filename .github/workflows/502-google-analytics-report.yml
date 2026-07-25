@@ -3,8 +3,13 @@ run-name: 'Google Analytics Report'
 
 # Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers
 # it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe:
-# aggregate metrics only. Requires the google-prod-read environment (report) and the approval-gated
-# github-prod environment (delivery, CBM_TOKEN) + the Wave 0 foundation.
+# aggregate metrics only. Requires the google-prod-read environment (report) and the UNGATED
+# github-prod-read environment (delivery, GH_REPORT_TOKEN) + the Wave 0 foundation.
+#
+# Delivery moved off gated github-prod in #834: both halves of this workflow are Reads-level, but
+# the gate on the deliver job parked the whole daily run — 4 of 8 scheduled runs failed or were
+# cancelled. GH_REPORT_TOKEN needs cross-repo contents:write + pull-requests:write on ffcadmin to
+# open the sync PR; see the github-prod-read scope table in docs/workflow-safety-and-approvals.md.
 
 on:
   schedule:
@@ -17,17 +22,15 @@ on:
         default: '28'
         type: string
 
-# Supersede-on-newer (#722): these daily runs pause at an approval gate; without
-# this, unapproved runs pile up ~12-deep until the janitor reaps them at 7 days.
-# cancel-in-progress cancels the older queued/waiting run the moment the next
-# scheduled run starts, so at most ONE run ever waits at the gate. Ref-scoped
-# so a dispatch from a PR branch can never cancel main's scheduled run.
-# Trade-off (accepted): cancel-in-progress could interrupt an EXECUTING run,
-# but execution lasts minutes against a 24h cadence — in practice only
-# gate-waiting runs are ever superseded; janitor 734 remains the backstop.
+# cancel-in-progress is now FALSE (#834). The supersede-on-newer setting (#722) existed solely
+# because these daily runs parked at the github-prod approval gate and piled up ~12-deep until
+# janitor 734 reaped them at 7 days. With delivery on the ungated github-prod-read, no run ever
+# waits, so the only thing cancel-in-progress could still cancel is an EXECUTING run — the
+# trade-off #722 accepted as the lesser evil is now pure downside. Group stays ref-scoped so a
+# dispatch from a PR branch can never collide with main's scheduled run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-supersede
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -109,7 +112,7 @@ jobs:
   deliver:
     needs: report
     runs-on: ubuntu-latest
-    environment: github-prod
+    environment: github-prod-read
     steps:
       # Checkout gives the deliver job the current workflow catalog so the public
       # copies on ffcadmin (src/data render + /data stable URL) refresh in the
@@ -124,17 +127,17 @@ jobs:
 
       # Generate the Agentic OS status feed (backlog #723) so it rides the same
       # daily sync PR as the GA data + workflow catalog — one reviewable pipe,
-      # no new gate. REST-only, PII-safe aggregates; CBM_TOKEN just reads.
+      # no new gate. REST-only, PII-safe aggregates; GH_REPORT_TOKEN just reads.
       - name: Generate Agentic OS status feed
         env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_REPORT_TOKEN }}
         run: |
           set -euo pipefail
           python3 scripts/generate-agentic-os-status.py --output agentic-os-status.json
 
       - name: Open/update daily data-sync PR into FFC-IN-ffcadmin.org
         env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_REPORT_TOKEN }}
         run: |
           set -euo pipefail
           git config --global user.name 'ffc-automation[bot]'

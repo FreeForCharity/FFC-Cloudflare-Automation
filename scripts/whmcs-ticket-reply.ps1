@@ -82,7 +82,7 @@ try {
 
     if ($DryRun) {
         $preview = $body.Clone()
-        foreach ($k in @('secret', 'accesskey')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
+        foreach ($k in @('identifier', 'secret', 'accesskey')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
         [pscustomobject]@{ action = $action; dryRun = $true; ticketid = $TicketId; request = $preview } | ConvertTo-Json -Depth 8
         exit 0
     }

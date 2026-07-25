@@ -1353,6 +1353,27 @@
       "categoryCode": "GOOGLE"
     },
     {
+      "number": 506,
+      "title": "Google - Fleet Telemetry Reachability",
+      "apis": [
+        "GOOGLE"
+      ],
+      "file": "506-google-fleet-telemetry-reachability.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-read"
+      ],
+      "description": "Answers four questions the fleet could not previously answer, in one read-only pass: 1. which domains have a GTM container (and is any container SHARED between sites) 2. which domains have a GA4 property + web stream 3. which domains are verified in Search Console 4. how much traffic each gets \u2014 ranked, so rollout order is measured rather than alphabetical  Two properties of the report matter more than the raw numbers:  * It compares the SERVED HTML against what the APIs say is provisioned. A site can have a container provisioned and never load it, or load a hardcoded template container the API does not associate with it. Both are live today across the six primary sites, and neither is visible from provisioning records alone.  * It never conflates \"no data\" with \"no traffic\". A site with no GA4 property is UNMEASURED; a site with a property and zero sessions has NO TRAFFIC. Collapsing the two sorts unmeasured sites to the bottom of a traffic-ordered rollout \u2014 which is how a site that matters ends up treated as if it does not.  Read-only end to end: analytics.readonly, tagmanager.readonly and webmasters are all already in the delegated scope grant (docs/google-api.md), so this needs no new credential or scope. Ref #865, epic #861.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "google-prod-read",
+      "guard": "read-only; enumerates GTM containers, GA4 properties/streams and Search Console sites, cross-checks them against each site's SERVED HTML, and ranks traffic. Reports \"no data\" distinctly from \"no traffic\" so an unmeasured site never sorts as unpopular. Weekly Mon 07:23 + dispatch",
+      "category": "Google",
+      "categoryCode": "GOOGLE"
+    },
+    {
       "number": 601,
       "title": "WPMUDEV - Export Sites/Domains (Read-only)",
       "apis": [

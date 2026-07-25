@@ -1,0 +1,99 @@
+name: '229. WHMCS - Service Domain Set (backfill) [WHMCS]'
+run-name: 'WHMCS Service Domain Set #${{ inputs.service_id }} -> ${{ inputs.domain }}'
+
+# Record the charity's domain on a WHMCS service. The onboarding products are
+# service products, so WHMCS never asks for a domain at order time and the
+# column stays empty - leaving every downstream workflow to infer the domain
+# from custom fields or an email address. Dry-run by default; one service per
+# dispatch, no bulk loop (same convention as 211).
+
+on:
+  workflow_dispatch:
+    inputs:
+      service_id:
+        description: 'WHMCS service id (numeric) - from 219 application detail'
+        required: true
+        type: string
+      domain:
+        description: 'Apex domain to record (no scheme, no www)'
+        required: true
+        type: string
+      force:
+        description: 'Replace an existing, different domain (otherwise refused)'
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Preview only (no WHMCS write)'
+        required: false
+        type: boolean
+        default: true
+      api_url:
+        description: 'WHMCS API endpoint'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+
+permissions:
+  contents: read
+  id-token: write
+
+# Serialize runs: a second dispatch queues behind the first instead of racing it.
+concurrency:
+  group: 229-whmcs-service-domain-set
+  cancel-in-progress: false
+
+jobs:
+  service_domain_set:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Set service domain
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          SERVICE_ID: ${{ inputs.service_id }}
+          DOMAIN: ${{ inputs.domain }}
+          FORCE: ${{ inputs.force }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+
+          $serviceId = 0
+          if (-not [int]::TryParse($env:SERVICE_ID, [ref]$serviceId) -or $serviceId -lt 1) {
+            throw "service_id must be a positive integer (got '$($env:SERVICE_ID)')."
+          }
+
+          $psArgs = @(
+            '-NoProfile', '-File', '.\scripts\whmcs-service-domain-set.ps1',
+            '-ApiUrl', $env:WHMCS_API_URL,
+            '-ServiceId', "$serviceId",
+            '-Domain', $env:DOMAIN
+          )
+          if ($env:FORCE -eq 'true') { $psArgs += '-Force' }
+          if ($env:DRY_RUN -ne 'false') { $psArgs += '-DryRun' }
+
+          $json = & pwsh @psArgs
+          if ($LASTEXITCODE -ne 0) { throw "Service domain set failed (exit $LASTEXITCODE)." }
+
+          # Print to the job log as well as the summary: the Actions API exposes
+          # neither the step summary nor artifacts, so a summary-only result is
+          # invisible to any caller working from logs.
+          Write-Host (($json | Out-String).TrimEnd())
+
+          $fence = [string][char]0x60 * 3
+          $lines = @("## WHMCS service domain set - service $serviceId", '', ($fence + 'json'),
+            (($json | Out-String).TrimEnd()), $fence)
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

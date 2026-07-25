@@ -206,6 +206,23 @@ def test_neutral_is_ignored():
     assert r["updates"] == [], r
 
 
+def test_benign_conclusions_cost_no_api_call():
+    # A guaranteed no-op should not spend REST budget: the whole fleet of watched
+    # crons shares one 5,000/hr pool with every other agent (AGENTS.md).
+    for conclusion in ("skipped", "neutral"):
+        r = _run(conclusion, open_issues=[_alert_issue(7)])
+        assert r["threw"] is None, (conclusion, r)
+        assert r["listForRepoCalls"] == [], (conclusion, r)
+
+
+def test_success_still_spends_the_lookup_so_it_can_close():
+    # `success` is benign in outcome but must NOT early-return: closing a live
+    # alert is the whole recovery half of the state machine.
+    r = _run("success", open_issues=[_alert_issue(7)])
+    assert len(r["listForRepoCalls"]) == 1, r
+    assert r["updates"] == [{"issue_number": 7, "state": "closed"}], r
+
+
 # --- branch scoping --------------------------------------------------------
 
 
@@ -336,7 +353,7 @@ def test_every_watched_name_matches_a_real_workflow_name():
     # `workflows:` entry that matches no `name:` never fires and never errors.
     known = _all_workflow_names()
     for name in _watched(WORKFLOW):
-        assert name in known, f"watched name has no matching workflow name:: {name!r}"
+        assert name in known, f"watched name has no matching workflow name: {name!r}"
 
 
 def test_watched_workflows_are_actually_scheduled():

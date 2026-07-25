@@ -59,7 +59,12 @@ jobs:
             }
             // Conclusions that mean "nothing went wrong" — everything else (failure,
             // cancelled, timed_out, startup_failure, action_required) is reportable.
-            const BENIGN = ['success', 'skipped', 'neutral'];
+            // `success` is benign too but still needs the lookup below, to close an alert.
+            const BENIGN = ['skipped', 'neutral'];
+            if (BENIGN.includes(run.conclusion)) {
+              core.info(`Ignoring ${run.name} (${run.conclusion}).`);
+              return; // before the issue lookup: a guaranteed no-op should cost no API call
+            }
             // `agentic-os,bug` is a broad pair and the backlog is long, so page at the max
             // and sort by recency of update: a live rolling alert is touched by every new
             // failure comment, which keeps it on the first page even as the backlog grows.
@@ -83,7 +88,6 @@ jobs:
               }
               return;
             }
-            if (BENIGN.includes(run.conclusion)) return;
             const line = `- ${new Date().toISOString()} — **${run.name}** [run ${run.run_number}](${run.html_url}) → ${run.conclusion}`;
             if (existing) {
               await github.rest.issues.createComment({

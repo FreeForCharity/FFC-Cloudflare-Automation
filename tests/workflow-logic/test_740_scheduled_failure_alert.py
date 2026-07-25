@@ -214,11 +214,24 @@ def _run_obj(conclusion, *, run_number=42, head_branch="main", run_id=3011696711
     }
 
 
-def _alert_issue(number=7, *, marker=MARKER):
+def _alert_issue(number=7, *, marker=MARKER, last_run=None):
+    """An open rolling alert. `last_run` stamps the run it has already logged.
+
+    Defaults to unstamped, which is both the pre-#843 event-era shape and the
+    "a newer run has appeared" case, so the ordinary failure tests still expect
+    an appended comment.
+    """
     body = "ended in a bad conclusion.\n"
+    if last_run is not None:
+        body = f"<!-- last-recorded-run:{last_run} -->\n{body}"
     if marker:
         body = f"{marker}\n{body}"
     return {"number": number, "body": body}
+
+
+def _closes(result):
+    """Just the close transitions — body re-stamps are also issues.update calls."""
+    return [u for u in result["updates"] if u.get("state") == "closed"]
 
 
 # --- failure branch --------------------------------------------------------
@@ -249,7 +262,7 @@ def test_failure_with_existing_appends_comment_not_a_second_issue():
     assert len(r["comments"]) == 1, r
     assert r["comments"][0]["issue_number"] == 7, r
     assert WATCHED_NAME in r["comments"][0]["body"], r
-    assert r["updates"] == [], r  # a failure never closes the alert
+    assert _closes(r) == [], r  # a failure never closes the alert
 
 
 # --- cancelled is reportable (the #832 regression) -------------------------
@@ -382,6 +395,63 @@ def test_one_sweep_lists_open_issues_at_most_once():
     assert markers == sorted(
         [f"{MARKER_PREFIX}{first} -->", f"{MARKER_PREFIX}{second} -->"]
     ), markers
+
+
+# --- one comment per failing RUN, not per sweep ----------------------------
+#
+# The sharpest behavioural difference between the event and the poll. The event
+# saw each run once, so appending on every observation was the same as appending
+# per run. The poll re-observes the SAME latest run every 30 minutes until a
+# newer one completes, so an unconditional append posts ~48 identical comments a
+# day per broken workflow — burying the history the issue exists to record.
+
+
+def test_the_same_failing_run_is_not_re_commented_on_the_next_sweep():
+    r = _run("failure", open_issues=[_alert_issue(7, last_run=30116967112)])
+    assert r["threw"] is None, r
+    assert r["comments"] == [], r  # the whole point
+    assert r["created"] == [], r  # and certainly no duplicate issue
+    assert _closes(r) == [], r
+    assert any("already recorded" in i for i in r["infos"]), r
+
+
+def test_a_newer_failing_run_appends_and_restamps():
+    # A genuinely new failing run is still worth a line — that history is why the
+    # rolling issue exists.
+    r = _run("failure", open_issues=[_alert_issue(7, last_run=999)])
+    assert r["threw"] is None, r
+    assert len(r["comments"]) == 1, r
+    stamps = [u for u in r["updates"] if u.get("body")]
+    assert len(stamps) == 1, r
+    assert "<!-- last-recorded-run:30116967112 -->" in stamps[0]["body"], stamps
+    assert "<!-- last-recorded-run:999 -->" not in stamps[0]["body"], stamps
+
+
+def test_an_alert_from_the_event_era_is_adopted_and_stamped():
+    # Alerts opened by the pre-#843 workflow carry no run marker. They must be
+    # adopted (one entry, then stamped), never duplicated and never ignored.
+    r = _run("failure", open_issues=[_alert_issue(7)])
+    assert r["threw"] is None, r
+    assert r["created"] == [], r
+    assert len(r["comments"]) == 1, r
+    stamps = [u for u in r["updates"] if u.get("body")]
+    assert len(stamps) == 1, r
+    assert "<!-- last-recorded-run:30116967112 -->" in stamps[0]["body"], stamps
+    # the stamp is added, not substituted for the existing body
+    assert MARKER in stamps[0]["body"], stamps
+
+
+def test_a_new_alert_records_its_run_so_the_next_sweep_stays_quiet():
+    r = _run("failure", open_issues=[])
+    assert "<!-- last-recorded-run:30116967112 -->" in r["created"][0]["body"], r
+
+
+def test_recovery_closes_a_stamped_alert():
+    # The stamp must not interfere with the recovery half of the state machine.
+    r = _run("success", open_issues=[_alert_issue(7, last_run=30116967112)])
+    assert r["threw"] is None, r
+    assert _closes(r) == [{"issue_number": 7, "state": "closed"}], r
+    assert any("Recovered" in c["body"] for c in r["comments"]), r
 
 
 # --- a declined approval gate is not an outage -----------------------------
@@ -661,6 +731,32 @@ def test_open_issue_query_is_scoped_to_open_state_and_alert_labels():
     assert call["per_page"] == 100, call
     assert call["sort"] == "updated", call
     assert call["direction"] == "desc", call
+
+
+def test_the_alert_lookup_pages_past_the_first_hundred_open_issues():
+    # `agentic-os,bug` is broad and the backlog is long. Sorting by `updated` used to
+    # be the whole defence, on the theory that a live alert is touched constantly —
+    # but now that a re-observed run is NOT re-commented, a weekly workflow's alert is
+    # touched only when a new failing run appears and can sink past page 1. Reading
+    # one page would then open a duplicate, or miss the close on recovery.
+    filler = [{"number": 1000 + i, "body": "unrelated agentic-os bug\n"} for i in range(120)]
+    target = _alert_issue(7)
+    r = _run("failure", open_issues=filler + [target])
+    assert r["threw"] is None, r
+    assert r["created"] == [], f"paged past page 1 and still opened a duplicate: {r}"
+    assert len(r["comments"]) == 1, r
+    assert r["comments"][0]["issue_number"] == 7, r
+    assert len(r["listForRepoCalls"]) == 2, r  # 100 + 21, stops on the short page
+    assert [c["page"] for c in r["listForRepoCalls"]] == [1, 2], r
+
+
+def test_a_recovery_also_finds_an_alert_past_the_first_page():
+    # The close half has the same exposure: a missed lookup leaves a stale alert open
+    # forever, claiming a workflow is broken after it recovered.
+    filler = [{"number": 1000 + i, "body": "unrelated agentic-os bug\n"} for i in range(120)]
+    r = _run("success", open_issues=filler + [_alert_issue(7, last_run=30116967112)])
+    assert r["threw"] is None, r
+    assert _closes(r) == [{"issue_number": 7, "state": "closed"}], r
 
 
 # --- YAML-level contract guards (no node needed) ---------------------------

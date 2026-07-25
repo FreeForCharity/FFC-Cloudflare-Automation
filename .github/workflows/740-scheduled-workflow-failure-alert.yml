@@ -114,18 +114,51 @@ jobs:
             // Safe to cache across watched workflows because each has its own marker — a create
             // or close for one can never change the lookup result for another.
             let openIssues = null;
+            // `agentic-os,bug` is a broad pair and the backlog is long, so this MUST page.
+            // A single page of 100 sorted by `updated` is not enough: once the alerter stops
+            // re-commenting on an already-recorded run (see recordedRun below), a rolling
+            // alert for a weekly workflow is touched only when a NEW failing run appears and
+            // can sink past page 1 — at which point the sweep would open a duplicate, or fail
+            // to close the real one on recovery. Bounded like 739's listIssuesBounded so a
+            // pathological backlog cannot make this run unboundedly long.
+            const MAX_ISSUE_PAGES = 10;
             const listOpenAlerts = async () => {
               if (openIssues) return openIssues;
-              // `agentic-os,bug` is a broad pair and the backlog is long, so page at the max
-              // and sort by recency of update: a live rolling alert is touched by every new
-              // failure comment, which keeps it on the first page even as the backlog grows.
-              // Missing it would mean a duplicate alert issue rather than a missed alert.
-              const { data } = await github.rest.issues.listForRepo({
-                owner, repo, state: 'open', labels: 'agentic-os,bug', per_page: 100,
-                sort: 'updated', direction: 'desc',
-              });
-              openIssues = data;
+              const acc = [];
+              for (let pg = 1; pg <= MAX_ISSUE_PAGES; pg++) {
+                const { data } = await github.rest.issues.listForRepo({
+                  owner, repo, state: 'open', labels: 'agentic-os,bug', per_page: 100,
+                  sort: 'updated', direction: 'desc', page: pg,
+                });
+                acc.push(...data);
+                if (data.length < 100) break;
+                if (pg === MAX_ISSUE_PAGES) {
+                  // Never truncate silently: past this point a missed alert is possible and
+                  // the operator needs to know the lookup was incomplete.
+                  core.warning(`Open agentic-os,bug issues exceed ${MAX_ISSUE_PAGES} pages; alert lookup may be incomplete.`);
+                }
+              }
+              openIssues = acc;
               return openIssues;
+            };
+
+            // Which failing run an open alert has already logged. Kept in the issue BODY (not
+            // inferred from comments) so the sweep's existing issue listing answers it for
+            // free. An alert opened by the pre-#843 event-driven version carries no such
+            // marker; it reads as "nothing recorded", so the first poll appends one entry and
+            // stamps it — correct, and self-healing rather than a migration.
+            const RUN_MARKER_OPEN = '<!-- last-recorded-run:';
+            const RUN_MARKER_CLOSE = ' -->';
+            const recordedRun = (body) => {
+              const m = String(body || '').match(/<!-- last-recorded-run:(\d+) -->/);
+              return m ? m[1] : null;
+            };
+            const withRecordedRun = (body, runId) => {
+              const stamp = `${RUN_MARKER_OPEN}${runId}${RUN_MARKER_CLOSE}`;
+              const text = String(body || '');
+              return /<!-- last-recorded-run:\d+ -->/.test(text)
+                ? text.replace(/<!-- last-recorded-run:\d+ -->/, stamp)
+                : `${stamp}\n${text}`;
             };
 
             // `wfName` is the WORKFLOW's name, never `run.name`: for a workflow that sets
@@ -194,14 +227,29 @@ jobs:
               }
               const line = `- ${new Date().toISOString()} — **${wfName}** [run ${run.run_number}](${run.html_url}) → ${run.conclusion}`;
               if (existing) {
+                // ONE COMMENT PER FAILING RUN, NOT ONE PER SWEEP. The event-driven version saw
+                // each run once, so appending on every observation was the same thing. A poll
+                // re-observes the SAME latest run every 30 minutes until a newer one completes,
+                // so appending unconditionally would post ~48 identical comments a day per
+                // broken workflow — burying the history the issue exists to record and burning
+                // the shared REST budget. The last recorded run id lives in the body so the
+                // check needs no extra API call (the issue list already carries the body).
+                if (recordedRun(existing.body) === String(run.id)) {
+                  core.info(`Run ${run.id} for ${wfName} is already recorded; not re-commenting.`);
+                  return;
+                }
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: existing.number, body: line,
+                });
+                await github.rest.issues.update({
+                  owner, repo, issue_number: existing.number,
+                  body: withRecordedRun(existing.body, run.id),
                 });
               } else {
                 await github.rest.issues.create({
                   owner, repo,
                   title, labels: ['agentic-os', 'bug'],
-                  body: `${marker}\n**${wfName}** ended in a bad conclusion. This rolling issue tracks that one workflow and auto-closes on its next green run.\n\nEach entry below records what was observed — the run's conclusion and a link. Open the run to see which job failed before assuming a cause.\n\n${line}\n\n_Managed by 740. Repo - Scheduled Workflow Failure Alert._`,
+                  body: `${marker}\n${RUN_MARKER_OPEN}${run.id}${RUN_MARKER_CLOSE}\n**${wfName}** ended in a bad conclusion. This rolling issue tracks that one workflow and auto-closes on its next green run.\n\nEach entry below records what was observed — the run's conclusion and a link. Open the run to see which job failed before assuming a cause.\n\n${line}\n\n_Managed by 740. Repo - Scheduled Workflow Failure Alert._`,
                 });
               }
             };

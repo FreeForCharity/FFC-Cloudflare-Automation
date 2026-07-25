@@ -195,6 +195,10 @@ const github = {
       },
     },
     issues: {
+      // Paged like the real endpoint when the caller asks for a page, so a script that
+      // reads only page 1 provably cannot see an alert sitting deeper in the backlog.
+      // Callers that pass no `page` still get the whole fixture, keeping older
+      // single-page tests (732-era shape) working unchanged.
       listForRepo: async (args) => {
         listForRepoCalls.push({
           state: args.state,
@@ -202,8 +206,12 @@ const github = {
           per_page: args.per_page,
           sort: args.sort,
           direction: args.direction,
+          page: args.page,
         });
-        return { data: openIssues };
+        if (!args.page) return { data: openIssues };
+        const perPage = Math.min(args.per_page || 30, 100);
+        const start = (args.page - 1) * perPage;
+        return { data: openIssues.slice(start, start + perPage) };
       },
       create: async (args) => {
         const number = nextNumber++;
@@ -220,7 +228,15 @@ const github = {
         return { data: { id: comments.length } };
       },
       update: async (args) => {
-        updates.push({ issue_number: args.issue_number, state: args.state });
+        // `body` is recorded too: the alerter re-stamps the last-recorded run id via
+        // issues.update, so tests must be able to tell a body stamp from a close.
+        // JSON.stringify drops undefined keys, so a pure close still serialises as
+        // {issue_number, state} exactly as before.
+        updates.push({
+          issue_number: args.issue_number,
+          state: args.state,
+          body: args.body,
+        });
         return { data: {} };
       },
     },

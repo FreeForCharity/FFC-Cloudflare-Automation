@@ -220,6 +220,28 @@ def test_a_listing_failure_does_not_fabricate_missing_secrets():
     assert len(a["live"]) == 2, a
 
 
+def test_an_empty_but_successful_listing_reports_targets_as_missing():
+    """The mirror of the case above, and the same switch: a listing that
+    SUCCEEDED and came back empty means the credentials are genuinely absent —
+    a wrong vault name, or an RBAC state that lists nothing. `missing` names
+    that; `UNVERIFIED` would blur it into "the probe didn't work". The workflow
+    already treats an unlisted target as absent (it skips the read), so the
+    library must agree with the step feeding it."""
+    a = analyze(secrets=[], probes=[_live_pat(), _live_cf()], listError=None)
+    assert sorted(d["secret"] for d in a["missing"]) == sorted([CF, PAT]), a
+    assert a["unverified"] == [], a
+    assert a["hasFinding"] is True, a
+
+
+def test_empty_listing_and_failed_listing_are_classified_differently():
+    # Both are findings, but they say different things and must not collapse:
+    # "the vault is empty" is evidence; "I could not look" is the absence of it.
+    empty = analyze(secrets=[], probes=[_live_pat()], listError=None)
+    failed = analyze(secrets=[], probes=[_live_pat()], listError="AuthorizationFailed")
+    assert empty["missing"] and not failed["missing"], (empty, failed)
+    assert failed["listError"] and not empty["listError"], (empty, failed)
+
+
 def test_no_probes_at_all_still_reports_expiry_findings():
     a = analyze(secrets=[_secret(PAT, "2026-07-30T00:00:00Z")], probes=[])
     assert a["hasFinding"] is True, a

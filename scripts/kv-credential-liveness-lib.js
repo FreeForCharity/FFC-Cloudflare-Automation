@@ -202,10 +202,18 @@ function analyze(input) {
   const unverified = [];
   const missing = [];
   const live = [];
-  // Absence is only knowable from a listing that succeeded. With no listing,
+  // Absence is only knowable from a listing that SUCCEEDED. With no listing,
   // every probe target would read as `missing` — a fabricated finding that
   // would hide the real one (the listing failure) behind four false ones.
-  const canCheckPresence = !listError && secrets.length > 0;
+  //
+  // A successful listing that comes back EMPTY is the opposite case and turns
+  // on the same switch: nothing is there, so every target is genuinely absent
+  // and `missing` is the accurate report. That is also what the workflow does —
+  // it skips the read for any target not in the listing — so gating this on a
+  // non-empty list would make the library contradict the step feeding it, and
+  // downgrade a real "the vault has nothing in it" (wrong vault name, an RBAC
+  // state that lists nothing) to a vague UNVERIFIED.
+  const canCheckPresence = !listError;
   for (const p of probeResults) {
     const target = { secret: p.secret, kind: p.kind };
     if (canCheckPresence && !byName.has(p.secret)) {

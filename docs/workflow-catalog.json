@@ -1043,6 +1043,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 229,
+      "title": "WHMCS - Service Domain Set (backfill)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "229-whmcs-service-domain-set.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Record the charity's domain on a WHMCS service. The onboarding products are service products, so WHMCS never asks for a domain at order time and the column stays empty - leaving every downstream workflow to infer the domain from custom fields or an email address. Dry-run by default; one service per dispatch, no bulk loop (same convention as 211).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`dry_run` (default true); one service at a time; validates the apex domain and refuses to replace an existing different domain without `force`",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 (FFC Tenant) - Domain Preflight (Read-only)",
       "apis": [

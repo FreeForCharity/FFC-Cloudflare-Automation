@@ -1188,6 +1188,29 @@
       "categoryCode": "MS"
     },
     {
+      "number": 321,
+      "title": "Azure - KV Credential Liveness + Expiry Monitor",
+      "apis": [
+        "MS",
+        "GH",
+        "CF"
+      ],
+      "file": "321-azure-kv-credential-liveness.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-read"
+      ],
+      "description": "Daily health check of the credentials in kv-ffc-admin-prod-cbm that back the automation lanes, on two independent signals:  1. EXPIRY/ENABLED for every secret, read from `az keyvault secret list`, which returns attributes WITHOUT values. So write-scope credentials are monitored without this workflow ever reading their material. 2. LIVENESS for the credentials that can verify themselves read-only \u2014 the two GitHub PATs (GET /user) and the two Cloudflare tokens (/user/tokens/verify). Probes cover `read-all-*` secrets ONLY; the library refuses a `wr-all-*` target before anything is read.  Why (#848): both `read-all-*` GitHub PATs in the vault were dead with 401 Bad credentials, for an unknown period, and nothing noticed because nothing consumed them yet. Expiry alone would not have caught it \u2014 a REVOKED token still carries a future expiry date \u2014 which is why liveness is a separate signal here and why a probe that cannot be evaluated is reported as unverifiable rather than passing (the #726/#855 lesson: never render an unreadable response as a green check).  Secret values are never printed, never written to the artifact, and never sent anywhere except the probe host, which is re-validated against an allowlist in this file immediately before the request. Findings are upserted into one rolling issue that auto-closes when the vault is clean.  Runs on google-prod-read because it federates the ffc-admin-kv-reader identity and has no approval gate (a monitor must not wait on a human, and a dedicated azure-prod-read environment would need a new federated credential). Under the per-secret RBAC migration (#848 part A) that identity needs `getSecret` on the four probed `read-all-*` secrets, plus list on the vault; without those grants the run reports UNVERIFIABLE, not green.  Classification + report logic lives in scripts/kv-credential-liveness-lib.js (unit-tested under tests/workflow-logic/).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "google-prod-read (reader identity)",
+      "guard": "daily two-signal credential health check: expiry/enabled for every vault secret from the attribute listing (values never read), plus a read-only liveness probe (`GET /user`, Cloudflare `/user/tokens/verify`) for the four `read-all-*` credentials that can verify themselves \u2014 the library refuses a `wr-all-*` probe target before anything is read, so write-scope material is expiry-monitored without ever being fetched; a probe that cannot be evaluated is reported as unverifiable, never as passing; values never printed or persisted; rolling issue upsert/close; ungated by design (a credential monitor must not wait on a human)",
+      "category": "Microsoft (M365 / Azure / Graph)",
+      "categoryCode": "MS"
+    },
+    {
       "number": 401,
       "title": "Zeffy - Campaigns Export",
       "apis": [

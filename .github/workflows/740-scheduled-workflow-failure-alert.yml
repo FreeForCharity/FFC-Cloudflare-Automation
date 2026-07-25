@@ -25,6 +25,7 @@ run-name:
 on:
   workflow_run:
     workflows:
+      - '321. Azure - KV Credential Liveness + Expiry Monitor [MS+GH+CF]'
       - '703. Sites List - Generate (CSV + JSON) [GH]'
       - '723. Repo - CodeQL Security Analysis [Repo]'
       - '726. Repo - Rulesets + Settings Drift Audit [Org]'

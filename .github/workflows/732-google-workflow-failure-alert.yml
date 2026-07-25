@@ -12,6 +12,7 @@ on:
     workflows:
       - '501. Google - API Smoke (GA4 connectivity) [GOOGLE]'
       - '502. Google - Analytics Report (GA4 -> JSON) [GOOGLE]'
+      - '506. Google - Fleet Telemetry Reachability [GOOGLE]'
     types: [completed]
 
 permissions:

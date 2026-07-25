@@ -199,6 +199,21 @@ def _run(
     return result
 
 
+def _run_obj(conclusion, *, run_number=42, head_branch="main", run_id=30116967113):
+    """A run object as `listWorkflowRuns` returns it, for seeding a second workflow.
+
+    `name` is the rendered `run-name:`, deliberately unequal to any workflow name.
+    """
+    return {
+        "id": run_id,
+        "name": RUN_DISPLAY_NAME,
+        "conclusion": conclusion,
+        "run_number": run_number,
+        "head_branch": head_branch,
+        "html_url": f"https://github.com/x/y/actions/runs/{run_id}",
+    }
+
+
 def _alert_issue(number=7, *, marker=MARKER):
     body = "ended in a bad conclusion.\n"
     if marker:
@@ -316,12 +331,27 @@ def test_benign_conclusions_cost_no_api_call():
         assert r["listForRepoCalls"] == [], (conclusion, r)
 
 
-def test_an_all_green_sweep_spends_no_issue_api_call():
-    # The overwhelmingly common poll outcome. Nothing to close, nothing to open:
-    # the issue listing must never be fetched "just in case".
-    r = _run("skipped", open_issues=[])
+def test_an_all_green_sweep_lists_issues_once_and_writes_nothing():
+    # The overwhelmingly common poll outcome: several watched workflows all
+    # `success`, nothing open to close.
+    #
+    # It costs exactly ONE issue listing — not zero, and not one per workflow.
+    # Not zero because `success` has to look for an alert to close, which is the
+    # recovery half of the state machine; the genuinely-zero case is
+    # `skipped`/`neutral`, covered by test_benign_conclusions_cost_no_api_call.
+    # Not one per workflow because the listing is cached across the sweep.
+    watched = _watched()
+    r = _run(
+        "success",
+        open_issues=[],
+        name=watched[0],
+        extra_runs={"101": [_run_obj("success", run_number=43)]},
+    )
     assert r["threw"] is None, r
-    assert r["listForRepoCalls"] == [], r
+    assert len(r["listForRepoCalls"]) == 1, r
+    assert r["created"] == [], r
+    assert r["comments"] == [], r
+    assert r["updates"] == [], r
 
 
 def test_success_still_spends_the_lookup_so_it_can_close():
@@ -343,18 +373,7 @@ def test_one_sweep_lists_open_issues_at_most_once():
         "failure",
         open_issues=[],
         name=first,
-        extra_runs={
-            "101": [
-                {
-                    "id": 30116967113,
-                    "name": RUN_DISPLAY_NAME,
-                    "conclusion": "failure",
-                    "run_number": 43,
-                    "head_branch": "main",
-                    "html_url": "https://github.com/x/y/actions/runs/1000",
-                }
-            ]
-        },
+        extra_runs={"101": [_run_obj("failure", run_number=43)]},
     )
     assert r["threw"] is None, r
     assert len(r["created"]) == 2, r  # both workflows got their own issue ...

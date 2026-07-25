@@ -175,7 +175,9 @@ function Invoke-GooglePagedApi {
         # A 200 with an EMPTY body deserializes to $null, and $null.PSObject.Properties throws
         # "The property 'Name' cannot be found on this object" — which is what the GA4 Admin API
         # returns for a parent with no properties. An empty page is a valid answer, not an error.
-        if ($null -eq $resp) { break }
+        # Clear the token BEFORE breaking: leaving it set from the previous page would make the
+        # post-loop cap check fire and report truncation on what is actually a clean finish.
+        if ($null -eq $resp) { $token = $null; break }
         if ($resp.PSObject.Properties.Name -contains $CollectionName -and $resp.$CollectionName) {
             $items += @($resp.$CollectionName)
         }
@@ -241,7 +243,11 @@ function Get-GtmInventory {
             # left unset — so matching on domainName alone finds nothing, which is exactly what the
             # first working run showed (GTM ❌ for every site while containers clearly exist).
             # The container name is the reliable key here.
-            if ($c.name) {
+            # Only when the name actually LOOKS like a domain. GTM container names are free text
+            # ("FFC Main", "Staging"), and treating any name as a domain would inflate the domain
+            # count and falsely report a container as shared across sites — turning this check into
+            # a false-positive generator, which is worse than the miss it was fixing.
+            if ($c.name -and ($c.name -match '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$')) {
                 $fromName = Normalize-Domain $c.name
                 if ($fromName -and ($domainList -notcontains $fromName)) { $domainList += $fromName }
             }

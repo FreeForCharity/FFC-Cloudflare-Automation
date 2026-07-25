@@ -106,6 +106,8 @@ const github = {
           state: args.state,
           labels: args.labels,
           per_page: args.per_page,
+          sort: args.sort,
+          direction: args.direction,
         });
         return { data: openIssues };
       },

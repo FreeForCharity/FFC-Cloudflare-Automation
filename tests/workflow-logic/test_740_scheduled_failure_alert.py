@@ -12,11 +12,16 @@ duplicate issue, never a missed close — plus three that are specific to 740:
     it reached a runner, executed zero steps, and the run-level conclusion
     (failure) disagreed with the job-level one (cancelled). Filtering to
     `failure` alone would still have missed half the incident.
+  - **One rolling issue PER WATCHED WORKFLOW.** The marker is keyed by workflow
+    name, so a success only closes the alert for the workflow that recovered.
+    With ten workflows watched, a shared marker would let 739's weekly green run
+    silently close 726's daily outage — the alert would clear itself while the
+    thing it is watching is still broken (found by Copilot on PR #833).
   - **Isolation from 732.** Both alerters watch different workflows and write to
     the same repo; a marker or label collision would let one close the other's
-    issue. 740 uses `<!-- scheduled-workflow-failure-alert -->` + `agentic-os,bug`
-    against 732's `<!-- google-workflow-failure-alert -->` + `google-api,bug`,
-    and neither may match the other's issue.
+    issue. 740 uses `<!-- scheduled-workflow-failure-alert:NAME -->` +
+    `agentic-os,bug` against 732's `<!-- google-workflow-failure-alert -->` +
+    `google-api,bug`, and neither may match the other's issue.
   - **The watch list is by exact `name:` string**, which is the part that breaks
     silently: a `workflow_run.workflows` entry that does not match any workflow's
     `name:` never fires and never errors. #832's own draft got two of the three
@@ -46,12 +51,15 @@ from wf_extract import (  # noqa: E402
 WORKFLOW = "740-scheduled-workflow-failure-alert.yml"
 JOB = "alert"
 STEP = "Upsert or close rolling alert issue"
-MARKER = "<!-- scheduled-workflow-failure-alert -->"
+MARKER_PREFIX = "<!-- scheduled-workflow-failure-alert:"
 GOOGLE_MARKER = "<!-- google-workflow-failure-alert -->"
 HARNESS = pathlib.Path(__file__).resolve().parent / "harness" / "issues_api_shim.mjs"
 NODE = shutil.which("node") or "node"
 
 WATCHED_NAME = "726. Repo - Rulesets + Settings Drift Audit [Org]"
+OTHER_WATCHED_NAME = "739. Repo - Process Health Metrics Report [GH]"
+MARKER = f"{MARKER_PREFIX}{WATCHED_NAME} -->"
+OTHER_MARKER = f"{MARKER_PREFIX}{OTHER_WATCHED_NAME} -->"
 
 
 def _run(conclusion, *, open_issues=None, name=WATCHED_NAME, head_branch="main"):
@@ -92,7 +100,7 @@ def _run(conclusion, *, open_issues=None, name=WATCHED_NAME, head_branch="main")
 
 
 def _alert_issue(number=7, *, marker=MARKER):
-    body = "A scheduled hub workflow ended in a bad conclusion.\n"
+    body = "ended in a bad conclusion.\n"
     if marker:
         body = f"{marker}\n{body}"
     return {"number": number, "body": body}
@@ -107,6 +115,7 @@ def test_failure_with_no_existing_creates_one_issue():
     assert len(r["created"]) == 1, r
     issue = r["created"][0]
     assert MARKER in issue["body"], issue
+    assert WATCHED_NAME in issue["title"], issue  # title names the failing workflow
     assert sorted(issue["labels"]) == ["agentic-os", "bug"], issue
     # the failure line names the workflow, the run and its conclusion
     assert WATCHED_NAME in issue["body"], issue
@@ -217,6 +226,37 @@ def test_success_on_a_feature_branch_does_not_close_the_alert():
     assert r["comments"] == [], r
 
 
+# --- one rolling issue per watched workflow --------------------------------
+
+
+def test_success_of_a_different_watched_workflow_does_not_close_the_alert():
+    # The defect this keying exists to prevent: 739's weekly green run must not
+    # clear 726's still-broken daily alert.
+    r = _run("success", open_issues=[_alert_issue(7)], name=OTHER_WATCHED_NAME)
+    assert r["threw"] is None, r
+    assert r["updates"] == [], r  # 726's alert stays open
+    assert r["comments"] == [], r
+
+
+def test_success_closes_only_its_own_workflows_alert():
+    r = _run(
+        "success",
+        open_issues=[_alert_issue(7, marker=OTHER_MARKER), _alert_issue(9)],
+        name=OTHER_WATCHED_NAME,
+    )
+    assert r["threw"] is None, r
+    assert r["updates"] == [{"issue_number": 7, "state": "closed"}], r
+    assert [c["issue_number"] for c in r["comments"]] == [7], r
+
+
+def test_a_second_workflow_failing_opens_its_own_issue():
+    r = _run("failure", open_issues=[_alert_issue(7)], name=OTHER_WATCHED_NAME)
+    assert r["threw"] is None, r
+    assert len(r["created"]) == 1, r  # not a comment on 726's issue
+    assert OTHER_MARKER in r["created"][0]["body"], r
+    assert r["comments"] == [], r
+
+
 # --- isolation from 732 ----------------------------------------------------
 
 
@@ -248,9 +288,9 @@ def test_markers_and_labels_do_not_collide_with_732():
     google = step_github_script(
         "732-google-workflow-failure-alert.yml", "alert", "Upsert or close rolling alert issue"
     )
-    assert MARKER in script, "marker literal drifted from the test"
+    assert MARKER_PREFIX in script, "marker literal drifted from the test"
     assert GOOGLE_MARKER not in script, "740 must not reuse 732's marker"
-    assert MARKER not in google, "732 must not reuse 740's marker"
+    assert MARKER_PREFIX not in google, "732 must not reuse 740's marker"
     assert "'agentic-os', 'bug'" in script, script
     assert "google-api" not in script, "740 must use its own labels"
 
@@ -262,6 +302,12 @@ def test_open_issue_query_is_scoped_to_open_state_and_alert_labels():
     call = r["listForRepoCalls"][0]
     assert call["state"] == "open", call
     assert call["labels"] == "agentic-os,bug", call
+    # `agentic-os,bug` is broad and the backlog is long: page at the max and put
+    # the most recently touched issues first, so a live alert cannot fall off
+    # page 1 and get duplicated.
+    assert call["per_page"] == 100, call
+    assert call["sort"] == "updated", call
+    assert call["direction"] == "desc", call
 
 
 # --- YAML-level contract guards (no node needed) ---------------------------

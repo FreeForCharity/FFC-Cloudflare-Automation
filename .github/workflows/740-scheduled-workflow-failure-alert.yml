@@ -5,8 +5,11 @@ run-name:
 
 # Watches the scheduled NON-Google hub workflows (726 drift audit, 734 janitor, 738 smoke
 # drift, and the other cron-driven monitors). On a bad conclusion it upserts ONE rolling
-# alert issue; on the next success of the same workflow it closes that issue. 732 does the
-# same job for the Google reporting workflows (501/502) — the two alerters are kept apart by
+# alert issue PER WATCHED WORKFLOW, and closes that issue on the next success of that same
+# workflow. The marker is keyed by workflow name precisely so a green run of one watched
+# workflow can never close another's alert — with ten workflows watched, a shared marker
+# would let a weekly job's success silently clear a daily job's outage. 732 does the same
+# job for the Google reporting workflows (501/502) — the two alerters are kept apart by
 # distinct markers and labels so neither ever closes the other's issue.
 #
 # Ambient GITHUB_TOKEN only, no environment: — the alerter must never be blocked by the very
@@ -43,8 +46,10 @@ jobs:
         with:
           script: |
             const run = context.payload.workflow_run;
-            const marker = '<!-- scheduled-workflow-failure-alert -->';
-            const title = '🚨 Scheduled workflow failing';
+            // Keyed by workflow name: one rolling issue per watched workflow, so a success
+            // only ever closes the alert for the workflow that actually recovered.
+            const marker = `<!-- scheduled-workflow-failure-alert:${run.name} -->`;
+            const title = `🚨 Scheduled workflow failing: ${run.name}`;
             // Only the default branch matters: a red run on a feature branch is the PR
             // author's problem, not a fleet-wide alert.
             const defaultBranch = (context.payload.repository || {}).default_branch || 'main';
@@ -55,9 +60,14 @@ jobs:
             // Conclusions that mean "nothing went wrong" — everything else (failure,
             // cancelled, timed_out, startup_failure, action_required) is reportable.
             const BENIGN = ['success', 'skipped', 'neutral'];
+            // `agentic-os,bug` is a broad pair and the backlog is long, so page at the max
+            // and sort by recency of update: a live rolling alert is touched by every new
+            // failure comment, which keeps it on the first page even as the backlog grows.
+            // Missing it would mean a duplicate alert issue rather than a missed alert.
             const { data: open } = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', labels: 'agentic-os,bug', per_page: 50,
+              state: 'open', labels: 'agentic-os,bug', per_page: 100,
+              sort: 'updated', direction: 'desc',
             });
             const existing = open.find(i => i.body && i.body.includes(marker));
             if (run.conclusion === 'success') {
@@ -84,6 +94,6 @@ jobs:
               await github.rest.issues.create({
                 owner: context.repo.owner, repo: context.repo.repo,
                 title, labels: ['agentic-os', 'bug'],
-                body: `${marker}\nA scheduled hub workflow ended in a bad conclusion. This rolling issue auto-closes on the next green run of a watched workflow.\n\nA \`cancelled\` entry usually means the run never reached a runner (queue starvation or a stale gate), not that someone cancelled it by hand.\n\n${line}\n\n_Managed by 740. Repo - Scheduled Workflow Failure Alert._`,
+                body: `${marker}\n**${run.name}** ended in a bad conclusion. This rolling issue tracks that one workflow and auto-closes on its next green run.\n\nA \`cancelled\` entry usually means the run never reached a runner (queue starvation or a stale gate), not that someone cancelled it by hand.\n\n${line}\n\n_Managed by 740. Repo - Scheduled Workflow Failure Alert._`,
               });
             }

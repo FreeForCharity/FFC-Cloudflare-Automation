@@ -47,7 +47,8 @@ UnicodeDecodeError: 'charmap' codec can't decode byte 0x9d in position 20770
 ```
 
 Nothing is wrong with the data — Python's default encoding on Windows is cp1252, and FFC issue
-titles, board item titles and PR bodies routinely contain em-dashes, arrows and smart quotes. Always:
+titles, board item titles and PR bodies routinely contain em-dashes, arrows and smart quotes.
+Always:
 
 ```python
 json.load(open(path, encoding="utf-8"))

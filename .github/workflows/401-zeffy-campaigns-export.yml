@@ -68,28 +68,51 @@ jobs:
 
   # Publish the public campaign list (title/url/status only) as a reviewable PR.
   # main is protected (changes via PR + merge queue only), so we open a data
-  # update PR rather than pushing directly. Uses CBM_TOKEN (a PAT, github-prod)
-  # so the PR can trigger required checks.
+  # update PR rather than pushing directly. Uses a real PAT (fetched from Key
+  # Vault over OIDC — see #844) so the PR can trigger required checks; a PR opened
+  # by GITHUB_TOKEN would not.
   deliver:
     needs: zeffy_campaigns_export
     runs-on: ubuntu-latest
     environment: github-prod
     # Only this gated job gets write + PR scopes (create-pull-request).
+    # NOTE: a job-level `permissions:` block REPLACES the workflow-level one, so
+    # `id-token: write` must be repeated here or the OIDC exchange below fails.
     permissions:
       contents: write
       pull-requests: write
+      id-token: write
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Validate CBM_TOKEN
-        env:
-          CBM_TOKEN: ${{ secrets.CBM_TOKEN }}
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Rotation is
+      # a new KV version — no GitHub change and no second copy that can drift.
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
         run: |
-          if [ -z "$CBM_TOKEN" ]; then
-            echo "::error::Missing secret CBM_TOKEN in environment 'github-prod'."
+          set -euo pipefail
+          token="$(az keyvault secret show \
+            --vault-name kv-ffc-admin-prod-cbm \
+            --name wr-all-cbm-github-pat \
+            --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
             exit 1
           fi
-          echo "CBM_TOKEN is present."
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
 
       - name: Download campaigns CSV artifact
         uses: actions/download-artifact@v8
@@ -109,7 +132,8 @@ jobs:
       - name: Open data update PR
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
         with:
-          token: ${{ secrets.CBM_TOKEN }}
+          # Set from Key Vault by the "Load the GitHub PAT" step above.
+          token: ${{ env.GH_TOKEN }}
           add-paths: docs/data/ffc-zeffy-campaigns.json
           commit-message: 'chore(zeffy): refresh public campaign list (title/url/status)'
           branch: data/zeffy-campaigns-auto

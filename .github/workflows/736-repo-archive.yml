@@ -51,6 +51,8 @@ permissions:
   contents: read
   issues: write
   actions: read
+  # Required for the OIDC exchange that fetches the PAT from Key Vault (#844).
+  id-token: write
 
 env:
   TARGET_ORG: FreeForCharity
@@ -219,17 +221,34 @@ jobs:
     needs: preflight
     environment: github-prod
     steps:
-      - name: Validate required token
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Rotation is
+      # a new KV version — no GitHub change and no second copy that can drift.
+      - name: Load the GitHub PAT from Key Vault
         shell: bash
         run: |
-          if [ -z "${{ secrets.CBM_TOKEN }}" ]; then
-            echo '::error::CBM_TOKEN secret is not set (environment: github-prod).'
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
             exit 1
           fi
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
 
       - name: Archive repository (guarded)
         env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
           IN_REPO: ${{ inputs.repo }}
           IN_REASON: ${{ inputs.reason }}
           IN_DRY_RUN: ${{ inputs.dry_run }}

@@ -8,6 +8,39 @@ Everything below was observed from outside the site on 2026-07-25 — public DNS
 the server-rendered HTML. Nothing here required Wix credentials, and nothing here should be treated
 as a substitute for reading their Wix dashboard (see [What we still need](#what-we-still-need)).
 
+## Application (confirmed 2026-07-25, workflow 221 run 30172777704)
+
+| Field      | Value                                    |
+| ---------- | ---------------------------------------- |
+| Client id  | **444**                                  |
+| Service id | **618**                                  |
+| Product    | FFC 501c3 Nonprofit / Charity Onboarding |
+| Status     | **Pending**                              |
+| Submitted  | 2026-07-24                               |
+
+The application is complete: FFC ToS certified, US-establishment certified, legal status "501(c)(3)
+Food, Water, or Shelter Organization", Candid/GuideStar profile
+`app.candid.org/profile/14588092/minoritywealthgap-88-3800775`, board contacts for five roles, a
+technical contact, footer data (Los Angeles, CA + public phone and email), and all four socials
+(Facebook, Instagram, X, YouTube `@minoritywealthgap3894`). EIN, phone numbers, and personal emails
+are masked in the search output by design — read them from client 444 in the WHMCS admin UI when
+generating the footer config, and **never transcribe an EIN off the public website instead**.
+
+Two gaps the application does not close:
+
+- **No GitHub username for the technical contact.** Workflow 701 needs one to add the maintainer,
+  and the application captures a LinkedIn URL instead. Ask before running 701 — a missing/invalid
+  value is silently skipped and the repo is created without the maintainer.
+- **The service's `domain` field is empty.** The match came from custom-field content, not a
+  recorded requested-domain. Confirm `minoritywealthgap.org` is the intended domain in writing
+  rather than inferring it.
+
+Also observed: the sweep could not read **at least 6 client records** (indexes 19, 22, 23, 24, 27,
+28 — the visible tail of `unreadableIndexes`). These are the malformed-UTF-8 rows described in
+[PR #868](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/pull/868), clustered in the
+early client ids. They did not hide this application, but they are real corruption in WHMCS and
+should be cleaned up in the admin UI.
+
 ## Current state
 
 | Layer         | Value                                                                   | Implication for FFC                                                                 |

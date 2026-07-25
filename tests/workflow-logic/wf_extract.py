@@ -16,7 +16,12 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
 
 def load_workflow(filename: str) -> dict:
-    return yaml.safe_load((WORKFLOWS / filename).read_text())
+    # encoding="utf-8" is required, not cosmetic. Workflow files contain ✓/❌/⚠️ and
+    # em-dashes; without it Python on Windows decodes as cp1252 and raises
+    # UnicodeDecodeError, which crashes the whole module before any test runs. The
+    # crash prints a traceback rather than FAIL lines, so a harness that greps for
+    # "FAIL" reports zero failures — a crashed suite looks exactly like a passing one.
+    return yaml.safe_load((WORKFLOWS / filename).read_text(encoding="utf-8"))
 
 
 def find_step(workflow: dict, job_id: str, name_substring: str) -> dict:

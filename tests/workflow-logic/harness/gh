@@ -18,6 +18,15 @@ case "$cmd" in
   api)
     case "$args" in
       *orgs/*/rulesets*)
+        # TEST_ORG_RULESETS_FAIL reproduces the REAL failure shape that caused #854:
+        # gh writes its error JSON to STDOUT (not stderr) and exits non-zero. Any
+        # caller that swallows the exit code inherits the error body as if it were
+        # data. Keep this on stdout — moving it to stderr would make the test unable
+        # to catch the bug it exists for.
+        if [ "${TEST_ORG_RULESETS_FAIL:-}" = "1" ]; then
+          echo '{"message":"Resource not accessible by personal access token","status":"403"}'
+          exit 1
+        fi
         echo "${TEST_ORG_RULESETS:-1}"
         ;;
       *rules/branches/*)

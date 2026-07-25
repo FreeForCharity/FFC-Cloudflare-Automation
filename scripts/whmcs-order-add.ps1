@@ -117,7 +117,7 @@ try {
         $preview = $body.Clone()
         # Redact secrets AND customfields (the serialized payload can embed PII
         # such as emails/phone/EIN that would otherwise print to dry-run logs).
-        foreach ($k in @('secret', 'accesskey', 'customfields')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
+        foreach ($k in @('identifier', 'secret', 'accesskey', 'customfields')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
         [pscustomobject]@{ action = 'AddOrder'; dryRun = $true; orderid = $null; invoiceid = $null; productids = $null; request = $preview } | ConvertTo-Json -Depth 8
         exit 0
     }

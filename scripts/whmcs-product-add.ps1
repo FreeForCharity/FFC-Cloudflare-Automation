@@ -124,7 +124,7 @@ try {
 
     if ($DryRun) {
         $preview = $body.Clone()
-        foreach ($k in @('secret', 'accesskey')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
+        foreach ($k in @('identifier', 'secret', 'accesskey')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
         [pscustomobject]@{ action = 'AddProduct'; dryRun = $true; pid = $null; request = $preview } | ConvertTo-Json -Depth 8
         exit 0
     }

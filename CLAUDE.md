@@ -46,6 +46,15 @@
   ```bash
   gh api graphql -f query='query{organization(login:"FreeForCharity"){projectV2(number:9){workflows(first:20){nodes{name enabled}}}}}'
   ```
+- **A negative read straight after a successful GitHub write means "unknown", not "failed".** The
+  write APIs are strongly consistent; the _list/read_ endpoints behind them are not, and the lag is
+  seconds. Three instances so far: `mergeQueueEntry` reads `null` for a few seconds after a good
+  `--auto` enqueue (2026-07-24); `gh project item-list` read back the full board **without** an
+  issue that `gh project item-add` had just added successfully (2026-07-25, org project #9); and the
+  `POST /pulls` HTTP-500 episode below, where the branch had in fact been pushed. Re-poll before
+  concluding anything failed, and **never let an immediate negative read trigger a retry loop** —
+  run 41 burned ~51 attempts that way. Where the write is idempotent (`item-add` is: two calls
+  produced one row) a retry is merely wasteful; where it is not, it is destructive.
 - **Push the branch before opening the PR.** On 2026-07-24, `POST /repos/…/pulls` returned **HTTP
   500 with an empty body** for >20 minutes, across **multiple FFC repos**
   (`FFC-IN-freeforcharity.org` and `FFC-Cloudflare-Automation`) and all three clients (`gh`, REST,

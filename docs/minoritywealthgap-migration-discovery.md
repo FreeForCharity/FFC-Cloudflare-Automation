@@ -132,7 +132,10 @@ publicly and ports to static as-is. Registration only matters for events that ha
 **Beware the "open registration" count.** 13 events advertise open registration, but 12 of them are
 past-dated (2022–2025) — Wix leaves RSVP open on past events. Reading that number without checking
 the dates turns one event into a phantom thirteen. Event dates come from each page's JSON-LD
-`startDate`; the full audit is in the session's `events-audit.tsv`.
+`startDate`; all 34 rows are checked in beside this doc as
+[`minoritywealthgap-events-audit.tsv`](minoritywealthgap-events-audit.tsv), so the claim above is
+re-checkable rather than something you have to take on trust. Re-fetch the URLs to refresh it — the
+"upcoming" count is only true as of 2026-07-25.
 
 So this is not "34 events cannot come over". It is **one event needing a registration path** —
 Eventbrite / Zeffy / Givebutter, or a `mailto:` if it is small — plus a Wix export of existing

@@ -6,7 +6,7 @@
 .DESCRIPTION
     Read-only. Answers four questions the fleet could not previously answer:
 
-      1. Which domains have a GTM container, and is any container SHARED between sites?
+      1. Which domains have a GTM container, and is any container shared with a CHARITY site?
       2. Which domains have a GA4 property + web stream?
       3. Which domains are verified in Search Console?
       4. How much traffic does each get — ranked, so rollout order is measured, not alphabetical.
@@ -24,7 +24,9 @@
       gets treated as if it does not.
 
     GA4 properties are matched to domains by web-stream `defaultUri`, never by property display
-    name — docs/google-api.md records display names as historically unreliable.
+    name — docs/google-api.md records display names as historically unreliable. This also handles
+    the internal model correctly, where ONE property carries a stream per FFC domain rather than a
+    property per site.
 
     TWO AUTH PATHS, and conflating them is a 401 on every call:
       * Tag Manager, Search Console, GA4 ADMIN API — Workspace-adjacent. Need a DWD token minted
@@ -86,6 +88,22 @@ param(
     # analytics SA that GOOGLE_APPLICATION_CREDENTIALS points at. 501's gsc-smoke, 503 and 505 all
     # download this key separately for exactly this reason.
     [string]$WorkspaceKeyPath,
+    # Domains that are FFC's OWN pages rather than supported-charity sites. The analytics model
+    # differs and the difference is not inferable from the repo name:
+    #   internal  -> ONE GA4 property with a stream PER DOMAIN, and containers MAY be shared
+    #                (docs/google-api.md: "Internal sites may share or keep existing containers")
+    #   charity   -> one property AND one container each, because GTM access is container-level
+    #                and a charity POC self-administers only their own container
+    # So a shared container is expected for internal pages and a real finding for a charity site.
+    [string[]]$InternalDomains = @(
+        'freeforcharity.org',
+        'ffcadmin.org',
+        'ffcworkingsite1.org',
+        'freeforcharity.github.io/FFC-IN-Footer_Only_Template',
+        'technologymonastery.org',
+        'amargraves.org',
+        'makeacalendarinvite.org'
+    ),
     [switch]$SkipLiveProbe
 )
 
@@ -337,11 +355,20 @@ $gaAll = if ($gaProbe.ok) { @($gaProbe.value) } else { @() }
 $gscAll = if ($gscProbe.ok) { @($gscProbe.value) } else { @() }
 
 # Which GTM containers serve more than one domain — violates one-container-per-charity.
+$internalSet = @($InternalDomains | ForEach-Object { Normalize-Domain $_ })
 $sharedContainers = @()
 foreach ($c in $gtmAll) {
     $ds = @($c.domains | ForEach-Object { Normalize-Domain $_ } | Where-Object { $_ })
     if ($ds.Count -gt 1) {
-        $sharedContainers += [pscustomobject]@{ publicId = $c.publicId; domains = $ds }
+        # Sharing is only a finding when a SUPPORTED-CHARITY domain is involved. Across FFC's own
+        # pages it is the documented design, not drift — they are one organisation under one EIN.
+        $charityDomains = @($ds | Where-Object { $internalSet -notcontains $_ })
+        $sharedContainers += [pscustomobject]@{
+            publicId       = $c.publicId
+            domains        = $ds
+            allInternal    = ($charityDomains.Count -eq 0)
+            charityDomains = $charityDomains
+        }
     }
 }
 
@@ -484,10 +511,24 @@ foreach ($s in $report) {
     $lines += "| $($s.domain) | $gtmCell | $gaCell | $gscCell | $tCell | $mCell |"
 }
 
-if ($sharedContainers.Count -gt 0) {
+$sharedCharity = @($sharedContainers | Where-Object { -not $_.allInternal })
+$sharedInternal = @($sharedContainers | Where-Object { $_.allInternal })
+if ($sharedCharity.Count -gt 0) {
     $lines += ''
-    $lines += '### Shared GTM containers (violates one-container-per-charity)'
-    foreach ($c in $sharedContainers) { $lines += "- ``$($c.publicId)`` → $($c.domains -join ', ')" }
+    $lines += '### Shared GTM containers involving a CHARITY site — review'
+    $lines += ''
+    $lines += 'One container per charity is required because GTM access is container-level: a shared'
+    $lines += 'container cannot delegate per-charity admin to a POC.'
+    foreach ($c in $sharedCharity) {
+        $lines += "- ``$($c.publicId)`` → $($c.domains -join ', ')  (charity: $($c.charityDomains -join ', '))"
+    }
+}
+if ($sharedInternal.Count -gt 0) {
+    $lines += ''
+    $lines += '### Shared GTM containers across FFC-internal pages — expected'
+    $lines += ''
+    $lines += 'Internal FFC pages are one organisation under one EIN, and may share containers by design.'
+    foreach ($c in $sharedInternal) { $lines += "- ``$($c.publicId)`` → $($c.domains -join ', ')" }
 }
 
 $allMismatch = @($report | Where-Object { $_.mismatches.Count -gt 0 })

@@ -1,0 +1,497 @@
+name: '742. Repo - Fleet Security Audit Backfill [Org]'
+run-name:
+  'Fleet Security Audit Backfill (dry_run=${{ inputs.dry_run }}, max_repos=${{ inputs.max_repos }})'
+
+# Closes the coverage gap that workflow 741 measures: opens one pull request per
+# FFC-EX repo that lacks dependency-vulnerability detection, adding BOTH halves
+# together — `.github/workflows/security-audit.yml` and the `audit:high` script
+# it runs.
+#
+# Why a hub workflow and not 34 hand-made PRs (#838): the fleet keeps growing,
+# and a rollout that lives here also covers the 35th repo provisioned next
+# month. The target list is re-derived from the org listing on every dispatch,
+# never read from a checklist, which is the failure #838 was opened about (its
+# scope was estimated at 13 repos when the real number was 38).
+#
+# Never pushes a default branch — every change goes through a PR on the target
+# repo. Never bumps a dependency: making the vulnerabilities visible is this
+# workflow's job, upgrading them is #822's. A newly-wired repo whose audit goes
+# red is this working correctly.
+#
+# Two-job split so a preview costs nothing and needs nobody:
+#   - plan  — ungated, GITHUB_TOKEN, read-only. `dry_run=true` (the default)
+#             stops here, so anyone can see the exact planned diff without an
+#             approval.
+#   - apply — `dry_run=false` only, gated `github-prod` (a cross-repo write
+#             genuinely needs CBM_TOKEN). Acts on the plan the gate approver saw.
+#
+# Decision logic lives in scripts/fleet-audit-backfill-lib.js behind
+# scripts/fleet-audit-backfill.js, unit-tested under tests/workflow-logic/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Preview only: print the per-repo plan, open no PRs (no approval needed)'
+        required: false
+        default: true
+        type: boolean
+      max_repos:
+        description: 'Batch size cap — how many repos this run may touch'
+        required: false
+        default: '10'
+        type: string
+      only_repos:
+        description: 'Optional comma-separated repo names to restrict to (e.g. FFC-EX-example.org)'
+        required: false
+        type: string
+      open_as_draft:
+        description: 'Open the per-repo PRs as drafts'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+# Serialize: two concurrent backfills would race on the same target branches.
+concurrency:
+  group: 742-fleet-security-audit-backfill
+  cancel-in-progress: false
+
+env:
+  ORG: FreeForCharity
+  CANONICAL_REPO: FreeForCharity/FFC-IN-FFC_Single_Page_Template
+  AUDIT_WORKFLOW_PATH: .github/workflows/security-audit.yml
+
+jobs:
+  plan:
+    name: Plan (read-only)
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
+      count: ${{ steps.plan.outputs.count }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout (for the planning library)
+        uses: actions/checkout@v7.0.1
+
+      - name: Validate inputs
+        shell: bash
+        env:
+          MAX_REPOS: ${{ inputs.max_repos }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$MAX_REPOS" =~ ^[0-9]+$ ]] || [ "$((10#$MAX_REPOS))" -lt 1 ]; then
+            echo "::error::max_repos must be a positive integer, got '$MAX_REPOS'"
+            exit 1
+          fi
+          # `10#` because this regex accepts `08`, and bare `$((08))` is a hard
+          # bash error ("value too great for base") — an 8 is not octal. That is
+          # the guaranteed hazard. jq is NOT: `jq --argjson n 08` parses fine as
+          # 8 on the 1.7 the runners ship, so normalizing before jq is
+          # version-independence against a stricter build, not a fix for an
+          # observed failure. Stated precisely so nobody chases a non-repro.
+          echo "::notice::max_repos=$((10#$MAX_REPOS))"
+
+      - name: Fetch + validate the canonical security-audit.yml
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Source of truth per #838 — do not write a new one. Fetched rather
+          # than vendored so the fleet cannot drift from the canonical copy.
+          gh api "repos/${CANONICAL_REPO}/contents/${AUDIT_WORKFLOW_PATH}" \
+            -H "Accept: application/vnd.github.raw" > canonical-security-audit.yml
+          # Fail here, before the gate: this run would copy this file to every
+          # uncovered repo, so a template that has drifted out of the expected
+          # shape (e.g. moved to pnpm, #771) must stop the rollout rather than
+          # be amplified 34 times.
+          node scripts/fleet-audit-backfill.js validate-template canonical-security-audit.yml
+          echo "Canonical template validated."
+
+      - name: Gather fleet coverage facts
+        id: gather
+        shell: bash
+        env:
+          ONLY_REPOS: ${{ inputs.only_repos }}
+        run: |
+          set -uo pipefail
+
+          # Root-directory listing rather than a per-file fetch: one call yields
+          # both package.json and package-lock.json presence, and it never
+          # downloads a lockfile (which can be megabytes across 44 repos).
+          # Echoes OK / ABSENT / ERROR:<msg> so a private or rate-limited repo is
+          # reported rather than silently counted as uncovered.
+          #
+          # The endpoint is built explicitly rather than by interpolating a
+          # possibly-empty $dir: `contents/` with a trailing slash is not the
+          # same request as `contents`.
+          list_dir() {
+            local repo="$1" dir="$2" dest="$3" rc path
+            if [ -n "$dir" ]; then
+              path="repos/${repo}/contents/${dir}"
+            else
+              path="repos/${repo}/contents"
+            fi
+            : > "$dest"
+            gh api "$path" --jq '[.[].name] | join(",")' > "$dest" 2>/tmp/err
+            rc=$?
+            if [ "$rc" -ne 0 ]; then
+              if grep -qi "Not Found" /tmp/err; then
+                echo "ABSENT"
+              else
+                echo "ERROR:$(head -c 200 /tmp/err | tr '\n' ' ')"
+              fi
+              return 0
+            fi
+            echo "OK"
+          }
+
+          # Fleet = every non-archived FFC-EX-* repo, with its default branch in
+          # the same call. FFC-IN-* is out of scope here (all four already audit,
+          # and ffcadmin is pnpm so the npm shape does not transfer — #771/#838).
+          gh repo list "$ORG" --limit 1000 --no-archived \
+            --json name,defaultBranchRef \
+            --jq '.[] | select(.name | startswith("FFC-EX-")) | .name + " " + (.defaultBranchRef.name // "")' \
+            | sort -u > fleet.txt
+
+          if [ ! -s fleet.txt ]; then
+            echo "::error::Org listing returned no FFC-EX-* repos — refusing to proceed"
+            exit 1
+          fi
+          echo "Fleet size: $(wc -l < fleet.txt)"
+
+          candidates="candidates.json"
+          echo "[]" > "$candidates"
+
+          # Strip ALL whitespace from the filter before matching. `a.org, b.org`
+          # is the natural way to type a list, and the substring match below
+          # would then fail on ` b.org` and quietly process one repo instead of
+          # two — a silent narrowing of exactly the kind this workflow exists to
+          # stop. Normalizing beats documenting a no-spaces rule nobody reads.
+          ONLY_REPOS="$(printf '%s' "$ONLY_REPOS" | tr -d '[:space:]')"
+          matched_filter=""
+
+          while read -r name defbranch; do
+            [ -z "$name" ] && continue
+            if [ -n "$ONLY_REPOS" ]; then
+              if [[ ",$ONLY_REPOS," != *",$name,"* ]]; then
+                continue
+              fi
+              matched_filter="${matched_filter},${name}"
+            fi
+            full="${ORG}/${name}"
+
+            root_status=$(list_dir "$full" "" root.txt)
+            case "$root_status" in
+              ERROR:*)
+                jq --arg r "$full" --arg e "${root_status#ERROR:}" \
+                  '. += [{"repo":$r,"error":$e}]' "$candidates" > "$candidates.tmp" \
+                  && mv "$candidates.tmp" "$candidates"
+                echo "::warning::$full root listing failed: ${root_status#ERROR:}"
+                continue
+                ;;
+              ABSENT)
+                # ABSENT is legitimate for .github/workflows (a repo may have
+                # none) but the root always exists, so a 404 here means the repo
+                # could not be listed — overwhelmingly an empty repo with no
+                # commits, possibly a path/auth/transient quirk.
+                #
+                # Skipped rather than blocked: with no commits there genuinely is
+                # no package.json and no dependency tree, so this is a correct
+                # no-op, and blocking would leave a permanent entry nobody can
+                # action. But it gets its OWN reason rather than falling through
+                # into the plain "no package.json" bucket, because the defect
+                # #838 exists to correct is silent miscounting of scope (13
+                # estimated, 38 real, 44 measured) — and the plan output is what
+                # the gate approver reads.
+                jq --arg r "$full" \
+                  --arg s "root listing returned 404 — empty repo (no commits) or unlistable; no dependency tree either way" \
+                  '. += [{"repo":$r,"hasPackageJson":false,"skipReason":$s}]' \
+                  "$candidates" > "$candidates.tmp" && mv "$candidates.tmp" "$candidates"
+                echo "::warning::$full root listing returned 404 — recorded as skipped with a distinct reason"
+                continue
+                ;;
+            esac
+            root="$(cat root.txt)"
+
+            if [[ ",$root," != *",package.json,"* ]]; then
+              jq --arg r "$full" '. += [{"repo":$r,"hasPackageJson":false}]' \
+                "$candidates" > "$candidates.tmp" && mv "$candidates.tmp" "$candidates"
+              echo "  $full -> no package.json (out of scope)"
+              continue
+            fi
+
+            has_lock=false
+            if [[ ",$root," == *",package-lock.json,"* ]]; then has_lock=true; fi
+
+            wf_status=$(list_dir "$full" ".github/workflows" wfs.txt)
+            case "$wf_status" in
+              ERROR:*)
+                jq --arg r "$full" --arg e "${wf_status#ERROR:}" \
+                  '. += [{"repo":$r,"error":$e}]' "$candidates" > "$candidates.tmp" \
+                  && mv "$candidates.tmp" "$candidates"
+                echo "::warning::$full workflows listing failed: ${wf_status#ERROR:}"
+                continue
+                ;;
+            esac
+            has_wf=false
+            if [[ ",$(cat wfs.txt)," == *",security-audit.yml,"* ]]; then has_wf=true; fi
+
+            # Only now fetch package.json itself, and only to answer one
+            # question: is the audit:high script declared? Parsed, not grepped —
+            # a bare mention of the name elsewhere must not read as covered.
+            if ! gh api "repos/${full}/contents/package.json" \
+              -H "Accept: application/vnd.github.raw" > pkg.json 2>/tmp/err; then
+              jq --arg r "$full" --arg e "$(head -c 200 /tmp/err | tr '\n' ' ')" \
+                '. += [{"repo":$r,"error":$e}]' "$candidates" > "$candidates.tmp" \
+                && mv "$candidates.tmp" "$candidates"
+              echo "::warning::$full package.json fetch failed"
+              continue
+            fi
+            has_script="$(node scripts/fleet-audit-backfill.js probe pkg.json)"
+
+            jq --arg r "$full" --argjson w "$has_wf" --argjson s "$has_script" \
+              --argjson l "$has_lock" --arg b "$defbranch" \
+              '. += [{"repo":$r,"hasPackageJson":true,"hasWorkflow":$w,"hasScript":$s,"hasLockfile":$l,"defaultBranch":(if $b=="" then null else $b end)}]' \
+              "$candidates" > "$candidates.tmp" && mv "$candidates.tmp" "$candidates"
+            echo "  $full -> workflow=$has_wf script=$has_script lockfile=$has_lock branch=${defbranch:-unknown}"
+          done < fleet.txt
+
+          # A filter entry that matched nothing is an operator error — a typo, an
+          # archived repo, an FFC-IN name — and it must not pass silently. Left
+          # unchecked it yields a smaller batch, or `targets=0`, which reads as
+          # "the fleet is already covered": the one failure this workflow must
+          # never present as success. Hard-fail rather than warn, because the
+          # plan job is ungated, cheap, and re-dispatchable.
+          if [ -n "$ONLY_REPOS" ]; then
+            unmatched=""
+            IFS=',' read -ra wanted <<< "$ONLY_REPOS"
+            for w in "${wanted[@]}"; do
+              [ -z "$w" ] && continue
+              if [[ ",$matched_filter," != *",$w,"* ]]; then
+                unmatched="${unmatched} ${w}"
+              fi
+            done
+            if [ -n "$unmatched" ]; then
+              echo "::error::only_repos named repos that are not in the non-archived FFC-EX fleet:${unmatched}"
+              exit 1
+            fi
+          fi
+
+          echo "candidates_file=$candidates" >> "$GITHUB_OUTPUT"
+
+      - name: Build the plan
+        id: plan
+        shell: bash
+        env:
+          CANDIDATES_FILE: ${{ steps.gather.outputs.candidates_file }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          MAX_REPOS: ${{ inputs.max_repos }}
+        run: |
+          set -euo pipefail
+          node scripts/fleet-audit-backfill.js plan "$CANDIDATES_FILE" > plan.json
+
+          # Base-10 normalized (see the validate step): required for the bash
+          # arithmetic, and belt-and-braces for jq, which accepts `08` today but
+          # would be within spec to reject it.
+          limit="$((10#$MAX_REPOS))"
+
+          targets_all="$(jq '.targets | length' plan.json)"
+          blocked="$(jq '.blocked | length' plan.json)"
+          skipped="$(jq '.skipped | length' plan.json)"
+
+          # Trim to the batch cap here, so the plan the gate approver reviews is
+          # exactly the set that will be written.
+          jq --argjson n "$limit" '.targets[:$n]' plan.json > batch.json
+          batch="$(jq 'length' batch.json)"
+
+          node scripts/fleet-audit-backfill.js summary plan.json "$DRY_RUN" "$limit" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::notice::targets=$targets_all batch=$batch blocked=$blocked skipped=$skipped dry_run=$DRY_RUN"
+
+          {
+            echo "targets<<PLAN_EOF"
+            cat batch.json
+            echo "PLAN_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "count=$batch" >> "$GITHUB_OUTPUT"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry_run=true — plan printed above, no PRs opened."
+          fi
+
+  apply:
+    name: Apply (open one PR per repo)
+    needs: plan
+    if: ${{ inputs.dry_run == false && needs.plan.outputs.count != '0' }}
+    runs-on: ubuntu-latest
+    environment: github-prod
+    steps:
+      - name: Checkout (for the backfill scripts)
+        uses: actions/checkout@v7.0.1
+
+      - name: Validate required token
+        shell: bash
+        env:
+          CBM_TOKEN: ${{ secrets.CBM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CBM_TOKEN}" ]; then
+            echo "::error::CBM_TOKEN secret is not set (environment: github-prod)."
+            exit 1
+          fi
+
+      - name: Backfill each target repo
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+          TARGETS_JSON: ${{ needs.plan.outputs.targets }}
+          OPEN_AS_DRAFT: ${{ inputs.open_as_draft }}
+        run: |
+          set -uo pipefail
+          printf '%s' "$TARGETS_JSON" > targets.json
+
+          # Re-fetch and re-validate rather than trusting the plan job: the
+          # canonical file could have changed while the run waited at the gate.
+          gh api "repos/${CANONICAL_REPO}/contents/${AUDIT_WORKFLOW_PATH}" \
+            -H "Accept: application/vnd.github.raw" > canonical-security-audit.yml
+          if ! node scripts/fleet-audit-backfill.js validate-template canonical-security-audit.yml; then
+            echo "::error::Canonical template no longer usable — refusing to roll out."
+            exit 1
+          fi
+          TEMPLATE="$PWD/canonical-security-audit.yml"
+
+          gh auth setup-git
+          git config --global user.name "ffc-automation[bot]"
+          git config --global user.email "actions@github.com"
+
+          BRANCH="chore/security-audit-backfill"
+          failures=0
+          {
+            echo "## 742 Fleet Security Audit Backfill — results"
+            echo ''
+            echo '| Repo | Result | Cron | PR |'
+            echo '| --- | --- | --- | --- |'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          total="$(jq 'length' targets.json)"
+          for i in $(seq 0 $((total - 1))); do
+            repo="$(jq -r ".[$i].repo" targets.json)"
+            cron="$(jq -r ".[$i].cron" targets.json)"
+            jq ".[$i]" targets.json > target.json
+            echo "::group::$repo"
+
+            rm -rf target-repo
+            if ! git clone --depth 1 "https://github.com/${repo}.git" target-repo; then
+              echo "::warning::$repo clone failed"
+              echo "| $repo | ❌ clone failed | — | — |" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1))
+              echo "::endgroup::"
+              continue
+            fi
+
+            node scripts/fleet-audit-backfill.js apply \
+              target-repo "$repo" "$cron" "$TEMPLATE" > result.json 2>apply-err.txt
+            rc=$?
+            reason="$(head -c 300 apply-err.txt | tr '\n' ' ')"
+
+            # The CLI's two nonzero codes mean different things and must not be
+            # collapsed. Exit 2 is BLOCKED: an expected, reported outcome for a
+            # shape the CLI will not edit unattended. Exit 1 is an unexpected
+            # error — a bug or a broken assumption, e.g. the post-write coverage
+            # check failing. Treating 1 as "blocked" would let the job report
+            # success while internal errors occurred, which is precisely the
+            # looks-fine-but-lied failure this whole workflow exists to avoid.
+            if [ "$rc" -eq 2 ]; then
+              echo "::warning::$repo blocked: $reason"
+              echo "| $repo | ⏭️ blocked — ${reason} | — | — |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::endgroup::"
+              continue
+            elif [ "$rc" -ne 0 ]; then
+              echo "::error::$repo errored (exit $rc): $reason"
+              echo "| $repo | ❌ error (exit $rc) — ${reason} | — | — |" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1))
+              echo "::endgroup::"
+              continue
+            fi
+            cat result.json
+
+            cd target-repo
+            git add -A
+
+            # Guard: this change owns exactly two paths. Anything else staged
+            # means the edit went somewhere unintended, and a charity's repo is
+            # not the place to find that out after the fact.
+            unexpected="$(git diff --cached --name-only \
+              | grep -vE '^(\.github/workflows/security-audit\.yml|package\.json)$' || true)"
+            if [ -n "$unexpected" ]; then
+              echo "::error::$repo staged unexpected paths: $(echo "$unexpected" | tr '\n' ' ')"
+              echo "| $repo | ❌ unexpected paths staged | — | — |" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1))
+              cd ..
+              echo "::endgroup::"
+              continue
+            fi
+
+            if git diff --cached --quiet; then
+              echo "Already covered — nothing to commit."
+              echo "| $repo | ✅ already covered | \`$cron\` | — |" >> "$GITHUB_STEP_SUMMARY"
+              cd ..
+              echo "::endgroup::"
+              continue
+            fi
+            git --no-pager diff --cached --stat
+
+            DEFBRANCH="$(git symbolic-ref --short HEAD)"
+            git checkout -b "$BRANCH"
+            git commit -m "ci: add security audit (npm audit high/critical, daily)"
+            if ! git push -u origin "$BRANCH" --force-with-lease; then
+              echo "::warning::$repo push failed"
+              echo "| $repo | ❌ push failed | — | — |" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1))
+              cd ..
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Idempotent re-dispatch: the push above already updated an open PR
+            # for this head branch, so don't hard-fail on `gh pr create`.
+            if url="$(gh pr view "$BRANCH" --repo "$repo" --json url --jq .url 2>/dev/null)"; then
+              echo "| $repo | ♻️ updated existing PR | \`$cron\` | $url |" >> "$GITHUB_STEP_SUMMARY"
+              cd ..
+              echo "::endgroup::"
+              continue
+            fi
+
+            cd ..
+            node scripts/fleet-audit-backfill.js pr-body target.json > pr-body.md
+            draft_flag=()
+            if [ "$OPEN_AS_DRAFT" = "true" ]; then draft_flag=(--draft); fi
+            if url="$(gh pr create --repo "$repo" --base "$DEFBRANCH" --head "$BRANCH" \
+              --title "ci: add security audit (npm audit high/critical, daily)" \
+              --body-file pr-body.md "${draft_flag[@]+"${draft_flag[@]}"}")"; then
+              echo "| $repo | 🆕 PR opened | \`$cron\` | $url |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::$repo PR creation failed (branch is pushed)"
+              echo "| $repo | ⚠️ pushed, PR create failed | \`$cron\` | — |" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1))
+            fi
+            echo "::endgroup::"
+          done
+
+          {
+            echo ''
+            echo "Coverage is re-measured by **741. Repo - Fleet Security Audit Coverage**"
+            echo "(rolling issue), which closes itself once the fleet is fully covered. Refs #838."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Fail the job only after every repo has been attempted — one bad
+          # target must not strand the rest of the batch. PRs already opened
+          # stay valid.
+          if [ "$failures" -gt 0 ]; then
+            echo "::error::$failures repo(s) failed — see the table above."
+            exit 1
+          fi

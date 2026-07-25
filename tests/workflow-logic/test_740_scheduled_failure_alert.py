@@ -750,12 +750,78 @@ def test_triggers_are_schedule_plus_dispatch_only():
     assert crons, on
 
 
+def _cron_minutes(expr: str) -> set:
+    """Every minute of the hour a cron expression's minute field fires on.
+
+    Covers the syntaxes cron accepts: `*`, `a`, `a,b`, `a-b`, `*/n`, `a-b/n`, and
+    Vixie's `a/n` (= `a-59/n`). The first cut of this parser matched literal digits
+    only, which read `*/3` — a schedule that fires on :09, colliding head-on with
+    the poll — as "no minutes at all" (caught in review on PR #846). Anything it
+    cannot parse raises rather than returning an empty set, because silently
+    understanding nothing is exactly how a collision guard stops guarding.
+    """
+    field = expr.split()[0]
+    out = set()
+    for part in field.split(","):
+        step = 1
+        if "/" in part:
+            part, _, raw_step = part.partition("/")
+            if not raw_step.isdigit() or int(raw_step) == 0:
+                raise ValueError(f"unparsable cron step in {expr!r}")
+            step = int(raw_step)
+        if part == "*":
+            lo, hi = 0, 59
+        elif "-" in part:
+            lo_s, _, hi_s = part.partition("-")
+            if not (lo_s.isdigit() and hi_s.isdigit()):
+                raise ValueError(f"unparsable cron range in {expr!r}")
+            lo, hi = int(lo_s), int(hi_s)
+        elif part.isdigit():
+            # A bare literal with a step is Vixie's `a/n` shorthand for `a-59/n`.
+            lo = int(part)
+            hi = 59 if step > 1 else lo
+        else:
+            raise ValueError(f"unparsable cron minute field in {expr!r}")
+        if not (0 <= lo <= hi <= 59):
+            raise ValueError(f"cron minute out of range in {expr!r}")
+        out |= set(range(lo, hi + 1, step))
+    return out
+
+
+def test_the_cron_minute_parser_understands_steps_and_ranges():
+    # The collision guard below is only as good as this parser.
+    assert _cron_minutes("9,39 * * * *") == {9, 39}
+    assert _cron_minutes("*/30 * * * *") == {0, 30}
+    assert 9 in _cron_minutes("*/3 * * * *")  # the case the literal-only parser missed
+    assert 9 in _cron_minutes("5-15 * * * *")
+    assert _cron_minutes("10-20/5 * * * *") == {10, 15, 20}
+    assert _cron_minutes("* * * * *") == set(range(60))
+    assert _cron_minutes("9/20 * * * *") == {9, 29, 49}
+    for bad in ("x * * * *", "1-y * * * *", "*/0 * * * *", "70 * * * *"):
+        try:
+            _cron_minutes(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"{bad!r} must raise, not parse to a silent empty set")
+
+
+def test_the_poll_declares_literal_minutes_not_a_wildcard():
+    # Keep 740's OWN cron strict: a stepped or wildcard expression here would
+    # spread the sweep across slots the staggering is meant to keep clear, and
+    # would make the collision guard below far blunter than it needs to be.
+    wf = load_workflow(WORKFLOW)
+    for e in wf.get("on", wf.get(True, {}))["schedule"]:
+        field = e["cron"].split()[0]
+        assert all(p.isdigit() for p in field.split(",")), (
+            f"740's own cron must name concrete minutes, not a wildcard/stepped "
+            f"expression: {e['cron']!r}"
+        )
+
+
 def test_the_poll_cron_collides_with_no_other_hub_schedule():
     # Two crons in the same minute slot contend for the same runner burst; the
     # hub deliberately staggers them.
-    def minutes(expr):
-        return {int(m) for m in expr.split()[0].split(",") if m.isdigit()}
-
+    minutes = _cron_minutes
     wf = load_workflow(WORKFLOW)
     mine = set()
     for e in wf.get("on", wf.get(True, {}))["schedule"]:

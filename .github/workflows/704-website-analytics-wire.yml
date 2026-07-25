@@ -32,6 +32,8 @@ on:
 
 permissions:
   contents: read
+  # Required for the OIDC exchange that fetches the PAT from Key Vault (#844).
+  id-token: write
 
 # Serialize per-domain so re-dispatches for the same site queue instead of racing.
 concurrency:
@@ -45,14 +47,39 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Validate inputs + required token
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Rotation is
+      # a new KV version — no GitHub change and no second copy that can drift.
+      - name: Load the GitHub PAT from Key Vault
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "${CBM_TOKEN}" ]; then
-            echo "::error::CBM_TOKEN secret is not set (environment: github-prod)."
+          token="$(az keyvault secret show \
+            --vault-name kv-ffc-admin-prod-cbm \
+            --name wr-all-cbm-github-pat \
+            --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
             exit 1
           fi
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
           if [[ ! "${{ inputs.gtm_id }}" =~ ^GTM-[A-Z0-9]{5,9}$ ]]; then
             echo "::error::gtm_id '${{ inputs.gtm_id }}' is not a valid GTM-XXXXXXX id."
             exit 1
@@ -61,13 +88,10 @@ jobs:
             echo "::error::measurement_id '${{ inputs.measurement_id }}' is not a valid G-XXXXXXXXXX id."
             exit 1
           fi
-        env:
-          CBM_TOKEN: ${{ secrets.CBM_TOKEN }}
 
       - name: Wire analytics + open PR
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
           DOMAIN: ${{ inputs.domain }}
           GTM_ID: ${{ inputs.gtm_id }}
           MEASUREMENT_ID: ${{ inputs.measurement_id }}

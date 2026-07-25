@@ -1,0 +1,107 @@
+name: '506. Google - Fleet Telemetry Reachability [GOOGLE]'
+run-name: 'Telemetry reachability'
+
+# Answers four questions the fleet could not previously answer, in one read-only pass:
+#   1. which domains have a GTM container (and is any container SHARED between sites)
+#   2. which domains have a GA4 property + web stream
+#   3. which domains are verified in Search Console
+#   4. how much traffic each gets — ranked, so rollout order is measured rather than alphabetical
+#
+# Two properties of the report matter more than the raw numbers:
+#
+#   * It compares the SERVED HTML against what the APIs say is provisioned. A site can have a
+#     container provisioned and never load it, or load a hardcoded template container the API does
+#     not associate with it. Both are live today among the convergence set, and neither is
+#     visible from provisioning records alone.
+#
+#   * It never conflates "no data" with "no traffic". A site with no GA4 property is UNMEASURED;
+#     a site with a property and zero sessions has NO TRAFFIC. Collapsing the two sorts unmeasured
+#     sites to the bottom of a traffic-ordered rollout — which is how a site that matters ends up
+#     treated as if it does not.
+#
+# Read-only end to end: analytics.readonly, tagmanager.readonly and webmasters are all already in
+# the delegated scope grant (docs/google-api.md), so this needs no new credential or scope.
+# Ref #865, epic #861.
+
+on:
+  schedule:
+    - cron: '23 7 * * 1' # weekly, Monday 07:23 UTC — after the daily GA report at 07:17
+  workflow_dispatch:
+    inputs:
+      domains:
+        description:
+          'Comma-separated domains (blank = the four live domains of the six primary sites; the two
+          templates have no production domain)'
+        required: false
+        type: string
+      days:
+        description: 'Traffic lookback window in days'
+        required: false
+        default: '28'
+        type: string
+      skip_live_probe:
+        description: 'Skip fetching served HTML (API-only run)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  # Required for the OIDC exchange that fetches the Google SA key from Key Vault.
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  reachability:
+    name: Collect telemetry reachability
+    runs-on: windows-latest
+    # google-prod-read is ungated — this workflow only reads.
+    environment: google-prod-read
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Validate required Azure secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set (environment: google-prod-read)"; exit 1;
+          fi
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID is not set (environment: google-prod-read)"; exit 1;
+          fi
+
+      - uses: ./.github/actions/google-secrets-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Collect reachability + traffic
+        shell: pwsh
+        env:
+          IN_DOMAINS: ${{ inputs.domains }}
+          IN_DAYS: ${{ inputs.days != '' && inputs.days || '28' }}
+          IN_SKIP_PROBE: ${{ inputs.skip_live_probe }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # A blank domains input passes NO -Domains argument, so the script's own default list
+          # applies. That list is the single source of truth for scope — do not restate it here,
+          # or the two drift apart (they already did once).
+          $args = @{ OutputPath = 'telemetry-reachability.json'; Days = [int]$env:IN_DAYS }
+          if (-not [string]::IsNullOrWhiteSpace($env:IN_DOMAINS)) {
+            $args.Domains = $env:IN_DOMAINS.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          }
+          if ($env:IN_SKIP_PROBE -eq 'true') { $args.SkipLiveProbe = $true }
+          ./scripts/google-telemetry-reachability.ps1 @args
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: telemetry-reachability
+          path: telemetry-reachability.json
+          if-no-files-found: warn
+          retention-days: 90

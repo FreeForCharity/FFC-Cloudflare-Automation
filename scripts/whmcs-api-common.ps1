@@ -181,11 +181,23 @@ function Invoke-WhmcsApi {
 function Get-WhmcsNodeList {
     # WHMCS wraps list payloads as {products:{product:[...]}} but degenerates to
     # a bare array, a single object, or an empty string. Normalize all of those.
+    #
+    # The empty-string form appears at BOTH levels - {products:""} and
+    # {products:{product:""}} - so blank entries are filtered out of the list
+    # itself, not just matched on the container. Letting a "" through yields a
+    # one-item list holding an empty string, which reads downstream as a real
+    # record whose every property is $null: an inflated scan count and silently
+    # wrong output rather than a visible error.
     param($Node, [Parameter(Mandatory = $true)][string]$ChildName)
     if ($null -eq $Node -or $Node -is [string]) { return @() }
-    if ($Node -is [System.Array]) { return @($Node | Where-Object { $null -ne $_ }) }
-    if ($Node.PSObject.Properties[$ChildName]) { return @($Node.$ChildName | Where-Object { $null -ne $_ }) }
-    return @()
+
+    $items = if ($Node -is [System.Array]) { $Node }
+    elseif ($Node.PSObject.Properties[$ChildName]) { $Node.$ChildName }
+    else { @() }
+
+    return @($items | Where-Object {
+            $null -ne $_ -and -not ($_ -is [string] -and [string]::IsNullOrWhiteSpace($_))
+        })
 }
 
 function Invoke-WhmcsPagedFetch {

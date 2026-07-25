@@ -117,6 +117,12 @@ $unreadable = [System.Collections.Generic.List[int]]::new()
 $scanned = 0
 $start = 0
 $total = 0
+# A window with nothing readable in it also carries no `totalresults`, so the
+# loop learns nothing about where the data ends and cannot bound itself - while
+# each such window costs the bisect ~2*PageSize calls. Stop after this many
+# consecutive blind windows rather than crawling the table one record at a time.
+$maxBlindWindows = 3
+$blindWindows = 0
 $authBody = New-Body 'GetClientsProducts'
 while ($true) {
     # Paged via Invoke-WhmcsPagedFetch so one record WHMCS cannot JSON-encode
@@ -127,6 +133,17 @@ while ($true) {
     if ($page.Total -gt $total) { $total = $page.Total }
     $services = @($page.Items)
     if ($services.Count -le 0 -and $page.SkippedIndexes.Count -le 0) { break }
+
+    if ($services.Count -le 0) {
+        $blindWindows++
+        if ($total -le 0 -and $blindWindows -ge $maxBlindWindows) {
+            throw ("Aborting: $blindWindows consecutive windows ending at index $start returned no readable " +
+                'records and WHMCS never reported totalresults, so the sweep cannot tell where the data ends. ' +
+                'Repair the malformed records in WHMCS before searching.')
+        }
+    }
+    else { $blindWindows = 0 }
+
     foreach ($s in $services) {
         $scanned++
         $fields = Get-WhmcsList $s.customfields 'customfield'
@@ -160,6 +177,14 @@ while ($true) {
     # index, and a skipped record makes the two differ.
     $start += $PageSize
     if ($total -gt 0 -and $start -ge $total) { break }
+}
+
+# Read nothing but skipped something: a zero-match answer here would be
+# indistinguishable from "not found", which is the failure this whole script
+# exists to prevent. Fail instead of reporting an empty result.
+if ($scanned -le 0 -and $unreadable.Count -gt 0) {
+    throw ("Aborting: 0 records readable, $($unreadable.Count) unencodable. A 'no match' result would be " +
+        'indistinguishable from a genuine absence. Repair the malformed records in WHMCS before searching.')
 }
 
 $result = [ordered]@{

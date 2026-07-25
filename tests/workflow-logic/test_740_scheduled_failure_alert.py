@@ -783,7 +783,8 @@ def _cron_minutes(expr: str) -> set:
     out = set()
     for part in field.split(","):
         step = 1
-        if "/" in part:
+        has_step = "/" in part
+        if has_step:
             part, _, raw_step = part.partition("/")
             if not raw_step.isdigit() or int(raw_step) == 0:
                 raise ValueError(f"unparsable cron step in {expr!r}")
@@ -796,9 +797,12 @@ def _cron_minutes(expr: str) -> set:
                 raise ValueError(f"unparsable cron range in {expr!r}")
             lo, hi = int(lo_s), int(hi_s)
         elif part.isdigit():
-            # A bare literal with a step is Vixie's `a/n` shorthand for `a-59/n`.
+            # A bare literal FOLLOWED BY A STEP is Vixie's `a/n` shorthand for
+            # `a-59/n`. The trigger is the presence of the `/`, not the step's
+            # value: `9/1` means every minute from :09 to :59, so keying off
+            # `step > 1` would collapse it to just {9} (caught in review on #846).
             lo = int(part)
-            hi = 59 if step > 1 else lo
+            hi = 59 if has_step else lo
         else:
             raise ValueError(f"unparsable cron minute field in {expr!r}")
         if not (0 <= lo <= hi <= 59):
@@ -816,6 +820,10 @@ def test_the_cron_minute_parser_understands_steps_and_ranges():
     assert _cron_minutes("10-20/5 * * * *") == {10, 15, 20}
     assert _cron_minutes("* * * * *") == set(range(60))
     assert _cron_minutes("9/20 * * * *") == {9, 29, 49}
+    # `a/1` is `a-59/1`, NOT the single minute `a` — the `/` is what makes it a
+    # range, so a step of 1 must still expand to the rest of the hour.
+    assert _cron_minutes("9/1 * * * *") == set(range(9, 60))
+    assert _cron_minutes("9 * * * *") == {9}  # ... while a bare literal stays one minute
     for bad in ("x * * * *", "1-y * * * *", "*/0 * * * *", "70 * * * *"):
         try:
             _cron_minutes(bad)

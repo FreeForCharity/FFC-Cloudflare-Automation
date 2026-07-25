@@ -104,10 +104,14 @@ jobs:
             // the sweep, so one bad name cannot disable alerting for all the good ones.
             const unresolved = WATCHED.filter(n => !byName.has(n));
 
-            // One open-issue listing for the whole sweep, fetched lazily: an all-green poll runs
-            // 48 times a day and must cost no issue-API call at all. Safe to cache across watched
-            // workflows because each has its own marker — a create or close for one can never
-            // change the lookup result for another. (AGENTS.md: the 5,000/hr pool is shared.)
+            // One open-issue listing for the WHOLE sweep, fetched lazily. This runs 48 times a
+            // day against a 5,000/hr pool shared with every other agent (AGENTS.md), so the
+            // invariant is: at most ONE issues.listForRepo per sweep regardless of how many
+            // workflows are watched, and ZERO only when every watched run is benign
+            // (`skipped`/`neutral`). A green sweep still costs that one call — `success` has to
+            // look for an alert to close, which is the recovery half of the state machine.
+            // Safe to cache across watched workflows because each has its own marker — a create
+            // or close for one can never change the lookup result for another.
             let openIssues = null;
             const listOpenAlerts = async () => {
               if (openIssues) return openIssues;

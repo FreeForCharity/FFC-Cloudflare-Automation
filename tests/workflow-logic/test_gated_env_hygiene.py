@@ -60,7 +60,20 @@ GATED_ENVS = {
 # Safety-doc levels that mean "this run changes nothing operators must approve".
 # Reporting plumbing (opening an issue or a data PR with the findings) is not a
 # Write in this taxonomy — see AGENTS.md on what the [TAG] counts.
-READS_LEVELS = {"reads"}
+#
+# Matched by PREFIX, not equality. The table qualifies the level in parentheses
+# — `Reads (+ PR delivery)` (401), `Reads (builds a file)` (213) — and an exact
+# `== "Reads"` check silently skipped both, which is how 401 sat on gated
+# `github-prod` unnoticed by this guard. A qualifier describes how the run
+# reports its findings; it never makes the run a Write. `Writes (…)` levels can
+# never collide with this prefix, and test_every_safety_level_is_classifiable
+# fails if a future level matches neither prefix.
+READS_PREFIX = "reads"
+WRITES_PREFIX = "writes"
+
+
+def _is_reads_level(level: str) -> bool:
+    return level.strip().lower().startswith(READS_PREFIX)
 
 # Known Reads-level jobs still pinned to a gated environment. Every one is
 # `workflow_dispatch`-only, which is why they are tolerable rather than broken:
@@ -77,6 +90,12 @@ READS_LEVELS = {"reads"}
 # docs/workflow-safety-and-approvals.md, which tracks 301-303 / 601 as known.
 DISPATCH_ONLY_GATED_READS = {
     ("101-domain-status.yml", "m365"),
+    # Surfaced only once the level match became prefix-based: 401 is
+    # `Reads (+ PR delivery)`, and its deliver job opens the campaigns PR with
+    # CBM_TOKEN. A candidate to follow 502 onto github-prod-read later — it
+    # needs the same reporting scope — but that is a separate change, and it is
+    # dispatch-only, so it is not #834's failure class.
+    ("401-zeffy-campaigns-export.yml", "deliver"),
     ("104-domain-export-inventory.yml", "export_m365"),
     ("104-domain-export-inventory.yml", "export_wpmudev"),
     ("114-cloudflare-registrar-access-check.yml", "validate"),
@@ -151,7 +170,7 @@ def _gated_reads_jobs():
         number = _workflow_number(text)
         if number is None:
             continue  # repo-internal / CI workflow, no operator safety row
-        if levels.get(number, "").strip().lower() not in READS_LEVELS:
+        if not _is_reads_level(levels.get(number, "")):
             continue
         scheduled = "schedule" in _triggers(wf)
         for job_id, job in (wf.get("jobs") or {}).items():
@@ -230,6 +249,46 @@ def test_scheduled_gated_workflows_do_not_cancel_themselves():
                 "and let janitor 734 reap stale waiting runs."
             )
     assert not violations, "\n".join(violations)
+
+
+def test_every_safety_level_is_classifiable():
+    """No safety level may fit neither the Reads nor the Writes prefix.
+
+    The guard above decides what to police by prefix-matching the level cell.
+    A level that matches neither prefix — `Read-only`, `Audit`, `Mixed` — would
+    be silently skipped by every assertion in this module, which is exactly the
+    failure that let `Reads (+ PR delivery)` (401) escape the original exact
+    match. Fail loudly at review time instead: either name the new level to fit
+    the taxonomy, or teach this module about it deliberately.
+    """
+    unclassifiable = sorted(
+        {
+            level
+            for level in _safety_levels().values()
+            if not level.strip().lower().startswith((READS_PREFIX, WRITES_PREFIX))
+        }
+    )
+    assert not unclassifiable, (
+        "safety-doc levels matching neither 'Reads…' nor 'Writes…': "
+        f"{unclassifiable} — these are invisible to every check in this module. "
+        "Rename them to fit the taxonomy, or extend the prefixes on purpose."
+    )
+
+
+def test_reads_prefix_covers_the_qualified_variants():
+    """Pin the specific regression: qualified Reads levels must be policed."""
+    for level in ("Reads", "Reads (+ PR delivery)", "Reads (builds a file)"):
+        assert _is_reads_level(level), f"{level!r} must count as Reads-level"
+    for level in ("Writes (gated)", "Writes (data PR only)", "Writes (dry-run default)"):
+        assert not _is_reads_level(level), f"{level!r} must not count as Reads-level"
+
+    # And confirm the qualified variants are actually present in the doc — if
+    # they ever disappear this test is guarding nothing and should be revisited.
+    present = set(_safety_levels().values())
+    assert {"Reads (+ PR delivery)", "Reads (builds a file)"} <= present, (
+        "the qualified Reads levels this test pins are gone from the safety "
+        f"doc; present levels: {sorted(present)}"
+    )
 
 
 def test_gated_envs_match_doc_checker():

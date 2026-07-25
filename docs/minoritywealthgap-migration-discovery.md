@@ -94,41 +94,61 @@ is a brand-new onboarding, not a fleet-migration row.
 
 ## Content inventory (from Wix's own sitemaps)
 
-| Sitemap           | Count | Static-portable?                                                 |
-| ----------------- | ----: | ---------------------------------------------------------------- |
-| `pages`           |    12 | Yes — the real site.                                             |
-| `blog-posts`      |    64 | Yes, but needs a content pipeline, not a page-by-page hand port. |
-| `blog-categories` |     2 | Yes.                                                             |
-| `event-pages`     |    34 | Pages yes; **registration/ticketing no** (see below).            |
-| `member-profile`  |    76 | **No** — this is a logged-in Wix Members Area.                   |
+| Sitemap           | Count | Static-portable?                                                            |
+| ----------------- | ----: | --------------------------------------------------------------------------- |
+| `pages`           |    12 | Yes — the real site.                                                        |
+| `blog-posts`      |    64 | Yes, but needs a content pipeline, not a page-by-page hand port.            |
+| `blog-categories` |     2 | Yes.                                                                        |
+| `event-pages`     |    34 | Yes — all public; only 1 is upcoming, so registration is a 1-event problem. |
+| `member-profile`  |    76 | N/A — all 404 to the public; nothing publicly visible to port.              |
 
 The 12 real pages: `/`, `/about`, `/contact`, `/domestic-violence`, `/events`, `/news`, `/podcast`,
 `/privacy-policy`, `/s-projects-side-by-side`, `/support-us`, `/terms-of-use`, `/usa-projects`.
 
-**112 content URLs plus 76 member profiles is a materially bigger job than the 2026-05 wave sites.**
-The wave's easy tier was single-digit static pages. Scope this as its own project, not a drop-in.
+**112 public content URLs is a materially bigger job than the 2026-05 wave sites**, whose easy tier
+was single-digit static pages. Scope this as its own project, not a drop-in. The 76 member profiles
+do not add to that count — they are not publicly reachable (see below).
 
-## The three things that do not survive a static migration
+## What actually does not survive a static migration
 
-These are product decisions for MWG, not technical details to solve quietly during the port. All
-three are load-bearing on a Wix Premium plan and have **no equivalent** on GitHub Pages, which
-serves static files and runs no server code.
+> **This section was rewritten on 2026-07-25 after testing every URL.** The first version reasoned
+> from what the Wix _platform_ can do and called three features blockers. Fetching them as an
+> anonymous visitor shows the interactive surface is far narrower. Platform capability is not
+> evidence about a particular site — check the URLs.
 
-1. **Members Area — 76 member profiles.** Login, profiles, and any gated content are a Wix
-   application backed by Wix's database. Static hosting cannot authenticate anyone. Either the
-   feature is dropped (and the members told), or it moves to an external platform that MWG keeps
-   paying for. **Ask before assuming it can go** — 76 profiles on a mature charity usually means
-   something operational depends on it.
-2. **Wix Events — 34 event pages.** The _pages_ port fine as history. **Registration, ticketing, and
-   the registrant list do not.** If events are still being run, they need an external service
-   (Eventbrite, Zeffy, Givebutter events) wired in before cutover, and the existing registrant data
-   exported out of Wix first.
-3. **Forms.** Every Wix form posts to Wix. After migration those endpoints are dead. Each form
-   becomes a `mailto:` link or an external form service. Per the migration runbook: never ship a
-   form that silently posts nowhere.
+**Members Area — 76 profiles, and all 76 return HTTP 404 to the public.** Wix publishes them in
+`member-profile_p_first-chunk-sitemap.xml`, but without a members login every one is "Page Not
+Found" (verified across a sample; e.g. `/minoritywealthgap/profile`, `/jkyompire/profile`). So
+**nothing publicly visible is lost** by migrating — there is no public content here to capture in
+the first place, and these are dead links for search engines today. The member records live in Wix's
+database and need an admin export if MWG wants to keep them: a data-retention question, not a
+migration blocker.
 
-The blog (64 posts) is portable but is not a hand-port — it needs an export → Markdown → route
+**Wix Events — 34 pages, all public (HTTP 200), and only ONE is upcoming.** Every event page renders
+publicly and ports to static as-is. Registration only matters for events that have not happened:
+
+- `events-1/cooking-camp-cohort-3-1` — 2026-08-04, registration open. That is the whole live list.
+
+**Beware the "open registration" count.** 13 events advertise open registration, but 12 of them are
+past-dated (2022–2025) — Wix leaves RSVP open on past events. Reading that number without checking
+the dates turns one event into a phantom thirteen. Event dates come from each page's JSON-LD
+`startDate`; the full audit is in the session's `events-audit.tsv`.
+
+So this is not "34 events cannot come over". It is **one event needing a registration path** —
+Eventbrite / Zeffy / Givebutter, or a `mailto:` if it is small — plus a Wix export of existing
+registrant data if MWG wants it.
+
+**Forms — the one that genuinely breaks.** Wix Forms markup (`wixForms`, First Name / Message /
+Submit) appears on all 12 pages, i.e. a site-wide footer form, plus the contact page. Every one
+posts to Wix and stops working at cutover. Replacements are routine (`mailto:` or an external form
+service), but per the migration runbook: never ship a form that silently posts nowhere.
+
+**The blog (64 posts)** is portable but is not a hand-port — it needs an export → Markdown → route
 pipeline, or a deliberate decision to carry forward only recent posts.
+
+**The real cost is the rebuild, not the features.** Wix's layout depends on its own JS runtime and
+generated `comp-*` class names, so expect to rebuild presentation rather than inherit it. That is
+effort to budget, not a blocker to resolve.
 
 ## Analytics — the honest picture
 

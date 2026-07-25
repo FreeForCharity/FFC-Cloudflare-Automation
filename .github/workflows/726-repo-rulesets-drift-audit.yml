@@ -111,6 +111,19 @@ jobs:
             # rulesets" are opposite findings and must never collapse into the same output.
             if ! org_rs=$(api_get "orgs/$org/rulesets" --jq '[.[] | select(.target=="branch")] | length'); then
               echo "::error::$org: cannot read org rulesets — the audit cannot report on drift it could not measure. Check the token's Organization Administration permission."
+              # The issue step runs with `if: always()`, so it WILL run after this exit.
+              # Leave it an explicit report rather than a stale or missing one, otherwise
+              # a permissions failure silently overwrites a real drift report with
+              # "drift report missing".
+              {
+                echo "# Ruleset / Settings Drift Audit — INCOMPLETE"
+                echo ""
+                echo "The audit could not read \`orgs/$org/rulesets\` and stopped."
+                echo "**No conclusion should be drawn about drift from this run.**"
+                echo ""
+                echo "Check the Organization Administration permission on the PAT in"
+                echo "\`wr-all-cbm-ffc-copilot-mcp-github-pat\`."
+              } > /tmp/drift-report.md
               exit 1
             fi
             {
@@ -142,7 +155,7 @@ jobs:
               # become "drift" or "clean" (#854).
               if ! settings=$(api_get "repos/$org/$repo" --jq '"\(.allow_squash_merge)|\(.allow_auto_merge)|\(.delete_branch_on_merge)|\(.allow_update_branch)"'); then
                 echo "::warning::$org/$repo: settings unreadable — excluded from the audit"
-                echo "| $repo | ⚠️ UNREADABLE | | | | | |" >> "$REPORT"
+                echo "| $repo | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | settings-unreadable |" >> "$REPORT"
                 continue
               fi
               squash=$(echo "$settings" | cut -d'|' -f1)
@@ -264,8 +277,13 @@ jobs:
           title="Ruleset/settings drift detected"
           body=$(cat /tmp/drift-report.md 2>/dev/null || echo "drift report missing")
 
-          # Find an existing open tracking issue
-          existing=$(gh issue list --repo "$repo" --state open --search "$title in:title" --json number --jq '.[0].number // empty' 2>/dev/null)
+          # Find an existing open tracking issue. A LOOKUP failure must not read as
+          # "none exists" — that silently opens a duplicate tracking issue on every
+          # transient auth or rate-limit error (#854, same class).
+          if ! existing=$(gh issue list --repo "$repo" --state open --search "$title in:title" --json number --jq '.[0].number // empty'); then
+            echo "::error::Could not search for an existing tracking issue — refusing to risk opening a duplicate."
+            exit 1
+          fi
 
           # Failing to deliver the report is a FAILURE, not a warning. A warning here
           # means the drift was detected, the run went green, and nobody was told —

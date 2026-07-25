@@ -40,10 +40,34 @@ One gap the application does not close:
   and the application captures a LinkedIn URL instead. Ask before running 701 — a missing/invalid
   value is silently skipped and the repo is created without the maintainer.
 
-**Domain confirmed 2026-07-25**: the service's `domain` field in WHMCS is empty (the 221 match came
-from custom-field content), but the operator confirmed `minoritywealthgap.org` directly with the
-charity. Worth backfilling the WHMCS field so downstream workflows key off recorded data rather than
-a conversation.
+**Domain confirmed 2026-07-25** with the charity: `minoritywealthgap.org`. Order **797 accepted**
+the same day (workflow 211, `previousStatus: Pending`; WHMCS email suppressed, which is 211's
+default).
+
+### Why the domain field was blank — two independent causes
+
+Neither is a data-entry mistake, so neither is fixed by being more careful next time.
+
+1. **The 501c3 onboarding product does not ask for a domain.** Product pid 33's custom fields cover
+   the board roster, contacts, GuideStar, timezone, legal status, mission, EIN, footer data and
+   socials — there is no domain question. The **pre-501c3** product (pid 16) has exactly that pair,
+   fields 5 and 6 ("Do you have a domain name?" / "What is your current/desired domain name?"), so
+   the question exists in FFC's field vocabulary; it was simply never carried into pid 33.
+2. **The service's `domain` column is structurally empty.** The onboarding products are service
+   products, so WHMCS never prompts for a domain at order time regardless of the form.
+
+The consequence is not cosmetic: nothing downstream can read "the domain for this charity" from
+WHMCS. Workflow 221 found MWG by matching a Candid profile URL, not a recorded domain.
+
+**Fixes, and who can make them:**
+
+- **The recorded value** → workflow **229. WHMCS - Service Domain Set**, added alongside this doc
+  (dry-run default, gated, refuses to overwrite a different domain without `force`). It cannot be
+  dispatched until this PR merges — GitHub only exposes `workflow_dispatch` for files on the default
+  branch — so the backfill of service 618 runs immediately after merge.
+- **The intake gap** → adding a required domain question to pid 33 is a **WHMCS admin-UI change**.
+  There is no API for creating product custom fields, so no workflow can do it. Until then every
+  501c3 application arrives without a domain and 229 is the backfill path.
 
 Also observed: the sweep could not read **at least 6 client records** (indexes 19, 22, 23, 24, 27,
 28 — the visible tail of `unreadableIndexes`). These are the malformed-UTF-8 rows described in

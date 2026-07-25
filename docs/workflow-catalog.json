@@ -1647,7 +1647,7 @@
       "environments": [
         "github-prod"
       ],
-      "description": "Reusable workflow that adds (or updates) one or more GitHub users as collaborators on a repository at a chosen permission level.  Two ways to use it: 1. Manually via the Actions tab (workflow_dispatch). 2. From another workflow via `uses:` (workflow_call) -- e.g. the website provisioning workflow (15) calls this instead of inlining the gh api PUT.  The privileged step runs with secrets.CBM_TOKEN (environment: github-prod), so callers do not need `actions: write` themselves -- they only need to be able to create/assign issues or dispatch this workflow.",
+      "description": "Reusable workflow that adds (or updates) one or more GitHub users as collaborators on a repository at a chosen permission level.  Two ways to use it: 1. Manually via the Actions tab (workflow_dispatch). 2. From another workflow via `uses:` (workflow_call) -- e.g. the website provisioning workflow (15) calls this instead of inlining the gh api PUT.  The privileged step runs with a PAT from Key Vault (environment: github-prod), so callers do not need `actions: write` themselves -- they only need to be able to create/assign issues or dispatch this workflow.",
       "safetyLevel": "Writes (**live default**)",
       "approvalEnv": "\u2705 github-prod",
       "guard": "\u26a0\ufe0f `dry_run` defaults to **false**",

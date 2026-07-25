@@ -97,6 +97,9 @@ permissions:
   contents: read
   issues: write
   actions: read
+  # Required for the Key Vault OIDC exchange (#844). Declared at workflow level so
+  # the `repo`, `content` and reusable-`maintainers` jobs all inherit it.
+  id-token: write
 
 env:
   WEBSITE_TARGET_ORG: FreeForCharity
@@ -951,17 +954,33 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Validate required GitHub token
-        shell: pwsh
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844).
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
         run: |
-          if ([string]::IsNullOrWhiteSpace("${{ secrets.CBM_TOKEN }}")) {
-            throw 'CBM_TOKEN secret is not set (environment: github-prod).'
-          }
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-ffc-copilot-mcp-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
 
       - name: Create repo from template + enable Pages
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
           $repoFull = "${{ needs.resolve.outputs.repo_full }}"
@@ -1017,6 +1036,13 @@ jobs:
     if: >-
       needs.resolve.outputs.skip != 'true' && needs.repo.result == 'success' &&
       needs.resolve.outputs.maintainers_csv != ''
+    # A `uses:` job does not inherit a permissions block implicitly in a way that is
+    # obvious to readers, and 729 now mints an OIDC token for Key Vault. Declared
+    # explicitly so this call cannot silently lose id-token when 701's
+    # workflow-level block is next edited (#844).
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/729-repo-add-collaborator.yml
     with:
       repo: ${{ needs.resolve.outputs.repo_full }}
@@ -1040,18 +1066,34 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Validate required GitHub token
-        shell: pwsh
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844).
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
         run: |
-          if ([string]::IsNullOrWhiteSpace("${{ secrets.CBM_TOKEN }}")) {
-            throw 'CBM_TOKEN secret is not set (environment: github-prod).'
-          }
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-ffc-copilot-mcp-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
 
       - name: Apply footer + leadership content
         id: apply
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
 

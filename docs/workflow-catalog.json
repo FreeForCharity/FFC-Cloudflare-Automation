@@ -1762,7 +1762,7 @@
       "environments": [
         "github-prod"
       ],
-      "description": "Regenerates data/dependabot-affected-repos.json (the org repo inventory that feeds the smoke-protected Dependabot waves) and delivers it as an auto-merging PR. Migrated from FFC-IN-ClarkeMoyerAdmin. Uses the github-prod environment so the PR is opened with CBM_TOKEN (a real PAT) \u2014 a PR opened by GITHUB_TOKEN does not trigger the pull_request checks / Copilot review this repo requires, so it would never satisfy branch protection. Read-only against the org; PR-only.",
+      "description": "Regenerates data/dependabot-affected-repos.json (the org repo inventory that feeds the smoke-protected Dependabot waves) and delivers it as an auto-merging PR. Migrated from FFC-IN-ClarkeMoyerAdmin. Uses the github-prod environment so the PR is opened with a real PAT \u2014 a PR opened by GITHUB_TOKEN does not trigger the pull_request checks / Copilot review this repo requires, so it would never satisfy branch protection. The PAT comes from Key Vault (`wr-all-cbm-github-pat`) over OIDC, never a GitHub secret \u2014 see #844. Read-only against the org; PR-only.",
       "safetyLevel": "Reads",
       "approvalEnv": "\u2705 github-prod",
       "guard": "weekly org inventory (feeds smoke-protected waves); PR-only + auto-merge",

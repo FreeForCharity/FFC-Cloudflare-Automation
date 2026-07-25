@@ -97,7 +97,12 @@ function Invoke-Probe {
     catch {
         $msg = $_.Exception.Message
         $script:Errors.Add("${Label}: $msg")
-        Write-Host "::warning::$Label failed — $msg"
+        # Flatten CR/LF before emitting a workflow command: a multi-line exception message would
+        # otherwise terminate the ::warning:: line and let the remainder be parsed as further
+        # workflow commands, corrupting the log and the step summary.
+        $safe = ($msg -replace '?
+', ' ')
+        Write-Host "::warning::$Label failed — $safe"
         return @{ ok = $false; value = $null; error = $msg }
     }
 }
@@ -366,8 +371,20 @@ foreach ($domain in $Domains) {
         foreach ($id in $provisionedGtm) {
             if ($served.gtmIds -notcontains $id) { $mismatches += "provisioned GTM $id is NOT present in served HTML" }
         }
+        # Symmetric, matching the GTM checks above. An asymmetric check would miss the more
+        # alarming direction: a site serving a GA4 id that no provisioned stream accounts for —
+        # traffic flowing to a property nobody is watching.
         if ($gaStream -and ($served.gaIds -notcontains $gaStream.measurementId)) {
             $mismatches += "provisioned GA4 $($gaStream.measurementId) is NOT present in served HTML"
+        }
+        foreach ($id in $served.gaIds) {
+            if ($id -match '^G-X+$') { continue }  # placeholder: already reported separately
+            if (-not $gaStream) {
+                $mismatches += "served GA4 $id but NO provisioned stream matches this domain"
+            }
+            elseif ($id -ne $gaStream.measurementId) {
+                $mismatches += "served GA4 $id does not match provisioned $($gaStream.measurementId)"
+            }
         }
         if ($served.hasPlaceholder) { $mismatches += 'served HTML contains a PLACEHOLDER GA4 id' }
     }

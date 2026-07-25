@@ -178,6 +178,82 @@ function Invoke-WhmcsApi {
     }
 }
 
+function Get-WhmcsNodeList {
+    # WHMCS wraps list payloads as {products:{product:[...]}} but degenerates to
+    # a bare array, a single object, or an empty string. Normalize all of those.
+    param($Node, [Parameter(Mandatory = $true)][string]$ChildName)
+    if ($null -eq $Node -or $Node -is [string]) { return @() }
+    if ($Node -is [System.Array]) { return @($Node | Where-Object { $null -ne $_ }) }
+    if ($Node.PSObject.Properties[$ChildName]) { return @($Node.$ChildName | Where-Object { $null -ne $_ }) }
+    return @()
+}
+
+function Invoke-WhmcsPagedFetch {
+    <#
+    .SYNOPSIS
+        Fetch one page of a WHMCS list action, surviving records WHMCS cannot
+        JSON-encode.
+
+    .DESCRIPTION
+        If any single record in a page holds bytes that are not valid UTF-8 (a
+        mis-encoded character pasted into a client/custom field), PHP's
+        json_encode fails for the ENTIRE response and WHMCS returns
+        "Error generating JSON encoded response: Malformed UTF-8 characters".
+        The failure is per-response, not per-record, so one poisoned row makes
+        every page containing it unreadable - and with a 250-row page that is
+        250 rows lost, which reads as "no match found" rather than as an error.
+
+        So: on that specific error, bisect the window until the offending row is
+        alone, skip only that row, and keep the rest of the sweep. Every other
+        API error still fails fast. Returns Items / Total / SkippedIndexes so the
+        caller can report what it could not read.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiUrl,
+        # Auth + action fields; limitstart/limitnum are set per call from a clone.
+        [Parameter(Mandatory = $true)][hashtable]$Body,
+        [Parameter(Mandatory = $true)][int]$Start,
+        [Parameter(Mandatory = $true)][int]$Num,
+        [Parameter(Mandatory = $true)][string]$ListProperty,
+        [Parameter(Mandatory = $true)][string]$ItemProperty
+    )
+
+    $page = $Body.Clone()
+    $page.limitstart = $Start
+    $page.limitnum = $Num
+
+    try {
+        $resp = Invoke-WhmcsApi -ApiUrl $ApiUrl -Body $page
+    }
+    catch {
+        if ("$($_.Exception.Message)" -notmatch 'Malformed UTF-8|Error generating JSON encoded response') { throw }
+        if ($Num -le 1) {
+            Write-Warning "WHMCS cannot JSON-encode the record at index ${Start} (malformed UTF-8 in a stored value); skipping it."
+            return [pscustomobject]@{ Items = @(); Total = 0; SkippedIndexes = @($Start) }
+        }
+        $half = [int][math]::Floor($Num / 2)
+        $left = Invoke-WhmcsPagedFetch -ApiUrl $ApiUrl -Body $Body -Start $Start -Num $half `
+            -ListProperty $ListProperty -ItemProperty $ItemProperty
+        $right = Invoke-WhmcsPagedFetch -ApiUrl $ApiUrl -Body $Body -Start ($Start + $half) -Num ($Num - $half) `
+            -ListProperty $ListProperty -ItemProperty $ItemProperty
+        return [pscustomobject]@{
+            Items          = @($left.Items) + @($right.Items)
+            Total          = [math]::Max($left.Total, $right.Total)
+            SkippedIndexes = @($left.SkippedIndexes) + @($right.SkippedIndexes)
+        }
+    }
+
+    $total = 0
+    if ($resp.totalresults) { [void][int]::TryParse($resp.totalresults.ToString(), [ref]$total) }
+    $node = if ($resp.PSObject.Properties[$ListProperty]) { $resp.$ListProperty } else { $null }
+    return [pscustomobject]@{
+        Items          = @(Get-WhmcsNodeList -Node $node -ChildName $ItemProperty)
+        Total          = $total
+        SkippedIndexes = @()
+    }
+}
+
 function ConvertTo-WhmcsCustomFields {
     # Builds base64(serialize(array(id => value))) as WHMCS expects for the
     # `customfields` parameter on AddClient / AddOrder. -Json must be a JSON

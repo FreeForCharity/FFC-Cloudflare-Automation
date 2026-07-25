@@ -113,15 +113,20 @@ function New-Body {
 }
 
 $hits = [System.Collections.Generic.List[object]]::new()
+$unreadable = [System.Collections.Generic.List[int]]::new()
 $scanned = 0
 $start = 0
+$total = 0
+$authBody = New-Body 'GetClientsProducts'
 while ($true) {
-    $b = New-Body 'GetClientsProducts'
-    $b.limitstart = $start
-    $b.limitnum = $PageSize
-    $r = Invoke-WhmcsApi -ApiUrl $api -Body $b
-    $services = Get-WhmcsList $r.products 'product'
-    if ($services.Count -le 0) { break }
+    # Paged via Invoke-WhmcsPagedFetch so one record WHMCS cannot JSON-encode
+    # costs us that record, not the whole page (and not the whole search).
+    $page = Invoke-WhmcsPagedFetch -ApiUrl $api -Body $authBody -Start $start -Num $PageSize `
+        -ListProperty 'products' -ItemProperty 'product'
+    foreach ($idx in $page.SkippedIndexes) { $unreadable.Add($idx) }
+    if ($page.Total -gt $total) { $total = $page.Total }
+    $services = @($page.Items)
+    if ($services.Count -le 0 -and $page.SkippedIndexes.Count -le 0) { break }
     foreach ($s in $services) {
         $scanned++
         $fields = Get-WhmcsList $s.customfields 'customfield'
@@ -151,18 +156,22 @@ while ($true) {
         if ($hits.Count -ge $MaxMatches) { break }
     }
     if ($hits.Count -ge $MaxMatches) { break }
-    $start += $services.Count
-    $total = 0
-    if ($r.totalresults) { [void][int]::TryParse($r.totalresults.ToString(), [ref]$total) }
+    # Advance by the window, not by the returned count: limitstart is an absolute
+    # index, and a skipped record makes the two differ.
+    $start += $PageSize
     if ($total -gt 0 -and $start -ge $total) { break }
 }
 
 $result = [ordered]@{
-    query      = $Query
-    scanned    = $scanned
-    matchCount = $hits.Count
-    truncated  = ($hits.Count -ge $MaxMatches)
-    matches    = $hits
+    query             = $Query
+    scanned           = $scanned
+    matchCount        = $hits.Count
+    truncated         = ($hits.Count -ge $MaxMatches)
+    # Records WHMCS could not serialize; they were NOT searched, so a zero-match
+    # result with a non-empty list here is "not found in what we could read".
+    unreadableCount   = $unreadable.Count
+    unreadableIndexes = @($unreadable)
+    matches           = $hits
 }
 
 $json = $result | ConvertTo-Json -Depth 7

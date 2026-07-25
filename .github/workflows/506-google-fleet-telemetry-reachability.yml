@@ -11,7 +11,7 @@ run-name: 'Telemetry reachability'
 #
 #   * It compares the SERVED HTML against what the APIs say is provisioned. A site can have a
 #     container provisioned and never load it, or load a hardcoded template container the API does
-#     not associate with it. Both are live today across the six primary sites, and neither is
+#     not associate with it. Both are live today among the six primary sites, and neither is
 #     visible from provisioning records alone.
 #
 #   * It never conflates "no data" with "no traffic". A site with no GA4 property is UNMEASURED;
@@ -29,7 +29,9 @@ on:
   workflow_dispatch:
     inputs:
       domains:
-        description: 'Comma-separated domains (blank = the six primary sites)'
+        description:
+          'Comma-separated domains (blank = the four live domains of the six primary sites; the two
+          templates have no production domain)'
         required: false
         type: string
       days:

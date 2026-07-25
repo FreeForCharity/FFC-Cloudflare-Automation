@@ -27,7 +27,9 @@
     name — docs/google-api.md records display names as historically unreliable.
 
 .PARAMETER Domains
-    Domains to report on. Defaults to the six primary sites.
+    Domains to report on. Defaults to the four LIVE domains among the six primary sites —
+    FFC_Single_Page_Template and Footer_Only_Template are templates with no production domain,
+    so they have no telemetry to reach and are covered by source-level checks instead.
 
 .PARAMETER GtmAccountId
     FFC GTM account. Default 4702611686.
@@ -87,6 +89,46 @@ function Invoke-Probe {
     }
 }
 
+function Invoke-GooglePagedApi {
+    <#
+    Follows nextPageToken and returns the concatenated items from $CollectionName.
+
+    Not optional plumbing: the GA Admin and Tag Manager list endpoints paginate, so a single
+    unpaged call silently returns a PREFIX of reality. In a report whose entire purpose is
+    catching under-reporting, under-reporting itself is the worst possible bug — a site with a
+    GA4 property on page 2 would be reported as having none.
+  #>
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$AccessToken,
+        [Parameter(Mandatory)][string]$CollectionName,
+        [int]$MaxPages = 50
+    )
+    $items = @()
+    $token = $null
+    $page = 0
+    do {
+        $page++
+        $u = if ($token) {
+            $sep = if ($Uri -match '\?') { '&' } else { '?' }
+            "$Uri${sep}pageToken=$([uri]::EscapeDataString($token))"
+        }
+        else { $Uri }
+        $resp = Invoke-GoogleApi -Uri $u -AccessToken $AccessToken
+        if ($resp.PSObject.Properties.Name -contains $CollectionName -and $resp.$CollectionName) {
+            $items += @($resp.$CollectionName)
+        }
+        $token = if ($resp.PSObject.Properties.Name -contains 'nextPageToken') { $resp.nextPageToken } else { $null }
+    } while ($token -and $page -lt $MaxPages)
+
+    if ($token) {
+        # Hitting the cap means the result IS truncated. Say so loudly rather than returning a
+        # quietly partial list.
+        throw "Pagination cap ($MaxPages pages) reached for $Uri — result would be truncated."
+    }
+    return $items
+}
+
 function Normalize-Domain {
     param([string]$Value)
     if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
@@ -102,10 +144,10 @@ function Get-GtmInventory {
     param([string]$AccountId, [string]$Subject)
     $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/tagmanager.readonly'
     $uri = "https://tagmanager.googleapis.com/tagmanager/v2/accounts/$AccountId/containers"
-    $resp = Invoke-GoogleApi -Uri $uri -AccessToken $tok
+    $raw = Invoke-GooglePagedApi -Uri $uri -AccessToken $tok -CollectionName 'container'
     $containers = @()
-    if ($resp.PSObject.Properties.Name -contains 'container' -and $resp.container) {
-        foreach ($c in @($resp.container)) {
+    if ($raw.Count -gt 0) {
+        foreach ($c in $raw) {
             $containers += [pscustomobject]@{
                 name        = $c.name
                 publicId    = $c.publicId
@@ -124,27 +166,23 @@ function Get-Ga4Inventory {
     param([string]$AccountName, [string]$Subject)
     $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/analytics.readonly'
 
-    $accounts = Invoke-GoogleApi -Uri 'https://analyticsadmin.googleapis.com/v1beta/accounts' -AccessToken $tok
-    $acct = $null
-    if ($accounts.PSObject.Properties.Name -contains 'accounts') {
-        $acct = @($accounts.accounts) | Where-Object { $_.displayName -eq $AccountName } | Select-Object -First 1
-    }
+    $allAccounts = Invoke-GooglePagedApi -Uri 'https://analyticsadmin.googleapis.com/v1beta/accounts' -AccessToken $tok -CollectionName 'accounts'
+    $acct = $allAccounts | Where-Object { $_.displayName -eq $AccountName } | Select-Object -First 1
 
     $out = @()
     # Report ALL properties the token can see, not just those under the named account: a charity
     # property created outside the expected account is exactly the drift worth surfacing.
     $filters = @()
     if ($acct) { $filters += $acct.name }
-    foreach ($a in @($accounts.accounts)) { if ($filters -notcontains $a.name) { $filters += $a.name } }
+    foreach ($a in $allAccounts) { if ($filters -notcontains $a.name) { $filters += $a.name } }
 
     foreach ($parent in $filters) {
-        $props = Invoke-GoogleApi -Uri "https://analyticsadmin.googleapis.com/v1beta/properties?filter=parent:$parent" -AccessToken $tok
-        if (-not ($props.PSObject.Properties.Name -contains 'properties')) { continue }
-        foreach ($p in @($props.properties)) {
-            $streams = Invoke-GoogleApi -Uri "https://analyticsadmin.googleapis.com/v1beta/$($p.name)/dataStreams" -AccessToken $tok
+        $props = Invoke-GooglePagedApi -Uri "https://analyticsadmin.googleapis.com/v1beta/properties?filter=parent:$parent" -AccessToken $tok -CollectionName 'properties'
+        foreach ($p in $props) {
+            $streams = Invoke-GooglePagedApi -Uri "https://analyticsadmin.googleapis.com/v1beta/$($p.name)/dataStreams" -AccessToken $tok -CollectionName 'dataStreams'
             $webStreams = @()
-            if ($streams.PSObject.Properties.Name -contains 'dataStreams') {
-                foreach ($s in @($streams.dataStreams)) {
+            if ($streams.Count -gt 0) {
+                foreach ($s in $streams) {
                     if ($s.PSObject.Properties.Name -contains 'webStreamData' -and $s.webStreamData) {
                         $webStreams += [pscustomobject]@{
                             defaultUri    = $s.webStreamData.defaultUri
@@ -205,7 +243,8 @@ function Get-ServedTelemetry {
     param([string]$Domain)
     $url = "https://$Domain/"
     try {
-        $html = (Invoke-WebRequest -Uri $url -MaximumRedirection 5 -TimeoutSec 30 -UseBasicParsing).Content
+        # -UseBasicParsing is a deprecated no-op under pwsh 7 (still accepted, does nothing) — omitted.
+        $html = (Invoke-WebRequest -Uri $url -MaximumRedirection 5 -TimeoutSec 30).Content
     }
     catch {
         return [pscustomobject]@{ reachable = $false; error = $_.Exception.Message; gtmIds = @(); gaIds = @() }

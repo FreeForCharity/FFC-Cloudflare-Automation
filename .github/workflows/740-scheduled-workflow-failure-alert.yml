@@ -16,6 +16,11 @@ run-name:
 # gate it is watching. Reports `cancelled` as well as `failure`: a run cancelled before it
 # reaches a runner (the 2026-07-24 726 incident) executes zero steps and is exactly the kind
 # of silent breakage this workflow exists to surface.
+#
+# It does NOT alert on a declined or expired approval gate. Those also surface as run-level
+# `failure`, so the run conclusion alone cannot tell "the job broke" from "a human said no";
+# the job list can, and `actions: read` already allows reading it. See the discriminator in
+# the step below.
 
 on:
   workflow_run:
@@ -65,6 +70,37 @@ jobs:
               core.info(`Ignoring ${run.name} (${run.conclusion}).`);
               return; // before the issue lookup: a guaranteed no-op should cost no API call
             }
+            // A DECLINED OR EXPIRED APPROVAL GATE IS NOT AN OUTAGE. Three watched
+            // workflows (703/726/735) sit behind the `github-prod` gate, and a gate
+            // Clarke declines surfaces as run-level `failure` while its jobs read
+            // `cancelled`/`skipped` — identical to a real fault at the run level, which
+            // is all the payload carries. Without this check the dominant output of this
+            // alerter would be "a human said no", and an alerter that cries wolf in its
+            // first week is one nobody reads by its second (#834, #837).
+            // Discriminator: no job `failure` + at least one job `cancelled` ⇒ a declined
+            // or abandoned gate, or a `cancel-in-progress` supersession. Neither is a fault.
+            if (run.conclusion !== 'success') {
+              let jobs = null;
+              try {
+                const res = await github.rest.actions.listJobsForWorkflowRun({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  run_id: run.id, per_page: 100, filter: 'latest',
+                });
+                jobs = (res.data || {}).jobs || [];
+              } catch (e) {
+                // Fail LOUD, never silent: an unreadable job list must not swallow a real
+                // outage — that is precisely the failure mode this workflow exists to end.
+                core.warning(`Could not read jobs for run ${run.id} (${e.message}); alerting anyway.`);
+              }
+              if (jobs && jobs.length) {
+                const failed = jobs.filter(j => j.conclusion === 'failure');
+                const cancelled = jobs.filter(j => j.conclusion === 'cancelled');
+                if (failed.length === 0 && cancelled.length > 0) {
+                  core.notice(`Not alerting on ${run.name}: no job failed and ${cancelled.length} were cancelled (declined/abandoned approval gate, or a superseded run). ${run.html_url}`);
+                  return;
+                }
+              }
+            }
             // `agentic-os,bug` is a broad pair and the backlog is long, so page at the max
             // and sort by recency of update: a live rolling alert is touched by every new
             // failure comment, which keeps it on the first page even as the backlog grows.
@@ -98,6 +134,6 @@ jobs:
               await github.rest.issues.create({
                 owner: context.repo.owner, repo: context.repo.repo,
                 title, labels: ['agentic-os', 'bug'],
-                body: `${marker}\n**${run.name}** ended in a bad conclusion. This rolling issue tracks that one workflow and auto-closes on its next green run.\n\nA \`cancelled\` entry usually means the run never reached a runner (queue starvation or a stale gate), not that someone cancelled it by hand.\n\n${line}\n\n_Managed by 740. Repo - Scheduled Workflow Failure Alert._`,
+                body: `${marker}\n**${run.name}** ended in a bad conclusion. This rolling issue tracks that one workflow and auto-closes on its next green run.\n\nEach entry below records what was observed — the run's conclusion and a link. Open the run to see which job failed before assuming a cause.\n\n${line}\n\n_Managed by 740. Repo - Scheduled Workflow Failure Alert._`,
               });
             }

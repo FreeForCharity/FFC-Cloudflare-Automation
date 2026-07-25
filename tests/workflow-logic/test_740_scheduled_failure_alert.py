@@ -12,6 +12,14 @@ duplicate issue, never a missed close — plus three that are specific to 740:
     it reached a runner, executed zero steps, and the run-level conclusion
     (failure) disagreed with the job-level one (cancelled). Filtering to
     `failure` alone would still have missed half the incident.
+  - **A declined approval gate is not an outage.** Three watched workflows
+    (703/726/735) are gated on `github-prod`, and a declined or expired gate
+    surfaces as run-level `failure` with its jobs `cancelled` — identical to a
+    real fault in the payload. #834 measured 8 of 21 scheduled runs on that lane
+    ending that way, so without the job-level discriminator the alerter's
+    dominant output would be "a human said no", and it would be ignored by its
+    second week. The negative control (a genuinely failed job, run 29826157099)
+    must still alert; an unreadable job list must alert too, never stay quiet.
   - **One rolling issue PER WATCHED WORKFLOW.** The marker is keyed by workflow
     name, so a success only closes the alert for the workflow that recovered.
     With ten workflows watched, a shared marker would let 739's weekly green run
@@ -62,14 +70,28 @@ MARKER = f"{MARKER_PREFIX}{WATCHED_NAME} -->"
 OTHER_MARKER = f"{MARKER_PREFIX}{OTHER_WATCHED_NAME} -->"
 
 
-def _run(conclusion, *, open_issues=None, name=WATCHED_NAME, head_branch="main"):
-    """Drive the step for a workflow_run with the given conclusion."""
+def _run(
+    conclusion,
+    *,
+    open_issues=None,
+    name=WATCHED_NAME,
+    head_branch="main",
+    jobs=None,
+    jobs_throw=False,
+):
+    """Drive the step for a workflow_run with the given conclusion.
+
+    `jobs` is the fixture returned by actions.listJobsForWorkflowRun — the only
+    place the payload can distinguish a declined gate from a real fault. It
+    defaults to a single failed job so the ordinary failure cases still alert.
+    """
     script = step_github_script(WORKFLOW, JOB, STEP)
     context = {
         "repo": {"owner": "FreeForCharity", "repo": "FFC-Cloudflare-Automation"},
         "payload": {
             "repository": {"default_branch": "main"},
             "workflow_run": {
+                "id": 30116967112,
                 "name": name,
                 "conclusion": conclusion,
                 "run_number": 42,
@@ -78,15 +100,21 @@ def _run(conclusion, *, open_issues=None, name=WATCHED_NAME, head_branch="main")
             },
         },
     }
+    if jobs is None:
+        jobs = [{"name": "audit", "conclusion": "failure"}]
     env = {"PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin"}
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
         (tdp / "script.js").write_text(script)
         (tdp / "context.json").write_text(json.dumps(context))
         (tdp / "open.json").write_text(json.dumps(open_issues or []))
+        (tdp / "jobs.json").write_text(json.dumps(jobs))
         env["TEST_SCRIPT_FILE"] = str(tdp / "script.js")
         env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
         env["TEST_OPEN_ISSUES_FILE"] = str(tdp / "open.json")
+        env["TEST_RUN_JOBS_FILE"] = str(tdp / "jobs.json")
+        if jobs_throw:
+            env["TEST_JOBS_THROW"] = "1"
         proc = subprocess.run(
             [NODE, str(HARNESS)],
             env=env,
@@ -221,6 +249,107 @@ def test_success_still_spends_the_lookup_so_it_can_close():
     r = _run("success", open_issues=[_alert_issue(7)])
     assert len(r["listForRepoCalls"]) == 1, r
     assert r["updates"] == [{"issue_number": 7, "state": "closed"}], r
+
+
+# --- a declined approval gate is not an outage -----------------------------
+#
+# Run 43 (#832) established the mechanism against three real runs: a gate Clarke
+# declines produces run-level `failure` while its jobs read `cancelled`/`skipped`,
+# which is indistinguishable at the run level from a genuine fault. Three watched
+# workflows (703/726/735) are gated on `github-prod`, and #834 measured 8 of 21
+# scheduled runs on that lane failing or cancelling at the gate — so without this
+# carve-out the alerter's dominant output would be "a human said no".
+
+
+def _declined_gate_jobs():
+    # Shape of runs 30116967112 (declined) and 29174690119 (abandoned ~25h).
+    return [
+        {"name": "dns-flip", "conclusion": "cancelled"},
+        {"name": "cname-flip", "conclusion": "skipped"},
+    ]
+
+
+def test_declined_gate_does_not_alert():
+    r = _run("failure", open_issues=[], jobs=_declined_gate_jobs())
+    assert r["threw"] is None, r
+    assert r["created"] == [], r
+    assert r["comments"] == [], r
+    assert r["updates"] == [], r
+    # ... but it is logged, not silently dropped
+    assert any("Not alerting" in n for n in r["notices"]), r
+
+
+def test_abandoned_gate_does_not_alert_even_with_an_alert_already_open():
+    # An open alert for this workflow must not collect gate-decline noise either.
+    r = _run("failure", open_issues=[_alert_issue(7)], jobs=_declined_gate_jobs())
+    assert r["threw"] is None, r
+    assert r["comments"] == [], r
+    assert r["created"] == [], r
+
+
+def test_a_real_job_failure_still_alerts_the_negative_control():
+    # Run 29826157099: post-cutover-smoke genuinely failed. This MUST still alert —
+    # a discriminator that suppresses this one has broken the whole workflow.
+    r = _run(
+        "failure",
+        open_issues=[],
+        jobs=[
+            {"name": "post-cutover-smoke", "conclusion": "failure"},
+            {"name": "notify", "conclusion": "cancelled"},
+        ],
+    )
+    assert r["threw"] is None, r
+    assert len(r["created"]) == 1, r
+
+
+def test_unreadable_job_list_alerts_anyway():
+    # Fail loud, never silent: if the jobs API is unavailable we must not swallow
+    # a possible outage — that is the exact failure mode #832 exists to end.
+    r = _run("failure", open_issues=[], jobs_throw=True)
+    assert r["threw"] is None, r
+    assert len(r["created"]) == 1, r
+    assert any("Could not read jobs" in w for w in r["warnings"]), r
+
+
+def test_empty_job_list_alerts_anyway():
+    # Zero jobs is the 726-incident shape (cancelled before reaching a runner):
+    # there is no evidence of a decline, so it stays reportable.
+    r = _run("cancelled", open_issues=[], jobs=[])
+    assert r["threw"] is None, r
+    assert len(r["created"]) == 1, r
+
+
+def test_gate_check_is_skipped_on_the_success_path():
+    # A green run needs no classification — don't spend the call.
+    r = _run("success", open_issues=[_alert_issue(7)])
+    assert r["threw"] is None, r
+    assert r["listJobsCalls"] == [], r
+    assert r["updates"] == [{"issue_number": 7, "state": "closed"}], r
+
+
+def test_gate_check_reads_only_the_latest_attempt_of_this_run():
+    r = _run("failure", open_issues=[])
+    assert len(r["listJobsCalls"]) == 1, r
+    call = r["listJobsCalls"][0]
+    assert call["run_id"] == 30116967112, call
+    # `filter: latest` — a re-run's earlier failed attempt must not keep the alert
+    # alive after a successful retry.
+    assert call["filter"] == "latest", call
+
+
+def test_benign_conclusions_do_not_even_check_jobs():
+    for conclusion in ("skipped", "neutral"):
+        r = _run(conclusion, open_issues=[])
+        assert r["listJobsCalls"] == [], (conclusion, r)
+
+
+def test_alert_body_states_the_observation_without_diagnosing_a_cause():
+    # "all jobs cancelled" has at least two causes (declined gate, cancel-in-progress
+    # supersession); the issue must report what was seen, not guess why.
+    r = _run("cancelled", open_issues=[], jobs=[])
+    body = r["created"][0]["body"]
+    assert "what was observed" in body, body
+    assert "usually means" not in body, body
 
 
 # --- branch scoping --------------------------------------------------------

@@ -21,6 +21,11 @@
 //   TEST_EXISTING_MARKERS_FILE JSON array of marker strings that already have an
 //                             issue; the search mock returns one item when the
 //                             query quotes a listed marker (default: none exist)
+//   TEST_RUN_JOBS_FILE        JSON array of job objects [{name,conclusion}] returned by
+//                             actions.listJobsForWorkflowRun (default: [] = none), so a
+//                             script can tell a declined gate from a real job failure
+//   TEST_JOBS_THROW           when "1", the jobs mock rejects — proves the caller treats an
+//                             unreadable job list as "alert anyway", never as "stay quiet"
 //   TEST_SEARCH_THROWS        when "1", the search mock rejects — proves the
 //                             script's own .catch() fallback treats a failed
 //                             lookup as "not found" rather than skipping work
@@ -29,8 +34,8 @@
 //                             label) is deterministic
 //
 // Emits one JSON result line:
-//   { failed, threw, notices, infos, listForRepoCalls, searchCalls, created,
-//     comments, updates }
+//   { failed, threw, notices, warnings, infos, listForRepoCalls, searchCalls,
+//     listJobsCalls, created, comments, updates }
 
 import { readFileSync } from 'node:fs';
 
@@ -60,11 +65,20 @@ const existingMarkers = process.env.TEST_EXISTING_MARKERS_FILE
   ? JSON.parse(readFileSync(process.env.TEST_EXISTING_MARKERS_FILE, 'utf8'))
   : [];
 const searchThrows = process.env.TEST_SEARCH_THROWS === '1';
+// Job list returned by actions.listJobsForWorkflowRun — lets a script tell a
+// declined approval gate (run `failure`, jobs `cancelled`) from a real fault
+// (some job `failure`), which the run-level conclusion alone cannot express.
+const runJobs = process.env.TEST_RUN_JOBS_FILE
+  ? JSON.parse(readFileSync(process.env.TEST_RUN_JOBS_FILE, 'utf8'))
+  : null;
+const jobsThrow = process.env.TEST_JOBS_THROW === '1';
 
 const notices = [];
+const warnings = [];
 const infos = [];
 const listForRepoCalls = [];
 const searchCalls = [];
+const listJobsCalls = [];
 const created = [];
 const comments = [];
 const updates = [];
@@ -76,7 +90,7 @@ const core = {
     failed = String(m);
   },
   notice: (m) => notices.push(String(m)),
-  warning: () => {},
+  warning: (m) => warnings.push(String(m)),
   info: (m) => infos.push(String(m)),
   error: () => {},
   debug: () => {},
@@ -85,6 +99,17 @@ const core = {
 let nextNumber = 1000;
 const github = {
   rest: {
+    actions: {
+      listJobsForWorkflowRun: async (args) => {
+        listJobsCalls.push({
+          run_id: args.run_id,
+          per_page: args.per_page,
+          filter: args.filter,
+        });
+        if (jobsThrow) throw new Error('simulated jobs API failure');
+        return { data: { jobs: runJobs || [] } };
+      },
+    },
     search: {
       issuesAndPullRequests: async (args) => {
         searchCalls.push({ q: args.q, per_page: args.per_page });
@@ -148,9 +173,11 @@ console.log(
     failed,
     threw,
     notices,
+    warnings,
     infos,
     listForRepoCalls,
     searchCalls,
+    listJobsCalls,
     created,
     comments,
     updates,

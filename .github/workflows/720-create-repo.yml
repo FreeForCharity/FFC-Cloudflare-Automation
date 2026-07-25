@@ -146,6 +146,11 @@ jobs:
           echo "✅ $owner/$name is free — proceeding to the gated create. (Check covers repos visible to GITHUB_TOKEN; a private name collision would still fail at the create step.)" >> "$GITHUB_STEP_SUMMARY"
 
   create-repo:
+    # Job-level block: the ungated preflight job keeps the repo default token.
+    # `id-token: write` is required for the Key Vault OIDC exchange (#844).
+    permissions:
+      contents: read
+      id-token: write
     runs-on: windows-latest
     needs: preflight
     environment: github-prod
@@ -153,10 +158,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Rotation is
+      # a new KV version — no GitHub change and no second copy that can drift.
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+
       - name: Create Repository
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }} # Needs repo creation permissions
         run: |
           $ErrorActionPreference = 'Stop'
           $params = @{
@@ -182,7 +212,6 @@ jobs:
       - name: Grant FFC-ORGWIDE-* tier teams default access (PUBLIC repos only)
         if: ${{ inputs.DryRun != true && inputs.Visibility == 'public' }}
         env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
         shell: pwsh
         run: |
           # Auto-grant FFC-ORGWIDE-* tier teams on PUBLIC repos only.

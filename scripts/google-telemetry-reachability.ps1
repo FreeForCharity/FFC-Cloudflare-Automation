@@ -170,12 +170,20 @@ function Get-GtmInventory {
     $containers = @()
     if ($raw.Count -gt 0) {
         foreach ($c in $raw) {
+            # domainName is a GTM field listing the domains a container is declared for. It may be
+            # absent, a single string, or an array. Built explicitly rather than inline: @() does
+            # flatten correctly here (verified — an array yields String elements, not a nested
+            # Object[]), but the inline form reads as if it might nest, and container->domain
+            # matching plus shared-container detection both depend on this being flat.
+            $domainList = @()
+            if (($c.PSObject.Properties.Name -contains 'domainName') -and $c.domainName) {
+                $domainList = @($c.domainName)
+            }
             $containers += [pscustomobject]@{
                 name        = $c.name
                 publicId    = $c.publicId
                 containerId = $c.containerId
-                # domainName is a GTM field listing domains the container is declared for.
-                domains     = @(if ($c.PSObject.Properties.Name -contains 'domainName') { $c.domainName } else { @() })
+                domains     = $domainList
             }
         }
     }

@@ -356,7 +356,15 @@ function planTargets(candidates) {
       continue;
     }
     if (!c.hasPackageJson) {
-      skipped.push({ repo, reason: 'no package.json — no dependency tree to audit' });
+      // `skipReason` lets the caller distinguish WHY there is no package.json —
+      // a normal static repo versus one whose root listing 404'd (empty repo).
+      // Both are correct no-ops, but collapsing them into one line would be the
+      // silent scope-miscounting #838 was opened about, and this output is what
+      // the gate approver reads.
+      skipped.push({
+        repo,
+        reason: c.skipReason || 'no package.json — no dependency tree to audit',
+      });
       continue;
     }
     const hasWorkflow = Boolean(c.hasWorkflow);

@@ -121,11 +121,19 @@ jobs:
           # downloads a lockfile (which can be megabytes across 44 repos).
           # Echoes OK / ABSENT / ERROR:<msg> so a private or rate-limited repo is
           # reported rather than silently counted as uncovered.
+          #
+          # The endpoint is built explicitly rather than by interpolating a
+          # possibly-empty $dir: `contents/` with a trailing slash is not the
+          # same request as `contents`.
           list_dir() {
-            local repo="$1" dir="$2" dest="$3" rc
+            local repo="$1" dir="$2" dest="$3" rc path
+            if [ -n "$dir" ]; then
+              path="repos/${repo}/contents/${dir}"
+            else
+              path="repos/${repo}/contents"
+            fi
             : > "$dest"
-            gh api "repos/${repo}/contents/${dir}" \
-              --jq '[.[].name] | join(",")' > "$dest" 2>/tmp/err
+            gh api "$path" --jq '[.[].name] | join(",")' > "$dest" 2>/tmp/err
             rc=$?
             if [ "$rc" -ne 0 ]; then
               if grep -qi "Not Found" /tmp/err; then
@@ -169,6 +177,27 @@ jobs:
                   '. += [{"repo":$r,"error":$e}]' "$candidates" > "$candidates.tmp" \
                   && mv "$candidates.tmp" "$candidates"
                 echo "::warning::$full root listing failed: ${root_status#ERROR:}"
+                continue
+                ;;
+              ABSENT)
+                # ABSENT is legitimate for .github/workflows (a repo may have
+                # none) but the root always exists, so a 404 here means the repo
+                # could not be listed — overwhelmingly an empty repo with no
+                # commits, possibly a path/auth/transient quirk.
+                #
+                # Skipped rather than blocked: with no commits there genuinely is
+                # no package.json and no dependency tree, so this is a correct
+                # no-op, and blocking would leave a permanent entry nobody can
+                # action. But it gets its OWN reason rather than falling through
+                # into the plain "no package.json" bucket, because the defect
+                # #838 exists to correct is silent miscounting of scope (13
+                # estimated, 38 real, 44 measured) — and the plan output is what
+                # the gate approver reads.
+                jq --arg r "$full" \
+                  --arg s "root listing returned 404 — empty repo (no commits) or unlistable; no dependency tree either way" \
+                  '. += [{"repo":$r,"hasPackageJson":false,"skipReason":$s}]' \
+                  "$candidates" > "$candidates.tmp" && mv "$candidates.tmp" "$candidates"
+                echo "::warning::$full root listing returned 404 — recorded as skipped with a distinct reason"
                 continue
                 ;;
             esac

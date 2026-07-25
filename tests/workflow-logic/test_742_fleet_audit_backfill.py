@@ -242,10 +242,20 @@ def cli(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _fake_repo(tmp: str, pkg: str = PKG, with_workflow: str | None = None) -> str:
-    root = pathlib.Path(tmp) / "repo"
+def _fake_repo(
+    tmp: str,
+    pkg: str = PKG,
+    with_workflow: str | None = None,
+    with_lockfile: bool = True,
+    name: str = "repo",
+) -> str:
+    root = pathlib.Path(tmp) / name
     root.mkdir(parents=True)
     (root / "package.json").write_text(pkg)
+    # A lockfile by default: `npm ci` requires one, so the CLI blocks a clone
+    # without it, and a fixture lacking one would not represent a real target.
+    if with_lockfile:
+        (root / "package-lock.json").write_text('{"lockfileVersion": 3}\n')
     if with_workflow is not None:
         wfdir = root / ".github" / "workflows"
         wfdir.mkdir(parents=True)
@@ -699,6 +709,76 @@ def test_apply_does_not_overwrite_an_existing_workflow():
         assert (
             pathlib.Path(repo) / ".github/workflows/security-audit.yml"
         ).read_text() == existing
+
+
+def test_apply_rechecks_the_lockfile_after_the_gate():
+    """The plan job blocks lockfile-less repos, but an approval gate can sit for
+    days and a repo can lose its lockfile in between. `npm ci` fails without
+    one, so wiring it produces a permanently red audit that reads as real
+    vulnerability signal — the invariant whose violation is invisible.
+
+    The canonical template is already re-validated post-gate for exactly this
+    reason; checking one post-gate assumption and not the other was an
+    inconsistency. Raised in review on #842.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _fake_repo(tmp, with_lockfile=False)
+        proc = cli("apply", repo, "FreeForCharity/FFC-EX-a.org", "42 6 * * *", _template_file(tmp))
+        assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+        assert "package-lock.json" in proc.stderr, proc.stderr
+        # And, as ever, nothing written.
+        assert not (pathlib.Path(repo) / ".github" / "workflows" / "security-audit.yml").exists()
+        assert (pathlib.Path(repo) / "package.json").read_text() == PKG
+
+
+def test_root_listing_404_gets_its_own_skip_reason():
+    """`ABSENT` is legitimate for `.github/workflows` (a repo may have none) but
+    the repo ROOT always exists, so a 404 there means the repo could not be
+    listed — overwhelmingly an empty repo with no commits.
+
+    It stays a *skip*, not a block: with no commits there is genuinely no
+    dependency tree, so this is a correct no-op and blocking would leave a
+    permanent entry nobody can action. What it must not do is fall through into
+    the plain "no package.json" line with no trace, because silent
+    scope-miscounting is the defect #838 exists to correct. Raised in review
+    on #842.
+    """
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    assert "skipReason" in raw, raw
+    assert "root listing returned 404" in raw, raw
+    # Recorded as not-a-Node-app (a skip), never as an error (a block).
+    absent_branch = raw.split("              ABSENT)")[1].split(";;")[0]
+    assert '"hasPackageJson":false' in absent_branch, absent_branch
+    assert '"error"' not in absent_branch, absent_branch
+
+    # The endpoint is built explicitly: `contents/` (trailing slash) is not the
+    # same request as `contents`.
+    assert 'path="repos/${repo}/contents"' in raw, raw
+    assert 'gh api "repos/${repo}/contents/${dir}"' not in raw, raw
+
+
+def test_a_distinct_skip_reason_survives_into_the_plan():
+    """The reason has to reach the report, or recording it upstream is pointless."""
+    p = plan(
+        [
+            {
+                "repo": "FreeForCharity/FFC-EX-empty.org",
+                "hasPackageJson": False,
+                "skipReason": "root listing returned 404 — empty repo (no commits)",
+            },
+            {"repo": "FreeForCharity/FFC-EX-static.org", "hasPackageJson": False},
+        ]
+    )
+    assert p["targets"] == [] and p["blocked"] == [], p
+    reasons = {s["repo"]: s["reason"] for s in p["skipped"]}
+    assert "404" in reasons["FreeForCharity/FFC-EX-empty.org"], reasons
+    assert reasons["FreeForCharity/FFC-EX-static.org"].startswith("no package.json"), reasons
+    # And the two are distinguishable in the rendered summary.
+    with tempfile.TemporaryDirectory() as tmp:
+        f = pathlib.Path(tmp) / "plan.json"
+        f.write_text(json.dumps(p))
+        out = cli("summary", str(f), "true", "10").stdout
+        assert "404" in out, out
 
 
 def test_apply_reports_blocked_for_a_missing_package_json():

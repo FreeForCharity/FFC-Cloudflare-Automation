@@ -63,6 +63,20 @@ function apply(repoDir, repoFullName, cron, templateFile) {
   if (!fs.existsSync(pkgPath)) {
     fail(`${repoFullName}: no package.json in the clone`, BLOCKED);
   }
+
+  // Re-check the lockfile against the CLONE, not against the plan. The plan job
+  // already blocks lockfile-less repos, but an approval gate can sit for hours
+  // or days, and this invariant is the one whose violation is invisible: the
+  // canonical workflow runs `npm ci`, which fails without a lockfile, producing
+  // a permanently red audit that reads as real vulnerability signal. The
+  // canonical template is re-validated after the gate for the same reason, so
+  // checking one post-gate assumption and not the other was an inconsistency.
+  if (!fs.existsSync(path.join(repoDir, lib.LOCKFILE_PATH))) {
+    fail(
+      `${repoFullName}: no ${lib.LOCKFILE_PATH} in the clone — \`npm ci\` would fail on every run, making the audit red for the wrong reason`,
+      BLOCKED,
+    );
+  }
   const pkgRaw = read(pkgPath);
   const edit = lib.addAuditScript(pkgRaw);
   if (!edit.changed && edit.reason !== 'already-present') {

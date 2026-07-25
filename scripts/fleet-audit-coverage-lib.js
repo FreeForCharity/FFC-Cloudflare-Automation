@@ -101,8 +101,17 @@ function analyze(entries) {
  * a glance. It is informational: at fleet scale some repos sharing a minute is
  * unavoidable, so "no two repos share a cron" would be a rule that never goes
  * green — a permanently-red alert is one nobody reads. `staggered` reports the
- * one unambiguous case: more than one audited repo, all on a single cron, means
- * staggering was never applied at all.
+ * one unambiguous case: two or more repos whose cron is actually KNOWN, all on
+ * a single expression, means staggering was never applied at all.
+ *
+ * The known-cron qualifier is load-bearing. Repos whose audit is dispatch-only
+ * (or whose schedule could not be parsed) land in the `unknown` group, and
+ * `distinct` deliberately does not count that group — so testing the whole
+ * covered set instead would read a fleet of entirely-unknown crons as "all on
+ * one cron" and warn that staggering was never applied, when in truth nothing
+ * is known about the schedule at all. Not-measured must never render as
+ * measured-and-bad; that is the same error this workflow exists to catch, one
+ * level down.
  *
  * Returns groups sorted by size (largest pile-up first), then cron.
  */
@@ -117,10 +126,12 @@ function summarizeCrons(covered) {
     .map(([cron, repos]) => ({ cron, repos: repos.slice().sort(), count: repos.length }))
     .sort((a, b) => b.count - a.count || a.cron.localeCompare(b.cron));
   const distinct = groups.filter((g) => g.cron !== 'unknown').length;
+  const knownCount = groups.filter((g) => g.cron !== 'unknown').reduce((n, g) => n + g.count, 0);
   return {
     groups,
     distinct,
-    staggered: !((covered || []).length >= 2 && distinct <= 1),
+    knownCount,
+    staggered: !(knownCount >= 2 && distinct <= 1),
   };
 }
 

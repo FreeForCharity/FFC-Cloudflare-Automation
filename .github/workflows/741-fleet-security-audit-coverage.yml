@@ -1,12 +1,12 @@
 name: '741. Repo - Fleet Security Audit Coverage [Org]'
 run-name: 'Fleet Security Audit Coverage'
 
-# Weekly audit of whether each Node app in the FFC-EX fleet has dependency-
-# vulnerability detection wired at all. A repo counts as covered only when it
-# has BOTH `.github/workflows/security-audit.yml` and an `audit:high` script in
-# package.json — the workflow without the script fails on every run, the script
-# without the workflow never runs. Findings are upserted into a single rolling
-# issue that auto-closes once the fleet is fully covered.
+# Weekly audit of whether each Node app in the FFC-EX fleet has
+# dependency-vulnerability detection wired at all. A repo counts as covered only
+# when it has BOTH `.github/workflows/security-audit.yml` and an `audit:high`
+# script in package.json — the workflow without the script fails on every run,
+# the script without the workflow never runs. Findings are upserted into a
+# single rolling issue that auto-closes once the fleet is fully covered.
 #
 # Why (#838): 34 of the 44 Node FFC-EX repos had no detection of any kind, so a
 # published advisory against a charity site was invisible until somebody swept

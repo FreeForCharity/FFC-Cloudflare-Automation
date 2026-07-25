@@ -222,6 +222,49 @@ def test_dispatch_only_audit_copy_has_unknown_cron():
     assert r["crons"]["distinct"] == 0, r["crons"]
 
 
+def _unknown_cron(repo: str) -> dict:
+    return {"repo": repo, "hasPackageJson": True, "hasWorkflow": True,
+            "hasScript": True, "cron": None}
+
+
+def test_all_unknown_crons_do_not_read_as_unstaggered():
+    # Regression (Copilot review on #840): every repo landing in the `unknown`
+    # group is "nothing is known about the schedule", NOT "everything shares one
+    # schedule". Testing the whole covered set would make distinct==0 satisfy
+    # `distinct <= 1` and fire the warning. Not-measured must never render as
+    # measured-and-bad.
+    r = analyze([_unknown_cron("FreeForCharity/FFC-EX-a.org"),
+                 _unknown_cron("FreeForCharity/FFC-EX-b.org")])
+    assert r["crons"]["staggered"] is True, r["crons"]
+    assert r["crons"]["knownCount"] == 0, r["crons"]
+
+
+def test_one_known_cron_alongside_unknowns_is_not_unstaggered():
+    # A single known schedule cannot collide with anything, and the unknowns
+    # carry no evidence either way.
+    r = analyze([_covered("FreeForCharity/FFC-EX-a.org", "17 6 * * *"),
+                 _unknown_cron("FreeForCharity/FFC-EX-b.org")])
+    assert r["crons"]["staggered"] is True, r["crons"]
+    assert r["crons"]["knownCount"] == 1, r["crons"]
+
+
+def test_two_known_identical_crons_still_flag_despite_unknowns():
+    # The warning must survive unknowns in the same fleet — otherwise a single
+    # dispatch-only repo would mask a real pile-up.
+    r = analyze([_covered("FreeForCharity/FFC-EX-a.org", "17 6 * * *"),
+                 _covered("FreeForCharity/FFC-EX-b.org", "17 6 * * *"),
+                 _unknown_cron("FreeForCharity/FFC-EX-c.org")])
+    assert r["crons"]["staggered"] is False, r["crons"]
+    assert r["crons"]["knownCount"] == 2, r["crons"]
+
+
+def test_render_omits_stagger_warning_when_every_cron_is_unknown():
+    analysis = analyze([_unknown_cron("FreeForCharity/FFC-EX-a.org"),
+                        _unknown_cron("FreeForCharity/FFC-EX-b.org")])
+    body = render(analysis, "t")
+    assert "never staggered" not in body, body
+
+
 # --- parsing helpers -------------------------------------------------------
 
 def test_extract_cron_from_the_canonical_workflow_shape():
@@ -350,6 +393,28 @@ def test_workflow_does_not_collide_with_738_fleet_sweep():
     mine = cron_of(WF_FILE)
     theirs = cron_of("738-fleet-smoke-engine-drift-audit.yml")
     assert set(mine).isdisjoint(set(theirs)), (mine, theirs)
+
+
+def test_741_header_never_wraps_mid_hyphenated_word():
+    """The catalog generator joins header comment lines with a space, so a word
+    split across the wrap ships to the PUBLIC catalog (ffcadmin.org/automation/)
+    as `dependency- vulnerability`. Caught on #840 by review, and the mechanical
+    cause — a header line ending in a hyphen — is what this asserts.
+
+    Scoped to 741 rather than repo-wide: 727's description carries the same
+    pattern (`squash- or`) and predates this PR, so a repo-wide guard would fail
+    on unrelated work. Widening it is a worthwhile follow-up.
+    """
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    header = [ln for ln in raw.splitlines() if ln.startswith("#")]
+    offenders = [ln for ln in header if ln.rstrip().endswith("-")]
+    assert not offenders, offenders
+
+    catalog = json.loads((REPO_ROOT / "docs" / "workflow-catalog.json").read_text())
+    entries = catalog["workflows"] if isinstance(catalog, dict) else catalog
+    mine = next(w for w in entries if w.get("number") == 741)
+    import re as _re
+    assert not _re.search(r"\w+- \w+", mine["description"]), mine["description"]
 
 
 def test_workflow_never_writes_to_a_fleet_repo():

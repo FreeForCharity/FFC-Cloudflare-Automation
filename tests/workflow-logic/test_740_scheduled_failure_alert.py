@@ -1,12 +1,20 @@
 """Unit tests for the 740 scheduled-workflow rolling failure-alert github-script.
 
-740 generalises 732's rolling-issue monitor to the scheduled NON-Google hub
-workflows (726 drift audit, 734 janitor, 738 smoke drift, …). It exists because
-a gated daily workflow can fail and nothing tells anyone: 726 failed at
+740 is the hub's single failure alerter for every scheduled workflow (726 drift
+audit, 734 janitor, 738 smoke drift, the Google reporting pair, …). It exists
+because a gated daily workflow can fail and nothing tells anyone: 726 failed at
 2026-07-24 13:33Z and sat unnoticed for ~8.5 hours (#832). Silence read as green.
 
-The state machine is the same as 732's and needs the same guarantees — never a
-duplicate issue, never a missed close — plus three that are specific to 740:
+**It is a POLL, not a `workflow_run` watcher (#843).** The event-driven version
+never fired even once — `?event=workflow_run` returned total_count 0 for this
+repo all time, while sibling repos showed hundreds — so the alerting layer was
+dead for six days and nothing could reveal it, because a `workflow_run` watcher
+cannot be run on demand. The poll can, and `workflow_dispatch` is therefore part
+of the contract, not a convenience. 732 (the Google-lane twin, equally dead) is
+retired into this file.
+
+The state machine is unchanged by that conversion and needs the same guarantees —
+never a duplicate issue, never a missed close — plus the ones specific to 740:
 
   - `cancelled` is REPORTABLE, not ignored. The 13:33Z run was cancelled before
     it reached a runner, executed zero steps, and the run-level conclusion
@@ -15,28 +23,34 @@ duplicate issue, never a missed close — plus three that are specific to 740:
   - **A declined approval gate is not an outage.** Three watched workflows
     (703/726/735) are gated on `github-prod`, and a declined or expired gate
     surfaces as run-level `failure` with its jobs `cancelled` — identical to a
-    real fault in the payload. #834 measured 8 of 21 scheduled runs on that lane
-    ending that way, so without the job-level discriminator the alerter's
+    real fault in the run object. #834 measured 8 of 21 scheduled runs on that
+    lane ending that way, so without the job-level discriminator the alerter's
     dominant output would be "a human said no", and it would be ignored by its
     second week. The negative control (a genuinely failed job, run 29826157099)
     must still alert; an unreadable job list must alert too, never stay quiet.
   - **One rolling issue PER WATCHED WORKFLOW.** The marker is keyed by workflow
     name, so a success only closes the alert for the workflow that recovered.
-    With ten workflows watched, a shared marker would let 739's weekly green run
-    silently close 726's daily outage — the alert would clear itself while the
-    thing it is watching is still broken (found by Copilot on PR #833).
-  - **Isolation from 732.** Both alerters watch different workflows and write to
-    the same repo; a marker or label collision would let one close the other's
-    issue. 740 uses `<!-- scheduled-workflow-failure-alert:NAME -->` +
-    `agentic-os,bug` against 732's `<!-- google-workflow-failure-alert -->` +
-    `google-api,bug`, and neither may match the other's issue.
-  - **The watch list is by exact `name:` string**, which is the part that breaks
-    silently: a `workflow_run.workflows` entry that does not match any workflow's
-    `name:` never fires and never errors. #832's own draft got two of the three
-    names wrong (`734 … [GH]` for `[Repo]`, `738 … [Repo]` for `[Org]`), so the
-    list is verified against the shipped workflow files here.
+    With a dozen workflows watched, a shared marker would let 739's weekly green
+    run silently close 726's daily outage — the alert would clear itself while
+    the thing it is watching is still broken (found by Copilot on PR #833).
+  - **The marker keys on the WORKFLOW name, never `run.name`.** The runs API
+    returns the rendered `run-name:` when a workflow sets one, which would
+    scatter one workflow's alerts across a new marker on every run. Only the
+    poll shape can get this wrong, so it is tested explicitly.
+  - **The watch list must be resolved past `per_page`.** The repo has >100
+    workflows and `per_page` caps at 100; an unpaginated lookup silently drops
+    the tail, which already produced one false "740 is not registered" reading
+    while diagnosing #843.
+  - **A watched name that matches no workflow fails LOUD.** An entry matching
+    nothing never fires and never errors — that silence is precisely #832's
+    failure mode, and #832's own draft got two of three names wrong.
+  - **The watch list is scheduled workflows only.** Polling "the latest run" of
+    a dispatch-only workflow reports whatever a human last ran by hand: a stale
+    red would alert forever and a stale green would mean nothing. This is why
+    501 (dispatch/`workflow_call` only) is excluded even though retired 732
+    watched it, while 502 and 504 are absorbed.
 
-Refs #832, #752 (process assurance), AGENTS.md §"Adding or changing a workflow".
+Refs #843, #832, #752 (process assurance), AGENTS.md §"Adding or changing a workflow".
 """
 
 from __future__ import annotations
@@ -47,6 +61,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from wf_extract import (  # noqa: E402
@@ -60,7 +76,9 @@ WORKFLOW = "740-scheduled-workflow-failure-alert.yml"
 JOB = "alert"
 STEP = "Upsert or close rolling alert issue"
 MARKER_PREFIX = "<!-- scheduled-workflow-failure-alert:"
-GOOGLE_MARKER = "<!-- google-workflow-failure-alert -->"
+# 732's marker and labels. 732 is deleted, but a stray issue carrying them must
+# never be adopted or closed by 740 — and 740 must never reuse the identifiers.
+LEGACY_GOOGLE_MARKER = "<!-- google-workflow-failure-alert -->"
 HARNESS = pathlib.Path(__file__).resolve().parent / "harness" / "issues_api_shim.mjs"
 NODE = shutil.which("node") or "node"
 
@@ -68,6 +86,24 @@ WATCHED_NAME = "726. Repo - Rulesets + Settings Drift Audit [Org]"
 OTHER_WATCHED_NAME = "739. Repo - Process Health Metrics Report [GH]"
 MARKER = f"{MARKER_PREFIX}{WATCHED_NAME} -->"
 OTHER_MARKER = f"{MARKER_PREFIX}{OTHER_WATCHED_NAME} -->"
+
+# A run object's `name` is the rendered `run-name:`, not the workflow's `name:`.
+# Every fixture uses a distinct value so any accidental use of it is visible.
+RUN_DISPLAY_NAME = "Drift audit: nightly"
+
+
+def _step() -> dict:
+    return find_step(load_workflow(WORKFLOW), JOB, STEP)
+
+
+def _watched() -> list:
+    """The shipped watch list, read out of the step's `env:` block.
+
+    Kept in YAML rather than inside the script so these guards read the list that
+    actually ships instead of parsing JavaScript.
+    """
+    raw = _step()["env"]["WATCHED_WORKFLOWS"]
+    return [line.strip() for line in raw.split("\n") if line.strip()]
 
 
 def _run(
@@ -78,43 +114,77 @@ def _run(
     head_branch="main",
     jobs=None,
     jobs_throw=False,
+    watched=None,
+    registered=None,
+    filler_workflows=0,
+    runs_throw=None,
+    extra_runs=None,
 ):
-    """Drive the step for a workflow_run with the given conclusion.
+    """Drive one poll sweep in which `name` has `conclusion` as its latest run.
 
-    `jobs` is the fixture returned by actions.listJobsForWorkflowRun — the only
-    place the payload can distinguish a declined gate from a real fault. It
-    defaults to a single failed job so the ordinary failure cases still alert.
+    Every other watched workflow has no completed run, so the assertions stay
+    about the one workflow under test. `jobs` is the fixture returned by
+    actions.listJobsForWorkflowRun — the only place the run can be told apart
+    from a declined gate. It defaults to a single failed job so the ordinary
+    failure cases still alert.
+
+    `filler_workflows` pads the repo inventory ahead of the watched ones, so a
+    caller that fails to paginate cannot resolve them. `registered` is the set of
+    names the repo actually declares — pass a narrower list than `watched` to
+    model a workflow that was renamed out from under the watch list.
     """
     script = step_github_script(WORKFLOW, JOB, STEP)
+    watched = _watched() if watched is None else watched
+    registered = watched if registered is None else registered
     context = {
         "repo": {"owner": "FreeForCharity", "repo": "FFC-Cloudflare-Automation"},
-        "payload": {
-            "repository": {"default_branch": "main"},
-            "workflow_run": {
+        "payload": {"repository": {"default_branch": "main"}},
+    }
+    # Repo inventory: optional filler, then one entry per watched name.
+    inventory = [{"id": 900000 + i, "name": f"{i}. Filler [X]"} for i in range(filler_workflows)]
+    ids = {}
+    for i, wf_name in enumerate(registered):
+        wf_id = 100 + i
+        ids[wf_name] = wf_id
+        inventory.append({"id": wf_id, "name": wf_name})
+
+    runs = dict(extra_runs or {})
+    if name in ids:
+        runs[str(ids[name])] = [
+            {
                 "id": 30116967112,
-                "name": name,
+                "name": RUN_DISPLAY_NAME,
                 "conclusion": conclusion,
                 "run_number": 42,
                 "head_branch": head_branch,
                 "html_url": "https://github.com/x/y/actions/runs/999",
-            },
-        },
-    }
+            }
+        ]
     if jobs is None:
         jobs = [{"name": "audit", "conclusion": "failure"}]
-    env = {"PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin"}
+
+    env = {
+        "PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin",
+        "WATCHED_WORKFLOWS": "\n".join(watched),
+    }
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
         (tdp / "script.js").write_text(script)
         (tdp / "context.json").write_text(json.dumps(context))
         (tdp / "open.json").write_text(json.dumps(open_issues or []))
         (tdp / "jobs.json").write_text(json.dumps(jobs))
+        (tdp / "workflows.json").write_text(json.dumps(inventory))
+        (tdp / "runs.json").write_text(json.dumps(runs))
         env["TEST_SCRIPT_FILE"] = str(tdp / "script.js")
         env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
         env["TEST_OPEN_ISSUES_FILE"] = str(tdp / "open.json")
         env["TEST_RUN_JOBS_FILE"] = str(tdp / "jobs.json")
+        env["TEST_REPO_WORKFLOWS_FILE"] = str(tdp / "workflows.json")
+        env["TEST_WORKFLOW_RUNS_FILE"] = str(tdp / "runs.json")
         if jobs_throw:
             env["TEST_JOBS_THROW"] = "1"
+        if runs_throw:
+            env["TEST_RUNS_THROW"] = json.dumps([str(ids[n]) for n in runs_throw])
         proc = subprocess.run(
             [NODE, str(HARNESS)],
             env=env,
@@ -124,7 +194,9 @@ def _run(
         )
     if proc.returncode != 0:
         raise AssertionError(f"harness crashed: {proc.stderr}")
-    return json.loads(proc.stdout.strip().splitlines()[-1])
+    result = json.loads(proc.stdout.strip().splitlines()[-1])
+    result["_ids"] = ids
+    return result
 
 
 def _alert_issue(number=7, *, marker=MARKER):
@@ -140,6 +212,7 @@ def _alert_issue(number=7, *, marker=MARKER):
 def test_failure_with_no_existing_creates_one_issue():
     r = _run("failure", open_issues=[])
     assert r["threw"] is None, r
+    assert r["failed"] is None, r
     assert len(r["created"]) == 1, r
     issue = r["created"][0]
     assert MARKER in issue["body"], issue
@@ -169,7 +242,7 @@ def test_failure_with_existing_appends_comment_not_a_second_issue():
 
 def test_cancelled_is_reported_not_ignored():
     # A run cancelled before it reached a runner is the exact incident that made
-    # this workflow necessary — 732 ignores `cancelled`, 740 must not.
+    # this workflow necessary — retired 732 ignored `cancelled`, 740 must not.
     r = _run("cancelled", open_issues=[])
     assert r["threw"] is None, r
     assert len(r["created"]) == 1, r
@@ -235,12 +308,20 @@ def test_neutral_is_ignored():
 
 
 def test_benign_conclusions_cost_no_api_call():
-    # A guaranteed no-op should not spend REST budget: the whole fleet of watched
-    # crons shares one 5,000/hr pool with every other agent (AGENTS.md).
+    # A guaranteed no-op should not spend REST budget: this now runs 48 times a
+    # day and shares one 5,000/hr pool with every other agent (AGENTS.md).
     for conclusion in ("skipped", "neutral"):
         r = _run(conclusion, open_issues=[_alert_issue(7)])
         assert r["threw"] is None, (conclusion, r)
         assert r["listForRepoCalls"] == [], (conclusion, r)
+
+
+def test_an_all_green_sweep_spends_no_issue_api_call():
+    # The overwhelmingly common poll outcome. Nothing to close, nothing to open:
+    # the issue listing must never be fetched "just in case".
+    r = _run("skipped", open_issues=[])
+    assert r["threw"] is None, r
+    assert r["listForRepoCalls"] == [], r
 
 
 def test_success_still_spends_the_lookup_so_it_can_close():
@@ -249,6 +330,39 @@ def test_success_still_spends_the_lookup_so_it_can_close():
     r = _run("success", open_issues=[_alert_issue(7)])
     assert len(r["listForRepoCalls"]) == 1, r
     assert r["updates"] == [{"issue_number": 7, "state": "closed"}], r
+
+
+def test_one_sweep_lists_open_issues_at_most_once():
+    # Budget guard specific to the poll shape: a dozen failing workflows in the
+    # same sweep must share one listing, not spend one call each. Safe because
+    # each workflow's marker is distinct, so a create for one can never change
+    # the lookup for another.
+    watched = _watched()
+    first, second = watched[0], watched[1]
+    r = _run(
+        "failure",
+        open_issues=[],
+        name=first,
+        extra_runs={
+            "101": [
+                {
+                    "id": 30116967113,
+                    "name": RUN_DISPLAY_NAME,
+                    "conclusion": "failure",
+                    "run_number": 43,
+                    "head_branch": "main",
+                    "html_url": "https://github.com/x/y/actions/runs/1000",
+                }
+            ]
+        },
+    )
+    assert r["threw"] is None, r
+    assert len(r["created"]) == 2, r  # both workflows got their own issue ...
+    assert len(r["listForRepoCalls"]) == 1, r  # ... from a single listing
+    markers = sorted(i["body"].split("\n")[0] for i in r["created"])
+    assert markers == sorted(
+        [f"{MARKER_PREFIX}{first} -->", f"{MARKER_PREFIX}{second} -->"]
+    ), markers
 
 
 # --- a declined approval gate is not an outage -----------------------------
@@ -355,8 +469,22 @@ def test_alert_body_states_the_observation_without_diagnosing_a_cause():
 # --- branch scoping --------------------------------------------------------
 
 
+def test_the_run_query_is_scoped_to_completed_default_branch_runs():
+    # The poll asks the API for exactly the run the state machine models: the
+    # latest COMPLETED run on the default branch. Anything looser would feed it
+    # in-progress runs (conclusion null) or another branch's red.
+    r = _run("failure", open_issues=[])
+    calls = {c["workflow_id"]: c for c in r["listWorkflowRunsCalls"]}
+    assert calls, r
+    for call in calls.values():
+        assert call["branch"] == "main", call
+        assert call["status"] == "completed", call
+        assert call["per_page"] == 1, call
+
+
 def test_failure_on_a_feature_branch_is_ignored():
-    # A red run on someone's PR branch is not a fleet alert.
+    # A red run on someone's PR branch is not a fleet alert. The API filter should
+    # already exclude it; this guards the in-script check that backs it up.
     r = _run("failure", open_issues=[], head_branch="claude/some-branch")
     assert r["threw"] is None, r
     assert r["created"] == [], r
@@ -370,6 +498,25 @@ def test_success_on_a_feature_branch_does_not_close_the_alert():
     assert r["threw"] is None, r
     assert r["updates"] == [], r
     assert r["comments"] == [], r
+
+
+def test_a_workflow_with_no_completed_run_is_a_quiet_noop():
+    # A brand-new workflow that has never run on the default branch is not broken.
+    r = _run("failure", open_issues=[], name="__no_such_watched_workflow__")
+    assert r["threw"] is None, r
+    assert r["failed"] is None, r
+    assert r["created"] == [], r
+    assert r["listForRepoCalls"] == [], r
+
+
+def test_an_unreadable_run_list_warns_rather_than_reading_as_green():
+    # Nothing can be upserted without a run, but a workflow whose runs cannot be
+    # read must not pass as healthy in silence.
+    r = _run("failure", open_issues=[], runs_throw=[WATCHED_NAME])
+    assert r["threw"] is None, r
+    assert r["created"] == [], r
+    assert r["updates"] == [], r
+    assert any("Could not read runs" in w for w in r["warnings"]), r
 
 
 # --- one rolling issue per watched workflow --------------------------------
@@ -403,18 +550,63 @@ def test_a_second_workflow_failing_opens_its_own_issue():
     assert r["comments"] == [], r
 
 
-# --- isolation from 732 ----------------------------------------------------
+def test_the_marker_keys_on_the_workflow_name_not_the_run_display_name():
+    # Poll-specific hazard: `workflow_runs[].name` is the rendered `run-name:`,
+    # which changes per run for several watched workflows. Keying on it would
+    # open a brand-new issue every failure and never close any of them.
+    r = _run("failure", open_issues=[])
+    body = r["created"][0]["body"]
+    assert MARKER in body, body
+    assert RUN_DISPLAY_NAME not in body, body
+    assert RUN_DISPLAY_NAME not in r["created"][0]["title"], r["created"][0]
 
 
-def test_a_732_rolling_issue_is_never_matched_or_closed_by_740():
-    # 732's issue carries a different marker; 740 must open its own on failure ...
-    r = _run("failure", open_issues=[_alert_issue(7, marker=GOOGLE_MARKER)])
+# --- watch-list resolution -------------------------------------------------
+
+
+def test_watch_list_is_resolved_past_the_first_page_of_workflows():
+    # THE #843 TRUNCATION. The repo has >100 workflows and `per_page` caps at 100;
+    # a single unpaginated page silently drops the tail, and a watched workflow in
+    # that tail becomes permanently invisible with no error.
+    r = _run("failure", open_issues=[], filler_workflows=104)
+    assert r["threw"] is None, r
+    assert r["failed"] is None, f"watched names must resolve past page 1: {r['failed']}"
+    assert len(r["created"]) == 1, r
+    assert len(r["listRepoWorkflowsCalls"]) >= 2, r  # it actually paged
+    assert all(c["per_page"] == 100 for c in r["listRepoWorkflowsCalls"]), r
+
+
+def test_a_watched_name_matching_no_workflow_fails_loudly():
+    # A renamed workflow must not become invisible — this alerter's own failure
+    # mode. Silence is the bug; a red run is the fix.
+    watched = _watched() + ["999. Repo - Renamed Away [GH]"]
+    r = _run("failure", open_issues=[], watched=watched, registered=_watched())
+    assert r["threw"] is None, r
+    assert r["failed"] is not None, "an unresolvable watched name must fail the run"
+    assert "999. Repo - Renamed Away [GH]" in r["failed"], r["failed"]
+
+
+def test_an_unresolvable_name_does_not_suppress_the_other_alerts():
+    # One bad entry must not disable alerting for every good one — the failure is
+    # reported after the sweep, not instead of it.
+    watched = _watched() + ["999. Repo - Renamed Away [GH]"]
+    r = _run("failure", open_issues=[], watched=watched, registered=_watched())
+    assert len(r["created"]) == 1, r
+    assert MARKER in r["created"][0]["body"], r
+
+
+# --- isolation from the retired 732 ----------------------------------------
+
+
+def test_a_legacy_732_rolling_issue_is_never_matched_or_closed():
+    # 732 is deleted and never produced a run, so no such issue exists today —
+    # but 740 must still refuse to adopt or close one if it ever appears.
+    r = _run("failure", open_issues=[_alert_issue(7, marker=LEGACY_GOOGLE_MARKER)])
     assert r["threw"] is None, r
     assert len(r["created"]) == 1, r
     assert r["comments"] == [], r
 
-    # ... and must not close it on success.
-    r2 = _run("success", open_issues=[_alert_issue(7, marker=GOOGLE_MARKER)])
+    r2 = _run("success", open_issues=[_alert_issue(7, marker=LEGACY_GOOGLE_MARKER)])
     assert r2["threw"] is None, r2
     assert r2["updates"] == [], r2
     assert r2["comments"] == [], r2
@@ -429,14 +621,10 @@ def test_unmarked_open_agentic_os_bug_issue_is_not_treated_as_the_alert():
     assert r["comments"] == [], r
 
 
-def test_markers_and_labels_do_not_collide_with_732():
+def test_marker_and_labels_do_not_reuse_the_retired_732_identifiers():
     script = step_github_script(WORKFLOW, JOB, STEP)
-    google = step_github_script(
-        "732-google-workflow-failure-alert.yml", "alert", "Upsert or close rolling alert issue"
-    )
     assert MARKER_PREFIX in script, "marker literal drifted from the test"
-    assert GOOGLE_MARKER not in script, "740 must not reuse 732's marker"
-    assert MARKER_PREFIX not in google, "732 must not reuse 740's marker"
+    assert LEGACY_GOOGLE_MARKER not in script, "740 must not reuse 732's marker"
     assert "'agentic-os', 'bug'" in script, script
     assert "google-api" not in script, "740 must use its own labels"
 
@@ -459,18 +647,9 @@ def test_open_issue_query_is_scoped_to_open_state_and_alert_labels():
 # --- YAML-level contract guards (no node needed) ---------------------------
 
 
-def _watched(workflow_file: str) -> list:
-    wf = load_workflow(workflow_file)
-    # PyYAML parses the bare `on:` key as the boolean True.
-    on = wf.get("on", wf.get(True, {}))
-    return on["workflow_run"]["workflows"]
-
-
 def _all_workflow_names() -> dict:
     names = {}
     for path in sorted(WORKFLOWS.glob("*.yml")):
-        import yaml
-
         data = yaml.safe_load(path.read_text())
         if isinstance(data, dict) and data.get("name"):
             names[data["name"]] = path.name
@@ -478,25 +657,29 @@ def _all_workflow_names() -> dict:
 
 
 def test_every_watched_name_matches_a_real_workflow_name():
-    # The silent-failure mode this whole workflow exists to prevent: a
-    # `workflows:` entry that matches no `name:` never fires and never errors.
+    # The silent-failure mode this whole workflow exists to prevent: a watch-list
+    # entry that matches no `name:` resolves to nothing. The script fails loudly at
+    # run time; this catches it at PR time instead.
     known = _all_workflow_names()
-    for name in _watched(WORKFLOW):
+    for name in _watched():
         assert name in known, f"watched name has no matching workflow name: {name!r}"
 
 
 def test_watched_workflows_are_actually_scheduled():
+    # Load-bearing for the POLL shape (#843): "the latest run" of a dispatch-only
+    # workflow is whatever a human last ran by hand — a stale red would alert
+    # forever, a stale green would mean nothing.
     known = _all_workflow_names()
-    for name in _watched(WORKFLOW):
+    for name in _watched():
         wf = load_workflow(known[name])
         on = wf.get("on", wf.get(True, {}))
-        assert "schedule" in on, f"{name} is not scheduled; 740 watches cron-driven workflows"
+        assert "schedule" in on, f"{name} is not scheduled; 740 polls cron-driven workflows"
 
 
 # Scheduled workflows this alerter deliberately does NOT watch, with the reason.
-# Anything scheduled and absent from both this map and the watch lists fails the
+# Anything scheduled and absent from both this map and the watch list fails the
 # test below — a new cron must not join the fleet unnoticed, which is #832 all
-# over again. 741 proved the risk: it landed on `main` while this PR was open and
+# over again. 741 proved the risk: it landed on `main` while PR #833 was open and
 # would have shipped as a day-one blind spot if the merge hadn't surfaced it.
 DELIBERATELY_UNWATCHED = {
     "209. WHMCS - Tickets Triage (Open/Customer-Reply) [WHMCS]": "WHMCS lane, not hub plumbing (#832 scope)",
@@ -504,14 +687,13 @@ DELIBERATELY_UNWATCHED = {
     "225. WHMCS - Domain Order URL Verify [WHMCS]": "WHMCS lane, not hub plumbing (#832 scope)",
     "228. WHMCS - Fraud Review (FraudLabs Pro) [FRAUDLABS+WHMCS]": "WHMCS lane, not hub plumbing (#832 scope)",
     "320. Azure - Key Vault Secret Inventory (audit) [MS]": "Azure lane, not hub plumbing (#832 scope)",
-    "504. Google - GTM Container Backups (weekly export) [GOOGLE]": "Google lane — 732's family, not 740's",
 }
 
 
 def test_every_scheduled_workflow_is_watched_or_explicitly_excluded():
     # Turns silent coverage drift into a build failure with a forced decision:
-    # add the new cron to 740's list, or record why it is out of scope.
-    watched = set(_watched(WORKFLOW)) | set(_watched("732-google-workflow-failure-alert.yml"))
+    # add the new cron to the watch list, or record why it is out of scope.
+    watched = set(_watched())
     self_name = load_workflow(WORKFLOW)["name"]
     for name, path in _all_workflow_names().items():
         wf = load_workflow(path)
@@ -521,13 +703,13 @@ def test_every_scheduled_workflow_is_watched_or_explicitly_excluded():
         if name == self_name:
             continue  # a terminal alerter cannot watch itself; see #752
         assert name in watched or name in DELIBERATELY_UNWATCHED, (
-            f"{name} is scheduled but unwatched: add it to 740's `workflows:` list, "
+            f"{name} is scheduled but unwatched: add it to 740's WATCHED_WORKFLOWS, "
             f"or to DELIBERATELY_UNWATCHED with a reason"
         )
 
 
 def test_the_incident_workflows_from_832_are_watched():
-    watched = _watched(WORKFLOW)
+    watched = _watched()
     for required in (
         "726. Repo - Rulesets + Settings Drift Audit [Org]",
         "734. Repo - Stale Waiting-Run Janitor [Repo]",
@@ -536,21 +718,86 @@ def test_the_incident_workflows_from_832_are_watched():
         assert required in watched, f"{required} must stay watched (#832)"
 
 
-def test_740_and_732_watch_disjoint_workflow_sets():
-    overlap = set(_watched(WORKFLOW)) & set(_watched("732-google-workflow-failure-alert.yml"))
-    assert not overlap, f"double-alerting on {overlap}"
+def test_the_google_lane_absorbed_from_732_is_watched():
+    # 732 is retired into 740; its scheduled workflows must not be dropped on the
+    # way across. 501 is deliberately not here — dispatch/`workflow_call` only.
+    watched = _watched()
+    assert "502. Google - Analytics Report (GA4 -> JSON) [GOOGLE]" in watched, watched
+    assert "504. Google - GTM Container Backups (weekly export) [GOOGLE]" in watched, watched
+    assert not any(n.startswith("501.") for n in watched), (
+        "501 is dispatch/workflow_call only — polling its latest run reports whatever "
+        "a human last triggered, so it must not be watched"
+    )
+
+
+def test_the_watch_list_has_no_duplicates():
+    watched = _watched()
+    assert len(watched) == len(set(watched)), watched
 
 
 def test_740_does_not_watch_itself():
     wf = load_workflow(WORKFLOW)
-    assert wf["name"] not in _watched(WORKFLOW), "self-watching would loop"
+    assert wf["name"] not in _watched(), "self-watching would loop"
 
 
-def test_triggers_only_on_completed_runs():
+def test_triggers_are_schedule_plus_dispatch_only():
+    # The whole point of #843: `workflow_run` never fired in this repo, and an
+    # alerter that cannot be run on demand cannot be proven to work.
     wf = load_workflow(WORKFLOW)
     on = wf.get("on", wf.get(True, {}))
-    assert list(on) == ["workflow_run"], on
-    assert on["workflow_run"]["types"] == ["completed"], on
+    assert sorted(on) == ["schedule", "workflow_dispatch"], on
+    crons = [e["cron"] for e in on["schedule"]]
+    assert crons, on
+
+
+def test_the_poll_cron_collides_with_no_other_hub_schedule():
+    # Two crons in the same minute slot contend for the same runner burst; the
+    # hub deliberately staggers them.
+    def minutes(expr):
+        return {int(m) for m in expr.split()[0].split(",") if m.isdigit()}
+
+    wf = load_workflow(WORKFLOW)
+    mine = set()
+    for e in wf.get("on", wf.get(True, {}))["schedule"]:
+        mine |= minutes(e["cron"])
+    assert mine, "the poll must declare a concrete minute, not '*'"
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        if path.name == WORKFLOW:
+            continue
+        wf = yaml.safe_load(path.read_text())
+        if not isinstance(wf, dict):
+            continue
+        on = wf.get("on", wf.get(True, {}))
+        if not isinstance(on, dict) or "schedule" not in on:
+            continue
+        for e in on["schedule"]:
+            clash = mine & minutes(e["cron"])
+            assert not clash, f"{path.name} already uses minute slot(s) {clash}"
+
+
+def test_no_workflow_run_trigger_remains_anywhere_in_the_repo():
+    # Acceptance criterion of #843: the event is unusable in this repo, so no
+    # workflow may depend on it until the platform-side cause is resolved.
+    offenders = []
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        wf = yaml.safe_load(path.read_text())
+        if not isinstance(wf, dict):
+            continue
+        on = wf.get("on", wf.get(True, {}))
+        if isinstance(on, dict) and "workflow_run" in on:
+            offenders.append(path.name)
+        elif isinstance(on, list) and "workflow_run" in on:
+            offenders.append(path.name)
+    assert not offenders, (
+        f"`workflow_run` has never fired in this repo (#843); these workflows would "
+        f"be silently dead: {offenders}"
+    )
+
+
+def test_732_is_retired():
+    assert not (WORKFLOWS / "732-google-workflow-failure-alert.yml").exists()
+    here = pathlib.Path(__file__).resolve().parent
+    assert not (here / "test_732_google_failure_alert.py").exists()
 
 
 def test_permissions_are_issue_write_read_only_actions():
@@ -558,6 +805,8 @@ def test_permissions_are_issue_write_read_only_actions():
     perms = wf.get("permissions", {})
     assert perms.get("issues") == "write", perms
     assert perms.get("contents") == "read", perms
+    # `actions: read` covers both halves of the poll: enumerating workflows/runs
+    # and reading a run's job list for the gate discriminator.
     assert perms.get("actions") == "read", perms
 
 
@@ -570,11 +819,20 @@ def test_alerter_is_ungated_and_uses_the_ambient_token_only():
     assert "CBM_TOKEN" not in raw, "740 must use the ambient GITHUB_TOKEN only"
 
 
+def test_sweeps_never_overlap_and_are_never_cancelled_mid_flight():
+    # A half-finished sweep leaves the workflows it never reached unalerted, so
+    # the newer run must queue behind the older one rather than kill it.
+    wf = load_workflow(WORKFLOW)
+    conc = wf.get("concurrency", {})
+    assert conc.get("group"), conc
+    assert conc.get("cancel-in-progress") is False, conc
+
+
 def test_step_is_the_only_writer_and_never_touches_gates():
     script = step_github_script(WORKFLOW, JOB, STEP)
     for forbidden in ("pending_deployments", "reviewCustomProtectionRule", "approve"):
         assert forbidden not in script, f"alert must not touch gate approvals: {forbidden}"
-    step = find_step(load_workflow(WORKFLOW), JOB, STEP)
+    step = _step()
     assert "github-script" in step.get("uses", ""), step
 
 

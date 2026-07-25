@@ -26,6 +26,14 @@
 //                             script can tell a declined gate from a real job failure
 //   TEST_JOBS_THROW           when "1", the jobs mock rejects — proves the caller treats an
 //                             unreadable job list as "alert anyway", never as "stay quiet"
+//   TEST_REPO_WORKFLOWS_FILE  JSON array of workflow objects [{id,name}] returned by
+//                             actions.listRepoWorkflows. Served PAGED, honouring page/per_page,
+//                             so a caller that forgets to paginate provably sees only the first
+//                             page — the 105-workflow truncation from #843
+//   TEST_WORKFLOW_RUNS_FILE   JSON map of workflow id (as a string) -> array of run objects
+//                             returned by actions.listWorkflowRuns; a missing id yields none
+//   TEST_RUNS_THROW           JSON array of workflow ids (as strings) whose listWorkflowRuns
+//                             call rejects, to prove an unreadable run list is not read as green
 //   TEST_SEARCH_THROWS        when "1", the search mock rejects — proves the
 //                             script's own .catch() fallback treats a failed
 //                             lookup as "not found" rather than skipping work
@@ -35,7 +43,8 @@
 //
 // Emits one JSON result line:
 //   { failed, threw, notices, warnings, infos, listForRepoCalls, searchCalls,
-//     listJobsCalls, created, comments, updates }
+//     listJobsCalls, listRepoWorkflowsCalls, listWorkflowRunsCalls, created,
+//     comments, updates }
 
 import { readFileSync } from 'node:fs';
 
@@ -72,6 +81,17 @@ const runJobs = process.env.TEST_RUN_JOBS_FILE
   ? JSON.parse(readFileSync(process.env.TEST_RUN_JOBS_FILE, 'utf8'))
   : null;
 const jobsThrow = process.env.TEST_JOBS_THROW === '1';
+// Workflow inventory + latest-run fixtures for POLL-style alerters (740): the script
+// resolves watched names against listRepoWorkflows, then reads each one's latest run.
+const repoWorkflows = process.env.TEST_REPO_WORKFLOWS_FILE
+  ? JSON.parse(readFileSync(process.env.TEST_REPO_WORKFLOWS_FILE, 'utf8'))
+  : [];
+const workflowRuns = process.env.TEST_WORKFLOW_RUNS_FILE
+  ? JSON.parse(readFileSync(process.env.TEST_WORKFLOW_RUNS_FILE, 'utf8'))
+  : {};
+const runsThrow = process.env.TEST_RUNS_THROW
+  ? JSON.parse(process.env.TEST_RUNS_THROW).map(String)
+  : [];
 
 const notices = [];
 const warnings = [];
@@ -79,6 +99,8 @@ const infos = [];
 const listForRepoCalls = [];
 const searchCalls = [];
 const listJobsCalls = [];
+const listRepoWorkflowsCalls = [];
+const listWorkflowRunsCalls = [];
 const created = [];
 const comments = [];
 const updates = [];
@@ -98,6 +120,24 @@ const core = {
 
 let nextNumber = 1000;
 const github = {
+  // Real octokit `paginate`: walks pages until a short page, unwrapping the single
+  // array property of list responses (`workflows`, `workflow_runs`, `items`). Modelled
+  // faithfully rather than stubbed to "return everything", because the bug under test
+  // IS the missing pagination — a mock that ignores paging could not fail on it.
+  paginate: async (route, params) => {
+    const perPage = (params && params.per_page) || 30;
+    const out = [];
+    for (let page = 1; page <= 100; page += 1) {
+      const res = await route({ ...params, page });
+      const data = (res || {}).data || {};
+      const items = Array.isArray(data)
+        ? data
+        : data.workflows || data.workflow_runs || data.items || [];
+      out.push(...items);
+      if (items.length < perPage) break;
+    }
+    return out;
+  },
   rest: {
     actions: {
       listJobsForWorkflowRun: async (args) => {
@@ -108,6 +148,35 @@ const github = {
         });
         if (jobsThrow) throw new Error('simulated jobs API failure');
         return { data: { jobs: runJobs || [] } };
+      },
+      // Paged on purpose. `per_page` caps at 100 on the real endpoint, so a caller that
+      // reads one page silently loses every workflow past the first 100 — the truncation
+      // that produced a false "740 is not registered" reading in #843. Only a caller that
+      // paginates sees the tail of the fixture.
+      listRepoWorkflows: async (args) => {
+        const perPage = Math.min(args.per_page || 30, 100);
+        const page = args.page || 1;
+        listRepoWorkflowsCalls.push({ per_page: args.per_page, page });
+        const slice = repoWorkflows.slice((page - 1) * perPage, page * perPage);
+        return { data: { total_count: repoWorkflows.length, workflows: slice } };
+      },
+      listWorkflowRuns: async (args) => {
+        listWorkflowRunsCalls.push({
+          workflow_id: args.workflow_id,
+          branch: args.branch,
+          status: args.status,
+          per_page: args.per_page,
+        });
+        if (runsThrow.includes(String(args.workflow_id))) {
+          throw new Error('simulated runs API failure');
+        }
+        const runs = workflowRuns[String(args.workflow_id)] || [];
+        return {
+          data: {
+            total_count: runs.length,
+            workflow_runs: runs.slice(0, args.per_page || 30),
+          },
+        };
       },
     },
     search: {
@@ -178,6 +247,8 @@ console.log(
     listForRepoCalls,
     searchCalls,
     listJobsCalls,
+    listRepoWorkflowsCalls,
+    listWorkflowRunsCalls,
     created,
     comments,
     updates,

@@ -1,3 +1,8 @@
+# 34 Wix event pages, fetched anonymously on 2026-07-25.
+# start_date comes from each page's JSON-LD `startDate`; a BLANK start_date means the
+# page published no JSON-LD startDate, not a formatting error (2 rows).
+# registration: open | closed | none, as displayed on the page. Wix leaves RSVP open on
+# past events, so `open` on a past date is not a live registration.
 start_date	registration	url
 2026-08-04	open	https://www.minoritywealthgap.org/events-1/cooking-camp-cohort-3-1
 2025-11-15	open	https://www.minoritywealthgap.org/events-1/call-to-action-our-fight-against-domestic-violence-needs-you

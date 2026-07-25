@@ -100,7 +100,7 @@ is a brand-new onboarding, not a fleet-migration row.
 | `blog-posts`      |    64 | Yes, but needs a content pipeline, not a page-by-page hand port.            |
 | `blog-categories` |     2 | Yes.                                                                        |
 | `event-pages`     |    34 | Yes — all public; only 1 is upcoming, so registration is a 1-event problem. |
-| `member-profile`  |    76 | N/A — all 404 to the public; nothing publicly visible to port.              |
+| `member-profile`  |    76 | N/A — all 76 fetched, all 404 to the public; nothing publicly visible.      |
 
 The 12 real pages: `/`, `/about`, `/contact`, `/domestic-violence`, `/events`, `/news`, `/podcast`,
 `/privacy-policy`, `/s-projects-side-by-side`, `/support-us`, `/terms-of-use`, `/usa-projects`.
@@ -118,11 +118,12 @@ do not add to that count — they are not publicly reachable (see below).
 
 **Members Area — 76 profiles, and all 76 return HTTP 404 to the public.** Wix publishes them in
 `member-profile_p_first-chunk-sitemap.xml`, but without a members login every one is "Page Not
-Found" (verified across a sample; e.g. `/minoritywealthgap/profile`, `/jkyompire/profile`). So
-**nothing publicly visible is lost** by migrating — there is no public content here to capture in
-the first place, and these are dead links for search engines today. The member records live in Wix's
-database and need an admin export if MWG wants to keep them: a data-retention question, not a
-migration blocker.
+Found". Every one of the 76 was fetched anonymously, not sampled — the per-URL results are checked
+in as [`minoritywealthgap-members-audit.tsv`](minoritywealthgap-members-audit.tsv). So **nothing
+publicly visible is lost** by migrating — there is no public content here to capture in the first
+place, and these are dead links for search engines today. The member records live in Wix's database
+and need an admin export if MWG wants to keep them: a data-retention question, not a migration
+blocker.
 
 **Wix Events — 34 pages, all public (HTTP 200), and only ONE is upcoming.** Every event page renders
 publicly and ports to static as-is. Registration only matters for events that have not happened:
@@ -132,7 +133,8 @@ publicly and ports to static as-is. Registration only matters for events that ha
 **Beware the "open registration" count.** 13 events advertise open registration, but 12 of them are
 past-dated (2022–2025) — Wix leaves RSVP open on past events. Reading that number without checking
 the dates turns one event into a phantom thirteen. Event dates come from each page's JSON-LD
-`startDate`; all 34 rows are checked in beside this doc as
+`startDate` **where the page publishes one** — 2 of the 34 do not, and are recorded with a blank
+date rather than a guessed one. All 34 rows are checked in beside this doc as
 [`minoritywealthgap-events-audit.tsv`](minoritywealthgap-events-audit.tsv), so the claim above is
 re-checkable rather than something you have to take on trust. Re-fetch the URLs to refresh it — the
 "upcoming" count is only true as of 2026-07-25.

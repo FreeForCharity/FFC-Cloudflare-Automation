@@ -36,6 +36,26 @@
 - Never "fix" a test, or hold a PR, on the strength of a local harness crash — confirm against CI
   first.
 
+## Reading `gh --format json` on the Windows Conductor box (validated 2026-07-25)
+
+**Open the file as UTF-8 explicitly, or Python decodes it as cp1252 and dies.** Piping
+`gh project item-list … --format json` (or any `gh` JSON output) to a file and reading it back with
+plain `open(path)` fails on this box:
+
+```
+UnicodeDecodeError: 'charmap' codec can't decode byte 0x9d in position 20770
+```
+
+Nothing is wrong with the data — Python's default encoding on Windows is cp1252, and FFC issue
+titles, board item titles and PR bodies routinely contain em-dashes, arrows and smart quotes. Always:
+
+```python
+json.load(open(path, encoding="utf-8"))
+```
+
+Same for `pathlib.Path(p).read_text(encoding="utf-8")` and any `write_text`. This costs one failed
+call every time it is rediscovered, which has now happened more than once.
+
 ## Board & PR-creation env facts (validated 2026-07-24)
 
 - **The public "Agentic OS" board (org project #9) has NO automation.** Its only enabled built-in
@@ -158,8 +178,23 @@ gh api -X POST repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$RUN_
   -F "environment_ids[]=<env_id>" -f state=approved -f comment="approved"
 ```
 
-(Note: the approval API returns an array of deployment objects; don't apply a `--jq` filter that
-assumes a single object.)
+**Do not try to confirm the approval from the POST's own output — confirm by re-reading the run.**
+The response shape does not match the `pending_deployments` GET, so even an array-aware filter
+errors. On 2026-07-25 this exact command:
+
+```bash
+gh api -X POST …/pending_deployments -F "environment_ids[]=$ENV_ID" -f state=approved \
+  --jq '.[0] | "\(.status) \(.environment.name)"'
+```
+
+printed `expected an object but got: string ("github-prod")` — while the approval had **succeeded**
+and the run moved `waiting → in_progress`. Same trap as the read-after-write note above: the failure
+was in the confirmation, not the action, and reacting to it would mean re-approving an
+already-approved gate. Drop the `--jq` on the POST and verify with:
+
+```bash
+gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$RUN_ID --jq '.status'
+```
 
 ### Watch a run / read results
 

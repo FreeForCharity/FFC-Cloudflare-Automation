@@ -78,6 +78,13 @@ on:
 permissions:
   contents: read
   # Required for the OIDC exchange that fetches the PAT from Key Vault (#844).
+  #
+  # CALLERS MUST GRANT THIS TOO. This workflow is reusable via `workflow_call`
+  # (701 provisioning calls it). A reusable workflow cannot grant itself more than
+  # the calling job holds, so a caller whose job omits `id-token: write` makes the
+  # Azure login below fail at run time with an unhelpful
+  # "unable to get ACTIONS_ID_TOKEN_REQUEST_URL". 701's `maintainers` job declares
+  # it explicitly for this reason.
   id-token: write
 
 # Serialize runs: a second dispatch queues behind the first instead of racing it.

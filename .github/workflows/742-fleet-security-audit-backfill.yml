@@ -53,6 +53,8 @@ on:
 
 permissions:
   contents: read
+  # Required for the Key Vault OIDC exchange (#844).
+  id-token: write
 
 # Serialize: two concurrent backfills would race on the same target branches.
 concurrency:
@@ -333,21 +335,33 @@ jobs:
       - name: Checkout (for the backfill scripts)
         uses: actions/checkout@v7.0.1
 
-      - name: Validate required token
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844).
+      - name: Load the GitHub PAT from Key Vault
         shell: bash
-        env:
-          CBM_TOKEN: ${{ secrets.CBM_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${CBM_TOKEN}" ]; then
-            echo "::error::CBM_TOKEN secret is not set (environment: github-prod)."
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-ffc-copilot-mcp-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault."
             exit 1
           fi
-
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
       - name: Backfill each target repo
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
           TARGETS_JSON: ${{ needs.plan.outputs.targets }}
           OPEN_AS_DRAFT: ${{ inputs.open_as_draft }}
         run: |

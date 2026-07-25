@@ -186,7 +186,6 @@ jobs:
 
       - name: Create Repository
         shell: pwsh
-        env:
         run: |
           $ErrorActionPreference = 'Stop'
           $params = @{
@@ -211,7 +210,6 @@ jobs:
 
       - name: Grant FFC-ORGWIDE-* tier teams default access (PUBLIC repos only)
         if: ${{ inputs.DryRun != true && inputs.Visibility == 'public' }}
-        env:
         shell: pwsh
         run: |
           # Auto-grant FFC-ORGWIDE-* tier teams on PUBLIC repos only.

@@ -172,6 +172,10 @@ function Invoke-GooglePagedApi {
         }
         else { $Uri }
         $resp = Invoke-GoogleApi -Uri $u -AccessToken $AccessToken
+        # A 200 with an EMPTY body deserializes to $null, and $null.PSObject.Properties throws
+        # "The property 'Name' cannot be found on this object" — which is what the GA4 Admin API
+        # returns for a parent with no properties. An empty page is a valid answer, not an error.
+        if ($null -eq $resp) { break }
         if ($resp.PSObject.Properties.Name -contains $CollectionName -and $resp.$CollectionName) {
             $items += @($resp.$CollectionName)
         }
@@ -232,6 +236,14 @@ function Get-GtmInventory {
             $domainList = @()
             if (($c.PSObject.Properties.Name -contains 'domainName') -and $c.domainName) {
                 $domainList = @($c.domainName)
+            }
+            # 503 creates each container with the DOMAIN as its name, and domainName is usually
+            # left unset — so matching on domainName alone finds nothing, which is exactly what the
+            # first working run showed (GTM ❌ for every site while containers clearly exist).
+            # The container name is the reliable key here.
+            if ($c.name) {
+                $fromName = Normalize-Domain $c.name
+                if ($fromName -and ($domainList -notcontains $fromName)) { $domainList += $fromName }
             }
             $containers += [pscustomobject]@{
                 name        = $c.name

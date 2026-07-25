@@ -35,6 +35,7 @@ on:
       - '737. Repo - Claim Sync [Repo]'
       - '738. Repo - Fleet Smoke Engine Drift Audit [Org]'
       - '739. Repo - Process Health Metrics Report [GH]'
+      - '741. Repo - Fleet Security Audit Coverage [Org]'
     types: [completed]
 
 permissions:

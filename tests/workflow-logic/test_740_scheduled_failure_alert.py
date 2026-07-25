@@ -493,6 +493,39 @@ def test_watched_workflows_are_actually_scheduled():
         assert "schedule" in on, f"{name} is not scheduled; 740 watches cron-driven workflows"
 
 
+# Scheduled workflows this alerter deliberately does NOT watch, with the reason.
+# Anything scheduled and absent from both this map and the watch lists fails the
+# test below — a new cron must not join the fleet unnoticed, which is #832 all
+# over again. 741 proved the risk: it landed on `main` while this PR was open and
+# would have shipped as a day-one blind spot if the merge hadn't surfaced it.
+DELIBERATELY_UNWATCHED = {
+    "209. WHMCS - Tickets Triage (Open/Customer-Reply) [WHMCS]": "WHMCS lane, not hub plumbing (#832 scope)",
+    "210. WHMCS - Orders Triage (Pending/Fraud/Active) [WHMCS]": "WHMCS lane, not hub plumbing (#832 scope)",
+    "225. WHMCS - Domain Order URL Verify [WHMCS]": "WHMCS lane, not hub plumbing (#832 scope)",
+    "228. WHMCS - Fraud Review (FraudLabs Pro) [FRAUDLABS+WHMCS]": "WHMCS lane, not hub plumbing (#832 scope)",
+    "320. Azure - Key Vault Secret Inventory (audit) [MS]": "Azure lane, not hub plumbing (#832 scope)",
+    "504. Google - GTM Container Backups (weekly export) [GOOGLE]": "Google lane — 732's family, not 740's",
+}
+
+
+def test_every_scheduled_workflow_is_watched_or_explicitly_excluded():
+    # Turns silent coverage drift into a build failure with a forced decision:
+    # add the new cron to 740's list, or record why it is out of scope.
+    watched = set(_watched(WORKFLOW)) | set(_watched("732-google-workflow-failure-alert.yml"))
+    self_name = load_workflow(WORKFLOW)["name"]
+    for name, path in _all_workflow_names().items():
+        wf = load_workflow(path)
+        on = wf.get("on", wf.get(True, {}))
+        if not isinstance(on, dict) or "schedule" not in on:
+            continue
+        if name == self_name:
+            continue  # a terminal alerter cannot watch itself; see #752
+        assert name in watched or name in DELIBERATELY_UNWATCHED, (
+            f"{name} is scheduled but unwatched: add it to 740's `workflows:` list, "
+            f"or to DELIBERATELY_UNWATCHED with a reason"
+        )
+
+
 def test_the_incident_workflows_from_832_are_watched():
     watched = _watched(WORKFLOW)
     for required in (

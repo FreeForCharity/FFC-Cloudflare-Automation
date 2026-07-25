@@ -1866,6 +1866,25 @@
       "categoryCode": "GH"
     },
     {
+      "number": 741,
+      "title": "Repo - Fleet Security Audit Coverage",
+      "apis": [
+        "Org"
+      ],
+      "file": "741-fleet-security-audit-coverage.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Weekly audit of whether each Node app in the FFC-EX fleet has dependency-vulnerability detection wired at all. A repo counts as covered only when it has BOTH `.github/workflows/security-audit.yml` and an `audit:high` script in package.json \u2014 the workflow without the script fails on every run, the script without the workflow never runs. Findings are upserted into a single rolling issue that auto-closes once the fleet is fully covered.  Why (#838): 34 of the 44 Node FFC-EX repos had no detection of any kind, so a published advisory against a charity site was invisible until somebody swept by hand \u2014 and nothing was measuring that, which is why #822's scope was estimated at 13 repos when the real number was 38. This workflow re-derives the fleet from the org listing every run rather than trusting a count carried between sessions.  Read-only: GITHUB_TOKEN reads public repo contents org-wide and lists the org's public repos; the only write is the rolling issue in THIS repo. No external API, no environment gate. It reports coverage only and never bumps a dependency \u2014 remediation belongs to #822. Classification/report logic lives in scripts/fleet-audit-coverage-lib.js (unit-tested under tests/workflow-logic/).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "weekly coverage audit of dependency-vulnerability detection across the FFC-EX fleet (a repo counts as covered only with BOTH `security-audit.yml` and an `audit:high` script); rolling issue upsert/close on any gap; reports only \u2014 never bumps a dependency or writes to a fleet repo; GITHUB_TOKEN (public reads + own-repo issue), no external API, ungated",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 801,
       "title": "Candid - Charity Check (EIN)",
       "apis": [

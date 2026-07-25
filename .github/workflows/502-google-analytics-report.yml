@@ -114,6 +114,18 @@ jobs:
     runs-on: ubuntu-latest
     environment: github-prod-read
     steps:
+      # Fail fast, matching 726/735. Without this the job runs the whole GA
+      # pipeline and only dies at the cross-repo push with an opaque auth error.
+      # This one matters most of the three: 502 is the only job needing scope on
+      # ANOTHER repo (FFC-IN-ffcadmin.org), so it is the likeliest to be
+      # under-scoped when github-prod-read is first provisioned.
+      - name: Validate GH_REPORT_TOKEN
+        run: |
+          if [ -z "${{ secrets.GH_REPORT_TOKEN }}" ]; then
+            echo "::error::GH_REPORT_TOKEN secret is not set (environment: github-prod-read)."
+            exit 1
+          fi
+
       # Checkout gives the deliver job the current workflow catalog so the public
       # copies on ffcadmin (src/data render + /data stable URL) refresh in the
       # same daily PR as the GA data — one reviewable sync pipe (backlog #554).

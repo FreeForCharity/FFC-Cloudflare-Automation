@@ -30,17 +30,19 @@ A live change generally has to get past several of these, not just one:
    that no workflow currently uses). The environments with **no** reviewer — runs proceed without
    pausing — are **`cloudflare-prod-read`**, **`whmcs-prod-read`**, **`google-prod-read`**, and
    **`zeffy-prod`**, joined by **`github-prod-read`** (#834, see below). Because `whmcs-prod`,
-   `m365-prod`, and `wpmudev-prod` are gated at the environment level, they gate **every** job that
-   uses them. Read-only WHMCS workflows moved to the ungated **`whmcs-prod-read`** (reader OIDC
-   identity, `read-all-*` KV secrets) in 2026-07; the M365 list/preflight reads 301–303 and the
-   WPMUDEV export 601 still wait on their gated envs. Re-run workflow 730 after any change in
-   _Settings → Environments_ to refresh this list. To preview or clear **several** runs waiting at a
-   gate at once, an environment reviewer can run `scripts/approve-waiting-runs.py` — an operator
-   tool that acts under your own `gh` auth (the ambient `GITHUB_TOKEN` **cannot** approve gates). It
-   defaults to a dry-run preview; pass `--approve` (optionally `--environment <name>`) to act. For
-   the idempotent Google 505/503 provisioning writes specifically, the structural fix is a dedicated
-   **ungated `google-prod-provision`** environment (mirroring `whmcs-prod-read`) so they don't gate
-   at all (#636).
+   `github-prod`, `m365-prod`, and `wpmudev-prod` are gated at the environment level, they gate
+   **every** job that uses them — a read-only job on one of them still waits. Two categories have
+   since escaped that: read-only WHMCS workflows moved to the ungated **`whmcs-prod-read`** (reader
+   OIDC identity, `read-all-*` KV secrets) in 2026-07, and the scheduled GitHub reads moved to
+   **`github-prod-read`** in #834. The M365 list/preflight reads 301–303 and the WPMUDEV export 601
+   still wait on their gated envs. Re-run workflow 730 after any change in _Settings → Environments_
+   to refresh this list. To preview or clear **several** runs waiting at a gate at once, an
+   environment reviewer can run `scripts/approve-waiting-runs.py` — an operator tool that acts under
+   your own `gh` auth (the ambient `GITHUB_TOKEN` **cannot** approve gates). It defaults to a
+   dry-run preview; pass `--approve` (optionally `--environment <name>`) to act. For the idempotent
+   Google 505/503 provisioning writes specifically, the structural fix is a dedicated **ungated
+   `google-prod-provision`** environment (mirroring `whmcs-prod-read`) so they don't gate at all
+   (#636).
 
    **`github-prod-read` — the GitHub read lane (#834).** Three of four API categories had an ungated
    read lane; GitHub did not, so every Reads-level GitHub workflow was forced through gated

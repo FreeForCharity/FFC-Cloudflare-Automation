@@ -104,7 +104,9 @@ try {
 
     if ($DryRun) {
         $preview = $body.Clone()
-        foreach ($k in @('secret', 'accesskey')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
+        # Redact the identifier too: the composite action masks it in Actions
+        # logs, but this script also runs locally where nothing masks stdout.
+        foreach ($k in @('identifier', 'secret', 'accesskey')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
         [pscustomobject]@{
             action    = 'UpdateClientProduct'
             dryRun    = $true

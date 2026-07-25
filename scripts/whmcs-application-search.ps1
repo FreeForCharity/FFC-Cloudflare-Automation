@@ -92,14 +92,6 @@ function Format-MaskedField {
     return $v
 }
 
-function Get-WhmcsList {
-    param($Node, [Parameter(Mandatory = $true)][string]$ChildName)
-    if ($null -eq $Node -or $Node -is [string]) { return @() }
-    if ($Node -is [System.Array]) { return @($Node | Where-Object { $null -ne $_ }) }
-    if ($Node.PSObject.Properties[$ChildName]) { return @($Node.$ChildName | Where-Object { $null -ne $_ }) }
-    return @()
-}
-
 $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret -CredentialsJsonParam $CredentialsJson
 $api = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
 $key = Resolve-WhmcsAccessKey -AccessKeyParam $AccessKey
@@ -151,7 +143,7 @@ while ($true) {
 
     foreach ($s in $services) {
         $scanned++
-        $fields = Get-WhmcsList $s.customfields 'customfield'
+        $fields = Get-WhmcsNodeList -Node $s.customfields -ChildName 'customfield'
         $hit = $false
         if (("$($s.name)").ToLowerInvariant().Contains($needle)) { $hit = $true }
         foreach ($f in $fields) {

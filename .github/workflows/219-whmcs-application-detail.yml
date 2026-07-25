@@ -73,6 +73,21 @@ jobs:
           Write-Host "## WHMCS application detail - client $clientId"
           Write-Host (($json | Out-String).TrimEnd())
 
+          # Compact recap AFTER the JSON. The products block runs to hundreds of
+          # lines, and log readers fetch from the END of the log - so the orders
+          # array in the middle is unreachable in practice. These lines are what
+          # you need to act on an application (211 takes an order id, not a
+          # client or service id), so they must survive truncation.
+          try {
+            $detail = ($json | Out-String) | ConvertFrom-Json -ErrorAction Stop
+            foreach ($o in @($detail.orders)) {
+              Write-Host "ORDER id=$($o.id) num=$($o.ordernum) status=$($o.status) date=$($o.date) amount=$($o.amount) products=$($o.products)"
+            }
+          }
+          catch {
+            Write-Warning "Could not render the orders recap: $($_.Exception.Message)"
+          }
+
           $fence = [string][char]0x60 * 3
           $lines = @("## WHMCS application detail - client $clientId", '', ($fence + 'json'), (($json | Out-String).TrimEnd()), $fence)
           $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

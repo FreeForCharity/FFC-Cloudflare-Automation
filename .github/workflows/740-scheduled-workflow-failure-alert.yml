@@ -1,10 +1,11 @@
 name: '740. Repo - Scheduled Workflow Failure Alert (rolling issue) [GH]'
 run-name: 'Failure alert sweep'
 
-# Watches every scheduled hub workflow (726 drift audit, 734 janitor, 738 smoke drift, the
-# Google reporting pair, and the other cron-driven monitors). For each one it upserts ONE
-# rolling alert issue PER WATCHED WORKFLOW, and closes that issue on the next success of that
-# same workflow. The marker is keyed by workflow name precisely so a green run of one watched
+# Watches every scheduled hub workflow (726 drift audit, 734 janitor, 738 smoke drift, Google
+# 502 analytics + 504 GTM backups, and the other cron-driven monitors — the authoritative list
+# is WATCHED_WORKFLOWS below). For each one it upserts ONE rolling alert issue PER WATCHED
+# WORKFLOW, and closes that issue on the next success of that same workflow. The marker is
+# keyed by workflow name precisely so a green run of one watched
 # workflow can never close another's alert — with a dozen workflows watched, a shared marker
 # would let a weekly job's success silently clear a daily job's outage.
 #

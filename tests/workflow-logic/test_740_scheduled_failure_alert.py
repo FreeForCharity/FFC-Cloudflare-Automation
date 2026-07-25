@@ -1,7 +1,7 @@
 """Unit tests for the 740 scheduled-workflow rolling failure-alert github-script.
 
 740 is the hub's single failure alerter for every scheduled workflow (726 drift
-audit, 734 janitor, 738 smoke drift, the Google reporting pair, …). It exists
+audit, 734 janitor, 738 smoke drift, Google 502 + 504, …). It exists
 because a gated daily workflow can fail and nothing tells anyone: 726 failed at
 2026-07-24 13:33Z and sat unnoticed for ~8.5 hours (#832). Silence read as green.
 

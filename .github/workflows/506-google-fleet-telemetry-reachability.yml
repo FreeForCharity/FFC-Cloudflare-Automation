@@ -87,6 +87,9 @@ jobs:
           IN_SKIP_PROBE: ${{ inputs.skip_live_probe }}
         run: |
           $ErrorActionPreference = 'Stop'
+          # A blank domains input passes NO -Domains argument, so the script's own default list
+          # applies. That list is the single source of truth for scope — do not restate it here,
+          # or the two drift apart (they already did once).
           $args = @{ OutputPath = 'telemetry-reachability.json'; Days = [int]$env:IN_DAYS }
           if (-not [string]::IsNullOrWhiteSpace($env:IN_DOMAINS)) {
             $args.Domains = $env:IN_DOMAINS.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }

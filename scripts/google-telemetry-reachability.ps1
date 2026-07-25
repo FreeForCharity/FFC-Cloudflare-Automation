@@ -154,10 +154,20 @@ function Normalize-Domain {
   #>
     param([string]$Value)
     if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
-    $d = $Value.Trim().ToLowerInvariant()
+    $d = $Value.Trim()
     $d = $d -replace '^https?://', ''
-    $d = $d -replace '^www\.', ''
-    return ($d -replace '/+$', '')
+    $d = $d -replace '/+$', ''
+    # Lowercase ONLY the host. GitHub Pages project paths are CASE-SENSITIVE —
+    # /FFC-IN-Footer_Only_Template and /ffc-in-footer_only_template are different URLs, and
+    # lowercasing the path would make the live probe 404 against a site that is up.
+    $slash = $d.IndexOf('/')
+    if ($slash -lt 0) {
+        return ($d.ToLowerInvariant() -replace '^www\.', '')
+    }
+    # NB: not $host — that is a PowerShell automatic variable and assigning it is an error
+    # in some hosts.
+    $hostPart = $d.Substring(0, $slash).ToLowerInvariant() -replace '^www\.', ''
+    return $hostPart + $d.Substring($slash)
 }
 
 # ---------------------------------------------------------------- GTM

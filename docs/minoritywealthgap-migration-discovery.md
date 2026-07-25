@@ -61,13 +61,13 @@ WHMCS. Workflow 221 found MWG by matching a Candid profile URL, not a recorded d
 
 **Fixes, and who can make them:**
 
-- **The recorded value** → workflow **229. WHMCS - Service Domain Set**, added alongside this doc
-  (dry-run default, gated, refuses to overwrite a different domain without `force`). It cannot be
-  dispatched until this PR merges — GitHub only exposes `workflow_dispatch` for files on the default
-  branch — so the backfill of service 618 runs immediately after merge.
+- **The recorded value** → workflow **230. WHMCS - Record Field Set** (`target=service`,
+  `field=domain`): dry-run default, gated, refuses to overwrite a different value without `force`,
+  and reports `previousValue`. Service 618's domain was backfilled with its single-purpose
+  predecessor, 229, which 230 supersedes.
 - **The intake gap** → adding a required domain question to pid 33 is a **WHMCS admin-UI change**.
   There is no API for creating product custom fields, so no workflow can do it. Until then every
-  501c3 application arrives without a domain and 229 is the backfill path.
+  501c3 application arrives without a domain and 230 is the backfill path.
 
 Also observed: the sweep could not read **at least 6 client records** (indexes 19, 22, 23, 24, 27,
 28 — the visible tail of `unreadableIndexes`). These are the malformed-UTF-8 rows described in

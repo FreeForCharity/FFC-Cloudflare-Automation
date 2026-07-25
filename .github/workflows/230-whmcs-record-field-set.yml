@@ -1,0 +1,120 @@
+name: '230. WHMCS - Record Field Set (client/contact/service/domain) [WHMCS]'
+run-name:
+  'WHMCS Record Field Set: ${{ inputs.target }} #${{ inputs.record_id }} ${{ inputs.field }}'
+
+# Set ONE field on ONE existing WHMCS record. Supersedes 229 (service domain
+# set), which was the same operation for a single field on a single target.
+#
+# This is one dispatch surface that can write to four record types, so the
+# per-target ALLOWLIST in scripts/whmcs-record-field-set.ps1 is the safety
+# mechanism: a field not on the list cannot be written, and adding one is a
+# reviewed code change rather than a dispatch input. Dry-run by default; no
+# bulk loop.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which record type to update'
+        required: true
+        type: choice
+        options:
+          - client
+          - contact
+          - service
+          - domain
+      record_id:
+        description: 'Record id (client id / contact id / service id / domain id)'
+        required: true
+        type: string
+      field:
+        description: 'Field name, or customfield:<id> for a service custom field'
+        required: true
+        type: string
+      value:
+        description: 'New value'
+        required: true
+        type: string
+      force:
+        description: 'Replace an existing, different value (otherwise refused)'
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Preview only (no WHMCS write)'
+        required: false
+        type: boolean
+        default: true
+      api_url:
+        description: 'WHMCS API endpoint'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+
+permissions:
+  contents: read
+  id-token: write
+
+# Serialize runs: a second dispatch queues behind the first instead of racing it.
+concurrency:
+  group: 230-whmcs-record-field-set
+  cancel-in-progress: false
+
+jobs:
+  record_field_set:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Set record field
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          TARGET: ${{ inputs.target }}
+          RECORD_ID: ${{ inputs.record_id }}
+          FIELD: ${{ inputs.field }}
+          VALUE: ${{ inputs.value }}
+          FORCE: ${{ inputs.force }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+
+          $recordId = 0
+          if (-not [int]::TryParse($env:RECORD_ID, [ref]$recordId) -or $recordId -lt 1) {
+            throw "record_id must be a positive integer (got '$($env:RECORD_ID)')."
+          }
+
+          $psArgs = @(
+            '-NoProfile', '-File', '.\scripts\whmcs-record-field-set.ps1',
+            '-ApiUrl', $env:WHMCS_API_URL,
+            '-Target', $env:TARGET,
+            '-RecordId', "$recordId",
+            '-Field', $env:FIELD,
+            '-Value', $env:VALUE
+          )
+          if ($env:FORCE -eq 'true') { $psArgs += '-Force' }
+          if ($env:DRY_RUN -ne 'false') { $psArgs += '-DryRun' }
+
+          $json = & pwsh @psArgs
+          if ($LASTEXITCODE -ne 0) { throw "Record field set failed (exit $LASTEXITCODE)." }
+
+          # Print to the job log as well as the summary: the Actions API exposes
+          # neither the step summary nor artifacts, so a summary-only result is
+          # invisible to any caller working from logs.
+          Write-Host (($json | Out-String).TrimEnd())
+
+          $fence = [string][char]0x60 * 3
+          $lines = @("## WHMCS record field set - $($env:TARGET) $recordId / $($env:FIELD)", '',
+            ($fence + 'json'), (($json | Out-String).TrimEnd()), $fence)
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

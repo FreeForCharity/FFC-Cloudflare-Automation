@@ -47,10 +47,11 @@ A live change generally has to get past several of these, not just one:
    **`github-prod-read` — the GitHub read lane (#834).** Three of four API categories had an ungated
    read lane; GitHub did not, so every Reads-level GitHub workflow was forced through gated
    `github-prod`. A report-only audit that cannot finish without a human is an audit that mostly
-   does not finish: **8 of 21** scheduled runs of 502/726/735/703 failed or were cancelled in
-   2026-07, and the "successes" had sat at the gate for up to three days. 502 (`deliver`), 726 and
-   735 now run on `github-prod-read`, which has **no protection rules**. 703 stays on gated
-   `github-prod` — it is classified _Writes (data PR only)_, not Reads.
+   does not finish: **7 of the 18** scheduled Reads-level runs (502, 726, 735) failed or were
+   cancelled in 2026-07, and the "successes" had sat at the gate for up to three days. Those three
+   now run on `github-prod-read`, which has **no protection rules**. 703 stays on gated
+   `github-prod` — it is classified _Writes (data PR only)_, not Reads; counting its one bad run of
+   three gives the 8-of-21 figure #834 opens with, but that total is not a Reads-level statistic.
 
    The lane has its **own** credential, `GH_REPORT_TOKEN` — never a second copy of `CBM_TOKEN` under
    a different environment (one secret name holding two different values across environments is the
@@ -105,7 +106,7 @@ used to be the recurring daily gates the Conductor auto-approved: both ran on `g
 safety-level **Reads**, so they were approved without paging Clarke. Both now run on the ungated
 `github-prod-read` and never reach a reviewer — which is the better outcome, because auto-approval
 only ever worked when a Conductor run happened to be live during the waiting window. When one was
-not, the run failed or was cancelled (8 of 21 scheduled runs in 2026-07).
+not, the run failed or was cancelled — 7 of these two workflows' 16 scheduled runs in 2026-07.
 
 The ruling still stands and still governs every other gated read — it is why the policy is written
 in terms of safety level rather than environment name, and it resolved the run-31 vs run-32

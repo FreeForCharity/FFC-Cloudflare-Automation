@@ -1,8 +1,9 @@
 """Guard: scheduled workflows must not be structurally unable to finish (#834).
 
 Two independent failure modes, both proven by the 2026-07 run history that
-motivated #834 (8 of 21 scheduled runs of the Reads-level GitHub workflows
-failed or were cancelled):
+motivated #834 (7 of the 18 scheduled runs of the Reads-level GitHub workflows
+502, 726 and 735 failed or were cancelled; #834's headline 8-of-21 also counts
+703, which is Writes-level and stays gated):
 
 1. **A Reads-level workflow pinned to a reviewer-gated environment.** A
    report-only audit that cannot finish without a human is an audit that mostly
@@ -187,7 +188,7 @@ def test_scheduled_reads_workflows_are_never_gated():
 
     A scheduled Reads-level run on a reviewer-gated environment fires with
     nobody watching, parks at `status: waiting`, and is eventually cancelled or
-    reaped. 8 of 21 such runs failed or were cancelled in 2026-07.
+    reaped. 7 of the 18 such runs failed or were cancelled in 2026-07.
     """
     violations = [
         f"{name}: job '{job_id}' is Reads-level, runs on a SCHEDULE, and is "

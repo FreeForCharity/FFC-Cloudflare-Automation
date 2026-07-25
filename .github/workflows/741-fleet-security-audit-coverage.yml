@@ -132,7 +132,11 @@ jobs:
             [ "$wf_status" = "OK" ] && has_wf=true
 
             # Script presence and the cron are decided by the shipped library so
-            # the parsing that ships is the parsing that is tested.
+            # the parsing that ships is the parsing that is tested. Deliberately
+            # concatenation and not a JS template literal: `${...}` inside this
+            # single-quoted argument reads to shellcheck as a shell expansion
+            # that will not expand (SC2016), and suppressing that warning would
+            # blind the step to a real one.
             read -r has_script cron < <(
               node -e '
                 const fs = require("fs");
@@ -140,7 +144,7 @@ jobs:
                 const pkg = fs.readFileSync(process.argv[1], "utf8");
                 const wf = fs.readFileSync(process.argv[2], "utf8");
                 const cron = lib.extractCron(wf);
-                process.stdout.write(`${lib.hasAuditScript(pkg)} ${cron || "-"}\n`);
+                process.stdout.write(lib.hasAuditScript(pkg) + " " + (cron || "-") + "\n");
               ' /tmp/pkg.json /tmp/audit.yml
             )
             [ "$cron" = "-" ] && cron=""

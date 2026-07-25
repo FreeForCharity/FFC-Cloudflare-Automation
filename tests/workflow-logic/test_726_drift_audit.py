@@ -53,7 +53,13 @@ def run_audit(env_overrides: dict) -> tuple[str, str, str]:
 
 
 def run_audit_allow_failure(env_overrides: dict) -> tuple[str, str, int]:
-    """Like run_audit but tolerates a non-zero exit. Returns (report, stderr, rc)."""
+    """Like run_audit but tolerates a non-zero exit.
+
+    Returns (report, combined_output, rc) where combined_output is stdout+stderr
+    concatenated. Both streams are needed: `::error::` annotations go to stdout
+    while api_get forwards the failed response body to stderr, and a caller
+    asserting on either one alone would miss half the evidence.
+    """
     script = step_run("726-repo-rulesets-drift-audit.yml", "audit", "Audit org rulesets")
     with tempfile.TemporaryDirectory() as td:
         td = pathlib.Path(td)

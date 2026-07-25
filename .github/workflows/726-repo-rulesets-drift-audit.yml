@@ -265,10 +265,22 @@ jobs:
           # Find an existing open tracking issue
           existing=$(gh issue list --repo "$repo" --state open --search "$title in:title" --json number --jq '.[0].number // empty' 2>/dev/null)
 
+          # Failing to deliver the report is a FAILURE, not a warning. A warning here
+          # means the drift was detected, the run went green, and nobody was told —
+          # the same silent-success shape as the 403-rendered-as-✓ bug above (#854).
+          # This path matters especially on a read-scoped credential: creating an issue
+          # and EDITING one are different permissions, so a token can open the first
+          # drift report and then silently stop updating it on every run after.
           if [ -n "$existing" ]; then
             echo "Updating issue #$existing"
-            gh issue edit "$existing" --repo "$repo" --body "$body" || echo "::warning::Failed to update issue"
+            if ! gh issue edit "$existing" --repo "$repo" --body "$body"; then
+              echo "::error::Drift detected but issue #$existing could not be updated — the report was not delivered."
+              exit 1
+            fi
           else
             echo "Creating new tracking issue"
-            gh issue create --repo "$repo" --title "$title" --body "$body" 2>&1 || echo "::warning::Failed to create issue"
+            if ! gh issue create --repo "$repo" --title "$title" --body "$body"; then
+              echo "::error::Drift detected but the tracking issue could not be created — the report was not delivered."
+              exit 1
+            fi
           fi

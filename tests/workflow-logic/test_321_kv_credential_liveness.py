@@ -395,6 +395,42 @@ def test_the_body_states_the_read_only_probe_scope():
     assert "read-all-" in render(a), "the report must say which scope is probed"
 
 
+def test_the_stated_close_condition_matches_every_finding_bucket():
+    """The body tells a responder when the issue will close. If that sentence
+    omits a bucket that actually keeps it open (it omitted expired, missing and
+    the listing failure), the responder clears what it names, sees the issue
+    stay open, and learns to distrust the report."""
+    body = render(analyze(secrets=[_secret(PAT, "2026-07-01T00:00:00Z")], probes=[]))
+    sentence = next(l for l in body.splitlines() if "auto-closes" in l)
+    for bucket in ("dead", "expired", "expiring", "disabled", "missing", "unverifiable"):
+        assert bucket in sentence, f"close condition omits {bucket}: {sentence}"
+    assert "listed" in sentence, f"close condition omits the listing failure: {sentence}"
+
+
+def test_every_bucket_named_a_finding_actually_raises_one():
+    # Guards the doc comment against the code: each of these alone must set
+    # hasFinding, and each non-finding bucket alone must not.
+    cases = {
+        "dead": dict(
+            secrets=[_secret(PAT, None)],
+            probes=[{"secret": PAT, "kind": "github-pat", "httpStatus": 401}],
+        ),
+        "expired": dict(secrets=[_secret(PAT, "2026-07-01T00:00:00Z")], probes=[]),
+        "expiring": dict(secrets=[_secret(PAT, "2026-08-01T00:00:00Z")], probes=[]),
+        "disabled": dict(secrets=[_secret(PAT, None, enabled=False)], probes=[]),
+        "missing": dict(secrets=[_secret("other", None)], probes=[_live_pat()]),
+        "unverified": dict(
+            secrets=[_secret(PAT, None)],
+            probes=[{"secret": PAT, "kind": "github-pat", "httpStatus": 503}],
+        ),
+    }
+    for name, kw in cases.items():
+        assert analyze(**kw)["hasFinding"] is True, f"{name} must be a finding"
+    # The three context-only buckets, each alone, must NOT raise a finding.
+    assert analyze(secrets=[_secret(PAT, None)], probes=[_live_pat()])["hasFinding"] is False
+    assert analyze(secrets=[_secret(PAT, "2028-01-01T00:00:00Z")], probes=[])["hasFinding"] is False
+
+
 def test_a_listing_failure_says_the_run_is_incomplete_not_clean():
     body = render(analyze(secrets=[], probes=[], listError="AuthorizationFailed"))
     assert "could not be listed" in body, body
@@ -483,6 +519,23 @@ def test_the_workflow_never_prints_or_persists_a_value():
             assert "::add-mask::" in line, f"value printed unmasked: {line.strip()}"
     # The payload handed to the reporting step carries names and statuses only.
     assert "value" not in run.split("$payload = ")[1], run.split("$payload = ")[1][:300]
+
+
+def test_the_value_is_never_masked_as_a_whole():
+    """`::add-mask::` is a LINE-oriented workflow command. Masking a value that
+    contains an embedded newline registers only its first line as a secret and
+    prints the remainder to the log in clear — a leak produced by the very step
+    meant to prevent one. So the mask is applied per line, never to `$value`."""
+    run = next(
+        s
+        for s in load_workflow(WF_FILE)["jobs"]["monitor"]["steps"]
+        if "probe liveness" in (s.get("name") or "")
+    )["run"]
+    assert "::add-mask::$value" not in run, "the whole value must never be masked in one command"
+    assert "-split" in run, "the value must be split into lines before masking"
+    # ...and the trim still happens before the mask, so no empty trailing line
+    # is masked (masking an empty string is a no-op GitHub warns about).
+    assert run.index("TrimEnd") < run.index("::add-mask::"), run[:400]
 
 
 def test_the_trailing_newline_guard_is_present():

@@ -145,7 +145,12 @@ function _days(fromIso, nowMs) {
  *          updated?:string|null}>,
  *          probes?:Array<object>, listError?:string|null, now?:string}} input
  *
- * Buckets (each one a finding except `live`/`noExpiry`):
+ * Buckets. Findings: dead, expired, expiring, disabled, missing, unverified.
+ * NOT findings, reported for context only: `live` (probe verified), `healthy`
+ * (expiry beyond the warning window), `noExpiry` (no expiry date set — common
+ * and not a defect). Keep this list in step with `hasFinding` below; a bucket
+ * described as a finding that does not raise one is how a responder learns to
+ * distrust the report.
  *   - dead:      a probe the provider rejected. The #848 finding-1 class.
  *   - expired:   `expires` already past. Runtime failure, guaranteed.
  *   - expiring:  `expires` inside EXPIRY_WARN_DAYS. Both working GitHub PATs
@@ -298,7 +303,9 @@ function renderBody(a, iso) {
     `- Secrets in vault: ${a.totalSecrets} · probed: ${a.dead.length + a.live.length + a.unverified.length} of ${PROBES.length} registered`,
     `- Expiry warning threshold: ${EXPIRY_WARN_DAYS} days`,
     '',
-    'This rolling issue auto-closes on the next run where nothing is dead, expiring, disabled, or unverifiable.',
+    'This rolling issue auto-closes on the next run where nothing is dead, expired, expiring, ' +
+      'disabled, missing, or unverifiable, and the vault could be listed. Anything less than all ' +
+      'of that keeps it open — the close condition is exactly the finding set below.',
     '',
   );
 

@@ -20,6 +20,14 @@ on:
         description: 'Live apex domain to clone (e.g. browncanyonranch.org)'
         required: true
         type: string
+      dry_run:
+        description: >-
+          Dry-run: clone, integrate and BUILD the site, but do not commit, push or open a PR.
+          Everything except the final write still runs, so the result is a real rehearsal rather
+          than a smoke test. Default: true.
+        required: false
+        type: boolean
+        default: true
       ffc_ex_repo:
         description: 'Target FFC-EX repo name (default: FFC-EX-<domain>)'
         required: false
@@ -283,7 +291,33 @@ jobs:
             exit 1
           fi
 
+      # Dry-run stops HERE, deliberately late: the clone, the integration and the
+      # Next.js build have all already run, so a dry run exercises everything that
+      # can realistically fail and only withholds the write.
+      - name: Report what the write would do (dry run)
+        if: ${{ inputs.dry_run }}
+        working-directory: target-repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch='${{ steps.target.outputs.branch }}'
+          {
+            echo "## 702 dry run — no commit, no push, no PR"
+            echo ""
+            echo "Would have committed to \`$branch\` on \`FreeForCharity/${{ steps.target.outputs.repo }}\` and opened a draft PR."
+            echo ""
+            echo "### Files that would be committed"
+            echo ""
+            echo '```'
+            git add -A --dry-run | head -200
+            echo '```'
+            echo ""
+            echo "Total changed paths: $(git add -A --dry-run | wc -l)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::dry_run=true — clone and build completed, nothing was written to the target repo."
+
       - name: Commit and open PR on the FFC-EX repo
+        if: ${{ !inputs.dry_run }}
         working-directory: ffc-ex
         run: |
           git config user.name 'ffc-clone-bot'

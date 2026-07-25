@@ -17,6 +17,15 @@ on:
 
   workflow_dispatch:
     inputs:
+      dry_run:
+        description: >-
+          Dry-run: resolve the request, check the zone, and rehearse every write without performing
+          it. DNS enforcement, repo creation and the maintainer grant all run with their own DryRun
+          switches, and the content commit and push are skipped. Default: true — set false only for
+          a real run.
+        required: false
+        type: boolean
+        default: true
       domain:
         description: 'Apex domain (example: example.org). This is the only required field.'
         required: true
@@ -927,7 +936,10 @@ jobs:
           $outDir = Join-Path $env:RUNNER_TEMP 'website-provision-dns'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-          $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -GitHubPagesOnly *>&1
+          # -DryRun:$bool — PowerShell's switch-with-value form, so ONE call site
+          # serves both modes and the dry path cannot drift from the live one.
+          $dryRun = "${{ inputs.dry_run }}" -eq 'true'
+          $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -GitHubPagesOnly -DryRun:$dryRun *>&1
           $outPath = Join-Path $outDir 'dns-enforce.txt'
           $out | Out-File -FilePath $outPath -Encoding utf8
 
@@ -983,6 +995,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $dryRun = "${{ inputs.dry_run }}" -eq 'true'
           $repoFull = "${{ needs.resolve.outputs.repo_full }}"
           $repoName = "${{ needs.resolve.outputs.repo_name }}"
           $domain = "${{ needs.resolve.outputs.domain }}"
@@ -1022,6 +1035,13 @@ jobs:
               $createParams.PagesDomainType = 'github-default'
             }
 
+            if ($dryRun) { $createParams.DryRun = $true }
+
+            # Seed $LASTEXITCODE: in DryRun the script invokes no native command, so
+            # $LASTEXITCODE keeps whatever it held (often $null) and the check below
+            # throws "failed with exit code " on a run that actually succeeded. This
+            # is the defect that made 720's dry run unusable.
+            $LASTEXITCODE = 0
             ./scripts/Create-GitHubRepo.ps1 @createParams
             if ($LASTEXITCODE -ne 0) {
               throw "Create-GitHubRepo.ps1 failed with exit code $LASTEXITCODE"
@@ -1049,6 +1069,9 @@ jobs:
       username: ${{ needs.resolve.outputs.maintainers_csv }}
       permission: maintain
       soft_fail: true
+      # 729 already accepts dry_run over workflow_call — forward it so a 701 dry
+      # run cannot silently perform a real collaborator grant.
+      dry_run: ${{ inputs.dry_run }}
     secrets: inherit
 
   content:
@@ -1235,10 +1258,18 @@ jobs:
             git diff --cached --quiet
             $diffExit = $LASTEXITCODE
             if ($diffExit -eq 1) {
-              git commit -m "chore: apply footer + leadership content" | Out-Null
-              if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit $LASTEXITCODE)." }
-              git push origin HEAD:main
-              if ($LASTEXITCODE -ne 0) { throw "git push to origin main failed (exit $LASTEXITCODE)." }
+              if ("${{ inputs.dry_run }}" -eq 'true') {
+                # Everything above already ran — clone, footer/leadership rendering
+                # and staging. Only the write is withheld, so the step is still
+                # fully exercised.
+                Write-Host '::notice::dry_run=true - content rendered and staged, not committed or pushed.'
+                git --no-pager diff --cached --stat
+              } else {
+                git commit -m "chore: apply footer + leadership content" | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit $LASTEXITCODE)." }
+                git push origin HEAD:main
+                if ($LASTEXITCODE -ne 0) { throw "git push to origin main failed (exit $LASTEXITCODE)." }
+              }
             } elseif ($diffExit -eq 0) {
               Write-Host "No content changes detected; skipping commit." -ForegroundColor Yellow
             } else {

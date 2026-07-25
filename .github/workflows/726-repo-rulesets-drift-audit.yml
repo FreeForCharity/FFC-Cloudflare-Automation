@@ -10,8 +10,10 @@ on:
 # Daily read-only audit of FreeForCharity org repository rulesets and settings
 # drift (branch protections, merge queues, Actions policies) against the
 # documented standard, reported as issues under the github-prod approval gate.
-# The PAT comes from Key Vault (`wr-all-cbm-github-pat`) over OIDC, never a
-# GitHub secret — see #844.
+# The PAT comes from Key Vault (`wr-all-cbm-ffc-copilot-mcp-github-pat`) over OIDC,
+# never a GitHub secret — see #844. That token (not `wr-all-cbm-github-pat`) is the
+# one with Organization Administration read+write, which GitHub requires even to
+# READ org rulesets via a fine-grained PAT.
 #
 # Supersede-on-newer (#722): these daily runs pause at an approval gate; without
 # this, unapproved runs pile up ~12-deep until the janitor reaps them at 7 days.
@@ -52,10 +54,10 @@ jobs:
           set -euo pipefail
           token="$(az keyvault secret show \
             --vault-name kv-ffc-admin-prod-cbm \
-            --name wr-all-cbm-github-pat \
+            --name wr-all-cbm-ffc-copilot-mcp-github-pat \
             --query value -o tsv)"
           if [ -z "$token" ]; then
-            echo "::error::wr-all-cbm-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
             exit 1
           fi
           echo "::add-mask::$token"

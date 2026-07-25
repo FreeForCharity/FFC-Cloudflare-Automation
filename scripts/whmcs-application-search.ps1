@@ -92,14 +92,6 @@ function Format-MaskedField {
     return $v
 }
 
-function Get-WhmcsList {
-    param($Node, [Parameter(Mandatory = $true)][string]$ChildName)
-    if ($null -eq $Node -or $Node -is [string]) { return @() }
-    if ($Node -is [System.Array]) { return @($Node | Where-Object { $null -ne $_ }) }
-    if ($Node.PSObject.Properties[$ChildName]) { return @($Node.$ChildName | Where-Object { $null -ne $_ }) }
-    return @()
-}
-
 $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret -CredentialsJsonParam $CredentialsJson
 $api = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
 $key = Resolve-WhmcsAccessKey -AccessKeyParam $AccessKey
@@ -113,18 +105,45 @@ function New-Body {
 }
 
 $hits = [System.Collections.Generic.List[object]]::new()
+$unreadable = [System.Collections.Generic.List[int]]::new()
 $scanned = 0
 $start = 0
+$total = 0
+# A window with nothing readable in it also carries no `totalresults`, so the
+# loop learns nothing about where the data ends and cannot bound itself - while
+# each such window costs the bisect ~2*PageSize calls. Stop after this many
+# consecutive blind windows rather than crawling the table one record at a time.
+$maxBlindWindows = 3
+$blindWindows = 0
+$authBody = New-Body 'GetClientsProducts'
 while ($true) {
-    $b = New-Body 'GetClientsProducts'
-    $b.limitstart = $start
-    $b.limitnum = $PageSize
-    $r = Invoke-WhmcsApi -ApiUrl $api -Body $b
-    $services = Get-WhmcsList $r.products 'product'
-    if ($services.Count -le 0) { break }
+    # Paged via Invoke-WhmcsPagedFetch so one record WHMCS cannot JSON-encode
+    # costs us that record, not the whole page (and not the whole search).
+    $page = Invoke-WhmcsPagedFetch -ApiUrl $api -Body $authBody -Start $start -Num $PageSize `
+        -ListProperty 'products' -ItemProperty 'product'
+    foreach ($idx in $page.SkippedIndexes) { $unreadable.Add($idx) }
+    if ($page.Total -gt $total) { $total = $page.Total }
+    $services = @($page.Items)
+    if ($services.Count -le 0 -and $page.SkippedIndexes.Count -le 0) { break }
+
+    if ($services.Count -le 0) {
+        $blindWindows++
+        if ($total -le 0 -and $blindWindows -ge $maxBlindWindows) {
+            # Name the actual index range: whoever reads this has to go find the
+            # offending rows in WHMCS, and $start alone is the current window's
+            # first index, not the span that failed.
+            $blindFrom = $start - (($blindWindows - 1) * $PageSize)
+            $blindTo = $start + $PageSize - 1
+            throw ("Aborting: $blindWindows consecutive windows covering indexes $blindFrom-$blindTo returned no " +
+                'readable records and WHMCS never reported totalresults, so the sweep cannot tell where the data ' +
+                'ends. Repair the malformed records in WHMCS before searching.')
+        }
+    }
+    else { $blindWindows = 0 }
+
     foreach ($s in $services) {
         $scanned++
-        $fields = Get-WhmcsList $s.customfields 'customfield'
+        $fields = Get-WhmcsNodeList -Node $s.customfields -ChildName 'customfield'
         $hit = $false
         if (("$($s.name)").ToLowerInvariant().Contains($needle)) { $hit = $true }
         foreach ($f in $fields) {
@@ -151,18 +170,30 @@ while ($true) {
         if ($hits.Count -ge $MaxMatches) { break }
     }
     if ($hits.Count -ge $MaxMatches) { break }
-    $start += $services.Count
-    $total = 0
-    if ($r.totalresults) { [void][int]::TryParse($r.totalresults.ToString(), [ref]$total) }
+    # Advance by the window, not by the returned count: limitstart is an absolute
+    # index, and a skipped record makes the two differ.
+    $start += $PageSize
     if ($total -gt 0 -and $start -ge $total) { break }
 }
 
+# Read nothing but skipped something: a zero-match answer here would be
+# indistinguishable from "not found", which is the failure this whole script
+# exists to prevent. Fail instead of reporting an empty result.
+if ($scanned -le 0 -and $unreadable.Count -gt 0) {
+    throw ("Aborting: 0 records readable, $($unreadable.Count) unencodable. A 'no match' result would be " +
+        'indistinguishable from a genuine absence. Repair the malformed records in WHMCS before searching.')
+}
+
 $result = [ordered]@{
-    query      = $Query
-    scanned    = $scanned
-    matchCount = $hits.Count
-    truncated  = ($hits.Count -ge $MaxMatches)
-    matches    = $hits
+    query             = $Query
+    scanned           = $scanned
+    matchCount        = $hits.Count
+    truncated         = ($hits.Count -ge $MaxMatches)
+    # Records WHMCS could not serialize; they were NOT searched, so a zero-match
+    # result with a non-empty list here is "not found in what we could read".
+    unreadableCount   = $unreadable.Count
+    unreadableIndexes = @($unreadable)
+    matches           = $hits
 }
 
 $json = $result | ConvertTo-Json -Depth 7

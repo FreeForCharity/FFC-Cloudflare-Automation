@@ -213,9 +213,9 @@ function Get-ServedTelemetry {
     $gtm = [regex]::Matches($html, 'GTM-[A-Z0-9]{4,}') | ForEach-Object { $_.Value } | Sort-Object -Unique
     $ga = [regex]::Matches($html, 'G-[A-Z0-9]{8,}') | ForEach-Object { $_.Value } | Sort-Object -Unique
     return [pscustomobject]@{
-        reachable = $true
-        gtmIds    = @($gtm)
-        gaIds     = @($ga)
+        reachable      = $true
+        gtmIds         = @($gtm)
+        gaIds          = @($ga)
         # A placeholder id shipped to production is a defect, not a configuration.
         hasPlaceholder = [bool](@($ga) | Where-Object { $_ -match '^G-X+$' })
     }
@@ -294,23 +294,23 @@ foreach ($domain in $Domains) {
     }
 
     $report += [pscustomobject]@{
-        domain        = $d
-        gtm           = [pscustomobject]@{
+        domain     = $d
+        gtm        = [pscustomobject]@{
             provisioned = ($gtmMatch.Count -gt 0)
             containers  = @($gtmMatch | ForEach-Object { $_.publicId })
         }
-        ga4           = [pscustomobject]@{
+        ga4        = [pscustomobject]@{
             provisioned   = [bool]$gaMatch
             propertyName  = if ($gaMatch) { $gaMatch.propertyName } else { $null }
             measurementId = if ($gaStream) { $gaStream.measurementId } else { $null }
         }
-        gsc           = [pscustomobject]@{
+        gsc        = [pscustomobject]@{
             verified        = ($gscMatch.Count -gt 0)
             permissionLevel = if ($gscMatch.Count -gt 0) { $gscMatch[0].permissionLevel } else { $null }
         }
-        traffic       = $traffic
-        served        = $served
-        mismatches    = $mismatches
+        traffic    = $traffic
+        served     = $served
+        mismatches = $mismatches
     }
 }
 
@@ -320,16 +320,16 @@ $measured = @($report | Where-Object { $_.traffic.state -eq 'measured' } | Sort-
 $unknown = @($report | Where-Object { $_.traffic.state -ne 'measured' })
 
 $out = [pscustomobject]@{
-    schemaVersion   = 1
-    generatedAt     = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    lookbackDays    = $Days
-    gtmAccountId    = $GtmAccountId
-    gaAccountName   = $GaAccountName
-    probeErrors     = @($script:Errors)
+    schemaVersion    = 1
+    generatedAt      = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    lookbackDays     = $Days
+    gtmAccountId     = $GtmAccountId
+    gaAccountName    = $GaAccountName
+    probeErrors      = @($script:Errors)
     sharedContainers = $sharedContainers
-    trafficRanking  = @($measured | ForEach-Object { [pscustomobject]@{ domain = $_.domain; sessions = $_.traffic.sessions } })
-    unmeasured      = @($unknown | ForEach-Object { [pscustomobject]@{ domain = $_.domain; reason = $_.traffic.state } })
-    sites           = $report
+    trafficRanking   = @($measured | ForEach-Object { [pscustomobject]@{ domain = $_.domain; sessions = $_.traffic.sessions } })
+    unmeasured       = @($unknown | ForEach-Object { [pscustomobject]@{ domain = $_.domain; reason = $_.traffic.state } })
+    sites            = $report
 }
 
 $json = $out | ConvertTo-Json -Depth 10

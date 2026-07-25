@@ -137,9 +137,14 @@ while ($true) {
     if ($services.Count -le 0) {
         $blindWindows++
         if ($total -le 0 -and $blindWindows -ge $maxBlindWindows) {
-            throw ("Aborting: $blindWindows consecutive windows ending at index $start returned no readable " +
-                'records and WHMCS never reported totalresults, so the sweep cannot tell where the data ends. ' +
-                'Repair the malformed records in WHMCS before searching.')
+            # Name the actual index range: whoever reads this has to go find the
+            # offending rows in WHMCS, and $start alone is the current window's
+            # first index, not the span that failed.
+            $blindFrom = $start - (($blindWindows - 1) * $PageSize)
+            $blindTo = $start + $PageSize - 1
+            throw ("Aborting: $blindWindows consecutive windows covering indexes $blindFrom-$blindTo returned no " +
+                'readable records and WHMCS never reported totalresults, so the sweep cannot tell where the data ' +
+                'ends. Repair the malformed records in WHMCS before searching.')
         }
     }
     else { $blindWindows = 0 }

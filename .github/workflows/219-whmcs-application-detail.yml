@@ -80,7 +80,12 @@ jobs:
           # client or service id), so they must survive truncation.
           try {
             $detail = ($json | Out-String) | ConvertFrom-Json -ErrorAction Stop
-            foreach ($o in @($detail.orders)) {
+            # Drop nulls first: a client with no orders makes @($detail.orders)
+            # into @($null), which would print a blank "ORDER id=" line - a
+            # phantom order is worse than no recap at all.
+            $orderList = @($detail.orders) | Where-Object { $null -ne $_ }
+            if (-not $orderList) { Write-Host 'ORDERS: none on this client.' }
+            foreach ($o in $orderList) {
               Write-Host "ORDER id=$($o.id) num=$($o.ordernum) status=$($o.status) date=$($o.date) amount=$($o.amount) products=$($o.products)"
             }
           }

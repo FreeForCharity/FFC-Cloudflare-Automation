@@ -1043,6 +1043,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 230,
+      "title": "WHMCS - Record Field Set (client/contact/service/domain)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "230-whmcs-record-field-set.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Set ONE field on ONE existing WHMCS record. Supersedes 229 (service domain set), which was the same operation for a single field on a single target.  This is one dispatch surface that can write to four record types, so the per-target ALLOWLIST in scripts/whmcs-record-field-set.ps1 is the safety mechanism: a field not on the list cannot be written, and adding one is a reviewed code change rather than a dispatch input. Dry-run by default; no bulk loop.",
+      "safetyLevel": "Writes (record field)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`dry_run` (default true); one record + one field per dispatch; strict per-target allowlist of writable fields; refuses to replace a different existing value without `force`; reports `previousValue`",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 (FFC Tenant) - Domain Preflight (Read-only)",
       "apis": [

@@ -68,8 +68,9 @@ jobs:
 
   # Publish the public campaign list (title/url/status only) as a reviewable PR.
   # main is protected (changes via PR + merge queue only), so we open a data
-  # update PR rather than pushing directly. Uses CBM_TOKEN (a PAT, github-prod)
-  # so the PR can trigger required checks.
+  # update PR rather than pushing directly. Uses a real PAT (fetched from Key
+  # Vault over OIDC — see #844) so the PR can trigger required checks; a PR opened
+  # by GITHUB_TOKEN would not.
   deliver:
     needs: zeffy_campaigns_export
     runs-on: ubuntu-latest

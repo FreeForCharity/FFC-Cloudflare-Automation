@@ -351,6 +351,38 @@ def test_template_escalating_permissions_is_rejected():
     assert any("permissions" in p for p in problems), problems
 
 
+def test_template_that_GAINED_a_scope_is_rejected():
+    """`contents: read` being present is not enough — the block must be exactly
+    that. A template that acquired `issues: write` upstream would otherwise be
+    rolled out to 34 charity repos with a scope an audit has no use for.
+
+    Caught in review on #842: the original regex only checked that `contents:
+    read` appeared somewhere under `permissions:`, while its own error message
+    claimed it was refusing to grant more than that.
+    """
+    for extra in ["issues: write", "contents: write", "pull-requests: write", "id-token: write"]:
+        raw = CANONICAL.replace(
+            "permissions:\n  contents: read", f"permissions:\n  contents: read\n  {extra}"
+        )
+        problems = validate_template(raw)
+        assert any("exactly" in p for p in problems), (extra, problems)
+        assert "error" in render_workflow(raw, "5 6 * * *"), extra
+
+
+def test_template_with_no_permissions_block_is_rejected():
+    """No block means the default token scope, which on many repos is write."""
+    raw = CANONICAL.replace("permissions:\n  contents: read\n\n", "")
+    problems = validate_template(raw)
+    assert any("permissions" in p for p in problems), problems
+
+
+def test_permissions_check_tolerates_formatting_variation():
+    """Must reject on scope, not on whitespace or quoting style."""
+    for variant in ["permissions:\n  contents: read", "permissions:\n    contents:   read"]:
+        raw = CANONICAL.replace("permissions:\n  contents: read", variant)
+        assert validate_template(raw) == [], (variant, validate_template(raw))
+
+
 def test_empty_template_is_rejected():
     assert validate_template("") != []
     assert validate_template("   \n") != []
@@ -798,19 +830,83 @@ def test_canonical_template_is_fetched_not_vendored():
     assert raw.count("validate-template") == 2, raw.count("validate-template")
 
 
-def test_no_dependency_versions_are_touched():
+def test_no_dependency_manifest_sections_are_touched():
     """Remediation is #822's. If this workflow ever bumped a version it would be
-    doing an unreviewed dependency upgrade across 34 charity repos."""
-    for text in [
-        (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(),
-        LIB.read_text(),
-        CLI.read_text(),
-    ]:
-        assert "npm install" not in text
-        assert "npm update" not in text
-        assert "dependencies" not in text.replace("dependency", "").replace(
-            "dependencies (the ones", ""
-        ) or "audit" in text
+    doing an unreviewed dependency upgrade across 34 charity repos.
+
+    Asserted on the JSON KEY names, not the English word: the prose 'dependency'
+    appears throughout these files' comments, so a substring test against it is
+    vacuous. (An earlier version of this test was worse than vacuous — it ended
+    in `or "audit" in text`, which is true for every one of these files, so the
+    assertion could never fail. Caught in review on #842.)
+    """
+    for path in [REPO_ROOT / ".github" / "workflows" / WF_FILE, LIB, CLI]:
+        text = path.read_text()
+        for forbidden in [
+            '"dependencies"',
+            '"devDependencies"',
+            "npm install",
+            "npm update",
+            "npm upgrade",
+        ]:
+            assert forbidden not in text, f"{path.name} references {forbidden}"
+
+
+def test_the_editor_cannot_alter_a_dependency_version():
+    """The runtime half of the guarantee above: even if something tried, the
+    whole-document comparison rejects it."""
+    tampered = add_script(PKG)["content"].replace('"next": "16.2.4"', '"next": "16.2.11"')
+    assert verify_only_added(PKG, tampered)["ok"] is False
+
+
+def test_apply_step_distinguishes_blocked_from_an_internal_error():
+    """Exit 2 (BLOCKED) is an expected, reported outcome; exit 1 is a bug. A
+    single `if !` collapsing both would let the job report success while
+    internal errors occurred — the looks-fine-but-lied failure this workflow
+    exists to avoid, in the workflow itself. Caught in review on #842."""
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    assert '[ "$rc" -eq 2 ]' in raw, raw
+    assert '[ "$rc" -ne 0 ]' in raw, raw
+    # The error branch must count toward the job's failure tally; blocked must not.
+    error_branch = raw.split('elif [ "$rc" -ne 0 ]; then')[1].split("continue")[0]
+    assert "failures=$((failures + 1))" in error_branch, error_branch
+    blocked_branch = raw.split('if [ "$rc" -eq 2 ]; then')[1].split("elif")[0]
+    assert "failures=" not in blocked_branch, blocked_branch
+
+
+def test_max_repos_is_normalized_to_base_ten():
+    """`max_repos` is validated with `^[0-9]+$`, which accepts `08`, so it is
+    normalized with `10#` before any arithmetic or jq use.
+
+    Raised in review on #842 as "jq --argjson will fail on 08". Worth recording
+    precisely, because the stated mechanism does NOT reproduce on the jq the
+    runners ship: jq 1.7 parses `08` as 8 and slices correctly (asserted below,
+    so this note cannot rot into a false claim). The normalization is kept as
+    version-independence rather than as a bug fix — jq's number parsing was
+    relaxed in 1.7 and a stricter build would reject it.
+
+    The leading zero IS a live hazard one step away, though: bash `$((08))` is a
+    hard error ("value too great for base"), so the `10#` form is the correct
+    way to write this regardless of jq.
+    """
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    assert 'limit="$((10#$MAX_REPOS))"' in raw, raw
+    assert '--argjson n "$limit"' in raw, raw
+    assert '--argjson n "$MAX_REPOS"' not in raw, raw
+    # No bare $(( )) on the raw input anywhere — that is the form that breaks.
+    assert "$((MAX_REPOS))" not in raw and "$(($MAX_REPOS))" not in raw, raw
+
+    # Record the actual behaviour of the jq in use, whichever it is.
+    probe = subprocess.run(
+        ["jq", "-n", "--argjson", "n", "08", "$n"], capture_output=True, text=True
+    )
+    if probe.returncode == 0:
+        assert probe.stdout.strip() == "8", probe.stdout
+    # And the bash hazard the 10# form exists for.
+    bare = subprocess.run(["bash", "-c", 'x=08; echo $((x))'], capture_output=True, text=True)
+    assert bare.returncode != 0, "bash accepted $((08)) — check the 10# rationale"
+    fixed = subprocess.run(["bash", "-c", 'x=08; echo $((10#$x))'], capture_output=True, text=True)
+    assert fixed.stdout.strip() == "8", fixed
 
 
 def test_header_never_wraps_mid_hyphenated_word():

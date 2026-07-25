@@ -83,10 +83,15 @@ jobs:
           MAX_REPOS: ${{ inputs.max_repos }}
         run: |
           set -euo pipefail
-          if ! [[ "$MAX_REPOS" =~ ^[0-9]+$ ]] || [ "$MAX_REPOS" -lt 1 ]; then
+          if ! [[ "$MAX_REPOS" =~ ^[0-9]+$ ]] || [ "$((10#$MAX_REPOS))" -lt 1 ]; then
             echo "::error::max_repos must be a positive integer, got '$MAX_REPOS'"
             exit 1
           fi
+          # Base-10 normalization matters downstream: this regex accepts `08`,
+          # and `jq --argjson n 08` fails because a leading zero is not valid
+          # JSON — a confusing plan-step crash for an input validation already
+          # passed. `10#` also stops bash reading `08` as invalid octal here.
+          echo "::notice::max_repos=$((10#$MAX_REPOS))"
 
       - name: Fetch + validate the canonical security-audit.yml
         shell: bash
@@ -225,16 +230,20 @@ jobs:
           set -euo pipefail
           node scripts/fleet-audit-backfill.js plan "$CANDIDATES_FILE" > plan.json
 
+          # Normalized to base 10 before it reaches jq: --argjson parses its
+          # value as JSON, and `08` is not a valid JSON number.
+          limit="$((10#$MAX_REPOS))"
+
           targets_all="$(jq '.targets | length' plan.json)"
           blocked="$(jq '.blocked | length' plan.json)"
           skipped="$(jq '.skipped | length' plan.json)"
 
           # Trim to the batch cap here, so the plan the gate approver reviews is
           # exactly the set that will be written.
-          jq --argjson n "$MAX_REPOS" '.targets[:$n]' plan.json > batch.json
+          jq --argjson n "$limit" '.targets[:$n]' plan.json > batch.json
           batch="$(jq 'length' batch.json)"
 
-          node scripts/fleet-audit-backfill.js summary plan.json "$DRY_RUN" "$MAX_REPOS" \
+          node scripts/fleet-audit-backfill.js summary plan.json "$DRY_RUN" "$limit" \
             >> "$GITHUB_STEP_SUMMARY"
 
           echo "::notice::targets=$targets_all batch=$batch blocked=$blocked skipped=$skipped dry_run=$DRY_RUN"
@@ -320,13 +329,27 @@ jobs:
               continue
             fi
 
-            # Exit 2 from the CLI means BLOCKED — a shape it will not edit
-            # unattended. Report it and move on; never write a partial repo.
-            if ! node scripts/fleet-audit-backfill.js apply \
-              target-repo "$repo" "$cron" "$TEMPLATE" > result.json 2>apply-err.txt; then
-              reason="$(head -c 300 apply-err.txt | tr '\n' ' ')"
+            node scripts/fleet-audit-backfill.js apply \
+              target-repo "$repo" "$cron" "$TEMPLATE" > result.json 2>apply-err.txt
+            rc=$?
+            reason="$(head -c 300 apply-err.txt | tr '\n' ' ')"
+
+            # The CLI's two nonzero codes mean different things and must not be
+            # collapsed. Exit 2 is BLOCKED: an expected, reported outcome for a
+            # shape the CLI will not edit unattended. Exit 1 is an unexpected
+            # error — a bug or a broken assumption, e.g. the post-write coverage
+            # check failing. Treating 1 as "blocked" would let the job report
+            # success while internal errors occurred, which is precisely the
+            # looks-fine-but-lied failure this whole workflow exists to avoid.
+            if [ "$rc" -eq 2 ]; then
               echo "::warning::$repo blocked: $reason"
               echo "| $repo | ⏭️ blocked — ${reason} | — | — |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::endgroup::"
+              continue
+            elif [ "$rc" -ne 0 ]; then
+              echo "::error::$repo errored (exit $rc): $reason"
+              echo "| $repo | ❌ error (exit $rc) — ${reason} | — | — |" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1))
               echo "::endgroup::"
               continue
             fi

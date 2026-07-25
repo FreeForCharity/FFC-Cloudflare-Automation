@@ -119,8 +119,27 @@ function validateTemplate(raw) {
   if (!/(?:^|[^\w-])npm\s+ci\b/m.test(text)) {
     problems.push('does not run `npm ci` — no dependency tree would be installed to audit');
   }
-  if (!/permissions:\s*\n\s*contents:\s*read/.test(text)) {
-    problems.push('missing `permissions: contents: read` — refusing to grant a fleet audit more');
+  // Exactly `contents: read`, not merely "contents: read appears somewhere".
+  // The weaker check would pass a template that had GAINED a scope — a
+  // `contents: write` or `issues: write` added upstream would then be rolled out
+  // to 34 charity repos, which is the one thing a fleet amplifier must never do
+  // silently. An audit reads a dependency tree; it needs nothing else.
+  const permBlock = /^permissions:[ \t]*(?:\r?\n)((?:[ \t]+\S[^\n]*(?:\r?\n)?)*)/m.exec(text);
+  if (!permBlock) {
+    problems.push(
+      'no `permissions:` block — refusing to roll out a workflow that would inherit the default token scope',
+    );
+  } else {
+    const scopes = permBlock[1]
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const extra = scopes.filter((s) => !/^contents:\s*read$/.test(s));
+    if (extra.length || !scopes.length) {
+      problems.push(
+        `permissions must be exactly \`contents: read\`, found: ${scopes.join(', ') || '(empty)'}`,
+      );
+    }
   }
   return problems;
 }

@@ -56,40 +56,12 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'whmcs-api-common.ps1')
 
-function Format-MaskedName {
-    param([string]$Name)
-    if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
-    $t = $Name.Trim()
-    if ($t.Length -le 1) { return '***' }
-    return $t.Substring(0, 1) + '***'
-}
-function Format-MaskedEmail {
-    param([string]$Email)
-    if ([string]::IsNullOrWhiteSpace($Email)) { return '' }
-    $at = $Email.IndexOf('@')
-    if ($at -lt 1) { return '***' }
-    return '***' + $Email.Substring($at)
-}
-# Strip simple HTML (WHMCS wraps URL answers in <a href>...</a>) for matching + display.
-function Remove-Html {
-    param([string]$Value)
-    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
-    return ([regex]::Replace($Value, '<[^>]+>', '')).Trim()
-}
+# Masking policy lives in whmcs-api-common.ps1 (Format-WhmcsFieldValue) and is
+# documented in docs/pii-classification.md. It strips WHMCS's <a href> wrapper
+# itself, so callers pass the raw value.
 function Format-MaskedField {
     param([string]$FieldName, [string]$Value)
-    $v = Remove-Html $Value
-    if ([string]::IsNullOrWhiteSpace($v)) { return '' }
-    if ($FieldName -match '(?i)\b(first|last|your|contact|poc)[ _-]?name\b' -and
-        $FieldName -notmatch '(?i)org|charity|company|nonprofit|foundation|business') {
-        return Format-MaskedName $v
-    }
-    if ($FieldName -match '(?i)\bein\b|tax[ _-]?id') { return '***' }
-    if ($FieldName -match '(?i)phone|email|e-mail') {
-        if ($v -match '@') { return Format-MaskedEmail $v }
-        return '***'
-    }
-    return $v
+    return Format-WhmcsFieldValue -FieldName $FieldName -Value $Value
 }
 
 $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret -CredentialsJsonParam $CredentialsJson

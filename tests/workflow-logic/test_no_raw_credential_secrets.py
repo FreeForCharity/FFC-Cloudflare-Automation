@@ -38,7 +38,23 @@ from wf_extract import REPO_ROOT, WORKFLOWS
 # Only matches inside a ${{ ... }} expression, so prose ("…/environments/…/secrets")
 # and PowerShell property access ($secrets.Count) are not mistaken for references.
 _EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
-_SECRET_REF = re.compile(r"\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)")
+
+# Both syntaxes GitHub accepts. `secrets.NAME` is what this repo writes today, but
+# `secrets['NAME']` is exactly equivalent at run time — so matching only the dot
+# form would leave a one-character bypass of the whole allowlist. Nothing uses the
+# bracket form here yet, which is the point: the guard has to hold for the syntax
+# nobody has used, not just the one currently in the tree.
+_SECRET_REF = re.compile(
+    r"""\bsecrets(?:\.([A-Za-z_][A-Za-z0-9_]*)      # secrets.NAME
+                 |\[\s*['"]([^'"]+)['"]\s*\])""",   # secrets['NAME'] / secrets["NAME"]
+    re.VERBOSE,
+)
+
+# Any Key Vault call, not just `secret show`. This repo also uses `secret download`
+# (the Google service-account key) and `secret list` (the KV inventory + liveness
+# monitors) — and every one of them needs the same OIDC-issued Azure session, so
+# pinning one subcommand would drop the others out of coverage silently.
+_KEY_VAULT_CALL = re.compile(r"\baz keyvault\b")
 
 # Non-secret values that are legitimately held as GitHub secrets.
 #
@@ -103,7 +119,8 @@ def _secret_references() -> dict[str, set[str]]:
         # Python on Windows would otherwise decode as cp1252 and crash the module.
         text = path.read_text(encoding="utf-8")
         for expression in _EXPRESSION.findall(text):
-            for secret in _SECRET_REF.findall(expression):
+            for match in _SECRET_REF.finditer(expression):
+                secret = match.group(1) or match.group(2)
                 found.setdefault(secret, set()).add(path.name)
     return found
 
@@ -169,20 +186,20 @@ def _key_vault_composite_actions() -> set[str]:
     """Local composite actions that fetch from Key Vault, derived from the tree.
 
     Derived rather than listed: a new `*-from-kv` action is covered the day it
-    lands, with nothing to remember. Matching on the `az keyvault secret show`
-    call rather than the `-from-kv` name means a differently-named action is
-    caught too, and a renamed one does not silently drop out of coverage.
+    lands, with nothing to remember. Matching on the Key Vault call rather than
+    the `-from-kv` name means a differently-named action is caught too, and a
+    renamed one does not silently drop out of coverage.
     """
     actions = set()
     for action_file in sorted((REPO_ROOT / ".github" / "actions").glob("*/action.yml")):
-        if "az keyvault secret show" in action_file.read_text(encoding="utf-8"):
+        if _KEY_VAULT_CALL.search(action_file.read_text(encoding="utf-8")):
             actions.add(action_file.parent.name)
     return actions
 
 
 def _job_fetches_from_key_vault(job: dict, kv_actions: set[str]) -> bool:
-    # Inline `az keyvault secret show`, anywhere in the job (run:, with:, env:).
-    if "az keyvault secret show" in yaml.safe_dump(job, default_flow_style=False):
+    # An inline `az keyvault ...` call anywhere in the job (run:, with:, env:).
+    if _KEY_VAULT_CALL.search(yaml.safe_dump(job, default_flow_style=False)):
         return True
     for step in job.get("steps") or []:
         if not isinstance(step, dict):
@@ -208,7 +225,7 @@ def test_key_vault_consumers_can_perform_the_oidc_exchange():
 
     Two things this deliberately does NOT do, both found by Copilot's review of
     the first version (which checked `az keyvault secret show` as a substring of
-    the whole file):
+    the whole file — see also the subcommand note on `_KEY_VAULT_CALL`):
 
     * It does not require the literal command in the workflow. **60 of the 61
       Key Vault consumers reach it through a `*-from-kv` composite action** and

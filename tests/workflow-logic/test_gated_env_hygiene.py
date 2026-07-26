@@ -92,10 +92,11 @@ def _is_reads_level(level: str) -> bool:
 DISPATCH_ONLY_GATED_READS = {
     ("101-domain-status.yml", "m365"),
     # Surfaced only once the level match became prefix-based: 401 is
-    # `Reads (+ PR delivery)`, and its deliver job opens the campaigns PR with
-    # CBM_TOKEN. A candidate to follow 502 onto github-prod-read later — it
-    # needs the same reporting scope — but that is a separate change, and it is
-    # dispatch-only, so it is not #834's failure class.
+    # `Reads (+ PR delivery)`, and its deliver job opens the campaigns PR with a
+    # PAT fetched from Key Vault on the writer identity. A candidate to follow
+    # 502 onto github-prod-read later — it needs the same reporting scope — but
+    # that is a separate change, and it is dispatch-only, so it is not #834's
+    # failure class.
     ("401-zeffy-campaigns-export.yml", "deliver"),
     ("104-domain-export-inventory.yml", "export_m365"),
     ("104-domain-export-inventory.yml", "export_wpmudev"),

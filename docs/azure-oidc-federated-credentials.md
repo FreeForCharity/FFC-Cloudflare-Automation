@@ -95,6 +95,42 @@ The ungated read environment for WHMCS reads needs, one-time:
 4. Create the `whmcs-prod-read` GitHub environment with **no** required reviewers, then re-run
    **730** to refresh the gate audit.
 
+## `github-prod-read` — the ungated GitHub read lane (#834)
+
+> **Status: NOT YET PROVISIONED.** Workflows 502 (`deliver`), 726 and 735 target this environment on
+> the #834 branch. Until the three steps below are done they will fail at `azure/login` with
+> `AADSTS700213` (no federated credential for this subject) — loudly, which is correct, but it means
+> **provision first, then merge**.
+
+Same shape as `whmcs-prod-read`, and deliberately **no secret of its own**: the credential stays in
+Key Vault and the lane authenticates as the _reader_ identity over OIDC. This is the point of the
+lane — the three workflows previously ran on the gated `github-prod` as the **writer** identity
+(`wr-all-cbm-github-pat`, the 100+-repo create/archive/collaborator credential) for work classified
+`Reads`.
+
+1. **Federated credential on kv-reader:**
+   ```bash
+   az ad app federated-credential create \
+     --id 79a123d8-2f45-4925-a550-bbd849399daf \
+     --parameters '{"name":"github-oidc-github-prod-read","issuer":"https://token.actions.githubusercontent.com","subject":"repo:FreeForCharity/FFC-Cloudflare-Automation:environment:github-prod-read","audiences":["api://AzureADTokenExchange"]}'
+   ```
+2. Confirm the kv-reader identity can `Get` **`read-all-cbm-github-pat`** (502, 735) and
+   **`read-all-cbm-ffc-copilot-mcp-github-pat`** (726 — this is the one carrying Organization
+   Administration read, which GitHub requires even to _read_ org rulesets with a fine-grained PAT).
+3. Create the `github-prod-read` GitHub environment with **no** required reviewers, then re-run
+   **730** to refresh the gate audit.
+
+**Blocked on a remint, not just on provisioning.** 321's liveness monitor reports
+`read-all-cbm-github-pat` returning **401** (#877, confirmed real in #878 after two false positives
+were fixed) — so 502's delivery and 735 cannot work until that secret is reminted under #848. 726
+uses the copilot-mcp PAT, which probes healthy.
+
+**Do not reintroduce a GitHub-secret copy.** An earlier revision of #834 proposed a
+`GH_REPORT_TOKEN` environment secret. That predates the Key Vault migration (#844) and would put a
+second copy of a credential where it can drift — the failure that silently broke the Cloudflare
+token for four months. The scope narrowing #834 wants is real, but it belongs in the _identity_
+(reader vs writer), not in a new pasted PAT.
+
 ## Auditing federated-credential subjects
 
 The `m365-prod` typo above was an **expected** credential with a **malformed subject** — a

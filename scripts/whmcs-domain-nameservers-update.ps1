@@ -286,13 +286,36 @@ try {
         throw 'NameServer1 and NameServer2 are required. Provide -NameServer1/-NameServer2 or set WHMCS_NAMESERVER_1/WHMCS_NAMESERVER_2.'
     }
 
+    # Report what is there NOW, not just what we intend to write. The record was
+    # already fetched above and its current nameservers were being discarded, so
+    # neither the dry-run nor the live run showed what the change replaced -
+    # which is the one thing you need to undo a wrong repoint.
+    $wanted = @($ns1, $ns2, $ns3, $ns4, $ns5)
+    $current = @(1..5 | ForEach-Object {
+            $p = "ns$_"
+            if ($existing.PSObject.Properties[$p]) { ([string]$existing.$p).Trim().ToLowerInvariant() } else { '' }
+        })
+    for ($i = 0; $i -lt 5; $i++) {
+        $w = if ($wanted[$i]) { $wanted[$i] } else { '' }
+        if ($w -or $current[$i]) {
+            Write-Host "- ns$($i + 1): $(if ($current[$i]) { $current[$i] } else { '(unset)' }) -> $(if ($w) { $w } else { '(unchanged)' })"
+        }
+    }
+
+    # No-op guard: a repoint that changes nothing should say so rather than
+    # spending a write and reporting success as though something moved.
+    $changes = 0
+    for ($i = 0; $i -lt 5; $i++) {
+        $w = if ($wanted[$i]) { $wanted[$i] } else { '' }
+        if ($w -and $w -ne $current[$i]) { $changes++ }
+    }
+    if ($changes -eq 0) {
+        Write-Host "WHMCS nameservers for '$domainName' (domainId=$domainId) already match; nothing to do." -ForegroundColor Green
+        exit 0
+    }
+
     if ($DryRun) {
-        Write-Host "[DRY-RUN] Would update WHMCS nameservers for '$domainName' (domainId=$domainId):" -ForegroundColor Yellow
-        Write-Host "- ns1: $ns1"
-        Write-Host "- ns2: $ns2"
-        if ($ns3) { Write-Host "- ns3: $ns3" }
-        if ($ns4) { Write-Host "- ns4: $ns4" }
-        if ($ns5) { Write-Host "- ns5: $ns5" }
+        Write-Host "[DRY-RUN] Would update WHMCS nameservers for '$domainName' (domainId=$domainId): $changes change(s) above." -ForegroundColor Yellow
         exit 0
     }
 

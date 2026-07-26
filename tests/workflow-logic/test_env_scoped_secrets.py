@@ -24,16 +24,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from wf_extract import WORKFLOWS
 
 # secret name -> the only environment(s) where it is defined
-#
-# Deliberately ONE environment each: a secret name defined in two environments
-# with two different values is the drift shape that silently broke the
-# Cloudflare token for four months. GH_REPORT_TOKEN (#834) is the ungated
-# github-prod-read lane's own credential, NOT a second copy of CBM_TOKEN — it
-# carries org read + report-back writes (issues, PRs) and none of CBM_TOKEN's
-# infrastructure-mutating scopes.
 ENV_SCOPED_SECRETS = {
     "CBM_TOKEN": {"github-prod"},
-    "GH_REPORT_TOKEN": {"github-prod-read"},
 }
 
 

@@ -52,6 +52,56 @@ def run_audit(env_overrides: dict) -> tuple[str, str, str]:
         return summary.read_text(), proc.stdout, gh_log.read_text()
 
 
+def run_audit_allow_failure(env_overrides: dict) -> tuple[str, str, int]:
+    """Like run_audit but tolerates a non-zero exit.
+
+    Returns (report, combined_output, rc) where combined_output is stdout+stderr
+    concatenated. Both streams are needed: `::error::` annotations go to stdout
+    while api_get forwards the failed response body to stderr, and a caller
+    asserting on either one alone would miss half the evidence.
+    """
+    script = step_run("726-repo-rulesets-drift-audit.yml", "audit", "Audit org rulesets")
+    with tempfile.TemporaryDirectory() as td:
+        td = pathlib.Path(td)
+        summary = td / "summary.md"
+        summary.touch()
+        env = {
+            "PATH": f"{HARNESS_DIR}:/usr/bin:/bin",
+            "GITHUB_STEP_SUMMARY": str(summary),
+            "TEST_GH_LOG": str(td / "gh.log"),
+            "HOME": str(td),
+        }
+        env.update(env_overrides)
+        proc = subprocess.run(
+            ["bash", "-c", script], env=env, capture_output=True, text=True, timeout=120
+        )
+        return summary.read_text(), proc.stdout + proc.stderr, proc.returncode
+
+
+def test_unreadable_org_rulesets_fails_and_never_reports_present():
+    """#854 regression: a 403 body must NEVER satisfy the 'ruleset present' branch.
+
+    The original bug was subtle: `gh api ... 2>/dev/null || echo "0"` produced
+    `{...403...}0`, which is not equal to "0", so the missing-ruleset branch never
+    fired and the audit printed a GREEN check containing an HTTP error. Asserting
+    only "does not say present" would pass even on a silently-wrong "0", so this
+    also pins the non-zero exit.
+    """
+    report, output, rc = run_audit_allow_failure(
+        {
+            "TEST_ORG_RULESETS_FAIL": "1",
+            "TEST_REPO_LIST": "FFC-EX-example.org	PUBLIC	main",
+            "TEST_TEAMS_OUTPUT": ALL_TEAMS,
+        }
+    )
+    assert rc != 0, f"audit must FAIL when it cannot read org rulesets; rc={rc}"
+    assert "Org-level branch ruleset present" not in report, report
+    assert "cannot read org rulesets" in output, output
+    # The error body must never leak into the report as if it were a count.
+    assert "403" not in report, report
+    assert "Resource not accessible" not in report, report
+
+
 def test_uppercase_public_visibility_triggers_no_merge_queue_flag():
     # gh emits PUBLIC (uppercase). Before the fix this row silently skipped
     # the public-only merge-queue check.

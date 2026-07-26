@@ -3,13 +3,10 @@ run-name: 'Google Analytics Report'
 
 # Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers
 # it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe:
-# aggregate metrics only. Requires the google-prod-read environment (report) and the UNGATED
-# github-prod-read environment (delivery, GH_REPORT_TOKEN) + the Wave 0 foundation.
-#
-# Delivery moved off gated github-prod in #834: both halves of this workflow are Reads-level, but
-# the gate on the deliver job parked the whole daily run — 4 of 8 scheduled runs failed or were
-# cancelled. GH_REPORT_TOKEN needs cross-repo contents:write + pull-requests:write on ffcadmin to
-# open the sync PR; see the github-prod-read scope table in docs/workflow-safety-and-approvals.md.
+# aggregate metrics only. Requires the google-prod-read environment (report) and the ungated
+# github-prod-read environment (delivery, #834) + the Wave 0 foundation. Opening the PR is reporting
+# plumbing, not a Write — the data this workflow consumes is a Read. The delivery PAT comes from Key
+# Vault (`read-all-cbm-github-pat`) over OIDC on the READER identity, never a GitHub secret — #844.
 
 on:
   schedule:
@@ -22,12 +19,12 @@ on:
         default: '28'
         type: string
 
-# cancel-in-progress is now FALSE (#834). The supersede-on-newer setting (#722) existed solely
-# because these daily runs parked at the github-prod approval gate and piled up ~12-deep until
-# janitor 734 reaped them at 7 days. With delivery on the ungated github-prod-read, no run ever
-# waits, so the only thing cancel-in-progress could still cancel is an EXECUTING run — the
-# trade-off #722 accepted as the lesser evil is now pure downside. Group stays ref-scoped so a
-# dispatch from a PR branch can never collide with main's scheduled run.
+# cancel-in-progress: false (#834). Its entire justification (#722) was that these
+# daily runs parked at an approval gate and piled up ~12-deep until janitor 734
+# reaped them at 7 days. Ungated on github-prod-read, nothing ever waits, so the
+# only run it could still cancel is an EXECUTING one — the trade-off #722 accepted
+# as the lesser evil becomes pure downside. Ref-scoped so a dispatch from a PR
+# branch can never collide with main's scheduled run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-supersede
   cancel-in-progress: false
@@ -114,22 +111,39 @@ jobs:
     runs-on: ubuntu-latest
     environment: github-prod-read
     steps:
-      # Fail fast, matching 726/735. Without this the job runs the whole GA
-      # pipeline and only dies at the cross-repo push with an opaque auth error.
-      # This one matters most of the three: 502 is the only job needing scope on
-      # ANOTHER repo (FFC-IN-ffcadmin.org), so it is the likeliest to be
-      # under-scoped when github-prod-read is first provisioned.
-      - name: Validate GH_REPORT_TOKEN
-        run: |
-          if [ -z "${{ secrets.GH_REPORT_TOKEN }}" ]; then
-            echo "::error::GH_REPORT_TOKEN secret is not set (environment: github-prod-read)."
-            exit 1
-          fi
-
       # Checkout gives the deliver job the current workflow catalog so the public
       # copies on ffcadmin (src/data render + /data stable URL) refresh in the
       # same daily PR as the GA data — one reviewable sync pipe (backlog #554).
       - uses: actions/checkout@v7.0.1
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Rotation is
+      # a new KV version — no GitHub change and no second copy that can drift.
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show \
+            --vault-name kv-ffc-admin-prod-cbm \
+            --name read-all-cbm-github-pat \
+            --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::read-all-cbm-github-pat came back empty from Key Vault — check the reader identity's role on kv-ffc-admin-prod-cbm."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
 
       - name: Download reports
         uses: actions/download-artifact@v8
@@ -139,17 +153,13 @@ jobs:
 
       # Generate the Agentic OS status feed (backlog #723) so it rides the same
       # daily sync PR as the GA data + workflow catalog — one reviewable pipe,
-      # no new gate. REST-only, PII-safe aggregates; GH_REPORT_TOKEN just reads.
+      # no new gate. REST-only, PII-safe aggregates; the PAT just reads here.
       - name: Generate Agentic OS status feed
-        env:
-          GH_TOKEN: ${{ secrets.GH_REPORT_TOKEN }}
         run: |
           set -euo pipefail
           python3 scripts/generate-agentic-os-status.py --output agentic-os-status.json
 
       - name: Open/update daily data-sync PR into FFC-IN-ffcadmin.org
-        env:
-          GH_TOKEN: ${{ secrets.GH_REPORT_TOKEN }}
         run: |
           set -euo pipefail
           git config --global user.name 'ffc-automation[bot]'

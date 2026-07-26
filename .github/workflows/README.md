@@ -564,6 +564,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 226 | WHMCS - Application Triage (rank + accept onboarding orders) [WHMCS] | `226-whmcs-application-triage.yml` | workflow_dispatch | Writes (report default) | ✅ whmcs-prod |
 | 227 | cPanel - Deploy WHMCS Hooks (FTPS/lftp) [cPanel] | `227-whmcs-hooks-deploy.yml` | workflow_dispatch | Writes (verify default) | ✅ whmcs-prod |
 | 228 | WHMCS - Fraud Review (FraudLabs Pro) [FRAUDLABS+WHMCS] | `228-whmcs-fraud-review.yml` | schedule, workflow_dispatch | Writes (issues only) | whmcs-prod-read + fraudlabspro-prod-read |
+| 230 | WHMCS - Record Field Set (client/contact/service/domain) [WHMCS] | `230-whmcs-record-field-set.yml` | workflow_dispatch | Writes (record field) | ✅ whmcs-prod |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |
@@ -575,6 +576,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 305 | M365 (FFC Tenant) - Add Tenant Domain (INTERNAL ONLY) [M365] | `305-m365-add-tenant-domain.yml` | workflow_dispatch | Writes (dry-run default) | ✅ m365-prod |
 | 306 | Discover - Uncaptured Comms (FFC Tenant M365, PII masked) [M365] | `306-discover-uncaptured-comms.yml` | workflow_dispatch | Reads | ✅ m365-prod |
 | 320 | Azure - Key Vault Secret Inventory (audit) [MS] | `320-azure-kv-secret-inventory.yml` | schedule, workflow_dispatch | Reads | google-prod-read (reader identity) |
+| 321 | Azure - KV Credential Liveness + Expiry Monitor [MS+GH+CF] | `321-azure-kv-credential-liveness.yml` | schedule, workflow_dispatch | Reads | google-prod-read (reader identity) |
 ### 4xx — Zeffy
 
 | # | Workflow | File | Triggers | Safety | Approval env |
@@ -591,6 +593,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 503 | Google - GTM Provision (per-charity container) [GOOGLE] | `503-google-gtm-provision.yml` | workflow_dispatch | Writes (dry-run default) | ✅ google-prod-write |
 | 504 | Google - GTM Container Backups (weekly export) [GOOGLE] | `504-google-gtm-backup.yml` | schedule, workflow_dispatch | Reads | google-prod-read |
 | 505 | Google - GA4 Property Provision (per-charity) [GOOGLE] | `505-google-ga-property-provision.yml` | workflow_dispatch | Writes (dry-run default) | ✅ google-prod-write |
+| 506 | Google - Fleet Telemetry Reachability [GOOGLE] | `506-google-fleet-telemetry-reachability.yml` | schedule, workflow_dispatch | Reads | google-prod-read |
 ### 6xx — WPMUDEV
 
 | # | Workflow | File | Triggers | Safety | Approval env |
@@ -616,7 +619,6 @@ No additional setup is required for these workflows to run. However, to get the 
 | 729 | Repo - Add Collaborator [Repo] | `729-repo-add-collaborator.yml` | workflow_dispatch | Writes (**live default**) | ✅ github-prod |
 | 730 | Repo - Audit Environment Approval Gates [Repo] | `730-repo-audit-environment-gates.yml` | push, workflow_dispatch | Reads | — |
 | 731 | Repo - Actions Run Metrics (30d per-workflow stats) [GH] | `731-actions-run-metrics.yml` | schedule, workflow_dispatch | Reads | — |
-| 732 | Repo - Google Workflow Failure Alert (rolling issue) [GH] | `732-google-workflow-failure-alert.yml` | workflow_run | Writes (issues only) | — |
 | 733 | Repo - Credential Rotation Reminders (quarterly) [GH] | `733-credential-rotation-reminders.yml` | schedule, workflow_dispatch | Writes (issues only) | — |
 | 734 | Repo - Stale Waiting-Run Janitor [Repo] | `734-stale-waiting-run-janitor.yml` | schedule, workflow_dispatch | Writes (cancels runs) | — |
 | 735 | Repo - Dependabot Affected Repos [Org] | `735-repo-dependabot-affected-repos.yml` | schedule, workflow_dispatch | Reads | github-prod-read |
@@ -624,6 +626,9 @@ No additional setup is required for these workflows to run. However, to get the 
 | 737 | Repo - Claim Sync [Repo] | `737-claim-sync.yml` | pull_request, schedule, workflow_dispatch | Writes (issues/labels only) | — |
 | 738 | Repo - Fleet Smoke Engine Drift Audit [Org] | `738-fleet-smoke-engine-drift-audit.yml` | schedule, workflow_dispatch | Reads | — |
 | 739 | Repo - Process Health Metrics Report [GH] | `739-process-health-metrics.yml` | schedule, workflow_dispatch | Reads | — |
+| 740 | Repo - Scheduled Workflow Failure Alert (rolling issue) [GH] | `740-scheduled-workflow-failure-alert.yml` | schedule, workflow_dispatch | Writes (issues only) | — |
+| 741 | Repo - Fleet Security Audit Coverage [Org] | `741-fleet-security-audit-coverage.yml` | schedule, workflow_dispatch | Reads | — |
+| 742 | Repo - Fleet Security Audit Backfill [Org] | `742-fleet-security-audit-backfill.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

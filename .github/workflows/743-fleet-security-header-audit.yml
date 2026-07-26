@@ -57,6 +57,13 @@ jobs:
           DOMAIN_FILTER: ${{ inputs.domains }}
         run: |
           set -euo pipefail
+          # The node script below reports counts with string concatenation and
+          # never a JS template literal: a dollar-brace inside this
+          # single-quoted argument reads to shellcheck as a shell expansion that
+          # will not expand, SC2016, and actionlint fails the build on it. Same
+          # constraint as 741's inline node block. Keep prose out of the script
+          # body too — shellcheck parses what it can see, and a stray paren in a
+          # JS comment there reads as a malformed function definition.
           node -e '
             const fs = require("fs");
             const lib = require("./scripts/fleet-security-header-lib.js");
@@ -69,7 +76,7 @@ jobs:
               : targets;
             fs.writeFileSync("/tmp/targets.json", JSON.stringify(picked));
             fs.writeFileSync("/tmp/skipped.json", JSON.stringify(filter.length ? [] : skipped));
-            console.log(`targets=${picked.length} skipped=${skipped.length}`);
+            console.log("targets=" + picked.length + " skipped=" + skipped.length);
           '
           count=$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync("/tmp/targets.json","utf8")).length))')
           if [ "$count" -eq 0 ]; then

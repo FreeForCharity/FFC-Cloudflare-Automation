@@ -70,6 +70,7 @@ jobs:
           WATCHED_WORKFLOWS: |
             502. Google - Analytics Report (GA4 -> JSON) [GOOGLE]
             504. Google - GTM Container Backups (weekly export) [GOOGLE]
+            506. Google - Fleet Telemetry Reachability [GOOGLE]
             703. Sites List - Generate (CSV + JSON) [GH]
             723. Repo - CodeQL Security Analysis [Repo]
             726. Repo - Rulesets + Settings Drift Audit [Org]

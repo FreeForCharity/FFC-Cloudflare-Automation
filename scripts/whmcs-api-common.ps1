@@ -266,6 +266,111 @@ function Invoke-WhmcsPagedFetch {
     }
 }
 
+# --- Disclosure classification -------------------------------------------
+# ONE classifier for what may be printed from a charity's WHMCS record. The
+# policy and its legal basis live in docs/pii-classification.md; this is its
+# implementation. Do not add a second copy - two classifiers disagreeing is
+# exactly how the EIN ended up masked by 221 and printed by 219.
+
+function Format-MaskedName {
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
+    $t = $Name.Trim()
+    if ($t.Length -le 1) { return '***' }
+    return $t.Substring(0, 1) + '***'
+}
+
+function Format-MaskedEmail {
+    param([string]$Email)
+    if ([string]::IsNullOrWhiteSpace($Email)) { return '' }
+    $at = $Email.IndexOf('@')
+    if ($at -lt 1) { return '***' }
+    return '***' + $Email.Substring($at)
+}
+
+function Get-WhmcsFieldClass {
+    <#
+    .SYNOPSIS
+        Classify a WHMCS field name for disclosure. Returns 'public',
+        'personal-contact', or 'person-name'.
+
+    .DESCRIPTION
+        The distinction is NOT "organizational vs. personal" - it is what the
+        charity has already published or is legally required to disclose:
+
+        - A nonprofit's EIN is public (IRS Pub 78 / BMF, and it appears in the
+          charity's own Candid profile URL).
+        - Officers and directors - names, titles, roles - are public via
+          Form 990 Part VII, which is a public-disclosure document.
+        - A LinkedIn profile is self-published by its owner.
+        - Fields the charity explicitly designated for its website footer are
+          public by the charity's own instruction.
+
+        What Form 990 does NOT disclose is an officer's personal email address
+        or phone number, so those stay masked even for the same person whose
+        name and role are public. That boundary is the whole policy: role and
+        identity are public, direct personal contact routes are not.
+
+        Order matters. Email/phone is decided FIRST so that
+        "Board President/Chair Individual Email" masks even though it names a
+        public role, and the footer exception is checked inside that branch.
+    #>
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$FieldName)
+
+    if ($FieldName -match '(?i)phone|email|e-mail') {
+        # Explicitly designated for publication by the charity.
+        if ($FieldName -match '(?i)\bpublic\b' -or $FieldName -match '(?i)footer') { return 'public' }
+        return 'personal-contact'
+    }
+    # Public by statute or self-publication.
+    if ($FieldName -match '(?i)\bein\b|tax[ _-]?id') { return 'public' }
+    if ($FieldName -match '(?i)linkedin|guidestar|candid|facebook|instagram|twitter|\bx\b|youtube|tiktok') { return 'public' }
+    # Form 990 Part VII: officer/director names and titles are disclosed.
+    if ($FieldName -match '(?i)board|president|chair|secretary|treasurer|vice[ _-]?president|member[ _-]?at[ _-]?large|director|officer|\brole\b|\btitle\b') {
+        return 'public'
+    }
+    # A natural person's name that is NOT an officer/org name.
+    if ($FieldName -match '(?i)\b(first|last|your|contact|poc)[ _-]?name\b' -and
+        $FieldName -notmatch '(?i)org|charity|company|nonprofit|foundation|business') {
+        return 'person-name'
+    }
+    return 'public'
+}
+
+function Format-WhmcsFieldValue {
+    # Apply Get-WhmcsFieldClass to a value. Free-text values are additionally
+    # shape-checked, because a personal phone or email typed into a mission or
+    # notes field is personal regardless of what the field is called.
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$FieldName,
+        [Parameter()][AllowEmptyString()][string]$Value
+    )
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    # WHMCS wraps URL answers in <a href>...</a>. Strip it BEFORE classifying:
+    # an <a href="mailto:...">-wrapped address does not match the email shape,
+    # so a value that should mask would sail through as free text.
+    $t = ([regex]::Replace($Value, '<[^>]+>', '')).Trim()
+    if ([string]::IsNullOrWhiteSpace($t)) { return '' }
+
+    switch (Get-WhmcsFieldClass -FieldName $FieldName) {
+        'personal-contact' {
+            if ($t -match '@') { return Format-MaskedEmail $t }
+            return '***'
+        }
+        'person-name' { return Format-MaskedName $t }
+        default {
+            # 'public' by field name - but check the VALUE's shape, since the
+            # field name cannot vouch for free text someone pasted into it.
+            if ($t -match '^[^@\s]+@[^@\s]+\.[^@\s]+$') { return Format-MaskedEmail $t }
+            # EIN shape (NN-NNNNNNN) is public and must not trip the phone
+            # matcher below, which it otherwise would.
+            if ($t -match '^\d{2}-?\d{7}$') { return $t }
+            if ($t -match '^\+?[0-9 ()\-\.]{7,}$') { return '***' }
+            return $t
+        }
+    }
+}
+
 function ConvertTo-WhmcsCustomFields {
     # Builds base64(serialize(array(id => value))) as WHMCS expects for the
     # `customfields` parameter on AddClient / AddOrder. -Json must be a JSON

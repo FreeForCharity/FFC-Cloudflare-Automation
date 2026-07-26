@@ -227,6 +227,17 @@ function summarizeSkips(skipped) {
  * things: a connection that failed outright, and a server that answered with an
  * error status. A 503 is emphatically reachable — calling it unreachable sends
  * triage looking for a DNS or TLS fault that is not there.
+ *
+ * `noSignal` is the guard that keeps `hasGap: false` honest. `hasGap` asks only
+ * "did any measured domain fall short", so a run where EVERY probe failed —
+ * egress blocked, DNS broken on the runner, a curl that never ran — produces
+ * `hasGap: false`, which the caller would otherwise read as "recovered" and use
+ * to close the rolling issue. A total blackout would file as full compliance.
+ *
+ * That is precisely the #884 failure one level down: not-measured rendering as
+ * measured-and-good. The caller must check `noSignal` BEFORE acting on
+ * `hasGap`, treat the run as broken, and leave the issue exactly as the last
+ * run that did measure something left it.
  */
 function analyze(entries, skipped) {
   const results = (entries || []).map(classify);
@@ -253,6 +264,7 @@ function analyze(entries, skipped) {
     skips: summarizeSkips(skipped),
     skippedCount: (skipped || []).length,
     hasGap: partial.length + bare.length > 0,
+    noSignal: results.length > 0 && measured === 0,
   };
 }
 

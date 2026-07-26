@@ -74,9 +74,10 @@ jobs:
             const picked = filter.length
               ? targets.filter((t) => filter.includes(t.domain.toLowerCase()))
               : targets;
+            const persistedSkips = filter.length ? [] : skipped;
             fs.writeFileSync("/tmp/targets.json", JSON.stringify(picked));
-            fs.writeFileSync("/tmp/skipped.json", JSON.stringify(filter.length ? [] : skipped));
-            console.log("targets=" + picked.length + " skipped=" + skipped.length);
+            fs.writeFileSync("/tmp/skipped.json", JSON.stringify(persistedSkips));
+            console.log("targets=" + picked.length + " skipped=" + persistedSkips.length);
           '
           count=$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync("/tmp/targets.json","utf8")).length))')
           if [ "$count" -eq 0 ]; then
@@ -155,6 +156,23 @@ jobs:
               owner, repo, state: 'open', per_page: 100,
             });
             const existing = open.find((i) => i.body && i.body.includes(lib.MARKER));
+
+            // A run that measured nothing is a broken run, not a clean fleet.
+            // `hasGap` only asks whether a MEASURED domain fell short, so a total
+            // blackout (egress blocked, DNS down on the runner) yields
+            // hasGap:false — which the recovery path below would read as full
+            // compliance and use to close the issue. Fail instead, and leave the
+            // issue exactly as the last run that did measure something left it:
+            // overwriting it with an empty report would destroy the last known
+            // posture on the way past. 740 turns this failure into an alert.
+            if (analysis.noSignal) {
+              core.setFailed(
+                `Probed ${analysis.probed} domains and measured none of them ` +
+                  `(${analysis.unmeasured.length} unmeasured). Refusing to touch the rolling ` +
+                  `issue — a no-signal run must never read as compliance.`,
+              );
+              return;
+            }
 
             if (!analysis.hasGap) {
               if (existing) {

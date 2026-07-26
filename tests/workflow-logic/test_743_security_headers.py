@@ -265,6 +265,54 @@ def test_out_of_scope_note_does_not_call_every_skip_a_migration_target():
     assert "#702" not in body, body
 
 
+def test_a_run_that_measured_nothing_is_not_compliance():
+    """The blackout case: every probe failed, so nothing was measured.
+
+    `hasGap` asks only whether a MEASURED domain fell short, so it is false here
+    — and a caller acting on that alone would close the rolling issue and file a
+    total outage as full compliance. `noSignal` is what stops it. Same failure as
+    #884, one level down: not-measured rendering as measured-and-good.
+    """
+    r = analyze([{"domain": "a.org", "error": "timeout", "status": 0},
+                 _probe("b.org", {}, status=503)])
+    assert r["hasGap"] is False, r
+    assert r["noSignal"] is True, r
+    assert r["measured"] == 0, r
+
+
+def test_one_measured_domain_is_enough_signal():
+    # The guard must not fire whenever ANY probe fails, or a single flaky domain
+    # would block reporting for the whole fleet.
+    r = analyze([{"domain": "a.org", "error": "timeout", "status": 0},
+                 _probe("ok.org", dict(FULL_SET))])
+    assert r["noSignal"] is False, r
+    assert r["hasGap"] is False, r
+
+
+def test_an_empty_probe_set_is_not_flagged_as_no_signal():
+    # Zero targets is caught earlier, by the workflow's own guard; noSignal is
+    # specifically "we probed and learned nothing".
+    assert analyze([])["noSignal"] is False
+
+
+def test_workflow_refuses_to_close_the_issue_on_a_no_signal_run():
+    from wf_extract import step_github_script
+
+    script = step_github_script(WF_FILE, "audit", "Classify")
+    assert "analysis.noSignal" in script, "743 must consult noSignal before acting on hasGap"
+    assert "core.setFailed" in script, "a no-signal run must fail so 740 alerts on it"
+    # The guard has to come BEFORE the recovery/close path, or it guards nothing.
+    assert script.index("analysis.noSignal") < script.index("if (!analysis.hasGap)"), script
+
+
+def test_filtered_run_logs_the_skip_count_it_actually_persists():
+    from wf_extract import step_run
+
+    run = step_run(WF_FILE, "audit", "Select probe targets")
+    assert "persistedSkips.length" in run, run
+    assert 'skipped=" + skipped.length' not in run, "filtered runs must not log the full-fleet count"
+
+
 def test_partial_and_bare_both_raise_the_issue():
     partial = _probe("p.org", {"x-content-type-options": "nosniff"})
     bare = _probe("b.org", {"server": "GitHub.com"})

@@ -98,7 +98,7 @@ def _live_cf(secret: str = CF) -> dict:
         "secret": secret,
         "kind": "cloudflare-token",
         "httpStatus": 200,
-        "cloudflareStatus": "active",
+        "bodySuccess": True,
     }
 
 
@@ -124,15 +124,27 @@ def test_a_cloudflare_400_is_dead_not_unverified():
     assert classify({"secret": CF, "kind": "cloudflare-token", "httpStatus": 400}) == "DEAD"
 
 
-def test_a_cloudflare_200_that_is_not_active_is_dead():
-    r = dict(_live_cf(), cloudflareStatus="disabled")
+def test_a_cloudflare_200_with_a_failed_envelope_is_dead():
+    r = dict(_live_cf(), bodySuccess=False)
     assert classify(r) == "DEAD"
 
 
-def test_a_cloudflare_200_with_no_status_is_unverified_not_live():
+def test_a_cloudflare_200_with_no_envelope_is_unverified_not_live():
     r = dict(_live_cf())
-    r.pop("cloudflareStatus")
+    r.pop("bodySuccess")
     assert classify(r) == "UNVERIFIED"
+
+
+def test_a_cloudflare_403_is_unverified_not_dead():
+    """#877's false-positive class, generalized.
+
+    On a resource endpoint Cloudflare returns 403 (code 9109) for a VALID
+    credential that lacks permission for the resource. Calling that "dead"
+    tells a responder to remint a working token. It is still a finding —
+    `unverified` keeps the rolling issue open — but it does not assert a
+    rejection the probe never observed.
+    """
+    assert classify({"secret": CF, "kind": "cloudflare-token", "httpStatus": 403}) == "UNVERIFIED"
 
 
 def test_a_500_is_unverified_not_dead_and_not_live():
@@ -337,6 +349,57 @@ def test_every_probe_url_is_https_on_an_allowlisted_host():
         assert k["url"].startswith("https://"), (name, k)
         host = k["url"].split("/")[2]
         assert host in ("api.github.com", "api.cloudflare.com"), (name, host)
+
+
+def test_the_cloudflare_probe_does_not_use_the_user_token_verify_endpoint():
+    """The #877 regression, pinned.
+
+    `/user/tokens/verify` only answers for user-owned tokens. FFC's Cloudflare
+    tokens are account-scoped, so it rejects them with a 4xx while they are
+    working — 321's first run reported both as dead hours after workflow 108
+    used them to export every zone. `cloudflare-registrar-access-check.ps1`
+    had already written this down; the probe was authored anyway. A comment
+    did not hold the line, so a test does.
+    """
+    url = const("PROBE_KINDS")["cloudflare-token"]["url"]
+    assert "tokens/verify" not in url, url
+
+
+def test_the_cloudflare_probe_calls_what_the_read_lane_calls():
+    """A liveness probe is only evidence if it exercises the same right the
+    consumers need. The read lane's own export (`Export-CloudflareDns.ps1`)
+    starts at `/zones`, so a probe pass there means the lane works and a probe
+    failure means it is broken — neither of which `/user/tokens/verify` could
+    tell us."""
+    url = const("PROBE_KINDS")["cloudflare-token"]["url"]
+    assert url.startswith("https://api.cloudflare.com/client/v4/zones"), url
+
+    export = (REPO_ROOT / "Export-CloudflareDns.ps1").read_text(encoding="utf-8")
+    assert "/zones?" in export, "the read lane no longer starts at /zones; re-check the probe"
+
+
+def test_a_cloudflare_403_is_not_registered_as_a_dead_status():
+    kinds = const("PROBE_KINDS")
+    assert 403 not in kinds["cloudflare-token"]["deadStatuses"], kinds["cloudflare-token"]
+    # ...while the statuses that DO mean rejection stay classified.
+    assert 400 in kinds["cloudflare-token"]["deadStatuses"]
+    assert 401 in kinds["cloudflare-token"]["deadStatuses"]
+
+
+def test_the_workflow_reads_the_body_field_the_library_classifies_on():
+    """The library decides on `bodySuccess`; the workflow is what populates it.
+    A rename on either side would make every Cloudflare probe read as
+    unverifiable — a monitor that fails safe but checks nothing — and no other
+    test would catch it, because each side is internally consistent."""
+    kinds = const("PROBE_KINDS")
+    assert kinds["cloudflare-token"]["requireSuccessBody"] is True, kinds
+    step = next(
+        s
+        for s in load_workflow(WF_FILE)["jobs"]["monitor"]["steps"]
+        if "probe liveness" in (s.get("name") or "")
+    )
+    assert "requireSuccessBody" in step["run"], step["run"][:400]
+    assert "bodySuccess" in step["run"], step["run"][:400]
 
 
 def test_the_workflow_allowlist_agrees_with_the_library_hosts():

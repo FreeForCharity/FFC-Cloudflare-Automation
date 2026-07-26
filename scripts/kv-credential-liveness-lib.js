@@ -26,7 +26,7 @@
 //      per-secret RBAC migration (#848 part A): the reader identity needs
 //      `getSecret` on the four probed secrets and nothing else.
 //   2. **A probe exists only where one secret can verify itself, read-only.**
-//      GitHub PATs (`GET /user`) and Cloudflare tokens (`/user/tokens/verify`)
+//      GitHub PATs (`GET /user`) and Cloudflare tokens (`GET /zones`)
 //      qualify. WHMCS needs three secrets and a POST; a Google SA key needs a
 //      JWT exchange. Those stay expiry-monitored only — inventing a probe that
 //      mutates or that needs a credential trio would trade the safety that
@@ -55,12 +55,27 @@ const PROBE_KINDS = {
     label: 'GitHub PAT',
   },
   'cloudflare-token': {
-    url: 'https://api.cloudflare.com/client/v4/user/tokens/verify',
+    // NOT `/user/tokens/verify`. That endpoint only answers for USER-owned
+    // tokens; FFC's are account-scoped, and it rejects them with a 4xx even
+    // when they are fully working — which is exactly what happened on 321's
+    // first run (#877): both Cloudflare tokens were reported dead hours after
+    // workflow 108 had used them to export every zone. `/zones` is the call
+    // the read lane actually makes (`Export-CloudflareDns.ps1`), so a probe
+    // failure here means the lane is broken, and a probe pass means it works.
+    // `scripts/cloudflare-registrar-access-check.ps1` already avoided the
+    // verify endpoint for this reason and said so in a comment.
+    url: 'https://api.cloudflare.com/client/v4/zones?per_page=1',
     // Cloudflare answers an invalid token with 400 (code 1000), not 401.
-    deadStatuses: [400, 401, 403],
-    // A 200 is not enough: a disabled or expired token still verifies with a
-    // non-`active` status.
-    requireActive: true,
+    // 403 is deliberately NOT here: on a resource endpoint it means
+    // authenticated-but-unauthorized (code 9109), which is a real problem but
+    // not a rejected credential — it lands in `unverified`, which still raises
+    // a finding without asserting something the probe did not observe.
+    deadStatuses: [400, 401],
+    // A 200 alone is not enough: Cloudflare wraps every response in an
+    // envelope, so read `success` and never infer health from the status line.
+    // (Replaces a `result.status == active` check that only `/user/tokens/verify`
+    // returns.)
+    requireSuccessBody: true,
     label: 'Cloudflare API token',
   },
 };
@@ -108,8 +123,8 @@ function assertNoWriteScopeProbes(probes) {
  * @returns {'LIVE'|'DEAD'|'UNVERIFIED'}
  *
  * DEAD       — the provider rejected the credential (see `deadStatuses`), or a
- *              Cloudflare token verified as anything but `active`.
- * LIVE       — 200 (plus `active` for Cloudflare).
+ *              Cloudflare 200 whose envelope says `success: false`.
+ * LIVE       — 200 (plus `success: true` for Cloudflare).
  * UNVERIFIED — anything else: transport error, unreadable secret, 5xx, 429, or
  *              a status this kind does not classify. NEVER treated as live —
  *              "could not check" and "checked, fine" are different answers, and
@@ -123,11 +138,11 @@ function classifyProbe(result) {
   if (!Number.isFinite(status) || status === 0) return 'UNVERIFIED';
   if (kind.deadStatuses.includes(status)) return 'DEAD';
   if (status !== 200) return 'UNVERIFIED';
-  if (kind.requireActive) {
-    const cf = result.cloudflareStatus;
-    if (cf === 'active') return 'LIVE';
-    // 200 with a missing status is unverifiable, not a rejection.
-    return cf ? 'DEAD' : 'UNVERIFIED';
+  if (kind.requireSuccessBody) {
+    const ok = result.bodySuccess;
+    if (ok === true) return 'LIVE';
+    // 200 with an unreadable envelope is unverifiable, not a rejection.
+    return ok === false ? 'DEAD' : 'UNVERIFIED';
   }
   return 'LIVE';
 }
@@ -229,7 +244,7 @@ function analyze(input) {
     const row = {
       ...target,
       httpStatus: Number.isFinite(Number(p.httpStatus)) ? Number(p.httpStatus) : null,
-      detail: p.error ? String(p.error) : p.cloudflareStatus ? `status=${p.cloudflareStatus}` : '',
+      detail: p.error ? String(p.error) : p.bodySuccess === false ? 'success=false' : '',
       providerExpiry: p.providerExpiry || null,
     };
     if (verdict === 'DEAD') dead.push(row);

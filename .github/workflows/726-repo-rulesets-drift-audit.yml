@@ -39,6 +39,20 @@ jobs:
     runs-on: ubuntu-latest
     environment: github-prod-read
     steps:
+      # Fail fast on a half-provisioned lane. Without this, missing identifiers
+      # surface inside azure/login as a blank/invalid client-id — which reads
+      # like an Entra problem, not a "you forgot to add two environment secrets"
+      # problem. Matters most right now: github-prod-read is new (#834).
+      - name: Validate required Azure secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set (environment: github-prod-read). These OIDC identifiers are ENVIRONMENT secrets — a repo Variable does not satisfy a secrets.* reference. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID is not set (environment: github-prod-read). See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+
       - name: Azure login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
         with:

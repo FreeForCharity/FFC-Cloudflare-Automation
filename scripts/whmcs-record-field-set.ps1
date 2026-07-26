@@ -251,8 +251,12 @@ try {
     if ($DryRun) {
         $preview = $body.Clone()
         # Redact the identifier too - this script also runs locally, where
-        # nothing masks stdout the way the Actions log does.
-        foreach ($k in @('identifier', 'secret', 'accesskey')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
+        # nothing masks stdout the way the Actions log does. `customfields`
+        # carries the base64-serialized application answers (mission, EIN,
+        # contact details), so it is redacted as payload, not as a credential.
+        foreach ($k in @('identifier', 'secret', 'accesskey', 'customfields')) {
+            if ($preview.ContainsKey($k)) { $preview[$k] = '***' }
+        }
         [pscustomobject]@{
             action   = $spec.WriteAction
             dryRun   = $true

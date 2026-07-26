@@ -44,36 +44,13 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'whmcs-api-common.ps1')
 
-function Format-MaskedName {
-    param([string]$Name)
-    if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
-    $t = $Name.Trim()
-    if ($t.Length -le 1) { return '***' }
-    return $t.Substring(0, 1) + '***'
-}
-
-function Format-MaskedEmail {
-    param([string]$Email)
-    if ([string]::IsNullOrWhiteSpace($Email)) { return '' }
-    $at = $Email.IndexOf('@')
-    if ($at -lt 1) { return '***' }
-    return '***' + $Email.Substring($at)
-}
-
-# Custom-field values are free text; mask any value that looks like personal
-# contact data (email/phone). Everything else (legal status, org website,
-# mission text, EIN) is application data the charity publishes anyway.
+# Masking policy lives in whmcs-api-common.ps1 (Format-WhmcsFieldValue) and is
+# documented in docs/pii-classification.md. Client-level custom fields come
+# back from WHMCS WITHOUT names, so they are classified on value shape alone -
+# that is what an empty field name selects.
 function Format-MaskedCustomValue {
     param([string]$Value)
-    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
-    $t = $Value.Trim()
-    if ($t -match '^[^@\s]+@[^@\s]+\.[^@\s]+$') { return Format-MaskedEmail $t }
-    # An EIN is public (IRS BMF / GuideStar publish it), so it must NOT be
-    # masked — but its NN-NNNNNNN shape (9 digits, one hyphen) otherwise trips
-    # the generic phone matcher below. Pass EIN-shaped values through first.
-    if ($t -match '^\d{2}-?\d{7}$') { return $t }
-    if ($t -match '^\+?[0-9 ()\-\.]{7,}$') { return '***' }
-    return $t
+    return Format-WhmcsFieldValue -FieldName '' -Value $Value
 }
 
 $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret -CredentialsJsonParam $CredentialsJson
@@ -156,21 +133,10 @@ foreach ($o in $orders) {
 # --- 3. Products/services + their custom fields ----------------------------
 # The onboarding application's answers are captured as PRODUCT custom fields
 # on the charity-onboarding service (GetClientsProducts returns field NAMES,
-# unlike client-level GetClientsDetails). Mask a value when it looks like
-# contact data OR the field name says it holds a person's name/contact -
-# organization/charity-name and mission fields stay readable.
+# unlike client-level GetClientsDetails), so these classify by field name.
 function Format-MaskedProductField {
     param([string]$FieldName, [string]$Value)
-    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
-    if ($FieldName -match '(?i)\b(first|last|your|contact|poc)[ _-]?name\b' -and
-        $FieldName -notmatch '(?i)org|charity|company|nonprofit|foundation|business') {
-        return Format-MaskedName $Value
-    }
-    if ($FieldName -match '(?i)phone|email|e-mail') {
-        if ($Value -match '@') { return Format-MaskedEmail $Value.Trim() }
-        return '***'
-    }
-    return Format-MaskedCustomValue $Value
+    return Format-WhmcsFieldValue -FieldName $FieldName -Value $Value
 }
 
 $body = New-Body 'GetClientsProducts'

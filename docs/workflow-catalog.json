@@ -1757,24 +1757,6 @@
       "categoryCode": "GH"
     },
     {
-      "number": 732,
-      "title": "Repo - Google Workflow Failure Alert (rolling issue)",
-      "apis": [
-        "GH"
-      ],
-      "file": "732-google-workflow-failure-alert.yml",
-      "triggers": [
-        "workflow_run"
-      ],
-      "environments": [],
-      "description": "Watches the Google reporting workflows (501 smoke, 502 analytics report). On failure it upserts ONE rolling alert issue; on the next success it closes that issue. Prevents a silently-stale nightly report. GitHub API only (issues), no environment gate.",
-      "safetyLevel": "Writes (issues only)",
-      "approvalEnv": "\u2014",
-      "guard": "rolling issue upsert/close; no external API",
-      "category": "GitHub (Website + Repo)",
-      "categoryCode": "GH"
-    },
-    {
       "number": 733,
       "title": "Repo - Credential Rotation Reminders (quarterly)",
       "apis": [
@@ -1919,13 +1901,14 @@
       ],
       "file": "740-scheduled-workflow-failure-alert.yml",
       "triggers": [
-        "workflow_run"
+        "schedule",
+        "workflow_dispatch"
       ],
       "environments": [],
-      "description": "Watches the scheduled NON-Google hub workflows (726 drift audit, 734 janitor, 738 smoke drift, and the other cron-driven monitors). On a bad conclusion it upserts ONE rolling alert issue PER WATCHED WORKFLOW, and closes that issue on the next success of that same workflow. The marker is keyed by workflow name precisely so a green run of one watched workflow can never close another's alert \u2014 with ten workflows watched, a shared marker would let a weekly job's success silently clear a daily job's outage. 732 does the same job for the Google reporting workflows (501/502) \u2014 the two alerters are kept apart by distinct markers and labels so neither ever closes the other's issue.  Ambient GITHUB_TOKEN only, no environment: \u2014 the alerter must never be blocked by the very gate it is watching. Reports `cancelled` as well as `failure`: a run cancelled before it reaches a runner (the 2026-07-24 726 incident) executes zero steps and is exactly the kind of silent breakage this workflow exists to surface.  It does NOT alert on a declined or expired approval gate. Those also surface as run-level `failure`, so the run conclusion alone cannot tell \"the job broke\" from \"a human said no\"; the job list can, and `actions: read` already allows reading it. See the discriminator in the step below.",
+      "description": "Watches every scheduled hub workflow (726 drift audit, 734 janitor, 738 smoke drift, Google 502 analytics + 504 GTM backups, and the other cron-driven monitors \u2014 the authoritative list is WATCHED_WORKFLOWS below). For each one it upserts ONE rolling alert issue PER WATCHED WORKFLOW, and closes that issue on the next success of that same workflow. The marker is keyed by workflow name precisely so a green run of one watched workflow can never close another's alert \u2014 with a dozen workflows watched, a shared marker would let a weekly job's success silently clear a daily job's outage.  POLL, NOT `workflow_run` (#843). This workflow used to trigger on the `workflow_run` completed event. That event has NEVER fired in this repository \u2014 `?event=workflow_run` returns 0 runs all time, while sibling repos show hundreds \u2014 so both this alerter and the Google one (732, now retired into this file) were `active` and had produced exactly zero runs. The alerting layer was dead for six days and nothing could tell us, because a `workflow_run` watcher cannot be tested on demand. The poll can: `workflow_dispatch` below is REQUIRED, not a convenience \u2014 it is what makes this alerter provable.  BEHAVIOUR CHANGE, deliberate: the event saw *every* run; the poll sees only the LATEST completed default-branch run per workflow, so a failure that self-heals between polls is missed. That is an acceptable \u2014 arguably better \u2014 fit, because the rolling issue answers \"is this workflow currently broken?\", which is exactly what latest-run state models. Do not add cursor/state tracking to chase the transient case; it would trade away the simplicity that makes this verifiable.  Consequence worth knowing: the poll model only makes sense for SCHEDULED workflows. For a dispatch-only workflow the \"latest run\" is whatever a human last ran by hand \u2014 a stale red would alert forever and a stale green would mean nothing. `test_watched_workflows_are_actually_scheduled` enforces that, and it is why 501 (workflow_dispatch/workflow_call only) is excluded even though retired 732 watched it.  Ambient GITHUB_TOKEN only, no environment: \u2014 the alerter must never be blocked by the very gate it is watching. Reports `cancelled` as well as `failure`: a run cancelled before it reaches a runner (the 2026-07-24 726 incident) executes zero steps and is exactly the kind of silent breakage this workflow exists to surface.  It does NOT alert on a declined or expired approval gate. Those also surface as run-level `failure`, so the run conclusion alone cannot tell \"the job broke\" from \"a human said no\"; the job list can, and `actions: read` already allows reading it. See the discriminator in the step below.",
       "safetyLevel": "Writes (issues only)",
       "approvalEnv": "\u2014",
-      "guard": "one rolling issue per watched workflow (marker keyed by workflow name, so only that workflow's own green run closes it) for the scheduled non-Google hub workflows (726/734/738 + the other cron monitors); reports `cancelled`/`timed_out` as well as `failure`, default-branch runs only; does **not** alert on a declined/expired approval gate (no job `failure` + \u22651 job `cancelled` \u21d2 logged via `core.notice`, not an alert) \u2014 an unreadable job list still alerts; ambient GITHUB_TOKEN, no external API, ungated by design (must not be blocked by the gate it watches)",
+      "guard": "**polls** every scheduled hub workflow twice hourly (`schedule` + `workflow_dispatch`; the `workflow_run` event has never fired in this repo \u2014 #843) and upserts one rolling issue per watched workflow (marker keyed by workflow name, so only that workflow's own green run closes it); absorbs the retired 732 Google lane (502/504); reports `cancelled`/`timed_out` as well as `failure`, latest completed default-branch run only; does **not** alert on a declined/expired approval gate (no job `failure` + \u22651 job `cancelled` \u21d2 logged via `core.notice`, not an alert) \u2014 an unreadable job list still alerts, and a watched name matching no workflow fails the run loudly; ambient GITHUB_TOKEN, no external API, ungated by design (must not be blocked by the gate it watches)",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

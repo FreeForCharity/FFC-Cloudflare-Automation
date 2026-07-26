@@ -135,10 +135,26 @@ function Get-GoogleRows {
     <#
     Safely return a report response's rows as an array. The GA Data API omits the 'rows' field
     entirely when a property/date range has no data, so $response.rows throws under Set-StrictMode.
+
+    Two StrictMode hazards are handled here, and BOTH bit in production:
+
+    1. `.PSObject.Properties.Name -contains` throws on a response with NO properties at all
+       (a bare {}), because enumerating .Name across an empty PSMemberInfoCollection is an error
+       under StrictMode. The indexer returns $null instead and never enumerates.
+
+    2. `return @()` does NOT return an empty array. PowerShell unrolls it on the way out, so the
+       caller receives $null — and `$null.Count` then throws under StrictMode, at the call site,
+       naming a property the reader never wrote. `return ,@()` wraps it so the unroll yields the
+       empty array intact. This is why a property with genuinely zero sessions failed with
+       "The property 'Count' cannot be found on this object" instead of reporting zero.
   #>
     param([Parameter(Mandatory)]$Response)
-    if (($Response.PSObject.Properties.Name -contains 'rows') -and $Response.rows) { return @($Response.rows) }
-    return @()
+    # No $null check: [Parameter(Mandatory)] already rejects $null at binding time, and a null
+    # response IS a caller bug worth failing loudly on rather than quietly reporting "no rows".
+    $props = $Response.PSObject
+    if ($null -eq $props) { return , @() }
+    if (($null -ne $props.Properties['rows']) -and $Response.rows) { return , @($Response.rows) }
+    return , @()
 }
 
 function Get-GoogleDwdAccessToken {

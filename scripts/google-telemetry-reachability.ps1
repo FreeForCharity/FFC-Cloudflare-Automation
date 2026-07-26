@@ -383,7 +383,12 @@ function Get-Ga4Sessions {
     $resp = Invoke-GoogleApi -Uri "https://analyticsdata.googleapis.com/v1beta/${PropertyName}:runReport" -AccessToken $tok -Method Post -Body $body
     # Get-GoogleRows exists because the Data API OMITS 'rows' entirely for an empty range —
     # reaching for $resp.rows directly throws under Set-StrictMode.
-    $rows = Get-GoogleRows -Response $resp
+    # Belt and braces: Get-GoogleRows now returns a real empty array (see its docstring), but a
+    # caller that trusts a helper's return shape is one refactor away from $null.Count throwing
+    # again — which is how a site with zero sessions came back as a probe FAILURE rather than as
+    # zero, and an unmeasured site is treated very differently from a quiet one in a rollout
+    # ordered by traffic.
+    $rows = @(Get-GoogleRows -Response $resp | Where-Object { $null -ne $_ })
     $sessions = 0; $users = 0
     if ($rows.Count -gt 0) {
         $sessions = [int]$rows[0].metricValues[0].value

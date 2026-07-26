@@ -133,7 +133,22 @@ function Invoke-Probe {
         return @{ ok = $true; value = (& $Action) }
     }
     catch {
+        # Include the exception TYPE and the failing script line. A bare message like "The property
+        # 'Name' cannot be found on this object" is not locatable in a script with several property
+        # probes, and guessing at it wasted a full diagnose-fix-redeploy cycle.
         $msg = $_.Exception.Message
+        $type = $_.Exception.GetType().Name
+        $line = if ($_.InvocationInfo) { $_.InvocationInfo.ScriptLineNumber } else { '?' }
+        # .Line is empty or absent for errors raised outside a script line (engine-level
+        # failures, some remoting contexts). Calling .Trim() on $null there would throw
+        # INSIDE the handler and replace the real failure with a diagnostic-code error —
+        # the worst possible trade, since this block exists to explain the original.
+        $stmt = if ($_.InvocationInfo -and $_.InvocationInfo.Line) { ([string]$_.InvocationInfo.Line).Trim() } else { '' }
+        # ${line} braces are REQUIRED, not stylistic. "$line:" makes PowerShell read
+        # "line:" as a scope/drive qualifier (like $env:PATH), and the whole FILE fails
+        # to parse — the script never runs at all. A diagnostic that stops the program
+        # from starting is worse than no diagnostic.
+        $msg = "$msg [$type at line ${line}: $stmt]"
         $script:Errors.Add("${Label}: $msg")
         # Flatten CR/LF before emitting a workflow command: a multi-line exception message would
         # otherwise terminate the ::warning:: line and let the remainder be parsed as further
@@ -144,6 +159,35 @@ function Invoke-Probe {
         Write-Host "::warning::$Label failed — $safe"
         return @{ ok = $false; value = $null; error = $msg }
     }
+}
+
+function Test-HasProperty {
+    <#
+    Null-safe property presence check.
+
+    Google's list endpoints return an empty body — deserialized as $null — for a parent with no
+    children, and an empty JSON object {} for some others. Every enumeration here can be handed
+    either.
+
+    Uses the INDEXER, not `.Properties.Name -contains`. That distinction is the whole function:
+    google-api-common.ps1 sets `Set-StrictMode -Version Latest`, which this script inherits by
+    dot-sourcing it. Under StrictMode, member enumeration of `.Name` across an EMPTY
+    PSMemberInfoCollection throws "The property 'Name' cannot be found on this object" — so the
+    guard written to make property access safe was itself the thing that threw, and only for the
+    empty case it existed to handle.
+
+    That is not hypothetical. The GA4 Admin API returns {} for a property with no data streams,
+    and the first such property aborted the entire GA4 inventory — which is why fleet traffic
+    ranking reported nothing for weeks while GTM and Search Console reported fine.
+
+    The indexer returns $null for a missing name and never enumerates, so it is safe under
+    StrictMode in both directions (verified for {}, {"x":1}, $null and arrays).
+  #>
+    param($Object, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $Object) { return $false }
+    $props = $Object.PSObject
+    if ($null -eq $props) { return $false }
+    return ($null -ne $props.Properties[$Name])
 }
 
 function Invoke-GooglePagedApi {
@@ -178,10 +222,10 @@ function Invoke-GooglePagedApi {
         # Clear the token BEFORE breaking: leaving it set from the previous page would make the
         # post-loop cap check fire and report truncation on what is actually a clean finish.
         if ($null -eq $resp) { $token = $null; break }
-        if ($resp.PSObject.Properties.Name -contains $CollectionName -and $resp.$CollectionName) {
+        if ((Test-HasProperty -Object $resp -Name $CollectionName) -and $resp.$CollectionName) {
             $items += @($resp.$CollectionName)
         }
-        $token = if ($resp.PSObject.Properties.Name -contains 'nextPageToken') { $resp.nextPageToken } else { $null }
+        $token = if (Test-HasProperty -Object $resp -Name 'nextPageToken') { $resp.nextPageToken } else { $null }
     } while ($token -and $page -lt $MaxPages)
 
     if ($token) {
@@ -236,7 +280,7 @@ function Get-GtmInventory {
             # Object[]), but the inline form reads as if it might nest, and container->domain
             # matching plus shared-container detection both depend on this being flat.
             $domainList = @()
-            if (($c.PSObject.Properties.Name -contains 'domainName') -and $c.domainName) {
+            if ((Test-HasProperty -Object $c -Name 'domainName') -and $c.domainName) {
                 $domainList = @($c.domainName)
             }
             # 503 creates each container with the DOMAIN as its name, and domainName is usually
@@ -283,9 +327,9 @@ function Get-Ga4Inventory {
         foreach ($p in $props) {
             $streams = Invoke-GooglePagedApi -Uri "https://analyticsadmin.googleapis.com/v1beta/$($p.name)/dataStreams" -AccessToken $tok -CollectionName 'dataStreams'
             $webStreams = @()
-            if ($streams.Count -gt 0) {
+            if ($null -ne $streams -and $streams.Count -gt 0) {
                 foreach ($s in $streams) {
-                    if ($s.PSObject.Properties.Name -contains 'webStreamData' -and $s.webStreamData) {
+                    if ((Test-HasProperty -Object $s -Name 'webStreamData') -and $s.webStreamData) {
                         $webStreams += [pscustomobject]@{
                             defaultUri    = $s.webStreamData.defaultUri
                             measurementId = $s.webStreamData.measurementId
@@ -307,9 +351,29 @@ function Get-Ga4Inventory {
 
 function Get-Ga4Sessions {
     param([string]$PropertyName, [int]$Days, [string]$Subject)
-    # DATA API, not Admin: plain SA token from ADC — the same call 501's smoke and 502's report
-    # make. It does NOT use DWD.
-    $tok = Get-GoogleAccessToken -Scope 'https://www.googleapis.com/auth/analytics.readonly'
+    # DWD first, ADC as fallback. 501's smoke and 502's report use the plain SA token, and
+    # copying that here made this report silently incomplete: the analytics SA is granted on
+    # ffcadmin's property and NOT on the others, so three of four domains returned 403 while
+    # ffcadmin returned 2689 sessions. A traffic ranking built on that would have sorted three
+    # measured sites below an unmeasured one — the exact failure this script's header says it
+    # exists to prevent.
+    #
+    # The Admin half of this same script already impersonates the admin via DWD, which is why
+    # enumeration sees every property. Using the same identity for the Data API makes reach
+    # uniform: the report covers what the admin can see, not whatever subset the SA happens to
+    # have been granted since. Per-property SA grants are a provisioning task that silently
+    # under-reports until someone notices — and nobody notices a number that is merely low.
+    #
+    # ADC is retained as a fallback so this still works anywhere DWD is unavailable (and so 501
+    # and 502 keep behaving as before). A failure of BOTH is reported, never swallowed.
+    $tok = $null
+    try {
+        $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/analytics.readonly' -CredentialsPath $script:WorkspaceKey
+    }
+    catch {
+        Write-Host "DWD token unavailable for the Data API ($($_.Exception.Message)); falling back to the service-account token."
+        $tok = Get-GoogleAccessToken -Scope 'https://www.googleapis.com/auth/analytics.readonly'
+    }
     # Pass the hashtable, NOT pre-serialized JSON: Invoke-GoogleApi runs ConvertTo-Json itself,
     # so handing it a string double-encodes the body and the API rejects it.
     $body = @{
@@ -335,7 +399,7 @@ function Get-GscInventory {
     $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/webmasters' -CredentialsPath $script:WorkspaceKey
     $resp = Invoke-GoogleApi -Uri 'https://searchconsole.googleapis.com/webmasters/v3/sites' -AccessToken $tok
     # siteEntry is absent when the list is empty, and @($null).Count is 1 — guard both.
-    if (($resp.PSObject.Properties.Name -contains 'siteEntry') -and $resp.siteEntry) {
+    if ((Test-HasProperty -Object $resp -Name 'siteEntry') -and $resp.siteEntry) {
         return @($resp.siteEntry)
     }
     return @()

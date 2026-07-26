@@ -133,7 +133,14 @@ function Invoke-Probe {
         return @{ ok = $true; value = (& $Action) }
     }
     catch {
+        # Include the exception TYPE and the failing script line. A bare message like "The property
+        # 'Name' cannot be found on this object" is not locatable in a script with several property
+        # probes, and guessing at it wasted a full diagnose-fix-redeploy cycle.
         $msg = $_.Exception.Message
+        $type = $_.Exception.GetType().Name
+        $line = if ($_.InvocationInfo) { $_.InvocationInfo.ScriptLineNumber } else { '?' }
+        $stmt = if ($_.InvocationInfo) { ($_.InvocationInfo.Line).Trim() } else { '' }
+        $msg = "$msg [$type at line $line: $stmt]"
         $script:Errors.Add("${Label}: $msg")
         # Flatten CR/LF before emitting a workflow command: a multi-line exception message would
         # otherwise terminate the ::warning:: line and let the remainder be parsed as further
@@ -144,6 +151,22 @@ function Invoke-Probe {
         Write-Host "::warning::$Label failed — $safe"
         return @{ ok = $false; value = $null; error = $msg }
     }
+}
+
+function Test-HasProperty {
+    <#
+    Null-safe property presence check.
+
+    $x.PSObject.Properties.Name throws "The property 'Name' cannot be found on this object" when
+    $x is $null, and Google's list endpoints return an empty body — deserialized as $null — for a
+    parent with no children. Guarding each call site individually kept missing one, so the guard
+    lives here instead and every call site routes through it.
+  #>
+    param($Object, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $Object) { return $false }
+    $props = $Object.PSObject
+    if ($null -eq $props) { return $false }
+    return ($props.Properties.Name -contains $Name)
 }
 
 function Invoke-GooglePagedApi {
@@ -178,10 +201,10 @@ function Invoke-GooglePagedApi {
         # Clear the token BEFORE breaking: leaving it set from the previous page would make the
         # post-loop cap check fire and report truncation on what is actually a clean finish.
         if ($null -eq $resp) { $token = $null; break }
-        if ($resp.PSObject.Properties.Name -contains $CollectionName -and $resp.$CollectionName) {
+        if ((Test-HasProperty -Object $resp -Name $CollectionName) -and $resp.$CollectionName) {
             $items += @($resp.$CollectionName)
         }
-        $token = if ($resp.PSObject.Properties.Name -contains 'nextPageToken') { $resp.nextPageToken } else { $null }
+        $token = if (Test-HasProperty -Object $resp -Name 'nextPageToken') { $resp.nextPageToken } else { $null }
     } while ($token -and $page -lt $MaxPages)
 
     if ($token) {
@@ -236,7 +259,7 @@ function Get-GtmInventory {
             # Object[]), but the inline form reads as if it might nest, and container->domain
             # matching plus shared-container detection both depend on this being flat.
             $domainList = @()
-            if (($c.PSObject.Properties.Name -contains 'domainName') -and $c.domainName) {
+            if ((Test-HasProperty -Object $c -Name 'domainName') -and $c.domainName) {
                 $domainList = @($c.domainName)
             }
             # 503 creates each container with the DOMAIN as its name, and domainName is usually
@@ -283,9 +306,9 @@ function Get-Ga4Inventory {
         foreach ($p in $props) {
             $streams = Invoke-GooglePagedApi -Uri "https://analyticsadmin.googleapis.com/v1beta/$($p.name)/dataStreams" -AccessToken $tok -CollectionName 'dataStreams'
             $webStreams = @()
-            if ($streams.Count -gt 0) {
+            if ($null -ne $streams -and $streams.Count -gt 0) {
                 foreach ($s in $streams) {
-                    if ($s.PSObject.Properties.Name -contains 'webStreamData' -and $s.webStreamData) {
+                    if ((Test-HasProperty -Object $s -Name 'webStreamData') -and $s.webStreamData) {
                         $webStreams += [pscustomobject]@{
                             defaultUri    = $s.webStreamData.defaultUri
                             measurementId = $s.webStreamData.measurementId
@@ -335,7 +358,7 @@ function Get-GscInventory {
     $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/webmasters' -CredentialsPath $script:WorkspaceKey
     $resp = Invoke-GoogleApi -Uri 'https://searchconsole.googleapis.com/webmasters/v3/sites' -AccessToken $tok
     # siteEntry is absent when the list is empty, and @($null).Count is 1 — guard both.
-    if (($resp.PSObject.Properties.Name -contains 'siteEntry') -and $resp.siteEntry) {
+    if ((Test-HasProperty -Object $resp -Name 'siteEntry') -and $resp.siteEntry) {
         return @($resp.siteEntry)
     }
     return @()

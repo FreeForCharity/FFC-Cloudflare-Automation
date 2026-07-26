@@ -201,9 +201,25 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module PSScriptAnalyzer
-          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity @('Error','Warning') | Where-Object { $_.ScriptPath -like '*.ps1' }
+          # 'ParseError' MUST be in this list. PSScriptAnalyzer reports a script that does not
+          # parse with Severity 'ParseError' — NOT 'Error' — so filtering to @('Error','Warning')
+          # discarded them silently. Invoke-Formatter (next step) also returns unparseable input
+          # unchanged and raises nothing. Both gates therefore went green on a .ps1 that PowerShell
+          # cannot even load, which is a strictly worse failure than any rule violation they do
+          # catch. Verified live: a file containing `"at line $line: x"` (an unbraced variable
+          # followed by ':', which PowerShell reads as a scope qualifier) passed the full CI suite.
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity @('ParseError','Error','Warning') | Where-Object { $_.ScriptPath -like '*.ps1' }
+          $parseErrors = $results | Where-Object { $_.Severity -eq 'ParseError' }
           $errors = $results | Where-Object { $_.Severity -eq 'Error' }
           $warnings = $results | Where-Object { $_.Severity -eq 'Warning' }
+
+          # Reported before the others: a parse error makes every other finding in that file
+          # unreliable, so it should be the first thing read in the log.
+          if ($parseErrors) {
+            Write-Host "PowerShell PARSE ERRORS (these scripts cannot run at all):" -ForegroundColor Red
+            $parseErrors | Select-Object ScriptPath,Line,Message | Format-Table -AutoSize -Wrap | Out-String | Write-Host
+            throw "PSScriptAnalyzer found $($parseErrors.Count) parse error(s)."
+          }
 
           if ($warnings) {
             Write-Host "PSScriptAnalyzer warnings:" -ForegroundColor Yellow

@@ -268,6 +268,30 @@ function analyze(entries, skipped) {
   };
 }
 
+/**
+ * What the caller is allowed to do to the rolling issue, given the run.
+ *
+ * The decision lives here rather than as a chain of `if`s in the workflow so it
+ * is unit-testable as a matrix — every guard 743 has needed so far was a case
+ * where a run knew LESS than the issue it was about to overwrite:
+ *
+ *   - `report-only`  a filtered run (`domains=` dispatch) saw a hand-picked
+ *                    subset, so its `hasGap` describes that subset and nothing
+ *                    else. One compliant domain must not close a fleet-wide
+ *                    issue, and a subset report must not replace a fleet body.
+ *   - `fail`         the run measured nothing at all; see `noSignal`.
+ *   - `close`        a full run measured the fleet and found no gap.
+ *   - `upsert`       a full run found a gap.
+ *
+ * Ordering matters: `report-only` and `fail` both outrank the `hasGap` verdict,
+ * because in each case that verdict is not about the thing the issue tracks.
+ */
+function decideIssueAction({ filtered, analysis }) {
+  if (filtered) return 'report-only';
+  if (!analysis || analysis.noSignal) return 'fail';
+  return analysis.hasGap ? 'upsert' : 'close';
+}
+
 function headerCell(r) {
   return REQUIRED_HEADERS.map((h) => (r.present.includes(h) ? '✅' : '❌')).join(' ');
 }
@@ -399,5 +423,6 @@ module.exports = {
   selectDomains,
   summarizeSkips,
   analyze,
+  decideIssueAction,
   renderBody,
 };

@@ -89,6 +89,15 @@ def select_domains(records: list) -> dict:
         pathlib.Path(path).unlink(missing_ok=True)
 
 
+def decide(filtered: bool, analysis: dict) -> str:
+    return _node(
+        "process.stdout.write(JSON.stringify(l.decideIssueAction("
+        "{filtered: JSON.parse(process.argv[1]), analysis: JSON.parse(process.argv[2])})));",
+        json.dumps(filtered),
+        json.dumps(analysis),
+    )
+
+
 def render(analysis: dict, ts: str) -> str:
     return _node(
         "process.stdout.write(JSON.stringify("
@@ -295,14 +304,61 @@ def test_an_empty_probe_set_is_not_flagged_as_no_signal():
     assert analyze([])["noSignal"] is False
 
 
+# --- what a run may do to the rolling issue --------------------------------
+
+
+def test_a_filtered_run_may_only_report():
+    """A `domains=` dispatch probes a hand-picked subset.
+
+    Its `hasGap` describes that subset, so closing the fleet-wide issue off one
+    compliant domain — or replacing a fleet body with a one-domain report —
+    would both be wrong. Same family as the no-signal case: the run knows less
+    than the issue it would overwrite.
+    """
+    clean = analyze([_probe("ffcadmin.org", dict(FULL_SET))])
+    dirty = analyze([_probe("bare.org", {"server": "GitHub.com"})])
+    assert decide(True, clean) == "report-only", clean
+    assert decide(True, dirty) == "report-only", dirty
+
+
+def test_a_full_run_closes_or_upserts_on_its_verdict():
+    clean = analyze([_probe("a.org", dict(FULL_SET))])
+    dirty = analyze([_probe("b.org", {"server": "GitHub.com"})])
+    assert decide(False, clean) == "close", clean
+    assert decide(False, dirty) == "upsert", dirty
+
+
+def test_no_signal_outranks_the_hasgap_verdict():
+    blackout = analyze([{"domain": "a.org", "error": "timeout", "status": 0}])
+    assert blackout["hasGap"] is False, blackout
+    assert decide(False, blackout) == "fail", blackout
+
+
+def test_filtered_outranks_no_signal():
+    # A filtered run that also measured nothing is still just a debug run; it
+    # must not fail the scheduled-workflow alerting on 740's behalf.
+    blackout = analyze([{"domain": "a.org", "error": "timeout", "status": 0}])
+    assert decide(True, blackout) == "report-only", blackout
+
+
+def test_workflow_obeys_the_library_decision():
+    from wf_extract import step_github_script
+
+    script = step_github_script(WF_FILE, "audit", "Classify")
+    assert "lib.decideIssueAction" in script, "the workflow must not re-derive the decision"
+    # Both non-acting outcomes must return before any issue write.
+    for guard in ["action === 'report-only'", "action === 'fail'"]:
+        assert guard in script, guard
+        assert script.index(guard) < script.index("issues.update"), guard
+
+
 def test_workflow_refuses_to_close_the_issue_on_a_no_signal_run():
     from wf_extract import step_github_script
 
     script = step_github_script(WF_FILE, "audit", "Classify")
-    assert "analysis.noSignal" in script, "743 must consult noSignal before acting on hasGap"
     assert "core.setFailed" in script, "a no-signal run must fail so 740 alerts on it"
-    # The guard has to come BEFORE the recovery/close path, or it guards nothing.
-    assert script.index("analysis.noSignal") < script.index("if (!analysis.hasGap)"), script
+    # The guard has to come BEFORE the close path, or it guards nothing.
+    assert script.index("action === 'fail'") < script.index("action === 'close'"), script
 
 
 def test_filtered_run_logs_the_skip_count_it_actually_persists():

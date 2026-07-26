@@ -77,7 +77,9 @@ jobs:
             const persistedSkips = filter.length ? [] : skipped;
             fs.writeFileSync("/tmp/targets.json", JSON.stringify(picked));
             fs.writeFileSync("/tmp/skipped.json", JSON.stringify(persistedSkips));
-            console.log("targets=" + picked.length + " skipped=" + persistedSkips.length);
+            fs.writeFileSync("/tmp/run-mode.json", JSON.stringify({ filtered: filter.length > 0 }));
+            console.log("targets=" + picked.length + " skipped=" + persistedSkips.length
+              + " filtered=" + (filter.length > 0));
           '
           count=$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync("/tmp/targets.json","utf8")).length))')
           if [ "$count" -eq 0 ]; then
@@ -151,11 +153,28 @@ jobs:
                 `unmeasured=${analysis.unmeasured.length} unproxied=${analysis.unproxied.length}`,
             );
 
-            const { owner, repo } = context.repo;
-            const open = await github.paginate(github.rest.issues.listForRepo, {
-              owner, repo, state: 'open', per_page: 100,
-            });
-            const existing = open.find((i) => i.body && i.body.includes(lib.MARKER));
+            // What this run is allowed to do to the fleet-wide issue. The rule
+            // is decided in the library (unit-tested as a matrix) because every
+            // guard here exists for the same reason: a run that knows LESS than
+            // the issue must never overwrite it.
+            const { filtered } = JSON.parse(fs.readFileSync('/tmp/run-mode.json', 'utf8'));
+            const action = lib.decideIssueAction({ filtered, analysis });
+
+            // A `domains=` dispatch probed a hand-picked subset, so its verdict
+            // is about that subset and not about the fleet. Closing the issue
+            // off one compliant domain, or replacing a fleet-wide body with a
+            // one-domain report, would both be wrong. Print and stop.
+            if (action === 'report-only') {
+              await core.summary
+                .addHeading('Filtered run — rolling issue untouched', 2)
+                .addRaw(lib.renderBody(analysis, new Date().toISOString()))
+                .write();
+              core.notice(
+                `Filtered run over ${analysis.probed} domain(s): report written to the job ` +
+                  `summary. The fleet-wide issue is only ever updated by a full run.`,
+              );
+              return;
+            }
 
             // A run that measured nothing is a broken run, not a clean fleet.
             // `hasGap` only asks whether a MEASURED domain fell short, so a total
@@ -165,7 +184,7 @@ jobs:
             // issue exactly as the last run that did measure something left it:
             // overwriting it with an empty report would destroy the last known
             // posture on the way past. 740 turns this failure into an alert.
-            if (analysis.noSignal) {
+            if (action === 'fail') {
               core.setFailed(
                 `Probed ${analysis.probed} domains and measured none of them ` +
                   `(${analysis.unmeasured.length} unmeasured). Refusing to touch the rolling ` +
@@ -174,7 +193,13 @@ jobs:
               return;
             }
 
-            if (!analysis.hasGap) {
+            const { owner, repo } = context.repo;
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            const existing = open.find((i) => i.body && i.body.includes(lib.MARKER));
+
+            if (action === 'close') {
               if (existing) {
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: existing.number,

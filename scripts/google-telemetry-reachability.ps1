@@ -139,8 +139,16 @@ function Invoke-Probe {
         $msg = $_.Exception.Message
         $type = $_.Exception.GetType().Name
         $line = if ($_.InvocationInfo) { $_.InvocationInfo.ScriptLineNumber } else { '?' }
-        $stmt = if ($_.InvocationInfo) { ($_.InvocationInfo.Line).Trim() } else { '' }
-        $msg = "$msg [$type at line $line: $stmt]"
+        # .Line is empty or absent for errors raised outside a script line (engine-level
+        # failures, some remoting contexts). Calling .Trim() on $null there would throw
+        # INSIDE the handler and replace the real failure with a diagnostic-code error —
+        # the worst possible trade, since this block exists to explain the original.
+        $stmt = if ($_.InvocationInfo -and $_.InvocationInfo.Line) { ([string]$_.InvocationInfo.Line).Trim() } else { '' }
+        # ${line} braces are REQUIRED, not stylistic. "$line:" makes PowerShell read
+        # "line:" as a scope/drive qualifier (like $env:PATH), and the whole FILE fails
+        # to parse — the script never runs at all. A diagnostic that stops the program
+        # from starting is worse than no diagnostic.
+        $msg = "$msg [$type at line ${line}: $stmt]"
         $script:Errors.Add("${Label}: $msg")
         # Flatten CR/LF before emitting a workflow command: a multi-line exception message would
         # otherwise terminate the ::warning:: line and let the remainder be parsed as further
@@ -157,10 +165,14 @@ function Test-HasProperty {
     <#
     Null-safe property presence check.
 
-    $x.PSObject.Properties.Name throws "The property 'Name' cannot be found on this object" when
-    $x is $null, and Google's list endpoints return an empty body — deserialized as $null — for a
-    parent with no children. Guarding each call site individually kept missing one, so the guard
-    lives here instead and every call site routes through it.
+    Google's list endpoints return an empty body — deserialized as $null — for a parent with no
+    children, so every enumeration here can be handed $null.
+
+    $null.PSObject.Properties.Name does NOT throw in a default session (measured); it returns
+    nothing, and -contains on it is false. But that is a property of the host, not a guarantee:
+    under Set-StrictMode -Version 3+ and in some hosts the same expression is an error. Rather
+    than depend on which, every call site routes through this one guard. Guarding call sites
+    individually was tried first and kept missing one.
   #>
     param($Object, [Parameter(Mandatory)][string]$Name)
     if ($null -eq $Object) { return $false }

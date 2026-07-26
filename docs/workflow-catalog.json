@@ -1952,6 +1952,23 @@
       "categoryCode": "GH"
     },
     {
+      "number": 743,
+      "title": "Website - Fleet Security Header Audit",
+      "apis": [],
+      "file": "743-fleet-security-header-audit.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Weekly audit of the security headers each FFC-delivered site ACTUALLY SERVES.  Why (#884): every FFC template ships `public/_headers`, and on this stack the file does nothing. `_headers` is a Cloudflare Pages / Netlify build feature; these sites are a GitHub Pages origin behind a Cloudflare proxy, and neither leg of that path reads it. FFC_Single_Page_Template ships the file with HSTS, X-Frame-Options, Referrer-Policy, Permissions-Policy, COOP and CORP \u2014 and its live response carries not one of them. The convergence plan was about to copy that file across the fleet and mark the gap closed, which would have produced green checklists and zero headers everywhere.  So this audit asserts on the RESPONSE and never on a file in a repo. Nothing in this repo measured a security header before it (#884). It reports only \u2014 remediation (Cloudflare Transform Rules per zone, and proxying the domains that bypass Cloudflare entirely) is a gated write and belongs elsewhere.  Read-only: plain HTTPS GETs to public websites, no credentials, no API, no environment gate. The only write is the rolling issue in THIS repo. Parsing/classification lives in scripts/fleet-security-header-lib.js (unit-tested under tests/workflow-logic/test_743_security_headers.py).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "weekly audit of the security headers each FFC-delivered site ACTUALLY SERVES (HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, CSP), measured by fetching the live response and never by looking for a file in a repo \u2014 `public/_headers` is inert on this stack, so a source-file check reports coverage that does not exist (#884); scope is every domain in an FFC Cloudflare zone (derived column, not the curated host category); report-only CSP does not count as a CSP and a `<meta>` tag satisfies nothing; rolling issue upsert/close on any gap; plain HTTPS GETs to public sites, no credentials, no external API, GITHUB_TOKEN for the issue only, ungated",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 801,
       "title": "Candid - Charity Check (EIN)",
       "apis": [

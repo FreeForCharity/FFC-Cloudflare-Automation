@@ -576,6 +576,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 305 | M365 (FFC Tenant) - Add Tenant Domain (INTERNAL ONLY) [M365] | `305-m365-add-tenant-domain.yml` | workflow_dispatch | Writes (dry-run default) | ✅ m365-prod |
 | 306 | Discover - Uncaptured Comms (FFC Tenant M365, PII masked) [M365] | `306-discover-uncaptured-comms.yml` | workflow_dispatch | Reads | ✅ m365-prod |
 | 320 | Azure - Key Vault Secret Inventory (audit) [MS] | `320-azure-kv-secret-inventory.yml` | schedule, workflow_dispatch | Reads | google-prod-read (reader identity) |
+| 321 | Azure - KV Credential Liveness + Expiry Monitor [MS+GH+CF] | `321-azure-kv-credential-liveness.yml` | schedule, workflow_dispatch | Reads | google-prod-read (reader identity) |
 ### 4xx — Zeffy
 
 | # | Workflow | File | Triggers | Safety | Approval env |

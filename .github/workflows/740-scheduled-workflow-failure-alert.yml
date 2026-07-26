@@ -68,6 +68,7 @@ jobs:
           # must match a workflow `name:` byte-exactly; a name that resolves to nothing fails the
           # run loudly (see the end of the script) rather than going quietly unwatched.
           WATCHED_WORKFLOWS: |
+            321. Azure - KV Credential Liveness + Expiry Monitor [MS+GH+CF]
             502. Google - Analytics Report (GA4 -> JSON) [GOOGLE]
             504. Google - GTM Container Backups (weekly export) [GOOGLE]
             506. Google - Fleet Telemetry Reachability [GOOGLE]

@@ -25,10 +25,12 @@ treatment it prescribes:
            like a passing one (#866). Every text read/write in these modules must
            therefore name its encoding.
 
-Both guards match the *thing* rather than one spelling of it: the shell scan skips
-comments (726 documents the anti-pattern in prose and must not self-trip), and the
-encoding scan walks parentheses instead of lines, so a call split across lines
-cannot slip through.
+Both guards match the *thing* rather than one spelling of it, which is ledger L17
+applied to itself: the shell scan covers `.yml` AND `.yaml` plus composite actions
+(Copilot caught the `.yaml` hole on #890 — a valid Actions extension the first
+draft skipped) and skips comment lines, since 726 documents the anti-pattern in
+prose and must not self-trip; the encoding scan walks parentheses instead of
+lines, so a call split across lines cannot slip through.
 """
 
 from __future__ import annotations
@@ -157,23 +159,43 @@ def test_prose_only_rows_say_why_prose_is_the_ceiling():
 # ---------------------------------------------------------------------------
 
 # Exact debt, not a ceiling. These are the sites 726's fix (#854) never reached;
-# both are tracked on #889 with the reason they were not fixed in the same PR
-# (neither workflow has extraction tests, and 120 is a gated bulk DNS cutover).
+# all six are tracked on #889 with the reason they were not fixed in the same PR
+# (none of those workflows has extraction tests, and 120 is a gated bulk DNS
+# cutover).
 # Fixing one REQUIRES editing this list, which is the point: the count is asserted
 # both ways so the debt cannot silently grow or silently rot.
+# Keyed by repo-relative path, not basename: every composite action is named
+# `action.yml`, so basenames collide across directories and two files' counts
+# would silently merge into one entry.
 KNOWN_ERROR_SWALLOWING = {
-    "120-bulk-cutover-to-github-pages.yml": 4,
-    "729-repo-add-collaborator.yml": 1,
-    "730-repo-audit-environment-gates.yml": 1,
+    ".github/workflows/120-bulk-cutover-to-github-pages.yml": 4,
+    ".github/workflows/729-repo-add-collaborator.yml": 1,
+    ".github/workflows/730-repo-audit-environment-gates.yml": 1,
 }
 
 _GH_CALL = re.compile(r"\bgh\s+[a-z]")
 _FALLBACK = re.compile(r"\|\|\s*(echo|true)\b")
 
 
+def _shell_carrying_files() -> list[pathlib.Path]:
+    """Every file in the tree that can carry an embedded `gh` invocation.
+
+    Both YAML extensions, because Actions accepts `.yaml` and nothing in this repo
+    forbids it — `check-workflow-references.py` already globs both, so a `.yml`-only
+    scan here would be the outlier. Composite actions are included for the same
+    reason: none holds a `gh` call today, and a scan that only looks where the
+    problem currently lives goes quiet exactly when it moves (ledger L17).
+    """
+    files: list[pathlib.Path] = []
+    for ext in ("yml", "yaml"):
+        files.extend(WORKFLOWS.glob(f"*.{ext}"))
+        files.extend((REPO_ROOT / ".github" / "actions").glob(f"*/action.{ext}"))
+    return sorted(files)
+
+
 def _error_swallowing_sites() -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
-    for path in sorted(WORKFLOWS.glob("*.yml")):
+    for path in _shell_carrying_files():
         for lineno, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(), start=1
         ):
@@ -187,7 +209,8 @@ def _error_swallowing_sites() -> dict[str, list[str]]:
                 and "2>/dev/null" in stripped
                 and _FALLBACK.search(stripped)
             ):
-                found.setdefault(path.name, []).append(f"{lineno}: {stripped}")
+                key = path.relative_to(REPO_ROOT).as_posix()
+                found.setdefault(key, []).append(f"{lineno}: {stripped}")
     return found
 
 

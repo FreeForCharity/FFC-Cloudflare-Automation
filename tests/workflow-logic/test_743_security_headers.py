@@ -230,6 +230,30 @@ def test_direct_github_origin_is_not_proxied():
     assert r2["proxied"] is True, r2
 
 
+def test_a_non_numeric_status_can_never_read_as_reachable():
+    """The sites-list `Status` column is a string like "Active".
+
+    A target object is spread into the probe entry, where `status` means the
+    HTTP code, so a registration status was one reordered line away from being
+    read as a response code — and "Active" is truthy and not >= 400, so a looser
+    guard let it through and rendered an UNPROBED domain as a real "serving
+    nothing" finding. The field is gone; this asserts the guard that makes its
+    return harmless.
+    """
+    r = classify({"domain": "x.org", "status": "Active", "headers": {}})
+    assert r["reachable"] is False, r
+    assert r["status"] == 0, r
+    assert r["missing"] == [], r
+
+
+def test_select_domains_does_not_emit_an_http_status_lookalike():
+    # Nothing in a target may be named `status`: it collides with the HTTP
+    # status on the entry these objects are spread into.
+    out = select_domains([{"Domain": "a.org", "Is In Cloudflare": "Yes", "Status": "Active",
+                           "Host Category": "GitHub Pages"}])
+    assert out["targets"] == [{"domain": "a.org", "hostCategory": "GitHub Pages"}], out
+
+
 def test_error_and_http_failure_are_unmeasured_not_bare():
     err = classify({"domain": "a.org", "error": "Could not resolve host", "status": 0})
     assert err["reachable"] is False, err
@@ -463,6 +487,19 @@ def test_workflow_is_ungated_and_read_only():
     assert perms.get("issues") == "write", perms
     for name, job in wf["jobs"].items():
         assert "environment" not in job, f"{name} must not use an environment gate"
+
+
+def test_a_filtered_dispatch_cannot_cancel_the_weekly_run():
+    """A debug spot check must not cost the fleet its weekly measurement.
+
+    One shared group plus cancel-in-progress meant a `domains=` dispatch
+    cancelled an in-flight scheduled run — and because filtered runs do not
+    touch the rolling issue, that week's data was simply gone.
+    """
+    wf = load_workflow(WF_FILE)
+    group = wf["concurrency"]["group"]
+    assert "inputs.domains" in group, f"filtered runs need their own group: {group}"
+    assert wf["concurrency"]["cancel-in-progress"] is False, wf["concurrency"]
 
 
 def test_workflow_has_schedule_and_dispatch():

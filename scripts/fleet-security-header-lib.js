@@ -130,7 +130,7 @@ function classify(entry) {
     domain,
     hostCategory: entry.hostCategory || null,
     reachable: false,
-    status: entry.status || 0,
+    status: typeof entry.status === 'number' ? entry.status : 0,
     servedBy: null,
     proxied: false,
     present: [],
@@ -139,7 +139,12 @@ function classify(entry) {
     metaCsp: Boolean(entry.metaCsp),
     error: entry.error || null,
   };
-  if (entry.error || !entry.status || entry.status >= 400 || entry.status === 0) {
+  // Only a NUMERIC 2xx/3xx counts as a measurement. The `typeof` check is the
+  // load-bearing half: a non-numeric status (a stray string from another
+  // column, say) is truthy and never `>= 400`, so a looser guard would let it
+  // through and render an unprobed domain as a real "serving nothing" finding.
+  // Anything that is not a number means the probe did not produce a status.
+  if (entry.error || typeof entry.status !== 'number' || entry.status <= 0 || entry.status >= 400) {
     base.missing = [];
     return base;
   }
@@ -197,7 +202,15 @@ function selectDomains(records) {
       skipped.push({ domain, reason: 'zone not in FFC Cloudflare' });
     } else {
       // hostCategory rides along for the report only — it never decides scope.
-      targets.push({ domain, hostCategory, status });
+      //
+      // The sites-list `Status` column is deliberately NOT carried here. A
+      // target object is spread into the probe entry, where `status` means the
+      // HTTP status code, so carrying a registration status under the same name
+      // put "Active" one reordered line away from being read as a response
+      // code — and "Active" is truthy and not >= 400, so it would have sailed
+      // through the reachability guard and rendered an unprobed domain as a
+      // real "serving nothing" finding.
+      targets.push({ domain, hostCategory });
     }
   }
   targets.sort((a, b) => a.domain.localeCompare(b.domain));

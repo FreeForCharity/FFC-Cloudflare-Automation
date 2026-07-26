@@ -35,9 +35,18 @@ on:
         required: false
         default: ''
 
+# Filtered debug dispatches get their OWN concurrency group, and nothing here
+# cancels anything. Sharing one group meant a one-off `domains=` spot check
+# could cancel an in-flight weekly run — and since a filtered run deliberately
+# does not touch the rolling issue, that week's fleet measurement would simply
+# be lost, with the cancellation surfacing through 740 as an alert nobody could
+# act on. `cancel-in-progress: false` because the thing this workflow produces
+# IS the measurement: a superseded run is not redundant work to discard, it is
+# the data. Two full runs queue instead of racing.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group:
+    ${{ github.workflow }}-${{ github.ref }}-${{ inputs.domains != '' && 'filtered' || 'full' }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

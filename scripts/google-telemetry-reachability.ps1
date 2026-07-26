@@ -351,9 +351,29 @@ function Get-Ga4Inventory {
 
 function Get-Ga4Sessions {
     param([string]$PropertyName, [int]$Days, [string]$Subject)
-    # DATA API, not Admin: plain SA token from ADC — the same call 501's smoke and 502's report
-    # make. It does NOT use DWD.
-    $tok = Get-GoogleAccessToken -Scope 'https://www.googleapis.com/auth/analytics.readonly'
+    # DWD first, ADC as fallback. 501's smoke and 502's report use the plain SA token, and
+    # copying that here made this report silently incomplete: the analytics SA is granted on
+    # ffcadmin's property and NOT on the others, so three of four domains returned 403 while
+    # ffcadmin returned 2689 sessions. A traffic ranking built on that would have sorted three
+    # measured sites below an unmeasured one — the exact failure this script's header says it
+    # exists to prevent.
+    #
+    # The Admin half of this same script already impersonates the admin via DWD, which is why
+    # enumeration sees every property. Using the same identity for the Data API makes reach
+    # uniform: the report covers what the admin can see, not whatever subset the SA happens to
+    # have been granted since. Per-property SA grants are a provisioning task that silently
+    # under-reports until someone notices — and nobody notices a number that is merely low.
+    #
+    # ADC is retained as a fallback so this still works anywhere DWD is unavailable (and so 501
+    # and 502 keep behaving as before). A failure of BOTH is reported, never swallowed.
+    $tok = $null
+    try {
+        $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/analytics.readonly' -CredentialsPath $script:WorkspaceKey
+    }
+    catch {
+        Write-Host "DWD token unavailable for the Data API ($($_.Exception.Message)); falling back to the service-account token."
+        $tok = Get-GoogleAccessToken -Scope 'https://www.googleapis.com/auth/analytics.readonly'
+    }
     # Pass the hashtable, NOT pre-serialized JSON: Invoke-GoogleApi runs ConvertTo-Json itself,
     # so handing it a string double-encodes the body and the API rejects it.
     $body = @{

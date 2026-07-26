@@ -22,6 +22,22 @@ Two directions, both load-bearing:
     rot into a stale overstatement of the work. (The #844 tracking comment listed
     13 workflows still on `CBM_TOKEN` when the real number was already 0; prose
     does not survive contact with a moving tree, which is why this is a test.)
+
+If you extend this file, know the failure mode it keeps having. Every defect
+found in review here was the same one wearing a different hat: the guard
+recognizing ONE SPELLING of a thing that has several, and passing green over
+the rest.
+
+    secrets.NAME              but not  secrets['NAME']
+    az keyvault secret show   but not  ... secret download / list
+    an inline `run:` step     but not  a `*-from-kv` composite action
+    the file as a whole       but not  the job, whose `permissions:` block
+                                       REPLACES the workflow-level one
+
+Each was invisible: the tests passed, and passed for the wrong reason. So when
+adding a check, match the *thing* — any Key Vault call, any secret reference —
+and derive the set from the tree rather than listing it. A guard that pins a
+form goes quiet the first time someone writes the other one.
 """
 
 from __future__ import annotations

@@ -41,7 +41,7 @@ const ISSUE_LABELS = ['security', 'priority: high', 'agentic-os'];
 //
 // `Status` is deliberately not a gate either — it describes registration and
 // billing, not what the zone serves. A domain that does not answer lands in the
-// `unreachable` bucket, which is reported and never counted as compliant.
+// `unmeasured` bucket, which is reported and never counted as compliant.
 const CLOUDFLARE_FIELDS = ['Is In Cloudflare', 'In Cloudflare'];
 
 /**
@@ -219,18 +219,23 @@ function summarizeSkips(skipped) {
 /**
  * Bucket every probed domain.
  *
- * `unreachable` is its own bucket and never counts as a gap: a domain that did
- * not answer has not been measured, and not-measured must never render as
- * measured-and-bad. That is the same error #884 caught one level up.
+ * `unmeasured` is its own bucket and never counts as a gap: a domain with no
+ * usable 2xx/3xx response has not been measured, and not-measured must never
+ * render as measured-and-bad. That is the same error #884 caught one level up.
+ *
+ * Named `unmeasured`, not `unreachable`, because the bucket holds two different
+ * things: a connection that failed outright, and a server that answered with an
+ * error status. A 503 is emphatically reachable — calling it unreachable sends
+ * triage looking for a DNS or TLS fault that is not there.
  */
 function analyze(entries, skipped) {
   const results = (entries || []).map(classify);
   const compliant = [];
   const partial = [];
   const bare = [];
-  const unreachable = [];
+  const unmeasured = [];
   for (const r of results) {
-    if (!r.reachable) unreachable.push(r);
+    if (!r.reachable) unmeasured.push(r);
     else if (!r.missing.length) compliant.push(r);
     else if (r.present.length) partial.push(r);
     else bare.push(r);
@@ -241,7 +246,7 @@ function analyze(entries, skipped) {
     compliant,
     partial,
     bare,
-    unreachable,
+    unmeasured,
     unproxied,
     measured,
     probed: results.length,
@@ -275,7 +280,7 @@ function renderBody(analysis, timestamp) {
   lines.push(
     `- Domains probed: ${analysis.probed} ` +
       `(compliant ${analysis.compliant.length}, partial ${analysis.partial.length}, ` +
-      `none ${analysis.bare.length}, unreachable ${analysis.unreachable.length})`,
+      `none ${analysis.bare.length}, unmeasured ${analysis.unmeasured.length})`,
   );
   lines.push(`- Header order in the columns below: ${REQUIRED_HEADERS.join(', ')}`);
   lines.push('');
@@ -334,12 +339,15 @@ function renderBody(analysis, timestamp) {
     lines.push('');
   }
 
-  if (analysis.unreachable.length) {
-    lines.push(`## Unreachable (${analysis.unreachable.length})`);
+  if (analysis.unmeasured.length) {
+    lines.push(`## Unmeasured (${analysis.unmeasured.length})`);
     lines.push('');
-    lines.push('_Did not answer; header posture NOT asserted either way._');
+    lines.push(
+      '_No usable 2xx/3xx response — either the request failed or the server answered with ' +
+        'an error status. Header posture NOT asserted either way._',
+    );
     lines.push('');
-    for (const r of analysis.unreachable) {
+    for (const r of analysis.unmeasured) {
       lines.push(`- ${r.domain}: ${r.error || `HTTP ${r.status || 'no response'}`}`);
     }
     lines.push('');
@@ -349,8 +357,9 @@ function renderBody(analysis, timestamp) {
     lines.push(`## Out of scope (${analysis.skippedCount})`);
     lines.push('');
     lines.push(
-      '_Not delivered by FFC (legacy third-party host, parked, or a dead domain). Header ' +
-        "posture there is the current host's; these are migration targets under #702._",
+      "_Outside this audit's scope, for the reason given. A domain whose zone FFC does not " +
+        'control cannot be fixed by a zone-level Transform Rule; a domain that has left FFC is ' +
+        'no longer ours to serve. Neither is a statement about its header posture._',
     );
     lines.push('');
     lines.push('| Reason | Domains |');

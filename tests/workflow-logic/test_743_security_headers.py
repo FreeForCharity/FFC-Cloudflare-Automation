@@ -10,7 +10,7 @@ which does not exist — `public/_headers` is present in every template and iner
 on this stack. So the tests concentrate on the ways a probe could be read as
 protected when it is not: a report-only CSP, a `<meta>` tag standing in for real
 headers, an egress proxy's CONNECT block read as the site's response, and an
-unreachable domain scored as compliant.
+domain with no usable response scored as compliant.
 """
 
 from __future__ import annotations
@@ -221,7 +221,7 @@ def test_direct_github_origin_is_not_proxied():
     assert r2["proxied"] is True, r2
 
 
-def test_error_and_http_failure_are_unreachable_not_bare():
+def test_error_and_http_failure_are_unmeasured_not_bare():
     err = classify({"domain": "a.org", "error": "Could not resolve host", "status": 0})
     assert err["reachable"] is False, err
     assert err["missing"] == [], err
@@ -232,13 +232,37 @@ def test_error_and_http_failure_are_unreachable_not_bare():
 # --- bucketing -------------------------------------------------------------
 
 
-def test_unreachable_domain_never_counts_as_a_gap():
+def test_unmeasured_domain_never_counts_as_a_gap():
     # Not-measured must not render as measured-and-bad; that is the same error
     # #884 caught one level up.
     r = analyze([{"domain": "a.org", "error": "timeout", "status": 0}])
     assert r["hasGap"] is False, r
-    assert len(r["unreachable"]) == 1, r
+    assert len(r["unmeasured"]) == 1, r
     assert r["measured"] == 0, r
+
+
+def test_an_error_status_is_reported_as_answered_not_as_no_response():
+    """A 503 is emphatically reachable.
+
+    Both failure modes land in the same bucket, so the report must not describe
+    the bucket as "did not answer" — that sends triage hunting a DNS or TLS
+    fault that is not there.
+    """
+    r = analyze([_probe("busy.org", {"server": "cloudflare"}, status=503)])
+    body = render(r, "2026-07-26T00:00:00.000Z")
+    assert "## Unmeasured (1)" in body, body
+    assert "did not answer" not in body.lower(), body
+    assert "HTTP 503" in body, body
+
+
+def test_out_of_scope_note_does_not_call_every_skip_a_migration_target():
+    # `left FFC` is not in the #702 migration backlog, and a skip is not a
+    # statement about the domain's header posture either way.
+    r = analyze([_probe("a.org", dict(FULL_SET))],
+                [{"domain": "gone.org", "reason": "left FFC"}])
+    body = render(r, "2026-07-26T00:00:00.000Z")
+    assert "## Out of scope (1)" in body, body
+    assert "#702" not in body, body
 
 
 def test_partial_and_bare_both_raise_the_issue():

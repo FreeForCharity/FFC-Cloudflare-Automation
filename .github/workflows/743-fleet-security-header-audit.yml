@@ -105,7 +105,7 @@ jobs:
             # redirects apex -> www is judged on what the browser ends up
             # honoring, not on the 301.
             if ! curl -sSIL --max-time 20 "https://${domain}/" > "$head_file" 2>"$err_file"; then
-              echo "  ${domain} -> unreachable: $(head -c 200 "$err_file" | tr '\n' ' ')"
+              echo "  ${domain} -> no response: $(head -c 200 "$err_file" | tr '\n' ' ')"
               continue
             fi
             # Body is fetched only to record whether a CSP <meta> tag is present.
@@ -147,7 +147,7 @@ jobs:
             core.notice(
               `probed=${analysis.probed} compliant=${analysis.compliant.length} ` +
                 `partial=${analysis.partial.length} none=${analysis.bare.length} ` +
-                `unreachable=${analysis.unreachable.length} unproxied=${analysis.unproxied.length}`,
+                `unmeasured=${analysis.unmeasured.length} unproxied=${analysis.unproxied.length}`,
             );
 
             const { owner, repo } = context.repo;

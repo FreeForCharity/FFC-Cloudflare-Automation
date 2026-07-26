@@ -30,8 +30,10 @@ import pathlib
 import re
 import sys
 
+import yaml
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import WORKFLOWS
+from wf_extract import REPO_ROOT, WORKFLOWS
 
 # Only matches inside a ${{ ... }} expression, so prose ("…/environments/…/secrets")
 # and PowerShell property access ($secrets.Count) are not mistaken for references.
@@ -163,24 +165,87 @@ def test_migrated_credentials_are_not_reintroduced():
     )
 
 
+def _key_vault_composite_actions() -> set[str]:
+    """Local composite actions that fetch from Key Vault, derived from the tree.
+
+    Derived rather than listed: a new `*-from-kv` action is covered the day it
+    lands, with nothing to remember. Matching on the `az keyvault secret show`
+    call rather than the `-from-kv` name means a differently-named action is
+    caught too, and a renamed one does not silently drop out of coverage.
+    """
+    actions = set()
+    for action_file in sorted((REPO_ROOT / ".github" / "actions").glob("*/action.yml")):
+        if "az keyvault secret show" in action_file.read_text(encoding="utf-8"):
+            actions.add(action_file.parent.name)
+    return actions
+
+
+def _job_fetches_from_key_vault(job: dict, kv_actions: set[str]) -> bool:
+    # Inline `az keyvault secret show`, anywhere in the job (run:, with:, env:).
+    if "az keyvault secret show" in yaml.safe_dump(job, default_flow_style=False):
+        return True
+    for step in job.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        uses = str(step.get("uses", ""))
+        if uses.startswith("./.github/actions/") and uses.split("/")[-1] in kv_actions:
+            return True
+    return False
+
+
+def _effective_permissions(workflow: dict, job: dict) -> object:
+    """Job-level `permissions:` replaces the workflow-level block outright."""
+    return job["permissions"] if "permissions" in job else workflow.get("permissions")
+
+
 def test_key_vault_consumers_can_perform_the_oidc_exchange():
     """A KV fetch without `id-token: write` fails at run time, not review time.
 
-    The whole migration rests on the OIDC exchange. A job that calls
-    `az keyvault secret show` without the permission gets an opaque azure/login
-    failure — and the tempting fix, under time pressure, is to paste the
-    credential back into a GitHub secret, which is what this file exists to stop.
+    The whole migration rests on the OIDC exchange. A job that fetches from Key
+    Vault without the permission gets an opaque azure/login failure — and the
+    tempting fix, under time pressure, is to paste the credential back into a
+    GitHub secret, which is what this file exists to stop.
+
+    Two things this deliberately does NOT do, both found by Copilot's review of
+    the first version (which checked `az keyvault secret show` as a substring of
+    the whole file):
+
+    * It does not require the literal command in the workflow. **60 of the 61
+      Key Vault consumers reach it through a `*-from-kv` composite action** and
+      never contain the string — so the substring form inspected one workflow
+      while reporting on all of them. A guard that reads green while checking
+      nothing is the exact failure class this repo keeps writing tests against.
+    * It does not check the file as a whole. `permissions:` is per job, and a
+      job-level block *replaces* the workflow-level one rather than merging, so
+      a two-job workflow where only the non-KV job declares `id-token: write`
+      passes a file-wide substring test and fails at run time.
     """
+    kv_actions = _key_vault_composite_actions()
+    assert kv_actions, (
+        "no composite action under .github/actions/ fetches from Key Vault — "
+        "either the layout moved or this guard has stopped finding its targets"
+    )
+
     violations = []
     for path in sorted(WORKFLOWS.glob("*.yml")):
-        text = path.read_text(encoding="utf-8")
-        if "az keyvault secret show" not in text:
-            continue
-        if "id-token: write" not in text:
-            violations.append(
-                f"{path.name} fetches from Key Vault but never declares "
-                "`id-token: write` — the OIDC exchange cannot succeed."
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for job_id, job in (workflow.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            if not _job_fetches_from_key_vault(job, kv_actions):
+                continue
+            permissions = _effective_permissions(workflow, job)
+            granted = (
+                isinstance(permissions, dict) and permissions.get("id-token") == "write"
             )
+            if not granted:
+                violations.append(
+                    f"{path.name}: job '{job_id}' fetches from Key Vault but its "
+                    "effective permissions do not include `id-token: write` "
+                    f"(got: {permissions!r}) — the OIDC exchange cannot succeed. "
+                    "Note that a job-level permissions block REPLACES the "
+                    "workflow-level one."
+                )
     assert not violations, "\n".join(violations)
 
 

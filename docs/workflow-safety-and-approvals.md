@@ -28,10 +28,11 @@ A live change generally has to get past several of these, not just one:
    environments that require a reviewer are: **`cloudflare-prod-write`**, **`whmcs-prod`**,
    **`github-prod`**, **`m365-prod`**, and **`wpmudev-prod`** (plus a bare **`cloudflare-prod`**
    that no workflow currently uses). The environments with **no** reviewer — runs proceed without
-   pausing — are **`cloudflare-prod-read`**, **`whmcs-prod-read`**, **`github-prod-read`**, and
-   **`zeffy-prod`**. Because `whmcs-prod`, `m365-prod`, and `wpmudev-prod` are gated at the
-   environment level, they gate **every** job that uses them. Read-only WHMCS workflows moved to the
-   ungated **`whmcs-prod-read`** (reader OIDC identity, `read-all-*` KV secrets) in 2026-07, and the
+   pausing — are **`cloudflare-prod-read`**, **`whmcs-prod-read`**, **`google-prod-read`**,
+   **`github-prod-read`**, and **`zeffy-prod`**. Because `whmcs-prod`, `github-prod`, `m365-prod`,
+   and `wpmudev-prod` are gated at the environment level, they gate **every** job that uses them — a
+   read-only job on one of them still waits. Read-only WHMCS workflows moved to the ungated
+   **`whmcs-prod-read`** (reader OIDC identity, `read-all-*` KV secrets) in 2026-07, and the
    scheduled GitHub reads 502/726/735 moved to **`github-prod-read`** on the same pattern (#834);
    the M365 list/preflight reads 301–303 and the WPMUDEV export 601 still wait on their gated envs.
    A **scheduled** Reads workflow must never sit on a gated environment: it fires with nobody

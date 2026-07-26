@@ -168,17 +168,29 @@ function Test-HasProperty {
     Google's list endpoints return an empty body — deserialized as $null — for a parent with no
     children, so every enumeration here can be handed $null.
 
-    $null.PSObject.Properties.Name does NOT throw in a default session (measured); it returns
-    nothing, and -contains on it is false. But that is a property of the host, not a guarantee:
-    under Set-StrictMode -Version 3+ and in some hosts the same expression is an error. Rather
-    than depend on which, every call site routes through this one guard. Guarding call sites
-    individually was tried first and kept missing one.
+    Google's list endpoints return an empty body — deserialized as $null — for a parent with no
+    children, and an empty JSON object {} for some others. Every enumeration here can be handed
+    either.
+
+    Uses the INDEXER, not `.Properties.Name -contains`. That distinction is the whole function:
+    google-api-common.ps1 sets `Set-StrictMode -Version Latest`, which this script inherits by
+    dot-sourcing it. Under StrictMode, member enumeration of `.Name` across an EMPTY
+    PSMemberInfoCollection throws "The property 'Name' cannot be found on this object" — so the
+    guard written to make property access safe was itself the thing that threw, and only for the
+    empty case it existed to handle.
+
+    That is not hypothetical. The GA4 Admin API returns {} for a property with no data streams,
+    and the first such property aborted the entire GA4 inventory — which is why fleet traffic
+    ranking reported nothing for weeks while GTM and Search Console reported fine.
+
+    The indexer returns $null for a missing name and never enumerates, so it is safe under
+    StrictMode in both directions (verified for {}, {"x":1}, $null and arrays).
   #>
     param($Object, [Parameter(Mandatory)][string]$Name)
     if ($null -eq $Object) { return $false }
     $props = $Object.PSObject
     if ($null -eq $props) { return $false }
-    return ($props.Properties.Name -contains $Name)
+    return ($null -ne $props.Properties[$Name])
 }
 
 function Invoke-GooglePagedApi {

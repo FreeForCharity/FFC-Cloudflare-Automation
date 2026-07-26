@@ -134,10 +134,11 @@ create/archive/collaborator credential) for work classified `Reads`.
    **`read-all-cbm-ffc-copilot-mcp-github-pat`** (726 — this is the one carrying Organization
    Administration read, which GitHub requires even to _read_ org rulesets with a fine-grained PAT).
 3. Create the `github-prod-read` GitHub environment with **no** required reviewers, and add the two
-   OIDC identifier secrets to it — the same pair `google-prod-read` and `whmcs-prod-read` carry:
-   **`READ_ALL_FFC_AZURE_KV_CLIENT_ID`** (client id of `ffc-admin-kv-reader`) and
-   **`READ_ALL_FFC_AZURE_TENANT_ID`**. Without these `azure/login` receives an empty `client-id` and
-   the job fails before any Key Vault call.
+   OIDC identifier **environment secrets** to it: **`READ_ALL_FFC_AZURE_KV_CLIENT_ID`** (client id
+   of `ffc-admin-kv-reader`) and **`READ_ALL_FFC_AZURE_TENANT_ID`**. Copy the pattern from
+   **`google-prod-read`** or **`candid-prod-read`** — **not** from `whmcs-prod-read`, which uses
+   repo Variables and therefore has nothing per-environment to copy (see the table above). Without
+   these `azure/login` receives an empty `client-id` and the job fails before any Key Vault call.
 4. Re-run **730** to refresh the gate audit, and confirm the environment reports no protection rules
    — an ungated lane that quietly acquired a reviewer is the failure #834 exists to prevent.
 

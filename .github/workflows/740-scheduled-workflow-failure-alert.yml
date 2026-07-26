@@ -187,7 +187,7 @@ jobs:
               }
               // A DECLINED OR EXPIRED APPROVAL GATE IS NOT AN OUTAGE. Watched workflow
               // 703 sits behind the `github-prod` gate (726 and 735 moved to the ungated
-              // `github-prod-read` lane in #837, so 703 is the only gated one left), and a
+              // `github-prod-read` lane in #834, so 703 is the only gated one left), and a
               // gate Clarke declines surfaces as run-level `failure` while its jobs read
               // `cancelled`/`skipped` — identical to a real fault at the run level, which
               // is all the run object carries. Without this check the dominant output of

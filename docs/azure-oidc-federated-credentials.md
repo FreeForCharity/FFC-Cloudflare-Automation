@@ -98,15 +98,31 @@ The ungated read environment for WHMCS reads needs, one-time:
 ## `github-prod-read` — the ungated GitHub read lane (#834)
 
 > **Status: NOT YET PROVISIONED.** Workflows 502 (`deliver`), 726 and 735 target this environment on
-> the #834 branch. Until the three steps below are done they will fail at `azure/login` with
-> `AADSTS700213` (no federated credential for this subject) — loudly, which is correct, but it means
-> **provision first, then merge**.
+> the #834 branch. Until the four steps below are done they will fail at `azure/login` — loudly,
+> which is correct, but it means **provision first, then merge**. Note the two failure modes are
+> different and easy to confuse: a missing **federated credential** gives `AADSTS700213`, while
+> missing **OIDC identifiers** (step 3) gives an empty `client-id` and never reaches Entra at all.
 
-Same shape as `whmcs-prod-read`, and deliberately **no secret of its own**: the credential stays in
-Key Vault and the lane authenticates as the _reader_ identity over OIDC. This is the point of the
-lane — the three workflows previously ran on the gated `github-prod` as the **writer** identity
-(`wr-all-cbm-github-pat`, the 100+-repo create/archive/collaborator credential) for work classified
-`Reads`.
+Deliberately **no credential of its own**: the PAT stays in Key Vault and the lane authenticates as
+the _reader_ identity over OIDC. That is the point of the lane — the three workflows previously ran
+on the gated `github-prod` as the **writer** identity (`wr-all-cbm-github-pat`, the 100+-repo
+create/archive/collaborator credential) for work classified `Reads`.
+
+> **"No credential of its own" means no copy of a PAT — not nothing to configure.** The environment
+> must still carry the two **OIDC identifiers** (step 3), and this is where a reasonable inference
+> from `whmcs-prod-read` goes wrong: the two lanes reference the identifiers differently, and only
+> one of them needs per-environment setup.
+>
+> | Lane                                                                           | Reference                      | What that requires                                          |
+> | ------------------------------------------------------------------------------ | ------------------------------ | ----------------------------------------------------------- |
+> | `whmcs-prod-read` (201, 202, …)                                                | `vars.READ_ALL_FFC_AZURE_*`    | **repo Variables** — set once, resolve in every environment |
+> | `google-prod-read`, `candid-prod-read`, **`github-prod-read`** (502, 726, 735) | `secrets.READ_ALL_FFC_AZURE_*` | **environment secrets** — added to _each_ environment       |
+>
+> A repo Variable does not satisfy a `secrets.*` reference. An environment missing the pair yields
+> an empty `client-id` and fails before Key Vault is ever reached. Precedent for the `secrets.*`
+> form: the "Environment secrets" section of
+> [github-actions-environments-and-secrets.md](github-actions-environments-and-secrets.md), and step
+> 3 of the `candid-prod-read` setup in [candid-api-and-mcp.md](candid-api-and-mcp.md).
 
 1. **Federated credential on kv-reader:**
    ```bash
@@ -117,8 +133,13 @@ lane — the three workflows previously ran on the gated `github-prod` as the **
 2. Confirm the kv-reader identity can `Get` **`read-all-cbm-github-pat`** (502, 735) and
    **`read-all-cbm-ffc-copilot-mcp-github-pat`** (726 — this is the one carrying Organization
    Administration read, which GitHub requires even to _read_ org rulesets with a fine-grained PAT).
-3. Create the `github-prod-read` GitHub environment with **no** required reviewers, then re-run
-   **730** to refresh the gate audit.
+3. Create the `github-prod-read` GitHub environment with **no** required reviewers, and add the two
+   OIDC identifier secrets to it — the same pair `google-prod-read` and `whmcs-prod-read` carry:
+   **`READ_ALL_FFC_AZURE_KV_CLIENT_ID`** (client id of `ffc-admin-kv-reader`) and
+   **`READ_ALL_FFC_AZURE_TENANT_ID`**. Without these `azure/login` receives an empty `client-id` and
+   the job fails before any Key Vault call.
+4. Re-run **730** to refresh the gate audit, and confirm the environment reports no protection rules
+   — an ungated lane that quietly acquired a reviewer is the failure #834 exists to prevent.
 
 **Blocked on a remint, not just on provisioning.** 321's liveness monitor reports
 `read-all-cbm-github-pat` returning **401** (#877, confirmed real in #878 after two false positives

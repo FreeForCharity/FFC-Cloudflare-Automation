@@ -22,7 +22,7 @@ never a duplicate issue, never a missed close — plus the ones specific to 740:
     `failure` alone would still have missed half the incident.
   - **A declined approval gate is not an outage.** Watched workflow 703 is
     gated on `github-prod` (726 and 735 moved to the ungated `github-prod-read`
-    lane in #837, leaving 703 the only gated one), and a declined or expired gate
+    lane in #834, leaving 703 the only gated one), and a declined or expired gate
     surfaces as run-level `failure` with its jobs `cancelled` — identical to a
     real fault in the run object. #834 measured 8 of 21 scheduled runs on that
     lane ending that way, so without the job-level discriminator the alerter's
@@ -461,7 +461,7 @@ def test_recovery_closes_a_stamped_alert():
 # declines produces run-level `failure` while its jobs read `cancelled`/`skipped`,
 # which is indistinguishable at the run level from a genuine fault. Watched workflow
 # 703 is gated on `github-prod` — 726 and 735 moved to the ungated `github-prod-read`
-# lane in #837 — and #834 measured 8 of 21 scheduled runs on the gated lane failing
+# lane in #834 — and #834 measured 8 of 21 scheduled runs on the gated lane failing
 # or cancelling at the gate — so without this
 # carve-out the alerter's dominant output would be "a human said no".
 

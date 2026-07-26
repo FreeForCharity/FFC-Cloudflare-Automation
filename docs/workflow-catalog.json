@@ -1208,6 +1208,29 @@
       "categoryCode": "MS"
     },
     {
+      "number": 321,
+      "title": "Azure - KV Credential Liveness + Expiry Monitor",
+      "apis": [
+        "MS",
+        "GH",
+        "CF"
+      ],
+      "file": "321-azure-kv-credential-liveness.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-read"
+      ],
+      "description": "Daily health check of the credentials in kv-ffc-admin-prod-cbm that back the automation lanes, on two independent signals:  1. EXPIRY/ENABLED for every secret, read from `az keyvault secret list`, which returns attributes WITHOUT values. So write-scope credentials are monitored without this workflow ever reading their material. 2. LIVENESS for the credentials that can verify themselves read-only \u2014 the two GitHub PATs (GET /user) and the two Cloudflare tokens (/user/tokens/verify). Probes cover `read-all-*` secrets ONLY; the library refuses a `wr-all-*` target before anything is read.  Why (#848): both `read-all-*` GitHub PATs in the vault were dead with 401 Bad credentials, for an unknown period, and nothing noticed because nothing consumed them yet. Expiry alone would not have caught it \u2014 a REVOKED token still carries a future expiry date \u2014 which is why liveness is a separate signal here and why a probe that cannot be evaluated is reported as unverifiable rather than passing (the #726/#855 lesson: never render an unreadable response as a green check).  Secret values are never printed, never written to the artifact, and never sent anywhere except the probe host, which is re-validated against an allowlist in this file immediately before the request. Findings are upserted into one rolling issue that auto-closes when the vault is clean.  Runs on google-prod-read because it federates the ffc-admin-kv-reader identity and has no approval gate (a monitor must not wait on a human, and a dedicated azure-prod-read environment would need a new federated credential). Under the per-secret RBAC migration (#848 part A) that identity needs `getSecret` on the four probed `read-all-*` secrets, plus list on the vault; without those grants the run reports UNVERIFIABLE, not green.  Classification + report logic lives in scripts/kv-credential-liveness-lib.js (unit-tested under tests/workflow-logic/).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "google-prod-read (reader identity)",
+      "guard": "daily two-signal credential health check: expiry/enabled for every vault secret from the attribute listing (values never read), plus a read-only liveness probe (`GET /user`, Cloudflare `/user/tokens/verify`) for the four `read-all-*` credentials that can verify themselves \u2014 the library refuses a `wr-all-*` probe target before anything is read, so write-scope material is expiry-monitored without ever being fetched; a probe that cannot be evaluated is reported as unverifiable, never as passing; values never printed or persisted; rolling issue upsert/close; ungated by design (a credential monitor must not wait on a human)",
+      "category": "Microsoft (M365 / Azure / Graph)",
+      "categoryCode": "MS"
+    },
+    {
       "number": 401,
       "title": "Zeffy - Campaigns Export",
       "apis": [
@@ -1734,24 +1757,6 @@
       "categoryCode": "GH"
     },
     {
-      "number": 732,
-      "title": "Repo - Google Workflow Failure Alert (rolling issue)",
-      "apis": [
-        "GH"
-      ],
-      "file": "732-google-workflow-failure-alert.yml",
-      "triggers": [
-        "workflow_run"
-      ],
-      "environments": [],
-      "description": "Watches the Google reporting workflows (501 smoke, 502 analytics report). On failure it upserts ONE rolling alert issue; on the next success it closes that issue. Prevents a silently-stale nightly report. GitHub API only (issues), no environment gate.",
-      "safetyLevel": "Writes (issues only)",
-      "approvalEnv": "\u2014",
-      "guard": "rolling issue upsert/close; no external API",
-      "category": "GitHub (Website + Repo)",
-      "categoryCode": "GH"
-    },
-    {
       "number": 733,
       "title": "Repo - Credential Rotation Reminders (quarterly)",
       "apis": [
@@ -1896,13 +1901,14 @@
       ],
       "file": "740-scheduled-workflow-failure-alert.yml",
       "triggers": [
-        "workflow_run"
+        "schedule",
+        "workflow_dispatch"
       ],
       "environments": [],
-      "description": "Watches the scheduled NON-Google hub workflows (726 drift audit, 734 janitor, 738 smoke drift, and the other cron-driven monitors). On a bad conclusion it upserts ONE rolling alert issue PER WATCHED WORKFLOW, and closes that issue on the next success of that same workflow. The marker is keyed by workflow name precisely so a green run of one watched workflow can never close another's alert \u2014 with ten workflows watched, a shared marker would let a weekly job's success silently clear a daily job's outage. 732 does the same job for the Google reporting workflows (501/502) \u2014 the two alerters are kept apart by distinct markers and labels so neither ever closes the other's issue.  Ambient GITHUB_TOKEN only, no environment: \u2014 the alerter must never be blocked by the very gate it is watching. Reports `cancelled` as well as `failure`: a run cancelled before it reaches a runner (the 2026-07-24 726 incident) executes zero steps and is exactly the kind of silent breakage this workflow exists to surface.  It does NOT alert on a declined or expired approval gate. Those also surface as run-level `failure`, so the run conclusion alone cannot tell \"the job broke\" from \"a human said no\"; the job list can, and `actions: read` already allows reading it. See the discriminator in the step below.",
+      "description": "Watches every scheduled hub workflow (726 drift audit, 734 janitor, 738 smoke drift, Google 502 analytics + 504 GTM backups, and the other cron-driven monitors \u2014 the authoritative list is WATCHED_WORKFLOWS below). For each one it upserts ONE rolling alert issue PER WATCHED WORKFLOW, and closes that issue on the next success of that same workflow. The marker is keyed by workflow name precisely so a green run of one watched workflow can never close another's alert \u2014 with a dozen workflows watched, a shared marker would let a weekly job's success silently clear a daily job's outage.  POLL, NOT `workflow_run` (#843). This workflow used to trigger on the `workflow_run` completed event. That event has NEVER fired in this repository \u2014 `?event=workflow_run` returns 0 runs all time, while sibling repos show hundreds \u2014 so both this alerter and the Google one (732, now retired into this file) were `active` and had produced exactly zero runs. The alerting layer was dead for six days and nothing could tell us, because a `workflow_run` watcher cannot be tested on demand. The poll can: `workflow_dispatch` below is REQUIRED, not a convenience \u2014 it is what makes this alerter provable.  BEHAVIOUR CHANGE, deliberate: the event saw *every* run; the poll sees only the LATEST completed default-branch run per workflow, so a failure that self-heals between polls is missed. That is an acceptable \u2014 arguably better \u2014 fit, because the rolling issue answers \"is this workflow currently broken?\", which is exactly what latest-run state models. Do not add cursor/state tracking to chase the transient case; it would trade away the simplicity that makes this verifiable.  Consequence worth knowing: the poll model only makes sense for SCHEDULED workflows. For a dispatch-only workflow the \"latest run\" is whatever a human last ran by hand \u2014 a stale red would alert forever and a stale green would mean nothing. `test_watched_workflows_are_actually_scheduled` enforces that, and it is why 501 (workflow_dispatch/workflow_call only) is excluded even though retired 732 watched it.  Ambient GITHUB_TOKEN only, no environment: \u2014 the alerter must never be blocked by the very gate it is watching. Reports `cancelled` as well as `failure`: a run cancelled before it reaches a runner (the 2026-07-24 726 incident) executes zero steps and is exactly the kind of silent breakage this workflow exists to surface.  It does NOT alert on a declined or expired approval gate. Those also surface as run-level `failure`, so the run conclusion alone cannot tell \"the job broke\" from \"a human said no\"; the job list can, and `actions: read` already allows reading it. See the discriminator in the step below.",
       "safetyLevel": "Writes (issues only)",
       "approvalEnv": "\u2014",
-      "guard": "one rolling issue per watched workflow (marker keyed by workflow name, so only that workflow's own green run closes it) for the scheduled non-Google hub workflows (726/734/738 + the other cron monitors); reports `cancelled`/`timed_out` as well as `failure`, default-branch runs only; does **not** alert on a declined/expired approval gate (no job `failure` + \u22651 job `cancelled` \u21d2 logged via `core.notice`, not an alert) \u2014 an unreadable job list still alerts; ambient GITHUB_TOKEN, no external API, ungated by design (must not be blocked by the gate it watches)",
+      "guard": "**polls** every scheduled hub workflow twice hourly (`schedule` + `workflow_dispatch`; the `workflow_run` event has never fired in this repo \u2014 #843) and upserts one rolling issue per watched workflow (marker keyed by workflow name, so only that workflow's own green run closes it); absorbs the retired 732 Google lane (502/504); reports `cancelled`/`timed_out` as well as `failure`, latest completed default-branch run only; does **not** alert on a declined/expired approval gate (no job `failure` + \u22651 job `cancelled` \u21d2 logged via `core.notice`, not an alert) \u2014 an unreadable job list still alerts, and a watched name matching no workflow fails the run loudly; ambient GITHUB_TOKEN, no external API, ungated by design (must not be blocked by the gate it watches)",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

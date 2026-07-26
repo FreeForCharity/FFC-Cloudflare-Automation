@@ -152,7 +152,7 @@ jobs:
 
   # Daily rolling tracking issue (issue #813 item 2). Only on the scheduled run — a manual dispatch
   # stays a pure review (artifact + step summary) and never mutates the tracking issue. Mirrors the
-  # 732 rolling-issue state machine: upsert ONE issue while Fraud orders remain, auto-close it on the
+  # 740 rolling-issue state machine: upsert ONE issue while Fraud orders remain, auto-close it on the
   # first scheduled run that finds the queue clear. Ambient GITHUB_TOKEN, hub-only (no gate).
   tracking_issue:
     needs: fraud_review

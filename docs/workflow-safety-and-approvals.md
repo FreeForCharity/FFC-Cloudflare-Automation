@@ -38,8 +38,12 @@ A live change generally has to get past several of these, not just one:
    secrets) in 2026-07, and the scheduled GitHub reads 502/726/735 moved to **`github-prod-read`**
    on the same pattern (#834); the M365 list/preflight reads 301–303 and the WPMUDEV export 601
    still wait on their gated envs. A **scheduled** Reads workflow must never sit on a gated
-   environment: it fires with nobody watching, waits, and is cancelled by its own successor, so the
-   audit silently never runs. The dispatch-only gated reads are a different case — the operator who
+   environment: it fires with nobody watching and waits. What happens next depends on its
+   concurrency config — with `cancel-in-progress: true` the next scheduled run cancels its waiting
+   predecessor; otherwise it sits at `status: waiting` until janitor **734** reaps it at 7 days, or
+   a human approves it days late. Both outcomes appear in #834's evidence (3 `failure` + 2
+   `cancelled` for 726 alone), and either way the schedule is not kept — do not assume the
+   cancellation path. The dispatch-only gated reads are a different case — the operator who
    dispatched is present to approve — and `tests/workflow-logic/test_gated_env_hygiene.py` enforces
    exactly that split. Re-run workflow 730 after any change in _Settings → Environments_ to refresh
    this list. To preview or clear **several** runs waiting at a gate at once, an environment

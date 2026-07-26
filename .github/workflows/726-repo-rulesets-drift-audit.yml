@@ -12,8 +12,11 @@ on:
 # documented standard, reported as issues.
 #
 # Runs on the UNGATED github-prod-read lane (#834). A scheduled Reads workflow
-# behind a required-reviewers gate fires at 13:00 UTC with nobody watching, waits,
-# and is cancelled by its own successor the next day — the audit never ran.
+# behind a required-reviewers gate fires at 13:00 UTC with nobody watching and
+# waits — then either its next scheduled run cancels it (when cancel-in-progress
+# is true, as this workflow had) or it sits until janitor 734 reaps it at 7 days.
+# Both happened here: 3 `failure` + 2 `cancelled` across 8 scheduled runs. Either
+# way the audit did not run on its schedule.
 # The PAT comes from Key Vault (`read-all-cbm-ffc-copilot-mcp-github-pat`) over
 # OIDC on the READER identity, never a GitHub secret — see #844. That token (not
 # `read-all-cbm-github-pat`) is the one with Organization Administration read,

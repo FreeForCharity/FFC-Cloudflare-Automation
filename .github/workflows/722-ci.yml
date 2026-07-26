@@ -201,9 +201,25 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module PSScriptAnalyzer
-          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity @('Error','Warning') | Where-Object { $_.ScriptPath -like '*.ps1' }
+          # 'ParseError' MUST be in this list. PSScriptAnalyzer reports a script that does not
+          # parse with Severity 'ParseError' — NOT 'Error' — so filtering to @('Error','Warning')
+          # discarded them silently. Invoke-Formatter (next step) also returns unparseable input
+          # unchanged and raises nothing. Both gates therefore went green on a .ps1 that PowerShell
+          # cannot even load, which is a strictly worse failure than any rule violation they do
+          # catch. Verified live: a file containing `"at line $line: x"` (an unbraced variable
+          # followed by ':', which PowerShell reads as a scope qualifier) passed the full CI suite.
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity @('ParseError','Error','Warning') | Where-Object { $_.ScriptPath -like '*.ps1' }
+          $parseErrors = $results | Where-Object { $_.Severity -eq 'ParseError' }
           $errors = $results | Where-Object { $_.Severity -eq 'Error' }
           $warnings = $results | Where-Object { $_.Severity -eq 'Warning' }
+
+          # Reported before the others: a parse error makes every other finding in that file
+          # unreliable, so it should be the first thing read in the log.
+          if ($parseErrors) {
+            Write-Host "PowerShell PARSE ERRORS (these scripts cannot run at all):" -ForegroundColor Red
+            $parseErrors | Select-Object ScriptPath,Line,Message | Format-Table -AutoSize -Wrap | Out-String | Write-Host
+            throw "PSScriptAnalyzer found $($parseErrors.Count) parse error(s)."
+          }
 
           if ($warnings) {
             Write-Host "PSScriptAnalyzer warnings:" -ForegroundColor Yellow
@@ -248,15 +264,37 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path scripts/tests)) {
-            Write-Host 'No scripts/tests directory; skipping Pester.'
+
+          # BOTH directories. This ran only scripts/tests, so every .Tests.ps1 under tests/
+          # was dead weight — present, passing locally, and never executed by any required
+          # check. tests/whmcs-application-triage.Tests.ps1 had been in that state for its
+          # whole life. A test that does not run is worse than a missing one: it reads as
+          # coverage in review, so nobody writes the test that would have run.
+          #
+          # Discovered by directory rather than listed, so a new location cannot be silently
+          # dropped again — and the count is printed so "0 files" is visible instead of
+          # looking like a clean pass.
+          $testDirs = @('scripts/tests', 'tests') | Where-Object { Test-Path $_ }
+
+          if (-not $testDirs) {
+            Write-Host 'No Pester test directories found; skipping.'
             exit 0
           }
+
+          $testFiles = Get-ChildItem -Path $testDirs -Filter *.Tests.ps1 -Recurse -File
+          Write-Host "Pester directories: $($testDirs -join ', ')"
+          Write-Host "Pester files found: $($testFiles.Count)"
+          $testFiles | ForEach-Object { Write-Host "  - $($_.FullName)" }
+
+          if ($testFiles.Count -eq 0) {
+            throw 'Pester test directories exist but contain no *.Tests.ps1 files — refusing to report a pass on zero tests.'
+          }
+
           if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version.Major -ge 5 })) {
             Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
             Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck
           }
-          Invoke-Pester -Path scripts/tests -Output Detailed -CI
+          Invoke-Pester -Path $testDirs -Output Detailed -CI
 
       - name: Check for sensitive files
         run: |

@@ -119,7 +119,7 @@ function assertNoWriteScopeProbes(probes) {
  * Classify one probe result.
  *
  * @param {{secret:string, kind:string, httpStatus?:number|null,
- *          cloudflareStatus?:string|null, error?:string|null}} result
+ *          bodySuccess?:boolean|null, error?:string|null}} result
  * @returns {'LIVE'|'DEAD'|'UNVERIFIED'}
  *
  * DEAD       — the provider rejected the credential (see `deadStatuses`), or a

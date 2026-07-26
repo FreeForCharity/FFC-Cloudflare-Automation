@@ -166,9 +166,6 @@ function Test-HasProperty {
     Null-safe property presence check.
 
     Google's list endpoints return an empty body — deserialized as $null — for a parent with no
-    children, so every enumeration here can be handed $null.
-
-    Google's list endpoints return an empty body — deserialized as $null — for a parent with no
     children, and an empty JSON object {} for some others. Every enumeration here can be handed
     either.
 

@@ -42,8 +42,8 @@ def run_finalize(env_overrides: dict) -> dict:
     with tempfile.TemporaryDirectory() as td:
         script_file = pathlib.Path(td) / "script.js"
         context_file = pathlib.Path(td) / "context.json"
-        script_file.write_text(script)
-        context_file.write_text(json.dumps(context))
+        script_file.write_text(script, encoding="utf-8")
+        context_file.write_text(json.dumps(context), encoding="utf-8")
         env = {
             "TEST_SCRIPT_FILE": str(script_file),
             "TEST_CONTEXT_FILE": str(context_file),

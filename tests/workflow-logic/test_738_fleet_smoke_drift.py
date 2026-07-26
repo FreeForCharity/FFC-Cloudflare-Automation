@@ -152,7 +152,7 @@ def test_render_missing_and_unreadable_sections():
 # --- workflow wiring shape -------------------------------------------------
 
 def test_workflow_requires_lib_and_is_read_only():
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert "scripts/fleet-smoke-drift-lib.js" in raw, "workflow must require the shipped lib"
     wf = load_workflow(WF_FILE)
     perms = wf["permissions"]

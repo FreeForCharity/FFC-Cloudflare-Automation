@@ -50,7 +50,7 @@ def run_preflight(env_overrides: dict) -> tuple[subprocess.CompletedProcess, str
             text=True,
             timeout=60,
         )
-        return proc, summary.read_text(), outputs.read_text()
+        return proc, summary.read_text(encoding="utf-8"), outputs.read_text(encoding="utf-8")
 
 
 def test_missing_repo_fails_fast_with_create_guidance():

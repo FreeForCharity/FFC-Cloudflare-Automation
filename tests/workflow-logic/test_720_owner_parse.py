@@ -38,7 +38,7 @@ def run_grant_step(repo_name: str) -> tuple[str, str]:
         )
         if proc.returncode != 0:
             raise AssertionError(f"grant step exited {proc.returncode}: {proc.stderr}")
-        return proc.stdout, gh_log.read_text()
+        return proc.stdout, gh_log.read_text(encoding="utf-8")
 
 
 def test_bare_repo_name_grants_all_five_teams():

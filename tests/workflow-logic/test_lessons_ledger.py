@@ -353,6 +353,10 @@ def test_the_variable_hashing_scan_leaves_correct_code_alone():
         # regex swallowed it until `(?!\()` was added (#895 round 5).
         'echo "$((n + 1))" | sha256sum',
         'printf "%s" "$((count * 2))" | md5sum',
+        # …and in the here-string form too. Carving arithmetic out of one form and
+        # not the other is how a single rule ends up disagreeing with itself: this
+        # sample was flagged while the pipe form above passed (#895 round 6).
+        'sha256sum <<<"$((n + 1))"',
         "(cd d && cat f) | sha256sum",
         "{ cat f; } | sha256sum",
         'echo "$name: ok" | tee -a "$log"',

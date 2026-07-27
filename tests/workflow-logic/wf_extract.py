@@ -53,16 +53,24 @@ _SUBST_SPAN = re.compile(r"\$\((?!\()(?:[^()]|\([^()]*\))*\)")
 _SUBST_MARK = "\x00SUBST\x00"  # cannot occur in a workflow line
 _MARK_RE = re.escape(_SUBST_MARK)
 
+# What "a shell value" is, defined ONCE and shared by both forms below. Spelling
+# it separately in each was how the arithmetic carve-out ended up applying to the
+# pipe form and not the here-string form — `echo "$((n + 1))" | sha256sum` passed
+# while `sha256sum <<<"$((n + 1))"` was flagged, from one rule with two spellings
+# of its central term (#895 round 6, reported openly and in the low-confidence
+# block). Requiring a variable NAME (or the substitution marker) rather than a
+# bare `$` is what excludes `$((…))` here, matching what masking does for the
+# pipe form.
+_VALUE = r"(?:\$\{?\w+\}?|" + _MARK_RE + r")"
+
 # One pattern, not two: a variable and a masked substitution are the same defect
 # in the same position.
-_HASHED_EMIT = re.compile(
-    r"(?:echo|printf)\b[^|]*(?:\$\{?\w+\}?|" + _MARK_RE + r")\"?\s*\|\s*" + _HASH_CMDS
-)
+_HASHED_EMIT = re.compile(r"(?:echo|printf)\b[^|]*" + _VALUE + r"\"?\s*\|\s*" + _HASH_CMDS)
 # `sha256sum <<<"$out"` is the same defect wearing a here-string: the stripped
 # value gets exactly one newline appended, which is right only by coincidence.
-# Accepts the marker too, or masking would hide `sha256sum <<<"$(cmd)"`.
+# The marker is in _VALUE, so masking cannot hide `sha256sum <<<"$(cmd)"`.
 _HASHED_HERESTRING = re.compile(
-    _HASH_CMDS + r"\s*(?:-\S+\s+)*<<<\s*\"?(?:\$|" + _MARK_RE + r")"
+    _HASH_CMDS + r"\s*(?:-\S+\s+)*<<<\s*\"?" + _VALUE
 )
 HASH_PATTERNS = (_HASHED_EMIT, _HASHED_HERESTRING)
 

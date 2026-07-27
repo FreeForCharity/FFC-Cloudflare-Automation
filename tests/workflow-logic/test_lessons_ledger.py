@@ -158,20 +158,19 @@ def test_prose_only_rows_say_why_prose_is_the_ceiling():
 # L02 — `gh` error bodies land on stdout, so `|| <default>` never yields <default>
 # ---------------------------------------------------------------------------
 
-# Exact debt, not a ceiling. These are the sites 726's fix (#854) never reached;
-# all six are tracked on #889 with the reason they were not fixed in the same PR
-# (none of those workflows has extraction tests, and 120 is a gated bulk DNS
-# cutover).
+# Exact debt, not a ceiling — and now EMPTY. The six sites 726's fix (#854) never
+# reached were converted in #889: 120's four (bind cert-state x2, smoke run list,
+# smoke run view) onto a `gh_get` helper, 729's role read-back and 730's
+# environment list onto `api_get`, each with an extraction test module
+# (test_120_cutover_gh_errors.py, test_729_add_collaborator.py,
+# test_730_environment_gate_audit.py).
 # Fixing one REQUIRES editing this list, which is the point: the count is asserted
-# both ways so the debt cannot silently grow or silently rot.
+# both ways so the debt cannot silently grow or silently rot. An empty dict now
+# means any NEW site fails CI on its first commit.
 # Keyed by repo-relative path, not basename: every composite action is named
 # `action.yml`, so basenames collide across directories and two files' counts
 # would silently merge into one entry.
-KNOWN_ERROR_SWALLOWING = {
-    ".github/workflows/120-bulk-cutover-to-github-pages.yml": 4,
-    ".github/workflows/729-repo-add-collaborator.yml": 1,
-    ".github/workflows/730-repo-audit-environment-gates.yml": 1,
-}
+KNOWN_ERROR_SWALLOWING: dict[str, int] = {}
 
 _GH_CALL = re.compile(r"\bgh\s+[a-z]")
 _FALLBACK = re.compile(r"\|\|\s*(echo|true)\b")
@@ -241,6 +240,9 @@ def test_no_new_gh_error_swallowing_sites():
 def test_the_known_sites_are_the_ones_the_ledger_and_889_describe():
     # Pins the shape rather than a count: if a "known" site is edited into some
     # other form, this stops asserting something that is no longer there.
+    # Vacuous while KNOWN_ERROR_SWALLOWING is empty (#889 closed the last six) —
+    # deliberately kept, because the debt list is the thing that may grow again,
+    # and the exact-count assertion above is what holds the empty case.
     found = _error_swallowing_sites()
     for name in KNOWN_ERROR_SWALLOWING:
         assert name in found, (

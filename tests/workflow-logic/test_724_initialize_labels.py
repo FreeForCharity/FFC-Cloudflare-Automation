@@ -62,14 +62,14 @@ def _run(labels, *, existing=None, getlabel_error=None, write_fail=None):
     env = {"PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin"}
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
-        (tdp / "script.js").write_text(script)
-        (tdp / "context.json").write_text(json.dumps(CTX))
-        (tdp / "labels.json").write_text(json.dumps(labels))
+        (tdp / "script.js").write_text(script, encoding="utf-8")
+        (tdp / "context.json").write_text(json.dumps(CTX), encoding="utf-8")
+        (tdp / "labels.json").write_text(json.dumps(labels), encoding="utf-8")
         env["TEST_SCRIPT_FILE"] = str(tdp / "script.js")
         env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
         env["TEST_LABELS_FILE"] = str(tdp / "labels.json")
         if existing is not None:
-            (tdp / "existing.json").write_text(json.dumps(existing))
+            (tdp / "existing.json").write_text(json.dumps(existing), encoding="utf-8")
             env["TEST_EXISTING_LABELS_FILE"] = str(tdp / "existing.json")
         if getlabel_error is not None:
             env["TEST_GETLABEL_ERROR"] = json.dumps(getlabel_error)

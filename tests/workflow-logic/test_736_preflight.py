@@ -87,7 +87,7 @@ def run_preflight(env_overrides: dict) -> tuple[subprocess.CompletedProcess, str
             text=True,
             timeout=60,
         )
-        return proc, summary.read_text(), gh_log.read_text()
+        return proc, summary.read_text(encoding="utf-8"), gh_log.read_text(encoding="utf-8")
 
 
 def test_dry_run_skips_all_checks():

@@ -138,7 +138,7 @@ def test_default_threshold_is_48h():
 # --- workflow wiring shape -------------------------------------------------
 
 def test_workflow_requires_lib_and_has_both_triggers():
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert "scripts/claim-sync-lib.js" in raw, "workflow must require the shipped lib"
     # yaml maps `on:` to the boolean True key; assert triggers via the parsed map.
     wf = load_workflow(WF_FILE)
@@ -157,7 +157,7 @@ def test_sweep_uses_ambient_token_hub_only():
     # CBM_TOKEN lives only in the gated github-prod environment, so it is empty
     # on schedule events — the sweep must run on the ambient GITHUB_TOKEN and
     # therefore can only mutate this repo (2026-07-20 first-fire failure).
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert "FFC-Cloudflare-Automation" in raw, raw
     assert "secrets.CBM_TOKEN" not in raw, (
         "sweep must not reference CBM_TOKEN: it is an environment secret in "

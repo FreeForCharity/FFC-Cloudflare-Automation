@@ -65,9 +65,9 @@ def _run(runs):
     }
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
-        (tdp / "script.js").write_text(script)
-        (tdp / "context.json").write_text(json.dumps(CTX))
-        (tdp / "runs.json").write_text(json.dumps(runs))
+        (tdp / "script.js").write_text(script, encoding="utf-8")
+        (tdp / "context.json").write_text(json.dumps(CTX), encoding="utf-8")
+        (tdp / "runs.json").write_text(json.dumps(runs), encoding="utf-8")
         env["TEST_SCRIPT_FILE"] = str(tdp / "script.js")
         env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
         env["TEST_RUNS_FILE"] = str(tdp / "runs.json")

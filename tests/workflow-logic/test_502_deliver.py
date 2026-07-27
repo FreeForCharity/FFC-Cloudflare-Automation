@@ -50,7 +50,7 @@ def _git(cwd: pathlib.Path, *args: str, env: dict | None = None) -> None:
 
 def _write(path: pathlib.Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
 
 
 def _seed_target_files(
@@ -135,7 +135,7 @@ def run_deliver(*, sync_branch: bool, sync_matches_source: bool, gh_env: dict | 
     # Redirect the real clone/fetch/push URL to the local bare repo — no network.
     gitconfig = home / ".gitconfig"
     gitconfig.write_text(
-        f'[url "file://{origin}"]\n\tinsteadOf = "{CLONE_URL}"\n'
+        f'[url "file://{origin}"]\n\tinsteadOf = "{CLONE_URL}"\n', encoding="utf-8"
     )
 
     gh_log = td / "gh.log"
@@ -158,7 +158,7 @@ def run_deliver(*, sync_branch: bool, sync_matches_source: bool, gh_env: dict | 
         text=True,
         timeout=120,
     )
-    return proc, gh_log.read_text(), origin, td_ctx
+    return proc, gh_log.read_text(encoding="utf-8"), origin, td_ctx
 
 
 def _origin_head(origin: pathlib.Path, branch: str) -> str | None:

@@ -271,16 +271,40 @@ def test_the_known_sites_are_the_ones_the_ledger_and_889_describe():
 # being hashed, so requiring one of them is the difference between a guard and a
 # tripwire — an unanchored form flagged three safe shapes, including one in the
 # variable pattern (measured on #895).
+# Command substitutions are MASKED before matching, which is what makes the
+# emitting-command anchor workable. Both halves of the pattern need "up to the
+# pipe that feeds the hash" (`[^|]*`), and a substitution may legitimately contain
+# pipes of its own — `echo "$(cat f | tr -d ' ')" | sha256sum` is the defect
+# wearing an internal pipe. Matching on the raw line, `[^|]*` stops at that inner
+# pipe and the whole shape goes unseen (#895 review round 4, reported twice: once
+# openly and once in the low-confidence block, per ledger L18). Masking collapses
+# each substitution to a marker first, so the only pipes left are the shell's own.
 _HASH_CMDS = r"(?:sha256sum|sha1sum|md5sum|shasum|cksum)"
-_EMIT = r"(?:echo|printf)\b[^|]*"
-_HASHED_VARIABLE = re.compile(_EMIT + r"\$\{?\w+\}?\"?\s*\|\s*" + _HASH_CMDS)
-# `echo "$(cmd)" | sha256sum` has the same defect for the same reason — the
-# substitution strips the newlines before the hash ever sees the bytes.
-_HASHED_SUBSTITUTION = re.compile(_EMIT + r"\$\([^|]*\)\"?\s*\|\s*" + _HASH_CMDS)
+_SUBST_SPAN = re.compile(r"\$\((?:[^()]|\([^()]*\))*\)")
+_SUBST_MARK = "\x00SUBST\x00"  # cannot occur in a workflow line
+_MARK_RE = re.escape(_SUBST_MARK)
+# One pattern, not two: a variable and a masked substitution are the same defect
+# in the same position, and keeping them as separate regexes was two spellings of
+# one rule to hold in sync.
+_HASHED_EMIT = re.compile(
+    r"(?:echo|printf)\b[^|]*(?:\$\{?\w+\}?|"
+    + _MARK_RE
+    + r")\"?\s*\|\s*"
+    + _HASH_CMDS
+)
 # `sha256sum <<<"$out"` is the same defect wearing a here-string: the stripped
 # value gets exactly one newline appended, which is right only by coincidence.
-_HASHED_HERESTRING = re.compile(_HASH_CMDS + r"\s*(?:-\S+\s+)*<<<\s*\"?\$")
-_HASH_PATTERNS = (_HASHED_VARIABLE, _HASHED_SUBSTITUTION, _HASHED_HERESTRING)
+# Accepts the marker too, or masking would hide `sha256sum <<<"$(cmd)"`.
+_HASHED_HERESTRING = re.compile(
+    _HASH_CMDS + r"\s*(?:-\S+\s+)*<<<\s*\"?(?:\$|" + _MARK_RE + r")"
+)
+_HASH_PATTERNS = (_HASHED_EMIT, _HASHED_HERESTRING)
+
+
+def _hash_hit(line: str) -> re.Pattern | None:
+    """The pattern flagging this line, or None. Substitutions masked first."""
+    masked = _SUBST_SPAN.sub(_SUBST_MARK, line)
+    return next((p for p in _HASH_PATTERNS if p.search(masked)), None)
 
 
 def _variable_hashing_sites() -> dict[str, list[str]]:
@@ -293,7 +317,7 @@ def _variable_hashing_sites() -> dict[str, list[str]]:
             # 738 explains the defect in a comment, exactly as 726 does for L02.
             if stripped.startswith("#"):
                 continue
-            if any(p.search(stripped) for p in _HASH_PATTERNS):
+            if _hash_hit(stripped):
                 key = path.relative_to(REPO_ROOT).as_posix()
                 found.setdefault(key, []).append(f"{lineno}: {stripped}")
     return found
@@ -322,8 +346,16 @@ def test_the_variable_hashing_scan_can_actually_see_the_defect():
         # Single-quoted: a triple-quoted form needs `\"` to escape the trailing
         # quote, which reads like a stray backslash in the shell sample it is not.
         'sha256sum <<<"$out"',
+        # Substitutions containing their OWN pipe. Every sample above happens to
+        # be pipe-free inside `$( )`, so all of them passed against a pattern that
+        # was blind to this entire spelling — the self-test proved nothing about
+        # it (#895 round 4). A sample family that cannot distinguish two
+        # implementations is not covering the difference between them.
+        'echo "$(cat f | tr -d " ")" | sha256sum',
+        'printf "%s" "$(gh api x | jq -r .body)" | sha256sum',
+        'sha256sum <<<"$(cat f | tail -1)"',
     ):
-        assert any(p.search(shape) for p in _HASH_PATTERNS), (
+        assert _hash_hit(shape), (
             f"the scan would not flag {shape!r} — it cannot hold L27"
         )
 
@@ -342,11 +374,14 @@ def test_the_variable_hashing_scan_leaves_correct_code_alone():
         'sha256sum "$file"',
         'cat "$file" | sha256sum',
         'cat "$(which tool)" | sha256sum',
+        # Masking must not turn a safe line into a hit: this one names a path via
+        # a substitution that contains a pipe, and still streams real bytes.
+        'cat "$(ls -1 d | head -1)" | sha256sum',
         "(cd d && cat f) | sha256sum",
         "{ cat f; } | sha256sum",
         'echo "$name: ok" | tee -a "$log"',
     ):
-        hit = next((p for p in _HASH_PATTERNS if p.search(ok)), None)
+        hit = _hash_hit(ok)
         assert hit is None, (
             f"the scan false-positives on {ok!r} (pattern {hit.pattern if hit else ''}) "
             "— it streams the file's real bytes and strips nothing"

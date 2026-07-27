@@ -135,6 +135,21 @@ jobs:
         run: |
           set -uo pipefail
 
+          # `gh` writes its error body to STDOUT, so `gh … 2>/dev/null || echo <default>`
+          # yields the error text with the default appended rather than the default
+          # (ledger L02 / #854 / #889). api_get — same shape as 726's — keeps stdout to
+          # successful responses only: on failure it returns non-zero and puts the error
+          # on stderr, so a caller can never report an error body as data.
+          api_get() {
+            local out rc
+            out=$(gh api "$@" 2>&1); rc=$?
+            if [ "$rc" -ne 0 ]; then
+              printf '%s\n' "$out" >&2
+              return "$rc"
+            fi
+            printf '%s' "$out"
+          }
+
           # Trim leading/trailing whitespace (incl. CR) from a value.
           trim() {
             local v="$1"
@@ -237,7 +252,14 @@ jobs:
                 echo "Invited $u to $repo as $perm (invitation #$invite_id); pending acceptance."
                 added+=("$u (invited as $perm, pending)")
               else
-                role="$(gh api "repos/$repo/collaborators/$u/permission" --jq '.role_name // .permission' 2>/dev/null || echo "$perm")"
+                # The grant already succeeded; this read is only the confirmation of
+                # the effective role. If it fails, say so and fall back to the
+                # requested permission — the swallowed form reported the API's error
+                # body as the role the user now holds.
+                if ! role="$(api_get "repos/$repo/collaborators/$u/permission" --jq '.role_name // .permission')"; then
+                  role="$perm"
+                  echo "::warning::Added $u to $repo, but could not read back the effective role; reporting the requested '$perm'."
+                fi
                 echo "Added $u to $repo as $role."
                 added+=("$u ($role)")
               fi

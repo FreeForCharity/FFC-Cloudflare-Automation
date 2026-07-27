@@ -68,6 +68,64 @@ case "$cmd" in
         # May be multi-line to simulate --paginate emitting one line per page.
         printf '%s\n' "${TEST_TEAMS_OUTPUT:-}"
         ;;
+      *repos/*/pages*)
+        # 120 bind + cert kick. The GET failure keeps the #854 shape deliberately:
+        # the error JSON goes to STDOUT with a non-zero exit, which is what makes a
+        # `|| echo unknown` caller inherit "…403…unknown" instead of "unknown".
+        case "$args" in
+          "-X PUT "*)
+            if [ "${TEST_PAGES_PUT_FAIL:-}" = "1" ]; then
+              echo '{"message":"Not Found","status":"404"}'
+              exit 1
+            fi
+            ;;
+          *)
+            if [ "${TEST_PAGES_GET_FAIL:-}" = "1" ]; then
+              echo '{"message":"Resource not accessible by personal access token","status":"403"}'
+              exit 1
+            fi
+            printf '%s\n' "${TEST_PAGES_CERT_STATE:-approved}"
+            ;;
+        esac
+        ;;
+      *collaborators/*/permission*)
+        # 729: read-back of the effective role after the grant.
+        if [ "${TEST_PERMISSION_FAIL:-}" = "1" ]; then
+          echo '{"message":"Not Found","status":"404"}'
+          exit 1
+        fi
+        printf '%s\n' "${TEST_PERMISSION_ROLE:-maintain}"
+        ;;
+      "-X PUT repos/"*collaborators/*)
+        # 729: the grant itself. Body is empty (204, in-place update) unless the
+        # scenario supplies an invitation object (201).
+        if [ "${TEST_COLLAB_PUT_FAIL:-}" = "1" ]; then
+          echo '{"message":"Validation Failed","status":"422"}'
+          exit 1
+        fi
+        printf '%s\n' "${TEST_COLLAB_PUT_BODY:-}"
+        ;;
+      *environments/*)
+        # 730: one environment's protection rules.
+        if [ "${TEST_ENV_DETAIL_FAIL:-}" = "1" ]; then
+          echo '{"message":"Not Found","status":"404"}'
+          exit 1
+        fi
+        # if/else rather than a `:-` default — see the brace note above.
+        if [ -n "${TEST_ENV_DETAIL:-}" ]; then
+          printf '%s\n' "$TEST_ENV_DETAIL"
+        else
+          echo '{"protection_rules":[],"deployment_branch_policy":null}'
+        fi
+        ;;
+      *environments*)
+        # 730: the environment LIST (--paginate --jq '.environments[].name').
+        if [ "${TEST_ENVIRONMENTS_FAIL:-}" = "1" ]; then
+          echo '{"message":"Resource not accessible by integration","status":"403"}'
+          exit 1
+        fi
+        printf '%s\n' "${TEST_ENVIRONMENTS:-}"
+        ;;
       "-X PATCH repos/"*)
         # 736 archive: PATCH repos/<owner>/<name> -F archived=true
         if [ "${TEST_PATCH_FAIL:-}" = "1" ]; then
@@ -123,6 +181,32 @@ case "$cmd" in
         if [ "${TEST_PR_MERGE_FAIL:-}" = "1" ]; then echo "auto-merge unavailable" >&2; exit 1; fi
         ;;
     esac
+    ;;
+  run)
+    # 120 smoke dispatch/poll. Both failures print to STDOUT (the #854 shape).
+    case "$1" in
+      list)
+        if [ "${TEST_RUN_LIST_FAIL:-}" = "1" ]; then
+          echo '{"message":"Bad credentials","status":"401"}'
+          exit 1
+        fi
+        printf '%s\n' "${TEST_RUN_ID:-}"
+        ;;
+      view)
+        if [ "${TEST_RUN_VIEW_FAIL:-}" = "1" ]; then
+          echo '{"message":"Not Found","status":"404"}'
+          exit 1
+        fi
+        printf '%s\n' "${TEST_RUN_STATUS:-completed:success}"
+        ;;
+    esac
+    ;;
+  workflow)
+    # 120: gh workflow run "Post-Deploy Smoke Test" --repo ... --ref main
+    if [ "${TEST_WORKFLOW_RUN_FAIL:-}" = "1" ]; then
+      echo "could not dispatch workflow" >&2
+      exit 1
+    fi
     ;;
   issue)
     # 736 archive: gh issue comment|close|list <n|--repo r> ...

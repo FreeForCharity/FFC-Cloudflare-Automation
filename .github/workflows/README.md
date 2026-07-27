@@ -629,6 +629,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 740 | Repo - Scheduled Workflow Failure Alert (rolling issue) [GH] | `740-scheduled-workflow-failure-alert.yml` | schedule, workflow_dispatch | Writes (issues only) | — |
 | 741 | Repo - Fleet Security Audit Coverage [Org] | `741-fleet-security-audit-coverage.yml` | schedule, workflow_dispatch | Reads | — |
 | 742 | Repo - Fleet Security Audit Backfill [Org] | `742-fleet-security-audit-backfill.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
+| 743 | Website - Fleet Security Header Audit | `743-fleet-security-header-audit.yml` | schedule, workflow_dispatch | Reads | — |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

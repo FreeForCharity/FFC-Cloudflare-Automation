@@ -40,7 +40,7 @@ import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import REPO_ROOT, WORKFLOWS
+from wf_extract import REPO_ROOT, WORKFLOWS, hashes_a_shell_value
 
 LEDGER = REPO_ROOT / "docs" / "lessons-ledger.md"
 HERE = pathlib.Path(__file__).resolve().parent
@@ -248,6 +248,125 @@ def test_the_known_sites_are_the_ones_the_ledger_and_889_describe():
         assert name in found, (
             f"{name} is listed as known debt but no longer matches — if it was "
             "fixed, delete its entry (see #889)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# L27 — hashing a shell variable is not hashing the file
+# ---------------------------------------------------------------------------
+
+# `out=$(cmd)` strips every trailing newline, so a digest taken from the variable
+# is the content minus its final byte(s). 738 published a canonical hash nobody
+# could reproduce with `sha256sum`, and its byte-identity audit reported a
+# trailing-newline-only difference as MATCHING (#893).
+#
+# Scanned tree-wide rather than in 738 alone: the anti-pattern is a shell habit,
+# not a property of that workflow, and a guard that only looks where the defect
+# currently lives goes quiet the moment it moves (ledger L17). Debt is zero and
+# the assertion says so — a second site fails on its first commit.
+#
+# Both patterns are anchored on the EMITTING command, which is what separates the
+# defect from correct code that looks like it. `cat "$file" | sha256sum` and
+# `(cd d && cat f) | sha256sum` stream the file's real bytes through the pipe and
+# strip nothing; `printf '%s' "$out" | sha256sum` hashes a string that has already
+# lost its trailing newlines. Only echo/printf turn a shell value into the bytes
+# being hashed, so requiring one of them is the difference between a guard and a
+# tripwire — an unanchored form flagged three safe shapes, including one in the
+# variable pattern (measured on #895).
+# The rule itself lives in `wf_extract.hashes_a_shell_value` — two modules check
+# it (this tree-wide scan and 738's step-local guard), and when they each held
+# their own regex the two drifted within a single review (#895 rounds 2 and 5).
+# The samples below are its self-test: they must distinguish a correct
+# implementation from the wrong ones, which is a stronger bar than passing.
+
+
+def _variable_hashing_sites() -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {}
+    for path in _shell_carrying_files():
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            stripped = line.strip()
+            # 738 explains the defect in a comment, exactly as 726 does for L02.
+            if stripped.startswith("#"):
+                continue
+            if hashes_a_shell_value(stripped):
+                key = path.relative_to(REPO_ROOT).as_posix()
+                found.setdefault(key, []).append(f"{lineno}: {stripped}")
+    return found
+
+
+def test_no_workflow_hashes_a_shell_variable_instead_of_a_file():
+    found = _variable_hashing_sites()
+    assert not found, (
+        "a digest taken from a shell variable is the content MINUS its trailing "
+        "newlines, because command substitution strips them (ledger L27 / #893). "
+        "The published digest then matches nothing `sha256sum` produces, and two "
+        "files differing only in trailing newlines hash the same — which silently "
+        "defeats a byte-identity comparison. Redirect the bytes to a file and hash "
+        "the file:\n  "
+        + "\n  ".join(f"{name}\n    " + "\n    ".join(s) for name, s in found.items())
+    )
+
+
+def test_the_variable_hashing_scan_can_actually_see_the_defect():
+    # A zero-debt assertion is only meaningful if the pattern matches the real
+    # thing. The first shape is the exact line 738 shipped before #893.
+    for shape in (
+        """printf '%s' "$out" | sha256sum | cut -d' ' -f1""",
+        """echo "${body}" | sha256sum""",
+        """echo "$(cat /tmp/body)" | md5sum""",
+        # Single-quoted: a triple-quoted form needs `\"` to escape the trailing
+        # quote, which reads like a stray backslash in the shell sample it is not.
+        'sha256sum <<<"$out"',
+        # Substitutions containing their OWN pipe. Every sample above happens to
+        # be pipe-free inside `$( )`, so all of them passed against a pattern that
+        # was blind to this entire spelling — the self-test proved nothing about
+        # it (#895 round 4). A sample family that cannot distinguish two
+        # implementations is not covering the difference between them.
+        'echo "$(cat f | tr -d " ")" | sha256sum',
+        'printf "%s" "$(gh api x | jq -r .body)" | sha256sum',
+        'sha256sum <<<"$(cat f | tail -1)"',
+    ):
+        assert hashes_a_shell_value(shape), (
+            f"the scan would not flag {shape!r} — it cannot hold L27"
+        )
+
+
+def test_the_variable_hashing_scan_leaves_correct_code_alone():
+    """The other direction, and the one #895's review was right about.
+
+    A tripwire that fires on safe shapes gets deleted or worked around, so each of
+    these is a form that streams real file bytes (or hashes a path) and must pass.
+    All three of the middle group were false positives before the emitting-command
+    anchor; `cat "$file" | sha256sum` slipped through the *variable* pattern, which
+    the review did not name.
+    """
+    for ok in (
+        "sha256sum /tmp/smoke-body | cut -d' ' -f1",
+        'sha256sum "$file"',
+        'cat "$file" | sha256sum',
+        'cat "$(which tool)" | sha256sum',
+        # Masking must not turn a safe line into a hit: this one names a path via
+        # a substitution that contains a pipe, and still streams real bytes.
+        'cat "$(ls -1 d | head -1)" | sha256sum',
+        # `$((…))` is arithmetic, not command substitution — a number with no
+        # trailing newlines to strip, so it is not the L27 defect. The masking
+        # regex swallowed it until `(?!\()` was added (#895 round 5).
+        'echo "$((n + 1))" | sha256sum',
+        'printf "%s" "$((count * 2))" | md5sum',
+        # …and in the here-string form too. Carving arithmetic out of one form and
+        # not the other is how a single rule ends up disagreeing with itself: this
+        # sample was flagged while the pipe form above passed (#895 round 6).
+        'sha256sum <<<"$((n + 1))"',
+        "(cd d && cat f) | sha256sum",
+        "{ cat f; } | sha256sum",
+        'echo "$name: ok" | tee -a "$log"',
+    ):
+        hit = hashes_a_shell_value(ok)
+        assert hit is None, (
+            f"the scan false-positives on {ok!r} (pattern {hit.pattern if hit else ''}) "
+            "— it streams the file's real bytes and strips nothing"
         )
 
 

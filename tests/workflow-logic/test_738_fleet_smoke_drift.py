@@ -285,6 +285,24 @@ def test_a_missing_file_is_a_null_hash_not_a_digest_of_the_404():
     assert "error" not in by_repo["FFC-EX-not-onboarded.org"], by_repo
 
 
+def test_a_404_reported_on_stdout_is_still_classified_absent():
+    """Ledger L02 again: which stream carries the error is not gh's to promise.
+
+    Before the redirect the body could only be searched on stderr, so a 404
+    announced on stdout became `unreadable` — a repo that simply has not been
+    onboarded, filed as a fetch failure needing investigation.
+    """
+    _, entries = run_gather(
+        {"FFC-IN-FFC_Single_Page_Template": CANONICAL_BYTES},
+        errors={"FFC-EX-stdout-404.org": '{"message":"Not Found","status":"404"}'},
+    )
+    entry = next(e for e in entries if e["repo"].endswith("FFC-EX-stdout-404.org"))
+    assert entry.get("hash", "missing") is None, (
+        "a 404 whose body arrived on stdout must still be the ABSENT sentinel, not "
+        f"an error entry: {entry}"
+    )
+
+
 def test_an_unreadable_repo_is_an_error_entry_and_its_body_is_never_hashed():
     """Ledger L02 shape: gh puts some error bodies on STDOUT.
 

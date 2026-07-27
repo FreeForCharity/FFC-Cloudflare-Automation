@@ -324,6 +324,25 @@ def test_an_unreadable_repo_is_an_error_entry_and_its_body_is_never_hashed():
     assert not re.fullmatch(r"[0-9a-f]{64}", entry.get("error", "")), entry
 
 
+def test_a_huge_error_body_is_truncated_before_it_reaches_the_report():
+    """An error body is not size-bounded, and it does not stop at the log.
+
+    It travels into entries.json and then into the rolling issue body, which
+    GitHub caps at 65536 characters — so an unbounded one from a single
+    unreachable repo could make the issue update fail for the whole fleet. 50 kB
+    of HTML here stands in for a proxy error page.
+    """
+    _, entries = run_gather(
+        {"FFC-IN-FFC_Single_Page_Template": CANONICAL_BYTES},
+        errors={"FFC-EX-huge-error.org": "<html>" + ("x" * 50_000) + "</html>"},
+    )
+    entry = next(e for e in entries if e["repo"].endswith("FFC-EX-huge-error.org"))
+    assert len(entry["error"]) <= 200, (
+        f"error text reached the report at {len(entry['error'])} chars — a single "
+        "unreachable repo can then blow the issue-body limit for the whole fleet"
+    )
+
+
 def test_the_gather_step_hashes_a_file_and_never_a_shell_variable():
     """Structural companion to the behavioural guards above (ledger L27).
 

@@ -69,8 +69,15 @@ jobs:
               if grep -qi "Not Found" /tmp/smoke-err /tmp/smoke-body; then
                 echo "ABSENT"
               else
-                msg=$(cat /tmp/smoke-err /tmp/smoke-body | tr '\n' ' ')
-                echo "ERROR:${msg:0:200}"
+                # Truncated inside the pipeline, not after: an error body has no
+                # size bound (an HTML proxy page, an unexpected raw payload), and
+                # only the first 200 chars are ever used — they travel on into
+                # entries.json and the rolling issue body, which GitHub caps at
+                # 65536 characters. `head` closing the pipe early makes `cat` exit
+                # non-zero under pipefail; harmless here, because the assignment's
+                # status is discarded and the function returns 0 explicitly.
+                msg=$(cat /tmp/smoke-err /tmp/smoke-body | head -c 200 | tr '\n' ' ')
+                echo "ERROR:$msg"
               fi
               return 0
             fi

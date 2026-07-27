@@ -319,7 +319,9 @@ def test_the_variable_hashing_scan_can_actually_see_the_defect():
         """printf '%s' "$out" | sha256sum | cut -d' ' -f1""",
         """echo "${body}" | sha256sum""",
         """echo "$(cat /tmp/body)" | md5sum""",
-        """sha256sum <<<"$out\"""",
+        # Single-quoted: a triple-quoted form needs `\"` to escape the trailing
+        # quote, which reads like a stray backslash in the shell sample it is not.
+        'sha256sum <<<"$out"',
     ):
         assert any(p.search(shape) for p in _HASH_PATTERNS), (
             f"the scan would not flag {shape!r} — it cannot hold L27"

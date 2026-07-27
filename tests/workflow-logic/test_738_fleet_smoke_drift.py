@@ -212,8 +212,17 @@ def run_gather(
             "TEST_REPO_LIST": "\n".join(fleet),
         }
         env.update({k: str(v) for k, v in wf["env"].items()})
+        # `-e -o pipefail`, because that is what production is: a `shell: bash`
+        # step runs `bash --noprofile --norc -eo pipefail {0}`, and the step's own
+        # `set -uo pipefail` does NOT clear `-e`. Driving it under plain `bash -c`
+        # made this harness blind to an errexit-only failure — a `cat … | head`
+        # truncation that dies of SIGPIPE past the pipe buffer (#895 review round 3).
         proc = subprocess.run(
-            ["bash", "-c", script], env=env, capture_output=True, text=True, timeout=120
+            ["bash", "-e", "-o", "pipefail", "-c", script],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if proc.returncode != 0:
             raise AssertionError(
@@ -341,6 +350,34 @@ def test_a_huge_error_body_is_truncated_before_it_reaches_the_report():
         f"error text reached the report at {len(entry['error'])} chars — a single "
         "unreachable repo can then blow the issue-body limit for the whole fleet"
     )
+
+
+def test_an_error_body_past_the_pipe_buffer_still_yields_the_error_sentinel():
+    """A body past the ~64 kB pipe buffer, which the 50 kB case above never reaches.
+
+    Honest about what this does and does not catch. It does NOT fail against the
+    `cat … | head -c 200` form the review flagged — measured 0/10 in this harness —
+    because `fetch_hash` is only called as `h=$(fetch_hash …)` and bash does not
+    inherit errexit into a command substitution, so the SIGPIPE 141 is discarded
+    and the sentinel still emits. The same line at top level dies 40/40.
+
+    What it holds is the invariant that survives a refactor: whatever the
+    truncation mechanism, a body far past the pipe buffer still produces a bounded
+    ERROR sentinel. Move this call out of a `$( )` with the old form in place and
+    that stops being true. Asserting the sentinel arrived rather than that the step
+    merely survived, since an empty capture would fall through fetch_hash's `*)`
+    case and be recorded as a repo's hash.
+    """
+    _, entries = run_gather(
+        {"FFC-IN-FFC_Single_Page_Template": CANONICAL_BYTES},
+        errors={"FFC-EX-past-buffer.org": "<html>" + ("y" * 200_000) + "</html>"},
+    )
+    entry = next(e for e in entries if e["repo"].endswith("FFC-EX-past-buffer.org"))
+    assert "error" in entry and entry["error"], (
+        f"no ERROR sentinel for a 200 kB body — the step died mid-capture: {entry}"
+    )
+    assert "hash" not in entry, f"recorded as a hash instead of an error: {entry}"
+    assert len(entry["error"]) <= 200, len(entry["error"])
 
 
 def test_the_gather_step_hashes_a_file_and_never_a_shell_variable():

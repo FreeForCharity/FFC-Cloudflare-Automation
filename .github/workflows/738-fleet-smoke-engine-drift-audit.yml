@@ -69,15 +69,29 @@ jobs:
               if grep -qi "Not Found" /tmp/smoke-err /tmp/smoke-body; then
                 echo "ABSENT"
               else
-                # Truncated inside the pipeline, not after: an error body has no
-                # size bound (an HTML proxy page, an unexpected raw payload), and
-                # only the first 200 chars are ever used — they travel on into
+                # Bounded at the READ, and never `cat … | head`. An error body has
+                # no size bound (an HTML proxy page, an unexpected raw payload) and
+                # only the first 200 chars are ever used — they travel into
                 # entries.json and the rolling issue body, which GitHub caps at
-                # 65536 characters. `head` closing the pipe early makes `cat` exit
-                # non-zero under pipefail; harmless here, because the assignment's
-                # status is discarded and the function returns 0 explicitly.
-                msg=$(cat /tmp/smoke-err /tmp/smoke-body | head -c 200 | tr '\n' ' ')
-                echo "ERROR:$msg"
+                # 65536 characters.
+                #
+                # Not `cat f | head -c 200`, which has a SIGPIPE surface this form
+                # does not. Measured on ubuntu (#895 review round 3):
+                #
+                #   at top level      `msg=$(cat big | head -c 200 | tr …)`  → 141
+                #   inside `$(fn)`    same line, same 200 KB body            → rc 0
+                #
+                # The second is what this workflow does — `fetch_hash` is only ever
+                # called as `h=$(fetch_hash …)`, and bash does NOT inherit errexit
+                # into a command substitution (`x=$(false; echo hi)` yields `hi`),
+                # so the pipeline's 141 is discarded and the sentinel still emits.
+                # The old form was therefore not breaking runs; it was one refactor
+                # away from it — move this call out of a `$( )` and a >64 KB error
+                # body kills the step before it can report which repo failed.
+                # `head -qc` reads the files directly: the writer never outlives the
+                # reader, so there is no race to reason about in the first place.
+                msg=$(head -qc 200 /tmp/smoke-err /tmp/smoke-body | tr '\n' ' ')
+                echo "ERROR:${msg:0:200}"
               fi
               return 0
             fi

@@ -250,6 +250,76 @@ def test_the_known_sites_are_the_ones_the_ledger_and_889_describe():
 
 
 # ---------------------------------------------------------------------------
+# L27 — hashing a shell variable is not hashing the file
+# ---------------------------------------------------------------------------
+
+# `out=$(cmd)` strips every trailing newline, so a digest taken from the variable
+# is the content minus its final byte(s). 738 published a canonical hash nobody
+# could reproduce with `sha256sum`, and its byte-identity audit reported a
+# trailing-newline-only difference as MATCHING (#893).
+#
+# Scanned tree-wide rather than in 738 alone: the anti-pattern is a shell habit,
+# not a property of that workflow, and a guard that only looks where the defect
+# currently lives goes quiet the moment it moves (ledger L17). Debt is zero and
+# the assertion says so — a second site fails on its first commit.
+_HASH_CMDS = r"(?:sha256sum|sha1sum|md5sum|shasum|cksum)"
+_HASHED_VARIABLE = re.compile(r"\$\{?\w+\}?\"?\s*\|\s*" + _HASH_CMDS)
+# `$(cmd) | sha256sum` has the same defect for the same reason — the substitution
+# strips the newlines before the hash ever sees the bytes.
+_HASHED_SUBSTITUTION = re.compile(r"\)\"?\s*\|\s*" + _HASH_CMDS)
+
+
+def _variable_hashing_sites() -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {}
+    for path in _shell_carrying_files():
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            stripped = line.strip()
+            # 738 explains the defect in a comment, exactly as 726 does for L02.
+            if stripped.startswith("#"):
+                continue
+            if _HASHED_VARIABLE.search(stripped) or _HASHED_SUBSTITUTION.search(
+                stripped
+            ):
+                key = path.relative_to(REPO_ROOT).as_posix()
+                found.setdefault(key, []).append(f"{lineno}: {stripped}")
+    return found
+
+
+def test_no_workflow_hashes_a_shell_variable_instead_of_a_file():
+    found = _variable_hashing_sites()
+    assert not found, (
+        "a digest taken from a shell variable is the content MINUS its trailing "
+        "newlines, because command substitution strips them (ledger L27 / #893). "
+        "The published digest then matches nothing `sha256sum` produces, and two "
+        "files differing only in trailing newlines hash the same — which silently "
+        "defeats a byte-identity comparison. Redirect the bytes to a file and hash "
+        "the file:\n  "
+        + "\n  ".join(f"{name}\n    " + "\n    ".join(s) for name, s in found.items())
+    )
+
+
+def test_the_variable_hashing_scan_can_actually_see_the_defect():
+    # A zero-debt assertion is only meaningful if the pattern matches the real
+    # thing. This is the exact line 738 shipped before #893, plus the substitution
+    # variant, checked against the same regexes the scan uses.
+    for shape in (
+        """printf '%s' "$out" | sha256sum | cut -d' ' -f1""",
+        """echo "${body}" | sha256sum""",
+        """$(cat /tmp/body) | md5sum""",
+    ):
+        assert _HASHED_VARIABLE.search(shape) or _HASHED_SUBSTITUTION.search(shape), (
+            f"the scan would not flag {shape!r} — it cannot hold L27"
+        )
+    # And it must not flag hashing a file, or every fixed site fails instead.
+    for ok in ("sha256sum /tmp/smoke-body | cut -d' ' -f1", 'sha256sum "$file"'):
+        assert not (
+            _HASHED_VARIABLE.search(ok) or _HASHED_SUBSTITUTION.search(ok)
+        ), f"the scan false-positives on {ok!r}"
+
+
+# ---------------------------------------------------------------------------
 # L07 — a module that crashes at import looks exactly like a passing one
 # ---------------------------------------------------------------------------
 

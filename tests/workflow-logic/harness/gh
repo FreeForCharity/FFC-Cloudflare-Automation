@@ -75,6 +75,29 @@ case "$cmd" in
           exit 1
         fi
         ;;
+      *contents/*)
+        # 738 fleet smoke drift: raw file fetch for repos/<o>/<r>/contents/<path>.
+        # TEST_SMOKE_DIR holds one file per repo NAME whose bytes are emitted with
+        # `cat` — deliberately not `echo`/`printf '%s\n'`, because the caller
+        # hashes these bytes and a newline added here would change the digest under
+        # test, making a trailing-newline guard unable to fail.
+        #   <name>        present  -> 200 with those exact bytes
+        #   <name>.error  present  -> non-404 failure; body on STDOUT (ledger L02)
+        #   neither                -> 404
+        smoke_repo="${args#*repos/}"
+        smoke_repo="${smoke_repo%%/contents/*}"
+        smoke_name="${smoke_repo##*/}"
+        if [ -f "${TEST_SMOKE_DIR:-/nonexistent}/${smoke_name}.error" ]; then
+          cat "${TEST_SMOKE_DIR}/${smoke_name}.error"
+          exit 1
+        fi
+        if [ -f "${TEST_SMOKE_DIR:-/nonexistent}/${smoke_name}" ]; then
+          cat "${TEST_SMOKE_DIR}/${smoke_name}"
+          exit 0
+        fi
+        echo "gh: Not Found (HTTP 404)" >&2
+        exit 1
+        ;;
       *repos/*)
         # 736 archive GET: TEST_REPO_META is a JSON blob ("404" = not found).
         if [ -n "${TEST_REPO_META:-}" ]; then

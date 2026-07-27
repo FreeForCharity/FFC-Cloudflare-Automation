@@ -28,7 +28,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import load_workflow, step_run
+from wf_extract import hashes_a_shell_value, load_workflow, step_run
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 LIB = REPO_ROOT / "scripts" / "fleet-smoke-drift-lib.js"
@@ -387,18 +387,26 @@ def test_the_gather_step_hashes_a_file_and_never_a_shell_variable():
     happens to be correct today; this one pins the mechanism, because the
     variable-capture form is the one a future edit reaches for by habit.
     """
+    # The rule comes from wf_extract, NOT a regex of this module's own. It was
+    # one here, and within a single review the two copies drifted: round 2 of
+    # #895 anchored the ledger's copy on the emitting command and left this one
+    # matching `cat "$file" | sha256sum` — a false positive on correct code,
+    # caught only by a later round. Two implementations of one rule is the defect.
+    #
     # Comment lines are excluded, or the step's own explanation of the defect
     # trips the guard — the same self-trip ledger L02's scan had to avoid.
     script = step_run(WF_FILE, "audit", GATHER_STEP)
-    code = "\n".join(
+    code_lines = [
         ln for ln in script.splitlines() if not ln.strip().startswith("#")
+    ]
+    hits = [(ln.strip(), hashes_a_shell_value(ln)) for ln in code_lines]
+    flagged = [(ln, p) for ln, p in hits if p]
+    assert not flagged, (
+        "the gather step hashes a shell value — command substitution strips "
+        "trailing newlines, so that is the digest of the file minus its final "
+        f"byte(s) (#893, ledger L27): {[ln for ln, _ in flagged]}"
     )
-    piped_var = re.search(r"\$\{?\w+\}?\"?\s*\|\s*sha256sum", code)
-    assert not piped_var, (
-        "the gather step pipes a shell variable into sha256sum — command "
-        "substitution strips trailing newlines, so that is the digest of the file "
-        f"minus its final byte(s) (#893): {piped_var.group(0) if piped_var else ''}"
-    )
+    code = "\n".join(code_lines)
     assert re.search(r"sha256sum\s+(/\S+|\"\$\w+\"|\$\w+)", code), (
         "the gather step must hash a file path so the published digest is "
         "reproducible with `sha256sum <file>`"

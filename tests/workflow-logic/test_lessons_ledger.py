@@ -40,7 +40,7 @@ import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import REPO_ROOT, WORKFLOWS
+from wf_extract import REPO_ROOT, WORKFLOWS, hashes_a_shell_value
 
 LEDGER = REPO_ROOT / "docs" / "lessons-ledger.md"
 HERE = pathlib.Path(__file__).resolve().parent
@@ -271,40 +271,11 @@ def test_the_known_sites_are_the_ones_the_ledger_and_889_describe():
 # being hashed, so requiring one of them is the difference between a guard and a
 # tripwire — an unanchored form flagged three safe shapes, including one in the
 # variable pattern (measured on #895).
-# Command substitutions are MASKED before matching, which is what makes the
-# emitting-command anchor workable. Both halves of the pattern need "up to the
-# pipe that feeds the hash" (`[^|]*`), and a substitution may legitimately contain
-# pipes of its own — `echo "$(cat f | tr -d ' ')" | sha256sum` is the defect
-# wearing an internal pipe. Matching on the raw line, `[^|]*` stops at that inner
-# pipe and the whole shape goes unseen (#895 review round 4, reported twice: once
-# openly and once in the low-confidence block, per ledger L18). Masking collapses
-# each substitution to a marker first, so the only pipes left are the shell's own.
-_HASH_CMDS = r"(?:sha256sum|sha1sum|md5sum|shasum|cksum)"
-_SUBST_SPAN = re.compile(r"\$\((?:[^()]|\([^()]*\))*\)")
-_SUBST_MARK = "\x00SUBST\x00"  # cannot occur in a workflow line
-_MARK_RE = re.escape(_SUBST_MARK)
-# One pattern, not two: a variable and a masked substitution are the same defect
-# in the same position, and keeping them as separate regexes was two spellings of
-# one rule to hold in sync.
-_HASHED_EMIT = re.compile(
-    r"(?:echo|printf)\b[^|]*(?:\$\{?\w+\}?|"
-    + _MARK_RE
-    + r")\"?\s*\|\s*"
-    + _HASH_CMDS
-)
-# `sha256sum <<<"$out"` is the same defect wearing a here-string: the stripped
-# value gets exactly one newline appended, which is right only by coincidence.
-# Accepts the marker too, or masking would hide `sha256sum <<<"$(cmd)"`.
-_HASHED_HERESTRING = re.compile(
-    _HASH_CMDS + r"\s*(?:-\S+\s+)*<<<\s*\"?(?:\$|" + _MARK_RE + r")"
-)
-_HASH_PATTERNS = (_HASHED_EMIT, _HASHED_HERESTRING)
-
-
-def _hash_hit(line: str) -> re.Pattern | None:
-    """The pattern flagging this line, or None. Substitutions masked first."""
-    masked = _SUBST_SPAN.sub(_SUBST_MARK, line)
-    return next((p for p in _HASH_PATTERNS if p.search(masked)), None)
+# The rule itself lives in `wf_extract.hashes_a_shell_value` — two modules check
+# it (this tree-wide scan and 738's step-local guard), and when they each held
+# their own regex the two drifted within a single review (#895 rounds 2 and 5).
+# The samples below are its self-test: they must distinguish a correct
+# implementation from the wrong ones, which is a stronger bar than passing.
 
 
 def _variable_hashing_sites() -> dict[str, list[str]]:
@@ -317,7 +288,7 @@ def _variable_hashing_sites() -> dict[str, list[str]]:
             # 738 explains the defect in a comment, exactly as 726 does for L02.
             if stripped.startswith("#"):
                 continue
-            if _hash_hit(stripped):
+            if hashes_a_shell_value(stripped):
                 key = path.relative_to(REPO_ROOT).as_posix()
                 found.setdefault(key, []).append(f"{lineno}: {stripped}")
     return found
@@ -355,7 +326,7 @@ def test_the_variable_hashing_scan_can_actually_see_the_defect():
         'printf "%s" "$(gh api x | jq -r .body)" | sha256sum',
         'sha256sum <<<"$(cat f | tail -1)"',
     ):
-        assert _hash_hit(shape), (
+        assert hashes_a_shell_value(shape), (
             f"the scan would not flag {shape!r} — it cannot hold L27"
         )
 
@@ -377,11 +348,16 @@ def test_the_variable_hashing_scan_leaves_correct_code_alone():
         # Masking must not turn a safe line into a hit: this one names a path via
         # a substitution that contains a pipe, and still streams real bytes.
         'cat "$(ls -1 d | head -1)" | sha256sum',
+        # `$((…))` is arithmetic, not command substitution — a number with no
+        # trailing newlines to strip, so it is not the L27 defect. The masking
+        # regex swallowed it until `(?!\()` was added (#895 round 5).
+        'echo "$((n + 1))" | sha256sum',
+        'printf "%s" "$((count * 2))" | md5sum',
         "(cd d && cat f) | sha256sum",
         "{ cat f; } | sha256sum",
         'echo "$name: ok" | tee -a "$log"',
     ):
-        hit = _hash_hit(ok)
+        hit = hashes_a_shell_value(ok)
         assert hit is None, (
             f"the scan false-positives on {ok!r} (pattern {hit.pattern if hit else ''}) "
             "— it streams the file's real bytes and strips nothing"

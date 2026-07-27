@@ -262,11 +262,25 @@ def test_the_known_sites_are_the_ones_the_ledger_and_889_describe():
 # not a property of that workflow, and a guard that only looks where the defect
 # currently lives goes quiet the moment it moves (ledger L17). Debt is zero and
 # the assertion says so — a second site fails on its first commit.
+#
+# Both patterns are anchored on the EMITTING command, which is what separates the
+# defect from correct code that looks like it. `cat "$file" | sha256sum` and
+# `(cd d && cat f) | sha256sum` stream the file's real bytes through the pipe and
+# strip nothing; `printf '%s' "$out" | sha256sum` hashes a string that has already
+# lost its trailing newlines. Only echo/printf turn a shell value into the bytes
+# being hashed, so requiring one of them is the difference between a guard and a
+# tripwire — an unanchored form flagged three safe shapes, including one in the
+# variable pattern (measured on #895).
 _HASH_CMDS = r"(?:sha256sum|sha1sum|md5sum|shasum|cksum)"
-_HASHED_VARIABLE = re.compile(r"\$\{?\w+\}?\"?\s*\|\s*" + _HASH_CMDS)
-# `$(cmd) | sha256sum` has the same defect for the same reason — the substitution
-# strips the newlines before the hash ever sees the bytes.
-_HASHED_SUBSTITUTION = re.compile(r"\)\"?\s*\|\s*" + _HASH_CMDS)
+_EMIT = r"(?:echo|printf)\b[^|]*"
+_HASHED_VARIABLE = re.compile(_EMIT + r"\$\{?\w+\}?\"?\s*\|\s*" + _HASH_CMDS)
+# `echo "$(cmd)" | sha256sum` has the same defect for the same reason — the
+# substitution strips the newlines before the hash ever sees the bytes.
+_HASHED_SUBSTITUTION = re.compile(_EMIT + r"\$\([^|]*\)\"?\s*\|\s*" + _HASH_CMDS)
+# `sha256sum <<<"$out"` is the same defect wearing a here-string: the stripped
+# value gets exactly one newline appended, which is right only by coincidence.
+_HASHED_HERESTRING = re.compile(_HASH_CMDS + r"\s*(?:-\S+\s+)*<<<\s*\"?\$")
+_HASH_PATTERNS = (_HASHED_VARIABLE, _HASHED_SUBSTITUTION, _HASHED_HERESTRING)
 
 
 def _variable_hashing_sites() -> dict[str, list[str]]:
@@ -279,9 +293,7 @@ def _variable_hashing_sites() -> dict[str, list[str]]:
             # 738 explains the defect in a comment, exactly as 726 does for L02.
             if stripped.startswith("#"):
                 continue
-            if _HASHED_VARIABLE.search(stripped) or _HASHED_SUBSTITUTION.search(
-                stripped
-            ):
+            if any(p.search(stripped) for p in _HASH_PATTERNS):
                 key = path.relative_to(REPO_ROOT).as_posix()
                 found.setdefault(key, []).append(f"{lineno}: {stripped}")
     return found
@@ -302,21 +314,41 @@ def test_no_workflow_hashes_a_shell_variable_instead_of_a_file():
 
 def test_the_variable_hashing_scan_can_actually_see_the_defect():
     # A zero-debt assertion is only meaningful if the pattern matches the real
-    # thing. This is the exact line 738 shipped before #893, plus the substitution
-    # variant, checked against the same regexes the scan uses.
+    # thing. The first shape is the exact line 738 shipped before #893.
     for shape in (
         """printf '%s' "$out" | sha256sum | cut -d' ' -f1""",
         """echo "${body}" | sha256sum""",
-        """$(cat /tmp/body) | md5sum""",
+        """echo "$(cat /tmp/body)" | md5sum""",
+        """sha256sum <<<"$out\"""",
     ):
-        assert _HASHED_VARIABLE.search(shape) or _HASHED_SUBSTITUTION.search(shape), (
+        assert any(p.search(shape) for p in _HASH_PATTERNS), (
             f"the scan would not flag {shape!r} — it cannot hold L27"
         )
-    # And it must not flag hashing a file, or every fixed site fails instead.
-    for ok in ("sha256sum /tmp/smoke-body | cut -d' ' -f1", 'sha256sum "$file"'):
-        assert not (
-            _HASHED_VARIABLE.search(ok) or _HASHED_SUBSTITUTION.search(ok)
-        ), f"the scan false-positives on {ok!r}"
+
+
+def test_the_variable_hashing_scan_leaves_correct_code_alone():
+    """The other direction, and the one #895's review was right about.
+
+    A tripwire that fires on safe shapes gets deleted or worked around, so each of
+    these is a form that streams real file bytes (or hashes a path) and must pass.
+    All three of the middle group were false positives before the emitting-command
+    anchor; `cat "$file" | sha256sum` slipped through the *variable* pattern, which
+    the review did not name.
+    """
+    for ok in (
+        "sha256sum /tmp/smoke-body | cut -d' ' -f1",
+        'sha256sum "$file"',
+        'cat "$file" | sha256sum',
+        'cat "$(which tool)" | sha256sum',
+        "(cd d && cat f) | sha256sum",
+        "{ cat f; } | sha256sum",
+        'echo "$name: ok" | tee -a "$log"',
+    ):
+        hit = next((p for p in _HASH_PATTERNS if p.search(ok)), None)
+        assert hit is None, (
+            f"the scan false-positives on {ok!r} (pattern {hit.pattern if hit else ''}) "
+            "— it streams the file's real bytes and strips nothing"
+        )
 
 
 # ---------------------------------------------------------------------------

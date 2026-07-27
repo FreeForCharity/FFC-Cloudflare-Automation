@@ -84,20 +84,27 @@ case "$cmd" in
         #   <name>        present  -> 200 with those exact bytes
         #   <name>.error  present  -> non-404 failure; body on STDOUT (ledger L02)
         #   neither                -> 404
-        smoke_repo="${args#*repos/}"
-        smoke_repo="${smoke_repo%%/contents/*}"
-        smoke_name="${smoke_repo##*/}"
-        if [ -f "${TEST_SMOKE_DIR:-/nonexistent}/${smoke_name}.error" ]; then
-          cat "${TEST_SMOKE_DIR}/${smoke_name}.error"
+        #
+        # Gated on TEST_SMOKE_DIR and ending in `;;&`, so a scenario that does not
+        # opt in continues matching the patterns below instead of being answered by
+        # 738's fixture. An unconditional branch here would silently 404 the next
+        # workflow that reads repo contents for some other reason.
+        if [ -n "${TEST_SMOKE_DIR:-}" ]; then
+          smoke_repo="${args#*repos/}"
+          smoke_repo="${smoke_repo%%/contents/*}"
+          smoke_name="${smoke_repo##*/}"
+          if [ -f "${TEST_SMOKE_DIR}/${smoke_name}.error" ]; then
+            cat "${TEST_SMOKE_DIR}/${smoke_name}.error"
+            exit 1
+          fi
+          if [ -f "${TEST_SMOKE_DIR}/${smoke_name}" ]; then
+            cat "${TEST_SMOKE_DIR}/${smoke_name}"
+            exit 0
+          fi
+          echo "gh: Not Found (HTTP 404)" >&2
           exit 1
         fi
-        if [ -f "${TEST_SMOKE_DIR:-/nonexistent}/${smoke_name}" ]; then
-          cat "${TEST_SMOKE_DIR}/${smoke_name}"
-          exit 0
-        fi
-        echo "gh: Not Found (HTTP 404)" >&2
-        exit 1
-        ;;
+        ;;&
       *repos/*)
         # 736 archive GET: TEST_REPO_META is a JSON blob ("404" = not found).
         if [ -n "${TEST_REPO_META:-}" ]; then

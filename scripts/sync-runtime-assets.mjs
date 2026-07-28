@@ -32,7 +32,7 @@
 
 import { createServer } from 'node:http';
 import { readFile, writeFile, mkdir, readdir, access } from 'node:fs/promises';
-import { join, dirname, extname, relative, sep } from 'node:path';
+import { join, dirname, extname, relative, resolve, isAbsolute, sep } from 'node:path';
 import { existsSync } from 'node:fs';
 
 function arg(name, def = undefined) {
@@ -86,13 +86,32 @@ async function exists(p) {
   }
 }
 
+/**
+ * Resolve a path inside `root`, or null if it escapes.
+ *
+ * Used for both serving and writing. A `startsWith(root)` prefix test is not
+ * containment: join() normalises `..`, so `/../site2/x` under root `/tmp/site`
+ * yields `/tmp/site2/x`, which still shares the prefix.
+ *
+ * This matters more on the write side. Asset paths come from URLs observed at
+ * runtime, i.e. from the cloned site's own JavaScript - content we do not
+ * control. A page requesting `/%2e%2e/%2e%2e/x` decodes to `../../x` and would
+ * otherwise write a remotely-fetched file outside the clone directory.
+ */
+function resolveWithin(root, requestPath) {
+  const abs = resolve(root, requestPath.replace(/^\/+/, ''));
+  const rel = relative(resolve(root), abs);
+  if (rel.startsWith('..') || isAbsolute(rel)) return null;
+  return abs;
+}
+
 function startServer(root) {
   const server = createServer(async (req, res) => {
     try {
       let p = decodeURIComponent(req.url.split('?')[0]);
       if (p.endsWith('/')) p += 'index.html';
-      const file = join(root, p.replace(/^\/+/, ''));
-      if (!file.startsWith(root)) {
+      const file = resolveWithin(root, p);
+      if (!file) {
         res.writeHead(403).end();
         return;
       }
@@ -226,7 +245,14 @@ async function main() {
     for (const miss of fresh) {
       seen.add(miss);
       const pathOnly = miss.split('?')[0];
-      const dest = join(dir, decodeURIComponent(pathOnly).replace(/^\/+/, ''));
+      const dest = resolveWithin(dir, decodeURIComponent(pathOnly));
+      if (!dest) {
+        // The clone's own JavaScript asked for a path outside the clone dir.
+        // Never fetch-and-write that; record it and move on.
+        unavailable.push(`${pathOnly} (refused: escapes clone directory)`);
+        console.error(`   ! ${pathOnly} (refused: escapes clone directory)`);
+        continue;
+      }
       if (await exists(dest)) continue;
       try {
         const { body, isText } = await fetchWithRetry(ORIGIN + miss);

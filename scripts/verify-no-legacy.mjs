@@ -48,12 +48,66 @@
 
 import { createServer } from 'node:http';
 import { readFile, mkdir, readdir } from 'node:fs/promises';
-import { join, extname, relative, sep } from 'node:path';
+import { join, extname, relative, resolve, isAbsolute, sep } from 'node:path';
 import { existsSync } from 'node:fs';
 
 function arg(name, def = undefined) {
   const i = process.argv.indexOf(`--${name}`);
   return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : def;
+}
+
+if (process.argv.includes('--self-test')) {
+  const d = 'example.org';
+  const legacy = (url) => {
+    let hostname;
+    try {
+      hostname = new URL(url).hostname.toLowerCase();
+    } catch {
+      return false;
+    }
+    return hostname === d || hostname.endsWith(`.${d}`);
+  };
+  const cases = [
+    ['apex is legacy', legacy('https://example.org/a.jpg'), true],
+    ['www is legacy', legacy('https://www.example.org/a.jpg'), true],
+    ['any subdomain is legacy', legacy('https://staging.example.org/a.jpg'), true],
+    ['uppercase host still matches', legacy('https://EXAMPLE.ORG/a.jpg'), true],
+    // A substring test would abort this request; it is a third party, not the
+    // origin being retired.
+    [
+      'domain in a query string is NOT legacy',
+      legacy('https://cdn.other.com/x?ref=example.org'),
+      false,
+    ],
+    [
+      'host merely ending in the bare name is NOT legacy',
+      legacy('https://charity.rallyup.com/w'),
+      false,
+    ],
+    // join() normalises `..`, so a startsWith() prefix test would pass here.
+    [
+      'sibling-dir traversal is contained',
+      resolveWithin('/tmp/site', '/../site2/x') === null,
+      true,
+    ],
+    [
+      'encoded traversal is contained',
+      resolveWithin('/tmp/site', decodeURIComponent('/%2e%2e/x')) === null,
+      true,
+    ],
+    ['normal path resolves', resolveWithin('/tmp/site', '/wp-content/a.jpg') !== null, true],
+  ];
+  let failed = 0;
+  for (const [name, got, want] of cases) {
+    if (got !== want) {
+      failed++;
+      console.error(`FAIL ${name} (got ${got}, want ${want})`);
+    } else {
+      console.log(`ok   ${name}`);
+    }
+  }
+  console.log(failed ? `${failed} failure(s)` : `${cases.length}/${cases.length} passed`);
+  process.exit(failed ? 2 : 0);
 }
 
 const domain = arg('domain');
@@ -74,9 +128,28 @@ if (dir && !existsSync(dir)) {
   process.exit(2);
 }
 
-// Both the apex and the www host resolve to the WordPress origin being retired.
-const legacyHosts = [domain, `www.${domain}`];
-const isLegacy = (url) => legacyHosts.some((h) => url.includes(h));
+/**
+ * Is this URL served by the WordPress origin being retired?
+ *
+ * Compares the parsed hostname rather than substring-matching the whole URL.
+ * A substring test both false-matches (`https://cdn.other.com/?ref=example.org`
+ * is not a legacy dependency, but would be aborted) and false-misses (a
+ * differently-cased or punycoded host would slip through the gate).
+ *
+ * Any subdomain counts: staging.<domain> is the same install being retired.
+ * Note this deliberately does not match a third-party host that merely *ends*
+ * with the bare name, e.g. `<charity>.rallyup.com`.
+ */
+function isLegacy(url) {
+  let hostname;
+  try {
+    hostname = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  const d = domain.toLowerCase();
+  return hostname === d || hostname.endsWith(`.${d}`);
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -100,13 +173,27 @@ const MIME = {
   '.webm': 'video/webm',
 };
 
+/**
+ * Resolve a request path inside `root`, or null if it escapes.
+ *
+ * A `startsWith(root)` prefix test is not containment: join() normalises `..`,
+ * so `/../site2/x` under root `/tmp/site` yields `/tmp/site2/x`, which still
+ * shares the prefix. Compare the relative path instead.
+ */
+function resolveWithin(root, requestPath) {
+  const abs = resolve(root, requestPath.replace(/^\/+/, ''));
+  const rel = relative(resolve(root), abs);
+  if (rel.startsWith('..') || isAbsolute(rel)) return null;
+  return abs;
+}
+
 function startServer(root) {
   const server = createServer(async (req, res) => {
     try {
       let p = decodeURIComponent(req.url.split('?')[0]);
       if (p.endsWith('/')) p += 'index.html';
-      const file = join(root, p.replace(/^\/+/, ''));
-      if (!file.startsWith(root)) {
+      const file = resolveWithin(root, p);
+      if (!file) {
         res.writeHead(403).end();
         return;
       }

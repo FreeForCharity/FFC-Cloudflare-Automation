@@ -1,4 +1,4 @@
-name: '123. Domain - Inbound Transfer Preflight (Report) [CF]'
+name: '123. Domain - Inbound Transfer Preflight (Report)'
 run-name: 'Inbound Transfer Preflight'
 
 # READ-ONLY: probes the registry (RDAP) for the given domains, then runs

@@ -228,7 +228,12 @@ function Get-InboundReadiness {
         [int]$PostRegLockDays
     )
 
-    $today = (Get-Date).Date
+    # UTC, to match ConvertTo-DateOrNull's AssumeUniversal/AdjustToUniversal
+    # parse. Mixing a local "today" with UTC-normalized registry dates shifts
+    # daysToExpiry / daysSinceRegistration by a day either side of midnight
+    # depending on the runner's timezone, which is exactly the wrong behaviour
+    # at an ICANN 60-day lock boundary.
+    $today = [datetime]::UtcNow.Date
     $regProfile = Get-RegistrarProfile -Registrar $Registrar
 
     $daysToExpiry = $null
@@ -315,20 +320,20 @@ function Get-InboundReadiness {
     }
 
     return [ordered]@{
-        domain              = $DomainName
-        currentRegistrar    = $Registrar
-        registrarFamily     = $regProfile.family
-        isForeignRegistrar  = $regProfile.isForeign
-        nsDelegationAllowed = $regProfile.nsDelegationAllowed
-        inboundPath         = $inboundPath
-        daysToExpiry        = $daysToExpiry
-        expiryOk            = $expiryOk
+        domain                = $DomainName
+        currentRegistrar      = $Registrar
+        registrarFamily       = $regProfile.family
+        isForeignRegistrar    = $regProfile.isForeign
+        nsDelegationAllowed   = $regProfile.nsDelegationAllowed
+        inboundPath           = $inboundPath
+        daysToExpiry          = $daysToExpiry
+        expiryOk              = $expiryOk
         daysSinceRegistration = $daysSinceReg
-        postRegLockOk       = $postRegLockOk
-        transferLocked      = $TransferLocked
-        readiness           = $readiness
-        bucket              = $bucket
-        reasons             = ($reasons -join ' ')
+        postRegLockOk         = $postRegLockOk
+        transferLocked        = $TransferLocked
+        readiness             = $readiness
+        bucket                = $bucket
+        reasons               = ($reasons -join ' ')
     }
 }
 

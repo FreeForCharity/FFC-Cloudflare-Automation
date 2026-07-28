@@ -100,7 +100,7 @@ Cloudflare/FFC, and the site is Live or Redirect.
 Everything above assumes the losing registrar is **eNom**. A domain still held at Wix, Squarespace,
 or GoDaddy classifies as `review` here and stops — no runbook is written and no path is defined.
 That inbound leg is a separate pipeline: workflow
-`123. Domain - Inbound Transfer Preflight (Report) [CF]`, documented in
+`123. Domain - Inbound Transfer Preflight (Report)`, documented in
 [wix-domain-migration.md](wix-domain-migration.md).
 
 The short version: Wix does not permit nameserver delegation, so a Wix domain must transfer to eNom

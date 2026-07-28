@@ -29,7 +29,7 @@ BeforeAll {
         return ($json | Out-String | ConvertFrom-Json)
     }
 
-    $script:Today = Get-Date
+    $script:Today = [datetime]::UtcNow
 }
 
 Describe 'domain-inbound-transfer-preflight.ps1' {

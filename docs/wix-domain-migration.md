@@ -4,7 +4,7 @@ The repeatable path for a charity whose domain is **registered with Wix**. This 
 counterpart to [domain-transfer-automation.md](domain-transfer-automation.md), which covers the
 outbound leg (eNom → Cloudflare Registrar) and assumes the domain is already at eNom.
 
-Tooling: workflow `123. Domain - Inbound Transfer Preflight (Report) [CF]` and
+Tooling: workflow `123. Domain - Inbound Transfer Preflight (Report)` and
 `scripts/domain-inbound-transfer-preflight.ps1`.
 
 ## Why Wix is its own case

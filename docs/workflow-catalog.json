@@ -475,9 +475,7 @@
     {
       "number": 123,
       "title": "Domain - Inbound Transfer Preflight (Report)",
-      "apis": [
-        "CF"
-      ],
+      "apis": [],
       "file": "123-domain-inbound-transfer-preflight.yml",
       "triggers": [
         "workflow_dispatch"

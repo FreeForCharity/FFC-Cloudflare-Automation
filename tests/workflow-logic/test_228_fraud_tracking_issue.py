@@ -67,9 +67,9 @@ def _run(review_json, *, open_issues=None):
     }
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
-        (tdp / "script.js").write_text(script)
-        (tdp / "context.json").write_text(json.dumps(context))
-        (tdp / "open.json").write_text(json.dumps(open_issues or []))
+        (tdp / "script.js").write_text(script, encoding="utf-8")
+        (tdp / "context.json").write_text(json.dumps(context), encoding="utf-8")
+        (tdp / "open.json").write_text(json.dumps(open_issues or []), encoding="utf-8")
         env["TEST_SCRIPT_FILE"] = str(tdp / "script.js")
         env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
         env["TEST_OPEN_ISSUES_FILE"] = str(tdp / "open.json")

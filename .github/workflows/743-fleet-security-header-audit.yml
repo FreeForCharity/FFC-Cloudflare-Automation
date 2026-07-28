@@ -1,0 +1,250 @@
+name: '743. Website - Fleet Security Header Audit'
+run-name: 'Fleet security header audit'
+
+# Weekly audit of the security headers each FFC-delivered site ACTUALLY SERVES.
+#
+# Why (#884): every FFC template ships `public/_headers`, and on this stack the
+# file does nothing. `_headers` is a Cloudflare Pages / Netlify build feature;
+# these sites are a GitHub Pages origin behind a Cloudflare proxy, and neither
+# leg of that path reads it. FFC_Single_Page_Template ships the file with HSTS,
+# X-Frame-Options, Referrer-Policy, Permissions-Policy, COOP and CORP — and its
+# live response carries not one of them. The convergence plan was about to copy
+# that file across the fleet and mark the gap closed, which would have produced
+# green checklists and zero headers everywhere.
+#
+# So this audit asserts on the RESPONSE and never on a file in a repo. Nothing
+# in this repo measured a security header before it (#884). It reports only —
+# remediation (Cloudflare Transform Rules per zone, and proxying the domains
+# that bypass Cloudflare entirely) is a gated write and belongs elsewhere.
+#
+# Read-only: plain HTTPS GETs to public websites, no credentials, no API, no
+# environment gate. The only write is the rolling issue in THIS repo.
+# Parsing/classification lives in scripts/fleet-security-header-lib.js
+# (unit-tested under tests/workflow-logic/test_743_security_headers.py).
+
+on:
+  schedule:
+    # Weekly, Monday 08:00 UTC — after 741's 07:30 so the two fleet audits do
+    # not file their rolling issues in the same minute.
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+    inputs:
+      domains:
+        description:
+          'Optional comma-separated subset to probe (default: every FFC-delivered domain)'
+        required: false
+        default: ''
+
+# Filtered debug dispatches get their OWN concurrency group, and nothing here
+# cancels anything. Sharing one group meant a one-off `domains=` spot check
+# could cancel an in-flight weekly run — and since a filtered run deliberately
+# does not touch the rolling issue, that week's fleet measurement would simply
+# be lost, with the cancellation surfacing through 740 as an alert nobody could
+# act on. `cancel-in-progress: false` because the thing this workflow produces
+# IS the measurement: a superseded run is not redundant work to discard, it is
+# the data. Two full runs queue instead of racing.
+concurrency:
+  group:
+    ${{ github.workflow }}-${{ github.ref }}-${{ inputs.domains != '' && 'filtered' || 'full' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (sites list + classification library)
+        uses: actions/checkout@v7.0.1
+
+      - name: Select probe targets from the sites list
+        id: select
+        shell: bash
+        env:
+          DOMAIN_FILTER: ${{ inputs.domains }}
+        run: |
+          set -euo pipefail
+          # The node script below reports counts with string concatenation and
+          # never a JS template literal: a dollar-brace inside this
+          # single-quoted argument reads to shellcheck as a shell expansion that
+          # will not expand, SC2016, and actionlint fails the build on it. Same
+          # constraint as 741's inline node block. Keep prose out of the script
+          # body too — shellcheck parses what it can see, and a stray paren in a
+          # JS comment there reads as a malformed function definition.
+          node -e '
+            const fs = require("fs");
+            const lib = require("./scripts/fleet-security-header-lib.js");
+            const records = JSON.parse(fs.readFileSync(lib.SITES_LIST_PATH, "utf8"));
+            const { targets, skipped } = lib.selectDomains(records);
+            const filter = (process.env.DOMAIN_FILTER || "")
+              .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+            const picked = filter.length
+              ? targets.filter((t) => filter.includes(t.domain.toLowerCase()))
+              : targets;
+            const persistedSkips = filter.length ? [] : skipped;
+            fs.writeFileSync("/tmp/targets.json", JSON.stringify(picked));
+            fs.writeFileSync("/tmp/skipped.json", JSON.stringify(persistedSkips));
+            fs.writeFileSync("/tmp/run-mode.json", JSON.stringify({ filtered: filter.length > 0 }));
+            console.log("targets=" + picked.length + " skipped=" + persistedSkips.length
+              + " filtered=" + (filter.length > 0));
+          '
+          count=$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync("/tmp/targets.json","utf8")).length))')
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No probe targets selected — refusing to report an empty fleet as compliant"
+            exit 1
+          fi
+
+      - name: Probe live responses
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/probes
+          mapfile -t domains < <(node -e '
+            const t = JSON.parse(require("fs").readFileSync("/tmp/targets.json", "utf8"));
+            for (const x of t) console.log(x.domain);
+          ')
+          for domain in "${domains[@]}"; do
+            [ -z "$domain" ] && continue
+            safe="${domain//\//_}"
+            head_file="/tmp/probes/${safe}.head"
+            body_file="/tmp/probes/${safe}.body"
+            err_file="/tmp/probes/${safe}.err"
+            : > "$head_file"; : > "$err_file"
+
+            # -L so the FINAL response is what gets classified; a domain that
+            # redirects apex -> www is judged on what the browser ends up
+            # honoring, not on the 301.
+            if ! curl -sSIL --max-time 20 "https://${domain}/" > "$head_file" 2>"$err_file"; then
+              echo "  ${domain} -> no response: $(head -c 200 "$err_file" | tr '\n' ' ')"
+              continue
+            fi
+            # Body is fetched only to record whether a CSP <meta> tag is present.
+            # That tag is the ONLY thing protecting the GitHub Pages sites today,
+            # and it is honored for CSP alone — it sets none of the other five.
+            curl -sSL --max-time 25 --max-filesize 2000000 -o "$body_file" \
+              "https://${domain}/" 2>/dev/null || : > "$body_file"
+            echo "  ${domain} -> probed"
+          done
+
+      - name: Classify + upsert/close rolling issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const lib = require('./scripts/fleet-security-header-lib.js');
+
+            const targets = JSON.parse(fs.readFileSync('/tmp/targets.json', 'utf8'));
+            const skipped = JSON.parse(fs.readFileSync('/tmp/skipped.json', 'utf8'));
+
+            const entries = targets.map((t) => {
+              const safe = t.domain.replace(/\//g, '_');
+              const headPath = `/tmp/probes/${safe}.head`;
+              const bodyPath = `/tmp/probes/${safe}.body`;
+              const errPath = `/tmp/probes/${safe}.err`;
+              if (!fs.existsSync(headPath) || !fs.readFileSync(headPath, 'utf8').trim()) {
+                const err = fs.existsSync(errPath)
+                  ? fs.readFileSync(errPath, 'utf8').trim().slice(0, 200)
+                  : '';
+                return { ...t, error: err || 'no response', status: 0, headers: {} };
+              }
+              const parsed = lib.parseHeaderBlocks(fs.readFileSync(headPath, 'utf8'));
+              const body = fs.existsSync(bodyPath) ? fs.readFileSync(bodyPath, 'utf8') : '';
+              const metaCsp = /http-equiv=["']?content-security-policy/i.test(body);
+              return { ...t, status: parsed.status, headers: parsed.headers, metaCsp };
+            });
+
+            const analysis = lib.analyze(entries, skipped);
+            core.notice(
+              `probed=${analysis.probed} compliant=${analysis.compliant.length} ` +
+                `partial=${analysis.partial.length} none=${analysis.bare.length} ` +
+                `unmeasured=${analysis.unmeasured.length} unproxied=${analysis.unproxied.length}`,
+            );
+
+            // What this run is allowed to do to the fleet-wide issue. The rule
+            // is decided in the library (unit-tested as a matrix) because every
+            // guard here exists for the same reason: a run that knows LESS than
+            // the issue must never overwrite it.
+            const { filtered } = JSON.parse(fs.readFileSync('/tmp/run-mode.json', 'utf8'));
+            const action = lib.decideIssueAction({ filtered, analysis });
+
+            // A `domains=` dispatch probed a hand-picked subset, so its verdict
+            // is about that subset and not about the fleet. Closing the issue
+            // off one compliant domain, or replacing a fleet-wide body with a
+            // one-domain report, would both be wrong. Print and stop.
+            if (action === 'report-only') {
+              await core.summary
+                .addHeading('Filtered run — rolling issue untouched', 2)
+                .addRaw(lib.renderBody(analysis, new Date().toISOString()))
+                .write();
+              core.notice(
+                `Filtered run over ${analysis.probed} domain(s): report written to the job ` +
+                  `summary. The fleet-wide issue is only ever updated by a full run.`,
+              );
+              return;
+            }
+
+            // A run that measured nothing is a broken run, not a clean fleet.
+            // `hasGap` only asks whether a MEASURED domain fell short, so a total
+            // blackout (egress blocked, DNS down on the runner) yields
+            // hasGap:false — which the recovery path below would read as full
+            // compliance and use to close the issue. Fail instead, and leave the
+            // issue exactly as the last run that did measure something left it:
+            // overwriting it with an empty report would destroy the last known
+            // posture on the way past. 740 turns this failure into an alert.
+            if (action === 'fail') {
+              core.setFailed(
+                `Probed ${analysis.probed} domains and measured none of them ` +
+                  `(${analysis.unmeasured.length} unmeasured). Refusing to touch the rolling ` +
+                  `issue — a no-signal run must never read as compliance.`,
+              );
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            const existing = open.find((i) => i.body && i.body.includes(lib.MARKER));
+
+            if (action === 'close') {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: existing.number,
+                  body: `✅ Recovered: every reachable FFC-delivered domain now serves the full security-header set (${analysis.compliant.length}/${analysis.measured}) ([run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})). Auto-closing.`,
+                });
+                await github.rest.issues.update({
+                  owner, repo, issue_number: existing.number, state: 'closed', state_reason: 'completed',
+                });
+                core.notice(`Closed rolling issue #${existing.number}`);
+              } else {
+                core.notice('Full coverage and no open rolling issue — nothing to do.');
+              }
+              return;
+            }
+
+            const labelColors = { security: 'b60205', 'priority: high': 'd93f0b', 'agentic-os': '5319e7' };
+            for (const name of lib.ISSUE_LABELS) {
+              try {
+                await github.rest.issues.createLabel({ owner, repo, name, color: labelColors[name] || 'ededed' });
+              } catch (e) {
+                if (e.status !== 422) throw e; // 422 = already exists
+              }
+            }
+
+            const body = lib.renderBody(analysis, new Date().toISOString());
+            if (existing) {
+              await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
+              // Additive so any human-added labels survive; restores stripped triage labels.
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: existing.number, labels: lib.ISSUE_LABELS,
+              });
+              core.notice(`Updated rolling issue #${existing.number}`);
+              return;
+            }
+
+            const created = await github.rest.issues.create({
+              owner, repo, title: lib.ISSUE_TITLE, labels: lib.ISSUE_LABELS, body,
+            });
+            core.notice(`Opened rolling issue #${created.data.number}`);

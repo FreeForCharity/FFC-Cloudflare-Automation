@@ -79,9 +79,9 @@ def _run(*, existing_markers=None, search_throws=False):
         env["TEST_SEARCH_THROWS"] = "1"
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
-        (tdp / "script.js").write_text(script)
-        (tdp / "context.json").write_text(json.dumps(context))
-        (tdp / "existing.json").write_text(json.dumps(existing_markers or []))
+        (tdp / "script.js").write_text(script, encoding="utf-8")
+        (tdp / "context.json").write_text(json.dumps(context), encoding="utf-8")
+        (tdp / "existing.json").write_text(json.dumps(existing_markers or []), encoding="utf-8")
         env["TEST_SCRIPT_FILE"] = str(tdp / "script.js")
         env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
         env["TEST_EXISTING_MARKERS_FILE"] = str(tdp / "existing.json")

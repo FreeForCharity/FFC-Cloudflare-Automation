@@ -49,7 +49,7 @@ def run_audit(env_overrides: dict) -> tuple[str, str, str]:
         )
         if proc.returncode != 0:
             raise AssertionError(f"audit script exited {proc.returncode}: {proc.stderr}")
-        return summary.read_text(), proc.stdout, gh_log.read_text()
+        return summary.read_text(encoding="utf-8"), proc.stdout, gh_log.read_text(encoding="utf-8")
 
 
 def run_audit_allow_failure(env_overrides: dict) -> tuple[str, str, int]:
@@ -75,7 +75,7 @@ def run_audit_allow_failure(env_overrides: dict) -> tuple[str, str, int]:
         proc = subprocess.run(
             ["bash", "-c", script], env=env, capture_output=True, text=True, timeout=120
         )
-        return summary.read_text(), proc.stdout + proc.stderr, proc.returncode
+        return summary.read_text(encoding="utf-8"), proc.stdout + proc.stderr, proc.returncode
 
 
 def test_unreadable_org_rulesets_fails_and_never_reports_present():

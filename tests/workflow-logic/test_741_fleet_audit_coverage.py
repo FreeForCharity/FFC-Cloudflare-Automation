@@ -364,7 +364,7 @@ def test_render_out_of_scope_and_unreadable_sections():
 # --- workflow wiring shape -------------------------------------------------
 
 def test_workflow_requires_lib_and_is_read_only():
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert "scripts/fleet-audit-coverage-lib.js" in raw, "workflow must require the shipped lib"
     wf = load_workflow(WF_FILE)
     perms = wf["permissions"]
@@ -405,12 +405,12 @@ def test_741_header_never_wraps_mid_hyphenated_word():
     pattern (`squash- or`) and predates this PR, so a repo-wide guard would fail
     on unrelated work. Widening it is a worthwhile follow-up.
     """
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     header = [ln for ln in raw.splitlines() if ln.startswith("#")]
     offenders = [ln for ln in header if ln.rstrip().endswith("-")]
     assert not offenders, offenders
 
-    catalog = json.loads((REPO_ROOT / "docs" / "workflow-catalog.json").read_text())
+    catalog = json.loads((REPO_ROOT / "docs" / "workflow-catalog.json").read_text(encoding="utf-8"))
     entries = catalog["workflows"] if isinstance(catalog, dict) else catalog
     mine = next(w for w in entries if w.get("number") == 741)
     import re as _re
@@ -420,7 +420,7 @@ def test_741_header_never_wraps_mid_hyphenated_word():
 def test_workflow_never_writes_to_a_fleet_repo():
     # Remediation belongs to #822; this workflow only measures. The single write
     # is the rolling issue in this repo.
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     for forbidden in ["create_or_update_file", "git push", "peter-evans/create-pull-request"]:
         assert forbidden not in raw, f"741 must not write to fleet repos ({forbidden})"
 

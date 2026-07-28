@@ -170,12 +170,12 @@ def _run(
     }
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
-        (tdp / "script.js").write_text(script)
-        (tdp / "context.json").write_text(json.dumps(context))
-        (tdp / "open.json").write_text(json.dumps(open_issues or []))
-        (tdp / "jobs.json").write_text(json.dumps(jobs))
-        (tdp / "workflows.json").write_text(json.dumps(inventory))
-        (tdp / "runs.json").write_text(json.dumps(runs))
+        (tdp / "script.js").write_text(script, encoding="utf-8")
+        (tdp / "context.json").write_text(json.dumps(context), encoding="utf-8")
+        (tdp / "open.json").write_text(json.dumps(open_issues or []), encoding="utf-8")
+        (tdp / "jobs.json").write_text(json.dumps(jobs), encoding="utf-8")
+        (tdp / "workflows.json").write_text(json.dumps(inventory), encoding="utf-8")
+        (tdp / "runs.json").write_text(json.dumps(runs), encoding="utf-8")
         env["TEST_SCRIPT_FILE"] = str(tdp / "script.js")
         env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
         env["TEST_OPEN_ISSUES_FILE"] = str(tdp / "open.json")
@@ -767,7 +767,7 @@ def test_a_recovery_also_finds_an_alert_past_the_first_page():
 def _all_workflow_names() -> dict:
     names = {}
     for path in sorted(WORKFLOWS.glob("*.yml")):
-        data = yaml.safe_load(path.read_text())
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if isinstance(data, dict) and data.get("name"):
             names[data["name"]] = path.name
     return names
@@ -955,7 +955,7 @@ def test_the_poll_cron_collides_with_no_other_hub_schedule():
     for path in sorted(WORKFLOWS.glob("*.yml")):
         if path.name == WORKFLOW:
             continue
-        wf = yaml.safe_load(path.read_text())
+        wf = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(wf, dict):
             continue
         on = wf.get("on", wf.get(True, {}))
@@ -971,7 +971,7 @@ def test_no_workflow_run_trigger_remains_anywhere_in_the_repo():
     # workflow may depend on it until the platform-side cause is resolved.
     offenders = []
     for path in sorted(WORKFLOWS.glob("*.yml")):
-        wf = yaml.safe_load(path.read_text())
+        wf = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(wf, dict):
             continue
         on = wf.get("on", wf.get(True, {}))
@@ -1006,7 +1006,7 @@ def test_alerter_is_ungated_and_uses_the_ambient_token_only():
     wf = load_workflow(WORKFLOW)
     job = wf["jobs"][JOB]
     assert "environment" not in job, job
-    raw = (WORKFLOWS / WORKFLOW).read_text()
+    raw = (WORKFLOWS / WORKFLOW).read_text(encoding="utf-8")
     assert "CBM_TOKEN" not in raw, "740 must use the ambient GITHUB_TOKEN only"
 
 

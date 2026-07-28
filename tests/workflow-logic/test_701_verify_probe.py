@@ -43,7 +43,7 @@ def run_probe(env_overrides: dict) -> tuple[subprocess.CompletedProcess, str, st
             text=True,
             timeout=120,
         )
-        return proc, summary.read_text(), outputs.read_text()
+        return proc, summary.read_text(encoding="utf-8"), outputs.read_text(encoding="utf-8")
 
 
 def test_serving_site_detected_despite_crlf_headers():

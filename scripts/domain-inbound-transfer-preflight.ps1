@@ -64,10 +64,16 @@
     -ExpiryDate / -RegistrationDate / -TransferLocked.
 
 .PARAMETER RegistryTruthCsv
-    Path to docs/domain-registry-truth.csv or the artifact produced by
-    scripts/domain-registry-probe.ps1 (columns: domain, registrarOfRecord,
-    registryExpiry, registryCreated, transferLocked, bucket). Preferred input --
-    RDAP is authoritative where WHMCS is frequently stale.
+    Path to a freshly generated scripts/domain-registry-probe.ps1 artifact
+    (columns: domain, registrarOfRecord, registryExpiry, registryCreated,
+    transferLocked, bucket), covering the domains you are actually migrating.
+
+    WHMCS is FFC's live record of the domains we hold. RDAP answers a narrower
+    question -- what the registry says about one domain right now -- which is the
+    useful cross-check for a domain at a foreign registrar, since such a domain
+    may not be in WHMCS at all. Do not point this at the committed
+    docs/domain-registry-truth.csv: that file is a point-in-time snapshot kept
+    for reference, not a current or authoritative worklist.
 
 .PARAMETER InventoryCsv
     Any CSV with a 'domain' column plus optional 'registrar' / 'expirydate' /
@@ -92,10 +98,11 @@
     For CSV inputs: writes -OutputFile and prints a JSON summary on stdout.
 
 .EXAMPLE
-    pwsh -File scripts/domain-inbound-transfer-preflight.ps1 -RegistryTruthCsv docs/domain-registry-truth.csv -RunbookDir _run_artifacts/runbooks
+    pwsh -File scripts/domain-inbound-transfer-preflight.ps1 -Domain cactuswrenpreschool.com -CurrentRegistrar 'Wix.com Ltd.' -RegistrationDate 2015-03-01 -ExpiryDate 2027-03-01
 
 .EXAMPLE
-    pwsh -File scripts/domain-inbound-transfer-preflight.ps1 -Domain cactuswrenpreschool.com -CurrentRegistrar 'Wix.com Ltd.' -RegistrationDate 2015-03-01 -ExpiryDate 2027-03-01
+    pwsh -File scripts/domain-registry-probe.ps1 -Domain cactuswrenpreschool.com -OutputFile _run_artifacts/truth.csv
+    pwsh -File scripts/domain-inbound-transfer-preflight.ps1 -RegistryTruthCsv _run_artifacts/truth.csv -RunbookDir _run_artifacts/runbooks
 #>
 [CmdletBinding(DefaultParameterSetName = 'Csv')]
 param(

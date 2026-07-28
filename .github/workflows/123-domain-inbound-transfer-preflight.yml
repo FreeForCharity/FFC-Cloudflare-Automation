@@ -1,5 +1,5 @@
 name: '123. Domain - Inbound Transfer Preflight (Report)'
-run-name: 'Inbound Transfer Preflight'
+run-name: 'Inbound Transfer Preflight (domains=${{ inputs.domains }})'
 
 # READ-ONLY: probes the registry (RDAP) for the given domains, then runs
 # scripts/domain-inbound-transfer-preflight.ps1 offline to classify how each
@@ -11,15 +11,26 @@ run-name: 'Inbound Transfer Preflight'
 #
 # No secrets and no WHMCS credentials: RDAP is public and the preflight itself
 # is pure offline analysis. Initiates no transfer and spends no money.
+#
+# SCOPE: `domains` is required and there is no fleet-wide default. This workflow
+# only ever looks at domains someone names explicitly -- it does not sweep the
+# estate, and it is not a source of truth about it.
+#
+# WHMCS is FFC's live record of what we hold. docs/domain-registry-truth.csv is
+# a committed point-in-time RDAP snapshot for reference only; do not treat it as
+# current, and do not drive work from it.
+#
+# run-name echoes the requested domains so a run is identifiable in the Actions
+# list without opening it.
 
 on:
   workflow_dispatch:
     inputs:
       domains:
         description:
-          'Comma/space separated domains to evaluate. Leave blank to use the committed
-          docs/domain-registry-truth.csv.'
-        required: false
+          'REQUIRED. Comma/space separated domains to evaluate. Explicit opt-in only -- there is
+          deliberately no fleet-wide default, so this never sweeps domains nobody asked about.'
+        required: true
         type: string
       min_days_to_expiry:
         description: 'Minimum days to expiry to treat a domain as transfer-ready'
@@ -60,12 +71,7 @@ jobs:
 
           $raw = "$env:INPUT_DOMAINS"
           if ([string]::IsNullOrWhiteSpace($raw)) {
-            # No explicit list: re-use the committed registry truth as-is. It
-            # already carries registrarOfRecord/expiry/lock for the whole fleet,
-            # so the RDAP probe below is skipped entirely.
-            Copy-Item docs/domain-registry-truth.csv artifacts/inbound/registry_truth.csv -Force
-            Write-Host 'Using committed docs/domain-registry-truth.csv (no RDAP probe needed).'
-            'false' | Out-File -FilePath artifacts/inbound/needs_probe.txt -Encoding utf8 -NoNewline
+            throw 'domains is required. Name the domains to evaluate explicitly; this workflow has no fleet-wide default by design.'
           }
           else {
             $domains = $raw -split '[,\s]+' |
@@ -81,7 +87,7 @@ jobs:
             $domains | Sort-Object -Unique |
               ForEach-Object { [pscustomobject]@{ domain = $_ } } |
               Export-Csv artifacts/inbound/domains.csv -NoTypeInformation -Encoding utf8
-            Write-Host ("Domains to probe: {0}" -f @($domains).Count)
+            Write-Host ("Domains to evaluate: {0}" -f @($domains).Count)
             'true' | Out-File -FilePath artifacts/inbound/needs_probe.txt -Encoding utf8 -NoNewline
           }
 

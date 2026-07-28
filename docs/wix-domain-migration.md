@@ -94,16 +94,21 @@ workflows `115` → `116` → `117`.
 
 ## Reading the preflight output
 
-Run workflow `123` (or the script directly) to classify a domain:
+Run workflow `123` (or the script directly) against the specific domain you are migrating. The
+`domains` input is required and there is no fleet-wide default — this is a per-domain tool, run when
+a charity's migration is actually on the table, not a sweep of the estate.
 
 ```bash
 pwsh -File scripts/domain-inbound-transfer-preflight.ps1 \
   -Domain example.org -CurrentRegistrar 'Wix.com Ltd.' -RunbookDir _run_artifacts/runbooks
-
-# Or across the whole fleet from the committed registry truth:
-pwsh -File scripts/domain-inbound-transfer-preflight.ps1 \
-  -RegistryTruthCsv docs/domain-registry-truth.csv -RunbookDir _run_artifacts/runbooks
 ```
+
+> **What is authoritative.** WHMCS is FFC's live record of the domains we hold — check it first, and
+> treat it as the answer when anything disagrees. RDAP tells you what the _registry_ says about one
+> domain right now, which is the useful cross-check when a domain is at a foreign registrar and
+> therefore may not be in WHMCS at all. `docs/domain-registry-truth.csv` is a committed
+> point-in-time snapshot for reference only: it is not current, it is not the live record, and work
+> should not be driven from it.
 
 | bucket                      | meaning                                                               |
 | --------------------------- | --------------------------------------------------------------------- |
@@ -135,4 +140,5 @@ transfer starts on day one rather than being discovered midway through a provisi
   leg (workflows 115/116/117).
 - [domain-transfer-automation-scope.md](domain-transfer-automation-scope.md) — why the transfer
   click itself stays manual.
-- [domain-registry-truth.md](domain-registry-truth.md) — RDAP as the authoritative registrar source.
+- [domain-registry-truth.md](domain-registry-truth.md) — how the RDAP probe works and what its
+  snapshot is (and is not) good for.

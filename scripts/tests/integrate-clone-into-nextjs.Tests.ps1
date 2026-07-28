@@ -42,7 +42,9 @@ Describe 'integrate-clone-into-nextjs.mjs' {
 
     It 'deletes the dead _clone-host sentinel instead of backing it up' {
         $output = (& node $script:Script --self-test 2>&1) -join "`n"
-        $output | Should -Match 'ok\s+the `_clone-host` sentinel is deleted'
+        # `.` stands in for the backticks around the folder name in the output,
+        # so the assertion doesn't hinge on PowerShell string-escaping rules.
+        $output | Should -Match 'ok\s+the .?_clone-host.? sentinel is deleted'
     }
 
     It 'moves real template routes to the backup rather than deleting them' {

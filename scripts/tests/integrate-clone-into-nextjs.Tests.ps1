@@ -52,6 +52,14 @@ Describe 'integrate-clone-into-nextjs.mjs' {
         $output | Should -Match 'ok\s+real template routes are moved to the backup'
     }
 
+    It 'does not count a page in a private folder as a remaining route' {
+        # The reported route count has to draw the same private-vs-routable
+        # distinction the sentinel got wrong, or it repeats the bug in the
+        # metric that is meant to replace the old asserted invariant.
+        $output = (& node $script:Script --self-test 2>&1) -join "`n"
+        $output | Should -Match 'ok\s+a page in a private folder is not counted as a route'
+    }
+
     It 'still reports usage when required arguments are missing' {
         # Guards the ordering trap: --self-test has to run before the usage
         # guard, without weakening the guard itself.

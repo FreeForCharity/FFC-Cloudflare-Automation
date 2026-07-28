@@ -114,14 +114,28 @@ function disableTemplatePages(appDir, backupDir) {
   return movedRoutes;
 }
 
-/** Count surviving `page.*` files under src/app, so the report states the end
- *  state as an observation rather than asserting an invariant. */
-function countPages(dir) {
+/**
+ * Count surviving *routable* pages under src/app, so the report states the end
+ * state as an observation rather than asserting an invariant.
+ *
+ * Underscore-prefixed directories are private and excluded from routing, so a
+ * `page.*` inside one is not a route and must not be counted as one — the exact
+ * distinction this script previously got wrong. Route groups `(name)` are not
+ * skipped: unlike private folders they do route, they just don't add a segment.
+ *
+ * Note this is deliberately stricter than disableTemplatePages(), which moves
+ * every page-shaped file aside regardless of where it sits. Disabling is a
+ * conservative safety net over a backup; counting is a claim about routes, so it
+ * has to mean what it says.
+ */
+function countRoutablePages(dir) {
   if (!existsSync(dir)) return 0;
   let n = 0;
   for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.isDirectory()) n += countPages(join(dir, e.name));
-    else if (PAGE.test(e.name)) n++;
+    if (e.isDirectory()) {
+      if (e.name.startsWith('_')) continue;
+      n += countRoutablePages(join(dir, e.name));
+    } else if (PAGE.test(e.name)) n++;
   }
   return n;
 }
@@ -180,7 +194,7 @@ function integrate({ clone, repo, domain }) {
     publicFiles: countFiles(publicDir),
     disabledTemplateRoutes: movedRoutes,
     removedDeadSentinels: removedSentinels.map((p) => relative(repo, p)),
-    appRoutesRemaining: countPages(appDir),
+    appRoutesRemaining: countRoutablePages(appDir),
     cname: keptCname || domain,
     note: 'Run `npm ci && npm run build` in the repo; the static export (out/) serves the clone.',
   };
@@ -244,7 +258,7 @@ function selfTest() {
       existsSync(join(repo, '_disabled_template_routes', 'page.tsx')) &&
       existsSync(join(repo, '_disabled_template_routes', 'contact', 'page.tsx')),
   );
-  check('no `page.*` survives under src/app', report.appRoutesRemaining === 0);
+  check('no routable page survives under src/app', report.appRoutesRemaining === 0);
   check('layout.tsx is left alone', existsSync(join(appDir, 'layout.tsx')));
   check(
     'the clone replaces public/ and httrack cruft is gone',
@@ -274,6 +288,22 @@ function selfTest() {
       again.removedDeadSentinels.length === 0 &&
       again.appRoutesRemaining === 0 &&
       readFileSync(join(repo, '.prettierignore'), 'utf8').split('public/').length === 2,
+  );
+
+  // countRoutablePages() is exercised directly, not through integrate(): that
+  // sweeps every page-shaped file first, so a private page never survives long
+  // enough for the report to disagree. The distinction is the whole point of
+  // this change, so it gets pinned at the source.
+  const routeFixture = join(root, 'routes', 'app');
+  mkdirSync(join(routeFixture, '_private'), { recursive: true });
+  mkdirSync(join(routeFixture, '(group)'), { recursive: true });
+  mkdirSync(join(routeFixture, 'about'), { recursive: true });
+  for (const d of ['_private', '(group)', 'about', '.']) {
+    writeFileSync(join(routeFixture, d, 'page.tsx'), 'export default function P(){return null}');
+  }
+  check(
+    'a page in a private folder is not counted as a route, but a route group is',
+    countRoutablePages(routeFixture) === 3,
   );
 
   rmSync(root, { recursive: true, force: true });

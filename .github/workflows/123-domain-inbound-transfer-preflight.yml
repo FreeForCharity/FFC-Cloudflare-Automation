@@ -49,11 +49,16 @@ jobs:
 
       - name: Resolve the domain set
         shell: pwsh
+        # The dispatch input travels via env, never interpolated into the
+        # script body: a `'` in the input would otherwise terminate the
+        # PowerShell string literal and let the rest execute as code.
+        env:
+          INPUT_DOMAINS: ${{ inputs.domains }}
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path artifacts/inbound | Out-Null
 
-          $raw = '${{ inputs.domains }}'
+          $raw = "$env:INPUT_DOMAINS"
           if ([string]::IsNullOrWhiteSpace($raw)) {
             # No explicit list: re-use the committed registry truth as-is. It
             # already carries registrarOfRecord/expiry/lock for the whole fleet,
@@ -67,6 +72,12 @@ jobs:
               ForEach-Object { $_.Trim().ToLowerInvariant().Trim('.') } |
               Where-Object { $_ }
             if (@($domains).Count -eq 0) { throw 'No usable domains parsed from the input.' }
+
+            # Defence in depth: these tokens are only ever written to a CSV and
+            # read back as data, but reject anything that is not a plausible
+            # hostname rather than carrying it forward.
+            $bad = @($domains | Where-Object { $_ -notmatch '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' })
+            if ($bad.Count -gt 0) { throw ("Not valid domain names: {0}" -f ($bad -join ', ')) }
             $domains | Sort-Object -Unique |
               ForEach-Object { [pscustomobject]@{ domain = $_ } } |
               Export-Csv artifacts/inbound/domains.csv -NoTypeInformation -Encoding utf8
@@ -92,17 +103,26 @@ jobs:
 
       - name: Run inbound transfer preflight (offline)
         shell: pwsh
+        # Same reasoning as the domain input: workflow_dispatch `type: number`
+        # is a UI hint, not a guarantee -- an API dispatch can send any string
+        # -- so these arrive via env and are cast to [int] before use.
+        env:
+          INPUT_MIN_DAYS_TO_EXPIRY: ${{ inputs.min_days_to_expiry }}
+          INPUT_POST_REG_LOCK_DAYS: ${{ inputs.post_reg_lock_days }}
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path artifacts/inbound/runbooks | Out-Null
+
+          $minDays = [int]"$env:INPUT_MIN_DAYS_TO_EXPIRY"
+          $lockDays = [int]"$env:INPUT_POST_REG_LOCK_DAYS"
 
           $ErrorActionPreference = 'Continue'
           $out = & pwsh -NoProfile -File .\scripts\domain-inbound-transfer-preflight.ps1 `
             -RegistryTruthCsv artifacts/inbound/registry_truth.csv `
             -OutputFile artifacts/inbound/domain_inbound_transfer_preflight.csv `
             -RunbookDir artifacts/inbound/runbooks `
-            -MinDaysToExpiry ${{ inputs.min_days_to_expiry }} `
-            -PostRegLockDays ${{ inputs.post_reg_lock_days }}
+            -MinDaysToExpiry $minDays `
+            -PostRegLockDays $lockDays
           $exit = $LASTEXITCODE
           $ErrorActionPreference = 'Stop'
           if ($exit -ne 0) { throw "domain-inbound-transfer-preflight.ps1 failed (exit $exit)." }
@@ -171,10 +191,19 @@ jobs:
       - name: Comment summary back to issue
         if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
         uses: actions/github-script@v9
+        env:
+          # Via env for the same reason as the pwsh steps -- interpolating a
+          # dispatch input straight into the script body is a JS injection
+          # vector, and this step holds a token with issues: write.
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
         with:
           script: |
             const fs = require('fs');
-            const issueNumber = Number('${{ inputs.issue_number }}');
+            const issueNumber = Number(process.env.INPUT_ISSUE_NUMBER);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed(`Not a valid issue number: ${process.env.INPUT_ISSUE_NUMBER}`);
+              return;
+            }
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             let table = '';
             try {

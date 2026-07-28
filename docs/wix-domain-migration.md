@@ -79,12 +79,12 @@ or M365 loses email the moment those are dropped.
 
 No waiting period applies to a nameserver change.
 
-- Run `110. Cloudflare - Zone Create`.
+- Run `110. DNS - Create Zone (Admin) [CF]`.
 - Recreate every stage-0 record in the Cloudflare zone **before** switching nameservers.
 - Verify MX/SPF/DKIM/DMARC match the stage-0 capture exactly.
 - Set nameservers to the Cloudflare pair at eNom.
-- Run `102. Domain - Add to FFC Cloudflare + WHMCS Nameservers`.
-- Run `103. Domain - Enforce Domain Standard` once the zone is active.
+- Run `102. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS]`.
+- Run `103. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]` once the zone is active.
 
 ### Stage 4 — eNom → Cloudflare Registrar (later, optional)
 

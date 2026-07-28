@@ -420,12 +420,12 @@ function Write-InboundRunbook {
     $lines.Add('No waiting period applies to a nameserver change. Once this lands the site is behind')
     $lines.Add('Cloudflare, regardless of who holds the registration.')
     $lines.Add('')
-    $lines.Add('- [ ] Run workflow `110. Cloudflare - Zone Create` for the domain.')
+    $lines.Add('- [ ] Run workflow `110. DNS - Create Zone (Admin) [CF]` for the domain.')
     $lines.Add('- [ ] Recreate every record captured in stage 0 in the Cloudflare zone **before** switching NS.')
     $lines.Add('- [ ] Verify MX/SPF/DKIM/DMARC match the stage-0 capture exactly.')
     $lines.Add('- [ ] Set the nameservers to the Cloudflare pair at the registrar.')
-    $lines.Add('- [ ] Run workflow `102. Domain - Add to FFC Cloudflare and WHMCS`.')
-    $lines.Add('- [ ] Run workflow `103. Domain - Enforce Domain Standard` once the zone is active.')
+    $lines.Add('- [ ] Run workflow `102. Domain - Add to FFC Cloudflare + WHMCS Nameservers (Admin) [CF+WHMCS]`.')
+    $lines.Add('- [ ] Run workflow `103. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]` once the zone is active.')
     $lines.Add('')
 
     if ($R.inboundPath -eq 'transfer-required') {
@@ -436,7 +436,7 @@ function Write-InboundRunbook {
         $lines.Add('stage 3, so there is no urgency.')
         $lines.Add('')
         $lines.Add('- [ ] Wait 60 days from the stage-2 transfer completion date.')
-        $lines.Add('- [ ] The domain now classifies as `ENOM_READY`; run workflow `115. Domain - Transfer Readiness Preflight`.')
+        $lines.Add('- [ ] The domain now classifies as `ENOM_READY`; run workflow `115. Domain - Transfer Readiness Preflight (Report) [WHMCS]`.')
         $lines.Add('- [ ] Continue with workflows `116` (EPP probe) and `117` (post-transfer verification).')
         $lines.Add('')
     }

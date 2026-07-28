@@ -95,8 +95,23 @@ pwsh -File scripts/domain-transfer-verify.ps1 -Domain example.org -Account FFC
 `verified` is true only when the domain is managed by Cloudflare Registrar, its nameservers are
 Cloudflare/FFC, and the site is Live or Redirect.
 
+## Domains that are not at eNom yet
+
+Everything above assumes the losing registrar is **eNom**. A domain still held at Wix, Squarespace,
+or GoDaddy classifies as `review` here and stops — no runbook is written and no path is defined.
+That inbound leg is a separate pipeline: workflow
+`123. Domain - Inbound Transfer Preflight (Report) [CF]`, documented in
+[wix-domain-migration.md](wix-domain-migration.md).
+
+The short version: Wix does not permit nameserver delegation, so a Wix domain must transfer to eNom
+before Cloudflare is reachable at all; every other registrar can point nameservers at Cloudflare
+immediately and transfer later. Once a domain lands at eNom it becomes an ordinary `ENOM_READY` row
+and re-enters the pipeline above.
+
 ## See also
 
+- [wix-domain-migration.md](wix-domain-migration.md) — the inbound leg (foreign registrar → eNom →
+  Cloudflare)
 - [domain-transfer-automation-scope.md](domain-transfer-automation-scope.md) — scope and boundaries
 - [domain-inventory-reconciliation.md](domain-inventory-reconciliation.md) — the inventory side
 - [cloudflare-domain-registration.md](cloudflare-domain-registration.md) — buying _new_ domains

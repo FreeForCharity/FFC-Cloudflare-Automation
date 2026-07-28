@@ -473,6 +473,24 @@
       "categoryCode": "CF"
     },
     {
+      "number": 123,
+      "title": "Domain - Inbound Transfer Preflight (Report)",
+      "apis": [
+        "CF"
+      ],
+      "file": "123-domain-inbound-transfer-preflight.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "READ-ONLY: probes the registry (RDAP) for the given domains, then runs scripts/domain-inbound-transfer-preflight.ps1 offline to classify how each domain held at a FOREIGN registrar (Wix / Squarespace / GoDaddy / ...) comes under FFC management -- via eNom/WHMCS, then Cloudflare nameservers.  Counterpart to workflow 115, which handles the outbound leg (eNom -> Cloudflare Registrar) and assumes the losing registrar is already eNom.  No secrets and no WHMCS credentials: RDAP is public and the preflight itself is pure offline analysis. Initiates no transfer and spends no money.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "none (no credentials)",
+      "guard": "read-only RDAP + offline analysis; classifies foreign-registrar domains for the eNom/WHMCS inbound path",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
       "number": 201,
       "title": "WHMCS - Export Domains (Report)",
       "apis": [

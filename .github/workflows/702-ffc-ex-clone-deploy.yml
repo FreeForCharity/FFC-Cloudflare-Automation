@@ -235,6 +235,15 @@ jobs:
       - name: Install httrack
         run: sudo apt-get update && sudo apt-get install -y httrack
 
+      - name: Install Playwright (runtime-asset sync + cutover gate)
+        # This repo is intentionally dependency-free, so Playwright is installed
+        # ad hoc for the two browser-driven stages rather than committed as a
+        # dependency. Chromium only; --with-deps pulls the shared libraries the
+        # runner image does not ship.
+        run: |
+          npm i --no-save playwright
+          npx playwright install --with-deps chromium
+
       - name: Resolve target repo
         id: target
         run: |
@@ -253,6 +262,17 @@ jobs:
             --depth "${{ inputs.depth }}" \
             ${{ inputs.exclude && format('--exclude {0}', inputs.exclude) || '' }}
           cat "$RUNNER_TEMP/clone/clone-report.json"
+
+      - name: Mirror runtime-loaded assets
+        working-directory: automation
+        # httrack only fetches what it can see in markup. Elementor and friends
+        # assemble content-hashed chunk URLs in JavaScript, so those are missing
+        # from the mirror and every widget depending on them dies silently.
+        # See #902.
+        run: |
+          node scripts/sync-runtime-assets.mjs \
+            --domain "${{ inputs.domain }}" \
+            --dir "$RUNNER_TEMP/clone/${{ inputs.domain }}"
 
       - name: Check out target FFC-EX repo
         uses: actions/checkout@v7.0.1
@@ -282,6 +302,16 @@ jobs:
             echo "missing out/index.html"
             exit 1
           fi
+
+      - name: Gate - clone must be self-contained
+        if: ${{ inputs.build_check }}
+        # Loads every exported page with all requests to the live host aborted.
+        # Fails on a surviving legacy dependency OR a missing local asset - the
+        # two classes clone-report.json cannot see. See #902.
+        run: |
+          node automation/scripts/verify-no-legacy.mjs \
+            --domain "${{ inputs.domain }}" \
+            --dir ffc-ex/out
 
       - name: Commit and open PR on the FFC-EX repo
         working-directory: ffc-ex

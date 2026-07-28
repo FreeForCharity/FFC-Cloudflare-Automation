@@ -287,7 +287,20 @@ jobs:
           cp "$REPORT" /tmp/drift-report.md
 
       - name: Open / update tracking issue if drift detected
-        if: ${{ always() }}
+        # always() so a FAILED audit still delivers a report — the hard-fail path
+        # above deliberately writes an INCOMPLETE report rather than leaving a
+        # stale or missing one (#854).
+        #
+        # ...but NOT when the audit never ran. If the preflight or the Azure login
+        # bails, there is no report to deliver AND no GH_TOKEN, so this step dies
+        # on `gh issue list` and reports "Could not search for an existing tracking
+        # issue — refusing to risk opening a duplicate". That is a true statement
+        # about a situation that does not exist, and it buries the real one-line
+        # cause under a second error that looks like an API or permissions fault.
+        # Observed on run 30334346136 (dispatch against the unprovisioned
+        # github-prod-read lane): the preflight said exactly what was wrong in two
+        # seconds, and this step immediately contradicted it.
+        if: ${{ always() && steps.audit.conclusion != 'skipped' }}
         shell: bash
         run: |
           set -uo pipefail

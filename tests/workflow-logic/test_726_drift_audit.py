@@ -181,6 +181,42 @@ def test_clean_public_repo_reports_no_drift_flags():
         assert flag not in report, (flag, report)
 
 
+def test_report_step_skips_when_the_audit_never_ran():
+    """The reporting step must not fire when the audit step was skipped.
+
+    It runs `if: always()` so a FAILED audit still delivers its INCOMPLETE
+    report (#854). But when the preflight or the Azure login bails, there is no
+    report AND no GH_TOKEN, so `gh issue list` dies and the step reports
+    "Could not search for an existing tracking issue" — a second error that
+    reads like an API fault and buries the real cause. Seen for real on run
+    30334346136, dispatched against the unprovisioned github-prod-read lane.
+
+    Both halves matter, so both are asserted: drop `always()` and a failed
+    audit stops reporting; drop the skip guard and a bailed job emits the
+    misleading duplicate-issue error.
+    """
+    import yaml as _yaml
+
+    from wf_extract import WORKFLOWS as _WORKFLOWS
+
+    wf = _yaml.safe_load(
+        (_WORKFLOWS / "726-repo-rulesets-drift-audit.yml").read_text(encoding="utf-8-sig")
+    )
+    steps = wf["jobs"]["audit"]["steps"]
+    report_step = next(s for s in steps if "tracking issue" in str(s.get("name", "")).lower())
+    cond = str(report_step.get("if", ""))
+
+    assert "always()" in cond, (
+        "the reporting step lost always(): a failed audit must still deliver its "
+        f"INCOMPLETE report (#854). Condition is {cond!r}"
+    )
+    assert "skipped" in cond and "steps.audit" in cond, (
+        "the reporting step must not run when the audit step was skipped — "
+        "otherwise a preflight/login bail emits a misleading "
+        f"'could not search for an existing tracking issue' error. Condition is {cond!r}"
+    )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

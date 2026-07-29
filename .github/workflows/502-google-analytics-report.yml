@@ -3,9 +3,10 @@ run-name: 'Google Analytics Report'
 
 # Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers
 # it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe:
-# aggregate metrics only. Requires the google-prod-read environment (report) and the approval-gated
-# github-prod environment (delivery) + the Wave 0 foundation. The delivery PAT comes from Key Vault
-# (`wr-all-cbm-github-pat`) over OIDC, never a GitHub secret — see #844.
+# aggregate metrics only. Requires the google-prod-read environment (report) and the ungated
+# github-prod-read environment (delivery, #834) + the Wave 0 foundation. Opening the PR is reporting
+# plumbing, not a Write — the data this workflow consumes is a Read. The delivery PAT comes from Key
+# Vault (`read-all-cbm-github-pat`) over OIDC on the READER identity, never a GitHub secret — #844.
 
 on:
   schedule:
@@ -18,17 +19,15 @@ on:
         default: '28'
         type: string
 
-# Supersede-on-newer (#722): these daily runs pause at an approval gate; without
-# this, unapproved runs pile up ~12-deep until the janitor reaps them at 7 days.
-# cancel-in-progress cancels the older queued/waiting run the moment the next
-# scheduled run starts, so at most ONE run ever waits at the gate. Ref-scoped
-# so a dispatch from a PR branch can never cancel main's scheduled run.
-# Trade-off (accepted): cancel-in-progress could interrupt an EXECUTING run,
-# but execution lasts minutes against a 24h cadence — in practice only
-# gate-waiting runs are ever superseded; janitor 734 remains the backstop.
+# cancel-in-progress: false (#834). Its entire justification (#722) was that these
+# daily runs parked at an approval gate and piled up ~12-deep until janitor 734
+# reaped them at 7 days. Ungated on github-prod-read, nothing ever waits, so the
+# only run it could still cancel is an EXECUTING one — the trade-off #722 accepted
+# as the lesser evil becomes pure downside. Ref-scoped so a dispatch from a PR
+# branch can never collide with main's scheduled run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-supersede
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -110,18 +109,32 @@ jobs:
   deliver:
     needs: report
     runs-on: ubuntu-latest
-    environment: github-prod
+    environment: github-prod-read
     steps:
       # Checkout gives the deliver job the current workflow catalog so the public
       # copies on ffcadmin (src/data render + /data stable URL) refresh in the
       # same daily PR as the GA data — one reviewable sync pipe (backlog #554).
       - uses: actions/checkout@v7.0.1
 
+      # Same preflight the `report` job runs for google-prod-read, now that
+      # `deliver` authenticates too (#834). Without it a missing identifier
+      # surfaces inside azure/login as a blank client-id, after the whole GA
+      # pipeline has already run.
+      - name: Validate required Azure secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set (environment: github-prod-read). These OIDC identifiers are ENVIRONMENT secrets — a repo Variable does not satisfy a secrets.* reference. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID is not set (environment: github-prod-read). See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+
       - name: Azure login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
         with:
-          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
       # Key Vault is the single source of truth for credentials (#844). Rotation is
@@ -132,10 +145,10 @@ jobs:
           set -euo pipefail
           token="$(az keyvault secret show \
             --vault-name kv-ffc-admin-prod-cbm \
-            --name wr-all-cbm-github-pat \
+            --name read-all-cbm-github-pat \
             --query value -o tsv)"
           if [ -z "$token" ]; then
-            echo "::error::wr-all-cbm-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
+            echo "::error::read-all-cbm-github-pat came back empty from Key Vault — check the reader identity's role on kv-ffc-admin-prod-cbm."
             exit 1
           fi
           echo "::add-mask::$token"

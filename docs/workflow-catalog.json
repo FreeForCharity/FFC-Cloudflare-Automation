@@ -1043,6 +1043,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 230,
+      "title": "WHMCS - Record Field Set (client/contact/service/domain)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "230-whmcs-record-field-set.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Set ONE field on ONE existing WHMCS record. Supersedes 229 (service domain set), which was the same operation for a single field on a single target.  This is one dispatch surface that can write to four record types, so the per-target ALLOWLIST in scripts/whmcs-record-field-set.ps1 is the safety mechanism: a field not on the list cannot be written, and adding one is a reviewed code change rather than a dispatch input. Dry-run by default; no bulk loop.",
+      "safetyLevel": "Writes (record field)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`dry_run` (default true); one record + one field per dispatch; strict per-target allowlist of writable fields; refuses to replace a different existing value without `force`; reports `previousValue`",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 (FFC Tenant) - Domain Preflight (Read-only)",
       "apis": [
@@ -1188,6 +1208,29 @@
       "categoryCode": "MS"
     },
     {
+      "number": 321,
+      "title": "Azure - KV Credential Liveness + Expiry Monitor",
+      "apis": [
+        "MS",
+        "GH",
+        "CF"
+      ],
+      "file": "321-azure-kv-credential-liveness.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-read"
+      ],
+      "description": "Daily health check of the credentials in kv-ffc-admin-prod-cbm that back the automation lanes, on two independent signals:  1. EXPIRY/ENABLED for every secret, read from `az keyvault secret list`, which returns attributes WITHOUT values. So write-scope credentials are monitored without this workflow ever reading their material. 2. LIVENESS for the credentials that can verify themselves read-only \u2014 the two GitHub PATs (GET /user) and the two Cloudflare tokens (GET /zones). Probes cover `read-all-*` secrets ONLY; the library refuses a `wr-all-*` target before anything is read.  The Cloudflare probe deliberately does NOT use /user/tokens/verify: that endpoint does not apply to account-scoped tokens and rejects a working one, which made 321's first run (#877) report both live Cloudflare tokens as dead. Probe the call the lane actually makes.  Why (#848): both `read-all-*` GitHub PATs in the vault were dead with 401 Bad credentials, for an unknown period, and nothing noticed because nothing consumed them yet. Expiry alone would not have caught it \u2014 a REVOKED token still carries a future expiry date \u2014 which is why liveness is a separate signal here and why a probe that cannot be evaluated is reported as unverifiable rather than passing (the #726/#855 lesson: never render an unreadable response as a green check).  Secret values are never printed, never written to the artifact, and never sent anywhere except the probe host, which is re-validated against an allowlist in this file immediately before the request. Findings are upserted into one rolling issue that auto-closes when the vault is clean.  Runs on google-prod-read because it federates the ffc-admin-kv-reader identity and has no approval gate (a monitor must not wait on a human, and a dedicated azure-prod-read environment would need a new federated credential). Under the per-secret RBAC migration (#848 part A) that identity needs `getSecret` on the four probed `read-all-*` secrets, plus list on the vault; without those grants the run reports UNVERIFIABLE, not green.  Classification + report logic lives in scripts/kv-credential-liveness-lib.js (unit-tested under tests/workflow-logic/).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "google-prod-read (reader identity)",
+      "guard": "daily two-signal credential health check: expiry/enabled for every vault secret from the attribute listing (values never read), plus a read-only liveness probe (`GET /user`, Cloudflare `GET /zones`) for the four `read-all-*` credentials that can verify themselves \u2014 the library refuses a `wr-all-*` probe target before anything is read, so write-scope material is expiry-monitored without ever being fetched; a probe that cannot be evaluated is reported as unverifiable, never as passing; values never printed or persisted; rolling issue upsert/close; ungated by design (a credential monitor must not wait on a human)",
+      "category": "Microsoft (M365 / Azure / Graph)",
+      "categoryCode": "MS"
+    },
+    {
       "number": 401,
       "title": "Zeffy - Campaigns Export",
       "apis": [
@@ -1281,13 +1324,13 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "github-prod",
+        "github-prod-read",
         "google-prod-read"
       ],
-      "description": "Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe: aggregate metrics only. Requires the google-prod-read environment (report) and the approval-gated github-prod environment (delivery, CBM_TOKEN) + the Wave 0 foundation.",
+      "description": "Read-only GA4 reporting for the FFC primary sites. Generates aggregate JSON per site and delivers it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe: aggregate metrics only. Requires the google-prod-read environment (report) and the ungated github-prod-read environment (delivery, #834) + the Wave 0 foundation. Opening the PR is reporting plumbing, not a Write \u2014 the data this workflow consumes is a Read. The delivery PAT comes from Key Vault (`read-all-cbm-github-pat`) over OIDC on the READER identity, never a GitHub secret \u2014 #844.",
       "safetyLevel": "Reads",
-      "approvalEnv": "google-prod-read / \u2705 github-prod",
-      "guard": "delivers JSON to ffcadmin via PR (CBM_TOKEN, github-prod approval); PII-safe aggregates. Same PR also syncs the workflow catalog and the Agentic OS status feed (`agentic-os-status.json`, generated by `scripts/generate-agentic-os-status.py`, REST-only)",
+      "approvalEnv": "google-prod-read / github-prod-read",
+      "guard": "delivers JSON to ffcadmin via PR (`read-all-cbm-github-pat` from KV, ungated lane #834); PII-safe aggregates. Same PR also syncs the workflow catalog and the Agentic OS status feed (`agentic-os-status.json`, generated by `scripts/generate-agentic-os-status.py`, REST-only)",
       "category": "Google",
       "categoryCode": "GOOGLE"
     },
@@ -1349,6 +1392,27 @@
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 google-prod-write",
       "guard": "dry_run default true; one property per charity; idempotent by stream defaultUri",
+      "category": "Google",
+      "categoryCode": "GOOGLE"
+    },
+    {
+      "number": 506,
+      "title": "Google - Fleet Telemetry Reachability",
+      "apis": [
+        "GOOGLE"
+      ],
+      "file": "506-google-fleet-telemetry-reachability.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "google-prod-read"
+      ],
+      "description": "Answers four questions the fleet could not previously answer, in one read-only pass: 1. which domains have a GTM container (and is any container SHARED between sites) 2. which domains have a GA4 property + web stream 3. which domains are verified in Search Console 4. how much traffic each gets \u2014 ranked, so rollout order is measured rather than alphabetical  Two properties of the report matter more than the raw numbers:  * It compares the SERVED HTML against what the APIs say is provisioned. A site can have a container provisioned and never load it, or load a hardcoded template container the API does not associate with it. Both are live today among the convergence set, and neither is visible from provisioning records alone.  * It never conflates \"no data\" with \"no traffic\". A site with no GA4 property is UNMEASURED; a site with a property and zero sessions has NO TRAFFIC. Collapsing the two sorts unmeasured sites to the bottom of a traffic-ordered rollout \u2014 which is how a site that matters ends up treated as if it does not.  Read-only end to end: analytics.readonly, tagmanager.readonly and webmasters are all already in the delegated scope grant (docs/google-api.md), so this needs no new credential or scope. Ref #865, epic #861.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "google-prod-read",
+      "guard": "read-only; enumerates GTM containers, GA4 properties/streams and Search Console sites, cross-checks them against each site's SERVED HTML, and ranks traffic. Reports \"no data\" distinctly from \"no traffic\" so an unmeasured site never sorts as unpopular. Weekly Mon 07:23 + dispatch",
       "category": "Google",
       "categoryCode": "GOOGLE"
     },
@@ -1586,12 +1650,12 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "github-prod"
+        "github-prod-read"
       ],
-      "description": "Daily read-only audit of FreeForCharity org repository rulesets and settings drift (branch protections, merge queues, Actions policies) against the documented standard, reported as issues via CBM_TOKEN under the github-prod approval gate.  Supersede-on-newer (#722): these daily runs pause at an approval gate; without this, unapproved runs pile up ~12-deep until the janitor reaps them at 7 days. cancel-in-progress cancels the older queued/waiting run the moment the next scheduled run starts, so at most ONE run ever waits at the gate. Ref-scoped so a dispatch from a PR branch can never cancel main's scheduled run. Trade-off (accepted): cancel-in-progress could interrupt an EXECUTING run, but execution lasts minutes against a 24h cadence \u2014 in practice only gate-waiting runs are ever superseded; janitor 734 remains the backstop.",
+      "description": "Daily read-only audit of FreeForCharity org repository rulesets and settings drift (branch protections, merge queues, Actions policies) against the documented standard, reported as issues.  Runs on the UNGATED github-prod-read lane (#834). A scheduled Reads workflow behind a required-reviewers gate fires at 13:00 UTC with nobody watching and waits \u2014 then either its next scheduled run cancels it (when cancel-in-progress is true, as this workflow had) or it sits until janitor 734 reaps it at 7 days. Both happened here: 3 `failure` + 2 `cancelled` across 8 scheduled runs. Either way the audit did not run on its schedule. The PAT comes from Key Vault (`read-all-cbm-ffc-copilot-mcp-github-pat`) over OIDC on the READER identity, never a GitHub secret \u2014 see #844. That token (not `read-all-cbm-github-pat`) is the one with Organization Administration read, which GitHub requires even to READ org rulesets via a fine-grained PAT.  cancel-in-progress: false (#834). Its entire justification (#722) was that gated runs piled up ~12-deep waiting for approval until janitor 734 reaped them at 7 days. Ungated, nothing ever waits, so the only run it could still cancel is an EXECUTING one \u2014 the trade-off #722 accepted as the lesser evil becomes pure downside. Ref-scoped so a dispatch from a PR branch cannot collide with main's.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 github-prod",
-      "guard": "report only; CBM_TOKEN via github-prod approval",
+      "approvalEnv": "github-prod-read",
+      "guard": "report only; `read-all-cbm-ffc-copilot-mcp-github-pat` from KV over OIDC; ungated lane (#834) so the daily audit is never cancelled waiting at a gate",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },
@@ -1647,7 +1711,7 @@
       "environments": [
         "github-prod"
       ],
-      "description": "Reusable workflow that adds (or updates) one or more GitHub users as collaborators on a repository at a chosen permission level.  Two ways to use it: 1. Manually via the Actions tab (workflow_dispatch). 2. From another workflow via `uses:` (workflow_call) -- e.g. the website provisioning workflow (15) calls this instead of inlining the gh api PUT.  The privileged step runs with secrets.CBM_TOKEN (environment: github-prod), so callers do not need `actions: write` themselves -- they only need to be able to create/assign issues or dispatch this workflow.",
+      "description": "Reusable workflow that adds (or updates) one or more GitHub users as collaborators on a repository at a chosen permission level.  Two ways to use it: 1. Manually via the Actions tab (workflow_dispatch). 2. From another workflow via `uses:` (workflow_call) -- e.g. the website provisioning workflow (15) calls this instead of inlining the gh api PUT.  The privileged step runs with a PAT from Key Vault (environment: github-prod), so callers do not need `actions: write` themselves -- they only need to be able to create/assign issues or dispatch this workflow.",
       "safetyLevel": "Writes (**live default**)",
       "approvalEnv": "\u2705 github-prod",
       "guard": "\u26a0\ufe0f `dry_run` defaults to **false**",
@@ -1689,24 +1753,6 @@
       "safetyLevel": "Reads",
       "approvalEnv": "\u2014",
       "guard": "GITHUB_TOKEN read-only; JSON artifact",
-      "category": "GitHub (Website + Repo)",
-      "categoryCode": "GH"
-    },
-    {
-      "number": 732,
-      "title": "Repo - Google Workflow Failure Alert (rolling issue)",
-      "apis": [
-        "GH"
-      ],
-      "file": "732-google-workflow-failure-alert.yml",
-      "triggers": [
-        "workflow_run"
-      ],
-      "environments": [],
-      "description": "Watches the Google reporting workflows (501 smoke, 502 analytics report). On failure it upserts ONE rolling alert issue; on the next success it closes that issue. Prevents a silently-stale nightly report. GitHub API only (issues), no environment gate.",
-      "safetyLevel": "Writes (issues only)",
-      "approvalEnv": "\u2014",
-      "guard": "rolling issue upsert/close; no external API",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },
@@ -1760,12 +1806,12 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "github-prod"
+        "github-prod-read"
       ],
-      "description": "Regenerates data/dependabot-affected-repos.json (the org repo inventory that feeds the smoke-protected Dependabot waves) and delivers it as an auto-merging PR. Migrated from FFC-IN-ClarkeMoyerAdmin. Uses the github-prod environment so the PR is opened with CBM_TOKEN (a real PAT) \u2014 a PR opened by GITHUB_TOKEN does not trigger the pull_request checks / Copilot review this repo requires, so it would never satisfy branch protection. Read-only against the org; PR-only.",
+      "description": "Regenerates data/dependabot-affected-repos.json (the org repo inventory that feeds the smoke-protected Dependabot waves) and delivers it as an auto-merging PR. Migrated from FFC-IN-ClarkeMoyerAdmin. Runs on the UNGATED github-prod-read lane (#834): the org inventory it consumes is a Read, and a weekly gated run fires at 06:15 UTC with nobody watching. It still needs a real PAT \u2014 a PR opened by GITHUB_TOKEN does not trigger the pull_request checks / Copilot review this repo requires, so it would never satisfy branch protection. The PAT comes from Key Vault (`read-all-cbm-github-pat`) over OIDC on the READER identity, never a GitHub secret \u2014 see #844. Read-only against the org; PR-only.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 github-prod",
-      "guard": "weekly org inventory (feeds smoke-protected waves); PR-only + auto-merge",
+      "approvalEnv": "github-prod-read",
+      "guard": "weekly org inventory (feeds smoke-protected waves); PR-only + auto-merge; `read-all-cbm-github-pat` from KV over OIDC on the ungated lane (#834)",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },
@@ -1844,6 +1890,81 @@
       "safetyLevel": "Reads",
       "approvalEnv": "\u2014",
       "guard": "weekly \"monitor the monitors\" REST sweep (backlog + data-pipeline signals) posted as a new comment on #719 with week-over-week trends (baseline read from the prior comment's hidden data block); JSON artifact; GITHUB_TOKEN (own-repo issue/Actions reads + one comment), no external API, ungated",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 740,
+      "title": "Repo - Scheduled Workflow Failure Alert (rolling issue)",
+      "apis": [
+        "GH"
+      ],
+      "file": "740-scheduled-workflow-failure-alert.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Watches every scheduled hub workflow (726 drift audit, 734 janitor, 738 smoke drift, Google 502 analytics + 504 GTM backups, and the other cron-driven monitors \u2014 the authoritative list is WATCHED_WORKFLOWS below). For each one it upserts ONE rolling alert issue PER WATCHED WORKFLOW, and closes that issue on the next success of that same workflow. The marker is keyed by workflow name precisely so a green run of one watched workflow can never close another's alert \u2014 with a dozen workflows watched, a shared marker would let a weekly job's success silently clear a daily job's outage.  POLL, NOT `workflow_run` (#843). This workflow used to trigger on the `workflow_run` completed event. That event has NEVER fired in this repository \u2014 `?event=workflow_run` returns 0 runs all time, while sibling repos show hundreds \u2014 so both this alerter and the Google one (732, now retired into this file) were `active` and had produced exactly zero runs. The alerting layer was dead for six days and nothing could tell us, because a `workflow_run` watcher cannot be tested on demand. The poll can: `workflow_dispatch` below is REQUIRED, not a convenience \u2014 it is what makes this alerter provable.  BEHAVIOUR CHANGE, deliberate: the event saw *every* run; the poll sees only the LATEST completed default-branch run per workflow, so a failure that self-heals between polls is missed. That is an acceptable \u2014 arguably better \u2014 fit, because the rolling issue answers \"is this workflow currently broken?\", which is exactly what latest-run state models. Do not add cursor/state tracking to chase the transient case; it would trade away the simplicity that makes this verifiable.  Consequence worth knowing: the poll model only makes sense for SCHEDULED workflows. For a dispatch-only workflow the \"latest run\" is whatever a human last ran by hand \u2014 a stale red would alert forever and a stale green would mean nothing. `test_watched_workflows_are_actually_scheduled` enforces that, and it is why 501 (workflow_dispatch/workflow_call only) is excluded even though retired 732 watched it.  Ambient GITHUB_TOKEN only, no environment: \u2014 the alerter must never be blocked by the very gate it is watching. Reports `cancelled` as well as `failure`: a run cancelled before it reaches a runner (the 2026-07-24 726 incident) executes zero steps and is exactly the kind of silent breakage this workflow exists to surface.  It does NOT alert on a declined or expired approval gate. Those also surface as run-level `failure`, so the run conclusion alone cannot tell \"the job broke\" from \"a human said no\"; the job list can, and `actions: read` already allows reading it. See the discriminator in the step below.",
+      "safetyLevel": "Writes (issues only)",
+      "approvalEnv": "\u2014",
+      "guard": "**polls** every scheduled hub workflow twice hourly (`schedule` + `workflow_dispatch`; the `workflow_run` event has never fired in this repo \u2014 #843) and upserts one rolling issue per watched workflow (marker keyed by workflow name, so only that workflow's own green run closes it); absorbs the retired 732 Google lane (502/504); reports `cancelled`/`timed_out` as well as `failure`, latest completed default-branch run only; does **not** alert on a declined/expired approval gate (no job `failure` + \u22651 job `cancelled` \u21d2 logged via `core.notice`, not an alert) \u2014 an unreadable job list still alerts, and a watched name matching no workflow fails the run loudly; ambient GITHUB_TOKEN, no external API, ungated by design (must not be blocked by the gate it watches)",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 741,
+      "title": "Repo - Fleet Security Audit Coverage",
+      "apis": [
+        "Org"
+      ],
+      "file": "741-fleet-security-audit-coverage.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Weekly audit of whether each Node app in the FFC-EX fleet has dependency-vulnerability detection wired at all. A repo counts as covered only when it has BOTH `.github/workflows/security-audit.yml` and an `audit:high` script in package.json \u2014 the workflow without the script fails on every run, the script without the workflow never runs. Findings are upserted into a single rolling issue that auto-closes once the fleet is fully covered.  Why (#838): 34 of the 44 Node FFC-EX repos had no detection of any kind, so a published advisory against a charity site was invisible until somebody swept by hand \u2014 and nothing was measuring that, which is why #822's scope was estimated at 13 repos when the real number was 38. This workflow re-derives the fleet from the org listing every run rather than trusting a count carried between sessions.  Read-only: GITHUB_TOKEN reads public repo contents org-wide and lists the org's public repos; the only write is the rolling issue in THIS repo. No external API, no environment gate. It reports coverage only and never bumps a dependency \u2014 remediation belongs to #822. Classification/report logic lives in scripts/fleet-audit-coverage-lib.js (unit-tested under tests/workflow-logic/).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "weekly coverage audit of dependency-vulnerability detection across the FFC-EX fleet (a repo counts as covered only with BOTH `security-audit.yml` and an `audit:high` script); rolling issue upsert/close on any gap; reports only \u2014 never bumps a dependency or writes to a fleet repo; GITHUB_TOKEN (public reads + own-repo issue), no external API, ungated",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 742,
+      "title": "Repo - Fleet Security Audit Backfill",
+      "apis": [
+        "Org"
+      ],
+      "file": "742-fleet-security-audit-backfill.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Closes the coverage gap that workflow 741 measures: opens one pull request per FFC-EX repo that lacks dependency-vulnerability detection, adding BOTH halves together \u2014 `.github/workflows/security-audit.yml` and the `audit:high` script it runs.  Why a hub workflow and not 34 hand-made PRs (#838): the fleet keeps growing, and a rollout that lives here also covers the 35th repo provisioned next month. The target list is re-derived from the org listing on every dispatch, never read from a checklist, which is the failure #838 was opened about (its scope was estimated at 13 repos when the real number was 38).  Never pushes a default branch \u2014 every change goes through a PR on the target repo. Never bumps a dependency: making the vulnerabilities visible is this workflow's job, upgrading them is #822's. A newly-wired repo whose audit goes red is this working correctly.  Two-job split so a preview costs nothing and needs nobody: - plan  \u2014 ungated, GITHUB_TOKEN, read-only. `dry_run=true` (the default) stops here, so anyone can see the exact planned diff without an approval. - apply \u2014 `dry_run=false` only, gated `github-prod` (a cross-repo write genuinely needs CBM_TOKEN). Acts on the plan the gate approver saw.  Decision logic lives in scripts/fleet-audit-backfill-lib.js behind scripts/fleet-audit-backfill.js, unit-tested under tests/workflow-logic/.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 github-prod (apply job only)",
+      "guard": "closes the gap 741 measures: opens one PR per uncovered FFC-EX repo adding BOTH halves of the audit pair (`security-audit.yml` + the `audit:high` script) in a single commit, never a `partial`; cron staggered deterministically by repo name across 06:00\u201306:59, skipping the crowded `:17`; `dry_run` (default true) runs the ungated `plan` job only, so a preview needs no approval; never pushes a target's default branch and never bumps a dependency (#822 owns remediation); repos with no `package-lock.json` are reported, not wired",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 743,
+      "title": "Website - Fleet Security Header Audit",
+      "apis": [],
+      "file": "743-fleet-security-header-audit.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Weekly audit of the security headers each FFC-delivered site ACTUALLY SERVES.  Why (#884): every FFC template ships `public/_headers`, and on this stack the file does nothing. `_headers` is a Cloudflare Pages / Netlify build feature; these sites are a GitHub Pages origin behind a Cloudflare proxy, and neither leg of that path reads it. FFC_Single_Page_Template ships the file with HSTS, X-Frame-Options, Referrer-Policy, Permissions-Policy, COOP and CORP \u2014 and its live response carries not one of them. The convergence plan was about to copy that file across the fleet and mark the gap closed, which would have produced green checklists and zero headers everywhere.  So this audit asserts on the RESPONSE and never on a file in a repo. Nothing in this repo measured a security header before it (#884). It reports only \u2014 remediation (Cloudflare Transform Rules per zone, and proxying the domains that bypass Cloudflare entirely) is a gated write and belongs elsewhere.  Read-only: plain HTTPS GETs to public websites, no credentials, no API, no environment gate. The only write is the rolling issue in THIS repo. Parsing/classification lives in scripts/fleet-security-header-lib.js (unit-tested under tests/workflow-logic/test_743_security_headers.py).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "weekly audit of the security headers each FFC-delivered site ACTUALLY SERVES (HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, CSP), measured by fetching the live response and never by looking for a file in a repo \u2014 `public/_headers` is inert on this stack, so a source-file check reports coverage that does not exist (#884); scope is every domain in an FFC Cloudflare zone (derived column, not the curated host category); report-only CSP does not count as a CSP and a `<meta>` tag satisfies nothing; rolling issue upsert/close on any gap; plain HTTPS GETs to public sites, no credentials, no external API, GITHUB_TOKEN for the issue only, ungated",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

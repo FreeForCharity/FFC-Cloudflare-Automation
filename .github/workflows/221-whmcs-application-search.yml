@@ -76,6 +76,12 @@ jobs:
           $json = & pwsh -NoProfile -File .\scripts\whmcs-application-search.ps1 -ApiUrl $env:WHMCS_API_URL -Query $env:QUERY -MaxMatches $max -OutputFile $out
           if ($LASTEXITCODE -ne 0) { throw "Application search failed (exit $LASTEXITCODE)." }
 
+          # Also print to the job log. The payload is already masked, and a result
+          # that lives only in the step summary + artifact is unreadable to any
+          # caller working from logs (the API exposes neither).
+          Write-Host "## WHMCS application search - '$($env:QUERY)'"
+          Write-Host (($json | Out-String).TrimEnd())
+
           $fence = [string][char]0x60 * 3
           $lines = @("## WHMCS application search - '$($env:QUERY)'", '', ($fence + 'json'), (($json | Out-String).TrimEnd()), $fence)
           $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

@@ -104,7 +104,7 @@ try {
 
     if ($DryRun) {
         $preview = $body.Clone()
-        foreach ($k in @('secret', 'accesskey', 'customfields')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
+        foreach ($k in @('identifier', 'secret', 'accesskey', 'customfields')) { if ($preview.ContainsKey($k)) { $preview[$k] = '***' } }
         [pscustomobject]@{ action = 'OpenTicket'; dryRun = $true; ticketid = $null; tid = $null; request = $preview } | ConvertTo-Json -Depth 8
         exit 0
     }

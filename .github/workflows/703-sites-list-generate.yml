@@ -18,6 +18,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # Required for the Key Vault OIDC exchange (#844).
+  id-token: write
 
 # Prevent a manual run and the scheduled run from regenerating / pushing to main
 # at the same time.
@@ -32,19 +34,32 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Validate CBM_TOKEN
-        env:
-          CBM_TOKEN: ${{ secrets.CBM_TOKEN }}
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844).
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
         run: |
-          if [ -z "$CBM_TOKEN" ]; then
-            echo "::error::Missing secret CBM_TOKEN in environment 'github-prod'."
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-ffc-copilot-mcp-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault."
             exit 1
           fi
-          echo "CBM_TOKEN is present."
-
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
       - name: Trigger export workflows and download artifacts
         env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -104,7 +119,8 @@ jobs:
       - name: Open data update PR
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
         with:
-          token: ${{ secrets.CBM_TOKEN }}
+          # Set from Key Vault by the "Load the GitHub PAT" step above.
+          token: ${{ env.GH_TOKEN }}
           add-paths: |
             sites-list/sites_list.csv
             sites-list/sites_list.json

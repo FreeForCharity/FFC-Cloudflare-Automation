@@ -11,6 +11,11 @@ Cloudflare (DNS/registrar), WHMCS (billing/support), Microsoft 365, Zeffy, Googl
 WPMUDEV, and the FFC GitHub org itself. PowerShell-first scripts in `scripts/`, credentials from
 Azure Key Vault via OIDC (never GitHub secrets).
 
+**Before fleet-wide, credential or monitoring work, read `docs/lessons-ledger.md`.** It is the
+durable record of findings that cost previous sessions hours — dead triggers, swallowed 403s,
+presence mistaken for validity — each with its evidence link and the guard (if any) now holding it.
+Add a row there in the same PR as the fix whenever something surprises you.
+
 ## Onboarding a charity (start here for the full chain)
 
 If the task is to **onboard / provision / "set up the repo for" a charity or domain** — or you just
@@ -190,11 +195,12 @@ Poll runs in a background task with an `until` loop — never foreground-sleep.
 
 ## Key docs
 
-| Doc                                                            | What                                                                 |
-| -------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `docs/workflow-safety-and-approvals.md`                        | per-workflow safety levels, gates, guards                            |
-| `docs/workflow-catalog.json`                                   | generated machine-readable catalog                                   |
-| `docs/google-api.md`                                           | Google architecture (KV-backed), GA/GTM models, provisioning record  |
-| `docs/whmcs-apim-routing.md` / `docs/whmcs-product-catalog.md` | WHMCS credential path + products                                     |
-| `docs/charity-onboarding-lifecycle.md`                         | end-to-end charity onboarding order                                  |
-| `CLAUDE.md`                                                    | Claude-specific environment notes (sandbox constraints, auth quirks) |
+| Doc                                                            | What                                                                                                |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `docs/workflow-safety-and-approvals.md`                        | per-workflow safety levels, gates, guards                                                           |
+| `docs/workflow-catalog.json`                                   | generated machine-readable catalog                                                                  |
+| `docs/google-api.md`                                           | Google architecture (KV-backed), GA/GTM models, provisioning record                                 |
+| `docs/whmcs-apim-routing.md` / `docs/whmcs-product-catalog.md` | WHMCS credential path + products                                                                    |
+| `docs/charity-onboarding-lifecycle.md`                         | end-to-end charity onboarding order                                                                 |
+| `docs/lessons-ledger.md`                                       | what previous sessions learned the expensive way — read before fleet, credential or monitoring work |
+| `CLAUDE.md`                                                    | Claude-specific environment notes (sandbox constraints, auth quirks)                                |

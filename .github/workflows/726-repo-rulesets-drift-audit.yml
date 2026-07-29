@@ -9,38 +9,85 @@ on:
 
 # Daily read-only audit of FreeForCharity org repository rulesets and settings
 # drift (branch protections, merge queues, Actions policies) against the
-# documented standard, reported as issues via CBM_TOKEN under the github-prod
-# approval gate.
+# documented standard, reported as issues.
 #
-# Supersede-on-newer (#722): these daily runs pause at an approval gate; without
-# this, unapproved runs pile up ~12-deep until the janitor reaps them at 7 days.
-# cancel-in-progress cancels the older queued/waiting run the moment the next
-# scheduled run starts, so at most ONE run ever waits at the gate. Ref-scoped
-# so a dispatch from a PR branch can never cancel main's scheduled run.
-# Trade-off (accepted): cancel-in-progress could interrupt an EXECUTING run,
-# but execution lasts minutes against a 24h cadence — in practice only
-# gate-waiting runs are ever superseded; janitor 734 remains the backstop.
+# Runs on the UNGATED github-prod-read lane (#834). A scheduled Reads workflow
+# behind a required-reviewers gate fires at 13:00 UTC with nobody watching and
+# waits — then either its next scheduled run cancels it (when cancel-in-progress
+# is true, as this workflow had) or it sits until janitor 734 reaps it at 7 days.
+# Both happened here: 3 `failure` + 2 `cancelled` across 8 scheduled runs. Either
+# way the audit did not run on its schedule.
+# The PAT comes from Key Vault (`read-all-cbm-ffc-copilot-mcp-github-pat`) over
+# OIDC on the READER identity, never a GitHub secret — see #844. That token (not
+# `read-all-cbm-github-pat`) is the one with Organization Administration read,
+# which GitHub requires even to READ org rulesets via a fine-grained PAT.
+#
+# cancel-in-progress: false (#834). Its entire justification (#722) was that gated
+# runs piled up ~12-deep waiting for approval until janitor 734 reaped them at 7
+# days. Ungated, nothing ever waits, so the only run it could still cancel is an
+# EXECUTING one — the trade-off #722 accepted as the lesser evil becomes pure
+# downside. Ref-scoped so a dispatch from a PR branch cannot collide with main's.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-supersede
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
   issues: write
+  # Required for the OIDC exchange that fetches the PAT from Key Vault.
+  id-token: write
 
 jobs:
   audit:
     runs-on: ubuntu-latest
-    environment: github-prod
-    env:
-      GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+    environment: github-prod-read
     steps:
-      - name: Validate CBM_TOKEN
+      # Fail fast on a half-provisioned lane. Without this, missing identifiers
+      # surface inside azure/login as a blank/invalid client-id — which reads
+      # like an Entra problem, not a "the repo Variables are missing" problem.
+      # These are non-secret GUIDs held as repo Variables (see CLAUDE.md and
+      # docs/azure-oidc-federated-credentials.md); the per-environment federated
+      # credential is what actually authorizes the exchange (#834).
+      - name: Validate required Azure OIDC identifiers
+        shell: bash
         run: |
-          if [ -z "${{ secrets.CBM_TOKEN }}" ]; then
-            echo "::error::CBM_TOKEN secret is not set."
+          if [ -z "${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set. It is a repo-level Variable (non-secret GUID), read via vars.*, not an environment secret. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+          if [ -z "${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID is not set. It is a repo-level Variable (non-secret GUID), read via vars.*, not an environment secret. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Rotation is
+      # a new KV version — no GitHub change and no second copy that can drift, which
+      # is what silently broke the Cloudflare token for four months.
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show \
+            --vault-name kv-ffc-admin-prod-cbm \
+            --name read-all-cbm-ffc-copilot-mcp-github-pat \
+            --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault — check the reader identity's role on kv-ffc-admin-prod-cbm."
             exit 1
           fi
+          echo "::add-mask::$token"
+          # Heredoc-delimited write, safe for any value.
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
 
       - name: Audit org rulesets + per-repo settings + ruleset presence
         id: audit
@@ -48,7 +95,27 @@ jobs:
         run: |
           set -uo pipefail
 
-          ORGS=(FreeForCharity koenig-childhood-cancer-foundation)
+          ORGS=(FreeForCharity)
+
+          # `gh api` writes its error JSON to STDOUT, so `... 2>/dev/null || echo <default>`
+          # does NOT produce <default> on failure — it produces the error body WITH the
+          # default appended. That is how this workflow came to print
+          # "✓ Org-level branch ruleset present ({...403...}0)" on every run for months:
+          # the string was not equal to "0", so the missing-ruleset branch never fired and
+          # a permissions failure rendered as a passing check (#854).
+          #
+          # api_get: stdout is the response body ONLY on success. On failure it returns
+          # non-zero and puts the error on stderr, so callers can never mistake an error
+          # for data.
+          api_get() {
+            local out rc
+            out=$(gh api "$@" 2>&1); rc=$?
+            if [ "$rc" -ne 0 ]; then
+              printf '%s\n' "$out" >&2
+              return "$rc"
+            fi
+            printf '%s' "$out"
+          }
           DRIFT=0
           REPORT=$(mktemp)
           {
@@ -60,7 +127,25 @@ jobs:
 
           for org in "${ORGS[@]}"; do
             # Check org-level rulesets present
-            org_rs=$(gh api "orgs/$org/rulesets" --jq '[.[] | select(.target=="branch")] | length' 2>/dev/null || echo "0")
+            # Hard-fail on an unreadable org: "cannot see the rulesets" and "there are no
+            # rulesets" are opposite findings and must never collapse into the same output.
+            if ! org_rs=$(api_get "orgs/$org/rulesets" --jq '[.[] | select(.target=="branch")] | length'); then
+              echo "::error::$org: cannot read org rulesets — the audit cannot report on drift it could not measure. Check the token's Organization Administration permission."
+              # The issue step runs with `if: always()`, so it WILL run after this exit.
+              # Leave it an explicit report rather than a stale or missing one, otherwise
+              # a permissions failure silently overwrites a real drift report with
+              # "drift report missing".
+              {
+                echo "# Ruleset / Settings Drift Audit — INCOMPLETE"
+                echo ""
+                echo "The audit could not read \`orgs/$org/rulesets\` and stopped."
+                echo "**No conclusion should be drawn about drift from this run.**"
+                echo ""
+                echo "Check the Organization Administration permission on the PAT in"
+                echo "\`read-all-cbm-ffc-copilot-mcp-github-pat\`."
+              } > /tmp/drift-report.md
+              exit 1
+            fi
             {
               echo "## Org: $org"
               echo ""
@@ -85,12 +170,24 @@ jobs:
               # the public-only checks (merge-queue, tier teams) actually fire.
               vis=$(printf '%s' "$vis" | tr '[:upper:]' '[:lower:]')
               [ -z "$default" ] && continue
-              settings=$(gh api "repos/$org/$repo" --jq '"\(.allow_squash_merge)|\(.allow_auto_merge)|\(.delete_branch_on_merge)|\(.allow_update_branch)"' 2>/dev/null || echo "?|?|?|?")
+              # Unreadable settings are reported as UNREADABLE, never as a value that the
+              # table renderer would score. A per-repo read failure must not silently
+              # become "drift" or "clean" (#854).
+              if ! settings=$(api_get "repos/$org/$repo" --jq '"\(.allow_squash_merge)|\(.allow_auto_merge)|\(.delete_branch_on_merge)|\(.allow_update_branch)"'); then
+                echo "::warning::$org/$repo: settings unreadable — excluded from the audit"
+                echo "| $repo | ⚠️ | ⚠️ | ⚠️ | ⚠️ | ⚠️ | settings-unreadable |" >> "$REPORT"
+                continue
+              fi
               squash=$(echo "$settings" | cut -d'|' -f1)
               auto=$(echo "$settings" | cut -d'|' -f2)
               del=$(echo "$settings" | cut -d'|' -f3)
               upd=$(echo "$settings" | cut -d'|' -f4)
-              has_mq=$(gh api "repos/$org/$repo/rules/branches/$default" --jq '[.[] | select(.type=="merge_queue")] | length' 2>/dev/null || echo "0")
+              # A read failure here would otherwise render as "0" = no merge queue = drift,
+              # which is a confident wrong answer rather than an admission (#854).
+              if ! has_mq=$(api_get "repos/$org/$repo/rules/branches/$default" --jq '[.[] | select(.type=="merge_queue")] | length'); then
+                echo "::warning::$org/$repo: branch rules unreadable — merge-queue state unknown"
+                has_mq="unknown"
+              fi
 
               # Team-tier drift: FFC-ORGWIDE-* tier teams should be granted on PUBLIC FFC repos.
               # Private repos are intentionally excluded (Option C defensive isolation —
@@ -139,6 +236,11 @@ jobs:
               if [ "$vis" = "public" ] && [ "$has_mq" = "0" ]; then
                 issues+=("no-merge-queue")
               fi
+              # An unreadable rule set is its own finding — not drift, but not clean either.
+              # Silence here is what #854 was about.
+              if [ "$has_mq" = "unknown" ]; then
+                issues+=("merge-queue-unreadable")
+              fi
               if [ -n "$teams_check_failed" ]; then
                 issues+=("teams-check-failed")
               fi
@@ -155,7 +257,13 @@ jobs:
                 echo "::warning::$org/$repo drift: $issue_str"
               fi
 
-              mq_cell=$([ "$has_mq" != "0" ] && echo "✓" || echo "✗")
+              # Three states, not two: present / absent / unreadable. Rendering "unknown"
+              # as ✓ would recreate exactly the bug this workflow was fixed for (#854).
+              case "$has_mq" in
+                unknown) mq_cell="⚠️" ;;
+                0) mq_cell="✗" ;;
+                *) mq_cell="✓" ;;
+              esac
               echo "| $repo | $([ "$squash" = "false" ] && echo ✓ || echo ✗) | $([ "$auto" = "true" ] && echo ✓ || echo ✗) | $([ "$del" = "true" ] && echo ✓ || echo ✗) | $([ "$upd" = "true" ] && echo ✓ || echo ✗) | $mq_cell | $issue_str |" >> "$REPORT"
             done
             echo "" >> "$REPORT"
@@ -181,21 +289,63 @@ jobs:
           cp "$REPORT" /tmp/drift-report.md
 
       - name: Open / update tracking issue if drift detected
-        if: ${{ always() }}
+        # always() so a FAILED audit still delivers a report — the hard-fail path
+        # above deliberately writes an INCOMPLETE report rather than leaving a
+        # stale or missing one (#854).
+        #
+        # ...but NOT when the audit never ran. If the preflight or the Azure login
+        # bails, there is no report to deliver AND no GH_TOKEN, so this step dies
+        # on `gh issue list` and reports "Could not search for an existing tracking
+        # issue — refusing to risk opening a duplicate". That is a true statement
+        # about a situation that does not exist, and it buries the real one-line
+        # cause under a second error that looks like an API or permissions fault.
+        # Observed on run 30334346136 (dispatch against the unprovisioned
+        # github-prod-read lane): the preflight said exactly what was wrong in two
+        # seconds, and this step immediately contradicted it.
+        if: ${{ always() && steps.audit.conclusion != 'skipped' }}
         shell: bash
+        # The tracking issue lives in THIS repo, so the ambient token is both
+        # sufficient and correct here — the job already declares `issues: write`.
+        # The Key Vault PAT is a READ credential (that is the whole point of the
+        # github-prod-read lane) and it is exported to GITHUB_ENV as GH_TOKEN by
+        # the Key Vault step, so without this override it leaks into the delivery
+        # step and fails with `Resource not accessible by personal access token
+        # (updateIssue)` — searching an issue and editing one are different
+        # permissions, exactly as the comment above warns. Step-level env wins
+        # over GITHUB_ENV, so the org read keeps the PAT and only the write here
+        # falls back to GITHUB_TOKEN. Observed on run 30469439392 (#834).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
           repo=FreeForCharity/FFC-Cloudflare-Automation
           title="Ruleset/settings drift detected"
           body=$(cat /tmp/drift-report.md 2>/dev/null || echo "drift report missing")
 
-          # Find an existing open tracking issue
-          existing=$(gh issue list --repo "$repo" --state open --search "$title in:title" --json number --jq '.[0].number // empty' 2>/dev/null)
+          # Find an existing open tracking issue. A LOOKUP failure must not read as
+          # "none exists" — that silently opens a duplicate tracking issue on every
+          # transient auth or rate-limit error (#854, same class).
+          if ! existing=$(gh issue list --repo "$repo" --state open --search "$title in:title" --json number --jq '.[0].number // empty'); then
+            echo "::error::Could not search for an existing tracking issue — refusing to risk opening a duplicate."
+            exit 1
+          fi
 
+          # Failing to deliver the report is a FAILURE, not a warning. A warning here
+          # means the drift was detected, the run went green, and nobody was told —
+          # the same silent-success shape as the 403-rendered-as-✓ bug above (#854).
+          # This path matters especially on a read-scoped credential: creating an issue
+          # and EDITING one are different permissions, so a token can open the first
+          # drift report and then silently stop updating it on every run after.
           if [ -n "$existing" ]; then
             echo "Updating issue #$existing"
-            gh issue edit "$existing" --repo "$repo" --body "$body" || echo "::warning::Failed to update issue"
+            if ! gh issue edit "$existing" --repo "$repo" --body "$body"; then
+              echo "::error::Drift detected but issue #$existing could not be updated — the report was not delivered."
+              exit 1
+            fi
           else
             echo "Creating new tracking issue"
-            gh issue create --repo "$repo" --title "$title" --body "$body" 2>&1 || echo "::warning::Failed to create issue"
+            if ! gh issue create --repo "$repo" --title "$title" --body "$body"; then
+              echo "::error::Drift detected but the tracking issue could not be created — the report was not delivered."
+              exit 1
+            fi
           fi

@@ -178,6 +178,199 @@ function Invoke-WhmcsApi {
     }
 }
 
+function Get-WhmcsNodeList {
+    # WHMCS wraps list payloads as {products:{product:[...]}} but degenerates to
+    # a bare array, a single object, or an empty string. Normalize all of those.
+    #
+    # The empty-string form appears at BOTH levels - {products:""} and
+    # {products:{product:""}} - so blank entries are filtered out of the list
+    # itself, not just matched on the container. Letting a "" through yields a
+    # one-item list holding an empty string, which reads downstream as a real
+    # record whose every property is $null: an inflated scan count and silently
+    # wrong output rather than a visible error.
+    param($Node, [Parameter(Mandatory = $true)][string]$ChildName)
+    if ($null -eq $Node -or $Node -is [string]) { return @() }
+
+    $items = if ($Node -is [System.Array]) { $Node }
+    elseif ($Node.PSObject.Properties[$ChildName]) { $Node.$ChildName }
+    else { @() }
+
+    return @($items | Where-Object {
+            $null -ne $_ -and -not ($_ -is [string] -and [string]::IsNullOrWhiteSpace($_))
+        })
+}
+
+function Invoke-WhmcsPagedFetch {
+    <#
+    .SYNOPSIS
+        Fetch one page of a WHMCS list action, surviving records WHMCS cannot
+        JSON-encode.
+
+    .DESCRIPTION
+        If any single record in a page holds bytes that are not valid UTF-8 (a
+        mis-encoded character pasted into a client/custom field), PHP's
+        json_encode fails for the ENTIRE response and WHMCS returns
+        "Error generating JSON encoded response: Malformed UTF-8 characters".
+        The failure is per-response, not per-record, so one poisoned row makes
+        every page containing it unreadable - and with a 250-row page that is
+        250 rows lost, which reads as "no match found" rather than as an error.
+
+        So: on that specific error, bisect the window until the offending row is
+        alone, skip only that row, and keep the rest of the sweep. Every other
+        API error still fails fast. Returns Items / Total / SkippedIndexes so the
+        caller can report what it could not read.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiUrl,
+        # Auth + action fields; limitstart/limitnum are set per call from a clone.
+        [Parameter(Mandatory = $true)][hashtable]$Body,
+        [Parameter(Mandatory = $true)][int]$Start,
+        [Parameter(Mandatory = $true)][int]$Num,
+        [Parameter(Mandatory = $true)][string]$ListProperty,
+        [Parameter(Mandatory = $true)][string]$ItemProperty
+    )
+
+    $page = $Body.Clone()
+    $page.limitstart = $Start
+    $page.limitnum = $Num
+
+    try {
+        $resp = Invoke-WhmcsApi -ApiUrl $ApiUrl -Body $page
+    }
+    catch {
+        if ("$($_.Exception.Message)" -notmatch 'Malformed UTF-8|Error generating JSON encoded response') { throw }
+        if ($Num -le 1) {
+            Write-Warning "WHMCS cannot JSON-encode the record at index ${Start} (malformed UTF-8 in a stored value); skipping it."
+            return [pscustomobject]@{ Items = @(); Total = 0; SkippedIndexes = @($Start) }
+        }
+        $half = [int][math]::Floor($Num / 2)
+        $left = Invoke-WhmcsPagedFetch -ApiUrl $ApiUrl -Body $Body -Start $Start -Num $half `
+            -ListProperty $ListProperty -ItemProperty $ItemProperty
+        $right = Invoke-WhmcsPagedFetch -ApiUrl $ApiUrl -Body $Body -Start ($Start + $half) -Num ($Num - $half) `
+            -ListProperty $ListProperty -ItemProperty $ItemProperty
+        return [pscustomobject]@{
+            Items          = @($left.Items) + @($right.Items)
+            Total          = [math]::Max($left.Total, $right.Total)
+            SkippedIndexes = @($left.SkippedIndexes) + @($right.SkippedIndexes)
+        }
+    }
+
+    $total = 0
+    if ($resp.totalresults) { [void][int]::TryParse($resp.totalresults.ToString(), [ref]$total) }
+    $node = if ($resp.PSObject.Properties[$ListProperty]) { $resp.$ListProperty } else { $null }
+    return [pscustomobject]@{
+        Items          = @(Get-WhmcsNodeList -Node $node -ChildName $ItemProperty)
+        Total          = $total
+        SkippedIndexes = @()
+    }
+}
+
+# --- Disclosure classification -------------------------------------------
+# ONE classifier for what may be printed from a charity's WHMCS record. The
+# policy and its legal basis live in docs/pii-classification.md; this is its
+# implementation. Do not add a second copy - two classifiers disagreeing is
+# exactly how the EIN ended up masked by 221 and printed by 219.
+
+function Format-MaskedName {
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
+    $t = $Name.Trim()
+    if ($t.Length -le 1) { return '***' }
+    return $t.Substring(0, 1) + '***'
+}
+
+function Format-MaskedEmail {
+    param([string]$Email)
+    if ([string]::IsNullOrWhiteSpace($Email)) { return '' }
+    $at = $Email.IndexOf('@')
+    if ($at -lt 1) { return '***' }
+    return '***' + $Email.Substring($at)
+}
+
+function Get-WhmcsFieldClass {
+    <#
+    .SYNOPSIS
+        Classify a WHMCS field name for disclosure. Returns 'public',
+        'personal-contact', or 'person-name'.
+
+    .DESCRIPTION
+        The distinction is NOT "organizational vs. personal" - it is what the
+        charity has already published or is legally required to disclose:
+
+        - A nonprofit's EIN is public (IRS Pub 78 / BMF, and it appears in the
+          charity's own Candid profile URL).
+        - Officers and directors - names, titles, roles - are public via
+          Form 990 Part VII, which is a public-disclosure document.
+        - A LinkedIn profile is self-published by its owner.
+        - Fields the charity explicitly designated for its website footer are
+          public by the charity's own instruction.
+
+        What Form 990 does NOT disclose is an officer's personal email address
+        or phone number, so those stay masked even for the same person whose
+        name and role are public. That boundary is the whole policy: role and
+        identity are public, direct personal contact routes are not.
+
+        Order matters. Email/phone is decided FIRST so that
+        "Board President/Chair Individual Email" masks even though it names a
+        public role, and the footer exception is checked inside that branch.
+    #>
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$FieldName)
+
+    if ($FieldName -match '(?i)phone|email|e-mail') {
+        # Explicitly designated for publication by the charity.
+        if ($FieldName -match '(?i)\bpublic\b' -or $FieldName -match '(?i)footer') { return 'public' }
+        return 'personal-contact'
+    }
+    # Public by statute or self-publication.
+    if ($FieldName -match '(?i)\bein\b|tax[ _-]?id') { return 'public' }
+    if ($FieldName -match '(?i)linkedin|guidestar|candid|facebook|instagram|twitter|\bx\b|youtube|tiktok') { return 'public' }
+    # Form 990 Part VII: officer/director names and titles are disclosed.
+    if ($FieldName -match '(?i)board|president|chair|secretary|treasurer|vice[ _-]?president|member[ _-]?at[ _-]?large|director|officer|\brole\b|\btitle\b') {
+        return 'public'
+    }
+    # A natural person's name that is NOT an officer/org name.
+    if ($FieldName -match '(?i)\b(first|last|your|contact|poc)[ _-]?name\b' -and
+        $FieldName -notmatch '(?i)org|charity|company|nonprofit|foundation|business') {
+        return 'person-name'
+    }
+    return 'public'
+}
+
+function Format-WhmcsFieldValue {
+    # Apply Get-WhmcsFieldClass to a value. Free-text values are additionally
+    # shape-checked, because a personal phone or email typed into a mission or
+    # notes field is personal regardless of what the field is called.
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$FieldName,
+        [Parameter()][AllowEmptyString()][string]$Value
+    )
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    # WHMCS wraps URL answers in <a href>...</a>. Strip it BEFORE classifying:
+    # an <a href="mailto:...">-wrapped address does not match the email shape,
+    # so a value that should mask would sail through as free text.
+    $t = ([regex]::Replace($Value, '<[^>]+>', '')).Trim()
+    if ([string]::IsNullOrWhiteSpace($t)) { return '' }
+
+    switch (Get-WhmcsFieldClass -FieldName $FieldName) {
+        'personal-contact' {
+            if ($t -match '@') { return Format-MaskedEmail $t }
+            return '***'
+        }
+        'person-name' { return Format-MaskedName $t }
+        default {
+            # 'public' by field name - but check the VALUE's shape, since the
+            # field name cannot vouch for free text someone pasted into it.
+            if ($t -match '^[^@\s]+@[^@\s]+\.[^@\s]+$') { return Format-MaskedEmail $t }
+            # EIN shape (NN-NNNNNNN) is public and must not trip the phone
+            # matcher below, which it otherwise would.
+            if ($t -match '^\d{2}-?\d{7}$') { return $t }
+            if ($t -match '^\+?[0-9 ()\-\.]{7,}$') { return '***' }
+            return $t
+        }
+    }
+}
+
 function ConvertTo-WhmcsCustomFields {
     # Builds base64(serialize(array(id => value))) as WHMCS expects for the
     # `customfields` parameter on AddClient / AddOrder. -Json must be a JSON

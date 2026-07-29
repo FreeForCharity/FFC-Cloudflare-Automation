@@ -39,7 +39,7 @@ def run_preflight(env_overrides: dict) -> tuple[subprocess.CompletedProcess, str
             text=True,
             timeout=60,
         )
-        return proc, summary.read_text()
+        return proc, summary.read_text(encoding="utf-8")
 
 
 def test_existing_repo_refused_with_canonical_name():

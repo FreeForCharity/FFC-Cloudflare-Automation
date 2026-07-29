@@ -8,7 +8,7 @@ name: '729. Repo - Add Collaborator [Repo]'
 #   2. From another workflow via `uses:` (workflow_call) -- e.g. the website
 #      provisioning workflow (15) calls this instead of inlining the gh api PUT.
 #
-# The privileged step runs with secrets.CBM_TOKEN (environment: github-prod), so
+# The privileged step runs with a PAT from Key Vault (environment: github-prod), so
 # callers do not need `actions: write` themselves -- they only need to be able to
 # create/assign issues or dispatch this workflow.
 
@@ -77,6 +77,15 @@ on:
 
 permissions:
   contents: read
+  # Required for the OIDC exchange that fetches the PAT from Key Vault (#844).
+  #
+  # CALLERS MUST GRANT THIS TOO. This workflow is reusable via `workflow_call`
+  # (701 provisioning calls it). A reusable workflow cannot grant itself more than
+  # the calling job holds, so a caller whose job omits `id-token: write` makes the
+  # Azure login below fail at run time with an unhelpful
+  # "unable to get ACTIONS_ID_TOKEN_REQUEST_URL". 701's `maintainers` job declares
+  # it explicitly for this reason.
+  id-token: write
 
 # Serialize runs: a second dispatch queues behind the first instead of racing it.
 concurrency:
@@ -88,10 +97,35 @@ jobs:
     runs-on: ubuntu-latest
     environment: github-prod
     steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Rotation is
+      # a new KV version — no GitHub change and no second copy that can drift.
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+
       - name: Add collaborator(s)
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
           ORG_DEFAULT: FreeForCharity
           IN_REPO: ${{ inputs.repo }}
           IN_USER: ${{ inputs.username }}
@@ -100,6 +134,21 @@ jobs:
           IN_SOFT: ${{ inputs.soft_fail }}
         run: |
           set -uo pipefail
+
+          # `gh` writes its error body to STDOUT, so `gh … 2>/dev/null || echo <default>`
+          # yields the error text with the default appended rather than the default
+          # (ledger L02 / #854 / #889). api_get — same shape as 726's — keeps stdout to
+          # successful responses only: on failure it returns non-zero and puts the error
+          # on stderr, so a caller can never report an error body as data.
+          api_get() {
+            local out rc
+            out=$(gh api "$@" 2>&1); rc=$?
+            if [ "$rc" -ne 0 ]; then
+              printf '%s\n' "$out" >&2
+              return "$rc"
+            fi
+            printf '%s' "$out"
+          }
 
           # Trim leading/trailing whitespace (incl. CR) from a value.
           trim() {
@@ -203,7 +252,14 @@ jobs:
                 echo "Invited $u to $repo as $perm (invitation #$invite_id); pending acceptance."
                 added+=("$u (invited as $perm, pending)")
               else
-                role="$(gh api "repos/$repo/collaborators/$u/permission" --jq '.role_name // .permission' 2>/dev/null || echo "$perm")"
+                # The grant already succeeded; this read is only the confirmation of
+                # the effective role. If it fails, say so and fall back to the
+                # requested permission — the swallowed form reported the API's error
+                # body as the role the user now holds.
+                if ! role="$(api_get "repos/$repo/collaborators/$u/permission" --jq '.role_name // .permission')"; then
+                  role="$perm"
+                  echo "::warning::Added $u to $repo, but could not read back the effective role; reporting the requested '$perm'."
+                fi
                 echo "Added $u to $repo as $role."
                 added+=("$u ($role)")
               fi

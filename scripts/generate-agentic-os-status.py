@@ -64,8 +64,10 @@ IN_FLIGHT_RULE = (
 )
 # Bare `#N` mentions are matched, not just Closes/Refs/Fixes, because agent PR
 # bodies routinely reference an issue in prose or in a comma-joined list
-# ("Refs #889, #841"). A false hit (a 3-6 digit hex colour, a bare number that
-# is not an issue) resolves to a 404 and is dropped — see _issue_is_agentic.
+# ("Refs #889, #841"). The 1-5 digit bound is what excludes the common
+# 6-hex-digit colour (`#909090` never matches); a 3-digit all-numeric colour
+# (`#909`) and any bare number that is not an issue still can, and those are
+# dropped when the lookup 404s — see _issue_is_agentic.
 _ISSUE_REF_RE = re.compile(r"(?:^|[^\w&])#(\d{1,5})\b")
 # Bound on per-run lookups for referenced numbers not already in the backlog.
 # The backlog answers most of them for free; this caps the tail so a PR body

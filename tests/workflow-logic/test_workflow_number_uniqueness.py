@@ -34,7 +34,6 @@ import pathlib
 import re
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from wf_extract import WORKFLOWS

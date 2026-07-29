@@ -135,8 +135,13 @@ jobs:
 
       - name: Validate Zone in Cloudflare
         shell: pwsh
+        # Same rule as "Manage DNS Record" below: user-supplied values by env,
+        # never interpolated into the script body. The issue path constrains the
+        # domain to [A-Za-z0-9.-], but the workflow_dispatch path does not.
+        env:
+          REC_DOMAIN: ${{ needs.resolve-context.outputs.domain }}
         run: |
-          $Domain = "${{ needs.resolve-context.outputs.domain }}"
+          $Domain = [string]$env:REC_DOMAIN
           Write-Host "Checking if zone '$Domain' exists in Cloudflare..."
 
           .\Update-CloudflareDns.ps1 -Zone $Domain -List -ErrorAction SilentlyContinue
@@ -203,7 +208,10 @@ jobs:
 
       - name: Post-Change Compliance Audit
         shell: pwsh
+        # User-supplied value by env — see "Manage DNS Record" above.
+        env:
+          REC_DOMAIN: ${{ needs.resolve-context.outputs.domain }}
         run: |
-          $Domain = "${{ needs.resolve-context.outputs.domain }}"
+          $Domain = [string]$env:REC_DOMAIN
           Write-Host "--- Running Compliance Audit ---"
           .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ErrorAction Continue

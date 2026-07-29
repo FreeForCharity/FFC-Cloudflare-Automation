@@ -794,9 +794,17 @@ jobs:
       - name: Cloudflare source-of-truth zone check
         id: check
         shell: pwsh
+        # Issue-derived values reach the script through the environment, never
+        # through `${{ }}` in `run:`. The runner substitutes an expression into
+        # the script TEXT before pwsh parses it, so a value carrying a quote
+        # closes the literal and everything after it is executed as code. This
+        # workflow's trigger is `issues: [assigned]` on a PUBLIC repo, which
+        # makes every parsed field attacker-authored. See ledger L28.
+        env:
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ needs.resolve.outputs.domain }}"
+          $domain = [string]$env:DOMAIN
 
           # Best-effort: if secrets are missing, treat as not controlled and continue.
           if ([string]::IsNullOrWhiteSpace($env:CLOUDFLARE_API_TOKEN_FFC) -or [string]::IsNullOrWhiteSpace($env:CLOUDFLARE_API_TOKEN_CM)) {
@@ -920,9 +928,13 @@ jobs:
       - name: Enforce GitHub Pages DNS (apex + www)
         id: enforce
         shell: pwsh
+        # Issue-derived value — passed by environment, not interpolated into the
+        # script text. See the note in zone_check and ledger L28.
+        env:
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ needs.resolve.outputs.domain }}"
+          $domain = [string]$env:DOMAIN
 
           $outDir = Join-Path $env:RUNNER_TEMP 'website-provision-dns'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -981,14 +993,24 @@ jobs:
 
       - name: Create repo from template + enable Pages
         shell: pwsh
+        # Issue-derived values by environment, not `${{ }}` in `run:`. This step
+        # holds the org-wide write PAT in $env:GH_TOKEN, so a quote in a parsed
+        # field would have run attacker code next to that credential. Ledger L28.
+        env:
+          REPO_FULL: ${{ needs.resolve.outputs.repo_full }}
+          REPO_NAME: ${{ needs.resolve.outputs.repo_name }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          CHARITY_NAME: ${{ needs.resolve.outputs.charity_name }}
+          TEMPLATE_REPO: ${{ needs.resolve.outputs.template_repo }}
+          ZONE_CONTROLLED: ${{ needs.zone_check.outputs.zone_controlled }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $repoFull = "${{ needs.resolve.outputs.repo_full }}"
-          $repoName = "${{ needs.resolve.outputs.repo_name }}"
-          $domain = "${{ needs.resolve.outputs.domain }}"
-          $charityName = "${{ needs.resolve.outputs.charity_name }}"
-          $templateRepo = "${{ needs.resolve.outputs.template_repo }}"
-          $zoneControlled = "${{ needs.zone_check.outputs.zone_controlled }}" -eq 'true'
+          $repoFull = [string]$env:REPO_FULL
+          $repoName = [string]$env:REPO_NAME
+          $domain = [string]$env:DOMAIN
+          $charityName = [string]$env:CHARITY_NAME
+          $templateRepo = [string]$env:TEMPLATE_REPO
+          $zoneControlled = ([string]$env:ZONE_CONTROLLED) -eq 'true'
 
           if ([string]::IsNullOrWhiteSpace($charityName)) {
             $charityName = $domain
@@ -1008,7 +1030,7 @@ jobs:
           } else {
             $createParams = @{
               RepoName      = $repoName
-              Organization  = "${{ env.WEBSITE_TARGET_ORG }}"
+              Organization  = [string]$env:WEBSITE_TARGET_ORG
               Description   = "Website for $charityName ($domain)"
               TemplateRepo  = $templateRepo
               Visibility    = 'public'
@@ -1094,29 +1116,57 @@ jobs:
       - name: Apply footer + leadership content
         id: apply
         shell: pwsh
+        # Every value below is parsed out of the issue body, and this step also
+        # holds the org-wide write PAT in $env:GH_TOKEN. They reach the script
+        # through the environment so that no attacker-authored byte is ever part
+        # of the script TEXT the runner hands to pwsh. Ledger L28.
+        #
+        # The `*_JSON` fields were the least obvious of the set: `JSON.stringify`
+        # escapes `"` but not `'`, and they were interpolated into SINGLE-quoted
+        # literals — so a leadership line or address containing an apostrophe
+        # closed the literal, which is both an injection and a plain correctness
+        # bug for any charity whose name has one in it.
+        env:
+          REPO_FULL: ${{ needs.resolve.outputs.repo_full }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          CHARITY_NAME: ${{ needs.resolve.outputs.charity_name }}
+          WEBSITE_SITUATION: ${{ needs.resolve.outputs.website_situation }}
+          CURRENT_WEBSITE_URL: ${{ needs.resolve.outputs.current_website_url }}
+          REQUESTER: ${{ needs.resolve.outputs.requester_github_username }}
+          TECHNICAL_POC: ${{ needs.resolve.outputs.technical_poc_github_username }}
+          ZONE_CONTROLLED: ${{ needs.zone_check.outputs.zone_controlled }}
+          FOOTER_EMAIL: ${{ needs.resolve.outputs.footer_email }}
+          FOOTER_PHONE: ${{ needs.resolve.outputs.footer_phone }}
+          FOOTER_ADDRESS_JSON: ${{ needs.resolve.outputs.footer_address_json }}
+          FOOTER_EIN: ${{ needs.resolve.outputs.footer_ein }}
+          IRS_STATUS: ${{ needs.resolve.outputs.irs_status }}
+          GUIDESTAR_PROFILE_URL: ${{ needs.resolve.outputs.guidestar_profile_url }}
+          GUIDESTAR_DIRECT_PROFILE_URL: ${{ needs.resolve.outputs.guidestar_direct_profile_url }}
+          FOOTER_SOCIAL_JSON: ${{ needs.resolve.outputs.footer_social_json }}
+          LEADERSHIP_JSON: ${{ needs.resolve.outputs.leadership_json }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $repoFull = "${{ needs.resolve.outputs.repo_full }}"
-          $domain = "${{ needs.resolve.outputs.domain }}"
-          $charityName = "${{ needs.resolve.outputs.charity_name }}"
-          $websiteSituation = "${{ needs.resolve.outputs.website_situation }}"
-          $currentWebsiteUrl = "${{ needs.resolve.outputs.current_website_url }}"
-          $requester = "${{ needs.resolve.outputs.requester_github_username }}"
-          $technicalPoc = "${{ needs.resolve.outputs.technical_poc_github_username }}"
-          $zoneControlled = "${{ needs.zone_check.outputs.zone_controlled }}" -eq 'true'
+          $repoFull = [string]$env:REPO_FULL
+          $domain = [string]$env:DOMAIN
+          $charityName = [string]$env:CHARITY_NAME
+          $websiteSituation = [string]$env:WEBSITE_SITUATION
+          $currentWebsiteUrl = [string]$env:CURRENT_WEBSITE_URL
+          $requester = [string]$env:REQUESTER
+          $technicalPoc = [string]$env:TECHNICAL_POC
+          $zoneControlled = ([string]$env:ZONE_CONTROLLED) -eq 'true'
 
-          $footerEmail = "${{ needs.resolve.outputs.footer_email }}"
-          $footerPhone = "${{ needs.resolve.outputs.footer_phone }}"
-          $footerAddress = '${{ needs.resolve.outputs.footer_address_json }}' | ConvertFrom-Json
-          $footerEin = "${{ needs.resolve.outputs.footer_ein }}"
+          $footerEmail = [string]$env:FOOTER_EMAIL
+          $footerPhone = [string]$env:FOOTER_PHONE
+          $footerAddress = [string]$env:FOOTER_ADDRESS_JSON | ConvertFrom-Json
+          $footerEin = [string]$env:FOOTER_EIN
 
-          $irsStatus = "${{ needs.resolve.outputs.irs_status }}"
-          $guideStarProfileUrl = "${{ needs.resolve.outputs.guidestar_profile_url }}"
-          $guideStarDirectProfileUrl = "${{ needs.resolve.outputs.guidestar_direct_profile_url }}"
+          $irsStatus = [string]$env:IRS_STATUS
+          $guideStarProfileUrl = [string]$env:GUIDESTAR_PROFILE_URL
+          $guideStarDirectProfileUrl = [string]$env:GUIDESTAR_DIRECT_PROFILE_URL
 
-          $footerSocial = '${{ needs.resolve.outputs.footer_social_json }}' | ConvertFrom-Json
-          $leadership = '${{ needs.resolve.outputs.leadership_json }}' | ConvertFrom-Json
+          $footerSocial = [string]$env:FOOTER_SOCIAL_JSON | ConvertFrom-Json
+          $leadership = [string]$env:LEADERSHIP_JSON | ConvertFrom-Json
 
           $workDir = Join-Path $env:RUNNER_TEMP 'website-provision-repo'
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir }

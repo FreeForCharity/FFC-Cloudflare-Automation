@@ -20,6 +20,13 @@ Four scripts in `scripts/`, plus the repo's own `next build`:
    don't collide with the clone's pages. With `output: 'export'`, `next build` copies `public/`
    verbatim into `out/`, so the export ships the exact clone. Writes `public/CNAME` (apex).
 
+   The end state is a repo with **zero app routes**, and that is correct — `next build` succeeds
+   with `src/app` holding only `layout.tsx` (verified on Next 16.2.12; the route table is just the
+   framework's `/404`). Any surviving route would risk colliding with a cloned path and would export
+   a stray page into the published site. The script used to write a `_clone-host/page.tsx` sentinel
+   claiming to guarantee a route; underscore-prefixed folders are private in the App Router, so it
+   never was one, and it was removed in #905.
+
 3. **`sync-runtime-assets.mjs`** — mirrors the assets that only appear at runtime. httrack fetches
    what it can see in markup; Elementor / Essential Addons / ElementsKit assemble content-hashed
    webpack chunk URLs in JavaScript, so those are absent from the mirror and every widget depending

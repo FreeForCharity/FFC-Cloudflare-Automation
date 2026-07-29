@@ -233,7 +233,11 @@ function Invoke-GooglePagedApi {
         # quietly partial list.
         throw "Pagination cap ($MaxPages pages) reached for $Uri — result would be truncated."
     }
-    return $items
+    # Unary comma: without it an empty $items unrolls to nothing and the caller gets $null, so the
+    # `$raw.Count` in Get-GtmInventory below throws under StrictMode rather than reading 0. Same
+    # defect as #875's crash in Get-GoogleRows, latent here only because these list endpoints have
+    # always returned something. See the note in google-api-common.ps1.
+    return , $items
 }
 
 function Normalize-Domain {
@@ -303,7 +307,7 @@ function Get-GtmInventory {
             }
         }
     }
-    return $containers
+    return , $containers
 }
 
 # ---------------------------------------------------------------- GA4
@@ -346,7 +350,7 @@ function Get-Ga4Inventory {
             }
         }
     }
-    return $out
+    return , $out
 }
 
 function Get-Ga4Sessions {
@@ -382,7 +386,10 @@ function Get-Ga4Sessions {
     }
     $resp = Invoke-GoogleApi -Uri "https://analyticsdata.googleapis.com/v1beta/${PropertyName}:runReport" -AccessToken $tok -Method Post -Body $body
     # Get-GoogleRows exists because the Data API OMITS 'rows' entirely for an empty range —
-    # reaching for $resp.rows directly throws under Set-StrictMode.
+    # reaching for $resp.rows directly throws under Set-StrictMode. It returns an ARRAY on every
+    # path (unary comma), which is what makes the .Count below safe for a property with no traffic;
+    # it did not, and that is the crash #875 tracked. Zero traffic is a measurement, not an error:
+    # it must reach the report as sessions=0, not as a failed probe.
     $rows = Get-GoogleRows -Response $resp
     $sessions = 0; $users = 0
     if ($rows.Count -gt 0) {
@@ -399,10 +406,12 @@ function Get-GscInventory {
     $tok = Get-GoogleDwdAccessToken -Subject $Subject -Scope 'https://www.googleapis.com/auth/webmasters' -CredentialsPath $script:WorkspaceKey
     $resp = Invoke-GoogleApi -Uri 'https://searchconsole.googleapis.com/webmasters/v3/sites' -AccessToken $tok
     # siteEntry is absent when the list is empty, and @($null).Count is 1 — guard both.
+    # Unary comma on both paths so an admin with no verified properties yields an empty ARRAY
+    # rather than $null (#875).
     if ((Test-HasProperty -Object $resp -Name 'siteEntry') -and $resp.siteEntry) {
-        return @($resp.siteEntry)
+        return , @($resp.siteEntry)
     }
-    return @()
+    return , @()
 }
 
 # ---------------------------------------------------------------- Live probe

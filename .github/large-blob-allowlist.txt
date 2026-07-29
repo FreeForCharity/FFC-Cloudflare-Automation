@@ -1,0 +1,15 @@
+# Paths exempt from the large-blob guard (scripts/check-large-blobs.sh).
+#
+# One glob per line, matched against the blob's path with bash `==`.
+# Blank lines and `#` comments are ignored.
+#
+# Only add a path here when the file genuinely belongs in git history, and say
+# why in the PR description. Build outputs, downloaded tool binaries, wheels and
+# archives do NOT belong here -- install them in the workflow instead
+# (722-ci.yml already `go install`s actionlint rather than committing it).
+
+# Pre-existing WHMCS theme bundle: three assets over 1 MiB (fa-light-300.svg,
+# fa-regular-400.svg, js/scripts.js). Already on main, so the range scan skips
+# them; listed so that a legitimate theme refresh is not blocked.
+whmcs/theme/six_ffc/*
+whmcs/theme/six_ffc/**

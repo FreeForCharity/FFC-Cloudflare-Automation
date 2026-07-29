@@ -17,6 +17,19 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
+        with:
+          # Full history: the large-blob guard below scans every commit a PR
+          # introduces, not just its tip tree. ~26 MB / ~1300 commits, so the
+          # extra fetch is negligible against the rest of this job.
+          fetch-depth: 0
+
+      - name: Guard against large blobs in any commit of the PR
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/check-large-blobs.sh "$BASE_SHA" "$HEAD_SHA"
 
       - name: Validate workflow name prefixes (Actions UI order)
         shell: bash

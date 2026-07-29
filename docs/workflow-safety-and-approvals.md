@@ -68,14 +68,17 @@ A live change generally has to get past several of these, not just one:
 
 The Agentic OS **Conductor** may auto-approve a waiting deployment gate **when the run is safe**,
 and Clarke's standing rule is **"auto-approve them all if safe."** "Safe" is judged by the **run's
-actual safety level and the scope of the credential it loads — never by the environment name.** Both
-conditions are necessary (#915):
+actual safety level and the scopes of every credential it loads — never by the environment name.**
+Both conditions are necessary (#915), and a job may load more than one credential (401 loads two):
 
 - ✅ **Auto-approve** only when **both** hold:
   1. the waiting job is safety-level **Reads** (see the per-workflow table below), **or** a
      `Writes (dry-run default)` job dispatched with **`dry_run=true`**; **and**
-  2. **every credential the job loads is read-scoped** — each `*-from-kv` step in the job resolves
-     `read-all-*` secrets, and the job references no `wr-all-*` secret.
+  2. **every credential the job loads resolves to read scope** — for each `*-from-kv` step, resolve
+     the `scope` the action will actually use: the value the step passes, or the action's declared
+     `default:` when the step omits the input. All of them must resolve to `read`. A literal
+     `wr-all-*` reference anywhere in the job disqualifies it too, but **its absence proves
+     nothing** — see the note below before relying on a grep.
 
   Condition 1 alone still holds across environment names: a genuinely read-only job on a
   nominally-gated write environment (e.g. `github-prod`) is still read-only.

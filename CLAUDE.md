@@ -36,6 +36,36 @@
 - Never "fix" a test, or hold a PR, on the strength of a local harness crash — confirm against CI
   first.
 
+## A test asserting a non-zero exit code must also assert on the output (validated 2026-07-29)
+
+**Never pass a scrubbed `env=` to `subprocess.run`.** Writing
+`subprocess.run([...], env={"PATH": os.environ["PATH"]})` to isolate a test broke `bash` on this box
+— a bare `bash` here resolves to the WSL shim, which needs `SYSTEMROOT` and friends:
+
+```
+Catastrophic failure
+Error code: Bash/Service/E_UNEXPECTED
+```
+
+That surfaced as **exit 1**. The system under test also returns exit 1, for "a violation was found".
+Six tests in `test_722_large_blob_guard.py` failed honestly, but the seventh asserted only
+`returncode == 1` and went **green for the wrong reason** — the harness was broken and the test read
+it as a successful detection.
+
+The rule generalizes past this box: **a test that asserts a failure exit code must also assert
+something about stdout/stderr**, or it cannot distinguish the system under test from its harness.
+Prefer `env = dict(os.environ)` plus the one or two overrides you actually need.
+
+Related, same file: on `win32`, prefer Git-for-Windows bash explicitly —
+
+```python
+r"C:\Program Files\Git\bin\bash.exe"   # handles C:\... arguments
+```
+
+A bare `bash` (the WSL shim) strips drive letters out of Windows-style path arguments and exits 127
+with `No such file or directory` naming a path with every separator removed. No effect on
+`ubuntu-latest`, so this is a local-run fact only.
+
 ## Reading `gh --format json` on the Windows Conductor box (validated 2026-07-25)
 
 **Open the file as UTF-8 explicitly, or Python decodes it as cp1252 and dies.** Piping

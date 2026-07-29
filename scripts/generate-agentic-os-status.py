@@ -10,7 +10,11 @@ workflow 502's ``deliver`` job).
 The feed contains:
   * ``backlog_issues`` — open issues labeled ``agentic-os`` (sandboxed agents
     pick these up).
-  * ``in_flight_prs`` — open PRs labeled ``agentic-os`` (agent work in flight).
+  * ``in_flight_prs`` — open PRs that are agent work on that backlog: labeled
+    ``agentic-os``, or referencing an ``agentic-os``-labeled issue. The rule is
+    emitted alongside the rows as ``in_flight_prs_rule``, and the unfiltered
+    open-PR count as ``open_prs_total``, so a panel reading zero can be told
+    apart from a panel that is broken (#909).
   * ``conductor_log`` — the last 10 comments on the pinned Conductor log issue
     (#719), each body truncated to 500 chars.
   * ``pending_gates`` — workflow runs sitting at an environment approval gate
@@ -48,6 +52,25 @@ COMMENT_TRUNCATE = 500
 API_ROOT = "https://api.github.com"
 USER_AGENT = "ffc-agentic-os-status-generator"
 HTTP_TIMEOUT = 30  # seconds; fail closed rather than hang the daily sync.
+
+# The in-flight inclusion rule, stated in the feed itself. A public panel that
+# renders a bare count gives a reader no way to tell "nothing is in flight" from
+# "the filter is dead" — which is exactly how #909 survived unnoticed.
+IN_FLIGHT_RULE = (
+    "Open pull requests on this repo that are agent work on this backlog: a PR is listed "
+    "when it carries the agentic-os label, or when its body references an agentic-os "
+    "issue (e.g. 'Closes #123' / 'Refs #123'). Referenced-issue labels are what decide it "
+    "— nothing labels the pull requests themselves."
+)
+# Bare `#N` mentions are matched, not just Closes/Refs/Fixes, because agent PR
+# bodies routinely reference an issue in prose or in a comma-joined list
+# ("Refs #889, #841"). A false hit (a 3-6 digit hex colour, a bare number that
+# is not an issue) resolves to a 404 and is dropped — see _issue_is_agentic.
+_ISSUE_REF_RE = re.compile(r"(?:^|[^\w&])#(\d{1,5})\b")
+# Bound on per-run lookups for referenced numbers not already in the backlog.
+# The backlog answers most of them for free; this caps the tail so a PR body
+# full of `#N` noise cannot turn the daily feed into a rate-budget problem.
+MAX_ISSUE_LOOKUPS = 30
 
 # Defense-in-depth redaction for the Conductor-log bodies. The source issue
 # (#719) is already a public issue, so nothing here is a *new* disclosure — but
@@ -121,8 +144,13 @@ def _build_url(path_or_url, params=None):
     return url
 
 
-def _request(path_or_url, token, params=None):
-    """Perform ONE GET and return ``(payload, link_header)``. No pagination."""
+def _request(path_or_url, token, params=None, soft_fail=False):
+    """Perform ONE GET and return ``(payload, link_header)``. No pagination.
+
+    ``soft_fail=True`` returns ``(None, None)`` on an HTTP error instead of
+    aborting the run. Used only for speculative lookups (does referenced number
+    N name an agentic-os issue?), where a 404 is an expected answer — "no" — and
+    must never take the whole daily feed down with it."""
     url = _build_url(path_or_url, params)
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
@@ -134,6 +162,8 @@ def _request(path_or_url, token, params=None):
             payload = json.loads(resp.read().decode("utf-8"))
             return payload, resp.headers.get("Link")
     except urllib.error.HTTPError as exc:
+        if soft_fail:
+            return None, None
         detail = exc.read().decode("utf-8", "replace").strip()
         raise SystemExit(f"error: GitHub API {exc.code} for {url}: {detail}")
     except urllib.error.URLError as exc:
@@ -194,18 +224,73 @@ def collect_backlog(repo, token):
     return issues
 
 
-def collect_in_flight_prs(repo, token):
-    """Open PRs carrying the agentic-os label. The pulls endpoint gives us
-    ``draft`` and the label set directly."""
+def referenced_issue_numbers(body):
+    """Issue numbers referenced by a PR body, in first-seen order."""
+    if not body:
+        return []
+    seen, out = set(), []
+    for match in _ISSUE_REF_RE.finditer(body):
+        num = int(match.group(1))
+        if num not in seen:
+            seen.add(num)
+            out.append(num)
+    return out
+
+
+def _issue_is_agentic(repo, number, token, cache):
+    """Does ``number`` name an agentic-os-labeled ISSUE (not a PR)?
+
+    Cached per run, and deliberately fail-closed on anything unresolvable: a
+    404 (the number was a hex colour or a nonexistent issue), a soft-failed
+    request, or a number that turns out to be a pull request all answer False.
+    Counting a PR reference would be circular — PR bodies cross-reference each
+    other constantly."""
+    if number in cache:
+        return cache[number]
+    if len(cache) >= MAX_ISSUE_LOOKUPS:
+        return False
+    payload, _ = _request(f"repos/{repo}/issues/{number}", token, soft_fail=True)
+    verdict = False
+    if isinstance(payload, dict) and "pull_request" not in payload:
+        verdict = LABEL in [lbl.get("name") for lbl in payload.get("labels", [])]
+    cache[number] = verdict
+    return verdict
+
+
+def collect_in_flight_prs(repo, token, backlog_issue_numbers=None):
+    """Open PRs that are agent work on this backlog.
+
+    A PR qualifies when it carries the agentic-os label **or** its body
+    references an agentic-os-labeled issue. See ``IN_FLIGHT_RULE``.
+
+    The label alone was the previous rule and it could never match: workflow 737
+    labels linked *issues*, and nothing labels the pull requests, so the public
+    panel read 0 while a dozen agent PRs were open (#909). Resolution now runs
+    in the direction the data actually flows — from the PR to the issue it
+    references — so the panel does not depend on labelling discipline that has
+    never held.
+
+    ``backlog_issue_numbers`` (the already-fetched open agentic-os issues)
+    answers most references for free; only numbers outside that set cost a
+    lookup, and those are bounded and cached.
+
+    Returns ``(prs, open_prs_total)``. The unfiltered total is reported so a
+    zero panel is distinguishable from a dead one."""
     raw = rest_get(
         f"repos/{repo}/pulls",
         token,
         params={"state": "open", "per_page": "100"},
     )
+    known = set(backlog_issue_numbers or ())
+    cache = {}
     prs = []
     for pr in raw:
         labels = [lbl["name"] for lbl in pr.get("labels", [])]
-        if LABEL not in labels:
+        linked = []
+        for num in referenced_issue_numbers(pr.get("body")):
+            if num in known or _issue_is_agentic(repo, num, token, cache):
+                linked.append(num)
+        if LABEL not in labels and not linked:
             continue
         prs.append(
             {
@@ -217,10 +302,11 @@ def collect_in_flight_prs(repo, token):
                 "updated_at": pr["updated_at"],
                 "url": pr["html_url"],
                 "labels": labels,
+                "linked_agentic_issues": linked,
             }
         )
     prs.sort(key=lambda x: x["updated_at"], reverse=True)
-    return prs
+    return prs, len(raw)
 
 
 def collect_conductor_log(repo, token):
@@ -293,11 +379,17 @@ def collect_pending_gates(repo, token):
 
 
 def build_feed(repo, token):
+    backlog = collect_backlog(repo, token)
+    in_flight, open_prs_total = collect_in_flight_prs(
+        repo, token, backlog_issue_numbers=[i["number"] for i in backlog]
+    )
     return {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "repo": repo,
-        "backlog_issues": collect_backlog(repo, token),
-        "in_flight_prs": collect_in_flight_prs(repo, token),
+        "backlog_issues": backlog,
+        "in_flight_prs": in_flight,
+        "in_flight_prs_rule": IN_FLIGHT_RULE,
+        "open_prs_total": open_prs_total,
         "conductor_log": collect_conductor_log(repo, token),
         "pending_gates": collect_pending_gates(repo, token),
     }
@@ -318,7 +410,7 @@ def main():
             fh.write(text)
         counts = (
             f"{len(feed['backlog_issues'])} issues, "
-            f"{len(feed['in_flight_prs'])} PRs, "
+            f"{len(feed['in_flight_prs'])} of {feed['open_prs_total']} open PRs, "
             f"{len(feed['conductor_log'])} log entries, "
             f"{len(feed['pending_gates'])} pending gates"
         )

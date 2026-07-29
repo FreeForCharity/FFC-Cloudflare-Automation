@@ -1059,26 +1059,6 @@
       "categoryCode": "WHMCS"
     },
     {
-      "number": 229,
-      "title": "WHMCS - Domain Order Add (Register/Transfer) (Admin)",
-      "apis": [
-        "WHMCS"
-      ],
-      "file": "229-whmcs-domain-order-add.yml",
-      "triggers": [
-        "workflow_dispatch"
-      ],
-      "environments": [
-        "whmcs-prod"
-      ],
-      "description": "Places a WHMCS domain order for an existing client by wrapping scripts/whmcs-order-add.ps1 (WHMCS AddOrder). This is the entry point the inbound migration path (workflow 123 / docs/wix-domain-migration.md) needs: a charity whose domain sits at a foreign registrar has no domain product in WHMCS, so there is nothing to drive the transfer from until one is placed.  Products (group 6): transfer -> pid 41  \"Transfer your Existing Domain Name to the FFC CloudFlare\" register -> pid 39  \"Free new .org Domain Name in the FFC CloudFlare\"  SAFETY: this is the first WRITE against production billing in this area. * mode=dry-run (default) previews the AddOrder request and writes nothing. * mode=execute places a real order. Gated behind the whmcs-prod environment approval on top of that. * The underlying script skips when the client already has a non-terminated service for the product, unless allow_duplicate is set. * no_email defaults to true so a first live run cannot surprise a charity with an unexpected order confirmation. Turn it off deliberately.  Find client_id with 221 (Application Search) or 219 (Application Detail). Confirm the registrar situation first with 123 (Inbound Transfer Preflight).",
-      "safetyLevel": "Writes (dry-run default)",
-      "approvalEnv": "\u2705 whmcs-prod",
-      "guard": "`mode` (default `dry-run`) previews AddOrder and writes nothing; `execute` places a real order; pid fixed by `order_type` (41 transfer / 39 register); underlying script skips when the client already has a non-terminated service for the product unless `allow_duplicate`; `no_email` defaults true so a first live run cannot surprise a charity; price forced to 0",
-      "category": "WHMCS",
-      "categoryCode": "WHMCS"
-    },
-    {
       "number": 230,
       "title": "WHMCS - Record Field Set (client/contact/service/domain)",
       "apis": [
@@ -1095,6 +1075,26 @@
       "safetyLevel": "Writes (record field)",
       "approvalEnv": "\u2705 whmcs-prod",
       "guard": "`dry_run` (default true); one record + one field per dispatch; strict per-target allowlist of writable fields; refuses to replace a different existing value without `force`; reports `previousValue`",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 231,
+      "title": "WHMCS - Domain Order Add (Register/Transfer) (Admin)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "231-whmcs-domain-order-add.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Places a WHMCS domain order for an existing client by wrapping scripts/whmcs-order-add.ps1 (WHMCS AddOrder). This is the entry point the inbound migration path (workflow 123 / docs/wix-domain-migration.md) needs: a charity whose domain sits at a foreign registrar has no domain product in WHMCS, so there is nothing to drive the transfer from until one is placed.  Products (group 6): transfer -> pid 41  \"Transfer your Existing Domain Name to the FFC CloudFlare\" register -> pid 39  \"Free new .org Domain Name in the FFC CloudFlare\"  SAFETY: this is the first WRITE against production billing in this area. * mode=dry-run (default) previews the AddOrder request and writes nothing. * mode=execute places a real order. Gated behind the whmcs-prod environment approval on top of that. * The underlying script skips when the client already has a non-terminated service for the product, unless allow_duplicate is set. * no_email defaults to true so a first live run cannot surprise a charity with an unexpected order confirmation. Turn it off deliberately.  Find client_id with 221 (Application Search) or 219 (Application Detail). Confirm the registrar situation first with 123 (Inbound Transfer Preflight).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`mode` (default `dry-run`) previews AddOrder and writes nothing; `execute` places a real order; pid fixed by `order_type` (41 transfer / 39 register); underlying script skips when the client already has a non-terminated service for the product unless `allow_duplicate`; `no_email` defaults true so a first live run cannot surprise a charity; price forced to 0",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },

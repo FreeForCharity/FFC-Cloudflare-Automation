@@ -74,7 +74,7 @@ A charity whose domain sits at a foreign registrar has **no domain product in WH
 nothing to drive the transfer from until an order exists. Place it first:
 
 - Find the client id with `219. WHMCS - Application Detail` or `221. WHMCS - Application Search`.
-- Run `229. WHMCS - Domain Order Add (Register/Transfer) (Admin) [WHMCS]` with `order_type=transfer`
+- Run `231. WHMCS - Domain Order Add (Register/Transfer) (Admin) [WHMCS]` with `order_type=transfer`
   (pid 41, _Transfer your Existing Domain Name to the FFC CloudFlare_). It defaults to
   `mode=dry-run` — check the previewed request, then re-run with `mode=execute`.
 - Then complete the transfer itself: WHMCS → Orders → the new order → submit the EPP code from stage

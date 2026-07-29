@@ -57,7 +57,7 @@
     },
     {
       "intent": "Place the WHMCS domain order a foreign-registrar migration needs (transfer or register)",
-      "workflows": [229],
+      "workflows": [231],
       "safeFirst": 123,
       "notes": "Writes. mode=dry-run by default; execute places a real order behind the whmcs-prod approval. order_type=transfer -> pid 41, register -> pid 39. Find client_id with 219/221; confirm the registrar with 123 first. A charity whose domain is at a foreign registrar has no domain product in WHMCS, so this is what creates something to drive the transfer from."
     },

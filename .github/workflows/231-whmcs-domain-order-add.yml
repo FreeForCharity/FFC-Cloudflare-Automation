@@ -1,4 +1,4 @@
-name: '229. WHMCS - Domain Order Add (Register/Transfer) (Admin) [WHMCS]'
+name: '231. WHMCS - Domain Order Add (Register/Transfer) (Admin) [WHMCS]'
 run-name: 'Domain Order Add (${{ inputs.mode }}, ${{ inputs.order_type }}): ${{ inputs.domain }}'
 
 # Places a WHMCS domain order for an existing client by wrapping
@@ -91,7 +91,7 @@ permissions:
 # Serialize runs: a second dispatch queues behind the first rather than racing
 # it into a duplicate order.
 concurrency:
-  group: 229-whmcs-domain-order-add
+  group: 231-whmcs-domain-order-add
   cancel-in-progress: false
 
 jobs:

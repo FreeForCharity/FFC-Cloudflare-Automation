@@ -80,7 +80,7 @@ Org-WPAdmin,ksgf.org,Unknown,No,No,Yes,Hostinger,No,Matches Hostinger,153.92.213
 InterServer-Org,legion-in-the-woods.org,Active,Yes,Yes,No,InterServer RS1,No,Correct InterServer RS1,216.158.234.18,Yes,,Live,Standard,,,,,None,,InterServer RS1,,0.9,2026-09-11,0.00,3 - Needs Migration,66,46,15
 For-Profit,letsdanceactivities.com,Active,Yes,Yes,No,Hostinger,No,.org also on Hostinger,153.92.213.212,Yes,,Redirect,Standard,,,,,None,,Hostinger,,7.6,2026-09-17,13.50,3 - Needs Migration,73,56,0
 Krystal-New,movewithcompassion.org,Unknown,No,No,No,Krystal.io,No,New Krystal Host,185.199.224.x,No,,Live,Standard,,,,,None,,Krystal.io,,,,,3 - Needs Migration,55,45,0
-For-Profit,moyermanagement.com,Active,Yes,Yes,No,HostPapa,No,Matches HostPapa,185.199.111.153;185.199.110.153;185.199.109.153;185.199.108.153,Yes,,Live,Standard,,,,,None,,HostPapa,,11.6,2027-07-12,13.50,3 - Needs Migration,79,68,0
+For-Profit,moyermanagement.com,Active,Yes,Yes,No,GitHub Pages,Yes,Owner-managed by clarkemoyer (not an FFC-supported site); already static on GitHub Pages - no migration needed (reviewed 2026-07-26),185.199.111.153;185.199.110.153;185.199.109.153;185.199.108.153,Yes,,Live,Standard,,,,,None,,GitHub Pages,,11.6,2027-07-12,13.50,4 - Done / Stable,0,73,0
 For-Profit,muckfichigan.com,Unknown,No,No,No,Krystal.io,No,New Krystal Host,185.199.224.x,No,,Live,Standard,,,,,None,,Krystal.io,,,,,3 - Needs Migration,55,45,0
 Org-WPAdmin,myservicehours.org,Unknown,No,No,Yes,Hostinger,No,Matches Hostinger,153.92.213.212,No,,Live,Standard,,,,,None,,Hostinger,,,,,3 - Needs Migration,70,45,0
 Org-WPAdmin,naturaldividends.org,Unknown,No,No,Yes,Hostinger,No,Matches Hostinger,153.92.213.212,No,,Unreachable,Standard,,,,,None,,Hostinger,,,,,3 - Needs Migration,40,0,0

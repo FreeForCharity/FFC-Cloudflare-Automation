@@ -565,6 +565,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 226 | WHMCS - Application Triage (rank + accept onboarding orders) [WHMCS] | `226-whmcs-application-triage.yml` | workflow_dispatch | Writes (report default) | ✅ whmcs-prod |
 | 227 | cPanel - Deploy WHMCS Hooks (FTPS/lftp) [cPanel] | `227-whmcs-hooks-deploy.yml` | workflow_dispatch | Writes (verify default) | ✅ whmcs-prod |
 | 228 | WHMCS - Fraud Review (FraudLabs Pro) [FRAUDLABS+WHMCS] | `228-whmcs-fraud-review.yml` | schedule, workflow_dispatch | Writes (issues only) | whmcs-prod-read + fraudlabspro-prod-read |
+| 229 | WHMCS - Domain Order Add (Register/Transfer) (Admin) [WHMCS] | `229-whmcs-domain-order-add.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 230 | WHMCS - Record Field Set (client/contact/service/domain) [WHMCS] | `230-whmcs-record-field-set.yml` | workflow_dispatch | Writes (record field) | ✅ whmcs-prod |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 

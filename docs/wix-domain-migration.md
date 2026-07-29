@@ -70,10 +70,20 @@ or M365 loses email the moment those are dropped.
 
 ### Stage 2 — Transfer in to eNom via WHMCS
 
-- WHMCS → Orders → Add New Order → **Transfer** a domain, registrar module eNom.
-- Enter the domain and the EPP code.
+A charity whose domain sits at a foreign registrar has **no domain product in WHMCS** — there is
+nothing to drive the transfer from until an order exists. Place it first:
+
+- Find the client id with `219. WHMCS - Application Detail` or `221. WHMCS - Application Search`.
+- Run `229. WHMCS - Domain Order Add (Register/Transfer) (Admin) [WHMCS]` with `order_type=transfer`
+  (pid 41, _Transfer your Existing Domain Name to the FFC CloudFlare_). It defaults to
+  `mode=dry-run` — check the previewed request, then re-run with `mode=execute`.
+- Then complete the transfer itself: WHMCS → Orders → the new order → submit the EPP code from stage
+  1, registrar module eNom.
 - Approve the transfer-confirmation email (unapproved transfers auto-complete in 5–7 days).
 - Confirm the domain shows up in WHMCS with registrar `enom`.
+
+> Use `order_type=register` (pid 39) instead only when FFC is buying the charity a **new** domain —
+> that is a different path and does not belong in a migration.
 
 ### Stage 3 — Point nameservers at Cloudflare
 

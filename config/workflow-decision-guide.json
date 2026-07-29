@@ -56,6 +56,12 @@
       "notes": "Read-only, per-domain: `domains` is required and there is no fleet-wide default. Classifies the losing registrar and writes a runbook. Wix blocks nameserver delegation, so a Wix domain must transfer to eNom via WHMCS before Cloudflare is reachable; every other registrar can point NS at Cloudflare immediately. WHMCS is the live record of what FFC holds -- docs/domain-registry-truth.csv is a stale snapshot, not a worklist. See docs/wix-domain-migration.md."
     },
     {
+      "intent": "Place the WHMCS domain order a foreign-registrar migration needs (transfer or register)",
+      "workflows": [229],
+      "safeFirst": 123,
+      "notes": "Writes. mode=dry-run by default; execute places a real order behind the whmcs-prod approval. order_type=transfer -> pid 41, register -> pid 39. Find client_id with 219/221; confirm the registrar with 123 first. A charity whose domain is at a foreign registrar has no domain product in WHMCS, so this is what creates something to drive the transfer from."
+    },
+    {
       "intent": "Decide whether a domain needs a registrar transfer or just a nameserver change",
       "workflows": [123],
       "safeFirst": 101,

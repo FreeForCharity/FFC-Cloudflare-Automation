@@ -309,7 +309,7 @@
       "description": "READ-ONLY: probes whether the selected Cloudflare token has Registrar API rights (read + write). Never registers or changes anything. Wraps scripts/cloudflare-registrar-access-check.ps1.",
       "safetyLevel": "Reads",
       "approvalEnv": "\u2705 cloudflare-prod-write",
-      "guard": "never charges",
+      "guard": "never charges; but `cloudflare-tokens-from-kv` runs with **`scope: write`** \u2192 loads `wr-all-*` CF tokens, so **not auto-approvable** (#915)",
       "category": "Cloudflare / DNS / Domain",
       "categoryCode": "CF"
     },
@@ -890,7 +890,7 @@
       "description": "Read-only. Sweeps GetClientsProducts (all clients) and returns the onboarding application(s) whose product custom fields contain the query substring (a domain or organization name), with personal contact fields masked. This is the domain/org -> client-id lookup that 219 (which needs a client id) and the masked triage tables cannot do. Posts the matches to the job summary and optionally back to a GitHub issue. No writes.  NOTE: uses the gated `whmcs-prod` so it runs today with a single approval; once `whmcs-prod-read` is set up it can move there (read-only workflow).",
       "safetyLevel": "Reads",
       "approvalEnv": "\u2705 whmcs-prod",
-      "guard": "GetClientsProducts sweep; personal contact fields masked; gated until whmcs-prod-read setup",
+      "guard": "GetClientsProducts sweep; personal contact fields masked; gated until whmcs-prod-read setup; `whmcs-secrets-from-kv` **omits `scope`** \u2192 action default `write` \u2192 loads `wr-all-ffc-whmcs-*`, so **not auto-approvable** (#915)",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -1247,7 +1247,7 @@
       "description": "Read-only export of Zeffy campaigns/events (GET /api/v1/campaigns) via OIDC -> Key Vault. This endpoint returns NO personal data (forms/events only: title, target, volume, dates, URLs), so the uploaded artifact is inherently safe to keep on this public repo. Dispatch-only (no schedule) while we are testing the API. One workflow per endpoint.  The `deliver` job additionally publishes a public, PII-free campaign list (docs/data/ffc-zeffy-campaigns.json \u2014 title/url/status only) as a reviewable data-update PR, so the fleet smoke engine can classify a detected donation surface as ffc-interim (FFC-owned campaign) vs charity-specific (#744). Mirrors the 502 export->deliver split (github-prod gate, CBM_TOKEN) and the 703 same-repo peter-evans data-PR pattern.",
       "safetyLevel": "Reads (+ PR delivery)",
       "approvalEnv": "zeffy-prod \u2192 \u2705 github-prod (deliver)",
-      "guard": "PII masked; the published `docs/data/ffc-zeffy-campaigns.json` is title/url/status only (no financials); `deliver` opens a reviewable data PR via CBM_TOKEN",
+      "guard": "PII masked; the published `docs/data/ffc-zeffy-campaigns.json` is title/url/status only (no financials); `deliver` opens a reviewable data PR via CBM_TOKEN; loads `wr-all-ffc-zeffy-api-key` (default `write`) **and** `wr-all-cbm-github-pat` \u2192 **not auto-approvable** (#915; on the \u2705 list 2026-07-23 \u2192 2026-07-29)",
       "category": "Zeffy",
       "categoryCode": "ZEFFY"
     },
@@ -1494,7 +1494,7 @@
       "description": "Generates the merged FFC sites list from the WHMCS / Cloudflare / WPMUDEV exports plus the curated base list, runs per-domain health checks, and commits both sites-list/sites_list.csv and sites-list/sites_list.json.  This repo owns the export environments (whmcs-prod, cloudflare-prod-read, wpmudev-prod) and the GitHub PAT (CBM_TOKEN in github-prod) needed to dispatch the sibling export workflows, so generation lives here. Downstream consumers (e.g. ffcadmin.org) pull the published files from this repo.",
       "safetyLevel": "Writes (data PR only)",
       "approvalEnv": "\u2705 github-prod",
-      "guard": "dispatches read-only exports 201/108/601 (601 waits on its own wpmudev-prod gate); regenerates `sites-list/` CSV+JSON; opens a data PR (never pushes to `main`); weekly Mon 08:00Z + dispatch; serialized concurrency group",
+      "guard": "dispatches read-only exports 201/108/601 (601 waits on its own wpmudev-prod gate); regenerates `sites-list/` CSV+JSON; opens a data PR (never pushes to `main`); weekly Mon 08:00Z + dispatch; serialized concurrency group; loads `wr-all-cbm-ffc-copilot-mcp-github-pat` \u2192 **held on credential scope**, not on a taxonomy gap (#915)",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

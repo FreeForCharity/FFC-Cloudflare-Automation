@@ -93,6 +93,36 @@ Two habits, both cheap:
 
 This is the same class as the `#719` log tail needing `--paginate` to find the true run number.
 
+## On a merge-queue repo, `autoMergeRequest` is always `null` — `mergeQueueEntry` is the proof
+
+`main` here is governed by a merge queue, and that changes which field records an enqueue.
+`gh pr merge --auto` succeeds, prints only the advisory
+
+```
+! The merge strategy for main is set by the merge queue
+```
+
+and then **`autoMergeRequest` stays `null` forever** — the PR is in the queue, not in auto-merge.
+Reading that `null` as "the enqueue failed" is wrong, and on 2026-07-29 it nearly caused a duplicate
+merge attempt; the second `gh pr merge` answered `Pull request … is already queued to merge`, which
+is what revealed the mistake.
+
+Confirm with `mergeQueueEntry` instead:
+
+```bash
+gh api graphql -f query='{repository(owner:"FreeForCharity",name:"FFC-Cloudflare-Automation"){
+  pullRequest(number:905){ mergeQueueEntry{ position state enqueuedAt } }}}'
+# → {"position":1,"state":"AWAITING_CHECKS","enqueuedAt":"2026-07-29T13:10:06Z"}
+```
+
+Note the advisory goes to **stderr and the command still exits 0**, so a `>/dev/null` wrapper hides
+the one hint that the queue — not auto-merge — took the request.
+
+This is the third instance of the same underlying rule already in this file: **confirm a GitHub write
+by re-reading the state it should have changed, and make sure you re-read the _right_ field.** The
+gate-approval note above says don't trust the POST body; this says don't trust the field that would
+have been correct on a non-queue repo. Both fail the same way — a truthful-looking negative.
+
 ## Board & PR-creation env facts (validated 2026-07-24)
 
 - **The public "Agentic OS" board (org project #9) has NO automation.** Its only enabled built-in

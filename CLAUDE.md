@@ -118,10 +118,61 @@ gh api graphql -f query='{repository(owner:"FreeForCharity",name:"FFC-Cloudflare
 Note the advisory goes to **stderr and the command still exits 0**, so a `>/dev/null` wrapper hides
 the one hint that the queue — not auto-merge — took the request.
 
-This is the third instance of the same underlying rule already in this file: **confirm a GitHub write
-by re-reading the state it should have changed, and make sure you re-read the _right_ field.** The
-gate-approval note above says don't trust the POST body; this says don't trust the field that would
-have been correct on a non-queue repo. Both fail the same way — a truthful-looking negative.
+This is the third instance of the same underlying rule already in this file: **confirm a GitHub
+write by re-reading the state it should have changed, and make sure you re-read the _right_ field.**
+The gate-approval note above says don't trust the POST body; this says don't trust the field that
+would have been correct on a non-queue repo. Both fail the same way — a truthful-looking negative.
+
+## Narrowing a workflow to a read lane surfaces the writes that were riding on the old credential
+
+**Before moving a workflow to a `*-prod-read` environment, enumerate what it writes.** Validated the
+hard way on 2026-07-29 (#834): `726` was moved off the gated `github-prod` onto `github-prod-read`,
+and its Key Vault step exports the **read-scoped** PAT to `GITHUB_ENV` as `GH_TOKEN` — which then
+applies to every later step, including the one that **updates the rolling tracking issue**. The
+org-wide audit passed and the run died on the last step:
+
+```
+Updating issue #667
+failed to update .../issues/667: GraphQL: Resource not accessible by
+personal access token (updateIssue)
+```
+
+Searching an issue and editing one are different permissions, so the failure only appears at the
+write. That write had worked for months purely because the gated lane happened to hand it a
+**writer** PAT — the narrowing did not break it so much as reveal it.
+
+The fix is the pattern `737` already uses: an own-repo issue write belongs on the **ambient**
+`GITHUB_TOKEN`, not on a Key Vault credential. A step-level `env:` beats `GITHUB_ENV`, so the read
+step keeps the PAT and only the write falls back:
+
+```yaml
+- name: Open / update tracking issue
+  env:
+    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run: |
+    gh issue edit "$existing" --repo "$repo" --body "$body"
+```
+
+The job must declare `issues: write` (726 already did). Corollary worth keeping: **a workflow's own
+error message states what its author assumed, not what the repo can do.** 726's preflight asserted
+"These OIDC identifiers are ENVIRONMENT secrets — a repo Variable does not satisfy a `secrets.*`
+reference." True about `secrets.*`, and a false diagnosis: the identifiers were already repo
+Variables and the correct fix was to reference them as `vars.*`. That message was escalated to a
+human as a provisioning request before anyone checked `gh api repos/<r>/actions/variables`.
+
+## The Conductor cannot `--request-changes` on a cloud-worker PR
+
+Every cloud-worker PR in this org is authored by `clarkemoyer`, and the Conductor is authenticated
+as the same account, so GitHub refuses the review:
+
+```
+failed to create review: GraphQL: Review Can not request changes on your own
+pull request (addPullRequestReview)
+```
+
+This is not a scope problem and adding permissions will not fix it. Post blocking feedback with
+`gh pr comment <n> --body-file <f>` instead, and simply do not promote the PR out of draft until the
+finding is addressed — leaving it draft is what actually holds the merge, not the review state.
 
 ## Board & PR-creation env facts (validated 2026-07-24)
 

@@ -120,21 +120,21 @@ jobs:
       # `deliver` authenticates too (#834). Without it a missing identifier
       # surfaces inside azure/login as a blank client-id, after the whole GA
       # pipeline has already run.
-      - name: Validate required Azure secrets
+      - name: Validate required Azure OIDC identifiers
         shell: bash
         run: |
-          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
-            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set (environment: github-prod-read). These OIDC identifiers are ENVIRONMENT secrets — a repo Variable does not satisfy a secrets.* reference. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          if [ -z "${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set. It is a repo-level Variable (non-secret GUID), read via vars.*, not an environment secret. See docs/azure-oidc-federated-credentials.md."; exit 1;
           fi
-          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
-            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID is not set (environment: github-prod-read). See docs/azure-oidc-federated-credentials.md."; exit 1;
+          if [ -z "${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID is not set. It is a repo-level Variable (non-secret GUID), read via vars.*, not an environment secret. See docs/azure-oidc-federated-credentials.md."; exit 1;
           fi
 
       - name: Azure login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
         with:
-          client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+          client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
       # Key Vault is the single source of truth for credentials (#844). Rotation is

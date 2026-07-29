@@ -33,6 +33,8 @@ credentials — the same convention as `vars.*_AZURE_KV_CLIENT_ID`).
 | `whmcs-prod`                                | kv-writer                            | gated (WHMCS writes: 102, 116, 118, 204–207, 211, 212, 221)                         |
 | `whmcs-prod-read`                           | kv-reader                            | ungated (WHMCS reads: 104, 115, 201–203, 208–210, 213–220) — **applied 2026-07-07** |
 | `m365-prod`                                 | Graph CLI (+ kv-reader for KV steps) | gated — **typo fixed 2026-07-07**                                                   |
+| `github-prod-read`                          | kv-reader                            | ungated (GitHub reads: 502 `deliver`, 726, 735) — **applied 2026-07-29**            |
+| `github-prod`                               | kv-writer                            | gated (GitHub writes)                                                               |
 
 ## ✅ Resolved — `m365-prod` credential subject typo (found & fixed 2026-07-07)
 
@@ -97,32 +99,34 @@ The ungated read environment for WHMCS reads needs, one-time:
 
 ## `github-prod-read` — the ungated GitHub read lane (#834)
 
-> **Status: NOT YET PROVISIONED.** Workflows 502 (`deliver`), 726 and 735 target this environment on
-> the #834 branch. Until the four steps below are done they will fail at `azure/login` — loudly,
-> which is correct, but it means **provision first, then merge**. Note the two failure modes are
-> different and easy to confuse: a missing **federated credential** gives `AADSTS700213`, while
-> missing **OIDC identifiers** (step 3) gives an empty `client-id` and never reaches Entra at all.
+> **Status: PROVISIONED.** The federated credential
+> (`gha-FFC-Cloudflare-Automation-github-prod-read`) exists on kv-reader with the correct subject,
+> and the environment exists and is ungated. Workflows 502 (`deliver`), 726 and 735 read the OIDC
+> identifiers from the **repo Variables** via `vars.*`, so there is nothing per-environment left to
+> provision (see step 3). Note the two failure modes are different and easy to confuse: a missing
+> **federated credential** gives `AADSTS700213`, while missing **OIDC identifiers** gives an empty
+> `client-id` and never reaches Entra at all.
 
 Deliberately **no credential of its own**: the PAT stays in Key Vault and the lane authenticates as
 the _reader_ identity over OIDC. That is the point of the lane — the three workflows previously ran
 on the gated `github-prod` as the **writer** identity (`wr-all-cbm-github-pat`, the 100+-repo
 create/archive/collaborator credential) for work classified `Reads`.
 
-> **"No credential of its own" means no copy of a PAT — not nothing to configure.** The environment
-> must still carry the two **OIDC identifiers** (step 3), and this is where a reasonable inference
-> from `whmcs-prod-read` goes wrong: the two lanes reference the identifiers differently, and only
-> one of them needs per-environment setup.
+> **Two reference forms exist in this repo, and the choice is the workflow's, not the
+> environment's.** A repo Variable does not satisfy a `secrets.*` reference and vice versa — so
+> whichever form a workflow uses dictates what must be provisioned.
 >
-> | Lane                                                                           | Reference                      | What that requires                                          |
-> | ------------------------------------------------------------------------------ | ------------------------------ | ----------------------------------------------------------- |
-> | `whmcs-prod-read` (201, 202, …)                                                | `vars.READ_ALL_FFC_AZURE_*`    | **repo Variables** — set once, resolve in every environment |
-> | `google-prod-read`, `candid-prod-read`, **`github-prod-read`** (502, 726, 735) | `secrets.READ_ALL_FFC_AZURE_*` | **environment secrets** — added to _each_ environment       |
+> | Lane                                             | Reference                      | What that requires                                          |
+> | ------------------------------------------------ | ------------------------------ | ----------------------------------------------------------- |
+> | `whmcs-prod-read` (201, 202, …)                  | `vars.READ_ALL_FFC_AZURE_*`    | **repo Variables** — set once, resolve in every environment |
+> | **`github-prod-read`** (502 `deliver`, 726, 735) | `vars.READ_ALL_FFC_AZURE_*`    | **repo Variables** — nothing per-environment                |
+> | `google-prod-read`, `candid-prod-read`           | `secrets.READ_ALL_FFC_AZURE_*` | **environment secrets** — added to _each_ environment       |
 >
-> A repo Variable does not satisfy a `secrets.*` reference. An environment missing the pair yields
-> an empty `client-id` and fails before Key Vault is ever reached. Precedent for the `secrets.*`
-> form: the "Environment secrets" section of
-> [github-actions-environments-and-secrets.md](github-actions-environments-and-secrets.md), and step
-> 3 of the `candid-prod-read` setup in [candid-api-and-mcp.md](candid-api-and-mcp.md).
+> **Prefer the `vars.*` form for new read lanes.** These identifiers are non-secret GUIDs — the repo
+> already publishes them as Variables, `CLAUDE.md` documents them as such, and the `secrets.*` form
+> buys nothing but a provisioning step that can be forgotten. It was forgotten here:
+> `github-prod-read` shipped in #837 referencing `secrets.*` against an environment with no secrets,
+> and 726 failed three times on 2026-07-29 before the references were switched to `vars.*`.
 
 1. **Federated credential on kv-reader:**
    ```bash
@@ -133,12 +137,11 @@ create/archive/collaborator credential) for work classified `Reads`.
 2. Confirm the kv-reader identity can `Get` **`read-all-cbm-github-pat`** (502, 735) and
    **`read-all-cbm-ffc-copilot-mcp-github-pat`** (726 — this is the one carrying Organization
    Administration read, which GitHub requires even to _read_ org rulesets with a fine-grained PAT).
-3. Create the `github-prod-read` GitHub environment with **no** required reviewers, and add the two
-   OIDC identifier **environment secrets** to it: **`READ_ALL_FFC_AZURE_KV_CLIENT_ID`** (client id
-   of `ffc-admin-kv-reader`) and **`READ_ALL_FFC_AZURE_TENANT_ID`**. Copy the pattern from
-   **`google-prod-read`** or **`candid-prod-read`** — **not** from `whmcs-prod-read`, which uses
-   repo Variables and therefore has nothing per-environment to copy (see the table above). Without
-   these `azure/login` receives an empty `client-id` and the job fails before any Key Vault call.
+3. Create the `github-prod-read` GitHub environment with **no** required reviewers. **Nothing else
+   is needed here** — the workflows read `vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID` /
+   `vars.READ_ALL_FFC_AZURE_TENANT_ID`, which are repo Variables that resolve in every environment
+   (the `whmcs-prod-read` pattern). Do **not** add environment secrets by those names; a second copy
+   is exactly the drift this repo removed in #844.
 4. Re-run **730** to refresh the gate audit, and confirm the environment reports no protection rules
    — an ungated lane that quietly acquired a reviewer is the failure #834 exists to prevent.
 

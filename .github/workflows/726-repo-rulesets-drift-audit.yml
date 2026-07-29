@@ -304,6 +304,18 @@ jobs:
         # seconds, and this step immediately contradicted it.
         if: ${{ always() && steps.audit.conclusion != 'skipped' }}
         shell: bash
+        # The tracking issue lives in THIS repo, so the ambient token is both
+        # sufficient and correct here — the job already declares `issues: write`.
+        # The Key Vault PAT is a READ credential (that is the whole point of the
+        # github-prod-read lane) and it is exported to GITHUB_ENV as GH_TOKEN by
+        # the Key Vault step, so without this override it leaks into the delivery
+        # step and fails with `Resource not accessible by personal access token
+        # (updateIssue)` — searching an issue and editing one are different
+        # permissions, exactly as the comment above warns. Step-level env wins
+        # over GITHUB_ENV, so the org read keeps the PAT and only the write here
+        # falls back to GITHUB_TOKEN. Observed on run 30469439392 (#834).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
           repo=FreeForCharity/FFC-Cloudflare-Automation

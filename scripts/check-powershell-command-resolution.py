@@ -155,7 +155,11 @@ def extract_facts(
     seconds on a runner carrying the Az modules. Callers parsing a handful of
     fixture files should leave it off; the real scan asks for it once.
     """
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+    # Explicit UTF-8: the default text encoding is platform-dependent, and a
+    # non-ASCII path would be written in one encoding and read in another.
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as handle:
         handle.write("\n".join(files))
         list_file = handle.name
     try:
@@ -345,8 +349,26 @@ def run(root: pathlib.Path, verbose: bool = False) -> int:
         print(f"::error::{exc}")
         return 1
 
-    inventory = load_inventory(root) | set(payload.get("inventory", []))
-    facts = load_facts(payload)
+    # A corrupt snapshot or an unexpected payload shape is a scan that did not
+    # happen. Report it as such rather than as a traceback: the docstring
+    # promises this path fails closed, and a traceback in a CI log reads as a
+    # broken script rather than as an unmet precondition.
+    try:
+        inventory = load_inventory(root) | set(payload.get("inventory", []))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(
+            f"::error::could not read {INVENTORY_FILE}: {exc}. Regenerate it with "
+            f"`pwsh -NoProfile -File {FACTS_SCRIPT} -InventoryOnly`."
+        )
+        return 1
+    try:
+        facts = load_facts(payload)
+    except (KeyError, TypeError) as exc:
+        print(
+            f"::error::the fact extractor's payload is not the expected shape "
+            f"({exc}) — nothing was scanned."
+        )
+        return 1
     findings, unverified, skipped, structural = audit(facts, inventory)
 
     for path, reason in sorted(skipped.items()):

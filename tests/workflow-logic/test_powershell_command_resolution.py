@@ -476,9 +476,12 @@ def test_an_undeclared_module_import_gets_no_exemption():
 
 def test_every_declared_external_module_is_still_imported_somewhere():
     """A stale exemption rots into a permanent allowance (the #912 pattern)."""
+    # Every tracked file, not scripts/*.ps1: the guard scans the whole tree, so a
+    # narrower sweep here would call an exemption stale because its import moved
+    # to tests/ or the repo root, and force the deletion of a live one.
     imports = set()
-    for path in REPO_ROOT.glob("scripts/*.ps1"):
-        text = path.read_text(encoding="utf-8", errors="replace")
+    for rel in checker.tracked_powershell_files(REPO_ROOT):
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
         for module in checker.DECLARED_EXTERNAL_MODULES:
             if f"Import-Module {module}" in text:
                 imports.add(module)
@@ -492,6 +495,27 @@ def test_every_declared_external_module_is_still_imported_somewhere():
 # --------------------------------------------------------------------------
 # The exit code is the entire interface CI consumes.
 # --------------------------------------------------------------------------
+
+
+def test_an_unreadable_inventory_fails_closed_with_a_message():
+    """A corrupt snapshot is a scan that did not happen, not a traceback.
+
+    The exit code would be 1 either way; what this pins is that CI's log says
+    which precondition was unmet, and that the failure goes through the guard's
+    own reporting rather than an unhandled exception.
+    """
+    original = checker.load_inventory
+    checker.load_inventory = lambda root: (_ for _ in ()).throw(ValueError("bad JSON"))
+    try:
+        result = checker.run(REPO_ROOT)
+    except Exception as exc:  # noqa: BLE001 - the point is that nothing escapes
+        raise AssertionError(
+            f"an unreadable inventory raised {exc!r} instead of failing closed "
+            "through the guard's own reporting"
+        ) from exc
+    finally:
+        checker.load_inventory = original
+    assert result == 1
 
 
 def test_main_fails_the_build_when_there_is_a_finding():

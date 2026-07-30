@@ -53,6 +53,13 @@
   reported all-operational throughout — so treat "GitHub is green" as no guarantee that PR creation
   works. Because the work was committed and pushed first, nothing was lost: the branches simply wait
   for their PRs. **Adopt commit-and-push-first as the default order.**
+- **A per-item success log is not evidence of completeness — assert `processed == expected`.** On
+  2026-07-30 a conductor run fed 22 board items to `while read … done < missing.txt` and added
+  **21**. The file had no trailing newline (`'\n'.join(...)` from Python), so `read` discarded the
+  final line. Every line that _did_ run printed `ADDED`, so the log looked perfect; the miss was
+  visible only by counting. This generalizes past shell: whenever a loop reports success per item,
+  the loop's own output cannot tell you whether an item was skipped before it ever started. Print a
+  count and compare it, or terminate the file with a newline and still compare the count.
 
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 

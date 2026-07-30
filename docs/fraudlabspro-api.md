@@ -70,11 +70,14 @@ Steps, all done once by an admin:
 3. **Create the `fraudlabspro-prod-read` environment** (Settings → Environments), **no required
    reviewers** (this is a read-only env, like `whmcs-prod-read` / `candid-prod-read`). **Add nothing
    to it.** Since #912 the `fraud_review` job reads `vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID` /
-   `vars.READ_ALL_FFC_AZURE_TENANT_ID` — repo Variables, which resolve in every environment. Adding
-   environment secrets by those names now fails CI (`scripts/check-env-secret-references.py`): the
-   original wiring referenced `secrets.*` here, the copies were never created, and the job failed
-   **every** scheduled run from the day it shipped while the sibling job in the same file — on
-   `vars.*` — succeeded.
+   `vars.READ_ALL_FFC_AZURE_TENANT_ID` — repo Variables, which resolve in every environment. A
+   secret copy added here would simply be dead weight: **nothing reads it, and no check can see it**
+   — an environment's secret inventory is not visible to CI (ledger L31). What _is_ enforced is the
+   workflow side: `scripts/check-env-secret-references.py` fails **Validate Repository** if a
+   workflow reintroduces a `secrets.READ_ALL_FFC_AZURE_*` **reference** under this environment. That
+   reference is what broke the lane — the copies were never created, so `fraud_review` failed
+   **every** scheduled run from the day it shipped while the sibling job in the same file, on
+   `vars.*`, succeeded.
 4. **Add a federated credential** for the reader app (`ffc-admin-kv-reader`) with subject
    `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:fraudlabspro-prod-read` — follow
    `docs/azure-oidc-federated-credentials.md` (mind the trailing-hyphen subject typo documented

@@ -530,15 +530,20 @@ def test_scope_and_oidc_identity_agree_across_every_workflow():
 # --- proof the guard is not vacuously green --------------------------------
 
 
-def test_the_three_held_workflows_would_fail_if_relisted():
-    """#916 removed 114, 221 and 401. Putting any back must fail, by name."""
+def test_the_held_workflows_would_fail_if_relisted():
+    """#916 removed 114, 221 and 401. Putting a still-held one back must fail, by name.
+
+    221 was narrowed to a read-scoped credential under #920 and is no longer
+    held, so it is asserted clean here and its "omission reads as safe" shape is
+    pinned by the tamper test below instead — see that test for why the shape
+    still needs a guard even though no live workflow exhibits it.
+    """
     expectations = {
         114: (
             "114-cloudflare-registrar-access-check.yml",
             "cloudflare-tokens-from-kv",
             "explicit",
         ),
-        221: ("221-whmcs-application-search.yml", "whmcs-secrets-from-kv", "action default"),
         401: ("401-zeffy-campaigns-export.yml", "zeffy-secrets-from-kv", "action default"),
     }
     for number, (filename, action_name, how) in expectations.items():
@@ -554,13 +559,44 @@ def test_the_three_held_workflows_would_fail_if_relisted():
         )
         assert how in blob, f"{number}: message must say how the scope was resolved; got {blob!r}"
 
-    # 221 is the shape the naive grep misses: its own text has no `wr-all-`
-    # secret name, so the failure can only come from resolving the default.
-    text, _ = _load_workflow("221-whmcs-application-search.yml")
+    filename = "221-whmcs-application-search.yml"
+    _, wf = _load_workflow(filename)
+    assert not audit_workflow(221, filename, wf), (
+        "221 loads a read-scoped WHMCS credential since #920 and must audit clean"
+    )
+
+
+def test_dropping_221s_explicit_read_scope_is_caught():
+    """The `scope:`-omission shape a naive `wr-all-` grep misses, pinned by tamper.
+
+    Before #920, 221 was the live example: it omitted `scope`, took the action's
+    `write` default, and contained no literal `wr-all-` string — so omission read
+    as safe. Fixing it removed the only real instance, which would leave the
+    resolver's most valuable case asserted by nothing. Reconstructing the old
+    shape from the current file keeps the guard honest and pins the specific
+    regression: someone deleting the `scope: read` line.
+    """
+    filename = "221-whmcs-application-search.yml"
+    text, clean = _load_workflow(filename)
     assert "wr-all-" not in text.lower(), (
         "221 has grown a literal wr-all- secret reference; the 'omission reads "
         "as safe' case this test pins now needs a different example"
     )
+
+    tampered = copy.deepcopy(clean)
+    step = next(
+        s
+        for s in tampered["jobs"]["application_search"]["steps"]
+        if _is_kv_action(str(s.get("uses") or ""))
+    )
+    del step["with"]["scope"]
+
+    problems = audit_workflow(221, filename, tampered)
+    assert problems, "dropping `scope: read` from 221 was not caught"
+    blob = "\n".join(problems)
+    assert "whmcs-secrets-from-kv" in blob, f"must name the credential; got {blob!r}"
+    assert "scope 'write'" in blob, f"must name the resolved scope; got {blob!r}"
+    assert "action default" in blob, f"must say how the scope was resolved; got {blob!r}"
 
 
 def test_reusable_workflow_calls_are_actually_followed():

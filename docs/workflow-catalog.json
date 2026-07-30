@@ -901,12 +901,12 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
-      "description": "Read-only. Sweeps GetClientsProducts (all clients) and returns the onboarding application(s) whose product custom fields contain the query substring (a domain or organization name), with personal contact fields masked. This is the domain/org -> client-id lookup that 219 (which needs a client id) and the masked triage tables cannot do. Posts the matches to the job summary and optionally back to a GitHub issue. No writes.  NOTE: uses the gated `whmcs-prod` so it runs today with a single approval; once `whmcs-prod-read` is set up it can move there (read-only workflow).",
+      "description": "Read-only. Sweeps GetClientsProducts (all clients) and returns the onboarding application(s) whose product custom fields contain the query substring (a domain or organization name), with personal contact fields masked. This is the domain/org -> client-id lookup that 219 (which needs a client id) and the masked triage tables cannot do. Posts the matches to the job summary and optionally back to a GitHub issue. No writes.  Runs on the ungated `whmcs-prod-read` lane with the READ-scoped credential (`read-all-ffc-whmcs-*`, via the ffc-admin-kv-reader identity) \u2014 matching what the job actually does. 104 is the precedent for this lane. WHMCS is a single credential, so read/write scope selects the identity, not the access.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
-      "guard": "GetClientsProducts sweep; personal contact fields masked; gated until whmcs-prod-read setup; `whmcs-secrets-from-kv` **omits `scope`** \u2192 action default `write` \u2192 loads `wr-all-ffc-whmcs-*`, so **not auto-approvable** (#915)",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "GetClientsProducts sweep; personal contact fields masked; **ungated** \u2014 `whmcs-secrets-from-kv` with `scope: read` on the `READ_ALL_FFC_AZURE_*` (ffc-admin-kv-reader) identity \u2192 `read-all-ffc-whmcs-*` (#920; was \u2705 `whmcs-prod` on the writer identity, held under #915)",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },

@@ -95,8 +95,10 @@ in `GITHUB_ENV`, the blast radius is everything that token can reach — a `Read
 constrain it. This is the same failure shape as #834 / L45-4: a workflow's declared purpose diverged
 from the credential it actually rides on, and nobody noticed until the two were compared directly.
 
-**This is a tightening — three workflows come off the ✅ list.** All three are labelled `Reads` and
-all three load write-scoped credentials, so under condition 2 none is auto-approvable:
+**This was a tightening — three workflows came off the ✅ list (#916, 2026-07-23).** All three were
+labelled `Reads` and all three loaded write-scoped credentials, so under condition 2 none was
+auto-approvable. The table is the record of that decision; **221 has since been remediated (#920) —
+114 and 401 are still held:**
 
 | WF      | Level in the table | Environment                | What it actually loads                                                                  | Was on ✅ since |
 | ------- | ------------------ | -------------------------- | --------------------------------------------------------------------------------------- | --------------- |

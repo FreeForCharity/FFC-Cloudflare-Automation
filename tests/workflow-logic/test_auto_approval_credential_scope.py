@@ -589,6 +589,14 @@ def test_dropping_221s_explicit_read_scope_is_caught():
         for s in tampered["jobs"]["application_search"]["steps"]
         if _is_kv_action(str(s.get("uses") or ""))
     )
+    # State the precondition rather than letting `del` raise a bare KeyError:
+    # if 221 stops passing `scope` explicitly, this test is not merely broken —
+    # the thing it guards has regressed, and the message should say which.
+    assert "scope" in (step.get("with") or {}), (
+        "221's whmcs-secrets-from-kv step no longer passes `scope` explicitly, "
+        "so there is nothing to tamper with — it has regressed to the action's "
+        "write default, which is exactly the shape this test exists to catch"
+    )
     del step["with"]["scope"]
 
     problems = audit_workflow(221, filename, tampered)

@@ -30,7 +30,7 @@ credentials — the same convention as `vars.*_AZURE_KV_CLIENT_ID`).
 | `google-prod-read`                          | kv-reader                            | ungated                                                                             |
 | `google-prod-write`                         | kv-writer                            | gated (Google provisioning: 503, 505)                                               |
 | `zeffy-prod`                                | kv-writer                            | ungated                                                                             |
-| `whmcs-prod`                                | kv-writer                            | gated (WHMCS writes: 102, 116, 118, 204–207, 211, 212, 221)                         |
+| `whmcs-prod`                                | kv-writer                            | gated (WHMCS writes: 102, 116, 118, 204–207, 211, 212)                              |
 | `whmcs-prod-read`                           | kv-reader                            | ungated (WHMCS reads: 104, 115, 201–203, 208–210, 213–221) — **applied 2026-07-07** |
 | `m365-prod`                                 | Graph CLI (+ kv-reader for KV steps) | gated — **typo fixed 2026-07-07**                                                   |
 | `github-prod-read`                          | kv-reader                            | ungated (GitHub reads: 502 `deliver`, 726, 735) — **applied 2026-07-29**            |

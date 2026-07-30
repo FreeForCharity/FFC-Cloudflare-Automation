@@ -75,7 +75,10 @@ def facts_for(root: pathlib.Path, files: list[str]) -> dict:
     pwsh = require_pwsh()
     (root / "scripts").mkdir(parents=True, exist_ok=True)
     shutil.copy2(REPO_ROOT / checker.FACTS_SCRIPT, root / checker.FACTS_SCRIPT)
-    payload = checker.extract_facts(root, files, pwsh)
+    # No inventory: these fixtures assert against an explicit command set, and a
+    # Get-Command sweep per fixture costs seconds each on a CI runner.
+    payload = checker.extract_facts(root, files, pwsh, include_inventory=False)
+    assert payload["inventory"] == [], "fixture parses must not pay for a Get-Command sweep"
     return checker.load_facts(payload)
 
 

@@ -25,9 +25,12 @@
       - parseErrors : parser diagnostics; the caller treats a non-empty list as
                       an error, never as a skip
 
-    It also emits `inventory`: the command names available to the pwsh running
-    this script (Get-Command). The caller unions that with the committed floor
-    snapshot, so the allowlist is generated rather than hand-maintained.
+    With -IncludeInventory it also emits `inventory`: the command names available
+    to the pwsh running this script (Get-Command). The caller unions that with the
+    committed floor snapshot, so the allowlist is generated rather than
+    hand-maintained. It is opt-in because the sweep forces module auto-discovery
+    across the whole PSModulePath -- milliseconds on a bare host, seconds on a CI
+    runner carrying the Az modules, and the guard needs it once per scan.
 
     Deliberately out of scope, because it is not statically resolvable:
       - `& $variable` / `& $scriptblock` invocation (GetCommandName() returns null)
@@ -39,6 +42,12 @@
     A UTF-8 text file holding one path to analyze per line. A list file rather
     than an argument array keeps the caller clear of per-platform command-line
     length limits when the whole repo (100+ scripts) is scanned at once.
+
+.PARAMETER IncludeInventory
+    Also emit `inventory`. Off by default because Get-Command forces module
+    auto-discovery across the whole PSModulePath -- cheap on a bare host,
+    seconds on a CI runner carrying the Az modules. The guard asks for it once
+    per scan; callers parsing a couple of fixture files should not pay it.
 
 .PARAMETER InventoryOnly
     Emit only the `inventory` array. Used to regenerate the committed floor
@@ -54,6 +63,9 @@
 param(
     [Parameter(Mandatory = $true, ParameterSetName = 'Scan')]
     [string]$PathListFile,
+
+    [Parameter(ParameterSetName = 'Scan')]
+    [switch]$IncludeInventory,
 
     [Parameter(Mandatory = $true, ParameterSetName = 'Inventory')]
     [switch]$InventoryOnly
@@ -195,6 +207,6 @@ foreach ($file in $paths) {
 }
 
 [pscustomobject]@{
-    inventory = @(Get-CommandInventory)
+    inventory = @(if ($IncludeInventory) { Get-CommandInventory })
     files     = $results
 } | ConvertTo-Json -Depth 6 -Compress

@@ -145,14 +145,23 @@ def tracked_powershell_files(root: pathlib.Path) -> list[str]:
     return sorted(line for line in proc.stdout.splitlines() if line.strip())
 
 
-def extract_facts(root: pathlib.Path, files: list[str], pwsh: str) -> dict:
-    """Run the AST fact extractor over `files` and return its JSON payload."""
+def extract_facts(
+    root: pathlib.Path, files: list[str], pwsh: str, include_inventory: bool = True
+) -> dict:
+    """Run the AST fact extractor over `files` and return its JSON payload.
+
+    `include_inventory` drives a Get-Command sweep, which forces module
+    auto-discovery across the whole PSModulePath — negligible on a bare host,
+    seconds on a runner carrying the Az modules. Callers parsing a handful of
+    fixture files should leave it off; the real scan asks for it once.
+    """
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
         handle.write("\n".join(files))
         list_file = handle.name
     try:
         proc = subprocess.run(
-            [pwsh, "-NoProfile", "-File", FACTS_SCRIPT, "-PathListFile", list_file],
+            [pwsh, "-NoProfile", "-File", FACTS_SCRIPT, "-PathListFile", list_file]
+            + (["-IncludeInventory"] if include_inventory else []),
             cwd=root,
             capture_output=True,
             text=True,

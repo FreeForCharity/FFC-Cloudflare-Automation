@@ -5,10 +5,11 @@
 
 .DESCRIPTION
     Regression cover for #928 / #929: `Remove-Html` was deleted from
-    whmcs-application-search.ps1 by 8d8adae while its call site at :122 was
-    left behind, so 221 threw on the first custom field of the first service
-    and could never return a match. Nothing in CI executed the script, so it
-    shipped green for five days behind an approval gate.
+    whmcs-application-search.ps1 by 8d8adae while its call site in the
+    per-field match loop was left behind, so 221 threw on the first custom
+    field of the first service and could never return a match. Nothing in CI
+    executed the script, so it shipped green for five days behind an approval
+    gate.
 
     Two properties are asserted here, and the second is the one that matters:
 
@@ -25,10 +26,11 @@
 BeforeAll {
     . (Join-Path (Split-Path $PSScriptRoot -Parent) 'whmcs-api-common.ps1')
 
-    # The match expression from whmcs-application-search.ps1:122, reproduced.
-    # That script cannot be dot-sourced (it has a mandatory param block and
-    # runs a live sweep), so the expression is mirrored rather than imported.
-    # Keep it byte-identical to the call site.
+    # The match expression from the per-field loop in
+    # whmcs-application-search.ps1, reproduced. That script cannot be
+    # dot-sourced (it has a mandatory param block and runs a live sweep), so
+    # the expression is mirrored rather than imported. Keep it byte-identical
+    # to the call site.
     function Test-NeedleMatch {
         param([string]$Value, [string]$Needle)
         return (Remove-Html ([string]$Value)).ToLowerInvariant().Contains($Needle)

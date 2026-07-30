@@ -53,6 +53,15 @@ API_ROOT = "https://api.github.com"
 USER_AGENT = "ffc-agentic-os-status-generator"
 HTTP_TIMEOUT = 30  # seconds; fail closed rather than hang the daily sync.
 
+# Where a run has to live to count as an FFC gate. GitHub parks its own
+# platform agents in `status=waiting` too — the Copilot code-review agent runs
+# at `dynamic/agents/copilot-pull-request-reviewer` on a platform-managed
+# `copilot` environment, which no FFC reviewer can approve or decline and which
+# appears in no row of docs/workflow-safety-and-approvals.md. Publishing it as
+# "a workflow run paused awaiting a human" is simply false, and because Copilot
+# reviews every push the window is open constantly.
+WORKFLOW_PATH_PREFIX = ".github/workflows/"
+
 # The in-flight inclusion rule, stated in the feed itself. A public panel that
 # renders a bare count gives a reader no way to tell "nothing is in flight" from
 # "the filter is dead" — which is exactly how #909 survived unnoticed.
@@ -349,10 +358,30 @@ def collect_conductor_log(repo, token):
     return entries
 
 
+def is_repo_workflow_run(run):
+    """True when a waiting run is one of this repo's own workflows.
+
+    Discriminates on `path` rather than on the environment or workflow name: a
+    denylist of environment names would need editing for every future
+    platform-managed agent, while `.github/workflows/` is where every FFC
+    workflow lives by definition (AGENTS.md, "Adding or changing a workflow").
+
+    Fails **open** on an absent path. Hiding a gate that really is waiting on a
+    reviewer is a worse failure for this page than showing one extra row, so an
+    unrecognisable run is published rather than dropped.
+    """
+    path = run.get("path")
+    if not path:
+        return True
+    return path.startswith(WORKFLOW_PATH_PREFIX)
+
+
 def collect_pending_gates(repo, token):
     """Workflow runs waiting at an environment approval gate. The waiting run
     list names the workflow; the per-run pending_deployments call names the
-    environment(s) still awaiting approval."""
+    environment(s) still awaiting approval.
+
+    Only this repo's own workflows are reported — see `is_repo_workflow_run`."""
     runs_payload = rest_get(
         f"repos/{repo}/actions/runs",
         token,
@@ -361,6 +390,8 @@ def collect_pending_gates(repo, token):
     runs = runs_payload.get("workflow_runs", []) if isinstance(runs_payload, dict) else []
     gates = []
     for run in runs:
+        if not is_repo_workflow_run(run):
+            continue
         rid = run["id"]
         pend = rest_get(f"repos/{repo}/actions/runs/{rid}/pending_deployments", token)
         if not isinstance(pend, list):

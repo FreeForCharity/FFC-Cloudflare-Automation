@@ -504,7 +504,7 @@
       "description": "",
       "safetyLevel": "Reads",
       "approvalEnv": "whmcs-prod-read",
-      "guard": "gated only by the env approval",
+      "guard": "ungated read lane; artifacts are export catalogs",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -524,7 +524,7 @@
       "description": "",
       "safetyLevel": "Reads",
       "approvalEnv": "whmcs-prod-read",
-      "guard": "gated only by the env approval",
+      "guard": "ungated read lane; artifacts are export catalogs",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -544,7 +544,7 @@
       "description": "",
       "safetyLevel": "Reads",
       "approvalEnv": "whmcs-prod-read",
-      "guard": "gated only by the env approval",
+      "guard": "ungated read lane; artifacts are export catalogs",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },

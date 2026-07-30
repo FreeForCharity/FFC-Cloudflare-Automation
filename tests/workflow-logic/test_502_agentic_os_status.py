@@ -129,12 +129,34 @@ def _make_fake_request(m, call_log):
         901: {"number": 901, "labels": [{"name": "agentic-os"}], "pull_request": {"url": "..."}},
         909090: {"number": 909090, "labels": [{"name": "agentic-os"}]},  # must never be fetched
     }
+    # Three waiting runs: one real FFC workflow, one of GitHub's own platform
+    # agents (the Copilot reviewer, which parks in `status=waiting` on a
+    # platform-managed `copilot` environment nobody at FFC can approve), and one
+    # with no `path` at all to pin the fail-open branch.
     runs_obj = {
         "workflow_runs": [
-            {"id": 555, "name": "502. GA Report", "created_at": "2026-07-18T07:00:00Z", "html_url": "r555"}
+            {
+                "id": 555, "name": "502. GA Report", "created_at": "2026-07-18T07:00:00Z",
+                "html_url": "r555", "path": ".github/workflows/502-google-analytics-report.yml",
+            },
+            {
+                "id": 556, "name": "Running Copilot Code Review",
+                "created_at": "2026-07-18T08:00:00Z", "html_url": "r556",
+                "path": "dynamic/agents/copilot-pull-request-reviewer",
+            },
+            {
+                "id": 557, "name": "Unrecognisable", "created_at": "2026-07-18T09:00:00Z",
+                "html_url": "r557",
+            },
         ]
     }
-    deployments = [{"environment": {"name": "github-prod", "id": 1}}]
+    # Per-run, so the copilot run cannot be excluded by accident of returning an
+    # FFC environment name — the exclusion must come from the run itself.
+    deployments_by_run = {
+        555: [{"environment": {"name": "github-prod", "id": 1}}],
+        556: [{"environment": {"name": "copilot", "id": 2}}],
+        557: [{"environment": {"name": "cloudflare-prod-write", "id": 3}}],
+    }
 
     def fake_request(path_or_url, token, params=None, soft_fail=False):
         url = m._build_url(path_or_url, params)
@@ -157,7 +179,8 @@ def _make_fake_request(m, call_log):
             # initial page 1 -> advertise the last page (contents intentionally ignored)
             return [], f'<{LAST_URL}>; rel="last", <{PREV_URL}>; rel="prev"'
         if "pending_deployments" in url:
-            return deployments, None
+            rid = int(re.search(r"/runs/(\d+)/pending_deployments", url).group(1))
+            return deployments_by_run[rid], None
         if "/actions/runs" in url:
             return runs_obj, None
         if "/pulls" in url:
@@ -257,12 +280,32 @@ def main():
 
     gates = feed["pending_gates"]
     check(
-        gates == [{
-            "run_id": 555, "workflow_name": "502. GA Report", "environment": "github-prod",
-            "created_at": "2026-07-18T07:00:00Z", "url": "r555",
-        }],
-        "gate shaping",
+        gates == [
+            {
+                "run_id": 555, "workflow_name": "502. GA Report", "environment": "github-prod",
+                "created_at": "2026-07-18T07:00:00Z", "url": "r555",
+            },
+            {
+                "run_id": 557, "workflow_name": "Unrecognisable",
+                "environment": "cloudflare-prod-write",
+                "created_at": "2026-07-18T09:00:00Z", "url": "r557",
+            },
+        ],
+        f"gate shaping + platform-agent exclusion, got {gates}",
     )
+    # A gate panel that publishes GitHub's own Copilot reviewer tells readers a
+    # human is holding something up when nobody at FFC can act on it at all.
+    check(
+        not any(g["environment"] == "copilot" for g in gates),
+        "the platform-managed copilot environment is not an FFC gate",
+    )
+    check(556 not in [g["run_id"] for g in gates], "the Copilot reviewer run is excluded")
+    # Fail-open: an unrecognisable run is still published. Silently dropping a
+    # run that really is waiting on a reviewer is the worse failure here.
+    check(557 in [g["run_id"] for g in gates], "a run with no path is published, not dropped")
+    check(m.is_repo_workflow_run({"path": ".github/workflows/111-x.yml"}), "repo workflow included")
+    check(not m.is_repo_workflow_run({"path": "dynamic/agents/x"}), "dynamic agent excluded")
+    check(m.is_repo_workflow_run({}), "absent path fails open")
     check(feed["generated_at"].endswith("Z"), "timestamp shape")
     json.dumps(feed)  # must be JSON-serializable
 

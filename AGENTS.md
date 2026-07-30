@@ -135,6 +135,19 @@ and all authenticate as the same user. Before starting ANY issue:
 1. **Available = `is:open -label:claimed`.** The pickup query is
    `org:FreeForCharity label:agentic-os is:open -label:claimed`. If an issue has the `claimed` label
    or an open linked PR, it is TAKEN — pick something else.
+   - **`-label:claimed` currently under-reports: check for a cross-repo PR before you start.** The
+     backlog lives in the hub while much of the code lives in a template or site repo, so the normal
+     shape is a hub issue implemented by a PR in another repository — and 737 neither runs in those
+     repositories nor matches the qualified reference form they use. On 2026-07-30 three
+     `priority: high` hub issues (#934, #893, #880) sat in the pickup query with finished PRs
+     against them. Until #939 lands, search open PRs **org-wide** for the issue number before
+     claiming: `gh api -X GET search/issues -f q='org:FreeForCharity is:pr is:open <N>'`.
+   - **A grep for `refs #N` is not a check for "does any PR reference this issue".** The qualified
+     cross-repo form — `Refs FreeForCharity/FFC-Cloudflare-Automation#934` — has the `owner/repo`
+     between the keyword and the `#`, so a pattern anchored on `keyword` + `#` matches nothing and
+     reports a _clean_ result. Match `(closes|fixes|refs)[: ]+(owner/repo)?#N`. This is the same
+     blind spot as `claim-sync-lib.js`'s `LINK_RE`, and it fooled a conductor run before it was
+     found in the code (#939).
 2. **Claim before working**: add the `claimed` label AND post one comment
    `CLAIM: <actor> <planned-branch> <UTC timestamp>` where `<actor>` identifies you
    (`conductor-run-N`, `live-session`, `copilot-agent`, or a human name — the shared login does not
@@ -179,6 +192,16 @@ have exhausted the points budget for hours.
   (or request the last page explicitly). This silently breaks "the newest `START` comment is the
   source of truth for the run number" — a conductor run misread its own run number this way
   (2026-07-24).
+- **`gh api graphql --paginate` only advances a variable named exactly `$endCursor`.** `gh`
+  substitutes the next page cursor into that name and no other, so a query declaring `$cursor` (or
+  anything else) keeps `after:` null and **re-fetches page 1 until the budget stops it**. It fails
+  silently and looks like success: a large file of well-formed, entirely duplicate rows. On
+  2026-07-30 this produced 18,000 rows that `sort -u` collapsed to exactly **100** — one page — and
+  cost ~400 GraphQL points. The tells are a line count that is a clean multiple of 100 and a
+  `sort -u` that collapses it; the fix is
+  `query($endCursor:String){ … items(first:100, after:$endCursor){ pageInfo{hasNextPage endCursor} … } }`.
+  `guard_bash.py` now blocks the wrong-name form outright, since such a command can never return
+  page 2. Plain **REST** `--paginate` takes no variables and is unaffected.
 
 ## Dispatch / watch / approve recipes
 

@@ -80,6 +80,29 @@ def main():
     check("echo lowercase secret var", "guard_bash.py",
           bash("echo $cloudflare_api_token"), True)
 
+    # `gh api graphql --paginate` must declare $endCursor -- gh substitutes the
+    # page cursor into that exact name, so any other name silently re-fetches
+    # page 1 forever. The wrong-name case is the one that actually happened.
+    check("graphql paginate with $cursor", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($cursor:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$cursor){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), True)
+    check("graphql paginate with no cursor var", "guard_bash.py",
+          bash("gh api graphql --paginate -f query='query{viewer{login}}'"), True)
+    check("graphql paginate with $endCursor allowed", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($endCursor:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$endCursor){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), False)
+    # Only --paginate needs the cursor: a single-shot graphql call is fine, and
+    # REST --paginate has no query variables at all.
+    check("graphql single-shot allowed", "guard_bash.py",
+          bash("gh api graphql -f query='query{viewer{login}}'"), False)
+    check("REST paginate allowed", "guard_bash.py",
+          bash("gh api --paginate repos/FreeForCharity/FFC-Cloudflare-Automation/issues/719/comments"),
+          False)
+
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)
     check("write key.pem", "guard_edit.py", write("certs/key.pem", "x"), True)

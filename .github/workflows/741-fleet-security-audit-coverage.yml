@@ -15,11 +15,27 @@ run-name: 'Fleet Security Audit Coverage'
 # the fleet from the org listing every run rather than trusting a count carried
 # between sessions.
 #
+# It also answers the question presence cannot (#889, ledger L06): does each
+# repo's package-lock.json actually RESOLVE? A lockfile that exists but is out
+# of sync with package.json makes `npm ci` exit non-zero, so the nightly audit
+# installs nothing, scans nothing and reports clean — a covered repo that is not
+# being scanned. The verdict comes from running the real `npm ci --dry-run`, not
+# from re-implementing npm's sync check, so this audit cannot hold a second
+# opinion about semver from the one the fleet's own audits run on.
+#
 # Read-only: GITHUB_TOKEN reads public repo contents org-wide and lists the
-# org's public repos; the only write is the rolling issue in THIS repo. No
-# external API, no environment gate. It reports coverage only and never bumps a
-# dependency — remediation belongs to #822. Classification/report logic lives in
-# scripts/fleet-audit-coverage-lib.js (unit-tested under tests/workflow-logic/).
+# org's public repos; the only write is the rolling issue in THIS repo. The
+# lockfile stage additionally reads the npm registry (unauthenticated, no
+# credential, and `npm ci --dry-run` downloads no package) — that is the one
+# external API this workflow touches, and it is read-only. No environment gate.
+# It reports coverage only and never bumps a dependency — remediation belongs to
+# #822. Classification/report logic lives in scripts/fleet-audit-coverage-lib.js
+# (unit-tested under tests/workflow-logic/).
+#
+# Cost of the resolution check: one lockfile download plus one short npm run per
+# Node repo (~44). That is the trade 742 declined — it never downloads a lockfile
+# because it runs on demand across the whole fleet and writes files. This job is
+# weekly and read-only, so it can afford to be the place that measures.
 
 on:
   schedule:
@@ -40,6 +56,7 @@ env:
   ORG: FreeForCharity
   AUDIT_WORKFLOW_PATH: .github/workflows/security-audit.yml
   PACKAGE_PATH: package.json
+  LOCKFILE_PATH: package-lock.json
 
 jobs:
   audit:
@@ -49,6 +66,13 @@ jobs:
     steps:
       - name: Checkout (for the classification library)
         uses: actions/checkout@v7.0.1
+
+      # The lockfile verdict is npm's own words, so which npm answers has to be
+      # a decision rather than whatever the image ships this month (#860).
+      - name: Set up Node (pins the npm that judges the lockfiles)
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
 
       - name: Gather security-audit coverage across the fleet
         id: gather
@@ -149,10 +173,80 @@ jobs:
             )
             [ "$cron" = "-" ] && cron=""
 
+            # --- lockfile resolution (#889, ledger L06) --------------------
+            # Presence is not validity. Everything here is decided by npm or by
+            # the shipped library; this block only routes.
+            has_deps=$(
+              node -e '
+                const fs = require("fs");
+                const lib = require("./scripts/fleet-audit-coverage-lib.js");
+                process.stdout.write(String(lib.hasDependencies(fs.readFileSync(process.argv[1], "utf8"))));
+              ' /tmp/pkg.json
+            )
+
+            lock_json='{"state":"no-dependencies","detail":""}'
+            if [ "$has_deps" = "true" ]; then
+              lock_status=$(fetch_raw "$full" "$LOCKFILE_PATH" /tmp/lock.json)
+              case "$lock_status" in
+                ERROR:*)
+                  lock_json=$(jq -nc --arg d "lockfile fetch failed: ${lock_status#ERROR:}" \
+                    '{state:"unverified",detail:$d}')
+                  ;;
+                ABSENT)
+                  # No package-lock.json is only a finding for an npm repo — a
+                  # pnpm/yarn repo is correctly without one, and the npm-shaped
+                  # audit is what does not fit there (#771).
+                  # Every probe outcome is recorded, including its failures: a
+                  # probe that could not run is not evidence the file is absent,
+                  # and the library decides what the set of them means.
+                  probes="[]"
+                  for altpath in pnpm-lock.yaml yarn.lock; do
+                    st=$(fetch_raw "$full" "$altpath" /tmp/altlock)
+                    probes=$(printf '%s' "$probes" | jq -c --arg p "$altpath" --arg s "$st" \
+                      '. += [{path:$p,status:$s}]')
+                    [ "$st" = "OK" ] && break
+                  done
+                  lock_json=$(
+                    node -e '
+                      const lib = require("./scripts/fleet-audit-coverage-lib.js");
+                      const v = lib.classifyAbsentLockfile(JSON.parse(process.argv[1]));
+                      process.stdout.write(JSON.stringify(v));
+                    ' "$probes"
+                  )
+                  ;;
+                OK)
+                  work="$(mktemp -d)"
+                  cp /tmp/pkg.json "$work/package.json"
+                  cp /tmp/lock.json "$work/package-lock.json"
+                  # --dry-run installs nothing and --ignore-scripts runs nothing,
+                  # so a fleet lockfile can never execute code in this job.
+                  # `timeout` bounds a registry hang; its 124 is classified as
+                  # unverified, never as a broken lockfile.
+                  (
+                    cd "$work" || exit 127
+                    timeout 180 npm ci --dry-run --ignore-scripts --no-audit --no-fund
+                  ) > "$work/npm.log" 2>&1
+                  npm_rc=$?
+                  lock_json=$(
+                    node -e '
+                      const fs = require("fs");
+                      const lib = require("./scripts/fleet-audit-coverage-lib.js");
+                      const out = fs.readFileSync(process.argv[2], "utf8");
+                      const v = lib.classifyLockResolution(Number(process.argv[1]), out);
+                      process.stdout.write(JSON.stringify(v));
+                    ' "$npm_rc" "$work/npm.log"
+                  )
+                  rm -rf "$work"
+                  ;;
+              esac
+            fi
+            lock_state=$(printf '%s' "$lock_json" | jq -r '.state')
+
             jq --arg r "$full" --argjson w "$has_wf" --argjson s "$has_script" --arg c "$cron" \
-              '. += [{"repo":$r,"hasPackageJson":true,"hasWorkflow":$w,"hasScript":$s,"cron":(if $c=="" then null else $c end)}]' \
+              --argjson lock "$lock_json" \
+              '. += [{"repo":$r,"hasPackageJson":true,"hasWorkflow":$w,"hasScript":$s,"cron":(if $c=="" then null else $c end),"lockfile":$lock}]' \
               "$entries" > "$entries.tmp" && mv "$entries.tmp" "$entries"
-            echo "  $full -> workflow=$has_wf script=$has_script cron=${cron:-none}"
+            echo "  $full -> workflow=$has_wf script=$has_script cron=${cron:-none} lockfile=$lock_state"
           done
           echo "entries_file=$entries" >> "$GITHUB_OUTPUT"
 
@@ -170,7 +264,10 @@ jobs:
             core.notice(
               `node=${analysis.nodeRepos} covered=${analysis.covered.length} ` +
                 `partial=${analysis.partial.length} uncovered=${analysis.uncovered.length} ` +
-                `notNode=${analysis.notNode.length} unreadable=${analysis.unreadable.length}`,
+                `notNode=${analysis.notNode.length} unreadable=${analysis.unreadable.length} ` +
+                `lockOk=${analysis.lockfiles.resolves.length} ` +
+                `lockBroken=${analysis.lockfiles.broken.length} ` +
+                `lockUnverified=${analysis.lockfiles.unverified.length}`,
             );
 
             const { owner, repo } = context.repo;
@@ -186,7 +283,7 @@ jobs:
               if (existing) {
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: existing.number,
-                  body: `✅ Recovered: every Node repo in the FFC-EX fleet now has security-audit coverage (${analysis.covered.length}/${analysis.nodeRepos}) ([run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})). Auto-closing.`,
+                  body: `✅ Recovered: every Node repo in the FFC-EX fleet has security-audit coverage (${analysis.covered.length}/${analysis.nodeRepos}) and every measured lockfile resolves (${analysis.lockfiles.resolves.length} ok, ${analysis.lockfiles.unverified.length} unverified) ([run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})). Auto-closing.`,
                 });
                 await github.rest.issues.update({
                   owner, repo, issue_number: existing.number, state: 'closed', state_reason: 'completed',

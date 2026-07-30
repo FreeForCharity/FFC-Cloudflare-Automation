@@ -73,6 +73,21 @@ on:
         description: 'Current website URL (optional; must start with https:// if provided).'
         required: false
         type: string
+      domain_registrar:
+        description:
+          'Who holds the domain registration today (optional). Wix blocks nameserver delegation, so
+          a Wix-registered domain must move to eNom before Cloudflare is reachable — see workflow
+          123.'
+        required: false
+        type: choice
+        options:
+          - 'Unknown / not sure'
+          - 'Already with Free For Charity (eNom or Cloudflare)'
+          - 'Wix'
+          - 'Squarespace'
+          - 'GoDaddy'
+          - 'Other / another registrar'
+          - 'No domain yet'
       requester_github_username:
         description: 'GitHub username to add as maintainer (optional; defaults to the actor).'
         required: false
@@ -120,6 +135,7 @@ jobs:
       dns_controlled: ${{ steps.parse.outputs.dns_controlled }}
       website_situation: ${{ steps.parse.outputs.website_situation }}
       current_website_url: ${{ steps.parse.outputs.current_website_url }}
+      domain_registrar: ${{ steps.parse.outputs.domain_registrar }}
       requester_github_username: ${{ steps.parse.outputs.requester_github_username }}
       technical_poc_github_username: ${{ steps.parse.outputs.technical_poc_github_username }}
       maintainers_csv: ${{ steps.parse.outputs.maintainers_csv }}
@@ -303,6 +319,7 @@ jobs:
 
             let websiteSituation = '';
             let currentWebsiteUrl = '';
+            let domainRegistrar = '';
             let technicalPocGitHubUsername = '';
             let domain = '';
             let charityName = '';
@@ -348,6 +365,7 @@ jobs:
             if (isManual) {
               websiteSituation = normalizeInput(manualInputs.website_situation);
               currentWebsiteUrl = normalizeInput(manualInputs.current_website_url);
+              domainRegistrar = normalizeInput(manualInputs.domain_registrar);
               technicalPocGitHubUsername = normalizeInput(manualInputs.technical_poc_github_username).replace(/^@/, '');
 
               domain = normalizeDomain(manualInputs.domain);
@@ -365,6 +383,7 @@ jobs:
             } else {
               websiteSituation = normalizeInput(extractSection('Website Situation'));
               currentWebsiteUrl = normalizeInput(extractSection('Current Website URL (if any)'));
+              domainRegistrar = normalizeInput(extractSection('Domain Registrar (who holds the domain today)'));
               technicalPocGitHubUsername = normalizeInput(extractSection('Technical POC GitHub Username'));
               technicalPocGitHubUsername = technicalPocGitHubUsername.replace(/^@/, '');
 
@@ -745,6 +764,7 @@ jobs:
             core.setOutput('dns_controlled', dnsControlled ? 'true' : 'false');
             core.setOutput('website_situation', websiteSituation);
             core.setOutput('current_website_url', currentWebsiteUrl);
+            core.setOutput('domain_registrar', domainRegistrar);
             core.setOutput('requester_github_username', requesterGitHubUsername);
             core.setOutput('technical_poc_github_username', technicalPocGitHubUsername);
             core.setOutput('maintainers_csv', maintainersCsv);
@@ -1132,6 +1152,7 @@ jobs:
           CHARITY_NAME: ${{ needs.resolve.outputs.charity_name }}
           WEBSITE_SITUATION: ${{ needs.resolve.outputs.website_situation }}
           CURRENT_WEBSITE_URL: ${{ needs.resolve.outputs.current_website_url }}
+          DOMAIN_REGISTRAR: ${{ needs.resolve.outputs.domain_registrar }}
           REQUESTER: ${{ needs.resolve.outputs.requester_github_username }}
           TECHNICAL_POC: ${{ needs.resolve.outputs.technical_poc_github_username }}
           ZONE_CONTROLLED: ${{ needs.zone_check.outputs.zone_controlled }}
@@ -1152,6 +1173,7 @@ jobs:
           $charityName = [string]$env:CHARITY_NAME
           $websiteSituation = [string]$env:WEBSITE_SITUATION
           $currentWebsiteUrl = [string]$env:CURRENT_WEBSITE_URL
+          $domainRegistrar = [string]$env:DOMAIN_REGISTRAR
           $requester = [string]$env:REQUESTER
           $technicalPoc = [string]$env:TECHNICAL_POC
           $zoneControlled = ([string]$env:ZONE_CONTROLLED) -eq 'true'
@@ -1190,6 +1212,7 @@ jobs:
             charityName = $charityName
             websiteSituation = $websiteSituation
             currentWebsiteUrl = $currentWebsiteUrl
+            domainRegistrar = $domainRegistrar
             requesterGitHubUsername = $requester
             technicalPocGitHubUsername = $technicalPoc
             cloudflareZoneControlled = $zoneControlled

@@ -309,7 +309,7 @@
       "description": "READ-ONLY: probes whether the selected Cloudflare token has Registrar API rights (read + write). Never registers or changes anything. Wraps scripts/cloudflare-registrar-access-check.ps1.",
       "safetyLevel": "Reads",
       "approvalEnv": "\u2705 cloudflare-prod-write",
-      "guard": "never charges",
+      "guard": "never charges; but `cloudflare-tokens-from-kv` runs with **`scope: write`** \u2192 loads `wr-all-*` CF tokens, so **not auto-approvable** (#915)",
       "category": "Cloudflare / DNS / Domain",
       "categoryCode": "CF"
     },
@@ -469,6 +469,22 @@
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "cloudflare-prod-read / \u2705 cloudflare-prod-write",
       "guard": "`dry_run` (default true); preview job always runs read-only; idempotent (existing member = no change)",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 123,
+      "title": "Domain - Inbound Transfer Preflight (Report)",
+      "apis": [],
+      "file": "123-domain-inbound-transfer-preflight.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "READ-ONLY: probes the registry (RDAP) for the given domains, then runs scripts/domain-inbound-transfer-preflight.ps1 offline to classify how each domain held at a FOREIGN registrar (Wix / Squarespace / GoDaddy / ...) comes under FFC management -- via eNom/WHMCS, then Cloudflare nameservers.  Counterpart to workflow 115, which handles the outbound leg (eNom -> Cloudflare Registrar) and assumes the losing registrar is already eNom.  No secrets and no WHMCS credentials: RDAP is public and the preflight itself is pure offline analysis. Initiates no transfer and spends no money.  SCOPE: `domains` is required and there is no fleet-wide default. This workflow only ever looks at domains someone names explicitly -- it does not sweep the estate, and it is not a source of truth about it.  WHMCS is FFC's live record of what we hold. docs/domain-registry-truth.csv is a committed point-in-time RDAP snapshot for reference only; do not treat it as current, and do not drive work from it.  run-name echoes the requested domains so a run is identifiable in the Actions list without opening it.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "none (no credentials)",
+      "guard": "read-only RDAP + offline analysis; classifies foreign-registrar domains for the eNom/WHMCS inbound path",
       "category": "Cloudflare / DNS / Domain",
       "categoryCode": "CF"
     },
@@ -890,7 +906,7 @@
       "description": "Read-only. Sweeps GetClientsProducts (all clients) and returns the onboarding application(s) whose product custom fields contain the query substring (a domain or organization name), with personal contact fields masked. This is the domain/org -> client-id lookup that 219 (which needs a client id) and the masked triage tables cannot do. Posts the matches to the job summary and optionally back to a GitHub issue. No writes.  NOTE: uses the gated `whmcs-prod` so it runs today with a single approval; once `whmcs-prod-read` is set up it can move there (read-only workflow).",
       "safetyLevel": "Reads",
       "approvalEnv": "\u2705 whmcs-prod",
-      "guard": "GetClientsProducts sweep; personal contact fields masked; gated until whmcs-prod-read setup",
+      "guard": "GetClientsProducts sweep; personal contact fields masked; gated until whmcs-prod-read setup; `whmcs-secrets-from-kv` **omits `scope`** \u2192 action default `write` \u2192 loads `wr-all-ffc-whmcs-*`, so **not auto-approvable** (#915)",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -1059,6 +1075,26 @@
       "safetyLevel": "Writes (record field)",
       "approvalEnv": "\u2705 whmcs-prod",
       "guard": "`dry_run` (default true); one record + one field per dispatch; strict per-target allowlist of writable fields; refuses to replace a different existing value without `force`; reports `previousValue`",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 231,
+      "title": "WHMCS - Domain Order Add (Register/Transfer) (Admin)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "231-whmcs-domain-order-add.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Places a WHMCS domain order for an existing client by wrapping scripts/whmcs-order-add.ps1 (WHMCS AddOrder). This is the entry point the inbound migration path (workflow 123 / docs/wix-domain-migration.md) needs: a charity whose domain sits at a foreign registrar has no domain product in WHMCS, so there is nothing to drive the transfer from until one is placed.  Products (group 6): transfer -> pid 41  \"Transfer your Existing Domain Name to the FFC CloudFlare\" register -> pid 39  \"Free new .org Domain Name in the FFC CloudFlare\"  SAFETY: this is the first WRITE against production billing in this area. * mode=dry-run (default) previews the AddOrder request and writes nothing. * mode=execute places a real order. Gated behind the whmcs-prod environment approval on top of that. * The underlying script skips when the client already has a non-terminated service for the product, unless allow_duplicate is set. * no_email defaults to true so a first live run cannot surprise a charity with an unexpected order confirmation. Turn it off deliberately.  Find client_id with 221 (Application Search) or 219 (Application Detail). Confirm the registrar situation first with 123 (Inbound Transfer Preflight).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`mode` (default `dry-run`) previews AddOrder and writes nothing; `execute` places a real order; pid fixed by `order_type` (41 transfer / 39 register); underlying script skips when the client already has a non-terminated service for the product unless `allow_duplicate`; `no_email` defaults true so a first live run cannot surprise a charity; price forced to 0",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -1247,7 +1283,7 @@
       "description": "Read-only export of Zeffy campaigns/events (GET /api/v1/campaigns) via OIDC -> Key Vault. This endpoint returns NO personal data (forms/events only: title, target, volume, dates, URLs), so the uploaded artifact is inherently safe to keep on this public repo. Dispatch-only (no schedule) while we are testing the API. One workflow per endpoint.  The `deliver` job additionally publishes a public, PII-free campaign list (docs/data/ffc-zeffy-campaigns.json \u2014 title/url/status only) as a reviewable data-update PR, so the fleet smoke engine can classify a detected donation surface as ffc-interim (FFC-owned campaign) vs charity-specific (#744). Mirrors the 502 export->deliver split (github-prod gate, CBM_TOKEN) and the 703 same-repo peter-evans data-PR pattern.",
       "safetyLevel": "Reads (+ PR delivery)",
       "approvalEnv": "zeffy-prod \u2192 \u2705 github-prod (deliver)",
-      "guard": "PII masked; the published `docs/data/ffc-zeffy-campaigns.json` is title/url/status only (no financials); `deliver` opens a reviewable data PR via CBM_TOKEN",
+      "guard": "PII masked; the published `docs/data/ffc-zeffy-campaigns.json` is title/url/status only (no financials); `deliver` opens a reviewable data PR via CBM_TOKEN; loads `wr-all-ffc-zeffy-api-key` (default `write`) **and** `wr-all-cbm-github-pat` \u2192 **not auto-approvable** (#915; on the \u2705 list 2026-07-23 \u2192 2026-07-29)",
       "category": "Zeffy",
       "categoryCode": "ZEFFY"
     },
@@ -1494,7 +1530,7 @@
       "description": "Generates the merged FFC sites list from the WHMCS / Cloudflare / WPMUDEV exports plus the curated base list, runs per-domain health checks, and commits both sites-list/sites_list.csv and sites-list/sites_list.json.  This repo owns the export environments (whmcs-prod, cloudflare-prod-read, wpmudev-prod) and the GitHub PAT (CBM_TOKEN in github-prod) needed to dispatch the sibling export workflows, so generation lives here. Downstream consumers (e.g. ffcadmin.org) pull the published files from this repo.",
       "safetyLevel": "Writes (data PR only)",
       "approvalEnv": "\u2705 github-prod",
-      "guard": "dispatches read-only exports 201/108/601 (601 waits on its own wpmudev-prod gate); regenerates `sites-list/` CSV+JSON; opens a data PR (never pushes to `main`); weekly Mon 08:00Z + dispatch; serialized concurrency group",
+      "guard": "dispatches read-only exports 201/108/601 (601 waits on its own wpmudev-prod gate); regenerates `sites-list/` CSV+JSON; opens a data PR (never pushes to `main`); weekly Mon 08:00Z + dispatch; serialized concurrency group; loads `wr-all-cbm-ffc-copilot-mcp-github-pat` \u2192 **held on credential scope**, not on a taxonomy gap (#915)",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },
@@ -1924,10 +1960,10 @@
         "workflow_dispatch"
       ],
       "environments": [],
-      "description": "Weekly audit of whether each Node app in the FFC-EX fleet has dependency-vulnerability detection wired at all. A repo counts as covered only when it has BOTH `.github/workflows/security-audit.yml` and an `audit:high` script in package.json \u2014 the workflow without the script fails on every run, the script without the workflow never runs. Findings are upserted into a single rolling issue that auto-closes once the fleet is fully covered.  Why (#838): 34 of the 44 Node FFC-EX repos had no detection of any kind, so a published advisory against a charity site was invisible until somebody swept by hand \u2014 and nothing was measuring that, which is why #822's scope was estimated at 13 repos when the real number was 38. This workflow re-derives the fleet from the org listing every run rather than trusting a count carried between sessions.  Read-only: GITHUB_TOKEN reads public repo contents org-wide and lists the org's public repos; the only write is the rolling issue in THIS repo. No external API, no environment gate. It reports coverage only and never bumps a dependency \u2014 remediation belongs to #822. Classification/report logic lives in scripts/fleet-audit-coverage-lib.js (unit-tested under tests/workflow-logic/).",
+      "description": "Weekly audit of whether each Node app in the FFC-EX fleet has dependency-vulnerability detection wired at all. A repo counts as covered only when it has BOTH `.github/workflows/security-audit.yml` and an `audit:high` script in package.json \u2014 the workflow without the script fails on every run, the script without the workflow never runs. Findings are upserted into a single rolling issue that auto-closes once the fleet is fully covered.  Why (#838): 34 of the 44 Node FFC-EX repos had no detection of any kind, so a published advisory against a charity site was invisible until somebody swept by hand \u2014 and nothing was measuring that, which is why #822's scope was estimated at 13 repos when the real number was 38. This workflow re-derives the fleet from the org listing every run rather than trusting a count carried between sessions.  It also answers the question presence cannot (#889, ledger L06): does each repo's package-lock.json actually RESOLVE? A lockfile that exists but is out of sync with package.json makes `npm ci` exit non-zero, so the nightly audit installs nothing, scans nothing and reports clean \u2014 a covered repo that is not being scanned. The verdict comes from running the real `npm ci --dry-run`, not from re-implementing npm's sync check, so this audit cannot hold a second opinion about semver from the one the fleet's own audits run on.  Read-only: GITHUB_TOKEN reads public repo contents org-wide and lists the org's public repos; the only write is the rolling issue in THIS repo. The lockfile stage additionally reads the npm registry (unauthenticated, no credential, and `npm ci --dry-run` downloads no package) \u2014 that is the one external API this workflow touches, and it is read-only. No environment gate. It reports coverage only and never bumps a dependency \u2014 remediation belongs to 822. Classification/report logic lives in scripts/fleet-audit-coverage-lib.js (unit-tested under tests/workflow-logic/).  Cost of the resolution check: one lockfile download plus one short npm run per Node repo (~44). That is the trade 742 declined \u2014 it never downloads a lockfile because it runs on demand across the whole fleet and writes files. This job is weekly and read-only, so it can afford to be the place that measures.",
       "safetyLevel": "Reads",
       "approvalEnv": "\u2014",
-      "guard": "weekly coverage audit of dependency-vulnerability detection across the FFC-EX fleet (a repo counts as covered only with BOTH `security-audit.yml` and an `audit:high` script); rolling issue upsert/close on any gap; reports only \u2014 never bumps a dependency or writes to a fleet repo; GITHUB_TOKEN (public reads + own-repo issue), no external API, ungated",
+      "guard": "weekly coverage audit of dependency-vulnerability detection across the FFC-EX fleet (a repo counts as covered only with BOTH `security-audit.yml` and an `audit:high` script) PLUS a lockfile-resolution check \u2014 real `npm ci --dry-run` per Node repo, since a lockfile that exists but does not resolve makes the nightly audit scan nothing (#889, ledger L06); rolling issue upsert/close on any gap; reports only \u2014 never bumps a dependency or writes to a fleet repo; GITHUB_TOKEN (public reads + own-repo issue), npm registry read-only, ungated",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

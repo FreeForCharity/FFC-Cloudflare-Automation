@@ -149,6 +149,31 @@ body:
     validations:
       required: false
 
+  - type: dropdown
+    id: domain_registrar
+    attributes:
+      label: Domain Registrar (who holds the domain today)
+      description: |
+        Who you bought the domain from / who bills you for it each year. This is often
+        different from who hosts the website.
+
+        We ask because it changes how long setup takes. Most registrars let us point the
+        domain at our network the same day. **Wix does not** — a Wix-registered domain has
+        to be moved to our registrar first, which takes a few weeks. Telling us up front
+        means we plan for it instead of discovering it midway.
+
+        Not sure? Pick "Unknown / not sure" and we will look it up.
+      options:
+        - 'Unknown / not sure'
+        - 'Already with Free For Charity (eNom or Cloudflare)'
+        - 'Wix'
+        - 'Squarespace'
+        - 'GoDaddy'
+        - 'Other / another registrar'
+        - 'No domain yet'
+    validations:
+      required: false
+
   - type: input
     id: org_name
     attributes:

@@ -288,6 +288,37 @@ function Format-MaskedEmail {
     return '***' + $Email.Substring($at)
 }
 
+function Remove-Html {
+    <#
+    .SYNOPSIS
+        Strip HTML tags from a WHMCS field value and trim it. Returns '' for
+        null/empty/whitespace input.
+
+    .DESCRIPTION
+        WHMCS wraps URL and email answers in <a href="...">...</a>, so the raw
+        value of a custom field is markup, not text. Two call sites need the
+        stripped text and they must agree:
+
+        - Format-WhmcsFieldValue strips BEFORE classifying, because an
+          <a href="mailto:...">-wrapped address does not match the email shape
+          and would sail through as free text.
+        - whmcs-application-search.ps1 strips at MATCH time, because a needle
+          typed as a bare domain cannot be found inside the markup.
+
+        This is deliberately a plain strip with NO masking. The match site must
+        compare against the unmasked text: routing it through
+        Format-WhmcsFieldValue instead would compare the needle against '***'
+        for any personal-classified field, so an application whose domain sits
+        in such a field becomes silently unfindable and the search reports "no
+        matches" while looking like it worked (#928, #929). Masking belongs to
+        the emitted rows, which is a separate code path.
+    #>
+    param([Parameter(Position = 0)][AllowEmptyString()][AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    return ([regex]::Replace($Value, '<[^>]+>', '')).Trim()
+}
+
 function Get-WhmcsFieldClass {
     <#
     .SYNOPSIS
@@ -348,8 +379,11 @@ function Format-WhmcsFieldValue {
     if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
     # WHMCS wraps URL answers in <a href>...</a>. Strip it BEFORE classifying:
     # an <a href="mailto:...">-wrapped address does not match the email shape,
-    # so a value that should mask would sail through as free text.
-    $t = ([regex]::Replace($Value, '<[^>]+>', '')).Trim()
+    # so a value that should mask would sail through as free text. Shared with
+    # the search's match site via Remove-Html so the two cannot drift - they
+    # already did once, and the search shipped calling a function that had been
+    # deleted from under it (#928).
+    $t = Remove-Html $Value
     if ([string]::IsNullOrWhiteSpace($t)) { return '' }
 
     switch (Get-WhmcsFieldClass -FieldName $FieldName) {

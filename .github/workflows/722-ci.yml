@@ -118,6 +118,18 @@ jobs:
           # or stops dot-sourcing the library.
           python3 scripts/check-cloudflare-bulk-lib-consumption.py
 
+      - name: Validate every PowerShell command call resolves
+        shell: bash
+        run: |
+          # 221 called Remove-Html, a command defined nowhere in the repo (#929):
+          # PowerShell resolves commands at runtime, PSScriptAnalyzer says nothing,
+          # and the lane sat behind an approval gate so nobody saw it die. This
+          # parses every .ps1 with the PowerShell parser and fails when a call
+          # resolves neither to a known cmdlet nor to a function the file defines
+          # or dot-sources. Guards the #930 class. Needs a PowerShell host and
+          # fails closed without one — the pwsh steps below share that dependency.
+          python3 scripts/check-powershell-command-resolution.py
+
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v7
         with:

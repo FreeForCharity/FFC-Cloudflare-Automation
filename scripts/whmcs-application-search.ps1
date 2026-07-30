@@ -119,6 +119,10 @@ while ($true) {
         $hit = $false
         if (("$($s.name)").ToLowerInvariant().Contains($needle)) { $hit = $true }
         foreach ($f in $fields) {
+            # Remove-Html, NOT Format-MaskedField: matching happens against the
+            # unmasked text. Masking here would compare the needle against '***'
+            # for personal-classified fields, so an application whose domain sits
+            # in one would be unfindable while the search reported no matches.
             if ((Remove-Html ([string]$f.value)).ToLowerInvariant().Contains($needle)) { $hit = $true; break }
         }
         if (-not $hit) { continue }

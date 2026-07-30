@@ -246,6 +246,51 @@ branch. Also expect a **draft that has been green for days to fail on promotion 
 alone**: the guard's 5-commit threshold is measured at run time, so age accrues silently while the
 PR waits.
 
+**But do not pre-emptively update the branch on every promotion — being behind is the trigger, not
+promoting.** After three consecutive cases it was tempting to read this as "promotion breaks the
+guard". It does not. On 2026-07-30 #931 sat ~40 minutes as a draft, was **0 behind / 2 ahead**, and
+`gh pr ready` re-ran branch CI with the guard **passing**. Promotion only re-runs the check; the
+5-commit threshold decides the outcome. Check first and touch the branch only if the number says to
+— it is a worker's branch, and an unnecessary merge commit on it is not free:
+
+```bash
+gh api repos/FreeForCharity/FFC-Cloudflare-Automation/compare/main...<branch> --jq '{ahead:.ahead_by,behind:.behind_by}'
+```
+
+## Code scanning can block the merge queue even when every required check is green
+
+The ruleset is not the whole story. On 2026-07-30 #931 had both required contexts green — ruleset
+`16768928` requires exactly `Validate Repository` and `Phantom Revert Guard` — and the CodeQL
+workflow itself was `success` with `Perform CodeQL Analysis=success`. The enqueue still refused:
+
+```
+UNPROCESSABLE: Code scanning is waiting for results from CodeQL for the commits 3b73753 or 387c28d.
+```
+
+That is **code scanning merge protection**, a separate gate from required status checks, so reading
+`rulesets/<id>` `required_status_checks` will never show it and its absence there proves nothing.
+
+The cause is upload targeting, not analysis failure. Merge protection wants an analysis for the
+current **test-merge** commit, and a second push to the branch moves that sha:
+
+```bash
+gh api "repos/FreeForCharity/FFC-Cloudflare-Automation/code-scanning/analyses?ref=refs/pull/931/merge" \
+  --jq '.[]|"\(.commit_sha[0:7]) \(.created_at)"'
+# → 4e81727 2026-07-30T12:24:10Z     ... the PREVIOUS head's merge sha; neither sha in the error
+```
+
+Re-running the CodeQL workflow uploads for the current merge commit, and the enqueue then succeeds:
+
+```bash
+gh run rerun <codeql-run-id> --repo FreeForCharity/FFC-Cloudflare-Automation
+# ~3 min later the analyses list carries 3b73753, and enqueuePullRequest returns
+# "already in the queue" — the earlier silent --auto had been queued behind this all along
+```
+
+Diagnostic order: the enqueue-probe error **names the two shas it will accept** — start there, list
+the analyses on `refs/pull/N/merge`, compare, then re-run CodeQL. Do not push an empty commit to
+force it; the analysis, not the branch, is what is missing.
+
 ## Narrowing a workflow to a read lane surfaces the writes that were riding on the old credential
 
 **Before moving a workflow to a `*-prod-read` environment, enumerate what it writes.** Validated the

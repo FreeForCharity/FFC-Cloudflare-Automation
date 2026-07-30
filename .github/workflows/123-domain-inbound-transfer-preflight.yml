@@ -1,0 +1,252 @@
+name: '123. Domain - Inbound Transfer Preflight (Report)'
+run-name: 'Inbound Transfer Preflight (domains=${{ inputs.domains }})'
+
+# READ-ONLY: probes the registry (RDAP) for the given domains, then runs
+# scripts/domain-inbound-transfer-preflight.ps1 offline to classify how each
+# domain held at a FOREIGN registrar (Wix / Squarespace / GoDaddy / ...) comes
+# under FFC management -- via eNom/WHMCS, then Cloudflare nameservers.
+#
+# Counterpart to workflow 115, which handles the outbound leg (eNom ->
+# Cloudflare Registrar) and assumes the losing registrar is already eNom.
+#
+# No secrets and no WHMCS credentials: RDAP is public and the preflight itself
+# is pure offline analysis. Initiates no transfer and spends no money.
+#
+# SCOPE: `domains` is required and there is no fleet-wide default. This workflow
+# only ever looks at domains someone names explicitly -- it does not sweep the
+# estate, and it is not a source of truth about it.
+#
+# WHMCS is FFC's live record of what we hold. docs/domain-registry-truth.csv is
+# a committed point-in-time RDAP snapshot for reference only; do not treat it as
+# current, and do not drive work from it.
+#
+# run-name echoes the requested domains so a run is identifiable in the Actions
+# list without opening it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domains:
+        description:
+          'REQUIRED. Comma/space separated domains to evaluate. Explicit opt-in only -- there is
+          deliberately no fleet-wide default, so this never sweeps domains nobody asked about.'
+        required: true
+        type: string
+      min_days_to_expiry:
+        description: 'Minimum days to expiry to treat a domain as transfer-ready'
+        required: false
+        type: number
+        default: 15
+      post_reg_lock_days:
+        description: 'Days since registration before a transfer is allowed (ICANN)'
+        required: false
+        type: number
+        default: 60
+      issue_number:
+        description: 'Optional: issue number to comment the summary back to'
+        required: false
+        type: number
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  inbound_preflight:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Resolve the domain set
+        shell: pwsh
+        # The dispatch input travels via env, never interpolated into the
+        # script body: a `'` in the input would otherwise terminate the
+        # PowerShell string literal and let the rest execute as code.
+        env:
+          INPUT_DOMAINS: ${{ inputs.domains }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts/inbound | Out-Null
+
+          $raw = "$env:INPUT_DOMAINS"
+          if ([string]::IsNullOrWhiteSpace($raw)) {
+            throw 'domains is required. Name the domains to evaluate explicitly; this workflow has no fleet-wide default by design.'
+          }
+          else {
+            $domains = $raw -split '[,\s]+' |
+              ForEach-Object { $_.Trim().ToLowerInvariant().Trim('.') } |
+              Where-Object { $_ }
+            if (@($domains).Count -eq 0) { throw 'No usable domains parsed from the input.' }
+
+            # Defence in depth: these tokens are only ever written to a CSV and
+            # read back as data, but reject anything that is not a plausible
+            # hostname rather than carrying it forward.
+            $bad = @($domains | Where-Object { $_ -notmatch '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' })
+            if ($bad.Count -gt 0) { throw ("Not valid domain names: {0}" -f ($bad -join ', ')) }
+            $domains | Sort-Object -Unique |
+              ForEach-Object { [pscustomobject]@{ domain = $_ } } |
+              Export-Csv artifacts/inbound/domains.csv -NoTypeInformation -Encoding utf8
+            Write-Host ("Domains to evaluate: {0}" -f @($domains).Count)
+            'true' | Out-File -FilePath artifacts/inbound/needs_probe.txt -Encoding utf8 -NoNewline
+          }
+
+      - name: Probe registry truth (RDAP)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((Get-Content artifacts/inbound/needs_probe.txt -Raw).Trim() -ne 'true') {
+            Write-Host 'Skipping RDAP probe (using committed registry truth).'
+            exit 0
+          }
+          # Authoritative registrar of record / expiry / transfer-lock state.
+          # WHMCS is frequently stale here, and for a foreign-registrar domain
+          # WHMCS often has no record at all.
+          & pwsh -NoProfile -File .\scripts\domain-registry-probe.ps1 `
+            -DomainsCsv artifacts/inbound/domains.csv `
+            -OutputFile artifacts/inbound/registry_truth.csv | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "domain-registry-probe.ps1 failed (exit $LASTEXITCODE)." }
+
+      - name: Run inbound transfer preflight (offline)
+        shell: pwsh
+        # Same reasoning as the domain input: workflow_dispatch `type: number`
+        # is a UI hint, not a guarantee -- an API dispatch can send any string
+        # -- so these arrive via env and are cast to [int] before use.
+        env:
+          INPUT_MIN_DAYS_TO_EXPIRY: ${{ inputs.min_days_to_expiry }}
+          INPUT_POST_REG_LOCK_DAYS: ${{ inputs.post_reg_lock_days }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts/inbound/runbooks | Out-Null
+
+          $minDays = [int]"$env:INPUT_MIN_DAYS_TO_EXPIRY"
+          $lockDays = [int]"$env:INPUT_POST_REG_LOCK_DAYS"
+
+          $ErrorActionPreference = 'Continue'
+          $out = & pwsh -NoProfile -File .\scripts\domain-inbound-transfer-preflight.ps1 `
+            -RegistryTruthCsv artifacts/inbound/registry_truth.csv `
+            -OutputFile artifacts/inbound/domain_inbound_transfer_preflight.csv `
+            -RunbookDir artifacts/inbound/runbooks `
+            -MinDaysToExpiry $minDays `
+            -PostRegLockDays $lockDays
+          $exit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          if ($exit -ne 0) { throw "domain-inbound-transfer-preflight.ps1 failed (exit $exit)." }
+
+          $summary = ($out | Out-String)
+          Write-Host $summary
+          $summary.TrimEnd() | Out-File -FilePath artifacts/inbound/inbound_summary.json -Encoding utf8
+          $fence = [string][char]0x60 * 3
+          $lines = @('### Inbound transfer preflight summary', '', ($fence + 'json'), $summary.TrimEnd(), $fence)
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Build the foreign-registrar worklist
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rows = Import-Csv artifacts/inbound/domain_inbound_transfer_preflight.csv
+
+          $order = 'FOREIGN_TRANSFER_REQUIRED', 'FOREIGN_NS_CAPABLE', 'BLOCKED', 'UNKNOWN', 'AT_ENOM', 'AT_CLOUDFLARE'
+          $titles = @{
+            FOREIGN_TRANSFER_REQUIRED = 'Registrar blocks NS delegation (Wix) -> must transfer to eNom before Cloudflare is reachable'
+            FOREIGN_NS_CAPABLE        = 'Foreign registrar that allows NS delegation -> point at Cloudflare now, transfer later'
+            BLOCKED                   = 'Foreign registrar, transfer blocked (expired / locked / inside ICANN lock)'
+            UNKNOWN                   = 'Registrar of record unknown -> run the RDAP probe'
+            AT_ENOM                   = 'Already at eNom -> use workflow 115 for the Cloudflare Registrar leg'
+            AT_CLOUDFLARE             = 'Already at Cloudflare Registrar -> nothing to do'
+          }
+
+          $md = New-Object System.Collections.Generic.List[string]
+          $md.Add('### Inbound worklist (who holds the domain, and what unblocks Cloudflare)')
+          $md.Add('')
+          foreach ($b in $order) {
+            $n = @($rows | Where-Object { $_.bucket -eq $b }).Count
+            $md.Add(("- **{0}** ({1}): {2}" -f $b, $n, $titles[$b]))
+          }
+          $md.Add('')
+
+          # Only the foreign buckets get a detail table -- the eNom/Cloudflare
+          # rows are the outbound pipeline's business, not this workflow's.
+          foreach ($b in 'FOREIGN_TRANSFER_REQUIRED', 'FOREIGN_NS_CAPABLE', 'BLOCKED', 'UNKNOWN') {
+            $sel = @($rows | Where-Object { $_.bucket -eq $b } | Sort-Object domain)
+            if ($sel.Count -eq 0) { continue }
+            $md.Add(("#### {0} ({1})" -f $b, $sel.Count))
+            $md.Add('| domain | registrar | path | NS delegation | daysToExpiry | locked |')
+            $md.Add('| --- | --- | --- | --- | ---: | --- |')
+            foreach ($r in $sel) {
+              $md.Add(("| {0} | {1} | {2} | {3} | {4} | {5} |" -f `
+                  $r.domain, $r.currentRegistrar, $r.inboundPath, $r.nsDelegationAllowed, $r.daysToExpiry, $r.transferLocked))
+            }
+            $md.Add('')
+          }
+          $md | Out-File -FilePath artifacts/inbound/inbound_worklist.md -Encoding utf8
+          $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload inbound preflight results
+        uses: actions/upload-artifact@v7
+        with:
+          name: domain-inbound-transfer-preflight
+          path: |
+            artifacts/inbound/domain_inbound_transfer_preflight.csv
+            artifacts/inbound/inbound_summary.json
+            artifacts/inbound/inbound_worklist.md
+            artifacts/inbound/registry_truth.csv
+            artifacts/inbound/runbooks/*.md
+          if-no-files-found: error
+
+      - name: Comment summary back to issue
+        if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
+        uses: actions/github-script@v9
+        env:
+          # Via env for the same reason as the pwsh steps -- interpolating a
+          # dispatch input straight into the script body is a JS injection
+          # vector, and this step holds a token with issues: write.
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const issueNumber = Number(process.env.INPUT_ISSUE_NUMBER);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed(`Not a valid issue number: ${process.env.INPUT_ISSUE_NUMBER}`);
+              return;
+            }
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let table = '';
+            try {
+              const s = JSON.parse(fs.readFileSync('artifacts/inbound/inbound_summary.json', 'utf8'));
+              table = [
+                `- transfer-required (NS delegation blocked): **${s.foreignTransferRequired}**`,
+                `- NS-capable foreign registrar: **${s.foreignNsCapable}**`,
+                `- blocked: **${s.blocked}**`,
+                `- unknown registrar: **${s.unknownRegistrar}**`,
+                `- already at eNom: **${s.atEnom}**`,
+                `- already at Cloudflare: **${s.atCloudflare}**`,
+                `- total: **${s.total}**`,
+              ].join('\n');
+            } catch (e) {
+              table = '(could not read inbound preflight summary)';
+            }
+            let worklist = '';
+            try {
+              worklist = fs.readFileSync('artifacts/inbound/inbound_worklist.md', 'utf8').trim();
+            } catch (e) {
+              worklist = '_(worklist not available)_';
+            }
+            const body = [
+              'Inbound transfer preflight results',
+              '',
+              table,
+              '',
+              worklist,
+              '',
+              `Full CSV + per-domain runbooks: see the Artifacts section of ${runUrl}`,
+              '',
+              '---',
+              '_Generated by [Claude Code](https://claude.ai/code)_',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });

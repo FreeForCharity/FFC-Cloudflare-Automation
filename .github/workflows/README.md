@@ -532,6 +532,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 120 | DNS + GH Pages - Bulk Cutover staging -> Apex (FFC-EX) [CF+GH] | `120-bulk-cutover-to-github-pages.yml` | workflow_dispatch | Writes (dry-run default) | ✅ cloudflare-prod-write / ✅ github-prod |
 | 121 | DNS + GH Pages - Fleet Cutover Preflight (FFC-EX) | `121-fleet-cutover-preflight.yml` | workflow_dispatch | Reads | none (no credentials) |
 | 122 | Cloudflare - Zone Member Add (Domain Admin) [CF] | `122-cloudflare-zone-member-add.yml` | workflow_dispatch | Writes (dry-run default) | cloudflare-prod-read / ✅ cloudflare-prod-write |
+| 123 | Domain - Inbound Transfer Preflight (Report) | `123-domain-inbound-transfer-preflight.yml` | workflow_dispatch | Reads | none (no credentials) |
 ### 2xx — WHMCS
 
 | # | Workflow | File | Triggers | Safety | Approval env |
@@ -565,6 +566,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 227 | cPanel - Deploy WHMCS Hooks (FTPS/lftp) [cPanel] | `227-whmcs-hooks-deploy.yml` | workflow_dispatch | Writes (verify default) | ✅ whmcs-prod |
 | 228 | WHMCS - Fraud Review (FraudLabs Pro) [FRAUDLABS+WHMCS] | `228-whmcs-fraud-review.yml` | schedule, workflow_dispatch | Writes (issues only) | whmcs-prod-read + fraudlabspro-prod-read |
 | 230 | WHMCS - Record Field Set (client/contact/service/domain) [WHMCS] | `230-whmcs-record-field-set.yml` | workflow_dispatch | Writes (record field) | ✅ whmcs-prod |
+| 231 | WHMCS - Domain Order Add (Register/Transfer) (Admin) [WHMCS] | `231-whmcs-domain-order-add.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

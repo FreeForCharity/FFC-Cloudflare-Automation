@@ -87,6 +87,20 @@ json.load(open(path, encoding="utf-8"))
 Same for `pathlib.Path(p).read_text(encoding="utf-8")` and any `write_text`. This costs one failed
 call every time it is rediscovered, which has now happened more than once.
 
+**It bites on the way out too — set `PYTHONIOENCODING=utf-8`.** Reading UTF-8 correctly and then
+`print`ing what you read fails at the terminal instead:
+
+```
+UnicodeEncodeError: 'charmap' codec can't encode character '→' in position 78
+```
+
+On 2026-07-30 both halves fired inside one command while inspecting `agentic-os-status.json`,
+because a live workflow really is named _Redirect Rule: trendylittlegeek.com → aprilhansen.com_. The
+decode error names a byte offset and the encode error names a codepoint — worth knowing apart, since
+the first means "reopen the file" and the second means "the file was fine, your stdout is cp1252".
+This is not confined to `gh` output: any FFC JSON can carry an arrow, so treat **both** env-var and
+`encoding=` as the default for feed work.
+
 ## `git cat-file` / `git show` with a `.github/…` path needs `MSYS_NO_PATHCONV=1` (validated 2026-07-25)
 
 **git-bash rewrites a `rev:path` argument when the path starts with a dot.** Reading a file out of a
@@ -163,8 +177,40 @@ gh api graphql -f query="mutation{enqueuePullRequest(input:{pullRequestId:\"$NID
 # → errors[0].message: "Pull request is already in the queue"
 ```
 
-`enqueuePullRequest` is safe to use as a *probe* precisely because it is idempotent — an already-queued
-PR is rejected rather than double-enqueued, so the error message is the answer.
+`enqueuePullRequest` is safe to use as a _probe_ precisely because it is idempotent — an
+already-queued PR is rejected rather than double-enqueued, so the error message is the answer.
+
+**`--auto` can also print nothing at all, and REST `.auto_merge` can read `false`, while the enqueue
+took.** On 2026-07-30 this happened on three PRs in one run (#923, #887, ffcadmin #744): no
+advisory, no error, exit 0, `.auto_merge == false` on the very next call — and `enqueuePullRequest`
+answered `"already in the queue"` for two of them and `"Pull request is closed"` for the third,
+which had already merged. So the absence of the stderr advisory is **not** the signal that the queue
+declined the request. Empty output is not evidence; only the probe is.
+
+### Promoting a draft can hard-block the enqueue — a different case from the one AGENTS.md covers
+
+AGENTS.md says a branch-level check failure does not dequeue an **already-queued** PR, so leave the
+branch alone. The inverse case has the opposite remedy. #887 sat `clean` and all-green **as a
+draft**; `gh pr ready` re-ran branch CI and Phantom Revert Guard failed:
+
+```
+Phantom-revert risk: branch has untouched updates in critical paths and is 11 commits
+behind main (threshold: 5). Update the branch (merge main in or rebase) before merging.
+```
+
+Because the PR was not yet queued, this was a real block — `enqueuePullRequest` returned
+`"has failing required statuses"`, not `"already in the queue"`. Fix it with
+
+```bash
+gh api -X PUT repos/FreeForCharity/FFC-Cloudflare-Automation/pulls/<n>/update-branch
+```
+
+and note the ordering that makes this safe: **the enqueue rejection is what proved the PR was out of
+the queue.** Probing first, then updating, satisfies AGENTS.md's "only merge `main` into a branch
+that is genuinely out of the queue" — doing it in the other order risks a 422 against a queued
+branch. Also expect a **draft that has been green for days to fail on promotion for staleness
+alone**: the guard's 5-commit threshold is measured at run time, so age accrues silently while the
+PR waits.
 
 ## Narrowing a workflow to a read lane surfaces the writes that were riding on the old credential
 
@@ -263,15 +309,16 @@ contract before concluding a human is the blocker.
 
 ## When something claims a mechanism is dead, look for an artifact that mechanism produced (validated 2026-07-30)
 
-An issue asserted that the whole failure-alerting layer was dead, on solid evidence: `event=workflow_run`
-in this repo totals **0**, and both alerter workflows had never produced a run. That evidence was
-still literally true — and the conclusion was wrong by six days, because 740 had since been converted
-from `workflow_run` to a `schedule` poll (`cron: '9,39 * * * *'`) and had **115 successful runs**.
+An issue asserted that the whole failure-alerting layer was dead, on solid evidence:
+`event=workflow_run` in this repo totals **0**, and both alerter workflows had never produced a run.
+That evidence was still literally true — and the conclusion was wrong by six days, because 740 had
+since been converted from `workflow_run` to a `schedule` poll (`cron: '9,39 * * * *'`) and had **115
+successful runs**.
 
-The decisive evidence was not the run list. It was a *rolling alert issue that existed*, whose footer
-read `Managed by 740. Repo - Scheduled Workflow Failure Alert.` — created **7 seconds** after 740's
-run started. An artifact the mechanism emitted outranks any inference about whether the mechanism
-works, and it is usually cheaper to find. Two issues closed on that single observation.
+The decisive evidence was not the run list. It was a _rolling alert issue that existed_, whose
+footer read `Managed by 740. Repo - Scheduled Workflow Failure Alert.` — created **7 seconds** after
+740's run started. An artifact the mechanism emitted outranks any inference about whether the
+mechanism works, and it is usually cheaper to find. Two issues closed on that single observation.
 
 Corollary: an issue's stated premise can decay while every fact quoted in it stays true. Re-derive
 the premise, not the facts.
@@ -283,13 +330,13 @@ behind: it was last written at run 45 while runs **46 and 47 both completed** wi
 Two runs of gate decisions, merges and open threads existed only in the #719 thread.
 
 **Derive run state (including the run number) from the newest entries in the log issue first**, and
-treat the local file as corroboration. A local file that is *usually* current is more dangerous than
+treat the local file as corroboration. A local file that is _usually_ current is more dangerous than
 one that is obviously absent, because nothing about reading it feels like a risk.
 
 ## Review threads are GraphQL-only — `--json reviewThreads` is not a field (validated 2026-07-30)
 
 `gh pr view <n> --json reviewThreads` errors and dumps the full valid-field list. AGENTS.md already
-requires GraphQL to *resolve* a thread; the **read** side is equally GraphQL-only, which is easy to
+requires GraphQL to _resolve_ a thread; the **read** side is equally GraphQL-only, which is easy to
 assume otherwise when every other PR attribute is available over REST.
 
 ```bash

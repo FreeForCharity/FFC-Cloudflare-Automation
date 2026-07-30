@@ -153,6 +153,19 @@ write by re-reading the state it should have changed, and make sure you re-read 
 The gate-approval note above says don't trust the POST body; this says don't trust the field that
 would have been correct on a non-queue repo. Both fail the same way — a truthful-looking negative.
 
+**The `null` is not even stable, so a second reading is not a second opinion.** On 2026-07-30, #904
+read `autoMergeRequest` non-null with `mergeStateStatus=BLOCKED` immediately after `--auto`, then
+`null` with `CLEAN` a few minutes later — two different-looking states for one unchanged fact. Only
+the mutation settled it:
+
+```bash
+gh api graphql -f query="mutation{enqueuePullRequest(input:{pullRequestId:\"$NID\"}){mergeQueueEntry{position state}}}"
+# → errors[0].message: "Pull request is already in the queue"
+```
+
+`enqueuePullRequest` is safe to use as a *probe* precisely because it is idempotent — an already-queued
+PR is rejected rather than double-enqueued, so the error message is the answer.
+
 ## Narrowing a workflow to a read lane surfaces the writes that were riding on the old credential
 
 **Before moving a workflow to a `*-prod-read` environment, enumerate what it writes.** Validated the
@@ -221,6 +234,68 @@ finding is addressed — leaving it draft is what actually holds the merge, not 
   reported all-operational throughout — so treat "GitHub is green" as no guarantee that PR creation
   works. Because the work was committed and pushed first, nothing was lost: the branches simply wait
   for their PRs. **Adopt commit-and-push-first as the default order.**
+
+## "The workflow is blocked" is not "the outcome is blocked" (validated 2026-07-30)
+
+**Before escalating a reporting or visibility outcome to a human, check whether the artifact can be
+produced by any path you already control.**
+
+The public `/agentic-os` status feed sat frozen for ~12 hours and was recorded as un-completable,
+blocked on Clarke rotating a revoked Key Vault PAT. What was actually blocked was workflow **502's
+`deliver` job** — which 401s at its `Generate Agentic OS status feed` step. The generator itself
+states its auth contract in its own docstring:
+
+> REST only (no `gh` CLI, no GraphQL), so it runs anywhere a token is present. Authentication is a
+> single environment variable, `GH_TOKEN`.
+
+So the Conductor ran it locally and delivered the result by the same branch + PR route `deliver`
+would have used:
+
+```bash
+GH_TOKEN=$(gh auth token) python3 scripts/generate-agentic-os-status.py --output feed.json
+# then: cp to src/data/ AND public/data/ on a branch, PR, merge queue
+```
+
+A stale public dashboard is bad; a public dashboard that **misreports which approvals are
+outstanding** is worse, and that was the actual state. The dead credential was a real finding and
+still needs rotating — but it gated one delivery path, not the outcome. Read the script's auth
+contract before concluding a human is the blocker.
+
+## When something claims a mechanism is dead, look for an artifact that mechanism produced (validated 2026-07-30)
+
+An issue asserted that the whole failure-alerting layer was dead, on solid evidence: `event=workflow_run`
+in this repo totals **0**, and both alerter workflows had never produced a run. That evidence was
+still literally true — and the conclusion was wrong by six days, because 740 had since been converted
+from `workflow_run` to a `schedule` poll (`cron: '9,39 * * * *'`) and had **115 successful runs**.
+
+The decisive evidence was not the run list. It was a *rolling alert issue that existed*, whose footer
+read `Managed by 740. Repo - Scheduled Workflow Failure Alert.` — created **7 seconds** after 740's
+run started. An artifact the mechanism emitted outranks any inference about whether the mechanism
+works, and it is usually cheaper to find. Two issues closed on that single observation.
+
+Corollary: an issue's stated premise can decay while every fact quoted in it stays true. Re-derive
+the premise, not the facts.
+
+## The local Conductor workspace is not the state — the log issue is (validated 2026-07-30)
+
+`state\CONDUCTOR.md` is a convenience cache, exactly as the routine says, and it will silently fall
+behind: it was last written at run 45 while runs **46 and 47 both completed** without updating it.
+Two runs of gate decisions, merges and open threads existed only in the #719 thread.
+
+**Derive run state (including the run number) from the newest entries in the log issue first**, and
+treat the local file as corroboration. A local file that is *usually* current is more dangerous than
+one that is obviously absent, because nothing about reading it feels like a risk.
+
+## Review threads are GraphQL-only — `--json reviewThreads` is not a field (validated 2026-07-30)
+
+`gh pr view <n> --json reviewThreads` errors and dumps the full valid-field list. AGENTS.md already
+requires GraphQL to *resolve* a thread; the **read** side is equally GraphQL-only, which is easy to
+assume otherwise when every other PR attribute is available over REST.
+
+```bash
+gh api graphql -f query='{repository(owner:"FreeForCharity",name:"FFC-Cloudflare-Automation"){
+  pullRequest(number:904){reviewThreads(first:50){nodes{isResolved path}}}}}'
+```
 
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 

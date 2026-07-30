@@ -101,6 +101,40 @@ the first means "reopen the file" and the second means "the file was fine, your 
 This is not confined to `gh` output: any FFC JSON can carry an arrow, so treat **both** env-var and
 `encoding=` as the default for feed work.
 
+## Python on this host cannot open a git-bash `/c/...` path (validated 2026-07-30)
+
+**Every shell builtin accepts `/c/Users/...`; Python does not.** The interpreter is native Windows,
+so it never sees the MSYS mount table:
+
+```
+>>> io.open('/c/Users/clark/.../feed.json', encoding='utf-8')
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/clark/.../feed.json'
+```
+
+The path is real — `cat` on the very same string works. Write `C:/Users/...` in Python string
+literals (forward slashes are fine; it is the `/c/` _prefix_ that fails). Same family as the
+`MSYS_NO_PATHCONV` fact below: a path that is correct for the shell is not automatically correct for
+the process the shell hands it to. Bites hardest when a heredoc script is copying files the
+surrounding `cd`/`ls` already proved exist.
+
+## A symptom that disappears on its own has not verified your fix (validated 2026-07-30)
+
+**Check the cause was still present before claiming the fix suppressed it.** #924 filters GitHub's
+platform agents out of the public gate panel. The first feed generated after it merged showed no
+`copilot` row — which looks like proof and is not: that waiting run had resolved by itself minutes
+earlier, so the filter had nothing to act on and was never exercised.
+
+The mistake is cheap to avoid and expensive to make, because it retires a real verification task
+while feeling like it completed one. Before reading an absence as evidence, re-read the _input_:
+
+```
+gh api "repos/OWNER/REPO/actions/runs?status=waiting&per_page=20" --jq '.workflow_runs[].name'
+```
+
+If the thing you filter is not in there, the run proves nothing about the filter.
+Deliberately-injected input — a mutation test — is what actually verifies it, which is why #924
+shipped with one.
+
 ## `git cat-file` / `git show` with a `.github/…` path needs `MSYS_NO_PATHCONV=1` (validated 2026-07-25)
 
 **git-bash rewrites a `rev:path` argument when the path starts with a dot.** Reading a file out of a

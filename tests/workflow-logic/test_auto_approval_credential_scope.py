@@ -247,7 +247,12 @@ def credential_uses(wf: dict, source: str, _depth: int = 0) -> list[dict]:
             continue
         called = job.get("uses")
         if isinstance(called, str) and called.startswith("./.github/workflows/"):
-            child = REPO_ROOT / called.lstrip("./")
+            # removeprefix, NOT lstrip: `lstrip("./")` strips every leading '.'
+            # and '/' character, so "./.github/workflows/…" became
+            # "github/workflows/…" and every reusable call reported "does not
+            # exist". Caught by Copilot on #923 — see
+            # test_reusable_workflow_calls_are_actually_followed.
+            child = REPO_ROOT / called.removeprefix("./")
             if _depth >= 3:
                 out.append(
                     {
@@ -488,6 +493,13 @@ def test_scope_and_oidc_identity_agree_across_every_workflow():
             continue
         for entry in credential_uses(wf, path.name):
             if entry.get("unfollowable"):
+                # Reported, never skipped. Skipping these here is what hid the
+                # `lstrip` defect: every reusable call was unresolvable and this
+                # tree-wide assertion stayed green by ignoring exactly the
+                # entries that said so.
+                problems.append(
+                    f"{path.name}: job '{entry['job']}' — {entry['unfollowable']}"
+                )
                 continue
             action_name = entry["uses"].rstrip("/").split("/")[-1]
             if (path.name, entry["job"], action_name) in IDENTITY_SCOPE_EXCEPTIONS:
@@ -549,6 +561,45 @@ def test_the_three_held_workflows_would_fail_if_relisted():
         "221 has grown a literal wr-all- secret reference; the 'omission reads "
         "as safe' case this test pins now needs a different example"
     )
+
+
+def test_reusable_workflow_calls_are_actually_followed():
+    """The traversal must resolve a real `workflow_call` chain, not just claim to.
+
+    Regression pin for the defect Copilot caught on #923: the first draft used
+    `called.lstrip("./")`, which strips every leading '.' and '/' CHARACTER
+    rather than the "./" prefix, so `./.github/workflows/501-….yml` resolved to
+    `github/workflows/501-….yml`. Every reusable call therefore reported "does
+    not exist" — and nothing failed, because no ✅-listed workflow delegates
+    today and the tree-wide assertion skipped unresolvable entries. Two silences
+    stacked: an untested code path, and a check that ignored its own "cannot
+    resolve" signal. This test exercises the live 502 → 501 chain so the path
+    cannot rot untested again.
+    """
+    filename = "502-google-analytics-report.yml"
+    _, wf = _load_workflow(filename)
+    entries = credential_uses(wf, filename)
+
+    unfollowable = [e for e in entries if e.get("unfollowable")]
+    assert not unfollowable, f"502's reusable call did not resolve: {unfollowable}"
+
+    followed = [e for e in entries if "501-google-api-smoke.yml" in e["source"]]
+    assert followed, (
+        "502 calls ./.github/workflows/501-google-api-smoke.yml, whose smoke job "
+        f"loads google-secrets-from-kv — the traversal found none of it: {entries}"
+    )
+    scope, how = resolve_scope(followed[0]["uses"], followed[0]["explicit"])
+    assert scope == "read", (
+        f"501's credential step resolved to {scope!r} via {how} — expected read"
+    )
+
+    # And the negative: a call to a file that really is absent must be reported,
+    # so a broken delegation can never read as "loads nothing".
+    broken = yaml.safe_load(
+        "jobs:\n  child:\n    uses: ./.github/workflows/000-does-not-exist.yml\n"
+    )
+    problems = audit_workflow(999, "synthetic.yml", broken)
+    assert any("does not exist" in p for p in problems), problems
 
 
 def test_an_explicit_write_scope_in_a_listed_workflow_fails():

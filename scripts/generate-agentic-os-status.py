@@ -112,6 +112,11 @@ _ISSUE_REF_RE = re.compile(r"(?:^|[^\w&])#(\d{1,5})\b")
 # full of `#N` noise cannot turn the daily feed into a rate-budget problem.
 MAX_ISSUE_LOOKUPS = 30
 
+# GitHub's Search API returns at most this many results for any one query and
+# then simply stops paginating — WITHOUT setting `incomplete_results`. See
+# _assert_search_complete: this is why the flag alone is not a sufficient guard.
+SEARCH_RESULT_CAP = 1000
+
 # Defense-in-depth redaction for the Conductor-log bodies. The source issue
 # (#719) is already a public issue, so nothing here is a *new* disclosure — but
 # the aggregated public feed should never propagate a token that was pasted into
@@ -264,12 +269,13 @@ def search_agentic_items(org, token):
     list would have to be edited the first time an agent files an issue in a new
     repo, and nothing would fail if it were not.
 
-    Aborts on ``incomplete_results``. That flag means GitHub timed out and
-    returned a partial set; shipping it would recreate the very defect this
-    function exists to fix, only with a fresher timestamp on it."""
+    Aborts on ``incomplete_results``, and separately on any shortfall against
+    the reported ``total_count`` — see ``_assert_search_complete`` for why one
+    flag is not enough."""
     query = f"org:{org} label:{LABEL} is:open"
     url = _build_url("search/issues", {"q": query, "per_page": "100"})
     items = []
+    total_count = None
     while url:
         payload, link = _request(url, token)
         if not isinstance(payload, dict):
@@ -280,9 +286,53 @@ def search_agentic_items(org, token):
                 "would be published as complete while missing rows; re-run rather than "
                 "shipping a silently-truncated feed."
             )
+        if total_count is None:
+            total_count = payload.get("total_count")
         items.extend(payload.get("items", []))
         url = _link_rel(link, "next")
+    _assert_search_complete(query, items, total_count)
     return items
+
+
+def _assert_search_complete(query, items, total_count):
+    """Abort unless every result the search reports was actually retrieved.
+
+    ``incomplete_results`` covers exactly one truncation mode — a server-side
+    timeout. The Search API **also** caps any query at ``SEARCH_RESULT_CAP``
+    results and simply stops paginating, with ``incomplete_results`` false: a
+    clean, complete-looking response that is missing rows. A guard that trusted
+    the flag alone would publish a partial org-wide backlog as the whole one,
+    which is precisely the defect this module was rewritten to make impossible.
+
+    Comparing what came back against the ``total_count`` GitHub itself reports
+    catches both modes with one check — the same "denominator over the same
+    scope" discipline #925 applies to ``open_prs_total``.
+
+    Only a **shortfall** aborts. Retrieving more than ``total_count`` means an
+    item was added mid-pagination, which costs nothing; the reverse (an item
+    closed mid-pagination) is a narrow race that a re-run clears, and the
+    message says so rather than sending an operator hunting a cap that is not
+    the cause."""
+    if total_count is None:
+        raise SystemExit(
+            f"error: the search response for {query!r} carried no total_count, so the "
+            "result set cannot be confirmed complete. Refusing to publish a backlog whose "
+            "completeness is unknown."
+        )
+    if len(items) >= total_count:
+        return
+    if total_count > SEARCH_RESULT_CAP:
+        raise SystemExit(
+            f"error: {query!r} matches {total_count} items, past the Search API's "
+            f"{SEARCH_RESULT_CAP}-result cap; only {len(items)} could be retrieved. One "
+            "query can no longer cover the org at this size — split the sweep (e.g. "
+            "per-repo) rather than publishing a partial backlog."
+        )
+    raise SystemExit(
+        f"error: retrieved {len(items)} of {total_count} results for {query!r}. The "
+        "backlog would be published as complete while missing rows. If the set changed "
+        "mid-pagination, a re-run clears this."
+    )
 
 
 def collect_backlog(items):

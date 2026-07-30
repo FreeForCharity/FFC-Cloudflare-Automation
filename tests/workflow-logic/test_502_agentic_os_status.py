@@ -490,6 +490,58 @@ def main():
     else:
         raise AssertionError("an unexpected search response shape must abort")
 
+    # --- the OTHER truncation mode: the 1,000-result cap ---
+    # The Search API stops paginating at SEARCH_RESULT_CAP and does NOT set
+    # incomplete_results, so the flag alone lets a clean-looking but partial
+    # response through. Only a total_count comparison catches it.
+    def _short(total, got, link=None):
+        def fake(path_or_url, token, params=None, soft_fail=False):
+            return (
+                {"total_count": total, "incomplete_results": False,
+                 "items": [_in(HUB, {"number": i}) for i in range(got)]},
+                link,
+            )
+
+        return fake
+
+    m._request = _short(1500, 3)
+    try:
+        m.search_agentic_items(ORG, "tok")
+    except SystemExit as exc:
+        check(str(m.SEARCH_RESULT_CAP) in str(exc) and "1500" in str(exc),
+              f"a capped search must name the cap and the true total, got: {exc}")
+    else:
+        raise AssertionError("the 1,000-result cap must abort — incomplete_results stays false")
+
+    # A shortfall below the cap is a different cause and gets a different remedy.
+    m._request = _short(9, 3)
+    try:
+        m.search_agentic_items(ORG, "tok")
+    except SystemExit as exc:
+        check("3 of 9" in str(exc), f"a short read must name both counts, got: {exc}")
+        check(str(m.SEARCH_RESULT_CAP) not in str(exc),
+              "a sub-cap shortfall must not blame the cap — that sends operators the wrong way")
+    else:
+        raise AssertionError("retrieving fewer results than total_count must abort")
+
+    # No total_count at all: completeness is unknown, which is not the same as
+    # complete. Refuse rather than assume.
+    def _no_total(path_or_url, token, params=None, soft_fail=False):
+        return {"incomplete_results": False, "items": []}, None
+
+    m._request = _no_total
+    try:
+        m.search_agentic_items(ORG, "tok")
+    except SystemExit as exc:
+        check("total_count" in str(exc), f"abort must name the missing field, got: {exc}")
+    else:
+        raise AssertionError("a response with no total_count must abort")
+
+    # ...but an OVER-read is harmless: an item added mid-pagination costs
+    # nothing, and aborting on it would make the daily feed flaky for no gain.
+    m._request = _short(2, 3)
+    check(len(m.search_agentic_items(ORG, "tok")) == 3, "an over-read must not abort")
+
     print("test_502_agentic_os_status: all assertions passed")
     return 0
 

@@ -84,15 +84,20 @@ The scaffolding is complete but inert until these exist:
    `wr-all-*` hold identical values, matching WHMCS):
    - `read-all-ffc-candid-charity-check-key` (+ `wr-all-…` copy)
    - `read-all-ffc-candid-essentials-key` (+ `wr-all-…` copy)
-3. **GitHub environment `candid-prod-read`** with the two Azure OIDC identifier secrets already used
-   by `google-prod-read`: `READ_ALL_FFC_AZURE_KV_CLIENT_ID`, `READ_ALL_FFC_AZURE_TENANT_ID`. No
-   reviewer gate needed (read-only API, key has no write power).
+3. **GitHub environment `candid-prod-read`**, no reviewer gate (read-only API, key has no write
+   power). **Nothing else belongs in it** — since #912 both workflows read the OIDC identifiers from
+   the repo Variables (`vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID` /
+   `vars.READ_ALL_FFC_AZURE_TENANT_ID`), which resolve in every environment. Do **not** add
+   environment secrets by those names; `scripts/check-env-secret-references.py` fails CI on a
+   `secrets.*` reference here, because the earlier revision of these workflows used that form
+   against an environment holding nothing and could only ever fail its own preflight.
 4. **Federated credential** on the KV-reader identity (`ffc-admin-kv-reader`): subject
-   `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:candid-prod-read`.
+   `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:candid-prod-read` — the exact command
+   is in `docs/azure-oidc-federated-credentials.md`. Confirmed **not created** as of 2026-07-30.
 
-Until then, a dispatch fails fast at the "Validate required Azure secrets" step (missing env
-secrets) or in `candid-keys-from-kv` (missing KV secret / placeholder value) with an actionable
-message.
+Until then, a dispatch fails in `azure/login` with `AADSTS700213` (no federated credential for the
+environment) or, once that exists, in `candid-keys-from-kv` (missing KV secret / placeholder value)
+with an actionable message.
 
 ## How this ties into existing FFC flows
 

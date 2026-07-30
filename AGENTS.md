@@ -66,6 +66,16 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
 - **Copilot re-reviews every push and can file fresh threads.** After pushing fixes, re-poll
   `reviewThreads` before promoting or queueing — one resolution pass is not enough (a 2026-07-20 PR
   needed three rounds).
+- **Reviewing a guard: reintroduce the defect it claims to catch.** Reading the workflow proves a
+  new check is _wired_ (present in the `validate` job, no `continue-on-error`); it proves nothing
+  about whether it _detects_. Put the original defect back and watch the guard fail. Do it in a
+  throwaway worktree so the author's branch is never mutated:
+  `git worktree add /tmp/wt --detach origin/<branch>`, break the thing, run the checker, expect a
+  non-zero exit naming the real call site. On #933 (the #930 command-resolution guard) deleting
+  `Remove-Html` from `scripts/whmcs-api-common.ps1` reproduced the exact #929 finding at
+  `scripts/whmcs-application-search.ps1:128`. Also probe the fail-closed claims the same way — a
+  corrupt input file and a missing tool should each exit 1, not skip. A guard that cannot be shown
+  to fail is decoration.
 - **Supersession check before ready+queue.** Before promoting a PR, grep `main` for the
   function/capability names the PR adds — a same-purpose implementation may have landed on `main`
   after the PR branched (on 2026-07-20, #772's basePath probe duplicated `basePathMismatch` merged

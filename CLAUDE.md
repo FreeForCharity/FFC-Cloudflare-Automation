@@ -296,7 +296,10 @@ export AZURE_CONFIG_DIR="$PWD/azconfig"
   `api.candid.org`).
 - **Provisioning status:** scaffolding is inert until the one-time setup in
   `docs/candid-api-and-mcp.md` is done (Candid developer keys → KV secrets
-  `read-all-ffc-candid-{charity-check,essentials}-key`, environment `candid-prod-read` with the
-  `READ_ALL_FFC_AZURE_*` secrets, federated credential for `ffc-admin-kv-reader`).
+  `read-all-ffc-candid-{charity-check,essentials}-key`, an ungated `candid-prod-read` environment,
+  and a federated credential for `ffc-admin-kv-reader`). **The environment needs no secrets** —
+  since #912 both workflows read the OIDC identifiers from the repo Variables
+  (`vars.READ_ALL_FFC_AZURE_*`), and `scripts/check-env-secret-references.py` fails CI if a workflow
+  goes back to the `secrets.*` form against an environment that does not carry copies.
 - **No write API:** the annual Candid Platinum profile update stays a manual web form — the
   paste-sheet automation is issue #493.

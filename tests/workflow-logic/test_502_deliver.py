@@ -45,7 +45,7 @@ GA_FILES = ("freeforcharity.org.json", "ffcadmin.org.json")
 
 
 def _git(cwd: pathlib.Path, *args: str, env: dict | None = None) -> None:
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True, env=env)
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True, encoding="utf-8", env=env)
 
 
 def _write(path: pathlib.Path, text: str) -> None:
@@ -166,7 +166,7 @@ def run_deliver(*, sync_branch: bool, sync_matches_source: bool, gh_env: dict | 
         cwd=work,
         env=env,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=120,
     )
     return proc, gh_log.read_text(encoding="utf-8"), origin, td_ctx
@@ -176,7 +176,7 @@ def _origin_head(origin: pathlib.Path, branch: str) -> str | None:
     r = subprocess.run(
         ["git", "--git-dir", str(origin), "rev-parse", "--verify", "-q", f"refs/heads/{branch}"],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         # Same hermeticity as _build_origin: no harness dir on PATH, and the
         # config pins point at a path that does not exist so no ambient git
         # config can reach this read.

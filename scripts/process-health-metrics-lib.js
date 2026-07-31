@@ -114,6 +114,14 @@ function computeMetrics(input) {
     agenticOs: {
       open: Number(input.agenticOpen || 0),
       closed: Number(input.agenticClosedRecent || 0),
+      // The band the Conductor routine actually means (#922). `open` counts the
+      // whole `agentic-os` topic label — epics, machine-managed rolling issues,
+      // human-blocked items and durable findings included — so it can never sit
+      // in "5-15 issues a sandboxed agent can execute", and eight consecutive
+      // runs of trimming failed to move it. `ready` counts `agent-ready`, which
+      // is that sentence's actual population. Both are reported: `open` is still
+      // the honest size of the programme, `ready` is the one to steer by.
+      ready: Number(input.readyOpen || 0),
     },
     readyWaiting: buildReadyWaiting(input.readyWaiting, nowIso),
     dataPipeline: {
@@ -288,6 +296,9 @@ function renderReport(metrics, prev, opts) {
     `| Mean open-claim age (d) | ${fmt(cl.meanAgeDays)} | ${delta(cl.meanAgeDays, pcl.meanAgeDays, 1)} |`,
   );
   lines.push(`| Open agentic-os backlog | ${fmt(ao.open)} | ${delta(ao.open, pao.open)} |`);
+  lines.push(
+    `| **Ready queue (agent-ready, band 5-15)** | ${fmt(ao.ready)} | ${delta(ao.ready, pao.ready)} |`,
+  );
   lines.push(
     `| **PRs ready but unlanded** | ${fmt(rw.count)}${rw.oldest ? ` (oldest ${rw.oldest.ageDays}d)` : ''} | ${delta(rw.count, prw.count)} |`,
   );

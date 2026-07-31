@@ -339,12 +339,25 @@ def _ago(**kwargs) -> str:
     return (NOW - datetime.timedelta(**kwargs)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _search_item(nwo: str, number: int, body: str) -> dict:
+def _search_item(nwo: str, number: int, body: str, author: str = "clarkemoyer") -> dict:
     return {
         "number": number,
         "body": body,
         "repository_url": f"https://api.github.com/repos/{nwo}",
+        "author": author,
     }
+
+
+def _fleet_population(dependabot: int, other: int) -> list[dict]:
+    """An org PR population shaped like the live one that broke the sweep: mostly
+    dependabot, plus a handful of real PRs — one of which claims a hub issue."""
+    rows = [
+        _search_item(TEMPLATE, 1000 + i, "Bump some dep", author="app/dependabot")
+        for i in range(dependabot)
+    ]
+    rows.append(_search_item(TEMPLATE, 433, f"Refs {HUB}#934"))
+    rows += [_search_item(THIRD, 2000 + i, "unrelated") for i in range(other - 1)]
+    return rows
 
 
 def _claimed(number: int, updated_at: str) -> dict:
@@ -374,6 +387,18 @@ MUT_NO_REPO_KEY = (
     "      if (false) continue;",
 )
 
+# This one reverts the WORKFLOW's query rather than the lib, so it is applied to
+# the extracted script (see run_sweep's script_mutation) — the defect it restores
+# is the un-narrowed org search that the first live sweep ran into.
+MUT_UNNARROWED_QUERY = (
+    "...NON_CLAIMING_AUTHORS.map((a) => `-author:${a}`),",
+    "",
+)
+MUT_STRICT_HEADROOM = (
+    "if (total >= SEARCH_CAP_HEADROOM) {",
+    "if (total > SEARCH_CAP_HEADROOM) {",
+)
+
 
 def _workspace(td: pathlib.Path, mutation: tuple[str, str] | None) -> pathlib.Path:
     """A GITHUB_WORKSPACE whose claim-sync-lib.js is the shipped one, or a
@@ -401,8 +426,13 @@ def run_sweep(
     search_incomplete=False,
     search_total=None,
     mutation=None,
+    script_mutation=None,
 ) -> dict:
     script = step_github_script(WF_FILE, SWEEP_JOB, SWEEP_STEP)
+    if script_mutation is not None:
+        old, new = script_mutation
+        assert old in script, f"mutation anchor no longer present in the sweep script: {old!r}"
+        script = script.replace(old, new)
     context = {
         "repo": {"owner": "FreeForCharity", "repo": "FFC-Cloudflare-Automation"},
         "payload": {},
@@ -639,7 +669,87 @@ def test_sweep_spends_one_org_search_per_run_not_one_per_issue():
         issues={str(900 + i): _open_issue(900 + i) for i in range(1, 6)},
     )
     assert len(r["searchCalls"]) == 1, r["searchCalls"]
-    assert r["searchCalls"][0]["q"] == "org:FreeForCharity is:pr is:open", r["searchCalls"]
+    assert (
+        r["searchCalls"][0]["q"] == "org:FreeForCharity is:pr is:open -author:app/dependabot"
+    ), r["searchCalls"]
+
+
+# --- the query has to stay under the Search API's 1,000-result cap ----------
+
+
+def test_sweep_excludes_non_claiming_authors_from_the_org_search():
+    # The exclusion is the only thing keeping the population under the cap, so
+    # it is asserted on the query itself and not just on the outcome.
+    r = run_sweep(org_prs=[_search_item(TEMPLATE, 433, f"Refs {HUB}#934")], issues={})
+    assert "-author:app/dependabot" in r["searchCalls"][0]["q"], r["searchCalls"]
+
+
+def test_sweep_claims_across_a_fleet_sized_population():
+    # The live shape on 2026-07-31: 1,009 open org PRs, 849 of them dependabot's.
+    # Narrowed, the query matches 160 — a complete read, so the cross-repo claim
+    # actually happens instead of being skipped.
+    r = run_sweep(
+        org_prs=_fleet_population(dependabot=849, other=160),
+        issues={"934": _open_issue(934)},
+    )
+    assert _labeled(r) == [934], r["warnings"]
+    assert r["warnings"] == [], "a healthy, complete read must warn about nothing"
+    assert r["logs"], "the claim count is the acceptance signal, not the exit code"
+
+
+def test_sweep_warns_before_the_narrowed_query_reaches_the_cap():
+    # Still complete, still claiming — but the next growth step disables the pass
+    # entirely, and that has to be visible before it happens rather than after.
+    r = run_sweep(
+        org_prs=_fleet_population(dependabot=0, other=850),
+        issues={"934": _open_issue(934)},
+    )
+    assert _labeled(r) == [934], r
+    assert any("of the 1000-result cap" in w for w in r["warnings"]), r["warnings"]
+    assert not any("unusable" in w for w in r["warnings"]), r["warnings"]
+
+
+def test_sweep_warns_at_exactly_the_headroom_boundary():
+    # Pin the boundary: "warn at 800" means 800 warns, not 801. An off-by-one
+    # here costs nothing today and one silent run when the fleet lands on it.
+    r = run_sweep(
+        org_prs=_fleet_population(dependabot=0, other=800),
+        issues={"934": _open_issue(934)},
+    )
+    assert any("at 800 of the 1000-result cap" in w for w in r["warnings"]), r["warnings"]
+    # ...and the boundary is load-bearing: a strict `>` goes quiet at exactly 800.
+    strict = run_sweep(
+        org_prs=_fleet_population(dependabot=0, other=800),
+        issues={"934": _open_issue(934)},
+        script_mutation=MUT_STRICT_HEADROOM,
+    )
+    assert strict["warnings"] == [], "the mutation must silence the boundary case"
+
+
+def test_sweep_pages_the_org_search_at_the_declared_page_size():
+    # The loop bound, the request and the last-page test all read one constant;
+    # a fixture larger than one page proves the pager actually walks pages
+    # rather than reading page 1 and calling it complete.
+    r = run_sweep(
+        org_prs=_fleet_population(dependabot=0, other=250),
+        issues={"934": _open_issue(934)},
+    )
+    assert [c["per_page"] for c in r["searchCalls"]] == [100, 100, 100], r["searchCalls"]
+    assert [c["page"] for c in r["searchCalls"]] == [1, 2, 3], r["searchCalls"]
+    assert _labeled(r) == [934], r
+
+
+def test_mutation_unnarrowed_query_is_truncated_and_claims_nothing():
+    # Reintroduce the defect (#935): drop the author exclusion and the same fleet
+    # population goes over the cap, the read comes back short, and the sweep
+    # degrades to the no-op that #941's first live run produced.
+    r = run_sweep(
+        org_prs=_fleet_population(dependabot=849, other=160),
+        issues={"934": _open_issue(934)},
+        script_mutation=MUT_UNNARROWED_QUERY,
+    )
+    assert _labeled(r) == [], "the mutation must break the claim, or it proves nothing"
+    assert any("truncated: 1000 of 1009" in w for w in r["warnings"]), r["warnings"]
 
 
 # --- the same cases with the fix reverted (#935) ---------------------------

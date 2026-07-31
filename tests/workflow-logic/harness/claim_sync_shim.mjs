@@ -1,7 +1,11 @@
-// Harness for unit-testing the 737 claim-sync **sweep** github-script outside a
-// runner. The sibling issues_api_shim.mjs drives rolling-issue alerters
-// (list/search/create/close); this one drives the label-reconciliation surface
-// the sweep actually touches, which that shim does not model:
+// Harness for unit-testing the 737 claim-sync github-script steps outside a
+// runner — BOTH the daily **sweep** and the event-driven **label-sync** step,
+// which share this API surface (label-sync additionally reads the PR's own
+// comments via issues.listComments and writes its claim notice with
+// issues.createComment, both already modelled here). The sibling
+// issues_api_shim.mjs drives rolling-issue alerters (list/search/create/close);
+// this one drives the label-reconciliation surface those steps touch, which
+// that shim does not model:
 //   - github.rest.pulls.list                    (hub open PRs, paged)
 //   - github.rest.search.issuesAndPullRequests  (org-wide open PRs, paged, with
 //     total_count so a truncated read is expressible)
@@ -19,12 +23,17 @@
 //
 // Inputs (env):
 //   TEST_SCRIPT_FILE        path to the extracted github-script body
-//   TEST_CONTEXT_FILE       JSON: { repo:{owner,repo}, payload:{...} }
+//   TEST_CONTEXT_FILE       JSON: { repo:{owner,repo}, payload:{...} } — for
+//                           label-sync, payload.pull_request is the PR under test
+//   PR_ACTION               label-sync only: the pull_request event action
 //   GITHUB_WORKSPACE        tree whose scripts/claim-sync-lib.js is required
-//   TEST_HUB_PRS_FILE       JSON array of hub PRs [{number, body}]
+//   TEST_HUB_PRS_FILE       JSON array of hub PRs
+//                           [{number, body, draft?, created_at?}]
 //   TEST_ORG_PRS_FILE       JSON array of org-wide search items
-//                           [{number, body, repository_url|html_url, author?}]
-//                           `author` is matched by `-author:` terms in the query
+//                           [{number, body, repository_url|html_url, author?,
+//                             draft?, created_at?}]
+//                           `author` is matched by `-author:` terms in the query;
+//                           `draft`/`created_at` feed the stale-draft report
 //   TEST_SEARCH_TOTAL       override total_count to model the 1,000-result cap
 //                           (a complete-LOOKING response that is missing rows).
 //                           Without it, total_count is the number of rows that
@@ -32,6 +41,9 @@
 //                           the cap reproduced from the fixture population.
 //   TEST_SEARCH_INCOMPLETE  "1" -> incomplete_results on the first page
 //   TEST_SEARCH_THROWS      "1" -> the search mock rejects
+//   TEST_LIST_COMMENTS_THROWS "1" -> the listComments mock rejects. label-sync
+//                           must then skip its claim notice rather than risk a
+//                           duplicate: "already announced?" is unanswerable.
 //   TEST_CLAIMED_ISSUES_FILE JSON array of open `claimed` issues
 //                           [{number, updated_at, labels, pull_request?}]
 //   TEST_ISSUES_FILE        JSON map issue number -> issue object served by
@@ -185,6 +197,9 @@ const github = {
       },
       listComments: async (args) => {
         listCommentsCalls.push({ issue_number: args.issue_number, page: args.page });
+        if (process.env.TEST_LIST_COMMENTS_THROWS === '1') {
+          throw new Error('simulated listComments failure');
+        }
         return { data: page(commentsById[String(args.issue_number)] || [], args) };
       },
       addLabels: async (args) => {

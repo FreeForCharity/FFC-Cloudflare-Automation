@@ -24,6 +24,23 @@ already rewriting (#939). These lock down the repo-keyed reconciliation:
     and never releases a live claim on that silence;
   - the org search costs one call per sweep, never one per issue.
 
+The third half drives the **label-sync** step the same way, for the feedback
+loop #948 added. `Refs #N` is both the claiming form and how people write a
+citation, and 737 cannot tell them apart — it comments on the ISSUE, which the
+PR author has no reason to be watching, so a citation written as a claim removes
+a live backlog pickup with nobody aware it happened (#945, hidden six hours
+behind a docs draft). These pin the notice that closes the loop:
+
+  - a PR that claims something gets exactly one comment naming every issue it
+    claimed, with the cite-with-a-link escape hatch;
+  - a PR that claims nothing, or whose issues were already claimed, gets none;
+  - the notice never repeats, and idempotency is keyed per ISSUE so a PR that
+    later claims a second issue is still told about that one;
+  - unreadable PR comments skip the notice rather than risk a duplicate;
+  - and the sweep REPORTS, never releases, claims whose only claimant is a draft
+    PR older than 48h — a draft is not active work, but it suppresses a pickup
+    exactly as hard as a ready PR.
+
 Per #935 each new guard is also proved by reintroducing the defect it catches:
 the mutation tests copy the lib into a temp workspace with the fix reverted and
 assert the corresponding case flips.
@@ -53,12 +70,19 @@ TEMPLATE = "FreeForCharity/FFC-IN-FFC_Single_Page_Template"
 THIRD = "FreeForCharity/FFC-EX-canary"
 
 
+# encoding="utf-8" is required, not cosmetic. `text=True` alone decodes with the
+# platform's ANSI codepage, which on Windows is cp1252 — and every payload here
+# now carries emoji (🔒 in the claim notice, ⏳ in the draft report), so the
+# decode raises UnicodeDecodeError and the whole module crashes rather than
+# failing a test. Same class as the cp1252 decode tracked in #945, and the
+# Conductor runs on exactly that host.
 def _node(expr_body: str, *argv: str) -> object:
     code = f"const l=require({json.dumps(str(LIB))});{expr_body}"
     proc = subprocess.run(
         [NODE, "-e", code, *argv],
         capture_output=True,
-        text=True, encoding="utf-8",
+        text=True,
+        encoding="utf-8",
         timeout=60,
     )
     if proc.returncode != 0:
@@ -194,6 +218,27 @@ def test_workflow_requires_lib_and_has_both_triggers():
     assert "label-sync" in jobs and "sweep" in jobs, list(jobs)
 
 
+def test_label_sync_can_write_to_the_pull_request_it_comments_on():
+    """The claim notice is a comment on a PULL REQUEST.
+
+    It is posted through the issues endpoint, but GitHub scopes that call by the
+    target's real type: with `pull-requests: read` the POST returns 403
+    "Resource not accessible by integration" and answers
+    `x-accepted-github-permissions: issues=write; pull_requests=write`. Measured
+    live on run 30631950400, where the labels applied and the job then died on
+    the comment — i.e. the notice shipped in a job that could not post it.
+
+    A permission is not exercised by any unit test, so this is the only place
+    the requirement can be pinned.
+    """
+    perms = load_workflow(WF_FILE)["jobs"]["label-sync"]["permissions"]
+    assert perms.get("issues") == "write", perms
+    assert perms.get("pull-requests") == "write", (
+        "label-sync comments on a PR, which needs pull-requests: write; "
+        f"`read` 403s at the createComment call (got {perms.get('pull-requests')!r})"
+    )
+
+
 def test_sweep_uses_ambient_token_hub_only():
     # CBM_TOKEN lives only in the gated github-prod environment, so it is empty
     # on schedule events — the sweep must run on the ambient GITHUB_TOKEN and
@@ -269,6 +314,20 @@ def test_scoped_call_with_an_unparseable_target_matches_nothing():
     assert extract_scoped("Closes #12", {"sourceRepo": HUB, "targetRepo": "not-a-repo"})["all"] == []
 
 
+def test_a_citation_written_as_a_link_claims_nothing():
+    # The escape hatch AGENTS.md § "Work claiming" now documents (#948): cite
+    # with a URL or an unkeyworded `repo#N`, claim with `Refs`/`Closes`. Advice
+    # that the extractor does not actually honour would be a trap, and a guard's
+    # prose is exactly where its own premise goes to get contradicted (#912).
+    for body in (
+        f"Background: https://github.com/{HUB}/issues/945 explains why.",
+        f"Refs https://github.com/{HUB}/issues/945",
+        f"The enforceable half lives in {HUB}#945.",
+        "See #945 for the measurement.",
+    ):
+        assert extract_scoped(body, HUB_SCOPE)["all"] == [], body
+
+
 def test_no_false_match_on_a_path_like_reference():
     # A path in prose resolves to a "repo" nothing matches, rather than being
     # read as a bare reference to the hub.
@@ -329,6 +388,8 @@ def test_hand_claim_still_gets_the_full_window():
 
 SWEEP_JOB = "sweep"
 SWEEP_STEP = "Sync cross-repo claims"
+LABEL_SYNC_JOB = "label-sync"
+LABEL_SYNC_STEP = "Sync claimed label from linked PR"
 
 NOW = datetime.datetime(2026, 7, 30, 12, 0, 0, tzinfo=datetime.timezone.utc)
 NOW_MS = int(NOW.timestamp() * 1000)
@@ -339,13 +400,25 @@ def _ago(**kwargs) -> str:
     return (NOW - datetime.timedelta(**kwargs)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _search_item(nwo: str, number: int, body: str, author: str = "clarkemoyer") -> dict:
+def _search_item(nwo: str, number: int, body: str, author: str = "clarkemoyer", **extra) -> dict:
+    # `draft`/`created_at` are optional: most fixtures do not care, and their
+    # ABSENCE is itself under test (an unknown draft flag must not be reported
+    # as a stale draft claim).
     return {
         "number": number,
         "body": body,
         "repository_url": f"https://api.github.com/repos/{nwo}",
         "author": author,
+        **extra,
     }
+
+
+def _draft(nwo: str, number: int, body: str, **age) -> dict:
+    return _search_item(nwo, number, body, draft=True, created_at=_ago(**age))
+
+
+def _ready(nwo: str, number: int, body: str, **age) -> dict:
+    return _search_item(nwo, number, body, draft=False, created_at=_ago(**age))
 
 
 def _fleet_population(dependabot: int, other: int) -> list[dict]:
@@ -399,6 +472,30 @@ MUT_STRICT_HEADROOM = (
     "if (total > SEARCH_CAP_HEADROOM) {",
 )
 
+# #948 Part A: drop the PR-side notice entirely (the pre-fix state).
+MUT_NO_PR_NOTICE = ("if (fresh.length) {", "if (false) {")
+# #948 Part A: keep the notice but blind it to what it has already said, which
+# is the difference between "tell the author once" and "tell them every sync".
+MUT_NOTICE_BLIND = ("  for (const c of comments || []) {", "  for (const c of []) {")
+# #951 review: read only the FIRST page of an oldest-first comment list, the
+# prefix mistake the backwards walk exists to avoid.
+MUT_FIRST_PAGE_ONLY = (
+    "for (let p = last, reads = 0; p > 1 && reads < backPages; p--, reads++) {",
+    "for (let p = last, reads = 0; false; p--, reads++) {",
+)
+# #948 Part B: report a claim held by ANY draft, however fresh — a draft opened
+# an hour ago is a PR being written, not a stuck claim.
+MUT_DRAFT_IGNORES_AGE = (
+    "    if (!Number.isFinite(age) || age < thresholdMs) return null;",
+    "    if (!Number.isFinite(age)) return null;",
+)
+# #948 Part B: report a claim held by a READY PR — i.e. flag work that is in
+# review, which is the report crying wolf on healthy activity.
+MUT_DRAFT_IGNORES_READY = (
+    "    if (!r || r.draft !== true) return null;",
+    "    if (!r) return null;",
+)
+
 
 def _workspace(td: pathlib.Path, mutation: tuple[str, str] | None) -> pathlib.Path:
     """A GITHUB_WORKSPACE whose claim-sync-lib.js is the shipped one, or a
@@ -412,6 +509,66 @@ def _workspace(td: pathlib.Path, mutation: tuple[str, str] | None) -> pathlib.Pa
     (ws / "scripts").mkdir(parents=True)
     (ws / "scripts" / "claim-sync-lib.js").write_text(src.replace(old, new), encoding="utf-8")
     return ws
+
+
+def _invoke(
+    script: str,
+    context: dict,
+    *,
+    hub_prs=None,
+    org_prs=None,
+    claimed_issues=None,
+    issues=None,
+    comments=None,
+    mutation=None,
+    env_extra=None,
+) -> dict:
+    """Run one extracted github-script step against the shim."""
+    with tempfile.TemporaryDirectory() as td:
+        tdp = pathlib.Path(td)
+        files = {
+            "TEST_SCRIPT_FILE": ("script.js", script),
+            "TEST_CONTEXT_FILE": ("context.json", json.dumps(context)),
+            "TEST_HUB_PRS_FILE": ("hub_prs.json", json.dumps(hub_prs or [])),
+            "TEST_ORG_PRS_FILE": ("org_prs.json", json.dumps(org_prs or [])),
+            "TEST_CLAIMED_ISSUES_FILE": ("claimed.json", json.dumps(claimed_issues or [])),
+            "TEST_ISSUES_FILE": ("issues.json", json.dumps(issues or {})),
+            "TEST_COMMENTS_FILE": ("comments.json", json.dumps(comments or {})),
+        }
+        env = child_env(
+            pathlib.Path(NODE).parent,
+            TEST_NOW_MS=str(NOW_MS),
+            GITHUB_WORKSPACE=str(_workspace(tdp, mutation)),
+        )
+        env.update(env_extra or {})
+        for var, (name, content) in files.items():
+            (tdp / name).write_text(content, encoding="utf-8")
+            env[var] = str(tdp / name)
+        proc = subprocess.run(
+            [NODE, str(SHIM)],
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",  # see _node: the shim's JSON carries 🔒/⏳
+            timeout=120,
+        )
+    if proc.returncode != 0:
+        raise AssertionError(f"harness crashed: {proc.stderr[-2000:]}")
+    result = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert not result["threw"], result["threw"]
+    assert not result["failed"], result["failed"]
+    return result
+
+
+def _mutate(script: str, script_mutation, what: str) -> str:
+    if script_mutation is None:
+        return script
+    old, new = script_mutation
+    assert old in script, f"mutation anchor no longer present in the {what} script: {old!r}"
+    return script.replace(old, new)
+
+
+HUB_CONTEXT = {"owner": "FreeForCharity", "repo": "FFC-Cloudflare-Automation"}
 
 
 def run_sweep(
@@ -428,54 +585,58 @@ def run_sweep(
     mutation=None,
     script_mutation=None,
 ) -> dict:
-    script = step_github_script(WF_FILE, SWEEP_JOB, SWEEP_STEP)
-    if script_mutation is not None:
-        old, new = script_mutation
-        assert old in script, f"mutation anchor no longer present in the sweep script: {old!r}"
-        script = script.replace(old, new)
-    context = {
-        "repo": {"owner": "FreeForCharity", "repo": "FFC-Cloudflare-Automation"},
-        "payload": {},
-    }
-    with tempfile.TemporaryDirectory() as td:
-        tdp = pathlib.Path(td)
-        files = {
-            "TEST_SCRIPT_FILE": ("script.js", script),
-            "TEST_CONTEXT_FILE": ("context.json", json.dumps(context)),
-            "TEST_HUB_PRS_FILE": ("hub_prs.json", json.dumps(hub_prs or [])),
-            "TEST_ORG_PRS_FILE": ("org_prs.json", json.dumps(org_prs or [])),
-            "TEST_CLAIMED_ISSUES_FILE": ("claimed.json", json.dumps(claimed_issues or [])),
-            "TEST_ISSUES_FILE": ("issues.json", json.dumps(issues or {})),
-            "TEST_COMMENTS_FILE": ("comments.json", json.dumps(comments or {})),
-        }
-        env = child_env(
-            pathlib.Path(NODE).parent,
-            TEST_NOW_MS=str(NOW_MS),
-            GITHUB_WORKSPACE=str(_workspace(tdp, mutation)),
-            DRY_RUN="true" if dry_run else "false",
-        )
-        for var, (name, content) in files.items():
-            (tdp / name).write_text(content, encoding="utf-8")
-            env[var] = str(tdp / name)
-        if search_throws:
-            env["TEST_SEARCH_THROWS"] = "1"
-        if search_incomplete:
-            env["TEST_SEARCH_INCOMPLETE"] = "1"
-        if search_total is not None:
-            env["TEST_SEARCH_TOTAL"] = str(search_total)
-        proc = subprocess.run(
-            [NODE, str(SHIM)],
-            env=env,
-            capture_output=True,
-            text=True, encoding="utf-8",
-            timeout=120,
-        )
-    if proc.returncode != 0:
-        raise AssertionError(f"harness crashed: {proc.stderr[-2000:]}")
-    result = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert not result["threw"], result["threw"]
-    assert not result["failed"], result["failed"]
-    return result
+    env_extra = {"DRY_RUN": "true" if dry_run else "false"}
+    if search_throws:
+        env_extra["TEST_SEARCH_THROWS"] = "1"
+    if search_incomplete:
+        env_extra["TEST_SEARCH_INCOMPLETE"] = "1"
+    if search_total is not None:
+        env_extra["TEST_SEARCH_TOTAL"] = str(search_total)
+    return _invoke(
+        _mutate(step_github_script(WF_FILE, SWEEP_JOB, SWEEP_STEP), script_mutation, "sweep"),
+        {"repo": HUB_CONTEXT, "payload": {}},
+        hub_prs=hub_prs,
+        org_prs=org_prs,
+        claimed_issues=claimed_issues,
+        issues=issues,
+        comments=comments,
+        mutation=mutation,
+        env_extra=env_extra,
+    )
+
+
+def run_label_sync(
+    *,
+    pr,
+    action="opened",
+    issues=None,
+    comments=None,
+    hub_prs=None,
+    list_comments_throws=False,
+    mutation=None,
+    script_mutation=None,
+) -> dict:
+    """Drive the event-driven label-sync step for one pull_request event.
+
+    `comments` is keyed by number as usual — for this step the PR's own number
+    is the interesting key, since a PR's comments live on the issues endpoint.
+    """
+    env_extra = {"PR_ACTION": action}
+    if list_comments_throws:
+        env_extra["TEST_LIST_COMMENTS_THROWS"] = "1"
+    return _invoke(
+        _mutate(
+            step_github_script(WF_FILE, LABEL_SYNC_JOB, LABEL_SYNC_STEP),
+            script_mutation,
+            "label-sync",
+        ),
+        {"repo": HUB_CONTEXT, "payload": {"pull_request": pr}},
+        hub_prs=hub_prs,
+        issues=issues,
+        comments=comments,
+        mutation=mutation,
+        env_extra=env_extra,
+    )
 
 
 def _labeled(result: dict) -> list[int]:
@@ -776,6 +937,336 @@ def test_mutation_dropping_the_repo_comparison_claims_foreign_issues():
             mutation=MUT_NO_REPO_KEY,
         )
         assert _labeled(r) == [934], f"mutation must break the repo keying for {body!r}"
+
+
+# --- Part A: the PR-side claim notice (#948) -------------------------------
+#
+# `Refs #N` is both the claiming form and how people write a citation, and 737
+# cannot tell them apart. It comments on the ISSUE, which the PR author is not
+# watching — so a citation written as a claim hides a backlog pickup with nobody
+# aware it happened. #945 was invisible for six hours behind a docs draft.
+
+PR_NOTICE_MARKER = _node("process.stdout.write(JSON.stringify(l.PR_NOTICE_MARKER));")
+NOTICE_945 = _node("process.stdout.write(JSON.stringify(l.prNoticeComment([945])));")
+
+
+def _pr(number: int, body: str, **kw) -> dict:
+    return {"number": number, "body": body, **kw}
+
+
+def _notices(result: dict, pr_number: int) -> list[str]:
+    return [c["body"] for c in result["comments"] if c["issue_number"] == pr_number]
+
+
+def test_label_sync_tells_the_pr_what_it_just_claimed():
+    # Criterion 1: exactly one comment, naming every issue claimed, carrying the
+    # escape hatch.
+    r = run_label_sync(
+        pr=_pr(946, f"Refs #945\n\nAlso Closes {HUB}#900"),
+        issues={"945": _open_issue(945), "900": _open_issue(900)},
+    )
+    assert sorted(_labeled(r)) == [900, 945], r
+    notices = _notices(r, 946)
+    assert len(notices) == 1, r["comments"]
+    body = notices[0]
+    assert "#945" in body and "#900" in body, body
+    assert "instead of `Refs`/`Closes`" in body, body
+    assert PR_NOTICE_MARKER in body, body
+
+
+def test_label_sync_posts_nothing_when_the_pr_claims_nothing():
+    # Criterion 3.
+    r = run_label_sync(pr=_pr(946, "Fixes a typo. See the discussion in the ledger."))
+    assert _labeled(r) == [] and r["comments"] == [], r
+
+
+def test_label_sync_posts_nothing_when_the_issue_was_already_claimed():
+    # This PR did not remove anything from the pickup query, so telling its
+    # author it did would be false.
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945"),
+        issues={"945": _open_issue(945, labels=["claimed"])},
+    )
+    assert _labeled(r) == [] and r["comments"] == [], r
+
+
+def test_label_sync_does_not_repeat_a_notice_it_already_posted():
+    # Criterion 2. The realistic re-entry: someone removed the label by hand, so
+    # the claim is re-applied on the next event — but the author has been told.
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945"),
+        action="edited",
+        issues={"945": _open_issue(945)},
+        comments={"946": [{"body": NOTICE_945}]},
+    )
+    assert _labeled(r) == [945], "the label itself is still restored"
+    assert r["comments"] == [], "but the notice is not repeated"
+
+
+def test_label_sync_announces_a_newly_added_claim_on_an_already_noticed_pr():
+    # Idempotency is per ISSUE, not per comment: a PR that later claims a second
+    # issue must still be told about that one.
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945\nCloses #900"),
+        action="edited",
+        issues={"945": _open_issue(945, labels=["claimed"]), "900": _open_issue(900)},
+        comments={"946": [{"body": NOTICE_945}]},
+    )
+    assert _labeled(r) == [900], r
+    body = _notices(r, 946)[0]
+    assert "#900" in body, body
+    assert "945" not in body, "the already-announced issue must not be repeated"
+
+
+def test_label_sync_skips_the_notice_when_the_pr_comments_cannot_be_read():
+    # "Have I already said this?" is unanswerable, and a duplicate on every
+    # future sync is worse than a missing convenience comment.
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945"),
+        issues={"945": _open_issue(945)},
+        list_comments_throws=True,
+    )
+    assert _labeled(r) == [945], "the claim itself must still happen"
+    assert r["comments"] == [], r["comments"]
+    assert any("skipping the claim notice" in w for w in r["warnings"]), r["warnings"]
+
+
+def test_label_sync_release_path_posts_no_pr_notice():
+    # The notice belongs to the claim path only; closing still comments on the
+    # ISSUE, exactly as before.
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945", merged=True),
+        action="closed",
+        issues={"945": _open_issue(945, labels=["claimed"])},
+    )
+    assert _released(r) == [945], r
+    assert [c["issue_number"] for c in r["comments"]] == [945], r["comments"]
+
+
+def _long_thread(total: int, marker_at: str) -> list[dict]:
+    """`total` comments on a PR, with the claim notice at one end.
+
+    `marker_at` is "start" or "end" — the two places a notice can be. The first
+    claim on a PR lands early in the thread; a claim added by a later edit lands
+    last. A bounded read from page 1 only ever covers the first.
+    """
+    filler = [{"body": f"routine comment {i}"} for i in range(total - 1)]
+    return [{"body": NOTICE_945}, *filler] if marker_at == "start" else [*filler, {"body": NOTICE_945}]
+
+
+def test_label_sync_finds_a_notice_at_the_end_of_a_long_thread():
+    # Copilot on #951: comments are served OLDEST-first, so pages 1..N read the
+    # START of the thread. A notice posted after 300 comments sat beyond that
+    # window and was re-announced on every later sync. Same prefix mistake
+    # AGENTS.md records for long issues.
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945"),
+        action="edited",
+        issues={"945": _open_issue(945)},
+        comments={"946": _long_thread(350, marker_at="end")},
+    )
+    assert _labeled(r) == [945], r
+    assert r["comments"] == [], "the notice is already at the end of the thread"
+    # Bounded: page 1, then backwards from the last page. Never the whole thread.
+    assert len(r["listCommentsCalls"]) <= 3, r["listCommentsCalls"]
+
+
+def test_label_sync_still_finds_a_notice_at_the_start_of_a_long_thread():
+    # The other direction, and why page 1 stays in the read: the FIRST claim on
+    # a PR is announced early, and a backwards-only walk would miss it.
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945"),
+        action="edited",
+        issues={"945": _open_issue(945)},
+        comments={"946": _long_thread(350, marker_at="start")},
+    )
+    assert r["comments"] == [], "a notice at the head of the thread still counts"
+
+
+def test_mutation_reading_only_the_first_page_re_announces_on_a_long_thread():
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945"),
+        action="edited",
+        issues={"945": _open_issue(945)},
+        comments={"946": _long_thread(350, marker_at="end")},
+        script_mutation=MUT_FIRST_PAGE_ONLY,
+    )
+    assert _notices(r, 946), "the mutation must reintroduce the duplicate notice"
+
+
+def test_mutation_dropping_the_notice_leaves_the_author_uninformed():
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945"),
+        issues={"945": _open_issue(945)},
+        script_mutation=MUT_NO_PR_NOTICE,
+    )
+    assert _labeled(r) == [945], r
+    assert r["comments"] == [], "the mutation must silence the notice, or it proves nothing"
+
+
+def test_mutation_blinding_the_marker_check_repeats_the_notice():
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945"),
+        action="edited",
+        issues={"945": _open_issue(945)},
+        comments={"946": [{"body": NOTICE_945}]},
+        mutation=MUT_NOTICE_BLIND,
+    )
+    assert _notices(r, 946), "the mutation must re-announce an issue already noticed"
+
+
+# --- Part B: claims held only by a stale draft (#948) ----------------------
+#
+# Report only. A draft is not active work, but it suppresses a pickup exactly as
+# hard as a ready PR — several of the drafts measured in #948 had held one for
+# four to six days.
+
+DRAFT_HEADING = "Claims held only by a draft PR older than 48h"
+
+
+def _summary(result: dict) -> str:
+    return "\n".join(result["summary"])
+
+
+def test_sweep_reports_a_claim_held_only_by_an_old_draft():
+    # Criterion 4: listed, with the age, and nothing released.
+    r = run_sweep(
+        org_prs=[_draft(TEMPLATE, 946, f"Refs {HUB}#945", days=4)],
+        claimed_issues=[_claimed(945, _ago(hours=1))],
+    )
+    assert _released(r) == [], "report only — a long-lived draft is sometimes real work"
+    assert r["comments"] == [], "and reporting must not comment on the issue"
+    s = _summary(r)
+    assert f"{DRAFT_HEADING} — 1" in s, s
+    assert f"#945 — held only by draft {TEMPLATE}#946, 4d 0h old" in s, s
+
+
+def test_sweep_reports_a_draft_claim_it_applied_in_the_same_run():
+    # An issue claimed by this very sweep is suppressed from the pickup query
+    # just as much as one that was already labeled.
+    r = run_sweep(
+        org_prs=[_draft(TEMPLATE, 946, f"Refs {HUB}#945", days=6)],
+        issues={"945": _open_issue(945)},
+    )
+    assert _labeled(r) == [945], r
+    assert "#945 — held only by draft" in _summary(r), _summary(r)
+
+
+def test_sweep_does_not_report_a_claim_held_by_a_ready_pr():
+    r = run_sweep(
+        org_prs=[_ready(TEMPLATE, 946, f"Refs {HUB}#945", days=4)],
+        claimed_issues=[_claimed(945, _ago(hours=1))],
+    )
+    assert f"{DRAFT_HEADING} — 0" in _summary(r), _summary(r)
+    assert "None. Every claim is held by a ready PR" in _summary(r), _summary(r)
+
+
+def test_sweep_does_not_report_a_young_draft():
+    r = run_sweep(
+        org_prs=[_draft(TEMPLATE, 946, f"Refs {HUB}#945", hours=5)],
+        claimed_issues=[_claimed(945, _ago(hours=1))],
+    )
+    assert f"{DRAFT_HEADING} — 0" in _summary(r), _summary(r)
+
+
+def test_sweep_does_not_report_an_issue_a_ready_pr_also_claims():
+    # "ONLY claimant" is the whole rule: one ready PR alongside the old draft
+    # means the work is in review.
+    r = run_sweep(
+        org_prs=[
+            _draft(TEMPLATE, 946, f"Refs {HUB}#945", days=4),
+            _ready(THIRD, 21, f"Closes {HUB}#945", days=4),
+        ],
+        claimed_issues=[_claimed(945, _ago(hours=1))],
+    )
+    assert f"{DRAFT_HEADING} — 0" in _summary(r), _summary(r)
+
+
+def test_sweep_does_not_report_a_pr_with_an_unknown_draft_flag():
+    # Every pre-existing fixture omits `draft`/`created_at`; unknown must read as
+    # "not reportable" rather than defaulting either way.
+    r = run_sweep(
+        org_prs=[_search_item(TEMPLATE, 946, f"Refs {HUB}#945")],
+        claimed_issues=[_claimed(945, _ago(hours=1))],
+    )
+    assert f"{DRAFT_HEADING} — 0" in _summary(r), _summary(r)
+
+
+def test_sweep_skips_the_draft_report_when_the_org_search_is_unusable():
+    # With the search down, `claimants` is hub PRs only — so "its ONLY claimant
+    # is a draft" is a statement about a PR set this run could not read.
+    r = run_sweep(
+        hub_prs=[
+            {"number": 946, "body": "Refs #945", "draft": True, "created_at": _ago(days=4)}
+        ],
+        claimed_issues=[_claimed(945, _ago(hours=1))],
+        search_throws=True,
+    )
+    assert "Not reported this run" in _summary(r), _summary(r)
+    assert _released(r) == [], r
+
+
+def test_mutation_reporting_any_draft_flags_a_pr_opened_this_morning():
+    r = run_sweep(
+        org_prs=[_draft(TEMPLATE, 946, f"Refs {HUB}#945", hours=5)],
+        claimed_issues=[_claimed(945, _ago(hours=1))],
+        mutation=MUT_DRAFT_IGNORES_AGE,
+    )
+    assert f"{DRAFT_HEADING} — 1" in _summary(r), _summary(r)
+
+
+def test_mutation_ignoring_the_draft_flag_flags_work_in_review():
+    r = run_sweep(
+        org_prs=[_ready(TEMPLATE, 946, f"Refs {HUB}#945", days=4)],
+        claimed_issues=[_claimed(945, _ago(hours=1))],
+        mutation=MUT_DRAFT_IGNORES_READY,
+    )
+    assert f"{DRAFT_HEADING} — 1" in _summary(r), _summary(r)
+
+
+# --- the pure helpers behind both halves -----------------------------------
+
+
+def test_notice_body_is_a_function_of_the_issue_set_not_its_order():
+    a = _node("process.stdout.write(JSON.stringify(l.prNoticeComment([900,945,900])));")
+    b = _node("process.stdout.write(JSON.stringify(l.prNoticeComment([945,900])));")
+    assert a == b, (a, b)
+    assert "#900, #945" in a, a
+
+
+def test_noticed_issues_reads_back_every_marker():
+    assert _node(
+        "const c=l.prNoticeComment([945,900]);"
+        "process.stdout.write(JSON.stringify(l.noticedIssues([{body:c}]).sort((x,y)=>x-y)));"
+    ) == [900, 945]
+    assert _node("process.stdout.write(JSON.stringify(l.noticedIssues(null)));") == []
+    assert _node(
+        "process.stdout.write(JSON.stringify("
+        "l.noticedIssues([{body:'🔒 This PR claimed #945'}])));"
+    ) == [], "prose naming an issue is not a marker"
+
+
+def test_format_age_rounds_to_whole_hours_and_days():
+    fmt = lambda ms: _node(  # noqa: E731
+        f"process.stdout.write(JSON.stringify(l.formatAge({ms})));"
+    )
+    assert fmt(5 * 60 * 60 * 1000 + 59 * 60 * 1000) == "5h"
+    assert fmt(4 * DAY) == "4d 0h"
+    assert fmt(4 * DAY + 6 * 60 * 60 * 1000) == "4d 6h"
+    assert _node("process.stdout.write(JSON.stringify(l.formatAge(NaN)));") == "unknown age"
+
+
+def test_draft_only_claim_needs_a_usable_clock_and_a_non_empty_ref_set():
+    call = lambda args: _node(  # noqa: E731
+        "process.stdout.write(JSON.stringify(l.draftOnlyClaim("
+        "JSON.parse(process.argv[1]).rows, JSON.parse(process.argv[1]).opts)));",
+        json.dumps(args),
+    )
+    old = {"ref": "o/r#1", "draft": True, "createdAtMs": 0}
+    assert call({"rows": [old], "opts": {"nowMs": 10 * DAY}})["refs"] == ["o/r#1"]
+    assert call({"rows": [], "opts": {"nowMs": 10 * DAY}}) is None
+    assert call({"rows": [old], "opts": {}}) is None, "no clock -> nothing to report"
+    assert call({"rows": [{"ref": "o/r#1", "draft": True}], "opts": {"nowMs": 10 * DAY}}) is None
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

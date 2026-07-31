@@ -29,7 +29,7 @@ def run_grant_step(repo_name: str) -> tuple[str, str]:
             ["pwsh", "-NoProfile", "-Command", script],
             env=child_env(HARNESS_DIR, TEST_GH_LOG=str(gh_log), HOME=td),
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=120,
         )
         if proc.returncode != 0:

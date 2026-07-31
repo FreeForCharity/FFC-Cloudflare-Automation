@@ -84,7 +84,7 @@ def run_preflight(env_overrides: dict) -> tuple[subprocess.CompletedProcess, str
             ["bash", "-c", script],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=60,
         )
         return proc, summary.read_text(encoding="utf-8"), gh_log.read_text(encoding="utf-8")

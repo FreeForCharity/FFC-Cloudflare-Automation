@@ -36,7 +36,7 @@ NOW = "2026-07-25T00:00:00Z"
 def _node(expr_body: str, *argv: str, expect_fail: bool = False):
     code = f"const l=require({json.dumps(str(LIB))});{expr_body}"
     proc = subprocess.run(
-        ["node", "-e", code, *argv], capture_output=True, text=True, timeout=60
+        ["node", "-e", code, *argv], capture_output=True, text=True, encoding="utf-8", timeout=60
     )
     if expect_fail:
         assert proc.returncode != 0, f"expected a throw, got: {proc.stdout}"

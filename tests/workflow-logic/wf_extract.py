@@ -49,7 +49,17 @@ def child_env(*prepend_path: str | pathlib.Path, **overrides: str) -> dict[str, 
     """
     env = dict(os.environ)
     if prepend_path:
-        env["PATH"] = os.pathsep.join([*(str(p) for p in prepend_path), env.get("PATH", "")])
+        parts = [str(p) for p in prepend_path]
+        # Append the inherited PATH only when it is non-empty. Joining an empty
+        # tail would leave a trailing separator, and an EMPTY PATH ENTRY means
+        # "the current directory" on both POSIX and Windows — which would let a
+        # binary sitting in the child's cwd shadow a real tool. These tests run
+        # with cwd set to the repo root or a temp fixture dir, so that is not a
+        # theoretical concern.
+        inherited = env.get("PATH", "")
+        if inherited:
+            parts.append(inherited)
+        env["PATH"] = os.pathsep.join(parts)
     env.update(overrides)
     return env
 

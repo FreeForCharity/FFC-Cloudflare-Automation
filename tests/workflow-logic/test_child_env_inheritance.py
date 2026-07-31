@@ -183,6 +183,29 @@ def test_child_env_without_a_prepend_leaves_path_untouched():
     assert child_env()["PATH"] == os.environ["PATH"]
 
 
+def test_child_env_never_emits_an_empty_path_entry():
+    """An empty PATH entry means "the current directory" on POSIX and Windows
+    alike, so a trailing separator is not cosmetic — it would let a binary in
+    the child's cwd shadow a real tool, and these tests run with cwd set to the
+    repo root or a fixture dir. Raised by review on #944.
+    """
+    saved = os.environ.get("PATH")
+    try:
+        os.environ["PATH"] = ""
+        env = child_env("/only")
+        assert env["PATH"] == "/only", env["PATH"]
+        assert "" not in env["PATH"].split(os.pathsep), env["PATH"]
+
+        del os.environ["PATH"]
+        env = child_env("/only")
+        assert env["PATH"] == "/only", env["PATH"]
+    finally:
+        if saved is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = saved
+
+
 def test_child_env_joins_with_os_pathsep_in_its_source():
     """Asserted statically because it CANNOT be asserted at runtime here.
 

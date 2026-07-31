@@ -98,13 +98,15 @@ def main():
     # 6. `gh api graphql --paginate` whose query does not declare $endCursor.
     #    gh substitutes the page cursor into a variable named EXACTLY $endCursor;
     #    with any other name the `after:` argument stays null, so every page is
-    #    page 1 and the loop runs until the result set is exhausted only by luck
-    #    or by the rate limiter. It fails SILENTLY and looks like success --
+    #    page 1 and the loop runs until the RATE LIMITER stops it -- there is no
+    #    other termination condition. It fails SILENTLY and looks like success:
     #    a large output of well-formed, entirely duplicate rows. A 2026-07-30
-    #    conductor run wrote 18,000 rows that deduplicated to exactly 100 (one
-    #    page) and spent ~400 points of the shared GraphQL budget doing it.
-    #    This is a broken command, not merely a wasteful one: it can never
-    #    return page 2. See AGENTS.md "GitHub API rate budget".
+    #    conductor run wrote 2,454,201 rows / 98 MB (24,542 re-fetches of page 1)
+    #    that deduplicated to 107, and drained the shared 5,000-point GraphQL
+    #    budget to ZERO over ~6.5 hours -- starving every other agent session on
+    #    the account until the hourly reset. This is a broken command, not merely
+    #    a wasteful one: it can never return page 2.
+    #    See AGENTS.md "GitHub API rate budget".
     if re.search(r"\bgh\s+api\b", low) and "graphql" in low and "--paginate" in low:
         if "$endcursor" not in low:
             block(

@@ -195,10 +195,18 @@ have exhausted the points budget for hours.
 - **`gh api graphql --paginate` only advances a variable named exactly `$endCursor`.** `gh`
   substitutes the next page cursor into that name and no other, so a query declaring `$cursor` (or
   anything else) keeps `after:` null and **re-fetches page 1 until the budget stops it**. It fails
-  silently and looks like success: a large file of well-formed, entirely duplicate rows. On
-  2026-07-30 this produced 18,000 rows that `sort -u` collapsed to exactly **100** — one page — and
-  cost ~400 GraphQL points. The tells are a line count that is a clean multiple of 100 and a
-  `sort -u` that collapses it; the fix is
+  silently and looks like success: a large file of well-formed, entirely duplicate rows. **The rate
+  limiter is the only thing that ends it.** On 2026-07-30 this ran for ~6.5 hours in a backgrounded
+  task, wrote **2,454,201 rows / 98 MB** — 24,542 re-fetches of page 1 — that `sort -u` collapsed to
+  **107**, and **drained the shared 5,000-point GraphQL budget to zero**, starving every other agent
+  session on the account until the hourly reset. (The 107-rather-than-100 is itself the proof: page
+  1's _contents_ drifted as board items were added during those hours, while the page index never
+  moved.) Two tells, and **the second one matters more**: a line count that is a clean multiple of
+  100 with a `sort -u` that collapses it — and, if you background the command, a `gh api rate_limit`
+  that keeps falling after you believe it finished. Do not conclude a backgrounded `gh` loop has
+  stopped from a process listing; the 2026-07-30 run checked `ps` and saw no `gh`, then sampled the
+  file at 18,000 rows and reported that figure — understating the real damage **136-fold**. The fix
+  is
   `query($endCursor:String){ … items(first:100, after:$endCursor){ pageInfo{hasNextPage endCursor} … } }`.
   `guard_bash.py` now blocks the wrong-name form outright, since such a command can never return
   page 2. Plain **REST** `--paginate` takes no variables and is unaffected.

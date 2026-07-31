@@ -55,6 +55,57 @@ _PATHISH = re.compile(r"`([^`]+)`")
 _PATH_SUFFIXES = (".md", ".py", ".yml", ".yaml", ".json", ".ps1", ".csv")
 
 
+def split_table_cells(line: str) -> list[str]:
+    r"""Split one Markdown table row on its real cell separators (#964).
+
+    A `|` separates cells only when the run of backslashes immediately before it
+    is EVEN, because GFM resolves the escape before inline code is parsed:
+
+      ``\|``    an escaped pipe, inside a cell  (``\|\|`` renders as ``||``)
+      ``\\|``   a literal backslash, then a SEPARATOR
+      ``\\\|``  a literal backslash, then an escaped pipe — L43's row
+
+    A `(?<!\\)\|` lookbehind gets the middle case backwards, and it fails in the
+    direction that hides damage: two cells merge into one, so the row reads a
+    column short while still rendering as a table.
+    """
+    cells: list[str] = []
+    buf: list[str] = []
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "\\" and i + 1 < len(line):
+            # Consume the escape PAIR, so the escaped character can never be read
+            # as a separator and a doubled backslash cannot shield the pipe after
+            # it. This is what makes the rule "even number of backslashes".
+            buf.append(line[i : i + 2])
+            i += 2
+            continue
+        if ch == "|":
+            cells.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    cells.append("".join(buf))
+    return cells
+
+
+def _row_cells(line: str) -> list[str]:
+    """The cells of a table row, without the empties the outer pipes produce.
+
+    Exactly one leading and one trailing empty are dropped — they are the row's
+    delimiting pipes. Dropping every trailing empty would silently swallow a
+    genuinely blank final cell, which is one of the shapes #964 is about.
+    """
+    parts = split_table_cells(line.strip())
+    if parts and parts[0].strip() == "":
+        parts = parts[1:]
+    if parts and parts[-1].strip() == "":
+        parts = parts[:-1]
+    return [p.strip() for p in parts]
+
+
 def _rows() -> list[tuple[str, list[str]]]:
     """(id, [lesson, evidence, enforced_by]) for every ledger row."""
     rows = []
@@ -62,13 +113,11 @@ def _rows() -> list[tuple[str, list[str]]]:
         m = _ROW.match(line.strip())
         if not m:
             continue
-        # Split on unescaped pipes only: a lesson quoting shell (`\|\| echo`) has
-        # to escape its pipes for Markdown, and splitting on those would shred the
-        # row into fragments — which then fails the evidence/tier checks for a
-        # reason that has nothing to do with the row's content.
-        cells = [c.strip() for c in re.split(r"(?<!\\)\|", m.group(2))]
-        while cells and cells[-1] == "":
-            cells.pop()
+        # A lesson quoting shell (`\|\| echo`) has to escape its pipes for
+        # Markdown, and splitting on those would shred the row into fragments —
+        # which then fails the evidence/tier checks for a reason that has nothing
+        # to do with the row's content.
+        cells = _row_cells(line)[1:]
         rows.append((m.group(1), cells))
     return rows
 
@@ -152,6 +201,218 @@ def test_prose_only_rows_say_why_prose_is_the_ceiling():
             elif len(reason) < len("doc — ") + 20:
                 problems.append(f"{lid}: `doc —` with no real reason given")
     assert not problems, "\n".join(problems)
+
+
+# ---------------------------------------------------------------------------
+# Table structure — a stray pipe truncates a lesson, and so does "fixing" a
+# correct escape (#964)
+# ---------------------------------------------------------------------------
+#
+# The cells of this ledger routinely quote shell, so pipes inside them must be
+# written `\|`. Nothing checked that, and it fails in both directions:
+#
+#   * a genuine unescaped `|` splits the row into extra columns and truncates the
+#     lesson at the pipe — the table still renders, it is just wrong;
+#   * a reviewer deleting a correct escape does the same damage. That is not
+#     hypothetical: on #950 Copilot filed a finding that ``\|\|`` was
+#     over-escaped, and applying it would have split the row. Settling it took a
+#     manual GFM render (#950 comment 5146563050).
+#
+# Both directions are the same observable: the row's cell count stops matching
+# the header's. So the check is a column count, not a pipe-hunt — and it is
+# deliberately local, with no `gh api markdown` call: a CI test must not depend
+# on the network or the shared API budget.
+
+_DELIM_CELL = re.compile(r"^:?-{3,}:?$")
+_FENCE = re.compile(r"^\s*(```|~~~)")
+
+
+def _tables(text: str) -> list[dict]:
+    """Every GFM table in `text`, as {header, delim, rows} of (lineno, cells).
+
+    A table is a `|` line followed by a delimiter line — which is what separates
+    a real table from the `\\|`-quoting prose above it, and from the bullet list
+    in "Adding a lesson". Fenced code is skipped: a shell sample inside a fence
+    is not a table row, whatever it starts with.
+    """
+    lines = text.splitlines()
+    tables: list[dict] = []
+    i, fenced = 0, False
+    while i < len(lines):
+        if _FENCE.match(lines[i]):
+            fenced = not fenced
+            i += 1
+            continue
+        if fenced or not lines[i].lstrip().startswith("|"):
+            i += 1
+            continue
+        if i + 1 >= len(lines) or not lines[i + 1].lstrip().startswith("|"):
+            i += 1
+            continue
+        delim = _row_cells(lines[i + 1])
+        if not delim or not all(_DELIM_CELL.match(c) for c in delim):
+            i += 1
+            continue
+        table = {
+            "header": (i + 1, _row_cells(lines[i])),
+            "delim": (i + 2, delim),
+            "rows": [],
+        }
+        j = i + 2
+        while j < len(lines) and lines[j].lstrip().startswith("|"):
+            table["rows"].append((j + 1, _row_cells(lines[j])))
+            j += 1
+        tables.append(table)
+        i = j
+    return tables
+
+
+def _row_label(cells: list[str]) -> str:
+    """How to name the offending row: by ID when it has one, else by content."""
+    if cells and re.fullmatch(r"L\d+", cells[0].strip()):
+        return cells[0].strip()
+    first = (cells[0] if cells else "").strip()
+    return f"`{first[:40]}…`" if first else "<empty first cell>"
+
+
+def column_count_problems(
+    text: str, label: str = "docs/lessons-ledger.md"
+) -> list[str]:
+    """Rows whose cell count disagrees with their table's header."""
+    problems = []
+    for table in _tables(text):
+        hline, header = table["header"]
+        want = len(header)
+        dline, delim = table["delim"]
+        if len(delim) != want:
+            problems.append(
+                f"{label}:{dline}: delimiter row has {len(delim)} cells, "
+                f"header at line {hline} declares {want}"
+            )
+        for lineno, cells in table["rows"]:
+            if len(cells) != want:
+                problems.append(
+                    f"{label}:{lineno}: row {_row_label(cells)} has {len(cells)} "
+                    f"cells, header at line {hline} declares {want} — an unescaped "
+                    "`|` inside a cell splits the row and truncates the text at "
+                    "the pipe (write it `\\|`); deleting a correct `\\|` escape "
+                    "does the same damage"
+                )
+    return problems
+
+
+def id_problems(text: str, label: str = "docs/lessons-ledger.md") -> list[str]:
+    """Lesson IDs that are missing, malformed, or reused.
+
+    Gaps are legal and deliberately unchecked: L37–L41 are reserved by long-lived
+    draft PRs, and an ID in an open PR is only a reservation until it merges.
+    """
+    problems: list[str] = []
+    seen: dict[str, list[int]] = {}
+    for table in _tables(text):
+        _, header = table["header"]
+        if not header or header[0].strip().lower() != "id":
+            continue
+        for lineno, cells in table["rows"]:
+            got = cells[0].strip() if cells else ""
+            if not re.fullmatch(r"L\d+", got):
+                problems.append(
+                    f"{label}:{lineno}: ID column reads {got!r}, expected `L<n>` — "
+                    "rows are cited by ID from issues and PRs"
+                )
+                continue
+            seen.setdefault(got, []).append(lineno)
+    for lid, lines in sorted(seen.items()):
+        if len(lines) > 1:
+            problems.append(
+                f"{label}: duplicate lesson id {lid} at lines "
+                + ", ".join(str(n) for n in lines)
+                + " — ids are cited and never reused (L43: a hand-resolved merge "
+                "conflict shipped a duplicate L36 with nothing to catch it)"
+            )
+    return problems
+
+
+def test_every_ledger_row_has_the_column_count_its_header_declares():
+    problems = column_count_problems(LEDGER.read_text(encoding="utf-8"))
+    assert not problems, "\n".join(problems)
+
+
+def test_every_lesson_id_is_present_well_formed_and_unique():
+    problems = id_problems(LEDGER.read_text(encoding="utf-8"))
+    assert not problems, "\n".join(problems)
+
+
+# The three self-tests below are what make the two above worth having. Each is
+# mutation-proof in permanent form (L47/L09): neuter `column_count_problems` or
+# `id_problems` and these flip red, while the real-ledger tests above stay green
+# vacuously — which is precisely the "green for the wrong reason" shape this
+# repo keeps rediscovering.
+
+_FIXTURE_HEADER = (
+    "| ID  | Lesson | Evidence | Enforced by |\n| --- | --- | --- | --- |\n"
+)
+
+
+def test_the_column_count_guard_sees_a_stray_pipe():
+    planted = _FIXTURE_HEADER + (
+        "| L90 | run `a | b` and read the exit status | #1 | `doc — why` |\n"
+    )
+    problems = column_count_problems(planted, label="planted.md")
+    assert problems, "an unescaped `|` inside a cell must fail the column count"
+    first = problems[0]
+    assert "L90" in first and "5 cells" in first and "declares 4" in first, (
+        f"the failure must name the row and the observed vs expected counts: {problems}"
+    )
+
+
+def test_the_column_count_guard_sees_a_correct_escape_being_deleted():
+    """The #950 direction: a reviewer 'fixing' `\\|\\|` back to `||`.
+
+    The escaped form is L42's real shape, so this pins both readings of the same
+    row against each other rather than inventing a fixture.
+    """
+    escaped = _FIXTURE_HEADER + (
+        "| L91 | a `\\|\\|` fallback hides the crash | #947 | `doc — why prose` |\n"
+    )
+    assert not column_count_problems(escaped, label="planted.md"), (
+        "`\\|` is an escaped pipe inside a cell and must NOT be read as a separator"
+    )
+    de_escaped = escaped.replace("\\|\\|", "||")
+    problems = column_count_problems(de_escaped, label="planted.md")
+    assert problems and "L91" in problems[0], (
+        "removing a correct escape splits the row and must fail: " f"{problems}"
+    )
+
+
+def test_the_id_guard_sees_a_planted_duplicate_and_an_empty_cell():
+    planted = _FIXTURE_HEADER + (
+        "| L36 | first lesson | #1 | `doc — why` |\n"
+        "| L36 | second lesson | #2 | `doc — why` |\n"
+        "|     | third lesson | #3 | `doc — why` |\n"
+    )
+    problems = id_problems(planted, label="planted.md")
+    dupe = [p for p in problems if "duplicate" in p]
+    assert dupe and "3" in dupe[0] and "4" in dupe[0], (
+        f"a duplicate id must be reported with BOTH line numbers: {problems}"
+    )
+    assert any("ID column reads ''" in p for p in problems), (
+        f"an empty ID cell must be reported: {problems}"
+    )
+
+
+def test_the_cell_splitter_reads_backslashes_the_way_gfm_does():
+    # `\\|` — a literal backslash followed by a SEPARATOR — is the case a
+    # `(?<!\\)\|` lookbehind gets wrong, and it is wrong in the hiding direction:
+    # it merges two cells, so a row reads one column short instead of failing.
+    assert split_table_cells(r"a\\|b") == ["a\\\\", "b"]
+    assert split_table_cells(r"a\|b") == [r"a\|b"]
+    # L43's real shape: a literal backslash, then an escaped pipe, one cell.
+    assert split_table_cells(r"grep -oE '^\\\| L[0-9]{2}'") == [
+        r"grep -oE '^\\\| L[0-9]{2}'"
+    ]
+    # A blank final cell survives, so `| a | |` is two cells and not one.
+    assert _row_cells("| a | |") == ["a", ""]
 
 
 # ---------------------------------------------------------------------------

@@ -200,7 +200,19 @@ const github = {
         if (process.env.TEST_LIST_COMMENTS_THROWS === '1') {
           throw new Error('simulated listComments failure');
         }
-        return { data: page(commentsById[String(args.issue_number)] || [], args) };
+        const rows = commentsById[String(args.issue_number)] || [];
+        // The real endpoint serves comments OLDEST-first and advertises the
+        // last page in a Link header. Modelling that header is what makes
+        // "read the END of a long thread, not just its start" testable at all;
+        // without it a page-1-only read is indistinguishable from a correct one.
+        const perPage = Math.min(args.per_page || 30, 100);
+        const lastPage = Math.max(1, Math.ceil(rows.length / perPage));
+        const link =
+          lastPage > 1
+            ? `<https://api.github.com/repositories/1/issues/${args.issue_number}/comments` +
+              `?per_page=${perPage}&page=${lastPage}>; rel="last"`
+            : '';
+        return { data: page(rows, args), headers: { link } };
       },
       addLabels: async (args) => {
         addedLabels.push({ issue_number: args.issue_number, labels: args.labels });

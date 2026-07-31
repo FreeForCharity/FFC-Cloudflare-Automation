@@ -138,9 +138,32 @@ jobs:
               // already carrying the label was not suppressed by this PR, and
               // saying otherwise would be false.
               if (claimedNow.length) {
-                const prComments = await listOpen(github.rest.issues.listComments, {
-                  owner, repo, issue_number: pr.number,
-                }, 3).catch(() => null);
+                // Comments come back OLDEST-first, so a bounded pager from
+                // page 1 reads the START of the thread — the prefix mistake
+                // AGENTS.md records for long issues (a conductor run misread
+                // its own run number that way). A notice can sit at EITHER
+                // end: the first claim usually lands early in the thread, a
+                // claim added by a later edit lands at the very end. So read
+                // page 1 AND walk back from the last page, still bounded to
+                // three calls. Missing a marker costs a duplicate notice on
+                // every subsequent sync, which is why this is worth the reads.
+                const readPrComments = async (backPages = 2) => {
+                  const first = await github.rest.issues.listComments({
+                    owner, repo, issue_number: pr.number, per_page: 100,
+                  });
+                  const link = (first.headers && first.headers.link) || '';
+                  const m = String(link).match(/[?&]page=(\d+)[^>]*>;\s*rel="last"/);
+                  const last = m ? Number(m[1]) : 1;
+                  const seen = [...first.data];
+                  for (let p = last, reads = 0; p > 1 && reads < backPages; p--, reads++) {
+                    const { data } = await github.rest.issues.listComments({
+                      owner, repo, issue_number: pr.number, per_page: 100, page: p,
+                    });
+                    seen.push(...data);
+                  }
+                  return seen;
+                };
+                const prComments = await readPrComments().catch(() => null);
                 if (prComments === null) {
                   // Unread comments means "already notified?" is unknown, and
                   // the notice is a convenience while a duplicate is noise on

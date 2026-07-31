@@ -30,6 +30,7 @@ nothing about a guard that cannot fail).
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import subprocess
@@ -92,6 +93,8 @@ def test_checker_detects_a_duplicate_number():
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
     finally:
         twin.unlink()
@@ -115,6 +118,8 @@ def test_checker_passes_on_the_real_tree():
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     assert proc.returncode == 0, (
         "check-workflow-doc-consistency.py fails on the committed tree:\n"

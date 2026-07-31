@@ -15,7 +15,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import step_run
+from wf_extract import child_env, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -29,26 +29,26 @@ def run_step(env_overrides: dict) -> tuple[str, str, str, str, int]:
         summary = td / "summary.md"
         gh_log = td / "gh.log"
         summary.touch()
-        env = {
-            "PATH": f"{HARNESS_DIR}:/usr/bin:/bin",
-            "GITHUB_STEP_SUMMARY": str(summary),
-            "TEST_GH_LOG": str(gh_log),
-            "HOME": str(td),
-            "GH_TOKEN": "fake-token",
-            "ORG_DEFAULT": "FreeForCharity",
-            "IN_REPO": "FFC-EX-example.org",
-            "IN_USER": "octocat",
-            "IN_PERM": "maintain",
-            "IN_DRY": "false",
-            "IN_SOFT": "false",
-        }
+        env = child_env(
+            HARNESS_DIR,
+            GITHUB_STEP_SUMMARY=str(summary),
+            TEST_GH_LOG=str(gh_log),
+            HOME=str(td),
+            GH_TOKEN="fake-token",
+            ORG_DEFAULT="FreeForCharity",
+            IN_REPO="FFC-EX-example.org",
+            IN_USER="octocat",
+            IN_PERM="maintain",
+            IN_DRY="false",
+            IN_SOFT="false",
+        )
         env.update(env_overrides)
         proc = subprocess.run(
             ["bash", "-c", script],
             env=env,
             cwd=str(REPO_ROOT),
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=120,
         )
         return (

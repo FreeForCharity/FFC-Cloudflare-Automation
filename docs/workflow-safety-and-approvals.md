@@ -23,34 +23,36 @@ A live change generally has to get past several of these, not just one:
    provider logs.)
 2. **Environment approval gates.** A job whose `environment` is configured with **required
    reviewers** pauses at `status: waiting` until a reviewer (currently `clarkemoyer`) approves the
-   deployment. The live config was **audited on 2026-06-30** by the read-only workflow **730. Repo -
-   Audit Environment Approval Gates [Repo]** (reads the protection rules with `GITHUB_TOKEN`). The
-   environments that require a reviewer are: **`cloudflare-prod-write`**, **`whmcs-prod`**,
-   **`github-prod`**, **`m365-prod`**, and **`wpmudev-prod`** (plus a bare **`cloudflare-prod`**
-   that no workflow currently uses). The environments with **no** reviewer — runs proceed without
-   pausing — are **`cloudflare-prod-read`**, **`whmcs-prod-read`**, **`google-prod-read`**, and
-   **`zeffy-prod`**; **`github-prod-read`** joins them **once provisioned** (#834 — the environment
-   does not exist yet, so it is listed here as intent, not as audited fact; re-run 730 after
-   creating it). `candid-prod-read` is omitted for the same reason. Because `whmcs-prod`,
-   `github-prod`, `m365-prod`, and `wpmudev-prod` are gated at the environment level, they gate
-   **every** job that uses them — a read-only job on one of them still waits. Read-only WHMCS
-   workflows moved to the ungated **`whmcs-prod-read`** (reader OIDC identity, `read-all-*` KV
-   secrets) in 2026-07, and the scheduled GitHub reads 502/726/735 moved to **`github-prod-read`**
-   on the same pattern (#834); the M365 list/preflight reads 301–303 and the WPMUDEV export 601
-   still wait on their gated envs. A **scheduled** Reads workflow must never sit on a gated
-   environment: it fires with nobody watching and waits. What happens next depends on its
-   concurrency config — with `cancel-in-progress: true` the next scheduled run cancels its waiting
-   predecessor; otherwise it sits at `status: waiting` until janitor **734** reaps it at 7 days, or
-   a human approves it days late. Both outcomes appear in #834's evidence (3 `failure` + 2
-   `cancelled` for 726 alone), and either way the schedule is not kept — do not assume the
-   cancellation path. The dispatch-only gated reads are a different case — the operator who
-   dispatched is present to approve — and `tests/workflow-logic/test_gated_env_hygiene.py` enforces
-   exactly that split. Re-run workflow 730 after any change in _Settings → Environments_ to refresh
-   this list. To preview or clear **several** runs waiting at a gate at once, an environment
-   reviewer can run `scripts/approve-waiting-runs.py` — an operator tool that acts under your own
-   `gh` auth (the ambient `GITHUB_TOKEN` **cannot** approve gates). It defaults to a dry-run
-   preview; pass `--approve` (optionally `--environment <name>`) to act. For the idempotent Google
-   505/503 provisioning writes specifically, the structural fix is a dedicated **ungated
+   deployment. The live config was **re-audited on 2026-07-31** against the environments API
+   (`GET /repos/…/environments/<name>` — the same protection rules the read-only workflow **730.
+   Repo - Audit Environment Approval Gates [Repo]** reports). The environments that require a
+   reviewer are: **`cloudflare-prod-write`**, **`whmcs-prod`**, **`github-prod`**,
+   **`google-prod-write`**, **`m365-prod`**, and **`wpmudev-prod`** (plus a bare
+   **`cloudflare-prod`** that no workflow currently uses). The environments with **no** reviewer —
+   runs proceed without pausing — are **`cloudflare-prod-read`**, **`github-prod-read`**,
+   **`google-prod-read`**, **`fraudlabspro-prod-read`**, **`whmcs-prod-read`**, and
+   **`zeffy-prod`**. `github-prod-read` was provisioned after the 2026-06-30 audit and is now
+   **audited fact, not intent** (#834); `candid-prod-read` still **does not exist**, so it stays
+   omitted rather than listed as ungated. Because `whmcs-prod`, `github-prod`, `m365-prod`, and
+   `wpmudev-prod` are gated at the environment level, they gate **every** job that uses them — a
+   read-only job on one of them still waits. Read-only WHMCS workflows moved to the ungated
+   **`whmcs-prod-read`** (reader OIDC identity, `read-all-*` KV secrets) in 2026-07, and the
+   scheduled GitHub reads 502/726/735 moved to **`github-prod-read`** on the same pattern (#834);
+   the M365 list/preflight reads 301–303 and the WPMUDEV export 601 still wait on their gated envs.
+   A **scheduled** Reads workflow must never sit on a gated environment: it fires with nobody
+   watching and waits. What happens next depends on its concurrency config — with
+   `cancel-in-progress: true` the next scheduled run cancels its waiting predecessor; otherwise it
+   sits at `status: waiting` until janitor **734** reaps it at 7 days, or a human approves it days
+   late. Both outcomes appear in #834's evidence (3 `failure` + 2 `cancelled` for 726 alone), and
+   either way the schedule is not kept — do not assume the cancellation path. The dispatch-only
+   gated reads are a different case — the operator who dispatched is present to approve — and
+   `tests/workflow-logic/test_gated_env_hygiene.py` enforces exactly that split. Re-run workflow 730
+   after any change in _Settings → Environments_ to refresh this list. To preview or clear
+   **several** runs waiting at a gate at once, an environment reviewer can run
+   `scripts/approve-waiting-runs.py` — an operator tool that acts under your own `gh` auth (the
+   ambient `GITHUB_TOKEN` **cannot** approve gates). It defaults to a dry-run preview; pass
+   `--approve` (optionally `--environment <name>`) to act. For the idempotent Google 505/503
+   provisioning writes specifically, the structural fix is a dedicated **ungated
    `google-prod-provision`** environment (mirroring `whmcs-prod-read`) so they don't gate at all
    (#636).
 3. **`dry_run` defaults to preview.** The granular write workflows take a `dry_run` input that
@@ -286,7 +288,7 @@ the run pauses for approval, even if the action itself only reads.
 | 734     | Repo - Stale Waiting-Run Janitor                      | Writes (cancels runs)       | —                                                            | cancels runs left waiting >N days at a gate; never approves; dispatch dry-run supported                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 735     | Repo - Dependabot Affected Repos                      | Reads                       | github-prod-read                                             | weekly org inventory (feeds smoke-protected waves); PR-only + auto-merge; `read-all-cbm-github-pat` from KV over OIDC on the ungated lane (#834)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | 736     | Repo - Archive / Application Denied (Admin)           | Writes (dry-run default)    | ✅ github-prod                                               | ungated preflight (live archive requires a matching successful dry-run within 48h; fails fast on missing/already-archived; warns on recent push/Pages/open-issue references); archive-only (reversible, never deletes); `dry_run` default true; typed `confirm_repo`; org-locked + denylist                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 737     | Repo - Claim Sync                                     | Writes (issues/labels only) | —                                                            | syncs `claimed` label from linked PRs (pull_request event, GITHUB_TOKEN) + daily sweep of expired claims (no open linked PR + 48h idle) in this repo (ambient GITHUB_TOKEN — CBM_TOKEN is gated-env-only and empty on schedule); no external API, ungated; sweep `dry_run` via dispatch                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 737     | Repo - Claim Sync                                     | Writes (issues/labels only) | —                                                            | syncs `claimed` label from linked PRs (pull_request event, GITHUB_TOKEN) + daily sweep reconciling this repo's claims against every open PR in the org — one `search/issues` read, writes only this repo's issues (ambient GITHUB_TOKEN — CBM_TOKEN is gated-env-only and empty on schedule); releases when no open PR in any repo still references the issue, or after 48h idle for a hand-labeled claim; no external API, ungated; sweep `dry_run` via dispatch                                                                                                                                                                                                                                                                                                                           |
 | 738     | Repo - Fleet Smoke Engine Drift Audit                 | Reads                       | —                                                            | weekly SHA-256 byte-identity audit of `post-deploy-smoke.yml` across the fleet vs canonical (FFC-IN-FFC_Single_Page_Template@main); rolling issue upsert/close on divergence; GITHUB_TOKEN (public reads + own-repo issue), no external API, ungated                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 739     | Repo - Process Health Metrics Report                  | Reads                       | —                                                            | weekly "monitor the monitors" REST sweep (backlog + data-pipeline signals) posted as a new comment on #719 with week-over-week trends (baseline read from the prior comment's hidden data block); JSON artifact; GITHUB_TOKEN (own-repo issue/Actions reads + one comment), no external API, ungated                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 740     | Repo - Scheduled Workflow Failure Alert               | Writes (issues only)        | —                                                            | **polls** every scheduled hub workflow twice hourly (`schedule` + `workflow_dispatch`; the `workflow_run` event has never fired in this repo — #843) and upserts one rolling issue per watched workflow (marker keyed by workflow name, so only that workflow's own green run closes it); absorbs the retired 732 Google lane (502/504); reports `cancelled`/`timed_out` as well as `failure`, latest completed default-branch run only; does **not** alert on a declined/expired approval gate (no job `failure` + ≥1 job `cancelled` ⇒ logged via `core.notice`, not an alert) — an unreadable job list still alerts, and a watched name matching no workflow fails the run loudly; ambient GITHUB_TOKEN, no external API, ungated by design (must not be blocked by the gate it watches) |

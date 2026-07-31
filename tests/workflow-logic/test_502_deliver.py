@@ -33,7 +33,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import step_run
+from wf_extract import child_env, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 TOKEN = "TESTTOKEN"
@@ -45,7 +45,7 @@ GA_FILES = ("freeforcharity.org.json", "ffcadmin.org.json")
 
 
 def _git(cwd: pathlib.Path, *args: str, env: dict | None = None) -> None:
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True, env=env)
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True, encoding="utf-8", env=env)
 
 
 def _write(path: pathlib.Path, text: str) -> None:
@@ -71,16 +71,22 @@ def _build_origin(td: pathlib.Path, *, sync_branch: bool, sync_matches_source: b
     """Create a bare `origin` repo. Its `main` branch is a minimal repo; when
     `sync_branch` is set it also carries `chore/ga-data-sync` whose synced
     files either match the source bytes (`sync_matches_source`) or differ."""
-    env = {
-        "GIT_CONFIG_GLOBAL": str(td / "seed-gitconfig"),
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "HOME": str(td),
-        "PATH": "/usr/bin:/bin",
-        "GIT_AUTHOR_NAME": "seed",
-        "GIT_AUTHOR_EMAIL": "seed@example.com",
-        "GIT_COMMITTER_NAME": "seed",
-        "GIT_COMMITTER_EMAIL": "seed@example.com",
-    }
+    # Hermetic on purpose, and it stays hermetic under inheritance (#943). What
+    # the narrow PATH was buying is named explicitly instead of implied by
+    # omission: the harness dir is NOT prepended, so the fake `gh` stays
+    # unreachable while seeding (it is a test-local dir, never on a real PATH),
+    # and the three GIT_CONFIG_* pins keep the developer's own git config out
+    # regardless of what HOME or GIT_CONFIG_GLOBAL the parent happens to carry.
+    env = child_env(
+        GIT_CONFIG_GLOBAL=str(td / "seed-gitconfig"),  # deliberately nonexistent
+        GIT_CONFIG_SYSTEM=str(td / "seed-gitconfig"),
+        GIT_CONFIG_NOSYSTEM="1",
+        HOME=str(td),
+        GIT_AUTHOR_NAME="seed",
+        GIT_AUTHOR_EMAIL="seed@example.com",
+        GIT_COMMITTER_NAME="seed",
+        GIT_COMMITTER_EMAIL="seed@example.com",
+    )
     seed = td / "seed"
     seed.mkdir()
     _git(seed, "init", "-q", "-b", "main", env=env)
@@ -140,13 +146,18 @@ def run_deliver(*, sync_branch: bool, sync_matches_source: bool, gh_env: dict | 
 
     gh_log = td / "gh.log"
     gh_log.touch()
-    env = {
-        "PATH": f"{HARNESS_DIR}:/usr/bin:/bin",
-        "HOME": str(home),
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GH_TOKEN": TOKEN,
-        "TEST_GH_LOG": str(gh_log),
-    }
+    # GIT_CONFIG_GLOBAL is pinned to the temp .gitconfig rather than left to be
+    # found via HOME: under inheritance an ambient GIT_CONFIG_GLOBAL would win
+    # over HOME and the insteadOf redirect below would silently not apply,
+    # sending the clone at the real network URL (#943).
+    env = child_env(
+        HARNESS_DIR,
+        HOME=str(home),
+        GIT_CONFIG_GLOBAL=str(gitconfig),
+        GIT_CONFIG_NOSYSTEM="1",
+        GH_TOKEN=TOKEN,
+        TEST_GH_LOG=str(gh_log),
+    )
     if gh_env:
         env.update(gh_env)
 
@@ -155,7 +166,7 @@ def run_deliver(*, sync_branch: bool, sync_matches_source: bool, gh_env: dict | 
         cwd=work,
         env=env,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=120,
     )
     return proc, gh_log.read_text(encoding="utf-8"), origin, td_ctx
@@ -165,8 +176,15 @@ def _origin_head(origin: pathlib.Path, branch: str) -> str | None:
     r = subprocess.run(
         ["git", "--git-dir", str(origin), "rev-parse", "--verify", "-q", f"refs/heads/{branch}"],
         capture_output=True,
-        text=True,
-        env={"PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1"},
+        text=True, encoding="utf-8",
+        # Same hermeticity as _build_origin: no harness dir on PATH, and the
+        # config pins point at a path that does not exist so no ambient git
+        # config can reach this read.
+        env=child_env(
+            GIT_CONFIG_GLOBAL=str(origin.parent / "no-such-gitconfig"),
+            GIT_CONFIG_SYSTEM=str(origin.parent / "no-such-gitconfig"),
+            GIT_CONFIG_NOSYSTEM="1",
+        ),
     )
     return r.stdout.strip() or None
 

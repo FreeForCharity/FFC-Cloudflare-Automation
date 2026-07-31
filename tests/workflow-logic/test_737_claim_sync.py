@@ -40,7 +40,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import load_workflow, step_github_script
+from wf_extract import child_env, load_workflow, step_github_script
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 LIB = REPO_ROOT / "scripts" / "claim-sync-lib.js"
@@ -448,12 +448,12 @@ def run_sweep(
             "TEST_ISSUES_FILE": ("issues.json", json.dumps(issues or {})),
             "TEST_COMMENTS_FILE": ("comments.json", json.dumps(comments or {})),
         }
-        env = {
-            "PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin",
-            "TEST_NOW_MS": str(NOW_MS),
-            "GITHUB_WORKSPACE": str(_workspace(tdp, mutation)),
-            "DRY_RUN": "true" if dry_run else "false",
-        }
+        env = child_env(
+            pathlib.Path(NODE).parent,
+            TEST_NOW_MS=str(NOW_MS),
+            GITHUB_WORKSPACE=str(_workspace(tdp, mutation)),
+            DRY_RUN="true" if dry_run else "false",
+        )
         for var, (name, content) in files.items():
             (tdp / name).write_text(content, encoding="utf-8")
             env[var] = str(tdp / name)

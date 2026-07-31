@@ -36,7 +36,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import load_workflow, step_github_script  # noqa: E402
+from wf_extract import child_env, load_workflow, step_github_script  # noqa: E402
 
 WORKFLOW = "731-actions-run-metrics.yml"
 JOB = "metrics"
@@ -59,10 +59,7 @@ CTX = {"repo": {"owner": "FreeForCharity", "repo": "FFC-Cloudflare-Automation"}}
 
 def _run(runs):
     script = step_github_script(WORKFLOW, JOB, STEP)
-    env = {
-        "PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin",
-        "TEST_NOW_MS": str(NOW_MS),
-    }
+    env = child_env(pathlib.Path(NODE).parent, TEST_NOW_MS=str(NOW_MS))
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
         (tdp / "script.js").write_text(script, encoding="utf-8")

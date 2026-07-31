@@ -68,6 +68,7 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from wf_extract import (  # noqa: E402
     WORKFLOWS,
+    child_env,
     find_step,
     load_workflow,
     step_github_script,
@@ -164,10 +165,7 @@ def _run(
     if jobs is None:
         jobs = [{"name": "audit", "conclusion": "failure"}]
 
-    env = {
-        "PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin",
-        "WATCHED_WORKFLOWS": "\n".join(watched),
-    }
+    env = child_env(pathlib.Path(NODE).parent, WATCHED_WORKFLOWS="\n".join(watched))
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
         (tdp / "script.js").write_text(script, encoding="utf-8")

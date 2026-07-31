@@ -32,7 +32,7 @@ def _node(expr_body: str, *argv: str) -> object:
     proc = subprocess.run(
         ["node", "-e", code, *argv],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=60,
     )
     if proc.returncode != 0:
@@ -811,7 +811,7 @@ def test_real_npm_agrees_with_the_classifier_on_a_valid_pair():
         (work / "package-lock.json").write_text(FIXTURE_LOCKFILE, encoding="utf-8")
         proc = subprocess.run(
             ["npm", "ci", "--dry-run", "--ignore-scripts", "--no-audit", "--no-fund"],
-            cwd=work, capture_output=True, text=True, timeout=180,
+            cwd=work, capture_output=True, text=True, encoding="utf-8", timeout=180,
         )
         r = classify(proc.returncode, proc.stdout + proc.stderr)
     assert r["state"] == "resolves", (r, proc.returncode, proc.stdout, proc.stderr)
@@ -840,7 +840,7 @@ def test_real_npm_drift_never_reads_as_resolving():
         (work / "package-lock.json").write_text(FIXTURE_LOCKFILE, encoding="utf-8")
         proc = subprocess.run(
             ["npm", "ci", "--dry-run", "--ignore-scripts", "--no-audit", "--no-fund"],
-            cwd=work, capture_output=True, text=True, timeout=180,
+            cwd=work, capture_output=True, text=True, encoding="utf-8", timeout=180,
         )
         r = classify(proc.returncode, proc.stdout + proc.stderr)
     assert proc.returncode != 0, (proc.stdout, proc.stderr)

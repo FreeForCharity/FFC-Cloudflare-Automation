@@ -44,7 +44,7 @@ def run_audit(env_overrides: dict) -> tuple[str, str, str]:
             ["bash", "-c", script],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=120,
         )
         if proc.returncode != 0:
@@ -73,7 +73,7 @@ def run_audit_allow_failure(env_overrides: dict) -> tuple[str, str, int]:
         )
         env.update(env_overrides)
         proc = subprocess.run(
-            ["bash", "-c", script], env=env, capture_output=True, text=True, timeout=120
+            ["bash", "-c", script], env=env, capture_output=True, text=True, encoding="utf-8", timeout=120
         )
         return summary.read_text(encoding="utf-8"), proc.stdout + proc.stderr, proc.returncode
 

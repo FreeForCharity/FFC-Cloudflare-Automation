@@ -544,7 +544,7 @@ def test_the_real_tree_is_clean():
     """The guard as wired into CI, over the repository as it stands."""
     require_pwsh()
     proc = subprocess.run(
-        [sys.executable, str(SCRIPT)], cwd=REPO_ROOT, capture_output=True, text=True
+        [sys.executable, str(SCRIPT)], cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8"
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PowerShell command resolution OK" in proc.stdout, proc.stdout

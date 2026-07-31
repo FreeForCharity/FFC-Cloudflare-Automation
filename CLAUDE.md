@@ -36,6 +36,30 @@
 - Never "fix" a test, or hold a PR, on the strength of a local harness crash — confirm against CI
   first.
 
+## Windows git-bash: two ways a command lies instead of failing (run 60, 2026-07-31)
+
+Both of these produce a confident wrong answer rather than an error, which is what makes them worth
+writing down. The `grep -P` case is now blocked by `.claude/hooks/guard_bash.py`; the other two are
+not mechanically detectable from the command text alone.
+
+- **`/tmp` is not one directory.** git-bash resolves `/tmp` to its own MSYS mount, while a Windows
+  `python3` in the same pipeline resolves it to `C:\tmp` — so `cmd > /tmp/x.txt` followed by
+  `python3 … open('/tmp/x.txt')` fails with `FileNotFoundError` on a file that bash just wrote and
+  can still read. Do not hand paths between bash and Windows python via `/tmp`; use an absolute
+  Windows-style path (the session scratchpad) for anything that crosses that boundary.
+- **Ad-hoc `python3 -c` printing non-ASCII dies on cp1252.** `print()` encodes with the console
+  codepage, so echoing API data that contains an em dash, an arrow or an emoji raises
+  `UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'` — mid-way through, so you
+  get partial output that looks like a truncated result rather than an encoding fault. Run 60 hit
+  this printing a workflow name (`… → aprilhansen.com`) while verifying the public status feed.
+  Prefix with `PYTHONIOENCODING=utf-8`. This is the same cp1252 root cause as #945/L35, but a
+  _different vector_: `scripts/check-subprocess-encoding.py` guards `subprocess(text=True)` inside
+  committed files and cannot see a one-off command's stdout.
+- **A console `?` is not proof of a mangled file.** The same codepage that breaks `print()` also
+  renders a correctly-stored em dash as `?` in captured output. Before "fixing" an encoding, decode
+  the file with `errors='strict'` and test for `'\ufffd'` — run 60 nearly re-encoded a clean
+  `docs/lessons-ledger.md` on the strength of terminal rendering alone.
+
 ## Board & PR-creation env facts (validated 2026-07-24)
 
 - **The public "Agentic OS" board (org project #9) has NO automation.** Its only enabled built-in

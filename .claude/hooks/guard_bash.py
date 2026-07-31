@@ -95,6 +95,25 @@ def main():
         if dangerous:
             block("Refusing a destructive 'rm -rf' targeting a root/home/.git path.")
 
+    # 7. `grep -P` (PCRE) is not available in the Windows git-bash this repo is
+    #    driven from: it exits non-zero with "grep: -P supports only unibyte and
+    #    UTF-8 locales" and matches NOTHING. That is not a loud failure -- the
+    #    error goes to stderr while the exit status silently makes every
+    #    `if grep -qP ...` take the else branch and every `grep -P ... || echo
+    #    MISSING` report MISSING. A 2026-07-31 conductor run used `grep -qP` to
+    #    ask which of 10 open PRs were on the public board and was told all ten
+    #    were absent; every one was in fact present with a status already set.
+    #    Acting on that would have re-added ten duplicate board items.
+    #    Use `grep -E` (POSIX ERE) or awk instead.
+    #    (Rule 6 is reserved for the `--paginate`/`$endCursor` guard in #940.)
+    if re.search(r"(?<![\w-])grep\b[^\n|;&]*?\s-(?:-perl-regexp\b|[A-Za-z]*P[A-Za-z]*\b)", cmd):
+        block(
+            "`grep -P` (PCRE) is unavailable in this environment's git-bash: it matches "
+            "nothing and exits non-zero, so conditionals silently take the negative branch "
+            "and you get confident, wrong answers rather than an error. Use `grep -E` for "
+            "extended regex, or awk for field-wise matching."
+        )
+
     sys.exit(0)
 
 

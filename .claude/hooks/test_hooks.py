@@ -79,6 +79,25 @@ def main():
           bash("git push --force origin feature/main"), False)
     check("echo lowercase secret var", "guard_bash.py",
           bash("echo $cloudflare_api_token"), True)
+    # `grep -P` is unavailable in this environment's git-bash and fails by
+    # matching nothing rather than by erroring visibly (run 60, 2026-07-31).
+    check("grep -P", "guard_bash.py", bash("grep -P '^\\| L\\d+' docs/lessons-ledger.md"), True)
+    check("grep -qP in a conditional", "guard_bash.py",
+          bash('if grep -qP "\\t$N\\t" /tmp/items.txt; then echo ON; else echo MISSING; fi'), True)
+    check("grep -oP", "guard_bash.py", bash("gh api x | grep -oP 'runs/\\K[0-9]+'"), True)
+    check("grep --perl-regexp", "guard_bash.py", bash("grep --perl-regexp 'x' f"), True)
+    check("grep -rP recursive", "guard_bash.py", bash("grep -rP 'stripCode' scripts/"), True)
+    # Must NOT fire on the POSIX forms that do work here, nor on a capital P
+    # that is part of the *pattern* rather than a flag.
+    check("grep -E allowed", "guard_bash.py", bash("grep -E '^\\| L[0-9]+' docs/lessons-ledger.md"), False)
+    check("grep -i with P-word pattern allowed", "guard_bash.py",
+          bash("gh pr list | grep -i PASS"), False)
+    check("grep -n literal P allowed", "guard_bash.py", bash("grep -n 'P' notes.txt"), False)
+    check("pgrep not matched", "guard_bash.py", bash("pgrep -f node"), False)
+    check("grep --include allowed", "guard_bash.py",
+          bash("grep -r --include=*.py PATTERN scripts/"), False)
+    check("curl -X POST then grep allowed", "guard_bash.py",
+          bash("curl -sS https://api.example.com | grep foo"), False)
 
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)

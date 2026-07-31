@@ -256,8 +256,27 @@ def test_workflow_wiring():
     guard = next(
         s for s in steps if "check-large-blobs.sh" in str(s.get("run", ""))
     )
-    assert guard["if"] == "github.event_name == 'pull_request'"
     assert "BASE_SHA" in guard["env"] and "HEAD_SHA" in guard["env"]
+
+    # The guard must cover merge_group as well as pull_request. This job is a
+    # required check and the merge group is where required checks are evaluated
+    # for a queued PR, so a pull_request-only guard can be satisfied without
+    # ever running -- and 722 does trigger on merge_group.
+    triggers = wf[True] if True in wf else wf["on"]
+    assert "merge_group" in triggers, (
+        "722 no longer triggers on merge_group; re-check whether the guard's "
+        "event filter still needs to cover it"
+    )
+    condition = guard["if"]
+    for event in ("pull_request", "merge_group"):
+        assert f"github.event_name == '{event}'" in condition, (
+            f"the guard skips {event} runs: {condition}"
+        )
+    for expr in ("github.event.merge_group.base_sha", "github.event.merge_group.head_sha"):
+        assert expr in str(guard["env"]), (
+            f"{expr} missing; a merge_group run has no github.event.pull_request "
+            "to read the range from"
+        )
 
     # The guard must run before the slower validators, so an oversized branch
     # fails fast rather than after a full lint pass.

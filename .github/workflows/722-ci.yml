@@ -23,12 +23,20 @@ jobs:
           # extra fetch is negligible against the rest of this job.
           fetch-depth: 0
 
+      # Runs on merge_group too, not just pull_request. This job is a required
+      # check, and for a queued PR the merge group is where the required checks
+      # are evaluated (a branch-level failure does not dequeue). A guard that
+      # skipped on merge_group could therefore be satisfied without ever having
+      # scanned, which is the same false clean the guard exists to prevent.
+      # In a group batching several PRs the range covers all of them, so one
+      # oversized branch fails the group -- correct: none of them should reach
+      # main carrying the blob.
       - name: Guard against large blobs in any commit of the PR
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         shell: bash
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: bash scripts/check-large-blobs.sh "$BASE_SHA" "$HEAD_SHA"
 
       - name: Validate workflow name prefixes (Actions UI order)

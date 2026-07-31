@@ -69,7 +69,7 @@ def _run(runs, *, dry_run=None, max_age_days=None, cancel_fail_ids=None):
             [NODE, str(HARNESS)],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=60,
         )
     if proc.returncode != 0:

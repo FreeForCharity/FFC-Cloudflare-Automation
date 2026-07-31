@@ -70,6 +70,25 @@ not mechanically detectable from the command text alone.
   ```bash
   gh api graphql -f query='query{organization(login:"FreeForCharity"){projectV2(number:9){workflows(first:20){nodes{name enabled}}}}}'
   ```
+- **A negative read straight after a successful GitHub write means "unknown", not "failed".** The
+  write APIs are strongly consistent; the _list/read_ endpoints behind them are not, and the lag is
+  seconds. Three instances so far: `mergeQueueEntry` reads `null` for a few seconds after a good
+  `--auto` enqueue (2026-07-24); `gh project item-list` read back the full board **without** an
+  issue that `gh project item-add` had just added successfully (2026-07-25, org project #9); and the
+  `POST /pulls` HTTP-500 episode below, where the branch had in fact been pushed. Re-poll before
+  concluding anything failed, and **never let an immediate negative read trigger a retry loop** —
+  run 41 burned ~51 attempts that way. Where the write is idempotent (`item-add` is: two calls
+  produced one row) a retry is merely wasteful; where it is not, it is destructive.
+  - **Separately: some fields are not lagging, they simply never carry the state you want.** On
+    2026-07-31 (run 60) `gh pr merge --auto` printed nothing for #914/#958/#959 and `.auto_merge`
+    read `null` for all three — but `enqueuePullRequest` answered "already in the queue" for every
+    one. That `null` was not a few-second lag that re-polling would clear; `.auto_merge` describes
+    the _auto-merge flag_, and a PR that went straight into the merge queue never sets it. So
+    distinguish the two failure shapes: re-poll cures a stale read, but no amount of re-polling
+    cures a field that does not model the thing. When a read looks negative, confirm against the
+    endpoint that is **authoritative for that state** (here, the `enqueuePullRequest` mutation)
+    before either retrying or concluding anything — and note that silence from `gh pr merge --auto`
+    is success, not a no-op.
 - **Push the branch before opening the PR.** On 2026-07-24, `POST /repos/…/pulls` returned **HTTP
   500 with an empty body** for >20 minutes, across **multiple FFC repos**
   (`FFC-IN-freeforcharity.org` and `FFC-Cloudflare-Automation`) and all three clients (`gh`, REST,

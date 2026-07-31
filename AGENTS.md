@@ -154,14 +154,6 @@ and all authenticate as the same user. Before starting ANY issue:
      out in full — `Refs FreeForCharity/FFC-Cloudflare-Automation#N`. That qualified form is what
      737's daily sweep reads to claim the hub issue on your behalf; a bare number claims nothing
      here and leaves the issue in the pickup query for someone else to duplicate (#939).
-   - **Cite with a link; claim with `Refs`/`Closes`.** `Refs #N` is a **claim** — 737 labels `#N`
-     `claimed` and it disappears from the pickup query until your PR merges or closes. If you only
-     mean "that issue is where the related work lives", write a full markdown link
-     (`[#945](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/945)`) and no
-     keyword. Getting this backwards is not theoretical: a lessons PR cited `Refs #945` and hid the
-     backlog's top unclaimed pickup for six hours, and a sweep of open drafts found the claiming
-     form used as a citation in **3 of 5** hub drafts, two of them "claiming" the Conductor Log #719
-     (ledger L44). Enforcement is tracked in #948.
 3. **Release on stop**: if you abandon the work, remove the label and comment. Claims with no open
    linked PR and no activity for 48h are considered expired and may be swept. **A draft PR holds a
    claim as hard as a ready one** — 737's daily sweep reports (never releases) every issue whose

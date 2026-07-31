@@ -191,6 +191,42 @@ def test_a_real_claim_beside_documented_prose_still_claims():
     assert r["closing"] == [12], r
 
 
+def test_mutation_bypassing_stripcode_restores_the_code_span_defect():
+    """Per #935: prove the guard by reintroducing the defect, not by reading it.
+
+    Bypassing stripCode must make the documented-keyword body claim again —
+    otherwise these cases could be passing for some unrelated reason.
+    """
+    src = LIB.read_text(encoding="utf-8")
+    anchor = "const scannable = stripCode(body);"
+    assert anchor in src, f"mutation anchor no longer present in claim-sync-lib.js: {anchor!r}"
+    body = "Cite with a URL, not `Refs #834` — see the protocol note."
+    with tempfile.TemporaryDirectory() as td:
+        lib = pathlib.Path(td) / "claim-sync-lib.js"
+        lib.write_text(src.replace(anchor, "const scannable = body;"), encoding="utf-8")
+        proc = subprocess.run(
+            [
+                NODE,
+                "-e",
+                f"const l=require({json.dumps(str(lib))});"
+                "process.stdout.write(JSON.stringify("
+                "l.extractLinkedIssues(process.argv[1]).all));",
+                body,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+        assert proc.returncode == 0, f"node failed: {proc.stderr}"
+        mutated = json.loads(proc.stdout)
+    assert mutated == [834], (
+        f"the mutation must restore the defect (expected [834], got {mutated}) — "
+        "if it does not, the exclusion tests are not testing what they claim"
+    )
+    assert extract(body)["all"] == [], "and the shipped lib must still exclude it"
+
+
 def test_an_unterminated_fence_does_not_swallow_a_later_claim():
     """A stray fence must not blank the rest of the body.
 

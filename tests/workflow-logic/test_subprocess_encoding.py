@@ -116,6 +116,27 @@ def test_explicit_text_false_is_not_a_violation():
     assert find_violations(src, "false.py") == [], "text=False is binary mode"
 
 
+def test_a_truthy_non_bool_constant_still_requests_text_mode():
+    """`text=1` enables text mode — subprocess tests truth, not identity.
+
+    Matching only `is True` made this the one text-mode spelling the guard
+    waved through, so the cp1252 decode it exists to prevent came back
+    undetected. Both spellings, since both are accepted keywords.
+    """
+    for kw in ("text", "universal_newlines"):
+        src = f"import subprocess\nsubprocess.run(['x'], {kw}=1)\n"
+        found = find_violations(src, "truthy.py")
+        assert len(found) == 1, f"{kw}=1 is text mode and must be flagged, got {found}"
+        assert kw in found[0].reason, f"the reason must name {kw}, got {found[0].reason}"
+
+
+def test_falsy_non_bool_constants_stay_binary_mode():
+    """The mirror of the above: 0 and None are binary, not findings."""
+    for literal in ("0", "None"):
+        src = f"import subprocess\nsubprocess.run(['x'], text={literal})\n"
+        assert find_violations(src, "falsy.py") == [], f"text={literal} is binary mode"
+
+
 def test_a_non_subprocess_call_named_run_is_ignored():
     """`self.run(text=True)` is not subprocess; the guard must not claim it."""
     src = "import subprocess\nother.run(['x'], text=True)\n"

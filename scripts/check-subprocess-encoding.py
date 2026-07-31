@@ -129,10 +129,15 @@ def find_violations(source: str, path: str = "<string>") -> list[Violation]:
             if kw is None:
                 continue
             if isinstance(kw.value, ast.Constant):
-                if kw.value.value is True:
-                    requested_by = f"{kw_name}=True"
+                # subprocess tests these for TRUTH, not identity: `text=1` enables
+                # text mode exactly as `text=True` does. Matching only `is True`
+                # let `text=1` through as if it were binary mode — a silent
+                # false negative in the guard, which is the failure shape this
+                # scanner exists to catch. Falsy constants (False, 0, None) are
+                # genuinely binary mode and correctly not a finding.
+                if kw.value.value:
+                    requested_by = f"{kw_name}={kw.value.value!r}"
                     break
-                # An explicit False is binary mode — correct, and not a finding.
                 continue
             # Non-literal: cannot prove it is never true, and the failure is silent.
             requested_by = f"{kw_name}=<non-literal>"

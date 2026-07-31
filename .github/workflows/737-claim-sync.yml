@@ -268,24 +268,28 @@ jobs:
             const alreadyClaimed = new Set(claimedIssues.map((i) => i.number));
 
             // --- claim: an open PR anywhere in the org names a hub issue -----
+            // Runs whether or not the search worked. `claimants` is already
+            // reduced to hub PRs when it did not, and those come from pulls.list
+            // — authoritative either way. Skipping this on a transient search
+            // failure would leave a hub issue unclaimed with an open hub PR
+            // referencing it (e.g. a hand-removed label with no PR event to
+            // re-add it), which is the defect this job exists to prevent.
             const claimed = [];
-            if (searchOk) {
-              for (const [n, refs] of claimants) {
-                if (alreadyClaimed.has(n)) continue;
-                const { data: issue } = await github.rest.issues
-                  .get({ ...hub, issue_number: n })
-                  .catch(() => ({ data: null }));
-                if (!issue || issue.state !== 'open' || issue.pull_request) continue;
-                if ((issue.labels || []).some((l) => (l.name || l) === lib.CLAIM_LABEL)) continue;
-                claimed.push(`#${n} <- ${refs.join(', ')}`);
-                if (dryRun) continue;
-                await github.rest.issues.addLabels({
-                  ...hub, issue_number: n, labels: [lib.CLAIM_LABEL],
-                });
-                await github.rest.issues.createComment({
-                  ...hub, issue_number: n, body: lib.linkedClaimComment(refs.join(', ')),
-                });
-              }
+            for (const [n, refs] of claimants) {
+              if (alreadyClaimed.has(n)) continue;
+              const { data: issue } = await github.rest.issues
+                .get({ ...hub, issue_number: n })
+                .catch(() => ({ data: null }));
+              if (!issue || issue.state !== 'open' || issue.pull_request) continue;
+              if ((issue.labels || []).some((l) => (l.name || l) === lib.CLAIM_LABEL)) continue;
+              claimed.push(`#${n} <- ${refs.join(', ')}`);
+              if (dryRun) continue;
+              await github.rest.issues.addLabels({
+                ...hub, issue_number: n, labels: [lib.CLAIM_LABEL],
+              });
+              await github.rest.issues.createComment({
+                ...hub, issue_number: n, body: lib.linkedClaimComment(refs.join(', ')),
+              });
             }
 
             // --- release: no open PR anywhere still claims it ----------------
@@ -297,20 +301,31 @@ jobs:
                 hasOpenLinkedPR: false, claimedByLinkedPR, lastActivityMs,
                 nowMs: now, thresholdMs: lib.EXPIRY_MS,
               });
-              // Provenance is only worth a REST call INSIDE the expiry window:
-              // past it the backstop releases either way. A cross-repo PR gives
-              // this job no `closed` event, so the marker on the sweep's own
-              // claim comment is what separates a finished PR-derived claim
-              // (release now, matching the same-repo path) from a hand-written
-              // CLAIM comment (hold for the full 48h, or two agents collide).
+              // A cross-repo PR gives this job no `closed` event, so the marker
+              // on the sweep's own claim comment is what separates a PR-derived
+              // claim from a hand-written one. Read it only where it can change
+              // the outcome:
+              //   search usable + INSIDE the window -> a marker releases now
+              //     (matching the same-repo path), while an unmarked CLAIM
+              //     comment keeps its full 48h or two agents collide;
+              //   search UNUSABLE + PAST the window -> a marker HOLDS. The open
+              //     PR set is unknown, and a cross-repo PR that stays open
+              //     longer than the expiry would otherwise lose its claim to
+              //     the backstop on a transient search failure — releasing a
+              //     live claim on silence, which is exactly what this job must
+              //     never do.
+              // The other two combinations cannot change the decision, so they
+              // spend no REST call.
               const expired = decide(false);
-              const claimedByLinkedPR = expired || !searchOk
-                ? false
-                : lib.hasLinkedClaimMarker(
+              const provenanceMatters = searchOk ? !expired : expired;
+              const claimedByLinkedPR = provenanceMatters
+                ? lib.hasLinkedClaimMarker(
                     await listOpen(github.rest.issues.listComments, {
                       ...hub, issue_number: issue.number,
                     }, 3).catch(() => []),
-                  );
+                  )
+                : false;
+              if (!searchOk && claimedByLinkedPR) continue;
               if (!decide(claimedByLinkedPR)) continue;
               released.push(`${hub.repo}#${issue.number}`);
               if (dryRun) continue;

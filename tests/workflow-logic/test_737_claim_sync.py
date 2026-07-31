@@ -56,7 +56,7 @@ THIRD = "FreeForCharity/FFC-EX-canary"
 def _node(expr_body: str, *argv: str) -> object:
     code = f"const l=require({json.dumps(str(LIB))});{expr_body}"
     proc = subprocess.run(
-        ["node", "-e", code, *argv],
+        [NODE, "-e", code, *argv],
         capture_output=True,
         text=True,
         timeout=60,
@@ -576,6 +576,36 @@ def test_sweep_still_expires_hand_claims_when_the_search_fails():
     # The backstop is independent of the org search: hub PRs remain authoritative.
     r = run_sweep(claimed_issues=[_claimed(880, _ago(days=3))], search_throws=True)
     assert _released(r) == [880], r
+
+
+def test_sweep_holds_a_pr_derived_claim_past_the_window_when_the_search_fails():
+    # Copilot review on #941: the 48h backstop was still firing on a
+    # marker-stamped claim when the search was unusable, so a cross-repo PR that
+    # stays open longer than the expiry lost its claim to a transient search
+    # failure — releasing a live claim on silence, the one thing this must not do.
+    r = run_sweep(
+        claimed_issues=[_claimed(934, _ago(days=3))],
+        comments={"934": [{"body": f"claimed\n{MARKER}"}]},
+        search_throws=True,
+    )
+    assert _released(r) == [], r
+    # The provenance read is what makes the hold possible, so it must happen here
+    # even though the issue is past the expiry.
+    assert [c["issue_number"] for c in r["listCommentsCalls"]] == [934], r["listCommentsCalls"]
+
+
+def test_sweep_still_claims_from_hub_prs_when_the_search_fails():
+    # Copilot review on #941: hub PRs come from pulls.list and are authoritative
+    # whether or not the search worked, so skipping the whole claim pass left a
+    # hub issue unclaimed with an open hub PR referencing it (e.g. a hand-removed
+    # label, with no PR event coming to re-add it).
+    r = run_sweep(
+        hub_prs=[{"number": 940, "body": "Closes #934"}],
+        org_prs=[_search_item(TEMPLATE, 433, f"Refs {HUB}#893")],
+        issues={"934": _open_issue(934), "893": _open_issue(893)},
+        search_throws=True,
+    )
+    assert _labeled(r) == [934], "hub claims survive a failed search; cross-repo ones wait"
 
 
 def test_sweep_rejects_a_truncated_search_that_looks_complete():

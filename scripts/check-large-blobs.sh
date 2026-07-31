@@ -77,13 +77,33 @@ is_allowlisted() {
 offenders=""
 allowed=""
 
-object_list="$(git rev-list --objects "${BASE_REF}..${HEAD_REF}" || true)"
+# An enumeration failure must never read as "no objects, therefore clean" -- that
+# is the exact false-OK this guard exists to prevent. Both git calls are checked.
+if ! object_list="$(git rev-list --objects "${BASE_REF}..${HEAD_REF}")"; then
+  echo "::error::check-large-blobs: could not enumerate objects in" \
+       "'${BASE_REF}..${HEAD_REF}'. The range is unscannable (incomplete history" \
+       "or missing objects) -- fetch both refs at full depth and re-run." >&2
+  exit 2
+fi
 
 if [ -n "$object_list" ]; then
   # Build "sha type size" for every object in the range.
-  sizes="$(printf '%s\n' "$object_list" \
+  if ! sizes="$(printf '%s\n' "$object_list" \
     | awk '{print $1}' \
-    | git cat-file --batch-check='%(objectname) %(objecttype) %(objectsize)')"
+    | git cat-file --batch-check='%(objectname) %(objecttype) %(objectsize)')"; then
+    echo "::error::check-large-blobs: could not read object metadata for" \
+         "'${BASE_REF}..${HEAD_REF}'. The repository may be corrupt or shallow." >&2
+    exit 2
+  fi
+
+  # Index sha -> (type, size) once. Looking each sha up by re-scanning $sizes
+  # would make the scan O(n^2) in the number of objects the PR introduces.
+  declare -A obj_type obj_size
+  while read -r osha otype osize _rest; do
+    [ -n "$osha" ] || continue
+    obj_type["$osha"]="$otype"
+    obj_size["$osha"]="$osize"
+  done <<< "$sizes"
 
   while IFS= read -r line; do
     [ -z "$line" ] && continue
@@ -93,12 +113,11 @@ if [ -n "$object_list" ]; then
     [ "$sha" = "$rest" ] && rest=""
     path="$rest"
 
-    meta="$(printf '%s\n' "$sizes" | awk -v s="$sha" '$1==s {print $2" "$3; exit}')"
-    [ -z "$meta" ] && continue
-    otype="${meta%% *}"
-    osize="${meta##* }"
+    otype="${obj_type[$sha]:-}"
+    osize="${obj_size[$sha]:-}"
 
     [ "$otype" = "blob" ] || continue
+    [ -n "$osize" ] || continue
     [ -n "$path" ] || continue
     [ "$osize" -gt "$MAX_BLOB_BYTES" ] || continue
 

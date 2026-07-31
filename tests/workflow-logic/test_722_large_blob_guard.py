@@ -20,10 +20,13 @@ silently pass, but the wiring is what keeps it from ever getting there.
 
 from __future__ import annotations
 
+import inspect
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from wf_extract import load_workflow
@@ -209,6 +212,35 @@ def test_unresolvable_ref_fails_loudly(tmp_path):
     assert "cannot resolve ref" in result.stderr
 
 
+def test_unscannable_range_fails_loudly(tmp_path):
+    """An enumeration failure must exit 2, not read as an empty (clean) range.
+
+    Both refs resolve, so the ref check upstream passes -- the failure happens
+    inside `git rev-list --objects`. Swallowing it would report OK on a range
+    the guard never actually scanned, which is the precise false negative this
+    guard exists to prevent.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "actionlint").write_bytes(b"\0" * BIG)
+    _commit(repo, "commit a tool binary")
+
+    # Remove the tip commit's tree object. The commit still resolves, so the
+    # range looks scannable, but walking it cannot complete.
+    tree = _git(repo, "rev-parse", "HEAD^{tree}").strip()
+    tree_object = repo / ".git" / "objects" / tree[:2] / tree[2:]
+    assert tree_object.exists(), "fixture expects loose objects in a fresh repo"
+    tree_object.unlink()
+
+    result = _run_guard(repo)
+    assert result.returncode == 2, (
+        "an unscannable range must exit 2, never a false OK\n"
+        + result.stdout
+        + result.stderr
+    )
+    assert "OK:" not in result.stdout
+    assert "could not enumerate objects" in result.stderr
+
+
 def test_workflow_wiring():
     """722 must call the guard on pull_request with full history."""
     wf = load_workflow(WF_FILE)
@@ -241,3 +273,37 @@ def test_guard_script_is_executable():
         timeout=30,
     ).stdout.split()
     assert mode and mode[0] == "100755", f"expected mode 100755, got {mode[:1]}"
+
+
+TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+
+
+def _call(test) -> None:
+    """Invoke a test, supplying a private temp dir if it asks for one.
+
+    `run_all.py` executes each module as a plain script -- there is no pytest in
+    this suite, so `tmp_path` has to be provided here. Without this runner the
+    module defines its tests and exits 0 having executed none of them, which the
+    harness reports as a passing module.
+    """
+    if "tmp_path" in inspect.signature(test).parameters:
+        tmp = tempfile.mkdtemp(prefix="wf722-")
+        try:
+            test(pathlib.Path(tmp))
+        finally:
+            # git leaves read-only object files; they resist rmtree on Windows.
+            shutil.rmtree(tmp, ignore_errors=True)
+    else:
+        test()
+
+
+if __name__ == "__main__":
+    failures = 0
+    for t in TESTS:
+        try:
+            _call(t)
+            print(f"  PASS {t.__name__}")
+        except AssertionError as e:
+            failures += 1
+            print(f"  FAIL {t.__name__}: {e}")
+    sys.exit(1 if failures else 0)

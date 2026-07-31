@@ -132,7 +132,23 @@ jobs:
                 .listForRef({ owner, repo, ref: pr.head.sha, per_page: 100 })
                 .catch(() => ({ data: { check_runs: [] } }));
               const runs = checks.check_runs || [];
-              const required = REQUIRED_CHECKS.map((n) => runs.find((r) => r.name === n));
+              // A re-run leaves SEVERAL check-runs with the same `name` on one
+              // head SHA, and listForRef does not promise newest-first. Taking
+              // the first match can therefore read an OLD success while the
+              // current attempt is failing or still running — a green verdict
+              // for a PR that is not green. Select the LATEST attempt per name,
+              // ordered by started_at (set on in-progress runs too, unlike
+              // completed_at) so an in-flight re-run wins over the stale pass
+              // and fails the `conclusion === 'success'` test below.
+              const latestByName = (n) =>
+                runs
+                  .filter((r) => r.name === n)
+                  .reduce((best, r) => {
+                    if (!best) return r;
+                    const t = (x) => new Date(x.started_at || x.completed_at || 0).getTime();
+                    return t(r) >= t(best) ? r : best;
+                  }, null);
+              const required = REQUIRED_CHECKS.map(latestByName);
               // Missing counts as not-green: an absent required check is exactly
               // the "presence mistaken for validity" shape the ledger is about.
               if (!required.every((r) => r && r.conclusion === 'success')) continue;

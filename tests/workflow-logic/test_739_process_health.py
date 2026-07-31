@@ -309,6 +309,97 @@ def test_the_workflow_only_counts_drafts_that_are_clean_and_green():
     assert "parked" in raw, "must honour the parked marker/label"
 
 
+def _select_required(check_runs: list, names: list) -> list:
+    """Run the workflow's OWN latestByName selector against a fixture.
+
+    Extracted from the YAML rather than restated here: a copy in the test would
+    keep passing after the workflow reverted to `runs.find(...)`, which is the
+    exact mutation this guards.
+    """
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
+    start = raw.index("const latestByName")
+    end = raw.index("const required =", start)
+    selector = "\n".join(line.strip() for line in raw[start:end].splitlines())
+    code = (
+        "const runs=JSON.parse(process.argv[1]);"
+        f"{selector}"
+        "process.stdout.write(JSON.stringify("
+        "JSON.parse(process.argv[2]).map(latestByName)));"
+    )
+    proc = subprocess.run(
+        ["node", "-e", code, json.dumps(check_runs), json.dumps(names)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"node failed: {proc.stderr}")
+    return json.loads(proc.stdout)
+
+
+def test_a_rerun_in_flight_does_not_read_as_the_older_success():
+    """The re-run case: same name, same SHA, old pass first in API order.
+
+    `runs.find()` returns the stale success and the PR is reported green while
+    its current attempt is still running. Selecting the latest attempt must
+    surface the in-flight run, whose null conclusion fails the success test.
+    """
+    runs = [
+        {
+            "name": "Validate Repository",
+            "started_at": "2026-07-20T01:00:00Z",
+            "completed_at": "2026-07-20T01:05:00Z",
+            "conclusion": "success",
+        },
+        {
+            "name": "Validate Repository",
+            "started_at": "2026-07-20T03:00:00Z",
+            "completed_at": None,
+            "conclusion": None,
+        },
+    ]
+    (picked,) = _select_required(runs, ["Validate Repository"])
+    assert picked["started_at"] == "2026-07-20T03:00:00Z", (
+        f"must pick the newest attempt, picked {picked['started_at']}"
+    )
+    assert picked["conclusion"] != "success", "an in-flight re-run must not read as green"
+
+
+def test_a_rerun_that_failed_beats_the_earlier_pass():
+    """Ordering, not conclusion, decides — a later failure must win."""
+    runs = [
+        {
+            "name": "Phantom Revert Guard",
+            "started_at": "2026-07-20T01:00:00Z",
+            "completed_at": "2026-07-20T01:05:00Z",
+            "conclusion": "success",
+        },
+        {
+            "name": "Phantom Revert Guard",
+            "started_at": "2026-07-20T04:00:00Z",
+            "completed_at": "2026-07-20T04:06:00Z",
+            "conclusion": "failure",
+        },
+    ]
+    (picked,) = _select_required(runs, ["Phantom Revert Guard"])
+    assert picked["conclusion"] == "failure", "the latest attempt failed; the PR is not green"
+
+
+def test_a_missing_required_check_still_selects_to_null():
+    """Absent stays absent — the caller treats null as not-green."""
+    picked = _select_required([{"name": "Some Other Check"}], ["Validate Repository"])
+    assert picked == [None], f"a check with no runs must select to null, got {picked}"
+
+
+def test_the_selector_is_not_a_bare_find():
+    """Pin the defect out of the source as well as out of the behaviour."""
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
+    assert "runs.find((r) => r.name === n)" not in raw, (
+        "reverted to first-match; a re-run can mask a failure with an older success"
+    )
+    assert "started_at" in raw, "latest-attempt ordering must use started_at, set on in-flight runs"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

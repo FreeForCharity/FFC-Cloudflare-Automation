@@ -70,12 +70,19 @@ TEMPLATE = "FreeForCharity/FFC-IN-FFC_Single_Page_Template"
 THIRD = "FreeForCharity/FFC-EX-canary"
 
 
+# encoding="utf-8" is required, not cosmetic. `text=True` alone decodes with the
+# platform's ANSI codepage, which on Windows is cp1252 — and every payload here
+# now carries emoji (🔒 in the claim notice, ⏳ in the draft report), so the
+# decode raises UnicodeDecodeError and the whole module crashes rather than
+# failing a test. Same class as the cp1252 decode tracked in #945, and the
+# Conductor runs on exactly that host.
 def _node(expr_body: str, *argv: str) -> object:
     code = f"const l=require({json.dumps(str(LIB))});{expr_body}"
     proc = subprocess.run(
         [NODE, "-e", code, *argv],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=60,
     )
     if proc.returncode != 0:
@@ -209,6 +216,27 @@ def test_workflow_requires_lib_and_has_both_triggers():
     }, on["pull_request"]
     jobs = wf["jobs"]
     assert "label-sync" in jobs and "sweep" in jobs, list(jobs)
+
+
+def test_label_sync_can_write_to_the_pull_request_it_comments_on():
+    """The claim notice is a comment on a PULL REQUEST.
+
+    It is posted through the issues endpoint, but GitHub scopes that call by the
+    target's real type: with `pull-requests: read` the POST returns 403
+    "Resource not accessible by integration" and answers
+    `x-accepted-github-permissions: issues=write; pull_requests=write`. Measured
+    live on run 30631950400, where the labels applied and the job then died on
+    the comment — i.e. the notice shipped in a job that could not post it.
+
+    A permission is not exercised by any unit test, so this is the only place
+    the requirement can be pinned.
+    """
+    perms = load_workflow(WF_FILE)["jobs"]["label-sync"]["permissions"]
+    assert perms.get("issues") == "write", perms
+    assert perms.get("pull-requests") == "write", (
+        "label-sync comments on a PR, which needs pull-requests: write; "
+        f"`read` 403s at the createComment call (got {perms.get('pull-requests')!r})"
+    )
 
 
 def test_sweep_uses_ambient_token_hub_only():
@@ -449,6 +477,12 @@ MUT_NO_PR_NOTICE = ("if (fresh.length) {", "if (false) {")
 # #948 Part A: keep the notice but blind it to what it has already said, which
 # is the difference between "tell the author once" and "tell them every sync".
 MUT_NOTICE_BLIND = ("  for (const c of comments || []) {", "  for (const c of []) {")
+# #951 review: read only the FIRST page of an oldest-first comment list, the
+# prefix mistake the backwards walk exists to avoid.
+MUT_FIRST_PAGE_ONLY = (
+    "for (let p = last, reads = 0; p > 1 && reads < backPages; p--, reads++) {",
+    "for (let p = last, reads = 0; false; p--, reads++) {",
+)
 # #948 Part B: report a claim held by ANY draft, however fresh — a draft opened
 # an hour ago is a PR being written, not a stuck claim.
 MUT_DRAFT_IGNORES_AGE = (
@@ -515,6 +549,7 @@ def _invoke(
             env=env,
             capture_output=True,
             text=True,
+            encoding="utf-8",  # see _node: the shim's JSON carries 🔒/⏳
             timeout=120,
         )
     if proc.returncode != 0:
@@ -1006,6 +1041,57 @@ def test_label_sync_release_path_posts_no_pr_notice():
     )
     assert _released(r) == [945], r
     assert [c["issue_number"] for c in r["comments"]] == [945], r["comments"]
+
+
+def _long_thread(total: int, marker_at: str) -> list[dict]:
+    """`total` comments on a PR, with the claim notice at one end.
+
+    `marker_at` is "start" or "end" — the two places a notice can be. The first
+    claim on a PR lands early in the thread; a claim added by a later edit lands
+    last. A bounded read from page 1 only ever covers the first.
+    """
+    filler = [{"body": f"routine comment {i}"} for i in range(total - 1)]
+    return [{"body": NOTICE_945}, *filler] if marker_at == "start" else [*filler, {"body": NOTICE_945}]
+
+
+def test_label_sync_finds_a_notice_at_the_end_of_a_long_thread():
+    # Copilot on #951: comments are served OLDEST-first, so pages 1..N read the
+    # START of the thread. A notice posted after 300 comments sat beyond that
+    # window and was re-announced on every later sync. Same prefix mistake
+    # AGENTS.md records for long issues.
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945"),
+        action="edited",
+        issues={"945": _open_issue(945)},
+        comments={"946": _long_thread(350, marker_at="end")},
+    )
+    assert _labeled(r) == [945], r
+    assert r["comments"] == [], "the notice is already at the end of the thread"
+    # Bounded: page 1, then backwards from the last page. Never the whole thread.
+    assert len(r["listCommentsCalls"]) <= 3, r["listCommentsCalls"]
+
+
+def test_label_sync_still_finds_a_notice_at_the_start_of_a_long_thread():
+    # The other direction, and why page 1 stays in the read: the FIRST claim on
+    # a PR is announced early, and a backwards-only walk would miss it.
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945"),
+        action="edited",
+        issues={"945": _open_issue(945)},
+        comments={"946": _long_thread(350, marker_at="start")},
+    )
+    assert r["comments"] == [], "a notice at the head of the thread still counts"
+
+
+def test_mutation_reading_only_the_first_page_re_announces_on_a_long_thread():
+    r = run_label_sync(
+        pr=_pr(946, "Refs #945"),
+        action="edited",
+        issues={"945": _open_issue(945)},
+        comments={"946": _long_thread(350, marker_at="end")},
+        script_mutation=MUT_FIRST_PAGE_ONLY,
+    )
+    assert _notices(r, 946), "the mutation must reintroduce the duplicate notice"
 
 
 def test_mutation_dropping_the_notice_leaves_the_author_uninformed():

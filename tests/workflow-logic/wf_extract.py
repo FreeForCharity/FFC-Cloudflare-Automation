@@ -8,6 +8,7 @@ logic without updating the tests fails CI, not production.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 
@@ -15,6 +16,42 @@ import yaml
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+
+
+# --- child process environments ---------------------------------------------
+#
+# A child environment is INHERITED and then layered on, never built from
+# nothing. Handed a dict containing only the variables a test cares about,
+# node aborts during startup on Windows — it cannot initialize without the
+# platform's own variables (SYSTEMROOT above all) and dies before any test
+# logic runs, so the module reports `harness crashed:` rather than a result
+# (#943). 26 modules were unrunnable on a Windows host for this reason while
+# staying green on Linux and in CI, which is why nothing reported it.
+#
+# The cause is the *minimal dict*, not the POSIX-looking `/usr/bin:/bin` that
+# used to be written into it: #943 measured both, and rewriting PATH alone
+# changed nothing while inheriting fixed every crash.
+#
+# PATH is assembled with os.pathsep and keeps the inherited PATH as its tail,
+# so a harness directory still shadows the real `gh`/`curl`/`sleep` while the
+# platform's own directories stay reachable. The hardcoded `/usr/bin:/bin`
+# tails are dropped rather than translated: on POSIX they are already in the
+# inherited PATH, and on Windows they were never anything but noise.
+def child_env(*prepend_path: str | pathlib.Path, **overrides: str) -> dict[str, str]:
+    """The parent environment, with `prepend_path` entries put in front of PATH
+    and `overrides` applied on top.
+
+    Callers that need a child NOT to see something (the harness shims, the
+    developer's git config) must override the relevant variable explicitly —
+    inheriting means an omission is no longer a guarantee. HARNESS_DIR is a
+    test-local directory that is never on a real PATH, so simply not
+    prepending it keeps it unreachable.
+    """
+    env = dict(os.environ)
+    if prepend_path:
+        env["PATH"] = os.pathsep.join([*(str(p) for p in prepend_path), env.get("PATH", "")])
+    env.update(overrides)
+    return env
 
 
 # --- ledger L27: hashing a shell value is not hashing the file --------------

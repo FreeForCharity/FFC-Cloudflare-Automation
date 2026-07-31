@@ -42,7 +42,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import load_workflow, step_github_script  # noqa: E402
+from wf_extract import child_env, load_workflow, step_github_script  # noqa: E402
 
 WORKFLOW = "724-initialize-labels.yml"
 JOB = "create-labels"
@@ -59,7 +59,7 @@ def _label(name):
 
 def _run(labels, *, existing=None, getlabel_error=None, write_fail=None):
     script = step_github_script(WORKFLOW, JOB, STEP)
-    env = {"PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin"}
+    env = child_env(pathlib.Path(NODE).parent)
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
         (tdp / "script.js").write_text(script, encoding="utf-8")

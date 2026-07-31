@@ -17,7 +17,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import step_run
+from wf_extract import child_env, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 
@@ -41,12 +41,12 @@ def run_archive(env_overrides: dict) -> tuple[subprocess.CompletedProcess, str, 
         gh_log = tdp / "gh.log"
         summary.touch()
         gh_log.touch()
-        env = {
-            "PATH": f"{HARNESS_DIR}:/usr/bin:/bin",
-            "GITHUB_STEP_SUMMARY": str(summary),
-            "TEST_GH_LOG": str(gh_log),
-            "HOME": str(tdp),
-        }
+        env = child_env(
+            HARNESS_DIR,
+            GITHUB_STEP_SUMMARY=str(summary),
+            TEST_GH_LOG=str(gh_log),
+            HOME=str(tdp),
+        )
         env.update(BASE_ENV)
         env.update(env_overrides)
         proc = subprocess.run(

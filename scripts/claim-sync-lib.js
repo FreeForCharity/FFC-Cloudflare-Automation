@@ -92,9 +92,38 @@ function _collect(body, re, sourceRepo, targetRepo) {
   return out;
 }
 
+// Blanks fenced code blocks and inline code spans, preserving length (and so
+// every offset) by substituting spaces. Newlines are kept so line-anchored
+// reasoning downstream still sees the same line count.
+//
+// Why this exists: a linking keyword inside backticks is documentation, not a
+// claim. Writing *about* the protocol — "cite with a URL, not `Refs #834`" —
+// was indistinguishable from claiming #834, because this scanner is a plain
+// regex over the raw body. That is not hypothetical: it fired on PR #958 and
+// pulled #834 out of the pickup query, and then fired a SECOND time on the
+// rewrite whose whole purpose was to explain the first one. Prose that names
+// the keyword is exactly the prose most likely to appear in the PRs that
+// discuss claiming, so the failure concentrates where it does the most harm.
+//
+// Code spans are the right boundary: a genuine claim is never written in one,
+// and the linking keywords GitHub itself honours are ignored inside code too.
+function stripCode(text) {
+  const blank = (m) => m.replace(/[^\n]/g, ' ');
+  return (
+    String(text == null ? '' : text)
+      // Fenced blocks first (``` or ~~~), so a fence containing a lone backtick
+      // cannot leave an unbalanced delimiter for the inline pass.
+      .replace(/^([ \t]*)(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]*\2[^\n]*$|$)/gm, blank)
+      // Then inline spans, longest runs of backticks first.
+      .replace(/(`+)(?:(?!\1)[\s\S])*?\1/g, blank)
+  );
+}
+
 // Returns { closing, refs, all } — de-duplicated issue numbers referenced by a
 // PR body. `closing` are auto-closing keywords; `refs` are the ref/refs-only
 // references; `all` is the union (any reference counts as a claim).
+//
+// Keywords inside code spans or fenced blocks are IGNORED — see stripCode.
 //
 // Repo scoping via opts:
 //   {}                              -> bare `#N` only (same-repo, legacy shape)
@@ -107,8 +136,9 @@ function extractLinkedIssues(body, opts = {}) {
   const targetRepo = scoped ? normalizeRepo(opts.targetRepo) : null;
   if (scoped && !targetRepo) return { closing: [], refs: [], all: [] };
   const sourceRepo = normalizeRepo(opts.sourceRepo);
-  const all = _collect(body, LINK_RE, sourceRepo, targetRepo);
-  const closing = _collect(body, CLOSING_RE, sourceRepo, targetRepo);
+  const scannable = stripCode(body);
+  const all = _collect(scannable, LINK_RE, sourceRepo, targetRepo);
+  const closing = _collect(scannable, CLOSING_RE, sourceRepo, targetRepo);
   const refs = all.filter((n) => !closing.includes(n));
   return { closing, refs, all };
 }
@@ -231,6 +261,7 @@ module.exports = {
   LINK_RE,
   CLOSING_RE,
   normalizeRepo,
+  stripCode,
   extractLinkedIssues,
   linkedClaimComment,
   hasLinkedClaimMarker,

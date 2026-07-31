@@ -155,6 +155,55 @@ def test_empty_and_none_body():
     ) == []
 
 
+# --- code spans are documentation, not claims (#948) ------------------------
+
+
+def test_a_keyword_inside_an_inline_code_span_is_not_a_claim():
+    """Prose ABOUT the protocol must not execute the protocol.
+
+    The live failure: PR #958 cited an issue by URL and added a sentence
+    explaining not to use the keyword form — with the keyword in backticks.
+    That sentence claimed the issue and pulled it off the pickup query, which
+    is the exact defect the sentence was warning about.
+    """
+    r = extract("Cite with a URL, not `Refs #834` — see the protocol note.")
+    assert r["all"] == [], f"a keyword in backticks is documentation, got {r}"
+
+
+def test_a_keyword_inside_a_fenced_block_is_not_a_claim():
+    r = extract("Example of the claiming form:\n\n```\nCloses #12\n```\n\nDo not use it.")
+    assert r["all"] == [], f"a fenced example must not claim, got {r}"
+
+
+def test_a_multi_backtick_span_is_still_a_span():
+    r = extract("Written ``Refs #99`` when you need a literal backtick inside.")
+    assert r["all"] == [], f"``…`` is still a code span, got {r}"
+
+
+def test_a_real_claim_beside_documented_prose_still_claims():
+    """The exclusion must not become a way to hide a claim.
+
+    A body that genuinely claims #12 and also *discusses* #834 claims exactly
+    one of them. Dropping both would trade this bug for the worse one.
+    """
+    r = extract("Closes #12. Unlike a citation, do not write `Refs #834` here.")
+    assert r["all"] == [12], f"the real claim must survive, got {r}"
+    assert r["closing"] == [12], r
+
+
+def test_an_unterminated_fence_does_not_swallow_a_later_claim():
+    """A stray fence must not blank the rest of the body.
+
+    The failure mode to avoid is a typo'd fence silently hiding a real claim —
+    that would turn a formatting slip into a lost backlog pickup, trading this
+    bug for a quieter one. Verified rather than assumed: the fence pattern's
+    trailing `$` is line-anchored under /m, so an unterminated fence consumes
+    only up to a line end, and a claim written afterwards still registers.
+    """
+    r = extract("```\nunterminated\n\nCloses #12")
+    assert r["all"] == [12], f"a claim after a stray fence must survive, got {r}"
+
+
 # --- expiry decision -------------------------------------------------------
 
 DAY = 24 * 60 * 60 * 1000

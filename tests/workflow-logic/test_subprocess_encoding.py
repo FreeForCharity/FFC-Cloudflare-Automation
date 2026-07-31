@@ -230,6 +230,56 @@ def test_an_unreadable_argv0_is_not_assumed_to_be_python():
     assert find_violations(src, "unknown.py") == [], "an unprovable argv[0] is not a Python child"
 
 
+def test_the_var_name_in_a_VALUE_position_does_not_satisfy_the_rule():
+    """`{"FOO": "PYTHONIOENCODING"}` sets FOO, not PYTHONIOENCODING.
+
+    The first cut matched the name anywhere under `env=`, so this shape — a
+    genuinely unpinned call — read as fixed. A false negative in a guard is the
+    worst outcome available to it: the defect ships *and* the check reports
+    clean. Only key positions count (Copilot review, #963).
+    """
+    src = (
+        "import subprocess, sys\n"
+        "subprocess.run([sys.executable, 'x.py'], text=True, encoding='utf-8',\n"
+        "               env={'FOO': 'PYTHONIOENCODING'})\n"
+    )
+    found = find_violations(src, "value_position.py")
+    assert len(found) == 1, "a var name in a value position pins nothing"
+    assert "unpinned" in found[0].reason, found[0].reason
+
+
+def test_a_readable_env_without_the_pin_says_unpinned_not_unreadable():
+    """Provable absence and unprovable presence are different findings.
+
+    A dict literal with constant keys can be read in full, so omitting the pin
+    is a proof. Reporting that as 'cannot be read' sends the author looking for
+    an unreadability problem that does not exist.
+    """
+    src = (
+        "import subprocess, sys\n"
+        "subprocess.run([sys.executable, 'x.py'], text=True, encoding='utf-8',\n"
+        "               env={'FOO': 'bar'})\n"
+    )
+    found = find_violations(src, "readable_absent.py")
+    assert len(found) == 1, "a readable env= without the pin is still a finding"
+    assert "unpinned" in found[0].reason, found[0].reason
+    assert "cannot be read" not in found[0].reason, (
+        f"the env IS readable; the message must not claim otherwise: {found[0].reason}"
+    )
+
+
+def test_a_merged_mapping_keeps_the_benefit_of_the_doubt():
+    """`{**BASE}` may carry the pin, so it is 'unproven', not 'absent'."""
+    src = (
+        "import subprocess, sys\n"
+        "subprocess.run([sys.executable, 'x.py'], text=True, encoding='utf-8',\n"
+        "               env={**BASE, 'FOO': 'bar'})\n"
+    )
+    found = find_violations(src, "merged.py")
+    assert len(found) == 1, "an unreadable merge is still reported"
+    assert "cannot be proven" in found[0].reason, found[0].reason
+
+
 def test_an_env_that_cannot_be_read_is_reported():
     """A variable env may or may not carry the pin, and the failure is silent."""
     src = (
@@ -238,7 +288,7 @@ def test_an_env_that_cannot_be_read_is_reported():
     )
     found = find_violations(src, "opaque_env.py")
     assert len(found) == 1, "an unreadable env= must be reported, not assumed pinned"
-    assert "no readable PYTHONIOENCODING" in found[0].reason, found[0].reason
+    assert "cannot be proven" in found[0].reason, found[0].reason
 
 
 def test_the_child_rule_does_not_pre_empt_the_parent_rule():
@@ -268,6 +318,12 @@ def test_the_three_run_60_call_sites_pin_the_child():
     were actually fixed — including `run_all.py`, which is the harness every
     other module runs under and so the one whose None-stdout failure looks like
     a bug in every module at once.
+
+    Asserted by running the scanner over each file rather than by grepping for
+    `PYTHONIOENCODING`: a substring search passes on a file where the pin was
+    deleted but is still named in a comment or a docstring — including the
+    comment this very fix added above the `env=` in `run_all.py`. The scanner
+    reads the call, so only a real pin in a real key position satisfies it.
     """
     here = pathlib.Path(__file__).resolve().parent
     for name in (
@@ -276,9 +332,11 @@ def test_the_three_run_60_call_sites_pin_the_child():
         "test_powershell_command_resolution.py",
     ):
         src = (here / name).read_text(encoding="utf-8")
-        assert "PYTHONIOENCODING" in src, (
-            f"{name} spawns a Python child with the parent's encoding pinned; "
-            "without PYTHONIOENCODING it can return proc.stdout=None on Windows (#962)"
+        unpinned = [v for v in find_violations(src, name) if v.kind == "child"]
+        assert unpinned == [], (
+            f"{name} spawns a Python child with the parent's encoding pinned but not "
+            f"the child's; on Windows that returns proc.stdout=None (#962):\n"
+            + "\n".join(f"  {v}" for v in unpinned)
         )
 
 

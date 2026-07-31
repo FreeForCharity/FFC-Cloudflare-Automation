@@ -61,7 +61,9 @@ WHAT IT CANNOT SEE — stated rather than papered over
       prove one, since a false demand on a `node` child is pure noise.
     * `env=SOME_DICT` built elsewhere IS reported: the guard cannot prove the
       variable carries the pin, and the failure is the silent None-stdout shape.
-      Inline the mapping, or add the pin at the call site.
+      Inline the mapping, or add the pin at the call site. Only KEY positions
+      count as setting a variable — a name in a value (`{"FOO":
+      "PYTHONIOENCODING"}`) sets nothing and does not satisfy the rule.
     * A helper that wraps `subprocess` and takes `**kwargs` is only checked at
       the wrapper's own call site.
     * `os.popen`, `pty`, and direct `io.TextIOWrapper` use are out of scope.
@@ -198,12 +200,52 @@ def _is_python_child(argv: list[str | None]) -> bool:
     return bool(argv) and argv[0] is not None and PYTHON_EXE_RE.match(argv[0]) is not None
 
 
+def _env_var_names(env: ast.expr) -> tuple[set[str], bool]:
+    """The environment variable NAMES an `env=` expression sets, and whether
+    that reading is complete.
+
+    Only key positions count. A name appearing as a *value* — `{"FOO":
+    "PYTHONIOENCODING"}` — sets no such variable, and treating it as one let a
+    genuinely unpinned call through.
+
+    Completeness is the second half: `{**BASE, "A": "1"}` and `dict(base, A=1)`
+    both merge a mapping this scanner cannot see, so the pin may be in there.
+    Those read as incomplete; a dict literal with all-constant keys is complete,
+    and its omission of the pin is then a proof, not a guess.
+    """
+    names: set[str] = set()
+
+    if isinstance(env, ast.Dict):
+        complete = True
+        for key in env.keys:
+            if key is None:  # `**other` — an unreadable mapping merged in
+                complete = False
+            elif isinstance(key, ast.Constant) and isinstance(key.value, str):
+                names.add(key.value)
+            else:  # a computed key: cannot say what it names
+                complete = False
+        return names, complete
+
+    if isinstance(env, ast.Call) and isinstance(env.func, ast.Name) and env.func.id == "dict":
+        complete = not env.args  # dict(os.environ, …) merges an unreadable base
+        for kw in env.keywords:
+            if kw.arg is None:  # dict(**other)
+                complete = False
+            else:
+                names.add(kw.arg)
+        return names, complete
+
+    return set(), False  # a variable, a comprehension, a helper call
+
+
 def _child_encoding_pinned(node: ast.Call, argv: list[str | None]) -> bool | None:
     """Whether the child's own output encoding is pinned.
 
-    Returns True when pinned, False when provably not (no `env=` and no argv
-    flag), and None when an `env=` is passed but the guard cannot read the pin
-    out of it — reported, per the module docstring.
+    True when pinned; False when provably not (no `env=` at all, or an `env=`
+    the guard can read in full that omits the pin); None when an `env=` is
+    passed whose contents cannot be read out. All three of False and None are
+    reported — they differ only in the message, which has to be honest about
+    which one it is.
     """
     if CHILD_ENCODING_ARGV_JOINED in argv:
         return True
@@ -214,12 +256,10 @@ def _child_encoding_pinned(node: ast.Call, argv: list[str | None]) -> bool | Non
     if env is None:
         return False
 
-    for sub in ast.walk(env.value):
-        if isinstance(sub, ast.Constant) and sub.value in CHILD_ENCODING_ENV_VARS:
-            return True  # {**os.environ, "PYTHONIOENCODING": "utf-8"}
-        if isinstance(sub, ast.keyword) and sub.arg in CHILD_ENCODING_ENV_VARS:
-            return True  # dict(os.environ, PYTHONIOENCODING="utf-8")
-    return None
+    names, complete = _env_var_names(env.value)
+    if names & CHILD_ENCODING_ENV_VARS:
+        return True
+    return False if complete else None
 
 
 def find_violations(source: str, path: str = "<string>") -> list[Violation]:
@@ -247,7 +287,7 @@ def find_violations(source: str, path: str = "<string>") -> list[Violation]:
             if pinned is True:
                 continue
             detail = (
-                "passes env= but no readable PYTHONIOENCODING/PYTHONUTF8 in it"
+                "passes an env= this scanner cannot read, so the pin cannot be proven"
                 if pinned is None
                 else "the child's own encoding is unpinned"
             )

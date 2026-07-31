@@ -64,6 +64,7 @@ def _git(repo: pathlib.Path, *args: str) -> str:
         cwd=repo,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=60,
     )
     if proc.returncode != 0:
@@ -112,6 +113,7 @@ def _run_guard(
         cwd=repo,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=120,
         env=env,
     )
@@ -270,6 +272,7 @@ def test_guard_script_is_executable():
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=30,
     ).stdout.split()
     assert mode and mode[0] == "100755", f"expected mode 100755, got {mode[:1]}"

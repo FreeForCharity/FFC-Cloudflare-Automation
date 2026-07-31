@@ -51,6 +51,57 @@
     text is present **before** substituting, so a refactor that moved the guard fails loudly instead
     of silently testing nothing.
 
+### The harness crash is the scrubbed-`env` bug, and it is fixable (measured 2026-07-31)
+
+The two facts above and the `subprocess.run` rule further down are **the same bug**, and reading
+them as separate is what made "local red is no signal" feel permanent. On `main` (`d956a78d`),
+`run_all.py` fails **26 modules**, all with a node abort in
+`node::InitializeOncePerProcessInternal`. The cause is that each module builds a **fresh, minimal**
+env dict for `subprocess.run`, e.g. `tests/workflow-logic/test_724_initialize_labels.py:61`:
+
+```python
+env = {"PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin"}
+```
+
+On Linux that suffices; on Windows node cannot start without inherited variables (`SYSTEMROOT` above
+all) — exactly what the "never pass a scrubbed `env=`" rule below already says about `bash`.
+
+**The POSIX-looking `/usr/bin:/bin` is a red herring — falsify it before acting on it:**
+
+| change to `test_724` / `test_228` | crashes              | pass        |
+| --------------------------------- | -------------------- | ----------- |
+| unmodified                        | 8 / 8                | 2 / 5       |
+| `PATH` → `os.environ["PATH"]`     | **8 / 8, unchanged** | 2 / 5       |
+| `env = dict(os.environ)`          | **0 / 0**            | **10 / 13** |
+
+Rewriting `PATH` changes nothing; inheriting the whole environment fixes it outright. So the
+standing advice is narrower than it looks: **local red is no signal only until the env dict is
+fixed** — it is not an unfixable property of this host, and it is not entropy. Tracked as **#943**.
+Until that lands, the probe technique above is the workaround, not the diagnosis.
+
+## Prefer the machine's claim to your own: a hand-written `claimed` label expires in 48h (validated 2026-07-31)
+
+737 treats a claim bearing `<!-- claim-sync:linked-pr -->` (the sweep's own comment) as strictly
+stronger than a hand-written `CLAIM:` comment. From the release path
+(`.github/workflows/737-claim-sync.yml`):
+
+```js
+if (!searchOk && claimedByLinkedPR) continue;   // a MARKER holds through a search failure
+```
+
+A marker-bearing claim survives an unreadable org search; an unmarked one is deliberately given
+**exactly 48h** and then released, so two agents cannot collide on a stale hand-label. Confirmed by
+driving the sweep with a frozen clock and a 100h-idle issue: PR open + healthy search → held; no PR
+anywhere → released (the backstop, correct); **PR open + search over the result cap → released, a
+live claim lost.**
+
+Consequence for the Conductor: hand-labelling `claimed` buys ~48 hours, not a claim, and the cost is
+a standing "re-check these every run" thread — runs 54 and 55 each carried one. The durable move is
+to **remove the hand label and dispatch 737** once the sweep can actually see the PR; it re-applies
+the claim with a marker in seconds, and it finds referencing PRs a human enumerating by hand will
+miss (on 2026-07-31 it added canary #21/#22, FOT #123 and hub #940 to three issues that had been
+hand-labelled with one PR each).
+
 ## A test asserting a non-zero exit code must also assert on the output (validated 2026-07-29)
 
 **Never pass a scrubbed `env=` to `subprocess.run`.** Writing

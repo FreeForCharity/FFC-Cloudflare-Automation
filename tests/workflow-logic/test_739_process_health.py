@@ -28,7 +28,7 @@ def _node(expr_body: str, *argv: str) -> object:
     proc = subprocess.run(
         ["node", "-e", code, *argv],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=60,
     )
     if proc.returncode != 0:
@@ -91,13 +91,33 @@ def test_counts_means_and_success_rate():
     assert m["smokeFailures"]["closed"] == 1, m
     assert m["smokeFailures"]["meanTimeToCloseDays"] == 2, m
     assert m["claims"]["open"] == 1 and m["claims"]["meanAgeDays"] == 2, m
-    assert m["agenticOs"] == {"open": 18, "closed": 5}, m
+    # `ready` is the agent-ready band (#922) — the subset of the agentic-os topic
+    # label an agent can actually pick up. Absent input means 0, not null: an
+    # empty ready queue is a real, actionable reading ("nothing is pickable"),
+    # unlike a mean age over an empty set.
+    assert m["agenticOs"] == {"open": 18, "closed": 5, "ready": 0}, m
     assert m["dataPipeline"]["runs"] == 3 and m["dataPipeline"]["success"] == 2, m
     assert m["dataPipeline"]["successRate"] == 0.667, m
     # per-workflow grouping, sorted by name
     bw = m["dataPipeline"]["byWorkflow"]
     assert [w["name"] for w in bw] == ["502. Google", "703. Sites"], bw
     assert bw[0]["successRate"] == 0.5 and bw[1]["successRate"] == 1, bw
+
+
+def test_the_ready_queue_is_reported_alongside_the_backlog_not_instead_of_it():
+    """#922: the band the routine means, without losing the programme's real size.
+
+    `open` counts the whole `agentic-os` topic label — epics, machine-managed
+    rolling issues, human-blocked items, durable findings. That number is honest
+    and should stay visible; it just is not the thing the 5-15 band was ever
+    about. Both are reported so neither reading is lost.
+    """
+    m = compute({"nowIso": NOW, "agenticOpen": 56, "readyOpen": 6})
+    assert m["agenticOs"]["open"] == 56, m
+    assert m["agenticOs"]["ready"] == 6, m
+    body = render(m, None)
+    assert "Ready queue" in body, "the ready queue must render its own row"
+    assert "56" in body and "6" in body, "both numbers must survive to the report"
 
 
 def test_empty_inputs_use_null_not_zero_for_means():

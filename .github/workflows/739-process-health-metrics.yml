@@ -100,6 +100,11 @@ jobs:
             const claimedOpen = await openWithLabel('claimed');
             const agenticOpen = await openWithLabel('agentic-os');
             const agenticClosed = await closedWithLabel('agentic-os');
+            // The band the Conductor routine actually means (#922) — a strict
+            // subset of agentic-os: unclaimed, unblocked, one-PR-scoped, with
+            // acceptance criteria. Reported alongside `open`, never instead of
+            // it: `open` stays the honest size of the programme.
+            const readyOpen = await openWithLabel('agent-ready');
 
             // Data-pipeline runs in the pipeline window, matched by file-number
             // prefix on the run path (robust to display-name edits).
@@ -139,6 +144,7 @@ jobs:
               claimedOpen: claimedOpen.map((i) => ({ created_at: i.created_at })),
               agenticOpen: agenticOpen.length,
               agenticClosedRecent: agenticClosed.length,
+              readyOpen: readyOpen.length,
               pipelineRuns,
             });
 
@@ -183,6 +189,7 @@ jobs:
               .addRaw(
                 `Open smoke failures: ${metrics.smokeFailures.open}; open claims: ` +
                   `${metrics.claims.open}; agentic-os backlog: ${metrics.agenticOs.open}; ` +
+                  `ready queue: ${metrics.agenticOs.ready}; ` +
                   `data-pipeline success: ${metrics.dataPipeline.success}/${metrics.dataPipeline.runs}. ` +
                   `Posted to #${logIssue}.`,
               )

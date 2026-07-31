@@ -12,8 +12,24 @@ Four scripts in `scripts/`, plus the repo's own `next build`:
 
 1. **`clone-site-static.mjs`** — mirrors the live site with `httrack` (strict containment: only the
    target domain's HTML, but pulls page assets/images even when CDN/S3-hosted, and Google Fonts),
-   localizes links, and writes `clone-report.json` (page count, localized image count, remaining
-   external hosts). Read-only against the live site.
+   localizes links, repairs `srcset` (below), and writes `clone-report.json` (page count, localized
+   image count, remaining external hosts, srcset counters). Read-only against the live site.
+
+   **The `srcset` repair pass** — a third blind spot alongside the two in #902. httrack does not
+   understand `srcset`: it treats the whole comma-separated attribute as one opaque URL,
+   percent-encodes the separators, fetches that pseudo-URL, saves the 404 body under a filename
+   built from the string, and points the attribute at that stub. Every responsive image then
+   resolves to an HTML error page wearing an image extension, and the fabricated files are committed
+   as assets. `localizeLegacyUrls` cannot repair it — the mangled reference is already relative and
+   carries httrack's `https_/` form, not `https://` — and the mangling truncates the attribute's
+   tail, so the real candidates are unrecoverable from the mirror. The pass therefore **re-fetches
+   each page from the live site**, rebuilds its `srcset` from the real markup into `_ffc-assets/`
+   (root-relative, as `localizeLegacyUrls` emits), and deletes httrack's fabricated files. Pages
+   whose live and mirrored attribute counts disagree are reported and their collapsed attributes
+   dropped, so the plain `src` still renders.
+
+   This shipped broken once: FFC-EX-canadatokeywestcoastalrun.org#68 went green with 167 collapsed
+   attributes and 37 fabricated files, because `next build` succeeds either way.
 
 2. **`integrate-clone-into-nextjs.mjs`** — drops the clone into the repo's `public/` and moves the
    template's `src/app/**/page.*` routes aside (to a `_disabled_template_routes/` backup) so they
@@ -81,6 +97,9 @@ npx serve out                # spot-check vs the live site, then commit + PR
   JSON, and URLs JavaScript assembles at runtime. The second is why slopestohope.org shipped with
   its counter frozen at `0` for months — the page _looked_ right, it just showed the wrong number.
 - `clone-report.json` `localizedImages` ≈ live image count (not 0).
+- **`srcsetPagesUnalignable` is 0.** Non-zero means the live page and the mirror disagreed on
+  attribute count, so those responsive images were dropped rather than repaired — re-clone before
+  accepting. `srcsetArtifactsRemoved` records how many fabricated files were purged.
 - Visual diff of the built `out/` homepage + key inner pages vs the live site.
 - `remainingExternalHosts` reviewed: outbound `<a>` links are fine; asset hosts (fonts/CDN images)
   should be localized or consciously accepted. Note this field is a static scan of `src`/`href` only

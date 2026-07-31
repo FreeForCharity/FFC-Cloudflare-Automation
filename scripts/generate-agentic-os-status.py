@@ -605,6 +605,17 @@ def main():
     ap.add_argument("--output", help="Write JSON here instead of stdout")
     args = ap.parse_args()
 
+    # The feed carries whatever GitHub put in an issue title, and the alert
+    # workflows open issues titled "🚨 Scheduled workflow failing: …". Python
+    # encodes stdout with the OS ANSI codepage — UTF-8 on the runners, cp1252 on
+    # Windows — so writing this feed to stdout from a Windows host died with
+    # `UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f6a8'`
+    # until the caller remembered PYTHONUTF8=1. The file path below was already
+    # pinned; stdout was not, and this script is load-bearing for the public
+    # status page (#945).
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     token = _token()
     feed = build_feed(args.repo, token, org=args.org)
     text = json.dumps(feed, indent=2, ensure_ascii=False) + "\n"

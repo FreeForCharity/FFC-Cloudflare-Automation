@@ -40,7 +40,7 @@ def run_probe(env_overrides: dict) -> tuple[subprocess.CompletedProcess, str, st
             ["bash", "-c", script],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=120,
         )
         return proc, summary.read_text(encoding="utf-8"), outputs.read_text(encoding="utf-8")

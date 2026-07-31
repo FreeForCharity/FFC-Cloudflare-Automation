@@ -58,7 +58,7 @@ def _node(expr_body: str, *argv: str) -> object:
     proc = subprocess.run(
         [NODE, "-e", code, *argv],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=60,
     )
     if proc.returncode != 0:
@@ -467,7 +467,7 @@ def run_sweep(
             [NODE, str(SHIM)],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=120,
         )
     if proc.returncode != 0:

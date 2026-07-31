@@ -130,6 +130,18 @@ jobs:
           # fails closed without one — the pwsh steps below share that dependency.
           python3 scripts/check-powershell-command-resolution.py
 
+      - name: Validate text-mode subprocess calls pin an encoding
+        shell: bash
+        run: |
+          # Text-mode subprocess decodes with locale.getencoding(): UTF-8 on this
+          # runner, cp1252 on a Windows host. 41 test modules and 2 scripts passed
+          # text=True with no encoding=, so they were green here and died on a
+          # maintainer's machine the moment a child emitted an emoji — and the
+          # alert workflows open issues titled "🚨 Scheduled workflow failing".
+          # Like #944 / ledger L35, this class can never turn CI red, so it is
+          # checked against the SOURCE, where it is visible from every platform.
+          python3 scripts/check-subprocess-encoding.py
+
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v7
         with:

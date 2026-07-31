@@ -36,12 +36,18 @@
 - Never "fix" a test, or hold a PR, on the strength of a local harness crash — confirm against CI
   first.
 
-## Windows git-bash: two ways a command lies instead of failing (run 60, 2026-07-31)
+## Windows git-bash: five ways a command lies instead of failing (runs 60–61, 2026-07-31)
 
-Both of these produce a confident wrong answer rather than an error, which is what makes them worth
-writing down. The `grep -P` case is now blocked by `.claude/hooks/guard_bash.py`; the other two are
-not mechanically detectable from the command text alone.
+Every one of these produces a confident wrong answer rather than an error, which is what makes them
+worth writing down. Two are now blocked by `.claude/hooks/guard_bash.py` — `grep -P` (rule 7) and
+the leading-slash `gh api` endpoint (rule 8); the other three are not mechanically detectable from
+the command text alone and stay here as judgment.
 
+- **`grep -P` matches nothing and exits non-zero.** PCRE is not compiled into this environment's
+  git-bash, so `grep -P` never matches — and because it _fails_ rather than returning "no match",
+  `if grep -qP …` silently takes the **else** branch and `grep -P … || echo <default>` prints the
+  default. Run 60 used it to audit the public board and was told all 10 open PRs were missing from
+  it; all 10 were present. Use a POSIX ERE (`grep -E`) or python. Blocked by `guard_bash.py` rule 7.
 - **`/tmp` is not one directory.** git-bash resolves `/tmp` to its own MSYS mount, while a Windows
   `python3` in the same pipeline resolves it to `C:\tmp` — so `cmd > /tmp/x.txt` followed by
   `python3 … open('/tmp/x.txt')` fails with `FileNotFoundError` on a file that bash just wrote and

@@ -9,6 +9,15 @@ run-name: 'Failure alert sweep'
 # workflow can never close another's alert — with a dozen workflows watched, a shared marker
 # would let a weekly job's success silently clear a daily job's outage.
 #
+# COVERAGE IS NOW EVERY SCHEDULED WORKFLOW BUT THIS ONE (#932). The watch list originally stopped
+# at "hub plumbing" because that was #832's scope; the WHMCS lane (209/210/225/228) and the Azure
+# inventory (320) were excluded for being out of that ticket's scope, not for being unwatchable.
+# The evidence went the other way: 228 failed all four of its scheduled runs, 07-27 through 07-30,
+# and no mechanism said a word — it surfaced only because a conductor audited `main`'s failure list
+# by hand (#912). The lanes carrying live credentials and a payment/fraud pipeline were the ones
+# with no alerting. Nothing about a WHMCS or Azure cron makes the poll unsound, so the only
+# remaining exclusion is this workflow itself, which cannot watch itself without looping (#752).
+#
 # POLL, NOT `workflow_run` (#843). This workflow used to trigger on the `workflow_run` completed
 # event. That event has NEVER fired in this repository — `?event=workflow_run` returns 0 runs all
 # time, while sibling repos show hundreds — so both this alerter and the Google one (732, now
@@ -68,6 +77,11 @@ jobs:
           # must match a workflow `name:` byte-exactly; a name that resolves to nothing fails the
           # run loudly (see the end of the script) rather than going quietly unwatched.
           WATCHED_WORKFLOWS: |
+            209. WHMCS - Tickets Triage (Open/Customer-Reply) [WHMCS]
+            210. WHMCS - Orders Triage (Pending/Fraud/Active) [WHMCS]
+            225. WHMCS - Domain Order URL Verify [WHMCS]
+            228. WHMCS - Fraud Review (FraudLabs Pro) [FRAUDLABS+WHMCS]
+            320. Azure - Key Vault Secret Inventory (audit) [MS]
             321. Azure - KV Credential Liveness + Expiry Monitor [MS+GH+CF]
             502. Google - Analytics Report (GA4 -> JSON) [GOOGLE]
             504. Google - GTM Container Backups (weekly export) [GOOGLE]

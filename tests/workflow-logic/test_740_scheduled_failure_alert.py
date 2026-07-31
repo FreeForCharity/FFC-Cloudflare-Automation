@@ -68,6 +68,7 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from wf_extract import (  # noqa: E402
     WORKFLOWS,
+    child_env,
     find_step,
     load_workflow,
     step_github_script,
@@ -164,10 +165,7 @@ def _run(
     if jobs is None:
         jobs = [{"name": "audit", "conclusion": "failure"}]
 
-    env = {
-        "PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin",
-        "WATCHED_WORKFLOWS": "\n".join(watched),
-    }
+    env = child_env(pathlib.Path(NODE).parent, WATCHED_WORKFLOWS="\n".join(watched))
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
         (tdp / "script.js").write_text(script, encoding="utf-8")
@@ -798,13 +796,15 @@ def test_watched_workflows_are_actually_scheduled():
 # test below — a new cron must not join the fleet unnoticed, which is #832 all
 # over again. 741 proved the risk: it landed on `main` while PR #833 was open and
 # would have shipped as a day-one blind spot if the merge hadn't surfaced it.
-DELIBERATELY_UNWATCHED = {
-    "209. WHMCS - Tickets Triage (Open/Customer-Reply) [WHMCS]": "WHMCS lane, not hub plumbing (#832 scope)",
-    "210. WHMCS - Orders Triage (Pending/Fraud/Active) [WHMCS]": "WHMCS lane, not hub plumbing (#832 scope)",
-    "225. WHMCS - Domain Order URL Verify [WHMCS]": "WHMCS lane, not hub plumbing (#832 scope)",
-    "228. WHMCS - Fraud Review (FraudLabs Pro) [FRAUDLABS+WHMCS]": "WHMCS lane, not hub plumbing (#832 scope)",
-    "320. Azure - Key Vault Secret Inventory (audit) [MS]": "Azure lane, not hub plumbing (#832 scope)",
-}
+#
+# EMPTY ON PURPOSE (#932), and the emptiness is not the point — the forcing function is.
+# It held five names on a "not hub plumbing (#832 scope)" rationale, which described the
+# ticket 740 was built for rather than anything about those workflows. 228 then failed four
+# consecutive scheduled runs unalerted (#912), inside that exclusion. The reason a map entry
+# is allowed to exist is "this cron cannot be polled" (see 501's shape), never "this cron is
+# someone else's lane"; keep the map so the next new cron still has to choose, and read a
+# rationale that names a ticket's scope as a smell.
+DELIBERATELY_UNWATCHED: dict[str, str] = {}
 
 
 def test_every_scheduled_workflow_is_watched_or_explicitly_excluded():
@@ -833,6 +833,46 @@ def test_the_incident_workflows_from_832_are_watched():
         "738. Repo - Fleet Smoke Engine Drift Audit [Org]",
     ):
         assert required in watched, f"{required} must stay watched (#832)"
+
+
+def test_the_credentialed_lanes_from_932_are_watched():
+    # These five were excluded on a scope rationale, and the exclusion is what let 228 fail
+    # every scheduled run from 07-27 to 07-30 with nobody told (#912). A future scope trim has
+    # to argue with this test rather than quietly re-add a name to DELIBERATELY_UNWATCHED.
+    watched = _watched()
+    for required in (
+        "209. WHMCS - Tickets Triage (Open/Customer-Reply) [WHMCS]",
+        "210. WHMCS - Orders Triage (Pending/Fraud/Active) [WHMCS]",
+        "225. WHMCS - Domain Order URL Verify [WHMCS]",
+        "228. WHMCS - Fraud Review (FraudLabs Pro) [FRAUDLABS+WHMCS]",
+        "320. Azure - Key Vault Secret Inventory (audit) [MS]",
+    ):
+        assert required in watched, f"{required} must stay watched (#932)"
+
+
+def test_the_only_unwatched_scheduled_workflow_is_the_alerter_itself():
+    # The complement of the two tests above, stated once as a whole-fleet property so it
+    # survives someone rewriting either list: after #932, every `schedule:` in the tree is
+    # watched except 740, and 740 is excluded for a structural reason (self-watch loops),
+    # not a scope one. This is the assertion that goes red if a new cron lands unwatched
+    # AND its author records a rationale in DELIBERATELY_UNWATCHED to silence the forcing
+    # function above — the escape hatch that made #912's four silent days possible.
+    watched = set(_watched())
+    self_name = load_workflow(WORKFLOW)["name"]
+    unwatched = []
+    for name, path in _all_workflow_names().items():
+        wf = load_workflow(path)
+        on = wf.get("on", wf.get(True, {}))
+        if not isinstance(on, dict) or "schedule" not in on:
+            continue
+        if name not in watched:
+            unwatched.append(name)
+    unwatched.sort()
+    assert unwatched == [self_name], (
+        f"expected 740 alone to be unwatched, got {unwatched}. A scheduled workflow may only "
+        f"be left unwatched when polling it is unsound, and that case needs its own reasoning "
+        f"here — not a DELIBERATELY_UNWATCHED entry."
+    )
 
 
 def test_the_google_lane_absorbed_from_732_is_watched():

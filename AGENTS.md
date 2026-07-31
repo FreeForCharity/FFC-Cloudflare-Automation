@@ -153,6 +153,11 @@ and all authenticate as the same user. Before starting ANY issue:
    (`conductor-run-N`, `live-session`, `copilot-agent`, or a human name — the shared login does not
    identify you). Opening a PR that says `Closes #N` is also a claim (automation will sync the label
    from linked PRs once the claim-sync workflow lands).
+   - **From another repo, qualify the reference.** The backlog is here; the code usually is not. A
+     bare `#N` in a template or `FFC-EX-*` PR means _that_ repo's issue #N, so write the hub issue
+     out in full — `Refs FreeForCharity/FFC-Cloudflare-Automation#N`. That qualified form is what
+     737's daily sweep reads to claim the hub issue on your behalf; a bare number claims nothing
+     here and leaves the issue in the pickup query for someone else to duplicate (#939).
 3. **Release on stop**: if you abandon the work, remove the label and comment. Claims with no open
    linked PR and no activity for 48h are considered expired and may be swept.
    - **Multi-repo / multi-part issues: claim your portion, not the issue.** Post the

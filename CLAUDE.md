@@ -58,7 +58,35 @@ not mechanically detectable from the command text alone.
 - **A console `?` is not proof of a mangled file.** The same codepage that breaks `print()` also
   renders a correctly-stored em dash as `?` in captured output. Before "fixing" an encoding, decode
   the file with `errors='strict'` and test for `'\ufffd'` — run 60 nearly re-encoded a clean
-  `docs/lessons-ledger.md` on the strength of terminal rendering alone.
+  `docs/lessons-ledger.md` on the strength of terminal rendering alone. Re-confirmed run 61 on
+  #963's docstrings: strict-decoded clean, zero replacement characters, no fix needed.
+- **A leading slash in a `gh api` endpoint is rewritten into a filesystem path.** `gh api /markdown`
+  becomes `gh api "C:/Program Files/Git/markdown"` and fails with `invalid API endpoint` — the error
+  blames the endpoint, not the shell, which is what costs the time. Same MSYS argument-mangling
+  class as L42's `origin\main;…`, but on a `gh` endpoint rather than a git ref. Drop the slash:
+  `gh api markdown`. Blocked by `guard_bash.py` rule 8 (run 61).
+
+## Measuring health: a run count is not a time window (run 61, 2026-07-31)
+
+`gh api ".../actions/runs?per_page=N"` returns the newest N runs, so on a busy repo the **time span
+it covers shrinks as activity rises**. On 2026-07-31 the hub's newest 40 runs spanned **51
+minutes**. "0 failures in the last 40 runs" was therefore a statement about the last hour, and it
+read as a clean day — while `228. WHMCS - Fraud Review` and `502. Google - Analytics Report` had
+both failed on schedule that morning and every morning before it. Run 60 published "1 failure/30"
+from the same mistake.
+
+- For a health verdict, ask each **scheduled** workflow for its own recent runs
+  (`actions/workflows/<file>.yml/runs?per_page=N`) rather than sampling the repo-wide feed. A daily
+  cron produces one run a day; it cannot compete with PR churn for a slot in the newest N.
+- `?branch=main` does **not** rescue this — scheduled runs are on `main` too. They are simply older
+  than the window.
+- Separate the two populations before reporting: branch-CI failures on PR head SHAs are normal churn
+  (a promoted draft re-runs Phantom Revert Guard and can fail there legitimately — see AGENTS.md),
+  whereas a failing scheduled workflow is a standing outage.
+- **The workflow file name is not derivable from the number.** `739-process-health.yml` returns a
+  bare `404` that reads like "this workflow does not exist"; the real file is
+  `739-process-health-metrics.yml`. List `.github/workflows/` and match the numeric prefix rather
+  than guessing the slug.
 
 ## Board & PR-creation env facts (validated 2026-07-24)
 

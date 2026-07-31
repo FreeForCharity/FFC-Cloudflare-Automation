@@ -98,6 +98,26 @@ def main():
           bash("grep -r --include=*.py PATTERN scripts/"), False)
     check("curl -X POST then grep allowed", "guard_bash.py",
           bash("curl -sS https://api.example.com | grep foo"), False)
+    # A leading-slash `gh api` endpoint is rewritten by MSYS path conversion
+    # into a Windows filesystem path (run 61, 2026-07-31).
+    check("gh api leading slash", "guard_bash.py", bash("gh api /markdown -X POST"), True)
+    check("gh api leading slash with flags first", "guard_bash.py",
+          bash("gh api --paginate /repos/o/r/issues"), True)
+    check("gh api leading slash after -X", "guard_bash.py",
+          bash("gh api -X POST /repos/o/r/issues/1/comments"), True)
+    # Must NOT fire on the slash-less form, on a slash later in the path, on a
+    # graphql call, or on an unrelated command that merely contains a path.
+    check("gh api slash-less allowed", "guard_bash.py", bash("gh api markdown -X POST"), False)
+    check("gh api nested path allowed", "guard_bash.py",
+          bash("gh api repos/FreeForCharity/FFC-Cloudflare-Automation/pulls/963"), False)
+    check("gh api graphql allowed", "guard_bash.py",
+          bash("gh api graphql -f query='query{viewer{login}}'"), False)
+    check("gh api rate_limit allowed", "guard_bash.py", bash("gh api rate_limit"), False)
+    check("gh pr view with slash path allowed", "guard_bash.py",
+          bash("gh pr view 963 --repo FreeForCharity/FFC-Cloudflare-Automation"), False)
+    # A slash inside a flag VALUE is data, not the endpoint -- must not fire.
+    check("gh api field value with slash allowed", "guard_bash.py",
+          bash("gh api repos/o/r/issues -f body=/tmp/note.md"), False)
 
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)

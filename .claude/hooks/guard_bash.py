@@ -114,6 +114,30 @@ def main():
             "extended regex, or awk for field-wise matching."
         )
 
+    # 8. `gh api /<path>` with a LEADING SLASH is rewritten by MSYS path
+    #    conversion before gh ever sees it: `gh api /markdown` becomes
+    #    `gh api "C:/Program Files/Git/markdown"` and fails with
+    #    `invalid API endpoint`. Same argument-mangling class as the
+    #    `origin\main;...` corruption in ledger L42, but on a gh endpoint
+    #    rather than a git ref, and the error text blames the endpoint rather
+    #    than the shell -- which is what makes it cost time. Every `gh api`
+    #    example in AGENTS.md is already slash-less; this keeps it that way.
+    #    Hit on 2026-07-31 (run 61) rendering a table through `gh api
+    #    /markdown` to settle a review question.
+    #    Drop the leading slash: `gh api markdown`, `gh api rate_limit`.
+    #    Matched as "a whitespace-led /path token anywhere in the `gh api`
+    #    invocation" rather than by enumerating flags first: the endpoint can
+    #    follow a flag that takes a separate value (`gh api -X POST /repos/...`),
+    #    which a flags-then-endpoint pattern misses. The `(?<=\s)` keeps it off
+    #    an embedded value like `-f path=/x`, where the slash is data.
+    if re.search(r"(?<![\w-])gh\s+api\b[^\n|;&]*?(?<=\s)/[A-Za-z]", cmd):
+        block(
+            "`gh api` with a leading-slash endpoint is mangled by MSYS path conversion in "
+            "this environment's git-bash -- `gh api /markdown` is rewritten to a filesystem "
+            "path and fails with `invalid API endpoint`, blaming the endpoint rather than "
+            "the shell. Drop the leading slash: `gh api markdown`."
+        )
+
     sys.exit(0)
 
 

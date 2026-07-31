@@ -27,7 +27,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import find_step, load_workflow, step_github_script  # noqa: E402
+from wf_extract import child_env, find_step, load_workflow, step_github_script  # noqa: E402
 
 WORKFLOW = "734-stale-waiting-run-janitor.yml"
 JOB = "janitor"
@@ -50,9 +50,7 @@ CTX = {
 
 def _run(runs, *, dry_run=None, max_age_days=None, cancel_fail_ids=None):
     script = step_github_script(WORKFLOW, JOB, STEP)
-    env = {
-        "PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin",
-    }
+    env = child_env(pathlib.Path(NODE).parent)
     if dry_run is not None:
         env["DRY_RUN"] = dry_run
     if max_age_days is not None:
@@ -71,7 +69,7 @@ def _run(runs, *, dry_run=None, max_age_days=None, cancel_fail_ids=None):
             [NODE, str(HARNESS)],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=60,
         )
     if proc.returncode != 0:

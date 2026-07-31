@@ -28,7 +28,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import hashes_a_shell_value, load_workflow, step_run
+from wf_extract import child_env, hashes_a_shell_value, load_workflow, step_run
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 LIB = REPO_ROOT / "scripts" / "fleet-smoke-drift-lib.js"
@@ -43,7 +43,7 @@ def _node(expr_body: str, *argv: str) -> object:
     proc = subprocess.run(
         ["node", "-e", code, *argv],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=60,
     )
     if proc.returncode != 0:
@@ -204,13 +204,13 @@ def run_gather(
             (smoke / f"{name}.error").write_text(body, encoding="utf-8")
         gh_output = td / "output.txt"
         gh_output.touch()
-        env = {
-            "PATH": f"{HARNESS_DIR}:/usr/bin:/bin",
-            "HOME": str(td),
-            "GITHUB_OUTPUT": str(gh_output),
-            "TEST_SMOKE_DIR": str(smoke),
-            "TEST_REPO_LIST": "\n".join(fleet),
-        }
+        env = child_env(
+            HARNESS_DIR,
+            HOME=str(td),
+            GITHUB_OUTPUT=str(gh_output),
+            TEST_SMOKE_DIR=str(smoke),
+            TEST_REPO_LIST="\n".join(fleet),
+        )
         env.update({k: str(v) for k, v in wf["env"].items()})
         # `-e -o pipefail`, because that is what production is: a `shell: bash`
         # step runs `bash --noprofile --norc -eo pipefail {0}`, and the step's own
@@ -221,7 +221,7 @@ def run_gather(
             ["bash", "-e", "-o", "pipefail", "-c", script],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=120,
         )
         if proc.returncode != 0:

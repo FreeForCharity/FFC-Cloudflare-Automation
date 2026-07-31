@@ -309,7 +309,7 @@
       "description": "READ-ONLY: probes whether the selected Cloudflare token has Registrar API rights (read + write). Never registers or changes anything. Wraps scripts/cloudflare-registrar-access-check.ps1.",
       "safetyLevel": "Reads",
       "approvalEnv": "\u2705 cloudflare-prod-write",
-      "guard": "never charges",
+      "guard": "never charges; but `cloudflare-tokens-from-kv` runs with **`scope: write`** \u2192 loads `wr-all-*` CF tokens, so **not auto-approvable** (#915)",
       "category": "Cloudflare / DNS / Domain",
       "categoryCode": "CF"
     },
@@ -473,6 +473,22 @@
       "categoryCode": "CF"
     },
     {
+      "number": 123,
+      "title": "Domain - Inbound Transfer Preflight (Report)",
+      "apis": [],
+      "file": "123-domain-inbound-transfer-preflight.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "READ-ONLY: probes the registry (RDAP) for the given domains, then runs scripts/domain-inbound-transfer-preflight.ps1 offline to classify how each domain held at a FOREIGN registrar (Wix / Squarespace / GoDaddy / ...) comes under FFC management -- via eNom/WHMCS, then Cloudflare nameservers.  Counterpart to workflow 115, which handles the outbound leg (eNom -> Cloudflare Registrar) and assumes the losing registrar is already eNom.  No secrets and no WHMCS credentials: RDAP is public and the preflight itself is pure offline analysis. Initiates no transfer and spends no money.  SCOPE: `domains` is required and there is no fleet-wide default. This workflow only ever looks at domains someone names explicitly -- it does not sweep the estate, and it is not a source of truth about it.  WHMCS is FFC's live record of what we hold. docs/domain-registry-truth.csv is a committed point-in-time RDAP snapshot for reference only; do not treat it as current, and do not drive work from it.  run-name echoes the requested domains so a run is identifiable in the Actions list without opening it.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "none (no credentials)",
+      "guard": "read-only RDAP + offline analysis; classifies foreign-registrar domains for the eNom/WHMCS inbound path",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
       "number": 201,
       "title": "WHMCS - Export Domains (Report)",
       "apis": [
@@ -488,7 +504,7 @@
       "description": "",
       "safetyLevel": "Reads",
       "approvalEnv": "whmcs-prod-read",
-      "guard": "gated only by the env approval",
+      "guard": "ungated read lane; artifacts are export catalogs",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -508,7 +524,7 @@
       "description": "",
       "safetyLevel": "Reads",
       "approvalEnv": "whmcs-prod-read",
-      "guard": "gated only by the env approval",
+      "guard": "ungated read lane; artifacts are export catalogs",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -528,7 +544,7 @@
       "description": "",
       "safetyLevel": "Reads",
       "approvalEnv": "whmcs-prod-read",
-      "guard": "gated only by the env approval",
+      "guard": "ungated read lane; artifacts are export catalogs",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -885,12 +901,12 @@
         "workflow_dispatch"
       ],
       "environments": [
-        "whmcs-prod"
+        "whmcs-prod-read"
       ],
-      "description": "Read-only. Sweeps GetClientsProducts (all clients) and returns the onboarding application(s) whose product custom fields contain the query substring (a domain or organization name), with personal contact fields masked. This is the domain/org -> client-id lookup that 219 (which needs a client id) and the masked triage tables cannot do. Posts the matches to the job summary and optionally back to a GitHub issue. No writes.  NOTE: uses the gated `whmcs-prod` so it runs today with a single approval; once `whmcs-prod-read` is set up it can move there (read-only workflow).",
+      "description": "Read-only. Sweeps GetClientsProducts (all clients) and returns the onboarding application(s) whose product custom fields contain the query substring (a domain or organization name), with personal contact fields masked. This is the domain/org -> client-id lookup that 219 (which needs a client id) and the masked triage tables cannot do. Posts the matches to the job summary and optionally back to a GitHub issue. No writes.  Runs on the ungated `whmcs-prod-read` lane with the READ-scoped credential (`read-all-ffc-whmcs-*`, via the ffc-admin-kv-reader identity) \u2014 matching what the job actually does. 104 is the precedent for this lane. WHMCS is a single credential, so read/write scope selects the identity, not the access.",
       "safetyLevel": "Reads",
-      "approvalEnv": "\u2705 whmcs-prod",
-      "guard": "GetClientsProducts sweep; personal contact fields masked; gated until whmcs-prod-read setup",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "GetClientsProducts sweep; personal contact fields masked; **ungated** \u2014 `whmcs-secrets-from-kv` with `scope: read` on the `READ_ALL_FFC_AZURE_*` (ffc-admin-kv-reader) identity \u2192 `read-all-ffc-whmcs-*` (#920; was \u2705 `whmcs-prod` on the writer identity, held under #915)",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -1059,6 +1075,26 @@
       "safetyLevel": "Writes (record field)",
       "approvalEnv": "\u2705 whmcs-prod",
       "guard": "`dry_run` (default true); one record + one field per dispatch; strict per-target allowlist of writable fields; refuses to replace a different existing value without `force`; reports `previousValue`",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 231,
+      "title": "WHMCS - Domain Order Add (Register/Transfer) (Admin)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "231-whmcs-domain-order-add.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Places a WHMCS domain order for an existing client by wrapping scripts/whmcs-order-add.ps1 (WHMCS AddOrder). This is the entry point the inbound migration path (workflow 123 / docs/wix-domain-migration.md) needs: a charity whose domain sits at a foreign registrar has no domain product in WHMCS, so there is nothing to drive the transfer from until one is placed.  Products (group 6): transfer -> pid 41  \"Transfer your Existing Domain Name to the FFC CloudFlare\" register -> pid 39  \"Free new .org Domain Name in the FFC CloudFlare\"  SAFETY: this is the first WRITE against production billing in this area. * mode=dry-run (default) previews the AddOrder request and writes nothing. * mode=execute places a real order. Gated behind the whmcs-prod environment approval on top of that. * The underlying script skips when the client already has a non-terminated service for the product, unless allow_duplicate is set. * no_email defaults to true so a first live run cannot surprise a charity with an unexpected order confirmation. Turn it off deliberately.  Find client_id with 221 (Application Search) or 219 (Application Detail). Confirm the registrar situation first with 123 (Inbound Transfer Preflight).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`mode` (default `dry-run`) previews AddOrder and writes nothing; `execute` places a real order; pid fixed by `order_type` (41 transfer / 39 register); underlying script skips when the client already has a non-terminated service for the product unless `allow_duplicate`; `no_email` defaults true so a first live run cannot surprise a charity; price forced to 0",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -1247,7 +1283,7 @@
       "description": "Read-only export of Zeffy campaigns/events (GET /api/v1/campaigns) via OIDC -> Key Vault. This endpoint returns NO personal data (forms/events only: title, target, volume, dates, URLs), so the uploaded artifact is inherently safe to keep on this public repo. Dispatch-only (no schedule) while we are testing the API. One workflow per endpoint.  The `deliver` job additionally publishes a public, PII-free campaign list (docs/data/ffc-zeffy-campaigns.json \u2014 title/url/status only) as a reviewable data-update PR, so the fleet smoke engine can classify a detected donation surface as ffc-interim (FFC-owned campaign) vs charity-specific (#744). Mirrors the 502 export->deliver split (github-prod gate, CBM_TOKEN) and the 703 same-repo peter-evans data-PR pattern.",
       "safetyLevel": "Reads (+ PR delivery)",
       "approvalEnv": "zeffy-prod \u2192 \u2705 github-prod (deliver)",
-      "guard": "PII masked; the published `docs/data/ffc-zeffy-campaigns.json` is title/url/status only (no financials); `deliver` opens a reviewable data PR via CBM_TOKEN",
+      "guard": "PII masked; the published `docs/data/ffc-zeffy-campaigns.json` is title/url/status only (no financials); `deliver` opens a reviewable data PR via CBM_TOKEN; loads `wr-all-ffc-zeffy-api-key` (default `write`) **and** `wr-all-cbm-github-pat` \u2192 **not auto-approvable** (#915; on the \u2705 list 2026-07-23 \u2192 2026-07-29)",
       "category": "Zeffy",
       "categoryCode": "ZEFFY"
     },
@@ -1494,7 +1530,7 @@
       "description": "Generates the merged FFC sites list from the WHMCS / Cloudflare / WPMUDEV exports plus the curated base list, runs per-domain health checks, and commits both sites-list/sites_list.csv and sites-list/sites_list.json.  This repo owns the export environments (whmcs-prod, cloudflare-prod-read, wpmudev-prod) and the GitHub PAT (CBM_TOKEN in github-prod) needed to dispatch the sibling export workflows, so generation lives here. Downstream consumers (e.g. ffcadmin.org) pull the published files from this repo.",
       "safetyLevel": "Writes (data PR only)",
       "approvalEnv": "\u2705 github-prod",
-      "guard": "dispatches read-only exports 201/108/601 (601 waits on its own wpmudev-prod gate); regenerates `sites-list/` CSV+JSON; opens a data PR (never pushes to `main`); weekly Mon 08:00Z + dispatch; serialized concurrency group",
+      "guard": "dispatches read-only exports 201/108/601 (601 waits on its own wpmudev-prod gate); regenerates `sites-list/` CSV+JSON; opens a data PR (never pushes to `main`); weekly Mon 08:00Z + dispatch; serialized concurrency group; loads `wr-all-cbm-ffc-copilot-mcp-github-pat` \u2192 **held on credential scope**, not on a taxonomy gap (#915)",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },
@@ -1848,10 +1884,10 @@
         "workflow_dispatch"
       ],
       "environments": [],
-      "description": "Mechanizes the AGENTS.md work-claiming protocol (available = `is:open -label:claimed`). Two independent triggers:  1. Event-driven label sync (pull_request): parse Closes/Fixes/Refs #N from the PR body and add `claimed` to those open hub issues while the PR is active; remove it when the last open linked PR closes/merges. 2. Daily sweep (schedule): release stale hand-labeled claims \u2014 issues labeled `claimed` with no open linked PR and no activity for 48h \u2014 in this repo, so an abandoned claim frees itself. (ffcadmin needs its own sweep: cross-repo writes require CBM_TOKEN, which lives only in the gated github-prod environment \u2014 unusable for an ungated daily job.)  Writes issues/labels only; no external API; ungated. The decision logic lives in scripts/claim-sync-lib.js (unit-tested in tests/workflow-logic/).",
+      "description": "Mechanizes the AGENTS.md work-claiming protocol (available = `is:open -label:claimed`). Two independent triggers:  1. Event-driven label sync (pull_request): parse Closes/Fixes/Refs #N from the PR body and add `claimed` to those open hub issues while the PR is active; remove it when the last open linked PR closes/merges. It also comments ON THE PR naming what it just claimed \u2014 `Refs #N` is both the claiming form and how people write a citation, and only the PR author can tell which they meant (#948). 2. Daily sweep (schedule): reconcile this repo's `claimed` labels against every open PR in the org. The pickup query in AGENTS.md is org-wide but trigger 1 is repo-local, so a hub issue implemented by a PR in a template or site repo read as unclaimed and invited a duplicate (#939). The sweep claims those, releases a claim once the last open PR referencing the issue \u2014 in any repo \u2014 is closed or merged, and still releases a stale hand-labeled claim after 48h of inactivity. It also REPORTS (never releases) claims whose only claimant is a draft PR older than 48h \u2014 a draft suppresses a pickup exactly as hard as a ready PR (#948). Cross-repo is READ-only here: every write targets this repo's own issues, so the ambient token suffices. (ffcadmin still needs its own sweep for ITS issues: cross-repo writes require CBM_TOKEN, which lives only in the gated github-prod environment \u2014 unusable for an ungated daily job.)  Writes issues/labels only; no external API; ungated. The decision logic lives in scripts/claim-sync-lib.js (unit-tested in tests/workflow-logic/).",
       "safetyLevel": "Writes (issues/labels only)",
       "approvalEnv": "\u2014",
-      "guard": "syncs `claimed` label from linked PRs (pull_request event, GITHUB_TOKEN) + daily sweep of expired claims (no open linked PR + 48h idle) in this repo (ambient GITHUB_TOKEN \u2014 CBM_TOKEN is gated-env-only and empty on schedule); no external API, ungated; sweep `dry_run` via dispatch",
+      "guard": "syncs `claimed` label from linked PRs (pull_request event, GITHUB_TOKEN) + daily sweep reconciling this repo's claims against every open PR in the org \u2014 one `search/issues` read, writes only this repo's issues (ambient GITHUB_TOKEN \u2014 CBM_TOKEN is gated-env-only and empty on schedule); releases when no open PR in any repo still references the issue, or after 48h idle for a hand-labeled claim; no external API, ungated; sweep `dry_run` via dispatch",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },
@@ -1905,7 +1941,7 @@
         "workflow_dispatch"
       ],
       "environments": [],
-      "description": "Watches every scheduled hub workflow (726 drift audit, 734 janitor, 738 smoke drift, Google 502 analytics + 504 GTM backups, and the other cron-driven monitors \u2014 the authoritative list is WATCHED_WORKFLOWS below). For each one it upserts ONE rolling alert issue PER WATCHED WORKFLOW, and closes that issue on the next success of that same workflow. The marker is keyed by workflow name precisely so a green run of one watched workflow can never close another's alert \u2014 with a dozen workflows watched, a shared marker would let a weekly job's success silently clear a daily job's outage.  POLL, NOT `workflow_run` (#843). This workflow used to trigger on the `workflow_run` completed event. That event has NEVER fired in this repository \u2014 `?event=workflow_run` returns 0 runs all time, while sibling repos show hundreds \u2014 so both this alerter and the Google one (732, now retired into this file) were `active` and had produced exactly zero runs. The alerting layer was dead for six days and nothing could tell us, because a `workflow_run` watcher cannot be tested on demand. The poll can: `workflow_dispatch` below is REQUIRED, not a convenience \u2014 it is what makes this alerter provable.  BEHAVIOUR CHANGE, deliberate: the event saw *every* run; the poll sees only the LATEST completed default-branch run per workflow, so a failure that self-heals between polls is missed. That is an acceptable \u2014 arguably better \u2014 fit, because the rolling issue answers \"is this workflow currently broken?\", which is exactly what latest-run state models. Do not add cursor/state tracking to chase the transient case; it would trade away the simplicity that makes this verifiable.  Consequence worth knowing: the poll model only makes sense for SCHEDULED workflows. For a dispatch-only workflow the \"latest run\" is whatever a human last ran by hand \u2014 a stale red would alert forever and a stale green would mean nothing. `test_watched_workflows_are_actually_scheduled` enforces that, and it is why 501 (workflow_dispatch/workflow_call only) is excluded even though retired 732 watched it.  Ambient GITHUB_TOKEN only, no environment: \u2014 the alerter must never be blocked by the very gate it is watching. Reports `cancelled` as well as `failure`: a run cancelled before it reaches a runner (the 2026-07-24 726 incident) executes zero steps and is exactly the kind of silent breakage this workflow exists to surface.  It does NOT alert on a declined or expired approval gate. Those also surface as run-level `failure`, so the run conclusion alone cannot tell \"the job broke\" from \"a human said no\"; the job list can, and `actions: read` already allows reading it. See the discriminator in the step below.",
+      "description": "Watches every scheduled hub workflow (726 drift audit, 734 janitor, 738 smoke drift, Google 502 analytics + 504 GTM backups, and the other cron-driven monitors \u2014 the authoritative list is WATCHED_WORKFLOWS below). For each one it upserts ONE rolling alert issue PER WATCHED WORKFLOW, and closes that issue on the next success of that same workflow. The marker is keyed by workflow name precisely so a green run of one watched workflow can never close another's alert \u2014 with a dozen workflows watched, a shared marker would let a weekly job's success silently clear a daily job's outage.  COVERAGE IS NOW EVERY SCHEDULED WORKFLOW BUT THIS ONE (#932). The watch list originally stopped at \"hub plumbing\" because that was #832's scope; the WHMCS lane (209/210/225/228) and the Azure inventory (320) were excluded for being out of that ticket's scope, not for being unwatchable. The evidence went the other way: 228 failed all four of its scheduled runs, 07-27 through 07-30, and no mechanism said a word \u2014 it surfaced only because a conductor audited `main`'s failure list by hand (#912). The lanes carrying live credentials and a payment/fraud pipeline were the ones with no alerting. Nothing about a WHMCS or Azure cron makes the poll unsound, so the only remaining exclusion is this workflow itself, which cannot watch itself without looping (#752).  POLL, NOT `workflow_run` (#843). This workflow used to trigger on the `workflow_run` completed event. That event has NEVER fired in this repository \u2014 `?event=workflow_run` returns 0 runs all time, while sibling repos show hundreds \u2014 so both this alerter and the Google one (732, now retired into this file) were `active` and had produced exactly zero runs. The alerting layer was dead for six days and nothing could tell us, because a `workflow_run` watcher cannot be tested on demand. The poll can: `workflow_dispatch` below is REQUIRED, not a convenience \u2014 it is what makes this alerter provable.  BEHAVIOUR CHANGE, deliberate: the event saw *every* run; the poll sees only the LATEST completed default-branch run per workflow, so a failure that self-heals between polls is missed. That is an acceptable \u2014 arguably better \u2014 fit, because the rolling issue answers \"is this workflow currently broken?\", which is exactly what latest-run state models. Do not add cursor/state tracking to chase the transient case; it would trade away the simplicity that makes this verifiable.  Consequence worth knowing: the poll model only makes sense for SCHEDULED workflows. For a dispatch-only workflow the \"latest run\" is whatever a human last ran by hand \u2014 a stale red would alert forever and a stale green would mean nothing. `test_watched_workflows_are_actually_scheduled` enforces that, and it is why 501 (workflow_dispatch/workflow_call only) is excluded even though retired 732 watched it.  Ambient GITHUB_TOKEN only, no environment: \u2014 the alerter must never be blocked by the very gate it is watching. Reports `cancelled` as well as `failure`: a run cancelled before it reaches a runner (the 2026-07-24 726 incident) executes zero steps and is exactly the kind of silent breakage this workflow exists to surface.  It does NOT alert on a declined or expired approval gate. Those also surface as run-level `failure`, so the run conclusion alone cannot tell \"the job broke\" from \"a human said no\"; the job list can, and `actions: read` already allows reading it. See the discriminator in the step below.",
       "safetyLevel": "Writes (issues only)",
       "approvalEnv": "\u2014",
       "guard": "**polls** every scheduled hub workflow twice hourly (`schedule` + `workflow_dispatch`; the `workflow_run` event has never fired in this repo \u2014 #843) and upserts one rolling issue per watched workflow (marker keyed by workflow name, so only that workflow's own green run closes it); absorbs the retired 732 Google lane (502/504); reports `cancelled`/`timed_out` as well as `failure`, latest completed default-branch run only; does **not** alert on a declined/expired approval gate (no job `failure` + \u22651 job `cancelled` \u21d2 logged via `core.notice`, not an alert) \u2014 an unreadable job list still alerts, and a watched name matching no workflow fails the run loudly; ambient GITHUB_TOKEN, no external API, ungated by design (must not be blocked by the gate it watches)",
@@ -1924,10 +1960,10 @@
         "workflow_dispatch"
       ],
       "environments": [],
-      "description": "Weekly audit of whether each Node app in the FFC-EX fleet has dependency-vulnerability detection wired at all. A repo counts as covered only when it has BOTH `.github/workflows/security-audit.yml` and an `audit:high` script in package.json \u2014 the workflow without the script fails on every run, the script without the workflow never runs. Findings are upserted into a single rolling issue that auto-closes once the fleet is fully covered.  Why (#838): 34 of the 44 Node FFC-EX repos had no detection of any kind, so a published advisory against a charity site was invisible until somebody swept by hand \u2014 and nothing was measuring that, which is why #822's scope was estimated at 13 repos when the real number was 38. This workflow re-derives the fleet from the org listing every run rather than trusting a count carried between sessions.  Read-only: GITHUB_TOKEN reads public repo contents org-wide and lists the org's public repos; the only write is the rolling issue in THIS repo. No external API, no environment gate. It reports coverage only and never bumps a dependency \u2014 remediation belongs to #822. Classification/report logic lives in scripts/fleet-audit-coverage-lib.js (unit-tested under tests/workflow-logic/).",
+      "description": "Weekly audit of whether each Node app in the FFC-EX fleet has dependency-vulnerability detection wired at all. A repo counts as covered only when it has BOTH `.github/workflows/security-audit.yml` and an `audit:high` script in package.json \u2014 the workflow without the script fails on every run, the script without the workflow never runs. Findings are upserted into a single rolling issue that auto-closes once the fleet is fully covered.  Why (#838): 34 of the 44 Node FFC-EX repos had no detection of any kind, so a published advisory against a charity site was invisible until somebody swept by hand \u2014 and nothing was measuring that, which is why #822's scope was estimated at 13 repos when the real number was 38. This workflow re-derives the fleet from the org listing every run rather than trusting a count carried between sessions.  It also answers the question presence cannot (#889, ledger L06): does each repo's package-lock.json actually RESOLVE? A lockfile that exists but is out of sync with package.json makes `npm ci` exit non-zero, so the nightly audit installs nothing, scans nothing and reports clean \u2014 a covered repo that is not being scanned. The verdict comes from running the real `npm ci --dry-run`, not from re-implementing npm's sync check, so this audit cannot hold a second opinion about semver from the one the fleet's own audits run on.  Read-only: GITHUB_TOKEN reads public repo contents org-wide and lists the org's public repos; the only write is the rolling issue in THIS repo. The lockfile stage additionally reads the npm registry (unauthenticated, no credential, and `npm ci --dry-run` downloads no package) \u2014 that is the one external API this workflow touches, and it is read-only. No environment gate. It reports coverage only and never bumps a dependency \u2014 remediation belongs to 822. Classification/report logic lives in scripts/fleet-audit-coverage-lib.js (unit-tested under tests/workflow-logic/).  Cost of the resolution check: one lockfile download plus one short npm run per Node repo (~44). That is the trade 742 declined \u2014 it never downloads a lockfile because it runs on demand across the whole fleet and writes files. This job is weekly and read-only, so it can afford to be the place that measures.",
       "safetyLevel": "Reads",
       "approvalEnv": "\u2014",
-      "guard": "weekly coverage audit of dependency-vulnerability detection across the FFC-EX fleet (a repo counts as covered only with BOTH `security-audit.yml` and an `audit:high` script); rolling issue upsert/close on any gap; reports only \u2014 never bumps a dependency or writes to a fleet repo; GITHUB_TOKEN (public reads + own-repo issue), no external API, ungated",
+      "guard": "weekly coverage audit of dependency-vulnerability detection across the FFC-EX fleet (a repo counts as covered only with BOTH `security-audit.yml` and an `audit:high` script) PLUS a lockfile-resolution check \u2014 real `npm ci --dry-run` per Node repo, since a lockfile that exists but does not resolve makes the nightly audit scan nothing (#889, ledger L06); rolling issue upsert/close on any gap; reports only \u2014 never bumps a dependency or writes to a fleet repo; GITHUB_TOKEN (public reads + own-repo issue), npm registry read-only, ungated",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

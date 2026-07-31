@@ -36,15 +36,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Validate required Azure secrets
+      # Repository Variables, NOT environment secrets. `candid-prod-read` was
+      # scaffolded expecting per-environment secret copies (docs step 3), which
+      # nobody ever created — so this resolved to the empty string and the lane
+      # could only ever fail its own preflight. The identifiers are non-secret
+      # GUIDs held as repo Variables and resolve in every environment, so the
+      # provisioning step is not needed at all (#912).
+      - name: Validate required Azure OIDC identifiers
         shell: bash
+        env:
+          AZURE_KV_CLIENT_ID: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
         run: |
-          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
-            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID secret is not set (environment: candid-prod-read)";
+          if [ -z "$AZURE_KV_CLIENT_ID" ]; then
+            echo "::error::repository Variable READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set; see docs/candid-api-and-mcp.md";
             exit 1;
           fi
-          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
-            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID secret is not set (environment: candid-prod-read)";
+          if [ -z "$AZURE_TENANT_ID" ]; then
+            echo "::error::repository Variable READ_ALL_FFC_AZURE_TENANT_ID is not set; see docs/candid-api-and-mcp.md";
             exit 1;
           fi
 
@@ -53,8 +62,8 @@ jobs:
         with:
           scope: read
           apis: essentials
-          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Essentials search (read-only)
         id: search

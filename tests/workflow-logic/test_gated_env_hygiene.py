@@ -101,7 +101,6 @@ DISPATCH_ONLY_GATED_READS = {
     ("104-domain-export-inventory.yml", "export_m365"),
     ("104-domain-export-inventory.yml", "export_wpmudev"),
     ("114-cloudflare-registrar-access-check.yml", "validate"),
-    ("221-whmcs-application-search.yml", "application_search"),
     ("301-m365-domain-preflight.yml", "graph"),
     ("302-m365-list-domains.yml", "list-domains"),
     ("303-m365-domain-and-dkim.yml", "m365"),

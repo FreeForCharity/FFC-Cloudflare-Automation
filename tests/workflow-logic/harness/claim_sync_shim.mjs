@@ -23,9 +23,13 @@
 //   GITHUB_WORKSPACE        tree whose scripts/claim-sync-lib.js is required
 //   TEST_HUB_PRS_FILE       JSON array of hub PRs [{number, body}]
 //   TEST_ORG_PRS_FILE       JSON array of org-wide search items
-//                           [{number, body, repository_url|html_url}]
+//                           [{number, body, repository_url|html_url, author?}]
+//                           `author` is matched by `-author:` terms in the query
 //   TEST_SEARCH_TOTAL       override total_count to model the 1,000-result cap
-//                           (a complete-LOOKING response that is missing rows)
+//                           (a complete-LOOKING response that is missing rows).
+//                           Without it, total_count is the number of rows that
+//                           MATCHED the query while at most 1,000 are served —
+//                           the cap reproduced from the fixture population.
 //   TEST_SEARCH_INCOMPLETE  "1" -> incomplete_results on the first page
 //   TEST_SEARCH_THROWS      "1" -> the search mock rejects
 //   TEST_CLAIMED_ISSUES_FILE JSON array of open `claimed` issues
@@ -90,6 +94,10 @@ let failed = null;
 
 // Paged exactly like the real endpoints: a caller that reads only page 1
 // provably cannot see fixture rows past it.
+// GitHub's Search API never serves more than this many results for one query,
+// however many match (`total_count` still reports the true figure).
+const SEARCH_CAP = 1000;
+
 const page = (rows, args) => {
   const perPage = Math.min(args.per_page || 30, 100);
   const p = args.page || 1;
@@ -136,12 +144,26 @@ const github = {
       issuesAndPullRequests: async (args) => {
         searchCalls.push({ q: args.q, per_page: args.per_page, page: args.page });
         if (searchThrows) throw new Error('simulated search API failure');
-        const items = page(orgPrs, args);
+        // Honor `-author:` exclusions and the hard 1,000-result cap, because the
+        // sweep's remaining defect was a QUERY-SCOPE one: too broad a query is
+        // served short, with incomplete_results FALSE, and the cross-repo pass
+        // skips itself (#939). A mock that ignores `q` cannot tell the fixed
+        // query from the broken one, so the fix would be untestable. A fixture
+        // row's optional `author` is what an exclusion term matches.
+        const excluded = [...String(args.q || '').matchAll(/-author:(\S+)/g)].map((m) =>
+          m[1].toLowerCase(),
+        );
+        const matched = orgPrs.filter(
+          (it) => !excluded.includes(String(it.author || '').toLowerCase()),
+        );
+        // total_count counts what matched; at most SEARCH_CAP rows are ever
+        // served. That gap IS the silently-short read.
+        const items = page(matched.slice(0, SEARCH_CAP), args);
         return {
           data: {
             total_count: process.env.TEST_SEARCH_TOTAL
               ? Number(process.env.TEST_SEARCH_TOTAL)
-              : orgPrs.length,
+              : matched.length,
             incomplete_results: searchIncomplete && (args.page || 1) === 1,
             items,
           },

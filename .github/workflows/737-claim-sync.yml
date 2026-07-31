@@ -214,11 +214,29 @@ jobs:
             };
             let searchOk = true;
             const orgPrs = [];
+            // The Search API serves at most SEARCH_CAP results for a query and
+            // then stops, so a query whose population exceeds the cap can only
+            // ever be read short — the truncation guard below fires and the
+            // whole cross-repo pass degrades to a no-op. That is not a
+            // hypothetical: the first live sweep after #941 measured 1,009 open
+            // org PRs and skipped every run (#939). Authors that can never claim
+            // a hub issue are therefore excluded from the query rather than
+            // filtered after the fact: dependabot alone was 849 of those 1,009,
+            // taking the population to ~160. Excluding a non-claiming author
+            // loses no claim; widening this list is NOT the answer if the query
+            // grows again — a per-repo pulls.list fan-out is (see the headroom
+            // warning below).
+            const SEARCH_CAP = 1000;
+            const SEARCH_CAP_HEADROOM = 800;
+            const NON_CLAIMING_AUTHORS = ['app/dependabot'];
             try {
-              const q = `org:${hub.owner} is:pr is:open`;
+              const q = [
+                `org:${hub.owner}`, 'is:pr', 'is:open',
+                ...NON_CLAIMING_AUTHORS.map((a) => `-author:${a}`),
+              ].join(' ');
               let total = null;
               let fetched = 0;
-              for (let page = 1; page <= 10; page++) {
+              for (let page = 1; page <= SEARCH_CAP / 100; page++) {
                 const { data } = await github.rest.search.issuesAndPullRequests({
                   q, per_page: 100, page,
                 });
@@ -238,6 +256,17 @@ jobs:
               // to read as "no PR claims this issue" and release a live claim.
               if (!Number.isFinite(total) || fetched < total) {
                 throw new Error(`truncated: ${fetched} of ${total} result(s)`);
+              }
+              // Announce the NEXT cap breach instead of discovering it as a
+              // silently skipped pass. This read was complete, so the sweep is
+              // healthy — but the fleet grows, and the failure mode it grows
+              // into is invisible without this line.
+              if (total > SEARCH_CAP_HEADROOM) {
+                core.warning(
+                  `Org-wide PR search is at ${total} of the ${SEARCH_CAP}-result cap. Cross-repo ` +
+                  'claim sync still ran, but it stops entirely at the cap: switch to a per-repo ' +
+                  'pulls.list fan-out (#939) rather than excluding more authors.',
+                );
               }
             } catch (e) {
               searchOk = false;

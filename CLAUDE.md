@@ -35,6 +35,21 @@
   failed ~17 modules locally passed `Validate Repository` in CI (PR #828).
 - Never "fix" a test, or hold a PR, on the strength of a local harness crash — confirm against CI
   first.
+- **But "the harness is broken here" is not a reason to review a guard by reading it.** When the
+  harness cannot run, **test the module it wraps.** Only the harness-spawned node dies; `node`
+  itself is fine, so a pure module under `scripts/` can be `require`d directly and exercised on the
+  spot. Validated 2026-07-31 on PR #941: its test module reported **14 `harness crashed:` FAILs**
+  locally while CI was green, so instead of trusting the PR's own reported output — which the #935
+  rule forbids — the Conductor wrote a standalone 9-case node probe against
+  `scripts/claim-sync-lib.js`, then mutated the source (`(${NWO})?#` → `()#`, and the repo
+  comparison → `if (false)`) and re-ran it. Both mutations flipped exactly the expected cases and
+  left the rest green, which is the whole point: the checks pass by **discrimination, not
+  permissiveness**. Full mutation review was recovered on a host where the official harness is
+  unusable.
+  - Two mechanics that make this work: `require()` resolves relative paths against the **probe
+    file's** directory, not the cwd — pass an absolute `C:/…` path; and assert the mutation's anchor
+    text is present **before** substituting, so a refactor that moved the guard fails loudly instead
+    of silently testing nothing.
 
 ## A test asserting a non-zero exit code must also assert on the output (validated 2026-07-29)
 

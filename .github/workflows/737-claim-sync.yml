@@ -110,6 +110,7 @@ jobs:
               // (A reference REMOVED via `edited` is not un-claimed here; the
               // daily sweep eventually releases it once the issue has no open
               // linked PR AND is idle for the 48h expiry threshold.)
+              const claimedNow = [];
               for (const n of linked) {
                 const { data: issue } = await github.rest.issues
                   .get({ owner, repo, issue_number: n })
@@ -119,7 +120,28 @@ jobs:
                 await github.rest.issues.addLabels({
                   owner, repo, issue_number: n, labels: [lib.CLAIM_LABEL],
                 });
+                claimedNow.push(n);
                 core.info(`Claimed #${n} (linked from PR #${pr.number}).`);
+              }
+
+              // Tell the AUTHOR what their reference just did (#948). The claim
+              // comment already lands on the issue, which the author never
+              // reads; the consequence — an issue removed from the pickup query
+              // — is only actionable by the one person who knows whether they
+              // meant a claim or a citation. Keyed on the issue SET, so an
+              // unchanged PR is silent while a PR that later claims something
+              // different is told again.
+              if (claimedNow.length) {
+                const comments = await listOpen(github.rest.issues.listComments, {
+                  owner, repo, issue_number: pr.number,
+                }, 3).catch(() => []);
+                if (!lib.hasPrClaimNotice(comments, claimedNow)) {
+                  await github.rest.issues.createComment({
+                    owner, repo, issue_number: pr.number,
+                    body: lib.prClaimNotice(claimedNow),
+                  }).catch((e) => core.warning(`Could not notify PR #${pr.number}: ${e.message}`));
+                  core.info(`Notified PR #${pr.number} it claimed ${claimedNow.join(', ')}.`);
+                }
               }
               return;
             }
@@ -198,8 +220,14 @@ jobs:
             // Hub PRs come from pulls.list: authoritative and never subject to
             // search-index lag, so a PR opened minutes ago still holds its claim
             // even if the search below has not indexed it yet.
+            // `draft` and `created_at` ride along for the draft-held report
+            // (#948) — both are already in these payloads, so carrying them
+            // costs no extra request.
             const hubPrs = (await listOpen(github.rest.pulls.list, { ...hub, state: 'open' }))
-              .map((p) => ({ nwo: hubNwo, number: p.number, body: p.body || '' }));
+              .map((p) => ({
+                nwo: hubNwo, number: p.number, body: p.body || '',
+                draft: p.draft === true, createdAtMs: new Date(p.created_at).getTime(),
+              }));
 
             // Everything else comes from ONE org-wide search per sweep (never one
             // per issue — AGENTS.md rate budget). The backlog is org-wide but the
@@ -250,7 +278,10 @@ jobs:
                 fetched += items.length;
                 for (const it of items) {
                   const nwo = nwoOf(it);
-                  if (nwo) orgPrs.push({ nwo, number: it.number, body: it.body || '' });
+                  if (nwo) orgPrs.push({
+                    nwo, number: it.number, body: it.body || '',
+                    draft: it.draft === true, createdAtMs: new Date(it.created_at).getTime(),
+                  });
                 }
                 if (items.length < SEARCH_PER_PAGE) break;
               }
@@ -291,7 +322,11 @@ jobs:
                 sourceRepo: pr.nwo, targetRepo: hubNwo,
               }).all) {
                 if (!claimants.has(n)) claimants.set(n, []);
-                claimants.get(n).push(`${pr.nwo}#${pr.number}`);
+                claimants.get(n).push({
+                  ref: `${pr.nwo}#${pr.number}`,
+                  draft: pr.draft === true,
+                  createdAtMs: pr.createdAtMs,
+                });
               }
             }
 
@@ -308,7 +343,8 @@ jobs:
             // referencing it (e.g. a hand-removed label with no PR event to
             // re-add it), which is the defect this job exists to prevent.
             const claimed = [];
-            for (const [n, refs] of claimants) {
+            for (const [n, prs] of claimants) {
+              const refs = prs.map((p) => p.ref);
               if (alreadyClaimed.has(n)) continue;
               const { data: issue } = await github.rest.issues
                 .get({ ...hub, issue_number: n })
@@ -373,6 +409,14 @@ jobs:
               });
             }
 
+            // --- report-only: claims held solely by a long-lived draft (#948)
+            // A draft is not active work, but it suppresses a pickup exactly as
+            // hard as a ready PR — several claims have sat on drafts for four to
+            // six days. Reported, never released: a long-lived draft is
+            // sometimes real work, and releasing a live claim on a heuristic is
+            // the one thing this job must never do.
+            const draftHeld = lib.draftHeldClaims({ claimants, nowMs: now });
+
             const lines = [
               ...claimed.map((c) => `- 🔒 claimed ${c}`),
               ...released.map((r) => `- 🔓 released ${r}`),
@@ -381,4 +425,21 @@ jobs:
               .addHeading(`Claim sweep — ${claimed.length} claimed, ${released.length} released${dryRun ? ' (dry-run)' : ''}`)
               .addRaw(lines.length ? lines.join('\n') : 'No changes. Every claim matches an open PR or is inside the 48h window.')
               .write();
-            console.log(`${dryRun ? 'Would apply' : 'Applied'} ${claimed.length} claim(s) and ${released.length} release(s).`);
+            if (draftHeld.length) {
+              core.summary
+                .addHeading(`Held only by a draft PR (${draftHeld.length}) — report only, nothing released`, 3)
+                .addRaw(
+                  'These issues are out of the pickup query because a **draft** references them. ' +
+                  'If a draft is parked, or the reference was meant as a citation rather than a ' +
+                  'claim, release the issue by hand (see #948).\n\n' +
+                  draftHeld
+                    .map((d) => `- #${d.issue} — ${d.ageDays}d, held by ${d.refs.join(', ')}`)
+                    .join('\n'),
+                )
+                .write();
+              core.warning(
+                `${draftHeld.length} claim(s) are held only by a draft PR older than 48h: ` +
+                draftHeld.map((d) => `#${d.issue} (${d.ageDays}d)`).join(', '),
+              );
+            }
+            console.log(`${dryRun ? 'Would apply' : 'Applied'} ${claimed.length} claim(s) and ${released.length} release(s); ${draftHeld.length} draft-held.`);

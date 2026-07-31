@@ -778,6 +778,149 @@ def test_mutation_dropping_the_repo_comparison_claims_foreign_issues():
         assert _labeled(r) == [934], f"mutation must break the repo keying for {body!r}"
 
 
+# ---------------------------------------------------------------------------
+# Telling the PR author what their reference claimed (#948).
+#
+# `Refs #N` means both "this PR does part of that issue" and "that issue is
+# where the related work lives", and nothing can read intent. A lessons PR used
+# the claiming form as a citation and removed the backlog's top unclaimed pickup
+# from the agent query for six hours. The fix is not to guess which was meant —
+# it is to tell the one person who knows, on their own PR.
+# ---------------------------------------------------------------------------
+
+
+def _notice(nums: list[int]) -> str:
+    return _node(
+        "process.stdout.write(JSON.stringify(l.prClaimNotice(JSON.parse(process.argv[1]))))",
+        json.dumps(nums),
+    )
+
+
+def _has_notice(bodies: list[str], nums: list[int]) -> bool:
+    return _node(
+        "const a=JSON.parse(process.argv[1]);"
+        "process.stdout.write(JSON.stringify("
+        "l.hasPrClaimNotice(a.bodies.map((b)=>({body:b})), a.nums)))",
+        json.dumps({"bodies": bodies, "nums": nums}),
+    )
+
+
+def test_the_pr_notice_names_every_issue_it_claimed():
+    body = _notice([945, 936])
+    assert "#945" in body and "#936" in body, f"notice must name the issues: {body}"
+
+
+def test_the_pr_notice_states_the_citation_escape_hatch():
+    """Naming the issue is not enough — the author has to be told what to do."""
+    body = _notice([945]).lower()
+    assert "link" in body, "the notice must offer the link form as the citation alternative"
+    assert "refs" in body, "the notice must name the keyword form that caused the claim"
+
+
+def test_the_pr_notice_says_the_issue_left_the_pickup_query():
+    """The consequence is the whole point; without it this is just noise."""
+    body = _notice([945])
+    assert "-label:claimed" in body, f"notice must state the pickup-query effect: {body}"
+
+
+def test_the_same_issue_set_is_not_notified_twice():
+    """Re-running the sync on an unchanged PR must be silent (idempotent)."""
+    first = _notice([945])
+    assert _has_notice([first], [945]) is True, "an existing notice must be recognized"
+
+
+def test_issue_order_does_not_defeat_idempotency():
+    """The marker keys on a normalized set, not on the order they were claimed."""
+    first = _notice([945, 936])
+    assert _has_notice([first], [936, 945]) is True, "the marker must be order-independent"
+
+
+def test_a_different_issue_set_gets_a_fresh_notice():
+    """A PR that later claims something else must be told about that too."""
+    first = _notice([945])
+    assert _has_notice([first], [945, 936]) is False, "a new issue set needs a new notice"
+
+
+def test_an_unrelated_comment_is_not_mistaken_for_the_notice():
+    assert _has_notice(["Looks good to me, merging"], [945]) is False
+
+
+# ---------------------------------------------------------------------------
+# Claims held only by a long-lived draft (#948) — report only.
+# ---------------------------------------------------------------------------
+
+_DAY = 86400000
+_NOW = 1_800_000_000_000
+
+
+def _draft_held(claimants: dict, now_ms: int = _NOW) -> list:
+    """`claimants` is {issue: [{ref, draft, createdAtMs}, ...]}."""
+    return _node(
+        "const a=JSON.parse(process.argv[1]);"
+        "const m=new Map(Object.entries(a.claimants).map(([k,v])=>[Number(k),v]));"
+        "process.stdout.write(JSON.stringify("
+        "l.draftHeldClaims({claimants:m, nowMs:a.now})))",
+        json.dumps({"claimants": claimants, "now": now_ms}),
+    )
+
+
+def _draft(ref: str, age_days: float) -> dict:
+    return {"ref": ref, "draft": True, "createdAtMs": _NOW - int(age_days * _DAY)}
+
+
+def _ready(ref: str, age_days: float) -> dict:
+    return {"ref": ref, "draft": False, "createdAtMs": _NOW - int(age_days * _DAY)}
+
+
+def test_an_old_draft_only_claim_is_reported():
+    out = _draft_held({"945": [_draft("hub#946", 6)]})
+    assert [d["issue"] for d in out] == [945], f"a 6-day draft-held claim must be reported: {out}"
+    assert out[0]["ageDays"] == 6
+
+
+def test_a_ready_pr_means_the_claim_is_not_draft_held():
+    """A ready PR is active work; this report is about parked drafts only."""
+    out = _draft_held({"945": [_ready("hub#946", 6)]})
+    assert out == [], f"a ready PR must not be reported: {out}"
+
+
+def test_a_mixed_set_is_not_draft_held():
+    """One ready PR among the claimants means somebody is actually on it."""
+    out = _draft_held({"945": [_draft("hub#946", 6), _ready("hub#950", 6)]})
+    assert out == [], f"a mixed claimant set must not be reported: {out}"
+
+
+def test_a_recent_draft_is_inside_the_window():
+    out = _draft_held({"945": [_draft("hub#946", 1)]})
+    assert out == [], f"a 1-day draft is not stale: {out}"
+
+
+def test_the_newest_draft_governs_the_age():
+    """An issue picked up an hour ago is not stale because an old draft exists."""
+    out = _draft_held({"945": [_draft("hub#900", 9), _draft("hub#946", 0.5)]})
+    assert out == [], f"the most recent draft must govern: {out}"
+
+
+def test_the_report_names_the_holding_prs():
+    out = _draft_held({"945": [_draft("FreeForCharity/FFC-EX-canary#22", 5)]})
+    assert out[0]["refs"] == ["FreeForCharity/FFC-EX-canary#22"], (
+        "the report must name which PR is holding the claim, or it is unactionable"
+    )
+
+
+def test_nothing_is_released_by_the_draft_report():
+    """The function is a pure reporter; releasing on a heuristic is forbidden.
+
+    Guarded by construction — `draftHeldClaims` returns rows and the workflow
+    never feeds them to a removeLabel call — so this test pins the shape of what
+    it returns rather than a side effect it must not have.
+    """
+    out = _draft_held({"945": [_draft("hub#946", 6)]})
+    assert set(out[0].keys()) == {"issue", "ageDays", "refs"}, (
+        f"the reporter must return only report fields, no release verdict: {out[0]}"
+    )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

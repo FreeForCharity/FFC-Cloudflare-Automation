@@ -134,6 +134,78 @@ function decideRelease({
   return nowMs - lastActivityMs >= thresholdMs;
 }
 
+// --- telling the PR author what their reference just did (#948) -------------
+//
+// `Refs #N` carries two incompatible meanings — "this PR does part of that
+// issue" (a claim) and "that issue is where the related work lives" (a
+// citation) — and nothing can read the author's intent. Only the first should
+// suppress a pickup, so the fix is not to guess: it is to make the consequence
+// visible to the one person who knows which was meant.
+//
+// This mattered concretely. A lessons PR opened `Refs #945` as a citation and
+// removed the backlog's top unclaimed pickup from the agent query for six
+// hours, with no expiry short of that unrelated docs PR merging. A sweep of
+// open drafts then found the claiming form used as a citation in 3 of 5 hub
+// drafts. The author is told once, on their own PR, where they can act on it.
+
+// The marker embeds the issue set, so re-running on an unchanged PR is a no-op
+// while a PR that later claims a DIFFERENT set gets a fresh notice.
+function prClaimNoticeMarker(issueNumbers) {
+  const key = [...new Set(issueNumbers.map(Number))].sort((a, b) => a - b).join(',');
+  return `<!-- claim-sync:pr-notice:${key} -->`;
+}
+
+function prClaimNotice(issueNumbers) {
+  const nums = [...new Set(issueNumbers.map(Number))].sort((a, b) => a - b);
+  const list = nums.map((n) => `#${n}`).join(', ');
+  const plural = nums.length === 1 ? 'issue' : 'issues';
+  return (
+    `🔒 This PR **claimed** ${list} — ${nums.length === 1 ? 'it is' : 'they are'} now labelled ` +
+    `\`${CLAIM_LABEL}\` and no longer appear in the agent pickup query ` +
+    `(\`org:FreeForCharity label:agentic-os is:open -label:${CLAIM_LABEL}\`).\n\n` +
+    `That is correct **if this PR implements ${nums.length === 1 ? 'that ' + plural : 'those ' + plural}**. ` +
+    'If you only meant to *reference* ' +
+    `${nums.length === 1 ? 'it' : 'them'}, the keyword form is doing more than you intended: ` +
+    'cite with a plain markdown link instead of `Refs`/`Closes`, and remove the label.\n\n' +
+    `The claim releases automatically when this PR merges or closes.\n\n` +
+    `${prClaimNoticeMarker(nums)}`
+  );
+}
+
+function hasPrClaimNotice(comments, issueNumbers) {
+  const marker = prClaimNoticeMarker(issueNumbers);
+  return (comments || []).some((c) => c && typeof c.body === 'string' && c.body.includes(marker));
+}
+
+// --- claims held only by a long-lived draft (#948, report-only) -------------
+//
+// A draft is not active work, but it suppresses a pickup exactly as hard as a
+// ready PR. Several claims have sat on drafts for four to six days. This
+// REPORTS them and releases nothing: a long-lived draft is sometimes real work,
+// and releasing a live claim on a heuristic is the one thing this job must
+// never do.
+//
+// `claimants` maps issue number -> [{ ref, draft, createdAtMs }].
+function draftHeldClaims({ claimants, nowMs, thresholdMs = EXPIRY_MS }) {
+  const out = [];
+  for (const [issue, prs] of claimants) {
+    if (!prs.length) continue;
+    if (!prs.every((p) => p.draft === true)) continue;
+    // Age off the most RECENT draft: an issue picked up again an hour ago is
+    // not stale just because an older draft also references it.
+    const newest = Math.max(...prs.map((p) => p.createdAtMs));
+    if (!Number.isFinite(newest) || !Number.isFinite(nowMs)) continue;
+    const ageMs = nowMs - newest;
+    if (ageMs < thresholdMs) continue;
+    out.push({
+      issue,
+      ageDays: Math.floor(ageMs / 86400000),
+      refs: prs.map((p) => p.ref),
+    });
+  }
+  return out.sort((a, b) => b.ageDays - a.ageDays || a.issue - b.issue);
+}
+
 module.exports = {
   CLAIM_LABEL,
   EXPIRY_MS,
@@ -145,4 +217,8 @@ module.exports = {
   linkedClaimComment,
   hasLinkedClaimMarker,
   decideRelease,
+  prClaimNoticeMarker,
+  prClaimNotice,
+  hasPrClaimNotice,
+  draftHeldClaims,
 };

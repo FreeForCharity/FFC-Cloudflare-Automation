@@ -70,8 +70,12 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   new check is _wired_ (present in the `validate` job, no `continue-on-error`); it proves nothing
   about whether it _detects_. Put the original defect back and watch the guard fail. Do it in a
   throwaway worktree so the author's branch is never mutated:
-  `git worktree add /tmp/wt --detach origin/<branch>`, break the thing, run the checker, expect a
-  non-zero exit naming the real call site. On #933 (the #930 command-resolution guard) deleting
+  `git worktree add "$(mktemp -d)" --detach origin/<branch>`, break the thing, run the checker,
+  expect a non-zero exit naming the real call site. Let `mktemp -d` pick the path rather than
+  hard-coding one: a fixed `/tmp/wt` collides when the directory already exists or two reviewers run
+  concurrently, and in the Windows git-bash environment `/tmp` resolves to a _different_ directory
+  for bash than for a Windows `python3`, so a worktree bash created there is `FileNotFoundError` to
+  the checker you then run against it. On #933 (the #930 command-resolution guard) deleting
   `Remove-Html` from `scripts/whmcs-api-common.ps1` reproduced the exact #929 finding at
   `scripts/whmcs-application-search.ps1:128`. Also probe the fail-closed claims the same way — a
   corrupt input file and a missing tool should each exit 1, not skip. A guard that cannot be shown

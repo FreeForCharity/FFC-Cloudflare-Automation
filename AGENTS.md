@@ -135,6 +135,15 @@ and all authenticate as the same user. Before starting ANY issue:
 1. **Available = `is:open -label:claimed`.** The pickup query is
    `org:FreeForCharity label:agentic-os is:open -label:claimed`. If an issue has the `claimed` label
    or an open linked PR, it is TAKEN — pick something else.
+   - **Prefer `agent-ready`.** `org:FreeForCharity label:agent-ready is:open -label:claimed` is the
+     same query narrowed to issues that are _actually pickable_: unclaimed, unblocked, one-PR-scoped
+     and carrying acceptance criteria. `agentic-os` is the programme-wide **topic** label and stays
+     on everything, so it also counts epics, machine-managed rolling issues (740/738 open and close
+     those themselves), items blocked on a human with credentials, and durable findings kept as
+     records — none of which an agent can execute. Counting the topic label is why the Conductor's
+     "keep 5–15 open" band read 46 and drifted upward for eight consecutive runs of trimming that
+     could never converge (#922). Add `agent-ready` when you file an issue that meets the bar;
+     remove it when the issue becomes blocked.
 2. **Claim before working**: add the `claimed` label AND post one comment
    `CLAIM: <actor> <planned-branch> <UTC timestamp>` where `<actor>` identifies you
    (`conductor-run-N`, `live-session`, `copilot-agent`, or a human name — the shared login does not

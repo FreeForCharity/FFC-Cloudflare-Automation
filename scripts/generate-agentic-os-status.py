@@ -63,6 +63,15 @@ from datetime import datetime, timezone
 DEFAULT_REPO = "FreeForCharity/FFC-Cloudflare-Automation"
 DEFAULT_ORG = "FreeForCharity"
 LABEL = "agentic-os"
+# The band label (#922). `agentic-os` stays the program-wide topic label on
+# everything; `agent-ready` marks the strict subset an agent can pick up now.
+READY_LABEL = "agent-ready"
+READY_RULE = (
+    "Open issues labeled 'agent-ready': unclaimed, unblocked, one-PR-scoped and carrying "
+    "acceptance criteria — the queue a sandboxed agent can pick from now. A strict subset of "
+    "backlog_issues, which stays the full 'agentic-os' topic set (epics, machine-managed rolling "
+    "issues, human-blocked items and durable findings all remain counted there)."
+)
 CONDUCTOR_LOG_ISSUE = 719
 CONDUCTOR_LOG_LIMIT = 10
 COMMENT_TRUNCATE = 500
@@ -364,6 +373,25 @@ def collect_backlog(items):
     return issues
 
 
+def collect_ready(backlog):
+    """The subset of the backlog a sandboxed agent can actually pick up (#922).
+
+    ``agentic-os`` is one label doing five jobs — executable work-items, epics,
+    machine-managed rolling issues, items blocked on a human, and findings kept
+    as durable records. Only the first is what the Conductor's "keep 5-15 open"
+    band was ever about, so counting the label counted the wrong set: the band
+    read 46 while the executable queue was ~30, and it drifted upward for eight
+    consecutive runs of trimming that could never converge.
+
+    ``agent-ready`` carries that meaning explicitly: unclaimed, unblocked,
+    one-PR-scoped, with acceptance criteria. This filters rather than reclassifies
+    — the label is applied by a human or a conductor run, never inferred here,
+    because "can an agent finish this in one PR" is a judgement and guessing it
+    from an issue body is how the original conflation happened.
+    """
+    return [i for i in backlog if READY_LABEL in (i.get("labels") or [])]
+
+
 def scope_repos(items, hub_repo):
     """Repositories the org-wide panels sweep: every repo carrying an open
     agentic-os item, plus the hub.
@@ -581,6 +609,13 @@ def build_feed(repo, token, org=DEFAULT_ORG):
         "repo": repo,
         "repos": repos,
         "backlog_issues": backlog,
+        # ADDITIVE (#922). `backlog_issues` keeps its exact shape and contents —
+        # the ffcadmin renderer reads it, and narrowing it would silently drop
+        # epics and records from the public page. The ready queue is a strict
+        # subset alongside it.
+        "ready_issues": collect_ready(backlog),
+        "ready_count": len(collect_ready(backlog)),
+        "ready_rule": READY_RULE,
         "in_flight_prs": in_flight,
         "in_flight_prs_rule": IN_FLIGHT_RULE,
         "open_prs_total": open_prs_total,

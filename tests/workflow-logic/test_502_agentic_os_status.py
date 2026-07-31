@@ -542,6 +542,33 @@ def main():
     m._request = _short(2, 3)
     check(len(m.search_agentic_items(ORG, "tok")) == 3, "an over-read must not abort")
 
+    # --- the ready queue (#922) ------------------------------------------
+    # `agentic-os` is one label doing five jobs, so counting it counted epics,
+    # machine-managed rolling issues, human-blocked items and durable findings
+    # as though an agent could pick them up. `agent-ready` is the subset the
+    # Conductor's 5-15 band was always about.
+    backlog = [
+        {"repo": "o/r", "number": 1, "labels": ["agentic-os", "agent-ready"]},
+        {"repo": "o/r", "number": 2, "labels": ["agentic-os"]},
+        {"repo": "o/r", "number": 3, "labels": ["agentic-os", "agent-ready", "bug"]},
+        {"repo": "o/r", "number": 4, "labels": []},
+    ]
+    ready = m.collect_ready(backlog)
+    check([i["number"] for i in ready] == [1, 3], f"ready must filter on agent-ready: {ready}")
+
+    # A row with no labels key at all must not explode — the feed is generated
+    # from search results, and a missing field is a data problem, not a crash.
+    check(m.collect_ready([{"number": 9}]) == [], "a row with no labels must be skipped, not raise")
+
+    # The ready queue is a STRICT SUBSET: `backlog_issues` must keep every row.
+    # The ffcadmin renderer reads that key, and narrowing it would silently drop
+    # epics and records from the public page (#909's class).
+    check(len(backlog) == 4, "collect_ready must not mutate the backlog it filters")
+    check(
+        all(r in backlog for r in ready),
+        "every ready row must still be a backlog row — ready is a subset, not a replacement",
+    )
+
     print("test_502_agentic_os_status: all assertions passed")
     return 0
 

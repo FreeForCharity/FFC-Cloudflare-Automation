@@ -59,7 +59,16 @@ jobs:
     permissions:
       contents: read
       issues: write
-      pull-requests: read
+      # `pull-requests: write` is required for the claim NOTICE, not for the
+      # labels. Posting a comment on a PR goes through the issues endpoint, but
+      # GitHub scopes it by the target's real type: with `pull-requests: read`
+      # the POST returns 403 "Resource not accessible by integration" and
+      # answers `x-accepted-github-permissions: issues=write; pull_requests=write`.
+      # Measured on the first live run after the notice shipped (#951 → run
+      # 30631950400), where the labels applied and the job then died on the
+      # comment. The 403 is deliberately NOT caught: a swallowed 403 is the
+      # failure mode docs/lessons-ledger.md exists to prevent.
+      pull-requests: write
     steps:
       # Pin to the PR BASE (reviewed default-branch code), not the PR head, so
       # this issues:write job never executes claim-sync-lib.js as modified by the

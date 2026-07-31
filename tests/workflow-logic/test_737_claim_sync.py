@@ -218,6 +218,27 @@ def test_workflow_requires_lib_and_has_both_triggers():
     assert "label-sync" in jobs and "sweep" in jobs, list(jobs)
 
 
+def test_label_sync_can_write_to_the_pull_request_it_comments_on():
+    """The claim notice is a comment on a PULL REQUEST.
+
+    It is posted through the issues endpoint, but GitHub scopes that call by the
+    target's real type: with `pull-requests: read` the POST returns 403
+    "Resource not accessible by integration" and answers
+    `x-accepted-github-permissions: issues=write; pull_requests=write`. Measured
+    live on run 30631950400, where the labels applied and the job then died on
+    the comment — i.e. the notice shipped in a job that could not post it.
+
+    A permission is not exercised by any unit test, so this is the only place
+    the requirement can be pinned.
+    """
+    perms = load_workflow(WF_FILE)["jobs"]["label-sync"]["permissions"]
+    assert perms.get("issues") == "write", perms
+    assert perms.get("pull-requests") == "write", (
+        "label-sync comments on a PR, which needs pull-requests: write; "
+        f"`read` 403s at the createComment call (got {perms.get('pull-requests')!r})"
+    )
+
+
 def test_sweep_uses_ambient_token_hub_only():
     # CBM_TOKEN lives only in the gated github-prod environment, so it is empty
     # on schedule events — the sweep must run on the ambient GITHUB_TOKEN and

@@ -144,6 +144,145 @@ def test_a_non_subprocess_call_named_run_is_ignored():
 
 
 # --------------------------------------------------------------------------
+# The other half of the fix (#962): the CHILD's encode, not just the parent's
+# decode. A Python child writes stdout in the console codepage, so pinning only
+# this side converts mojibake into a UnicodeDecodeError raised on subprocess's
+# reader thread — the call still returns, with proc.stdout None, and the caller
+# dies later on `None + str`. Observed for real on 2026-07-31 (run 60).
+# --------------------------------------------------------------------------
+
+
+def test_a_python_child_with_only_the_parent_pinned_is_flagged():
+    """The exact shape that produced the None-stdout crash."""
+    src = (
+        "import subprocess, sys\n"
+        "subprocess.run([sys.executable, 'x.py'], capture_output=True,\n"
+        "               text=True, encoding='utf-8')\n"
+    )
+    found = find_violations(src, "half.py")
+    assert len(found) == 1, f"the child half must be flagged, got {[str(f) for f in found]}"
+    assert found[0].kind == "child", f"wrong kind: {found[0].kind}"
+    assert "unpinned" in found[0].reason, found[0].reason
+
+
+def test_pinning_the_child_clears_it():
+    """The fix, in the spelling the repo uses."""
+    src = (
+        "import os, subprocess, sys\n"
+        "subprocess.run([sys.executable, 'x.py'], text=True, encoding='utf-8',\n"
+        "               env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})\n"
+    )
+    assert find_violations(src, "fixed.py") == [], "the pinned-both-ends shape is the fix"
+
+
+def test_the_other_spellings_of_a_child_pin_are_accepted():
+    """PYTHONUTF8 and `-X utf8` make the child emit UTF-8 just as well."""
+    variants = (
+        "subprocess.run([sys.executable, 'x.py'], text=True, encoding='utf-8',\n"
+        "               env=dict(os.environ, PYTHONUTF8='1'))\n",
+        "subprocess.run([sys.executable, '-X', 'utf8', 'x.py'], text=True, encoding='utf-8')\n",
+        "subprocess.run([sys.executable, '-Xutf8', 'x.py'], text=True, encoding='utf-8')\n",
+    )
+    for v in variants:
+        src = "import os, subprocess, sys\n" + v
+        assert find_violations(src, "variant.py") == [], f"must accept:\n{v}"
+
+
+def test_a_stray_utf8_argument_is_not_mistaken_for_a_pin():
+    """`-X utf8` pins the child; the word `utf8` sitting in argv does not.
+
+    Accepting a bare token would let an ordinary script argument (a mode name, a
+    filename) silence the rule — a false negative in the guard is worse than a
+    false positive, because nothing ever tells you it happened.
+    """
+    src = (
+        "import subprocess, sys\n"
+        "subprocess.run([sys.executable, 'x.py', 'utf8'], text=True, encoding='utf-8')\n"
+    )
+    found = find_violations(src, "stray.py")
+    assert len(found) == 1, "a positional 'utf8' argument is not `-X utf8`"
+
+
+def test_a_bare_python_argv_counts_as_a_python_child():
+    """Not every call spells the interpreter `sys.executable`."""
+    for exe in ("python", "python3", "python3.12", "py", "python.exe"):
+        src = f"import subprocess\nsubprocess.run(['{exe}', 'x.py'], text=True, encoding='utf-8')\n"
+        found = find_violations(src, "bare.py")
+        assert len(found) == 1, f"{exe} is a Python child and must be flagged, got {found}"
+
+
+def test_a_non_python_child_is_not_asked_for_pythonioencoding():
+    """`node`/`git`/`pwsh` never read it — demanding it there would be noise."""
+    for exe in ("node", "git", "pwsh", "npx"):
+        src = f"import subprocess\nsubprocess.run(['{exe}', 'x'], text=True, encoding='utf-8')\n"
+        assert find_violations(src, "other_child.py") == [], (
+            f"{exe} does not read PYTHONIOENCODING; flagging it is pure noise"
+        )
+
+
+def test_an_unreadable_argv0_is_not_assumed_to_be_python():
+    """Deliberately asymmetric with the `text=<non-literal>` rule.
+
+    There the guard could not prove the call was *safe*. Here it cannot prove
+    the child is *Python*, and a false demand on a `node` child is noise.
+    """
+    src = "import subprocess\nEXE='node'\nsubprocess.run([EXE, 'x'], text=True, encoding='utf-8')\n"
+    assert find_violations(src, "unknown.py") == [], "an unprovable argv[0] is not a Python child"
+
+
+def test_an_env_that_cannot_be_read_is_reported():
+    """A variable env may or may not carry the pin, and the failure is silent."""
+    src = (
+        "import subprocess, sys\n"
+        "subprocess.run([sys.executable, 'x.py'], text=True, encoding='utf-8', env=ENV)\n"
+    )
+    found = find_violations(src, "opaque_env.py")
+    assert len(found) == 1, "an unreadable env= must be reported, not assumed pinned"
+    assert "no readable PYTHONIOENCODING" in found[0].reason, found[0].reason
+
+
+def test_the_child_rule_does_not_pre_empt_the_parent_rule():
+    """No `encoding=` at all is the parent's finding, with the parent's message.
+
+    A Python child that pins neither end must not be re-labelled as a child
+    problem — `encoding=` is the fix that call needs first, and the message the
+    author sees has to say so.
+    """
+    src = "import subprocess, sys\nsubprocess.run([sys.executable, 'x.py'], text=True)\n"
+    found = find_violations(src, "neither.py")
+    assert len(found) == 1, f"expected exactly one finding, got {[str(f) for f in found]}"
+    assert found[0].kind == "parent", f"must stay the parent finding, got {found[0].kind}"
+    assert "without encoding=" in found[0].reason, found[0].reason
+
+
+def test_a_binary_python_child_is_not_a_finding():
+    """No text mode, no decode — the child's codepage cannot bite."""
+    src = "import subprocess, sys\nsubprocess.run([sys.executable, 'x.py'], capture_output=True)\n"
+    assert find_violations(src, "binary_child.py") == [], "binary mode has no codec to get wrong"
+
+
+def test_the_three_run_60_call_sites_pin_the_child():
+    """The sites #962 names, asserted by name so a revert is loud.
+
+    The guard above proves the *rule*; this proves these specific call sites
+    were actually fixed — including `run_all.py`, which is the harness every
+    other module runs under and so the one whose None-stdout failure looks like
+    a bug in every module at once.
+    """
+    here = pathlib.Path(__file__).resolve().parent
+    for name in (
+        "run_all.py",
+        "test_env_secret_reference_resolution.py",
+        "test_powershell_command_resolution.py",
+    ):
+        src = (here / name).read_text(encoding="utf-8")
+        assert "PYTHONIOENCODING" in src, (
+            f"{name} spawns a Python child with the parent's encoding pinned; "
+            "without PYTHONIOENCODING it can return proc.stdout=None on Windows (#962)"
+        )
+
+
+# --------------------------------------------------------------------------
 # The tree itself.
 # --------------------------------------------------------------------------
 

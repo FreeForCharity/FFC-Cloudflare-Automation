@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import os
 import pathlib
 import subprocess
 import sys
@@ -349,6 +350,7 @@ def test_the_script_runs_as_a_command_and_reports_its_verdict():
         errors="replace",
         cwd=str(REPO_ROOT),
         timeout=120,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     assert "Environment secret references OK" in proc.stdout, proc.stdout

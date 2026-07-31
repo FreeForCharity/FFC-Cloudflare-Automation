@@ -21,6 +21,22 @@ const EXPIRY_MS = 48 * 60 * 60 * 1000;
 // CLAIM comment (hold for the full 48h expiry).
 const LINKED_CLAIM_MARKER = '<!-- claim-sync:linked-pr -->';
 
+// Markers stamped into the notice posted on the PR *itself* when it claims an
+// issue. `Refs #N` means two incompatible things — "this PR does part of that
+// issue" (a claim) and "that issue is where the related work lives" (a
+// citation) — and nothing here can tell them apart. 737 already comments on the
+// issue; the PR author never sees that, so a citation written as a claim hides
+// a backlog pickup silently, for as long as the PR stays open (#948: a docs
+// draft hid the run's designated top pickup for six hours).
+//
+// The per-issue marker, not the generic one, is what makes the notice
+// idempotent: a PR that later claims a SECOND issue must still get told about
+// that one, so "have I already said this?" is a question about an issue number,
+// not about the comment.
+const PR_NOTICE_MARKER = '<!-- claim-sync:pr-notice -->';
+const prNoticeIssueMarker = (n) => `<!-- claim-sync:pr-notice:${n} -->`;
+const PR_NOTICE_ISSUE_RE = /<!--\s*claim-sync:pr-notice:(\d+)\s*-->/g;
+
 // GitHub's closing keywords, plus bare `ref`/`refs` (which do NOT auto-close an
 // issue but still signal a claim per the protocol). `[:\s]+` allows an optional
 // colon and/or whitespace but requires a separator, so "prefix" / "closes#3"
@@ -114,6 +130,79 @@ function hasLinkedClaimMarker(comments) {
   );
 }
 
+// The notice posted ON THE PR naming what it just removed from the pickup
+// query, and the escape hatch for an author who meant a citation. Numbers are
+// sorted and de-duplicated so the body is a function of the SET, not of the
+// order the claim loop happened to visit it in.
+function prNoticeComment(issueNumbers) {
+  const ns = [
+    ...new Set((issueNumbers || []).map(Number).filter((n) => Number.isInteger(n) && n > 0)),
+  ].sort((a, b) => a - b);
+  const many = ns.length > 1;
+  return (
+    `🔒 This PR claimed ${ns.map((n) => `#${n}`).join(', ')} — ` +
+    `${many ? 'those issues are' : 'that issue is'} now hidden from the agent pickup query ` +
+    `(\`is:open -label:${CLAIM_LABEL}\`) until this PR merges or closes.\n\n` +
+    `**If you only meant to _cite_ ${many ? 'them' : 'it'}, not to take the work**, ` +
+    `edit the body to reference ${many ? 'them' : 'it'} with a full link ` +
+    '(`https://github.com/OWNER/REPO/issues/N`) instead of `Refs`/`Closes`, and remove the ' +
+    `\`${CLAIM_LABEL}\` label. \`Refs #N\` is the claiming form — see AGENTS.md ` +
+    '§ "Work claiming".\n\n' +
+    PR_NOTICE_MARKER +
+    ns.map(prNoticeIssueMarker).join('')
+  );
+}
+
+// Issue numbers this PR has already been told about, read back from its own
+// comments. Anything already in here is not re-announced.
+function noticedIssues(comments) {
+  const out = [];
+  for (const c of comments || []) {
+    if (!c || typeof c.body !== 'string') continue;
+    PR_NOTICE_ISSUE_RE.lastIndex = 0;
+    let m;
+    while ((m = PR_NOTICE_ISSUE_RE.exec(c.body)) !== null) {
+      const n = Number(m[1]);
+      if (Number.isInteger(n) && n > 0 && !out.includes(n)) out.push(n);
+    }
+  }
+  return out;
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+
+// Whole hours, then days — a claim age is read to answer "is anyone actually
+// working on this?", and minutes never change that answer.
+function formatAge(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return 'unknown age';
+  const hours = Math.floor(ms / HOUR_MS);
+  const days = Math.floor(hours / 24);
+  return days >= 1 ? `${days}d ${hours - days * 24}h` : `${hours}h`;
+}
+
+// A claim whose ONLY claimants are drafts older than thresholdMs — reportable,
+// never releasable. A draft is not active work, but it suppresses a pickup
+// exactly as hard as a ready PR, and several of the drafts measured in #948 had
+// been sitting four to six days. Returns null (nothing to report) unless EVERY
+// claimant is a draft AND every one of them is past the threshold:
+//   - any ready PR  -> real work in review, not a stuck claim;
+//   - any young draft -> plausibly still being written;
+//   - an unknown draft flag or unparseable age -> unknown, and this reports
+//     rather than releases, so a false alarm is the only failure it can cause.
+// `rows`: [{ ref, draft, createdAtMs }].
+function draftOnlyClaim(rows, { nowMs, thresholdMs = EXPIRY_MS } = {}) {
+  const refs = Array.isArray(rows) ? rows : [];
+  if (!refs.length || !Number.isFinite(nowMs)) return null;
+  let oldestAgeMs = -Infinity;
+  for (const r of refs) {
+    if (!r || r.draft !== true) return null;
+    const age = nowMs - Number(r.createdAtMs);
+    if (!Number.isFinite(age) || age < thresholdMs) return null;
+    if (age > oldestAgeMs) oldestAgeMs = age;
+  }
+  return { oldestAgeMs, refs: refs.map((r) => r.ref) };
+}
+
 // A claim is released when there is no open linked PR AND either
 //   - the claim came from a linked PR that is no longer open (claimedByLinkedPR:
 //     the work is finished, so holding the label just hides available work), or
@@ -138,11 +227,17 @@ module.exports = {
   CLAIM_LABEL,
   EXPIRY_MS,
   LINKED_CLAIM_MARKER,
+  PR_NOTICE_MARKER,
   LINK_RE,
   CLOSING_RE,
   normalizeRepo,
   extractLinkedIssues,
   linkedClaimComment,
   hasLinkedClaimMarker,
+  prNoticeIssueMarker,
+  prNoticeComment,
+  noticedIssues,
+  formatAge,
+  draftOnlyClaim,
   decideRelease,
 };

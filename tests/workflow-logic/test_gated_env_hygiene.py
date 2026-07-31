@@ -53,6 +53,7 @@ GATED_ENVS = {
     "cloudflare-prod",
     "cloudflare-prod-write",
     "github-prod",
+    "google-prod-write",
     "m365-prod",
     "whmcs-prod",
     "wpmudev-prod",

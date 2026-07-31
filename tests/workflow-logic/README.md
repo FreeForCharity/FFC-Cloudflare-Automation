@@ -53,3 +53,9 @@ When you add or change embedded workflow logic, add a scenario here:
 2. Drive it with a simulated context (JS) or `TEST_*` fixtures + the fake `gh` (shell), asserting on
    outputs, flags, or the gh call log.
 3. `run_all.py` auto-discovers any `test_*.py` module — no registration.
+4. **Give the module a runner.** `run_all.py` executes each module as a plain script
+   (`python3 test_x.py`), so a module without an `if __name__ == "__main__":` block defines its
+   tests and executes none of them — and exits 0, which the harness reported as a pass. The modules
+   do not share one reporting convention (most print `  PASS <name>` per test; `test_502` prints a
+   single summary line), but a module that exits 0 **in silence** is now failed as having run
+   nothing.

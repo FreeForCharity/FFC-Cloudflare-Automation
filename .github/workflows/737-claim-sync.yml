@@ -228,6 +228,10 @@ jobs:
             // warning below).
             const SEARCH_CAP = 1000;
             const SEARCH_CAP_HEADROOM = 800;
+            // One page size, three consumers (the loop bound, the request, the
+            // last-page test). Spelling 100 three times is how the cap maths
+            // silently drifts out of step with what is actually fetched.
+            const SEARCH_PER_PAGE = 100;
             const NON_CLAIMING_AUTHORS = ['app/dependabot'];
             try {
               const q = [
@@ -236,9 +240,9 @@ jobs:
               ].join(' ');
               let total = null;
               let fetched = 0;
-              for (let page = 1; page <= SEARCH_CAP / 100; page++) {
+              for (let page = 1; page <= Math.ceil(SEARCH_CAP / SEARCH_PER_PAGE); page++) {
                 const { data } = await github.rest.search.issuesAndPullRequests({
-                  q, per_page: 100, page,
+                  q, per_page: SEARCH_PER_PAGE, page,
                 });
                 if (data.incomplete_results) throw new Error('incomplete_results');
                 if (total === null) total = data.total_count;
@@ -248,7 +252,7 @@ jobs:
                   const nwo = nwoOf(it);
                   if (nwo) orgPrs.push({ nwo, number: it.number, body: it.body || '' });
                 }
-                if (items.length < 100) break;
+                if (items.length < SEARCH_PER_PAGE) break;
               }
               // Completeness, not just the flag: the Search API also caps a query
               // and stops paginating with incomplete_results FALSE. A short read
@@ -261,7 +265,7 @@ jobs:
               // silently skipped pass. This read was complete, so the sweep is
               // healthy — but the fleet grows, and the failure mode it grows
               // into is invisible without this line.
-              if (total > SEARCH_CAP_HEADROOM) {
+              if (total >= SEARCH_CAP_HEADROOM) {
                 core.warning(
                   `Org-wide PR search is at ${total} of the ${SEARCH_CAP}-result cap. Cross-repo ` +
                   'claim sync still ran, but it stops entirely at the cap: switch to a per-repo ' +

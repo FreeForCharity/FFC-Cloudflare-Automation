@@ -394,6 +394,10 @@ MUT_UNNARROWED_QUERY = (
     "...NON_CLAIMING_AUTHORS.map((a) => `-author:${a}`),",
     "",
 )
+MUT_STRICT_HEADROOM = (
+    "if (total >= SEARCH_CAP_HEADROOM) {",
+    "if (total > SEARCH_CAP_HEADROOM) {",
+)
 
 
 def _workspace(td: pathlib.Path, mutation: tuple[str, str] | None) -> pathlib.Path:
@@ -703,6 +707,36 @@ def test_sweep_warns_before_the_narrowed_query_reaches_the_cap():
     assert _labeled(r) == [934], r
     assert any("of the 1000-result cap" in w for w in r["warnings"]), r["warnings"]
     assert not any("unusable" in w for w in r["warnings"]), r["warnings"]
+
+
+def test_sweep_warns_at_exactly_the_headroom_boundary():
+    # Pin the boundary: "warn at 800" means 800 warns, not 801. An off-by-one
+    # here costs nothing today and one silent run when the fleet lands on it.
+    r = run_sweep(
+        org_prs=_fleet_population(dependabot=0, other=800),
+        issues={"934": _open_issue(934)},
+    )
+    assert any("at 800 of the 1000-result cap" in w for w in r["warnings"]), r["warnings"]
+    # ...and the boundary is load-bearing: a strict `>` goes quiet at exactly 800.
+    strict = run_sweep(
+        org_prs=_fleet_population(dependabot=0, other=800),
+        issues={"934": _open_issue(934)},
+        script_mutation=MUT_STRICT_HEADROOM,
+    )
+    assert strict["warnings"] == [], "the mutation must silence the boundary case"
+
+
+def test_sweep_pages_the_org_search_at_the_declared_page_size():
+    # The loop bound, the request and the last-page test all read one constant;
+    # a fixture larger than one page proves the pager actually walks pages
+    # rather than reading page 1 and calling it complete.
+    r = run_sweep(
+        org_prs=_fleet_population(dependabot=0, other=250),
+        issues={"934": _open_issue(934)},
+    )
+    assert [c["per_page"] for c in r["searchCalls"]] == [100, 100, 100], r["searchCalls"]
+    assert [c["page"] for c in r["searchCalls"]] == [1, 2, 3], r["searchCalls"]
+    assert _labeled(r) == [934], r
 
 
 def test_mutation_unnarrowed_query_is_truncated_and_claims_nothing():

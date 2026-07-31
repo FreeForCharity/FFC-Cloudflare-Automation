@@ -350,6 +350,7 @@ def _select_required(check_runs: list, names: list) -> list:
         ["node", "-e", code, json.dumps(check_runs), json.dumps(names)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=60,
     )
     if proc.returncode != 0:

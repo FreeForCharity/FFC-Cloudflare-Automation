@@ -140,6 +140,15 @@ and all authenticate as the same user. Before starting ANY issue:
    (`conductor-run-N`, `live-session`, `copilot-agent`, or a human name — the shared login does not
    identify you). Opening a PR that says `Closes #N` is also a claim (automation will sync the label
    from linked PRs once the claim-sync workflow lands).
+   - **`Refs`/`Closes` CLAIM. To merely cite an issue, use a full link.** The two readings of
+     `Refs #N` — "this PR does part of that issue" and "that issue is where the related work lives"
+     — are indistinguishable to 737, which claims on both. A citation written as `Refs #N` therefore
+     removes a live pickup from the query for as long as the PR stays open, silently and invisibly
+     to its author: a docs draft citing #945 hid the run's designated top pickup for six hours
+     (#948). So **cite with `https://github.com/FreeForCharity/<repo>/issues/N`** (or a bare
+     `<repo>#N` with no keyword) and keep `Refs`/`Closes` for work you are actually taking. 737
+     comments on the PR naming every issue it claimed, so a mistake is visible immediately — rewrite
+     the reference as a link and remove the `claimed` label.
    - **From another repo, qualify the reference.** The backlog is here; the code usually is not. A
      bare `#N` in a template or `FFC-EX-*` PR means _that_ repo's issue #N, so write the hub issue
      out in full — `Refs FreeForCharity/FFC-Cloudflare-Automation#N`. That qualified form is what
@@ -154,7 +163,10 @@ and all authenticate as the same user. Before starting ANY issue:
      form used as a citation in **3 of 5** hub drafts, two of them "claiming" the Conductor Log #719
      (ledger L44). Enforcement is tracked in #948.
 3. **Release on stop**: if you abandon the work, remove the label and comment. Claims with no open
-   linked PR and no activity for 48h are considered expired and may be swept.
+   linked PR and no activity for 48h are considered expired and may be swept. **A draft PR holds a
+   claim as hard as a ready one** — 737's daily sweep reports (never releases) every issue whose
+   only claimant is a draft older than 48h, so if a draft of yours shows up there, promote it or
+   close it rather than leaving the pickup suppressed.
    - **Multi-repo / multi-part issues: claim your portion, not the issue.** Post the
      `CLAIM: <actor> …` comment scoped to the part you are taking (name the repo/portion) and do
      **not** add the exclusive `claimed` label — the remainder must stay visible in the pickup

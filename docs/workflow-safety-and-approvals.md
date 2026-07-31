@@ -23,34 +23,36 @@ A live change generally has to get past several of these, not just one:
    provider logs.)
 2. **Environment approval gates.** A job whose `environment` is configured with **required
    reviewers** pauses at `status: waiting` until a reviewer (currently `clarkemoyer`) approves the
-   deployment. The live config was **audited on 2026-06-30** by the read-only workflow **730. Repo -
-   Audit Environment Approval Gates [Repo]** (reads the protection rules with `GITHUB_TOKEN`). The
-   environments that require a reviewer are: **`cloudflare-prod-write`**, **`whmcs-prod`**,
-   **`github-prod`**, **`m365-prod`**, and **`wpmudev-prod`** (plus a bare **`cloudflare-prod`**
-   that no workflow currently uses). The environments with **no** reviewer — runs proceed without
-   pausing — are **`cloudflare-prod-read`**, **`whmcs-prod-read`**, **`google-prod-read`**, and
-   **`zeffy-prod`**; **`github-prod-read`** joins them **once provisioned** (#834 — the environment
-   does not exist yet, so it is listed here as intent, not as audited fact; re-run 730 after
-   creating it). `candid-prod-read` is omitted for the same reason. Because `whmcs-prod`,
-   `github-prod`, `m365-prod`, and `wpmudev-prod` are gated at the environment level, they gate
-   **every** job that uses them — a read-only job on one of them still waits. Read-only WHMCS
-   workflows moved to the ungated **`whmcs-prod-read`** (reader OIDC identity, `read-all-*` KV
-   secrets) in 2026-07, and the scheduled GitHub reads 502/726/735 moved to **`github-prod-read`**
-   on the same pattern (#834); the M365 list/preflight reads 301–303 and the WPMUDEV export 601
-   still wait on their gated envs. A **scheduled** Reads workflow must never sit on a gated
-   environment: it fires with nobody watching and waits. What happens next depends on its
-   concurrency config — with `cancel-in-progress: true` the next scheduled run cancels its waiting
-   predecessor; otherwise it sits at `status: waiting` until janitor **734** reaps it at 7 days, or
-   a human approves it days late. Both outcomes appear in #834's evidence (3 `failure` + 2
-   `cancelled` for 726 alone), and either way the schedule is not kept — do not assume the
-   cancellation path. The dispatch-only gated reads are a different case — the operator who
-   dispatched is present to approve — and `tests/workflow-logic/test_gated_env_hygiene.py` enforces
-   exactly that split. Re-run workflow 730 after any change in _Settings → Environments_ to refresh
-   this list. To preview or clear **several** runs waiting at a gate at once, an environment
-   reviewer can run `scripts/approve-waiting-runs.py` — an operator tool that acts under your own
-   `gh` auth (the ambient `GITHUB_TOKEN` **cannot** approve gates). It defaults to a dry-run
-   preview; pass `--approve` (optionally `--environment <name>`) to act. For the idempotent Google
-   505/503 provisioning writes specifically, the structural fix is a dedicated **ungated
+   deployment. The live config was **re-audited on 2026-07-31** against the environments API
+   (`GET /repos/…/environments/<name>` — the same protection rules the read-only workflow **730.
+   Repo - Audit Environment Approval Gates [Repo]** reports). The environments that require a
+   reviewer are: **`cloudflare-prod-write`**, **`whmcs-prod`**, **`github-prod`**,
+   **`google-prod-write`**, **`m365-prod`**, and **`wpmudev-prod`** (plus a bare
+   **`cloudflare-prod`** that no workflow currently uses). The environments with **no** reviewer —
+   runs proceed without pausing — are **`cloudflare-prod-read`**, **`github-prod-read`**,
+   **`google-prod-read`**, **`fraudlabspro-prod-read`**, **`whmcs-prod-read`**, and
+   **`zeffy-prod`**. `github-prod-read` was provisioned after the 2026-06-30 audit and is now
+   **audited fact, not intent** (#834); `candid-prod-read` still **does not exist**, so it stays
+   omitted rather than listed as ungated. Because `whmcs-prod`, `github-prod`, `m365-prod`, and
+   `wpmudev-prod` are gated at the environment level, they gate **every** job that uses them — a
+   read-only job on one of them still waits. Read-only WHMCS workflows moved to the ungated
+   **`whmcs-prod-read`** (reader OIDC identity, `read-all-*` KV secrets) in 2026-07, and the
+   scheduled GitHub reads 502/726/735 moved to **`github-prod-read`** on the same pattern (#834);
+   the M365 list/preflight reads 301–303 and the WPMUDEV export 601 still wait on their gated envs.
+   A **scheduled** Reads workflow must never sit on a gated environment: it fires with nobody
+   watching and waits. What happens next depends on its concurrency config — with
+   `cancel-in-progress: true` the next scheduled run cancels its waiting predecessor; otherwise it
+   sits at `status: waiting` until janitor **734** reaps it at 7 days, or a human approves it days
+   late. Both outcomes appear in #834's evidence (3 `failure` + 2 `cancelled` for 726 alone), and
+   either way the schedule is not kept — do not assume the cancellation path. The dispatch-only
+   gated reads are a different case — the operator who dispatched is present to approve — and
+   `tests/workflow-logic/test_gated_env_hygiene.py` enforces exactly that split. Re-run workflow 730
+   after any change in _Settings → Environments_ to refresh this list. To preview or clear
+   **several** runs waiting at a gate at once, an environment reviewer can run
+   `scripts/approve-waiting-runs.py` — an operator tool that acts under your own `gh` auth (the
+   ambient `GITHUB_TOKEN` **cannot** approve gates). It defaults to a dry-run preview; pass
+   `--approve` (optionally `--environment <name>`) to act. For the idempotent Google 505/503
+   provisioning writes specifically, the structural fix is a dedicated **ungated
    `google-prod-provision`** environment (mirroring `whmcs-prod-read`) so they don't gate at all
    (#636).
 3. **`dry_run` defaults to preview.** The granular write workflows take a `dry_run` input that

@@ -29,6 +29,10 @@ permissions:
   contents: read
   issues: write
   actions: read
+  # #900 reads open PRs and their head-SHA check runs to find the ones that are
+  # green, clean and still in draft. Both are reads; nothing here writes a PR.
+  pull-requests: read
+  checks: read
 
 env:
   # Data-pipeline workflows tracked for the success-rate metric, by file-number
@@ -101,6 +105,49 @@ jobs:
             const agenticOpen = await openWithLabel('agentic-os');
             const agenticClosed = await closedWithLabel('agentic-os');
 
+            // "Green, clean, and stuck in draft" (#900). Every other signal in
+            // this report reads healthier as finished work piles up unlanded, so
+            // this is the one that has to notice. A PR qualifies only when it is
+            // a DRAFT, mergeable_state is `clean`, and every required check on
+            // its head SHA has concluded success — i.e. the draft flag is the
+            // only thing left between it and `main`.
+            //
+            // Age runs from the last required check COMPLETING, not created_at:
+            // a PR is only "waiting" from the moment it became landable.
+            //
+            // Uses check-runs, never the legacy commit-status API, which reads
+            // `pending` forever on this repo (ledger L26).
+            const REQUIRED_CHECKS = ['Validate Repository', 'Phantom Revert Guard'];
+            const PARKED_MARKER = /<!--\s*parked:/i;
+            const readyWaiting = [];
+            const agenticPrs = (await listIssuesBounded({
+              owner, repo, state: 'open', labels: 'agentic-os',
+            })).filter((i) => i.pull_request);
+            for (const item of agenticPrs) {
+              const { data: pr } = await github.rest.pulls
+                .get({ owner, repo, pull_number: item.number })
+                .catch(() => ({ data: null }));
+              if (!pr || !pr.draft || pr.mergeable_state !== 'clean') continue;
+              const { data: checks } = await github.rest.checks
+                .listForRef({ owner, repo, ref: pr.head.sha, per_page: 100 })
+                .catch(() => ({ data: { check_runs: [] } }));
+              const runs = checks.check_runs || [];
+              const required = REQUIRED_CHECKS.map((n) => runs.find((r) => r.name === n));
+              // Missing counts as not-green: an absent required check is exactly
+              // the "presence mistaken for validity" shape the ledger is about.
+              if (!required.every((r) => r && r.conclusion === 'success')) continue;
+              const readySince = required
+                .map((r) => new Date(r.completed_at || pr.updated_at).getTime())
+                .reduce((a, b) => Math.max(a, b), 0);
+              readyWaiting.push({
+                number: pr.number,
+                readySinceIso: new Date(readySince).toISOString(),
+                parked:
+                  PARKED_MARKER.test(pr.body || '') ||
+                  (pr.labels || []).some((l) => (l.name || l) === 'parked'),
+              });
+            }
+
             // Data-pipeline runs in the pipeline window, matched by file-number
             // prefix on the run path (robust to display-name edits).
             const nums = (process.env.PIPELINE_NUMBERS || '')
@@ -139,6 +186,7 @@ jobs:
               claimedOpen: claimedOpen.map((i) => ({ created_at: i.created_at })),
               agenticOpen: agenticOpen.length,
               agenticClosedRecent: agenticClosed.length,
+              readyWaiting,
               pipelineRuns,
             });
 
@@ -183,6 +231,7 @@ jobs:
               .addRaw(
                 `Open smoke failures: ${metrics.smokeFailures.open}; open claims: ` +
                   `${metrics.claims.open}; agentic-os backlog: ${metrics.agenticOs.open}; ` +
+                  `ready-but-unlanded PRs: ${metrics.readyWaiting.count}; ` +
                   `data-pipeline success: ${metrics.dataPipeline.success}/${metrics.dataPipeline.runs}. ` +
                   `Posted to #${logIssue}.`,
               )

@@ -190,6 +190,125 @@ def test_workflow_has_schedule_and_dispatch():
     assert "workflow_dispatch" in on, on
 
 
+# ---------------------------------------------------------------------------
+# "Green, clean, and stuck in draft" (#900).
+#
+# Every other signal in this report reads GREEN while finished agent work sits
+# unlanded — backlog and claim counts actually look *healthier* as PRs pile up
+# in draft. Four consecutive landing runs rediscovered that and wrote it up as
+# prose. These pin the metric that replaces the prose.
+# ---------------------------------------------------------------------------
+
+RW_NOW = "2026-07-31T12:00:00Z"
+
+
+def _rw(candidates) -> dict:
+    return compute({"nowIso": RW_NOW, "readyWaiting": candidates})["readyWaiting"]
+
+
+def test_no_candidates_yields_zero_and_null_ages():
+    """Absent input must not throw, and must not render a misleading 0 age."""
+    for empty in ([], None):
+        r = compute({"nowIso": RW_NOW} if empty is None else {"nowIso": RW_NOW, "readyWaiting": empty})
+        rw = r["readyWaiting"]
+        assert rw["count"] == 0, rw
+        assert rw["meanAgeDays"] is None, "empty must be null, not 0 — see how claims does it"
+        assert rw["maxAgeDays"] is None, rw
+        assert rw["oldest"] is None, rw
+
+
+def test_one_candidate_is_counted_and_aged():
+    rw = _rw([{"number": 897, "readySinceIso": "2026-07-30T00:00:00Z"}])
+    assert rw["count"] == 1
+    assert rw["maxAgeDays"] == 1.5, rw
+    assert rw["oldest"] == {"number": 897, "ageDays": 1.5}, rw
+
+
+def test_a_parked_candidate_is_excluded_from_the_count_but_still_listed():
+    """The load-bearing exclusion.
+
+    A PR parked for a stated reason and a PR simply forgotten look identical.
+    Counting the first alerts forever and trains everyone to ignore the metric.
+    """
+    rw = _rw([
+        {"number": 897, "readySinceIso": "2026-07-30T00:00:00Z"},
+        {"number": 837, "readySinceIso": "2026-07-25T00:00:00Z", "parked": True},
+    ])
+    assert rw["count"] == 1, f"parked must not be counted: {rw}"
+    assert rw["numbers"] == [897], rw
+    assert rw["parked"] == [837], "a parked PR must still be listed, not hidden"
+    assert rw["oldest"]["number"] == 897, "the parked PR must not become 'oldest'"
+
+
+def test_the_oldest_is_the_oldest_not_the_first():
+    rw = _rw([
+        {"number": 898, "readySinceIso": "2026-07-31T06:00:00Z"},
+        {"number": 897, "readySinceIso": "2026-07-29T12:00:00Z"},
+    ])
+    assert rw["oldest"]["number"] == 897, rw
+
+
+def test_the_report_names_the_prs_not_just_a_count():
+    """A count nobody can act on is what the four prior landing runs already had."""
+    m = compute({"nowIso": RW_NOW, "readyWaiting": [
+        {"number": 897, "readySinceIso": "2026-07-30T00:00:00Z"},
+        {"number": 837, "readySinceIso": "2026-07-25T00:00:00Z", "parked": True},
+    ]})
+    out = render(m, None)
+    assert "#897" in out, "the report must name the waiting PR"
+    assert "PRs ready but unlanded" in out, "the table row must render"
+    assert "#837" in out and "parked" in out.lower(), "parked PRs must be shown as excluded"
+
+
+def test_the_threshold_callout_fires_only_past_a_day():
+    hot = compute({"nowIso": RW_NOW, "readyWaiting": [
+        {"number": 897, "readySinceIso": "2026-07-30T00:00:00Z"},  # 1.5d
+    ]})
+    fresh = compute({"nowIso": RW_NOW, "readyWaiting": [
+        {"number": 898, "readySinceIso": "2026-07-31T06:00:00Z"},  # 0.25d
+    ]})
+    assert "need promoting out of draft" in render(hot, None), "1.5d must trigger the callout"
+    assert "need promoting out of draft" not in render(fresh, None), (
+        "a PR ready for six hours is not yet a problem worth naming"
+    )
+
+
+def test_a_report_predating_the_field_gives_no_arrow_and_does_not_crash():
+    """`prev` from before #900 has no readyWaiting key — must render, not throw."""
+    m = compute({"nowIso": RW_NOW, "readyWaiting": [
+        {"number": 897, "readySinceIso": "2026-07-30T00:00:00Z"},
+    ]})
+    out = render(m, {"agenticOs": {"open": 5, "closed": 1}, "claims": {"open": 2}})
+    assert "PRs ready but unlanded" in out
+    assert "—" in out, "a missing previous value must render an em dash, not an arrow"
+
+
+def test_the_workflow_only_counts_drafts_that_are_clean_and_green():
+    """The lib is pure, so the qualifying rule lives in the workflow — pin it.
+
+    Mutation-relevant: dropping any one of these three conditions turns the
+    metric into "count of open agentic-os PRs", which is not the thing.
+    """
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
+    assert "pr.draft" in raw, "must require the PR to be a draft"
+    assert "mergeable_state !== 'clean'" in raw, "must require a clean mergeable_state"
+    assert "Validate Repository" in raw and "Phantom Revert Guard" in raw, (
+        "must name the repo's actual required checks"
+    )
+    # Naming them is not enforcing them. The first version of this test asserted
+    # only the names, and a mutation deleting the conclusion check sailed past —
+    # the REQUIRED_CHECKS array survived, so the names were still "present".
+    # Presence mistaken for validity, in the guard for a metric about exactly
+    # that. Assert the comparison itself.
+    assert "conclusion === 'success'" in raw, (
+        "must assert the required checks CONCLUDED success — listing their names proves nothing"
+    )
+    assert "checks\n                .listForRef" in raw or "checks.listForRef" in raw, (
+        "must read check-runs; the legacy status API reads pending forever here (L26)"
+    )
+    assert "parked" in raw, "must honour the parked marker/label"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

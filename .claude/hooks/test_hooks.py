@@ -119,6 +119,30 @@ def main():
     check("gh api field value with slash allowed", "guard_bash.py",
           bash("gh api repos/o/r/issues -f body=/tmp/note.md"), False)
 
+    # Rule 9: `$?` after a pipeline reads the LAST stage, not the command meant.
+    # The exact shape that misreported a fail-closed probe on #965 (run 62).
+    check("pipeline then $? on same line", "guard_bash.py",
+          bash('python3 check.py | tail -3; echo "EXIT=$?"'), True)
+    check("pipeline then $? on next line", "guard_bash.py",
+          bash('python3 check.py | grep FAIL\necho "EXIT=$?"'), True)
+    check("pipeline then $? into a variable", "guard_bash.py",
+          bash('make build | tee log.txt\nrc=$?'), True)
+    # The two CORRECT spellings must stay silent, or the rule just trains people
+    # to ignore it.
+    check("PIPESTATUS allowed", "guard_bash.py",
+          bash('python3 check.py | tail -3; echo "EXIT=${PIPESTATUS[0]}"'), False)
+    check("pipefail allowed", "guard_bash.py",
+          bash('set -o pipefail\npython3 check.py | tail -3\necho "EXIT=$?"'), False)
+    # `$?` with no pipeline at all is the normal, correct idiom.
+    check("bare command then $? allowed", "guard_bash.py",
+          bash('python3 check.py\necho "EXIT=$?"'), False)
+    # `||` is not a pipeline -- it must not be mistaken for one.
+    check("logical or then $? allowed", "guard_bash.py",
+          bash('python3 check.py || echo failed\necho "EXIT=$?"'), False)
+    # A pipeline with no `$?` anywhere is the overwhelmingly common case.
+    check("pipeline without $? allowed", "guard_bash.py",
+          bash('git log --oneline | head -5'), False)
+
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)
     check("write key.pem", "guard_edit.py", write("certs/key.pem", "x"), True)

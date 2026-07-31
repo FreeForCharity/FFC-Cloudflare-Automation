@@ -138,6 +138,38 @@ def main():
             "the shell. Drop the leading slash: `gh api markdown`."
         )
 
+    # 9. `$?` AFTER A PIPELINE reads the LAST stage's status, not the command
+    #    you care about. `python3 check.py | tail -4` followed by `echo $?`
+    #    reports `tail`'s exit code, and `tail` essentially always succeeds --
+    #    so a checker that exited 1 is reported as 0. It fails in the
+    #    reassuring direction, which is the whole reason this file exists.
+    #    Hit twice on 2026-07-31 (run 62) while reviewing #965: probing whether
+    #    a guard was fail-closed, `... | tail -3; echo "EXIT=$?"` printed
+    #    EXIT=0 for a module that had in fact exited 1. Taken at face value it
+    #    would have produced a false "this guard is not fail-closed" finding
+    #    against a PR that was correct. The same run got it right elsewhere by
+    #    using ${PIPESTATUS[0]} -- the inconsistency is exactly what a hook is
+    #    for.
+    #    Fix: `${PIPESTATUS[0]}` for a specific stage, or `set -o pipefail` so
+    #    the pipeline's own status reflects any failing stage.
+    #    Deliberately narrow: it needs a REAL pipeline (`|`, not `||`), and it
+    #    stays silent when the command already uses PIPESTATUS or pipefail --
+    #    those are the correct spellings and must not be nagged.
+    if "$?" in cmd and "PIPESTATUS" not in cmd and "pipefail" not in cmd:
+        if re.search(
+            r"[^|&\n]\|[^|\n]"  # a real pipeline, not `||` and not `&|`
+            r"[^\n]*"  # ... the rest of that stage
+            r"(?:;|\n)\s*"  # a statement break
+            r"[^\n]*\$\?",  # ... then something reading $?
+            cmd,
+        ):
+            block(
+                "`$?` after a pipeline reports the LAST stage's exit status, not the "
+                "command you meant -- `cmd | tail` then `$?` reads `tail`, which almost "
+                "always succeeds, so a failing command reads as success. Use "
+                "`${PIPESTATUS[0]}` for a specific stage, or `set -o pipefail`."
+            )
+
     sys.exit(0)
 
 

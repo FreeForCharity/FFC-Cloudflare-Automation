@@ -94,6 +94,29 @@ from the same mistake.
   `739-process-health-metrics.yml`. List `.github/workflows/` and match the numeric prefix rather
   than guessing the slug.
 
+## `gh search` is index-backed and lags — never audit completeness with it (run 62, 2026-07-31)
+
+`gh search issues` / `gh search prs` read GitHub's **search index**, which trails the write APIs by
+an interval nobody controls. So they are fine for "find me something" and **wrong for "is anything
+missing"** — the items they omit are the newest ones, which are exactly the items a completeness
+audit is looking for.
+
+Run 62 built the "what should be on the public board" set from
+`gh search issues --owner FreeForCharity --label agentic-os --state open`: it returned **52** items
+and the audit reported **0 missing**. The authoritative REST enumeration
+(`repos/{owner}/{repo}/issues?state=open&labels=agentic-os`, paginated, per repo) returned **53**,
+and the omitted one — PR #965, created minutes earlier — was genuinely absent from the board. The
+search-based audit was not merely incomplete; it returned a **clean bill of health** for a board
+that had a hole in it.
+
+- For any "everything of kind X" question, enumerate with **REST per repo** and paginate.
+- This is a sibling of the stale-read rule below, but **not** the same thing and the remedy differs:
+  a post-write read is stale for seconds and re-polling cures it; a search index is stale on its own
+  schedule and re-polling is just a slower wrong answer. Change endpoint, don't retry.
+- The tell is a **denominator that looks plausible**. 52 vs 53 raises no alarm on its own — so print
+  both sides' counts (`expected=N board=M`) and treat the comparison, not the empty result set, as
+  the finding. Scripted in issue #966.
+
 ## Board & PR-creation env facts (validated 2026-07-24)
 
 - **The public "Agentic OS" board (org project #9) has NO automation.** Its only enabled built-in

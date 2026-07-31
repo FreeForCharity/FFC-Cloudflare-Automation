@@ -5,6 +5,7 @@ Usage: python3 tests/workflow-logic/run_all.py
 
 from __future__ import annotations
 
+import os
 import pathlib
 import subprocess
 import sys
@@ -40,6 +41,11 @@ def main() -> int:
             text=True,
             encoding="utf-8",
             errors="replace",
+            # The parent's decode and the child's encode are two settings. Pinning
+            # only this side turns a mojibake'd line into a UnicodeDecodeError on
+            # subprocess's reader thread, which leaves proc.stdout None and blames
+            # the caller's arithmetic instead. See #962.
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
         sys.stdout.write(proc.stdout)
         sys.stdout.flush()

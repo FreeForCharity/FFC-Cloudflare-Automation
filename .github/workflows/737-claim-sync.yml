@@ -6,15 +6,21 @@ run-name: 'Claim sync: ${{ github.event_name }}'
 #
 #   1. Event-driven label sync (pull_request): parse Closes/Fixes/Refs #N from
 #      the PR body and add `claimed` to those open hub issues while the PR is
-#      active; remove it when the last open linked PR closes/merges.
+#      active; remove it when the last open linked PR closes/merges. It also
+#      comments ON THE PR naming what it just claimed — `Refs #N` is both the
+#      claiming form and how people write a citation, and only the PR author can
+#      tell which they meant (#948).
 #   2. Daily sweep (schedule): reconcile this repo's `claimed` labels against
 #      every open PR in the org. The pickup query in AGENTS.md is org-wide but
 #      trigger 1 is repo-local, so a hub issue implemented by a PR in a template
 #      or site repo read as unclaimed and invited a duplicate (#939). The sweep
 #      claims those, releases a claim once the last open PR referencing the
 #      issue — in any repo — is closed or merged, and still releases a stale
-#      hand-labeled claim after 48h of inactivity. Cross-repo is READ-only here:
-#      every write targets this repo's own issues, so the ambient token suffices.
+#      hand-labeled claim after 48h of inactivity. It also REPORTS (never
+#      releases) claims whose only claimant is a draft PR older than 48h — a
+#      draft suppresses a pickup exactly as hard as a ready PR (#948).
+#      Cross-repo is READ-only here: every write targets this repo's own
+#      issues, so the ambient token suffices.
 #      (ffcadmin still needs its own sweep for ITS issues: cross-repo writes
 #      require CBM_TOKEN, which lives only in the gated github-prod environment
 #      — unusable for an ungated daily job.)
@@ -53,7 +59,16 @@ jobs:
     permissions:
       contents: read
       issues: write
-      pull-requests: read
+      # `pull-requests: write` is required for the claim NOTICE, not for the
+      # labels. Posting a comment on a PR goes through the issues endpoint, but
+      # GitHub scopes it by the target's real type: with `pull-requests: read`
+      # the POST returns 403 "Resource not accessible by integration" and
+      # answers `x-accepted-github-permissions: issues=write; pull_requests=write`.
+      # Measured on the first live run after the notice shipped (#951 → run
+      # 30631950400), where the labels applied and the job then died on the
+      # comment. The 403 is deliberately NOT caught: a swallowed 403 is the
+      # failure mode docs/lessons-ledger.md exists to prevent.
+      pull-requests: write
     steps:
       # Pin to the PR BASE (reviewed default-branch code), not the PR head, so
       # this issues:write job never executes claim-sync-lib.js as modified by the
@@ -110,6 +125,7 @@ jobs:
               // (A reference REMOVED via `edited` is not un-claimed here; the
               // daily sweep eventually releases it once the issue has no open
               // linked PR AND is idle for the 48h expiry threshold.)
+              const claimedNow = [];
               for (const n of linked) {
                 const { data: issue } = await github.rest.issues
                   .get({ owner, repo, issue_number: n })
@@ -119,7 +135,62 @@ jobs:
                 await github.rest.issues.addLabels({
                   owner, repo, issue_number: n, labels: [lib.CLAIM_LABEL],
                 });
+                claimedNow.push(n);
                 core.info(`Claimed #${n} (linked from PR #${pr.number}).`);
+              }
+
+              // Close the feedback loop on the PR side. The claim comment 737
+              // posts lands on the ISSUE, which the PR author has no reason to
+              // be watching — so a `Refs #N` written as a citation hides a
+              // backlog pickup with nobody aware it happened (#948). Announce
+              // only what this run actually took off the pickup query: an issue
+              // already carrying the label was not suppressed by this PR, and
+              // saying otherwise would be false.
+              if (claimedNow.length) {
+                // Comments come back OLDEST-first, so a bounded pager from
+                // page 1 reads the START of the thread — the prefix mistake
+                // AGENTS.md records for long issues (a conductor run misread
+                // its own run number that way). A notice can sit at EITHER
+                // end: the first claim usually lands early in the thread, a
+                // claim added by a later edit lands at the very end. So read
+                // page 1 AND walk back from the last page, still bounded to
+                // three calls. Missing a marker costs a duplicate notice on
+                // every subsequent sync, which is why this is worth the reads.
+                const readPrComments = async (backPages = 2) => {
+                  const first = await github.rest.issues.listComments({
+                    owner, repo, issue_number: pr.number, per_page: 100,
+                  });
+                  const link = (first.headers && first.headers.link) || '';
+                  const m = String(link).match(/[?&]page=(\d+)[^>]*>;\s*rel="last"/);
+                  const last = m ? Number(m[1]) : 1;
+                  const seen = [...first.data];
+                  for (let p = last, reads = 0; p > 1 && reads < backPages; p--, reads++) {
+                    const { data } = await github.rest.issues.listComments({
+                      owner, repo, issue_number: pr.number, per_page: 100, page: p,
+                    });
+                    seen.push(...data);
+                  }
+                  return seen;
+                };
+                const prComments = await readPrComments().catch(() => null);
+                if (prComments === null) {
+                  // Unread comments means "already notified?" is unknown, and
+                  // the notice is a convenience while a duplicate is noise on
+                  // every future sync. Skip rather than guess.
+                  core.warning(
+                    `Could not read PR #${pr.number}'s comments; skipping the claim notice.`,
+                  );
+                } else {
+                  const already = lib.noticedIssues(prComments);
+                  const fresh = claimedNow.filter((n) => !already.includes(n));
+                  if (fresh.length) {
+                    await github.rest.issues.createComment({
+                      owner, repo, issue_number: pr.number,
+                      body: lib.prNoticeComment(fresh),
+                    });
+                    core.info(`Notified PR #${pr.number} of claim(s): ${fresh.join(', ')}.`);
+                  }
+                }
               }
               return;
             }
@@ -195,11 +266,18 @@ jobs:
             const hubNwo = `${hub.owner}/${hub.repo}`;
 
             // --- every open PR that can claim a hub issue --------------------
+            // One shape for both sources. `draft`/`createdAtMs` feed the
+            // stale-draft REPORT only; they never affect whether a claim is
+            // held or released, and an absent field reads as unknown there.
+            const prRow = (nwo, p) => ({
+              nwo, number: p.number, body: p.body || '',
+              draft: p.draft === true, createdAtMs: new Date(p.created_at).getTime(),
+            });
             // Hub PRs come from pulls.list: authoritative and never subject to
             // search-index lag, so a PR opened minutes ago still holds its claim
             // even if the search below has not indexed it yet.
             const hubPrs = (await listOpen(github.rest.pulls.list, { ...hub, state: 'open' }))
-              .map((p) => ({ nwo: hubNwo, number: p.number, body: p.body || '' }));
+              .map((p) => prRow(hubNwo, p));
 
             // Everything else comes from ONE org-wide search per sweep (never one
             // per issue — AGENTS.md rate budget). The backlog is org-wide but the
@@ -250,7 +328,7 @@ jobs:
                 fetched += items.length;
                 for (const it of items) {
                   const nwo = nwoOf(it);
-                  if (nwo) orgPrs.push({ nwo, number: it.number, body: it.body || '' });
+                  if (nwo) orgPrs.push(prRow(nwo, it));
                 }
                 if (items.length < SEARCH_PER_PAGE) break;
               }
@@ -291,9 +369,12 @@ jobs:
                 sourceRepo: pr.nwo, targetRepo: hubNwo,
               }).all) {
                 if (!claimants.has(n)) claimants.set(n, []);
-                claimants.get(n).push(`${pr.nwo}#${pr.number}`);
+                claimants.get(n).push({
+                  ref: `${pr.nwo}#${pr.number}`, draft: pr.draft, createdAtMs: pr.createdAtMs,
+                });
               }
             }
+            const refList = (rows) => rows.map((r) => r.ref).join(', ');
 
             const claimedIssues = (await listOpen(github.rest.issues.listForRepo, {
               ...hub, state: 'open', labels: lib.CLAIM_LABEL,
@@ -308,6 +389,7 @@ jobs:
             // referencing it (e.g. a hand-removed label with no PR event to
             // re-add it), which is the defect this job exists to prevent.
             const claimed = [];
+            const claimedNumbers = new Set();
             for (const [n, refs] of claimants) {
               if (alreadyClaimed.has(n)) continue;
               const { data: issue } = await github.rest.issues
@@ -315,13 +397,14 @@ jobs:
                 .catch(() => ({ data: null }));
               if (!issue || issue.state !== 'open' || issue.pull_request) continue;
               if ((issue.labels || []).some((l) => (l.name || l) === lib.CLAIM_LABEL)) continue;
-              claimed.push(`#${n} <- ${refs.join(', ')}`);
+              claimed.push(`#${n} <- ${refList(refs)}`);
+              claimedNumbers.add(n);
               if (dryRun) continue;
               await github.rest.issues.addLabels({
                 ...hub, issue_number: n, labels: [lib.CLAIM_LABEL],
               });
               await github.rest.issues.createComment({
-                ...hub, issue_number: n, body: lib.linkedClaimComment(refs.join(', ')),
+                ...hub, issue_number: n, body: lib.linkedClaimComment(refList(refs)),
               });
             }
 
@@ -373,6 +456,30 @@ jobs:
               });
             }
 
+            // --- report: a pickup suppressed by nothing but an old draft -----
+            // REPORT ONLY, never release: a long-lived draft is sometimes real
+            // work. But it is not *active* work either, and it hides an issue
+            // from the pickup query exactly as hard as a ready PR — #945 sat
+            // invisible behind a docs draft under no deadline at all, and was
+            // found by hand six hours later (#948).
+            //
+            // Skipped entirely when the org search failed: `claimants` is then
+            // hub PRs only, so "its ONLY claimant is a draft" is a claim about a
+            // PR set this run could not read. Reporting it anyway would name
+            // issues that a ready cross-repo PR is legitimately holding.
+            const suppressed = new Set([...alreadyClaimed, ...claimedNumbers]);
+            const draftHeld = [];
+            if (searchOk) {
+              for (const [n, refs] of claimants) {
+                if (!suppressed.has(n)) continue;
+                const stale = lib.draftOnlyClaim(refs, { nowMs: now });
+                if (!stale) continue;
+                draftHeld.push(
+                  `#${n} — held only by draft ${refList(refs)}, ${lib.formatAge(stale.oldestAgeMs)} old`,
+                );
+              }
+            }
+
             const lines = [
               ...claimed.map((c) => `- 🔒 claimed ${c}`),
               ...released.map((r) => `- 🔓 released ${r}`),
@@ -380,5 +487,13 @@ jobs:
             core.summary
               .addHeading(`Claim sweep — ${claimed.length} claimed, ${released.length} released${dryRun ? ' (dry-run)' : ''}`)
               .addRaw(lines.length ? lines.join('\n') : 'No changes. Every claim matches an open PR or is inside the 48h window.')
+              .addHeading(`Claims held only by a draft PR older than 48h — ${draftHeld.length}`)
+              .addRaw(
+                !searchOk
+                  ? 'Not reported this run: the org-wide PR search was unusable, so no issue can be shown to have a draft as its ONLY claimant.'
+                  : draftHeld.length
+                    ? `${draftHeld.map((d) => `- ⏳ ${d}`).join('\n')}\n\nNothing was released. Promote the draft, or close it to free the pickup.`
+                    : 'None. Every claim is held by a ready PR or by a draft younger than 48h.'
+              )
               .write();
-            console.log(`${dryRun ? 'Would apply' : 'Applied'} ${claimed.length} claim(s) and ${released.length} release(s).`);
+            console.log(`${dryRun ? 'Would apply' : 'Applied'} ${claimed.length} claim(s) and ${released.length} release(s); ${draftHeld.length} claim(s) held only by a stale draft.`);

@@ -603,6 +603,10 @@ def build_feed(repo, token, org=DEFAULT_ORG):
     backlog = collect_backlog(items)
     repos = scope_repos(items, repo)
     in_flight, open_prs_total = collect_in_flight_prs(repos, token, backlog_issues=backlog)
+    # Derive the ready queue once: the list and its count must describe the same
+    # selection, and two calls could drift if collect_ready ever gains ordering
+    # or side effects.
+    ready = collect_ready(backlog)
     return {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "org": org,
@@ -613,8 +617,8 @@ def build_feed(repo, token, org=DEFAULT_ORG):
         # the ffcadmin renderer reads it, and narrowing it would silently drop
         # epics and records from the public page. The ready queue is a strict
         # subset alongside it.
-        "ready_issues": collect_ready(backlog),
-        "ready_count": len(collect_ready(backlog)),
+        "ready_issues": ready,
+        "ready_count": len(ready),
         "ready_rule": READY_RULE,
         "in_flight_prs": in_flight,
         "in_flight_prs_rule": IN_FLIGHT_RULE,

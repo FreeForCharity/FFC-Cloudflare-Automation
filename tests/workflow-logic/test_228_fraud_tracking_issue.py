@@ -2,7 +2,7 @@
 
 The scheduled run of 228 reviews the WHMCS Fraud queue and then upserts ONE rolling
 tracking issue listing the current Fraud-status orders + their FraudLabs verdicts,
-auto-closing it the first scheduled run the queue comes back clear. It is the 732
+auto-closing it the first scheduled run the queue comes back clear. It is the 740
 "rolling issue" state machine applied to the Fraud queue, so the same failure modes
 matter: an inverted empty/non-empty branch would spam a fresh issue every weekday (or
 never open one), a lost `<!-- marker -->` would break dedupe so trackers pile up as
@@ -18,7 +18,7 @@ issues. These lock down each branch:
   - the open-issue query is scoped to state=open + the agentic-os,whmcs labels.
 
 Runs on plain node (the github-script body + issues-API shim) — no pwsh, so it runs in
-any sandbox. Mirrors test_732_google_failure_alert.py. Refs #813, #752, AGENTS.md
+any sandbox. Mirrors test_740_scheduled_failure_alert.py. Refs #813, #752, AGENTS.md
 §"Adding or changing a workflow" (embedded logic gets a unit test).
 """
 
@@ -32,7 +32,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import find_step, load_workflow, step_github_script  # noqa: E402
+from wf_extract import child_env, find_step, load_workflow, step_github_script  # noqa: E402
 
 WORKFLOW = "228-whmcs-fraud-review.yml"
 JOB = "tracking_issue"
@@ -61,20 +61,17 @@ def _run(review_json, *, open_issues=None):
     script = step_github_script(WORKFLOW, JOB, STEP)
     context = {"repo": {"owner": "FreeForCharity", "repo": "FFC-Cloudflare-Automation"}}
     raw = review_json if isinstance(review_json, str) else json.dumps(review_json)
-    env = {
-        "PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin",
-        "FRAUD_REVIEW_JSON": raw,
-    }
+    env = child_env(pathlib.Path(NODE).parent, FRAUD_REVIEW_JSON=raw)
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
-        (tdp / "script.js").write_text(script)
-        (tdp / "context.json").write_text(json.dumps(context))
-        (tdp / "open.json").write_text(json.dumps(open_issues or []))
+        (tdp / "script.js").write_text(script, encoding="utf-8")
+        (tdp / "context.json").write_text(json.dumps(context), encoding="utf-8")
+        (tdp / "open.json").write_text(json.dumps(open_issues or []), encoding="utf-8")
         env["TEST_SCRIPT_FILE"] = str(tdp / "script.js")
         env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
         env["TEST_OPEN_ISSUES_FILE"] = str(tdp / "open.json")
         proc = subprocess.run(
-            [NODE, str(HARNESS)], env=env, capture_output=True, text=True, timeout=60
+            [NODE, str(HARNESS)], env=env, capture_output=True, text=True, encoding="utf-8", timeout=60
         )
     if proc.returncode != 0:
         raise AssertionError(f"harness crashed: {proc.stderr}")

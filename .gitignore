@@ -64,3 +64,12 @@ tmp_data/
 # Local Azure CLI session cache + venv (never commit — contains tokens)
 azconfig/
 azvenv/
+
+# Locally-downloaded lint tooling (CI installs its own — 722-ci.yml builds
+# actionlint from source and the runner image ships shellcheck). These land in
+# the repo root when a sandbox session lints by hand, and `git add -A` then
+# sweeps ~9MB of binary into the branch (caught on #910).
+/actionlint
+/actionlint.exe
+shellcheck
+shellcheck_py-*.whl

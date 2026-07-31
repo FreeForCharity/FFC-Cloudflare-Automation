@@ -73,6 +73,21 @@ on:
         description: 'Current website URL (optional; must start with https:// if provided).'
         required: false
         type: string
+      domain_registrar:
+        description:
+          'Who holds the domain registration today (optional). Wix blocks nameserver delegation, so
+          a Wix-registered domain must move to eNom before Cloudflare is reachable — see workflow
+          123.'
+        required: false
+        type: choice
+        options:
+          - 'Unknown / not sure'
+          - 'Already with Free For Charity (eNom or Cloudflare)'
+          - 'Wix'
+          - 'Squarespace'
+          - 'GoDaddy'
+          - 'Other / another registrar'
+          - 'No domain yet'
       requester_github_username:
         description: 'GitHub username to add as maintainer (optional; defaults to the actor).'
         required: false
@@ -97,6 +112,9 @@ permissions:
   contents: read
   issues: write
   actions: read
+  # Required for the Key Vault OIDC exchange (#844). Declared at workflow level so
+  # the `repo`, `content` and reusable-`maintainers` jobs all inherit it.
+  id-token: write
 
 env:
   WEBSITE_TARGET_ORG: FreeForCharity
@@ -117,6 +135,7 @@ jobs:
       dns_controlled: ${{ steps.parse.outputs.dns_controlled }}
       website_situation: ${{ steps.parse.outputs.website_situation }}
       current_website_url: ${{ steps.parse.outputs.current_website_url }}
+      domain_registrar: ${{ steps.parse.outputs.domain_registrar }}
       requester_github_username: ${{ steps.parse.outputs.requester_github_username }}
       technical_poc_github_username: ${{ steps.parse.outputs.technical_poc_github_username }}
       maintainers_csv: ${{ steps.parse.outputs.maintainers_csv }}
@@ -300,6 +319,7 @@ jobs:
 
             let websiteSituation = '';
             let currentWebsiteUrl = '';
+            let domainRegistrar = '';
             let technicalPocGitHubUsername = '';
             let domain = '';
             let charityName = '';
@@ -345,6 +365,7 @@ jobs:
             if (isManual) {
               websiteSituation = normalizeInput(manualInputs.website_situation);
               currentWebsiteUrl = normalizeInput(manualInputs.current_website_url);
+              domainRegistrar = normalizeInput(manualInputs.domain_registrar);
               technicalPocGitHubUsername = normalizeInput(manualInputs.technical_poc_github_username).replace(/^@/, '');
 
               domain = normalizeDomain(manualInputs.domain);
@@ -362,6 +383,7 @@ jobs:
             } else {
               websiteSituation = normalizeInput(extractSection('Website Situation'));
               currentWebsiteUrl = normalizeInput(extractSection('Current Website URL (if any)'));
+              domainRegistrar = normalizeInput(extractSection('Domain Registrar (who holds the domain today)'));
               technicalPocGitHubUsername = normalizeInput(extractSection('Technical POC GitHub Username'));
               technicalPocGitHubUsername = technicalPocGitHubUsername.replace(/^@/, '');
 
@@ -742,6 +764,7 @@ jobs:
             core.setOutput('dns_controlled', dnsControlled ? 'true' : 'false');
             core.setOutput('website_situation', websiteSituation);
             core.setOutput('current_website_url', currentWebsiteUrl);
+            core.setOutput('domain_registrar', domainRegistrar);
             core.setOutput('requester_github_username', requesterGitHubUsername);
             core.setOutput('technical_poc_github_username', technicalPocGitHubUsername);
             core.setOutput('maintainers_csv', maintainersCsv);
@@ -791,9 +814,17 @@ jobs:
       - name: Cloudflare source-of-truth zone check
         id: check
         shell: pwsh
+        # Issue-derived values reach the script through the environment, never
+        # through `${{ }}` in `run:`. The runner substitutes an expression into
+        # the script TEXT before pwsh parses it, so a value carrying a quote
+        # closes the literal and everything after it is executed as code. This
+        # workflow's trigger is `issues: [assigned]` on a PUBLIC repo, which
+        # makes every parsed field attacker-authored. See ledger L28.
+        env:
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ needs.resolve.outputs.domain }}"
+          $domain = [string]$env:DOMAIN
 
           # Best-effort: if secrets are missing, treat as not controlled and continue.
           if ([string]::IsNullOrWhiteSpace($env:CLOUDFLARE_API_TOKEN_FFC) -or [string]::IsNullOrWhiteSpace($env:CLOUDFLARE_API_TOKEN_CM)) {
@@ -917,9 +948,13 @@ jobs:
       - name: Enforce GitHub Pages DNS (apex + www)
         id: enforce
         shell: pwsh
+        # Issue-derived value — passed by environment, not interpolated into the
+        # script text. See the note in zone_check and ledger L28.
+        env:
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ needs.resolve.outputs.domain }}"
+          $domain = [string]$env:DOMAIN
 
           $outDir = Join-Path $env:RUNNER_TEMP 'website-provision-dns'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -951,25 +986,51 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Validate required GitHub token
-        shell: pwsh
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844).
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
         run: |
-          if ([string]::IsNullOrWhiteSpace("${{ secrets.CBM_TOKEN }}")) {
-            throw 'CBM_TOKEN secret is not set (environment: github-prod).'
-          }
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-ffc-copilot-mcp-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
 
       - name: Create repo from template + enable Pages
         shell: pwsh
+        # Issue-derived values by environment, not `${{ }}` in `run:`. This step
+        # holds the org-wide write PAT in $env:GH_TOKEN, so a quote in a parsed
+        # field would have run attacker code next to that credential. Ledger L28.
         env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+          REPO_FULL: ${{ needs.resolve.outputs.repo_full }}
+          REPO_NAME: ${{ needs.resolve.outputs.repo_name }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          CHARITY_NAME: ${{ needs.resolve.outputs.charity_name }}
+          TEMPLATE_REPO: ${{ needs.resolve.outputs.template_repo }}
+          ZONE_CONTROLLED: ${{ needs.zone_check.outputs.zone_controlled }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $repoFull = "${{ needs.resolve.outputs.repo_full }}"
-          $repoName = "${{ needs.resolve.outputs.repo_name }}"
-          $domain = "${{ needs.resolve.outputs.domain }}"
-          $charityName = "${{ needs.resolve.outputs.charity_name }}"
-          $templateRepo = "${{ needs.resolve.outputs.template_repo }}"
-          $zoneControlled = "${{ needs.zone_check.outputs.zone_controlled }}" -eq 'true'
+          $repoFull = [string]$env:REPO_FULL
+          $repoName = [string]$env:REPO_NAME
+          $domain = [string]$env:DOMAIN
+          $charityName = [string]$env:CHARITY_NAME
+          $templateRepo = [string]$env:TEMPLATE_REPO
+          $zoneControlled = ([string]$env:ZONE_CONTROLLED) -eq 'true'
 
           if ([string]::IsNullOrWhiteSpace($charityName)) {
             $charityName = $domain
@@ -989,7 +1050,7 @@ jobs:
           } else {
             $createParams = @{
               RepoName      = $repoName
-              Organization  = "${{ env.WEBSITE_TARGET_ORG }}"
+              Organization  = [string]$env:WEBSITE_TARGET_ORG
               Description   = "Website for $charityName ($domain)"
               TemplateRepo  = $templateRepo
               Visibility    = 'public'
@@ -1017,6 +1078,13 @@ jobs:
     if: >-
       needs.resolve.outputs.skip != 'true' && needs.repo.result == 'success' &&
       needs.resolve.outputs.maintainers_csv != ''
+    # A `uses:` job does not inherit a permissions block implicitly in a way that is
+    # obvious to readers, and 729 now mints an OIDC token for Key Vault. Declared
+    # explicitly so this call cannot silently lose id-token when 701's
+    # workflow-level block is next edited (#844).
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/729-repo-add-collaborator.yml
     with:
       repo: ${{ needs.resolve.outputs.repo_full }}
@@ -1040,41 +1108,87 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Validate required GitHub token
-        shell: pwsh
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844).
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
         run: |
-          if ([string]::IsNullOrWhiteSpace("${{ secrets.CBM_TOKEN }}")) {
-            throw 'CBM_TOKEN secret is not set (environment: github-prod).'
-          }
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-ffc-copilot-mcp-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
 
       - name: Apply footer + leadership content
         id: apply
         shell: pwsh
+        # Every value below is parsed out of the issue body, and this step also
+        # holds the org-wide write PAT in $env:GH_TOKEN. They reach the script
+        # through the environment so that no attacker-authored byte is ever part
+        # of the script TEXT the runner hands to pwsh. Ledger L28.
+        #
+        # The `*_JSON` fields were the least obvious of the set: `JSON.stringify`
+        # escapes `"` but not `'`, and they were interpolated into SINGLE-quoted
+        # literals — so a leadership line or address containing an apostrophe
+        # closed the literal, which is both an injection and a plain correctness
+        # bug for any charity whose name has one in it.
         env:
-          GH_TOKEN: ${{ secrets.CBM_TOKEN }}
+          REPO_FULL: ${{ needs.resolve.outputs.repo_full }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          CHARITY_NAME: ${{ needs.resolve.outputs.charity_name }}
+          WEBSITE_SITUATION: ${{ needs.resolve.outputs.website_situation }}
+          CURRENT_WEBSITE_URL: ${{ needs.resolve.outputs.current_website_url }}
+          DOMAIN_REGISTRAR: ${{ needs.resolve.outputs.domain_registrar }}
+          REQUESTER: ${{ needs.resolve.outputs.requester_github_username }}
+          TECHNICAL_POC: ${{ needs.resolve.outputs.technical_poc_github_username }}
+          ZONE_CONTROLLED: ${{ needs.zone_check.outputs.zone_controlled }}
+          FOOTER_EMAIL: ${{ needs.resolve.outputs.footer_email }}
+          FOOTER_PHONE: ${{ needs.resolve.outputs.footer_phone }}
+          FOOTER_ADDRESS_JSON: ${{ needs.resolve.outputs.footer_address_json }}
+          FOOTER_EIN: ${{ needs.resolve.outputs.footer_ein }}
+          IRS_STATUS: ${{ needs.resolve.outputs.irs_status }}
+          GUIDESTAR_PROFILE_URL: ${{ needs.resolve.outputs.guidestar_profile_url }}
+          GUIDESTAR_DIRECT_PROFILE_URL: ${{ needs.resolve.outputs.guidestar_direct_profile_url }}
+          FOOTER_SOCIAL_JSON: ${{ needs.resolve.outputs.footer_social_json }}
+          LEADERSHIP_JSON: ${{ needs.resolve.outputs.leadership_json }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $repoFull = "${{ needs.resolve.outputs.repo_full }}"
-          $domain = "${{ needs.resolve.outputs.domain }}"
-          $charityName = "${{ needs.resolve.outputs.charity_name }}"
-          $websiteSituation = "${{ needs.resolve.outputs.website_situation }}"
-          $currentWebsiteUrl = "${{ needs.resolve.outputs.current_website_url }}"
-          $requester = "${{ needs.resolve.outputs.requester_github_username }}"
-          $technicalPoc = "${{ needs.resolve.outputs.technical_poc_github_username }}"
-          $zoneControlled = "${{ needs.zone_check.outputs.zone_controlled }}" -eq 'true'
+          $repoFull = [string]$env:REPO_FULL
+          $domain = [string]$env:DOMAIN
+          $charityName = [string]$env:CHARITY_NAME
+          $websiteSituation = [string]$env:WEBSITE_SITUATION
+          $currentWebsiteUrl = [string]$env:CURRENT_WEBSITE_URL
+          $domainRegistrar = [string]$env:DOMAIN_REGISTRAR
+          $requester = [string]$env:REQUESTER
+          $technicalPoc = [string]$env:TECHNICAL_POC
+          $zoneControlled = ([string]$env:ZONE_CONTROLLED) -eq 'true'
 
-          $footerEmail = "${{ needs.resolve.outputs.footer_email }}"
-          $footerPhone = "${{ needs.resolve.outputs.footer_phone }}"
-          $footerAddress = '${{ needs.resolve.outputs.footer_address_json }}' | ConvertFrom-Json
-          $footerEin = "${{ needs.resolve.outputs.footer_ein }}"
+          $footerEmail = [string]$env:FOOTER_EMAIL
+          $footerPhone = [string]$env:FOOTER_PHONE
+          $footerAddress = [string]$env:FOOTER_ADDRESS_JSON | ConvertFrom-Json
+          $footerEin = [string]$env:FOOTER_EIN
 
-          $irsStatus = "${{ needs.resolve.outputs.irs_status }}"
-          $guideStarProfileUrl = "${{ needs.resolve.outputs.guidestar_profile_url }}"
-          $guideStarDirectProfileUrl = "${{ needs.resolve.outputs.guidestar_direct_profile_url }}"
+          $irsStatus = [string]$env:IRS_STATUS
+          $guideStarProfileUrl = [string]$env:GUIDESTAR_PROFILE_URL
+          $guideStarDirectProfileUrl = [string]$env:GUIDESTAR_DIRECT_PROFILE_URL
 
-          $footerSocial = '${{ needs.resolve.outputs.footer_social_json }}' | ConvertFrom-Json
-          $leadership = '${{ needs.resolve.outputs.leadership_json }}' | ConvertFrom-Json
+          $footerSocial = [string]$env:FOOTER_SOCIAL_JSON | ConvertFrom-Json
+          $leadership = [string]$env:LEADERSHIP_JSON | ConvertFrom-Json
 
           $workDir = Join-Path $env:RUNNER_TEMP 'website-provision-repo'
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir }
@@ -1098,6 +1212,7 @@ jobs:
             charityName = $charityName
             websiteSituation = $websiteSituation
             currentWebsiteUrl = $currentWebsiteUrl
+            domainRegistrar = $domainRegistrar
             requesterGitHubUsername = $requester
             technicalPocGitHubUsername = $technicalPoc
             cloudflareZoneControlled = $zoneControlled

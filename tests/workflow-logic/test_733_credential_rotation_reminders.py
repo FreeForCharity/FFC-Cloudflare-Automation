@@ -42,7 +42,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import find_step, load_workflow, step_github_script  # noqa: E402
+from wf_extract import child_env, find_step, load_workflow, step_github_script  # noqa: E402
 
 WORKFLOW = "733-credential-rotation-reminders.yml"
 JOB = "remind"
@@ -71,17 +71,14 @@ def _run(*, existing_markers=None, search_throws=False):
         "repo": {"owner": "FreeForCharity", "repo": "FFC-Cloudflare-Automation"},
         "payload": {},
     }
-    env = {
-        "PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin",
-        "TEST_NOW_MS": str(NOW_MS),
-    }
+    env = child_env(pathlib.Path(NODE).parent, TEST_NOW_MS=str(NOW_MS))
     if search_throws:
         env["TEST_SEARCH_THROWS"] = "1"
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
-        (tdp / "script.js").write_text(script)
-        (tdp / "context.json").write_text(json.dumps(context))
-        (tdp / "existing.json").write_text(json.dumps(existing_markers or []))
+        (tdp / "script.js").write_text(script, encoding="utf-8")
+        (tdp / "context.json").write_text(json.dumps(context), encoding="utf-8")
+        (tdp / "existing.json").write_text(json.dumps(existing_markers or []), encoding="utf-8")
         env["TEST_SCRIPT_FILE"] = str(tdp / "script.js")
         env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
         env["TEST_EXISTING_MARKERS_FILE"] = str(tdp / "existing.json")
@@ -89,7 +86,7 @@ def _run(*, existing_markers=None, search_throws=False):
             [NODE, str(HARNESS)],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=60,
         )
     if proc.returncode != 0:

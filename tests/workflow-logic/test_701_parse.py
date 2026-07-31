@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import step_github_script
+from wf_extract import child_env, step_github_script
 
 HARNESS = pathlib.Path(__file__).resolve().parent / "harness" / "github_script_shim.mjs"
 
@@ -24,13 +24,15 @@ def run_parse(context: dict) -> dict:
     with tempfile.TemporaryDirectory() as td:
         script_file = pathlib.Path(td) / "script.js"
         context_file = pathlib.Path(td) / "context.json"
-        script_file.write_text(script)
-        context_file.write_text(json.dumps(context))
+        script_file.write_text(script, encoding="utf-8")
+        context_file.write_text(json.dumps(context), encoding="utf-8")
         proc = subprocess.run(
             ["node", str(HARNESS)],
-            env={"TEST_SCRIPT_FILE": str(script_file), "TEST_CONTEXT_FILE": str(context_file), "PATH": "/usr/bin:/bin:/usr/local/bin"},
+            env=child_env(
+                TEST_SCRIPT_FILE=str(script_file), TEST_CONTEXT_FILE=str(context_file)
+            ),
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=60,
         )
     if proc.returncode != 0:
@@ -108,6 +110,62 @@ def test_issues_event_non_website_request_skips():
     assert r["outputs"].get("skip") == "true", r
     assert r["outputs"].get("post_comments") == "false", r
     assert r["failed"] is None, r
+
+
+def test_manual_dispatch_carries_domain_registrar():
+    r = run_parse(
+        ctx(
+            "workflow_dispatch",
+            {"inputs": {"domain": "example.org", "domain_registrar": "Wix"}},
+        )
+    )
+    assert r["failed"] is None, r
+    assert r["outputs"]["domain_registrar"] == "Wix", r
+
+
+def test_domain_registrar_defaults_to_empty_when_absent():
+    # The field is optional; omitting it must not fail the parse.
+    r = run_parse(ctx("workflow_dispatch", {"inputs": {"domain": "example.org"}}))
+    assert r["failed"] is None, r
+    assert r["outputs"]["domain_registrar"] == "", r
+
+
+def test_domain_registrar_label_matches_the_issue_template():
+    # The issue path reads this field by its rendered label. If the template
+    # label and the extractSection() argument ever drift apart the field
+    # silently parses as empty -- which is exactly how a Wix domain would slip
+    # through intake unnoticed, the failure this field exists to prevent.
+    import re
+
+    import yaml
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    label = "Domain Registrar (who holds the domain today)"
+
+    workflow = (root / ".github" / "workflows" / "701-website-provision.yml").read_text(
+        encoding="utf-8"
+    )
+    assert f"extractSection('{label}')" in workflow, "parser does not read the registrar label"
+
+    template = yaml.safe_load(
+        (root / ".github" / "ISSUE_TEMPLATE" / "02-website-request.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    fields = [
+        b for b in template["body"] if b.get("type") in ("input", "dropdown", "textarea")
+    ]
+    field = next(
+        (f for f in fields if f["attributes"].get("label") == label), None
+    )
+    assert field is not None, f"issue template is missing the {label!r} field"
+
+    # The option list must stay in sync with the registrar families the inbound
+    # preflight knows how to classify.
+    options = " ".join(field["attributes"]["options"]).lower()
+    for family in ("wix", "squarespace", "godaddy"):
+        assert family in options, f"registrar dropdown lost the {family} option"
+    assert re.search(r"enom|cloudflare", options), "dropdown lost the already-FFC option"
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

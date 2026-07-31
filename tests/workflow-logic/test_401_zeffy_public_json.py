@@ -48,7 +48,7 @@ def _node(expr_body: str, *argv: str) -> object:
     proc = subprocess.run(
         ["node", "-e", code, *argv],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=60,
     )
     if proc.returncode != 0:
@@ -158,9 +158,17 @@ def test_deliver_job_wired():
     needs = [needs] if isinstance(needs, str) else list(needs)
     assert needs == ["zeffy_campaigns_export"], needs
     # Only the gated deliver job carries write/PR scopes (least privilege).
+    #
+    # `id-token: write` is required — not scope creep. The PAT is fetched from Key
+    # Vault over OIDC (#844), and a job-level `permissions:` block REPLACES the
+    # workflow-level one rather than merging with it, so the workflow-level
+    # `id-token: write` does not reach this job. Without it here the OIDC exchange
+    # fails at run time. Kept as an exact-match assertion so any OTHER scope added
+    # to this gated job still trips the guard.
     assert deliver.get("permissions") == {
         "contents": "write",
         "pull-requests": "write",
+        "id-token": "write",
     }, deliver.get("permissions")
 
 

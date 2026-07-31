@@ -125,6 +125,39 @@ from the same mistake.
   works. Because the work was committed and pushed first, nothing was lost: the branches simply wait
   for their PRs. **Adopt commit-and-push-first as the default order.**
 
+## Windows host facts (the Conductor's git-bash environment, validated 2026-07-31)
+
+The scheduled Conductor runs on Windows 11 under git-bash, which is **not** the environment CI uses.
+These are the ways that difference has actually bitten, each found the expensive way.
+
+- **`git show <rev>:<path>` is mangled by MSYS path conversion.** `git show origin/main:.github/…`
+  reaches git as `origin\main;.github\workflows\…` and aborts with `fatal: ambiguous argument`.
+  Prefix with `MSYS_NO_PATHCONV=1` (and quote the argument). The failure is loud — but see the next
+  point for how it gets swallowed.
+- **Never let `||` supply a benign default for a command that can crash** (ledger L42). A
+  `cmd | grep … || echo "none found"` prints the reassuring branch when `cmd` _fails_, not only when
+  the match is empty. That silently turned a failed supersession check into a pass. Check the exit
+  status, or make the fallback read `CHECK FAILED`.
+- **`gh` inside a `while read` loop eats the loop's stdin**, losing one input line per invocation.
+  Read from a dedicated descriptor (`while read … <&3; done 3< file`) or redirect the child
+  (`gh … </dev/null`). A board audit silently processed 73 of 74 rows this way.
+- **Space-delimited `awk` columns break on human labels.** Project board statuses include
+  `In Progress` and `In Review`, so `$6` reads an item id instead of a state. Emit tab-delimited
+  rows (`IFS=$'\t'`) for anything carrying a human-authored field.
+- **Native Windows Python cannot open a git-bash path.** `open('/tmp/x')` raises `FileNotFoundError`
+  while `ls /tmp/x` works, so a bash heredoc that writes to `/tmp` and a Python reader disagree
+  about the same filename. Use `C:/…` paths (the session scratch dir) whenever Python is on either
+  end.
+- **Text-mode `subprocess` decodes with cp1252 here, not UTF-8** — pass `PYTHONUTF8=1` or an
+  explicit `encoding=`. `scripts/generate-agentic-os-status.py` is a production script that dies on
+  an emoji in an issue title without it, and the public status feed now routinely contains 🚨 alert
+  titles. Enumerated and tracked in #945.
+- **The full `tests/workflow-logic/` suite takes >2 minutes here** once it actually runs. A 2-minute
+  command timeout reads as a hang. (Crashes used to make it finish fast — see ledger L35.)
+- **You cannot approve your own PR, and every agent authenticates as `clarkemoyer`.**
+  `gh pr review --approve` returns `Can not approve your own pull request`. A conductor review is
+  therefore a **comment**, and the merge queue's required checks — not an approval — are the gate.
+
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 
 In a self-hosted/local remote environment the `gh` CLI is typically pre-authenticated — run

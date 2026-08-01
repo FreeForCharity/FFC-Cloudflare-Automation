@@ -30,6 +30,9 @@ Locked down here:
   * Conductor-log bodies are redacted then truncated to 500 chars;
   * redaction masks GitHub/Slack/AWS tokens AND full PEM key blocks (body, not
     just the header) while leaving git SHAs and ordinary prose intact;
+  * the ready queue excludes `claimed` as well as filtering on `agent-ready`
+    (#974) — the two labels coexist by design, so `agent-ready` alone published
+    every live claim as pickable work;
   * waiting runs are shaped into (run_id, workflow_name, environment, ...).
 
 Run: python3 tests/workflow-logic/test_502_agentic_os_status.py
@@ -71,6 +74,18 @@ _PEM = (
     f"-----BEGIN RSA {_KW}-----\n"
     "MIIBOgIBAAJBAKtokenbodyAAAA\nBBBBCCCCDDDD\n"
     f"-----END RSA {_KW}-----"
+)
+
+
+# The exact `READY_RULE` that shipped before #974 — prose promising "unclaimed"
+# over a `collect_ready()` that never checked the label. Kept verbatim so the
+# rule-wording assertion can be shown to REJECT it; a predicate that accepts this
+# string is not testing anything.
+PRE_974_READY_RULE = (
+    "Open issues labeled 'agent-ready': unclaimed, unblocked, one-PR-scoped and carrying "
+    "acceptance criteria — the queue a sandboxed agent can pick from now. A strict subset of "
+    "backlog_issues, which stays the full 'agentic-os' topic set (epics, machine-managed rolling "
+    "issues, human-blocked items and durable findings all remain counted there)."
 )
 
 
@@ -118,6 +133,20 @@ def _make_fake_request(m, call_log):
             "number": 900, "title": "PR via search", "state": "open",
             "assignee": {"login": "bot"}, "updated_at": "2026-07-19T02:00:00Z",
             "html_url": "pr900", "labels": [{"name": "agentic-os"}], "pull_request": {"url": "..."},
+        }),
+        # #974: an agent-ready issue with a live claim, and its unclaimed twin.
+        # Both belong in `backlog_issues` (the full topic set the ffcadmin page
+        # renders); only the second is pickable work. Carried through the real
+        # build_feed so the two panels are pinned against the same input.
+        _in(HUB, {
+            "number": 977, "title": "Ready but claimed", "state": "open", "assignee": None,
+            "updated_at": "2026-07-19T00:30:00Z", "html_url": "i977",
+            "labels": [{"name": "agentic-os"}, {"name": "agent-ready"}, {"name": "claimed"}],
+        }),
+        _in(HUB, {
+            "number": 978, "title": "Ready and unclaimed", "state": "open", "assignee": None,
+            "updated_at": "2026-07-19T00:20:00Z", "html_url": "i978",
+            "labels": [{"name": "agentic-os"}, {"name": "agent-ready"}],
         }),
     ]
     search_page2 = [
@@ -315,8 +344,22 @@ def main():
     check(feed["org"] == ORG, "org recorded in the feed")
     backlog = feed["backlog_issues"]
     # ffcadmin's 745 (09:00) is newer than the hub's 730 (01:08).
-    check([i["number"] for i in backlog] == [745, 730], "backlog spans both repos, PRs excluded")
-    check([i["repo"] for i in backlog] == [ADMIN, HUB], "every backlog row carries its repo")
+    check([i["number"] for i in backlog] == [745, 730, 977, 978],
+          "backlog spans both repos, PRs excluded")
+    check([i["repo"] for i in backlog] == [ADMIN, HUB, HUB, HUB],
+          "every backlog row carries its repo")
+
+    # --- the ready panel, at feed level (#974) ---------------------------
+    # 977 is `agent-ready` AND `claimed`; 978 is `agent-ready` alone. The whole
+    # point of the fix is that these two land differently in `ready_issues`
+    # while landing identically in `backlog_issues` — asserted here against the
+    # real build_feed output rather than a hand-built list, so it pins what the
+    # published feed actually carries.
+    check(977 in [i["number"] for i in backlog],
+          "a claimed row must stay in backlog_issues — the ffcadmin page renders that set")
+    ready_numbers = [i["number"] for i in feed["ready_issues"]]
+    check(ready_numbers == [978], f"only the unclaimed agent-ready issue is ready: {ready_numbers}")
+    check(feed["ready_count"] == 1, f"ready_count must match ready_issues: {feed['ready_count']}")
     # The assertion that fails against the pre-#925 single-repo generator: the
     # ffcadmin backlog was invisible on the public page while agents were told
     # to pick from it.
@@ -559,6 +602,56 @@ def main():
     # A row with no labels key at all must not explode — the feed is generated
     # from search results, and a missing field is a data problem, not a crash.
     check(m.collect_ready([{"number": 9}]) == [], "a row with no labels must be skipped, not raise")
+
+    # --- a live claim is NOT pickable work (#974) -------------------------
+    # 737 adds `claimed` while a linked PR is open and removes it when the last
+    # one closes; `agent-ready` deliberately stays put throughout, so the two
+    # coexist and filtering on `agent-ready` alone published every live claim as
+    # ready — the #939 duplicate-work class, aimed at the one surface sandboxed
+    # agents and the public pick from. Both directions are asserted: dropping the
+    # exclusion flips the first, and an always-empty collect_ready flips the
+    # second, so neither can pass vacuously.
+    claimed_backlog = [
+        {"repo": "o/r", "number": 10, "labels": ["agentic-os", "agent-ready", "claimed"]},
+        {"repo": "o/r", "number": 11, "labels": ["agentic-os", "agent-ready"]},
+        {"repo": "o/r", "number": 12, "labels": ["agentic-os", "claimed"]},
+    ]
+    claimed_ready = m.collect_ready(claimed_backlog)
+    numbers = [i["number"] for i in claimed_ready]
+    check(10 not in numbers, f"an agent-ready issue carrying `claimed` must not be ready: {numbers}")
+    check(11 in numbers, f"an agent-ready issue without `claimed` must stay ready: {numbers}")
+    check(numbers == [11], f"only the unclaimed agent-ready row is ready: {numbers}")
+    # ready_count is derived from this same list in build_feed, so excluding a row
+    # from `ready_issues` uncounts it — pinned here so the two cannot drift apart.
+    check(len(claimed_ready) == 1, f"ready_count must not count the claimed row: {claimed_ready}")
+    # `backlog_issues` keeping its claimed rows is pinned at feed level above,
+    # against real build_feed output — a length check on this literal could only
+    # ever catch in-place mutation, which the shared-fixture case already covers.
+    # What is worth pinning here is that the rows handed back are the SAME
+    # objects, not copies: the feed publishes both panels, and a copy would let
+    # them drift while every count still agreed.
+    check(claimed_ready[0] is claimed_backlog[1], "ready must return backlog rows, not copies")
+
+    # The published rule is what readers act on, so it has to describe the filter
+    # the code actually applies. A reworded rule that stops saying so is the
+    # defect #974 was: prose promising `unclaimed` over code that never checked.
+    # A plain `"claimed" in READY_RULE` cannot express that, because the pre-#974
+    # rule read "unclaimed, unblocked, …" and "unclaimed" CONTAINS "claimed" — the
+    # one string this assertion exists to reject is a string that satisfies it.
+    # Match the label as a word not preceded by "un", and pin that by running the
+    # same predicate over the real pre-#974 literal, so a future weakening back to
+    # a substring test fails here instead of passing quietly.
+    def names_exclusion(rule):
+        return re.search(r"(?<!un)\bclaimed\b", rule) is not None
+
+    check(
+        names_exclusion(m.READY_RULE),
+        "ready_rule must state the claimed exclusion it now implements",
+    )
+    check(
+        not names_exclusion(PRE_974_READY_RULE),
+        "the pre-#974 rule promised 'unclaimed' over code that never checked — it must not pass",
+    )
 
     # The ready queue is a STRICT SUBSET: `backlog_issues` must keep every row.
     # The ffcadmin renderer reads that key, and narrowing it would silently drop

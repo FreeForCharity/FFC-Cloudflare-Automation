@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import shlex
 import sys
 
 import yaml
@@ -100,6 +101,11 @@ NEW_ITEM_RE = re.compile(
 
 # Any `${{ ... }}` expression.
 EXPRESSION_RE = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
+
+# What an `actions/checkout` step contributes to a job's directory set.
+CHECKOUT_ROOT = "root"
+CHECKOUT_DIR = "dir"
+CHECKOUT_UNREADABLE = "unreadable"
 
 # Finding kinds, so `main()` can group the report.
 BAD_DIR = "bad-dir"
@@ -167,10 +173,23 @@ def _wd_line(lines: list[str], start: int, value: str) -> int:
 
 
 def _operands(text: str) -> list[str]:
-    """Non-flag operands of a shell/PowerShell command fragment."""
+    """Non-flag operands of a shell/PowerShell command fragment.
+
+    Tokenized with `shlex` so a quoted path survives as ONE operand: a plain
+    `.split()` turns `mkdir -p "build dir"` into `build` and `dir`, which both
+    invents two directories nobody made and loses the one that was — turning a
+    correct `working-directory: build dir` into a false finding. An unbalanced
+    quote is not tokenizable at all; fall back to whitespace there rather than
+    raise, since the operands are still the best guess available.
+    """
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
+        tokens = text.split()
+
     out: list[str] = []
     skip_next = False
-    for token in text.split():
+    for token in tokens:
         if skip_next:
             skip_next = False
             continue
@@ -230,18 +249,33 @@ def _step_label(step: dict, index: int) -> str:
     return f"step #{index + 1}"
 
 
-def _checkout_path(step: dict) -> tuple[bool, str | None]:
-    """`(is_checkout, literal_path)`. `path` None means root or unreadable."""
+def _checkout_path(step: dict) -> tuple[str, str] | None:
+    """What an `actions/checkout` step puts on disk, or None if it is not one.
+
+    Returns `(CHECKOUT_ROOT, "")` when it checks out at the workspace root,
+    `(CHECKOUT_DIR, path)` for a literal path, and `(CHECKOUT_UNREADABLE, repr)`
+    for anything else — an expression, or a non-string scalar.
+
+    The non-string case is why this does not just `str(path)`. Coercing turns an
+    unreadable value into something that *looks* like a proven literal, which is
+    the fail-open shape the whole guard exists to avoid: the coerced text would
+    not match `EXPRESSION_RE`, so it would be silently accepted as a directory
+    and would suppress the very finding it should raise.
+    """
     uses = step.get("uses")
     if not isinstance(uses, str) or not CHECKOUT_RE.match(uses.strip()):
-        return False, None
+        return None
     with_block = step.get("with")
     if not isinstance(with_block, dict):
-        return True, None
+        return CHECKOUT_ROOT, ""
     path = with_block.get("path")
     if path is None:
-        return True, None
-    return True, str(path)
+        return CHECKOUT_ROOT, ""
+    if not isinstance(path, str):
+        return CHECKOUT_UNREADABLE, repr(path)
+    if EXPRESSION_RE.search(path):
+        return CHECKOUT_UNREADABLE, path
+    return CHECKOUT_DIR, path
 
 
 def _accepted(value: str, known: set[str]) -> bool:
@@ -295,12 +329,13 @@ def find_findings(
         job_wide = set(base_dirs)
         unreadable_checkout: str | None = None
         for step in _steps(job):
-            is_checkout, checkout_path = _checkout_path(step)
-            if is_checkout and checkout_path is not None:
-                if EXPRESSION_RE.search(checkout_path):
-                    unreadable_checkout = checkout_path
-                else:
-                    job_wide.add(_normalize(checkout_path))
+            checkout = _checkout_path(step)
+            if checkout is not None:
+                kind, value = checkout
+                if kind == CHECKOUT_UNREADABLE:
+                    unreadable_checkout = value
+                elif kind == CHECKOUT_DIR:
+                    job_wide.add(_normalize(value))
             run_script = step.get("run")
             if isinstance(run_script, str):
                 job_wide |= _dirs_created_by(run_script)
@@ -348,11 +383,9 @@ def find_findings(
                     )
                 )
             # This step's own effects land after it is judged.
-            is_checkout, checkout_path = _checkout_path(step)
-            if is_checkout and checkout_path is not None and not EXPRESSION_RE.search(
-                checkout_path
-            ):
-                available.add(_normalize(checkout_path))
+            checkout = _checkout_path(step)
+            if checkout is not None and checkout[0] == CHECKOUT_DIR:
+                available.add(_normalize(checkout[1]))
             run_script = step.get("run")
             if isinstance(run_script, str):
                 available |= _dirs_created_by(run_script)

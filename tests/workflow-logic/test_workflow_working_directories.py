@@ -139,6 +139,24 @@ def test_a_mkdir_in_an_earlier_step_is_not_a_finding():
     assert found == [], [str(f) for f in found]
 
 
+def test_a_quoted_mkdir_operand_with_a_space_stays_one_directory():
+    """`.split()` would make `"build dir"` into `build` + `dir` — two wrong
+    answers at once: it invents directories nobody created, and loses the one
+    that was, so a correct working-directory becomes a false finding."""
+    steps = (
+        '      - run: mkdir -p "build dir"\n'
+        '      - run: ls\n        working-directory: "build dir"\n'
+    )
+    found = find_findings(_wf(steps), "t.yml", FAKE_DIRS)
+    assert found == [], [str(f) for f in found]
+
+
+def test_an_unbalanced_quote_in_a_mkdir_does_not_crash_the_scan():
+    """shlex raises on unbalanced quotes; the scan must degrade, not die."""
+    steps = '      - run: mkdir -p "build\n      - run: ls\n'
+    find_findings(_wf(steps), "t.yml", FAKE_DIRS)  # must not raise
+
+
 def test_new_item_directory_counts_as_creating_it():
     steps = (
         "      - shell: pwsh\n        run: New-Item -ItemType Directory -Path artifacts\n"
@@ -215,6 +233,33 @@ def test_a_non_literal_checkout_path_is_reported():
     )
     found = find_findings(_wf(steps), "t.yml", FAKE_DIRS)
     assert len(found) == 1 and found[0].kind == UNRESOLVABLE, [str(f) for f in found]
+
+
+def test_a_non_string_checkout_path_is_reported_not_coerced():
+    """`str(path)` would turn an unreadable value into an apparent literal.
+
+    A coerced non-string does not match the expression pattern, so it would be
+    accepted as a proven directory — the fail-open shape this guard exists to
+    avoid, inside the guard itself.
+    """
+    steps = (
+        "      - uses: actions/checkout@v7.0.1\n        with:\n          path: 42\n"
+        "      - run: ls\n        working-directory: scripts\n"
+    )
+    found = find_findings(_wf(steps), "t.yml", FAKE_DIRS)
+    assert len(found) == 1 and found[0].kind == UNRESOLVABLE, [str(f) for f in found]
+
+
+def test_the_guard_installs_its_own_yaml_dependency_in_ci():
+    """The guard is the first PyYAML consumer in the job; the runner image only
+    happens to preinstall it, so the step must not depend on that."""
+    ci = (REPO_ROOT / ".github" / "workflows" / "722-ci.yml").read_text(encoding="utf-8")
+    step = ci.split("python3 scripts/check-workflow-working-directories.py")[0]
+    tail = step[-600:]
+    assert "pip install --quiet pyyaml" in tail, (
+        "the working-directory guard imports yaml and runs before the "
+        "workflow-logic step that installs it — it must install it itself"
+    )
 
 
 def test_the_guard_is_wired_into_ci():

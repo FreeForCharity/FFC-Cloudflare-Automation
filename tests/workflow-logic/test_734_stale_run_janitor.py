@@ -167,6 +167,40 @@ def test_large_threshold_cancels_nothing():
     assert r["cancelAttempts"] == [], r
 
 
+def test_a_negative_max_age_does_not_cancel_the_entire_queue():
+    # `Number(x) || 7` accepted -1: finite and truthy, so it survived the
+    # fallback and put `cutoff` in the FUTURE, making every waiting run "stale".
+    # One mistyped dispatch would have reaped the whole queue — the worst
+    # possible failure for the one workflow in this repo that cancels runs.
+    # Raised by review on #967.
+    #
+    # The fixture is a run from SIX HOURS AGO, not FRESH_TS. A negative age moves
+    # the cutoff into the near future — `-1` puts it at now+1d — so a year-2999
+    # timestamp sails past it untouched and the case passes whether or not the
+    # bug is present. That is what the first draft of this test did, and only
+    # reintroducing the defect exposed it. The victims of this bug are ordinary
+    # recent runs, so the fixture has to be one.
+    recent = _run_obj(1, _ago(0.25))
+    for bad in ("-1", "-0.5", "nonsense", ""):
+        r = _run([recent], dry_run="false", max_age_days=bad)
+        assert r["threw"] is None, (bad, r)
+        assert r["cancelAttempts"] == [], (bad, r)  # fell back to the 7d default
+
+    # ...and the fallback is the default, not "cancel nothing ever": a genuinely
+    # stale run is still reaped when the input is garbage.
+    r = _run([_run_obj(2, STALE_TS)], dry_run="false", max_age_days="-1")
+    assert r["cancelledIds"] == [2], r
+
+
+def test_zero_warn_days_means_cancel_without_warning():
+    # 0 is a legitimate warn_days (opt out of warnings), not a bad input, so it
+    # must not fall back to 2 and start reporting runs nobody asked about.
+    r = _run([_run_obj(1, _ago(6))], dry_run="false", max_age_days="7", warn_days="0")
+    assert r["threw"] is None, r
+    assert r["comments"] == [], r
+    assert r["cancelAttempts"] == [], r
+
+
 def test_dry_run_reports_without_cancelling():
     r = _run([_run_obj(1, STALE_TS), _run_obj(2, STALE_TS)], dry_run="true")
     assert r["threw"] is None, r

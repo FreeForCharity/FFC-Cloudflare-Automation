@@ -61,7 +61,15 @@ jobs:
             }}
         with:
           script: |
-            const maxAgeDays = Number(process.env.MAX_AGE_DAYS) || 7;
+            // `Number(x) || 7` accepts a NEGATIVE age: `-1` is finite and truthy, so it
+            // survives the fallback, puts `cutoff` in the FUTURE, and buckets every
+            // waiting run as stale — one mistyped manual dispatch reaps the whole queue.
+            // This step cancels runs, so the age it acts on has to be positive, not just
+            // truthy. (Zero already fell back, being falsy; negatives were the hole.)
+            const maxAgeRaw = Number(process.env.MAX_AGE_DAYS);
+            const maxAgeDays = Number.isFinite(maxAgeRaw) && maxAgeRaw > 0 ? maxAgeRaw : 7;
+            // warn_days may legitimately be 0 — that is "cancel with no warning" — so it
+            // is bounded below at 0 rather than at anything greater.
             const warnDaysRaw = Number(process.env.WARN_DAYS);
             const warnDays = Number.isFinite(warnDaysRaw) && warnDaysRaw >= 0 ? warnDaysRaw : 2;
             const dryRun = String(process.env.DRY_RUN) === 'true';

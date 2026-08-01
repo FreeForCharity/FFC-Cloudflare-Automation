@@ -139,6 +139,19 @@ function classifyFeed(obs, nowIso) {
   }
 
   const now = Date.parse(nowIso);
+  // The one input whose failure inverts every rule above. An unparseable `now`
+  // makes `ageHours` NaN, and NaN fails BOTH `< -tolerance` and `> threshold` —
+  // so a feed of any age falls through to FRESH, and a run that could not
+  // establish the time reports the public page healthy. That is precisely the
+  // fail-open this module exists to close, in the only place it was not
+  // checked. The shipped workflow passes `new Date().toISOString()` so this is
+  // unreachable today; it is guarded because the contract, not the caller, is
+  // what the next caller will read.
+  if (!Number.isFinite(now)) {
+    return out('UNREADABLE', `cannot establish age: run timestamp \`${nowIso}\` did not parse`, {
+      generatedAt: value,
+    });
+  }
   const ageHours = Math.round(((now - then) / 3600000) * 10) / 10;
   if (ageHours < -FUTURE_TOLERANCE_HOURS) {
     return out('INVALID', `\`${TIMESTAMP_FIELD}\` is ${Math.abs(ageHours)}h in the future`, {

@@ -195,6 +195,31 @@ def test_ordinary_clock_skew_is_tolerated():
     assert r["verdict"] == "FRESH", r
 
 
+def test_an_unparseable_run_timestamp_cannot_make_a_stale_feed_read_fresh():
+    """The one input whose failure inverts every other rule in the module.
+
+    An unparseable `now` makes `ageHours` NaN, and NaN fails *both* comparisons
+    it is subjected to — `< -FUTURE_TOLERANCE_HOURS` and `> STALE_AFTER_HOURS`
+    are each false — so control falls through to the FRESH return. Every guard
+    above it holds, and the verdict is still "the public page is healthy",
+    computed by a run that could not tell what time it was.
+
+    Verified against the pre-fix module: a six-year-old feed classified FRESH
+    with `hasFinding` false. The shipped workflow passes
+    `new Date().toISOString()`, so this is unreachable from 744 today — it is
+    pinned because the module's contract is "unknown is never fresh", and a
+    contract that holds only for the current caller is not one.
+    """
+    ancient = _feed("2020-01-01T00:00:00Z")
+    r = classify(ancient, now="not-a-date")
+    assert r["verdict"] == "UNREADABLE", r
+    assert r["ageHours"] is None, r
+
+    a = analyze(observations=[dict(ancient), {**dict(ancient), "path": SRC}], now="not-a-date")
+    assert a["hasFinding"] is True, a
+    assert a["fresh"] == [], a
+
+
 def test_a_body_that_is_not_json_is_a_finding():
     obs = {"path": PUBLIC, "status": 200, "text": "<html>404</html>", "error": None}
     assert classify(obs)["verdict"] == "INVALID"

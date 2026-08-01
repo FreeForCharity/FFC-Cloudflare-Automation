@@ -96,6 +96,11 @@
 The scheduled Conductor runs on Windows 11 under git-bash, which is **not** the environment CI uses.
 These are the ways that difference has actually bitten, each found the expensive way.
 
+- **A `--jq` expression containing `//` is mangled the same way** (ledger L51). MSYS rewrites
+  `(.conclusion//"null")` into a Windows path, and jq then fails with a **type** error —
+  `cannot add: string ("completedC:/Program File …")` — which reads like a malformed filter and
+  sends you to rewrite the query instead of the quoting. Use `\(.field)` interpolation rather than
+  jq's `//` default operator, or prefix with `MSYS_NO_PATHCONV=1`.
 - **`git show <rev>:<path>` is mangled by MSYS path conversion.** `git show origin/main:.github/…`
   reaches git as `origin\main;.github\workflows\…` and aborts with `fatal: ambiguous argument`.
   Prefix with `MSYS_NO_PATHCONV=1` (and quote the argument). The failure is loud — but see the next
@@ -104,6 +109,11 @@ These are the ways that difference has actually bitten, each found the expensive
   `cmd | grep … || echo "none found"` prints the reassuring branch when `cmd` _fails_, not only when
   the match is empty. That silently turned a failed supersession check into a pass. Check the exit
   status, or make the fallback read `CHECK FAILED`.
+- **Never read an exit code through a pipe** (ledger L50). `cmd | tail; echo $?` reports `tail`'s
+  status, not `cmd`'s. `scripts/audit-agentic-os-board.py | tail -45; echo "EXIT=$?"` printed
+  `EXIT=0` while the script had exited **1** with six real findings — the script's entire contract
+  is to exit non-zero on any finding or any enumeration it could not complete, and the pipe threw
+  exactly that away. Redirect to a file and read `$?` before piping, or `set -o pipefail`.
 - **`gh` inside a `while read` loop eats the loop's stdin**, losing one input line per invocation.
   Read from a dedicated descriptor (`while read … <&3; done 3< file`) or redirect the child
   (`gh … </dev/null`). A board audit silently processed 73 of 74 rows this way.

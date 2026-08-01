@@ -36,6 +36,38 @@
 - Never "fix" a test, or hold a PR, on the strength of a local harness crash — confirm against CI
   first.
 
+## Windows host facts (validated 2026-07-31, conductor run 57)
+
+The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to rediscover.
+
+- **Native Python cannot open a git-bash path.** `open('/c/Users/…')` raises `FileNotFoundError`
+  while `ls /c/Users/…` works — bash resolves the redirect, native Python does not. The tell is a
+  command that writes a file successfully and a reader that insists it is missing. Use `C:/Users/…`
+  for anything a Windows binary will open, and keep `/c/…` for the shell's own redirects.
+- **`gh pr merge --delete-branch` is rejected where a merge queue is enabled**:
+  `Cannot use -d or --delete-branch when merge queue enabled`. Same family as the existing
+  no-strategy-flag rule — enqueue with `gh pr merge --auto` or the `enqueuePullRequest` mutation and
+  let the queue delete the branch.
+- **`scripts/generate-agentic-os-status.py` needs `PYTHONUTF8=1` on Windows** until #945 lands. It
+  writes issue titles to stdout and dies with
+  `UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f6a8'` on the 🚨 in #921's
+  title. It also needs `GH_TOKEN` exported (`export GH_TOKEN=$(gh auth token)`) — it does not read
+  `gh`'s keyring.
+- **The generator's `--output` writes CRLF on Windows.** `.gitattributes` (`* text=auto eol=lf`)
+  normalizes it, so the _committed_ blob is LF and byte-identical to a Linux run — but verify the
+  staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) before claiming 502 will not
+  report phantom drift.
+- **The full workflow-logic suite takes over 2 minutes once it actually runs.** It used to finish in
+  seconds only because the modules were aborting; a 2-minute command timeout now reads as a hang.
+- **Each full suite run leaves a zero-byte `U+F022 U+F022` file in the repo root.** Reproducible,
+  untracked; it is suite output, not a checkout artifact. Tracked on #945.
+- **When a PR declines to tick a platform-specific criterion, supply the platform.** Agents working
+  from a Linux sandbox correctly refuse to claim a Windows result they cannot measure (#944 did
+  exactly this). The move is neither to merge on trust nor to bounce the PR — it is to run that
+  criterion here, because this is the only host that can. Doing so on #944 turned an unverifiable
+  claim into a measured `129 → 0`, and surfaced a scope correction (the cause explained 8 of 26
+  modules, not 21) that the author had no way to see.
+
 ## Board & PR-creation env facts (validated 2026-07-24)
 
 - **The public "Agentic OS" board (org project #9) has NO automation.** Its only enabled built-in

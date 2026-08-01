@@ -79,7 +79,7 @@ def _run(labels, *, existing=None, getlabel_error=None, write_fail=None):
             [NODE, str(HARNESS)],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=60,
         )
     if proc.returncode != 0:

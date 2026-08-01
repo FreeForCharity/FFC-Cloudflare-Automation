@@ -66,7 +66,7 @@ def run_step(step_name: str, env_overrides: dict) -> tuple[str, str, str, int]:
             env=env,
             cwd=str(REPO_ROOT),  # the steps read config/ffc-ex-cutover-domains.json
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=180,
         )
         return proc.stdout, proc.stderr, gh_log.read_text(encoding="utf-8"), proc.returncode

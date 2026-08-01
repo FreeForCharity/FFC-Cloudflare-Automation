@@ -71,7 +71,7 @@ def _run(review_json, *, open_issues=None):
         env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
         env["TEST_OPEN_ISSUES_FILE"] = str(tdp / "open.json")
         proc = subprocess.run(
-            [NODE, str(HARNESS)], env=env, capture_output=True, text=True, timeout=60
+            [NODE, str(HARNESS)], env=env, capture_output=True, text=True, encoding="utf-8", timeout=60
         )
     if proc.returncode != 0:
         raise AssertionError(f"harness crashed: {proc.stderr}")

@@ -98,6 +98,7 @@ jobs:
             739. Repo - Process Health Metrics Report [GH]
             741. Repo - Fleet Security Audit Coverage [Org]
             743. Website - Fleet Security Header Audit
+            744. Repo - Public Feed Freshness [GH]
         with:
           script: |
             const owner = context.repo.owner;

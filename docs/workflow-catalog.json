@@ -2005,6 +2005,25 @@
       "categoryCode": "GH"
     },
     {
+      "number": 744,
+      "title": "Repo - Public Feed Freshness",
+      "apis": [
+        "GH"
+      ],
+      "file": "744-repo-public-feed-freshness.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Daily outcome check on the PUBLISHED Agentic OS status feed in FFC-IN-ffcadmin.org \u2014 the data behind https://ffcadmin.org/agentic-os/.  Why (#977): three separate mechanisms are supposed to keep that page current, and none of them checks whether its data is fresh. #921 (via 740) watches whether 502 succeeds, not whether its PR merged. #908 watches data-refresh PRs hanging behind main, not the publisher never opening one. #771 watches drift between the two copies, not both being equally stale. All three are PROCESS checks, and every one of them was green while the public feed sat three days old \u2014 502's deliver job had been failing since 2026-07-29 on a dead PAT (#848), and nobody connected the two.  This workflow asserts the outcome instead: how old is the timestamp the public page is actually serving. That catches all three causes above plus the next unknown one, and it is cheap.  Both published copies are checked and reported by path, because they are written separately and can disagree (#771).  A path that is missing, unreadable, or carries an absent, empty, non-ISO or future `generated_at` is reported as a FINDING, never as fresh. \"Could not check\" and \"checked, fine\" are different answers, and collapsing them is the exact fail-open this workflow exists to close (ledger L02).  Credentials: NONE beyond the ambient GITHUB_TOKEN. The two files are public and the only write is one issue in this repository. Using `read-all-cbm-github-pat` here would be circular: a freshness monitor that depends on the credential whose death it exists to reveal goes dark at precisely the moment it is needed. No Key Vault access, no environment, no approval gate.  Classification + report logic lives in scripts/public-feed-freshness-lib.js (unit-tested under tests/workflow-logic/).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "daily OUTCOME check on the published Agentic OS status feed in `FFC-IN-ffcadmin.org` (`public/data/` and `src/data/agentic-os-status.json`), asserting how old the timestamp the public page actually serves is \u2014 the three existing mechanisms are all PROCESS checks (#921 watches whether 502 succeeds, #908 watches PRs stuck behind `main`, #771 watches drift between the two copies) and every one of them was green while the page sat three days stale (#977); stale after 36h, so one missed daily tick does not report; a path that is missing, unreadable, or carries an absent/empty/non-ISO/future `generated_at` is a finding and never a pass, and a registered path the run produced no observation for is reported rather than skipped; rolling issue upsert/close; **deliberately holds no Key Vault credential** \u2014 ambient GITHUB_TOKEN only, since a monitor depending on the credential whose death it reveals goes dark when it is needed; ungated",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 801,
       "title": "Candid - Charity Check (EIN)",
       "apis": [

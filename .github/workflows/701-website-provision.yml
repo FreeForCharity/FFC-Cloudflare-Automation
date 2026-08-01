@@ -961,6 +961,7 @@ jobs:
         # script text. See the note in zone_check and ledger L28.
         env:
           DOMAIN: ${{ needs.resolve.outputs.domain }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = [string]$env:DOMAIN
@@ -970,7 +971,7 @@ jobs:
 
           # -DryRun:$bool — PowerShell's switch-with-value form, so ONE call site
           # serves both modes and the dry path cannot drift from the live one.
-          $dryRun = "${{ inputs.dry_run }}" -eq 'true'
+          $dryRun = ([string]$env:DRY_RUN) -eq 'true'
           $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -GitHubPagesOnly -DryRun:$dryRun *>&1
           $outPath = Join-Path $outDir 'dns-enforce.txt'
           $out | Out-File -FilePath $outPath -Encoding utf8
@@ -1189,6 +1190,7 @@ jobs:
           GUIDESTAR_DIRECT_PROFILE_URL: ${{ needs.resolve.outputs.guidestar_direct_profile_url }}
           FOOTER_SOCIAL_JSON: ${{ needs.resolve.outputs.footer_social_json }}
           LEADERSHIP_JSON: ${{ needs.resolve.outputs.leadership_json }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -1332,7 +1334,7 @@ jobs:
             git diff --cached --quiet
             $diffExit = $LASTEXITCODE
             if ($diffExit -eq 1) {
-              if ("${{ inputs.dry_run }}" -eq 'true') {
+              if (([string]$env:DRY_RUN) -eq 'true') {
                 # Everything above already ran — clone, footer/leadership rendering
                 # and staging. Only the write is withheld, so the step is still
                 # fully exercised.

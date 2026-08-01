@@ -245,14 +245,30 @@ def _write_credentials(job: dict) -> list[str]:
 
 
 def _has_dry_run_term(job: dict, input_name: str) -> bool:
-    """Does this job's `if:` consult the dry-run input at JOB level?
+    """Does this job's `if:` SKIP the job when the dry-run input is on?
 
-    Both spellings in the repo count: `== false` (111, 122, 742) and `!= true`
-    (120, and the #983 fixes). What does NOT count is the input appearing only
-    inside a step's `if:` — that is precisely the defect.
+    Not "does it mention the input". The three spellings that actually skip:
+    `== false` (111, 122, 742), `!= true` (120 and the #983 fixes), and the
+    negation `!inputs.<name>`. What does NOT count:
+
+    - the input appearing only inside a *step's* `if:` — that is precisely the
+      defect #983 is about;
+    - a bare truthy `if: inputs.dry_run`, or `== true`, which **inverts** the
+      guard: the job would run *only* on dry runs, which is the worst possible
+      outcome here and exactly what this module exists to prevent. Matching any
+      reference would have scored that mis-edit as "guarded" and let a
+      write-credentialed job run on every dry run without failing CI.
     """
     condition = str(job.get("if") or "")
-    return bool(re.search(rf"inputs\.{re.escape(input_name)}\b", condition, re.IGNORECASE))
+    name = re.escape(input_name)
+    skip_forms = (
+        rf"inputs\.{name}\s*!=\s*true",
+        rf"inputs\.{name}\s*==\s*false",
+        # `!inputs.dry_run`. The `!=` form cannot collide: this alternative
+        # requires `inputs` immediately after the `!`, not an `=`.
+        rf"!\s*inputs\.{name}\b",
+    )
+    return any(re.search(form, condition, re.IGNORECASE) for form in skip_forms)
 
 
 def _credential_jobs():
@@ -332,6 +348,38 @@ def test_scope_read_and_write_are_distinguished():
     )
     assert _write_credentials({"steps": [{"run": "az keyvault secret show --name wr-all-x"}]})
     assert _write_credentials({"steps": [{"run": "az keyvault secret show --name read-all-x"}]}) == []
+
+
+def test_only_skip_shaped_conditions_count_as_guarded():
+    """Mentioning the input is not guarding on it — the inversion must fail.
+
+    `if: inputs.dry_run` reads like a dry-run term and does the exact opposite:
+    the job runs ONLY on dry runs, so every dry run would mint the write
+    credential and no live run would ever create anything. A matcher that
+    accepts any reference to the input scores that mis-edit as guarded and the
+    whole module goes green over it (raised in review on #985).
+    """
+    guarded = ["inputs.dry_run != true", "inputs.dry_run == false", "!inputs.dry_run"]
+    for form in guarded:
+        assert _has_dry_run_term({"if": form}, "dry_run"), f"{form!r} skips the job on a dry run"
+        # and the same term must still be found inside a compound condition
+        compound = f"always() && {form} && needs.plan.result == 'success'"
+        assert _has_dry_run_term({"if": compound}, "dry_run"), f"{compound!r} must match"
+
+    inverted = ["inputs.dry_run", "${{ inputs.dry_run }}", "inputs.dry_run == true"]
+    for form in inverted:
+        assert not _has_dry_run_term({"if": form}, "dry_run"), (
+            f"{form!r} makes the job run ONLY on dry runs — it must never count "
+            "as guarded, or the guard passes over the inversion it exists to catch"
+        )
+
+    assert not _has_dry_run_term({"if": "needs.resolve.outputs.skip != 'true'"}, "dry_run")
+    assert not _has_dry_run_term({}, "dry_run")
+
+    # Casing: 720 spells it `DryRun`, and the match must respect the name it is
+    # given rather than matching any dry-run-ish input that happens to be near.
+    assert _has_dry_run_term({"if": "inputs.DryRun != true"}, "DryRun")
+    assert not _has_dry_run_term({"if": "inputs.force != true"}, "DryRun")
 
 
 # --- the fix ----------------------------------------------------------------

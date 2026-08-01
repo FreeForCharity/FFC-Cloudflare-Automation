@@ -940,7 +940,20 @@ jobs:
     runs-on: windows-latest
     environment: cloudflare-prod-write
     needs: [resolve, zone_check]
-    if: needs.resolve.outputs.skip != 'true' && needs.zone_check.outputs.zone_controlled == 'true'
+    # A dry run must not reach this job at all (#983). `dry_run` used to be
+    # enforced only INSIDE the step below, so the job still started, still
+    # parked the run on the `cloudflare-prod-write` reviewer gate, and still
+    # minted a write-scoped Cloudflare token — before any step decided to do
+    # nothing. The rehearsal survives: `zone_check` does the same Cloudflare
+    # reads on the ungated read lane, which is 111's preview/apply split.
+    #
+    # `!= true`, NOT 111's `== false`. 111 is workflow_dispatch-only; 701 also
+    # runs on `issues` and `repository_dispatch`, where the `inputs` context is
+    # empty. `inputs.dry_run == false` evaluates FALSE there and would skip
+    # this job on a real, issue-triggered provisioning run.
+    if: >-
+      inputs.dry_run != true && needs.resolve.outputs.skip != 'true' &&
+      needs.zone_check.outputs.zone_controlled == 'true'
     permissions:
       contents: read
       id-token: write
@@ -993,9 +1006,14 @@ jobs:
     runs-on: windows-latest
     environment: github-prod
     needs: [resolve, zone_check, dns]
+    # See the note on `dns`: gated `github-prod` + a write PAT from Key Vault,
+    # neither of which a dry run should ever reach (#983). `always()` is kept —
+    # it is what lets a *live* run proceed when `dns` was legitimately skipped
+    # (uncontrolled zone) — so the dry_run term has to be spelled out here as
+    # well; `always()` would otherwise run this job regardless.
     if: >-
-      always() && needs.resolve.outputs.skip != 'true' && (needs.dns.result == 'success' ||
-      needs.dns.result == 'skipped')
+      always() && inputs.dry_run != true && needs.resolve.outputs.skip != 'true' &&
+      (needs.dns.result == 'success' || needs.dns.result == 'skipped')
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -1122,7 +1140,11 @@ jobs:
     runs-on: windows-latest
     environment: github-prod
     needs: [resolve, zone_check, repo]
-    if: needs.resolve.outputs.skip != 'true'
+    # Same gate and same Key Vault write PAT as `repo` (#983). A skipped `repo`
+    # would already skip this job by dependency, but the term is spelled out so
+    # the invariant is readable at the job it protects rather than inferred two
+    # jobs away — and so it survives a future `always()` being added here.
+    if: inputs.dry_run != true && needs.resolve.outputs.skip != 'true'
     # Best-effort by design: content patching is cosmetic polish on an already-provisioned
     # site. The inner try/catch covers the patch/commit/push, but earlier steps (clone,
     # gh auth setup-git) can still fail the job — continue-on-error ensures no content

@@ -43,9 +43,27 @@
   `Pull request merged` are **disabled**. So **neither issues nor PRs auto-add, and statuses never
   self-update** — every item and every status is placed by hand. Do not assume a new `agentic-os`
   issue reached the board. Check:
+
   ```bash
   gh api graphql -f query='query{organization(login:"FreeForCharity"){projectV2(number:9){workflows(first:20){nodes{name enabled}}}}}'
   ```
+
+  - **Audit the board with `scripts/audit-agentic-os-board.py`, not by hand.** Because nothing
+    auto-adds, every run re-derives the same three sets — missing from the board, on the board with
+    no Status, closed/merged but not `Done` — and hand-rolling it was wrong twice in two runs, in
+    two different ways (#966). Run 61 read `items(first:100)` and got 100 of 208. Run 62 built the
+    _expected_ half from `gh search issues` and got 52 where REST returned 53: the **search index
+    lags writes**, so it under-reports precisely for the newest items, which are the ones most
+    likely to be missing from a hand-maintained board. It failed silently and in the reassuring
+    direction. The script reads both sides from authoritative endpoints (REST per repo; GraphQL
+    paginated on `$endCursor`), prints `expected=N board=M` so a short denominator is visible rather
+    than invisible, and exits non-zero on any finding **or** any failed enumeration — never 0 on a
+    read it could not complete. Read-only; it adds nothing and sets no status.
+    ```bash
+    GH_TOKEN=… python3 scripts/audit-agentic-os-board.py          # prose report
+    GH_TOKEN=… python3 scripts/audit-agentic-os-board.py --json   # machine-readable
+    ```
+
 - **A negative read straight after a successful GitHub write means "unknown", not "failed".** The
   write APIs are strongly consistent; the _list/read_ endpoints behind them are not, and the lag is
   seconds. Three instances so far: `mergeQueueEntry` reads `null` for a few seconds after a good

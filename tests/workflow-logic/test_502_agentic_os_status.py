@@ -122,6 +122,20 @@ def _make_fake_request(m, call_log):
             "assignee": {"login": "bot"}, "updated_at": "2026-07-19T02:00:00Z",
             "html_url": "pr900", "labels": [{"name": "agentic-os"}], "pull_request": {"url": "..."},
         }),
+        # #974: an agent-ready issue with a live claim, and its unclaimed twin.
+        # Both belong in `backlog_issues` (the full topic set the ffcadmin page
+        # renders); only the second is pickable work. Carried through the real
+        # build_feed so the two panels are pinned against the same input.
+        _in(HUB, {
+            "number": 977, "title": "Ready but claimed", "state": "open", "assignee": None,
+            "updated_at": "2026-07-19T00:30:00Z", "html_url": "i977",
+            "labels": [{"name": "agentic-os"}, {"name": "agent-ready"}, {"name": "claimed"}],
+        }),
+        _in(HUB, {
+            "number": 978, "title": "Ready and unclaimed", "state": "open", "assignee": None,
+            "updated_at": "2026-07-19T00:20:00Z", "html_url": "i978",
+            "labels": [{"name": "agentic-os"}, {"name": "agent-ready"}],
+        }),
     ]
     search_page2 = [
         _in(ADMIN, {
@@ -318,8 +332,22 @@ def main():
     check(feed["org"] == ORG, "org recorded in the feed")
     backlog = feed["backlog_issues"]
     # ffcadmin's 745 (09:00) is newer than the hub's 730 (01:08).
-    check([i["number"] for i in backlog] == [745, 730], "backlog spans both repos, PRs excluded")
-    check([i["repo"] for i in backlog] == [ADMIN, HUB], "every backlog row carries its repo")
+    check([i["number"] for i in backlog] == [745, 730, 977, 978],
+          "backlog spans both repos, PRs excluded")
+    check([i["repo"] for i in backlog] == [ADMIN, HUB, HUB, HUB],
+          "every backlog row carries its repo")
+
+    # --- the ready panel, at feed level (#974) ---------------------------
+    # 977 is `agent-ready` AND `claimed`; 978 is `agent-ready` alone. The whole
+    # point of the fix is that these two land differently in `ready_issues`
+    # while landing identically in `backlog_issues` — asserted here against the
+    # real build_feed output rather than a hand-built list, so it pins what the
+    # published feed actually carries.
+    check(977 in [i["number"] for i in backlog],
+          "a claimed row must stay in backlog_issues — the ffcadmin page renders that set")
+    ready_numbers = [i["number"] for i in feed["ready_issues"]]
+    check(ready_numbers == [978], f"only the unclaimed agent-ready issue is ready: {ready_numbers}")
+    check(feed["ready_count"] == 1, f"ready_count must match ready_issues: {feed['ready_count']}")
     # The assertion that fails against the pre-#925 single-repo generator: the
     # ffcadmin backlog was invisible on the public page while agents were told
     # to pick from it.
@@ -584,9 +612,13 @@ def main():
     # ready_count is derived from this same list in build_feed, so excluding a row
     # from `ready_issues` uncounts it — pinned here so the two cannot drift apart.
     check(len(claimed_ready) == 1, f"ready_count must not count the claimed row: {claimed_ready}")
-    # `backlog_issues` is the full agentic-os topic set and must keep every row,
-    # claimed or not — the ffcadmin renderer reads it (#922, #909's class).
-    check(len(claimed_backlog) == 3, "collect_ready must not drop claimed rows from the backlog")
+    # `backlog_issues` keeping its claimed rows is pinned at feed level above,
+    # against real build_feed output — a length check on this literal could only
+    # ever catch in-place mutation, which the shared-fixture case already covers.
+    # What is worth pinning here is that the rows handed back are the SAME
+    # objects, not copies: the feed publishes both panels, and a copy would let
+    # them drift while every count still agreed.
+    check(claimed_ready[0] is claimed_backlog[1], "ready must return backlog rows, not copies")
 
     # The published rule is what readers act on, so it has to describe the filter
     # the code actually applies. A reworded rule that stops saying so is the

@@ -233,6 +233,21 @@ gh api -X POST repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id>/
 
 Poll runs in a background task with an `until` loop — never foreground-sleep.
 
+**Find a workflow's runs by FILE NAME, never by matching the run's `.name` (L33).** A run object's
+`.name` is the rendered `run-name:`, not the workflow's `name:`. Workflow 228 titles its runs
+`WHMCS Fraud Review (FraudLabs Pro)`, so filtering `actions/runs` for a name starting with `228`
+returns **zero results while 228 is actively failing on a schedule** — a silent wrong answer, not an
+error. Resolve the workflow first, then list its runs:
+
+```bash
+id=$(gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/228-whmcs-fraud-review.yml --jq .id)
+gh api "repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/$id/runs?branch=main&per_page=10" \
+  --jq '.workflow_runs[] | "\(.created_at) \(.event) \(.conclusion)"'
+```
+
+Workflow 740 already gets this right (`740-scheduled-workflow-failure-alert.yml:169-170`) — the trap
+is in ad-hoc queries, which nothing guards.
+
 ## Key docs
 
 | Doc                                                            | What                                                                                                |

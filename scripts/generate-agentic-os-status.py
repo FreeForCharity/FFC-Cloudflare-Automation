@@ -66,9 +66,15 @@ LABEL = "agentic-os"
 # The band label (#922). `agentic-os` stays the program-wide topic label on
 # everything; `agent-ready` marks the strict subset an agent can pick up now.
 READY_LABEL = "agent-ready"
+# Applied by 737 while a linked PR is open, removed when the last one closes.
+# `agent-ready` does NOT come off in the meantime — the two labels coexist by
+# design — so a claim is only visible by consulting this label (#974).
+CLAIMED_LABEL = "claimed"
 READY_RULE = (
-    "Open issues labeled 'agent-ready': unclaimed, unblocked, one-PR-scoped and carrying "
-    "acceptance criteria — the queue a sandboxed agent can pick from now. A strict subset of "
+    "Open issues labeled 'agent-ready' and NOT 'claimed': unblocked, one-PR-scoped and carrying "
+    "acceptance criteria — the queue a sandboxed agent can pick from now. An 'agent-ready' issue "
+    "with an open PR against it carries 'claimed' (applied by workflow 737) and is excluded here "
+    "until that PR closes; ready_count counts exactly the rows in ready_issues. A strict subset of "
     "backlog_issues, which stays the full 'agentic-os' topic set (epics, machine-managed rolling "
     "issues, human-blocked items and durable findings all remain counted there)."
 )
@@ -388,8 +394,22 @@ def collect_ready(backlog):
     — the label is applied by a human or a conductor run, never inferred here,
     because "can an agent finish this in one PR" is a judgement and guessing it
     from an issue body is how the original conflation happened.
+
+    ``claimed`` is the one part of that meaning the label itself cannot carry
+    (#974). Workflow 737 adds it while a linked PR is open and removes it when
+    the last one closes, and ``agent-ready`` deliberately stays put throughout —
+    so the two coexist, and filtering on ``agent-ready`` alone published every
+    live claim as pickable work. That is the #939 duplicate-work class aimed at
+    the surface agents pick from, so the exclusion is here rather than left to
+    each reader: AGENTS.md's pickup query is
+    ``label:agent-ready is:open -label:claimed`` and this is that query.
     """
-    return [i for i in backlog if READY_LABEL in (i.get("labels") or [])]
+    ready = []
+    for issue in backlog:
+        labels = issue.get("labels") or []
+        if READY_LABEL in labels and CLAIMED_LABEL not in labels:
+            ready.append(issue)
+    return ready
 
 
 def scope_repos(items, hub_repo):

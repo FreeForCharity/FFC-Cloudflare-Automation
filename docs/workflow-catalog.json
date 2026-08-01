@@ -1823,7 +1823,7 @@
         "workflow_dispatch"
       ],
       "environments": [],
-      "description": "Cancels (or, in dry-run, just reports) workflow runs left in the `waiting` state \u2014 i.e. paused at an environment approval gate \u2014 for longer than max_age_days. Scheduled read/triage runs that no one approves otherwise stack up indefinitely and the Actions history stops reflecting real state (see the 209/210 backlog cleared manually on 2026-07-07, issue #637).  Read + cancel only; never approves a gate. Uses the ambient GITHUB_TOKEN.",
+      "description": "Cancels (or, in dry-run, just reports) workflow runs left in the `waiting` state \u2014 i.e. paused at an environment approval gate \u2014 for longer than max_age_days. Scheduled read/triage runs that no one approves otherwise stack up indefinitely and the Actions history stops reflecting real state (see the 209/210 backlog cleared manually on 2026-07-07, issue #637).  It also warns before it reaps: a run inside the last warn_days of its life is reported to the Conductor Log with the exact instant it will be cancelled, and anything actually cancelled is reported too. Before #960 the only output was core.summary on this job \u2014 a page no human opens \u2014 so a gate that had waited a week on a human reviewer was destroyed silently, and the deadlines circulated by hand were wrong by a day (this is a daily cron, so a run dies at the first 06:31Z tick AFTER it crosses the threshold, not at the threshold).  Read + cancel only; never approves a gate. Uses the ambient GITHUB_TOKEN.",
       "safetyLevel": "Writes (cancels runs)",
       "approvalEnv": "\u2014",
       "guard": "cancels runs left waiting >N days at a gate; never approves; dispatch dry-run supported",

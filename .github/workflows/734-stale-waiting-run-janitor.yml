@@ -7,6 +7,14 @@ run-name: 'Stale waiting-run janitor'
 # up indefinitely and the Actions history stops reflecting real state (see the
 # 209/210 backlog cleared manually on 2026-07-07, issue #637).
 #
+# It also warns before it reaps: a run inside the last warn_days of its life is
+# reported to the Conductor Log with the exact instant it will be cancelled, and
+# anything actually cancelled is reported too. Before #960 the only output was
+# core.summary on this job — a page no human opens — so a gate that had waited a
+# week on a human reviewer was destroyed silently, and the deadlines circulated
+# by hand were wrong by a day (this is a daily cron, so a run dies at the first
+# 06:31Z tick AFTER it crosses the threshold, not at the threshold).
+#
 # Read + cancel only; never approves a gate. Uses the ambient GITHUB_TOKEN.
 
 on:
@@ -19,6 +27,11 @@ on:
         required: false
         type: string
         default: '7'
+      warn_days:
+        description: 'Warn about waiting runs this many days before they are cancelled'
+        required: false
+        type: string
+        default: '2'
       dry_run:
         description: 'Report only; do not cancel'
         required: false
@@ -28,6 +41,7 @@ on:
 permissions:
   contents: read
   actions: write
+  issues: write
 
 jobs:
   janitor:
@@ -37,6 +51,9 @@ jobs:
         uses: actions/github-script@v9
         env:
           MAX_AGE_DAYS: ${{ github.event.inputs.max_age_days || '7' }}
+          WARN_DAYS: ${{ github.event.inputs.warn_days || '2' }}
+          # Where the warning/cancellation report is posted (the Conductor Log).
+          LOG_ISSUE: '719'
           # Scheduled runs have no inputs; default to a real cancel on schedule,
           # dry-run only when a dispatch explicitly asks for it.
           DRY_RUN:
@@ -45,11 +62,40 @@ jobs:
         with:
           script: |
             const maxAgeDays = Number(process.env.MAX_AGE_DAYS) || 7;
+            const warnDaysRaw = Number(process.env.WARN_DAYS);
+            const warnDays = Number.isFinite(warnDaysRaw) && warnDaysRaw >= 0 ? warnDaysRaw : 2;
             const dryRun = String(process.env.DRY_RUN) === 'true';
-            const cutoff = Date.now() - maxAgeDays * 24 * 3600e3;
+            const logIssue = Number(process.env.LOG_ISSUE) || 719;
+            const DAY = 24 * 3600e3;
+            const now = Date.now();
+            const cutoff = now - maxAgeDays * DAY;
+            // Runs older than this — but not yet past `cutoff` — are in their last
+            // `warnDays` of life. Clamped so warn_days >= max_age_days can't push the
+            // boundary into the future and swallow runs created after `now`.
+            const warnCutoff = now - Math.max(maxAgeDays - warnDays, 0) * DAY;
 
-            // Collect waiting runs across the repo (paginated).
+            // This workflow is a daily cron (see the `schedule:` above), so a run is
+            // NOT cancelled the moment it turns maxAgeDays old — it survives until the
+            // next tick. Reporting `created_at + maxAgeDays` is the off-by-a-day that
+            // sent two wrong deadlines to a human's phone (#960).
+            const TICK_HOUR = 6;
+            const TICK_MINUTE = 31;
+            const nextTickAfter = (ms) => {
+              const d = new Date(ms);
+              const sameDay = Date.UTC(
+                d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), TICK_HOUR, TICK_MINUTE, 0, 0,
+              );
+              // Strictly after: a run that turns stale exactly at 06:31Z has already
+              // been listed by that tick's own sweep, so it dies the following day.
+              return new Date(sameDay > ms ? sameDay : sameDay + DAY);
+            };
+            const cancellationInstant = (createdAt) =>
+              nextTickAfter(new Date(createdAt).getTime() + maxAgeDays * DAY);
+
+            // Collect waiting runs across the repo (paginated), bucketed into those
+            // to reap now and those to warn about.
             const stale = [];
+            const expiring = [];
             let page = 1;
             for (;;) {
               const { data } = await github.rest.actions.listWorkflowRunsForRepo({
@@ -57,8 +103,13 @@ jobs:
                 status: 'waiting', per_page: 100, page,
               });
               for (const r of data.workflow_runs) {
-                if (new Date(r.created_at).getTime() < cutoff) {
-                  stale.push({ id: r.id, name: r.name, created: r.created_at, url: r.html_url });
+                const created = new Date(r.created_at).getTime();
+                const rec = { id: r.id, name: r.name, created: r.created_at, url: r.html_url };
+                if (created < cutoff) {
+                  stale.push(rec);
+                } else if (created < warnCutoff) {
+                  rec.cancelAt = cancellationInstant(r.created_at).toISOString();
+                  expiring.push(rec);
                 }
               }
               if (data.workflow_runs.length < 100) break;
@@ -78,6 +129,7 @@ jobs:
                   outcome = `error: ${e.status || e.message}`;
                 }
               }
+              r.outcome = outcome;
               rows.push([String(r.id), r.name || '(unnamed)', r.created, outcome]);
             }
 
@@ -92,5 +144,47 @@ jobs:
             } else {
               core.summary.addRaw('No waiting runs older than the threshold. Queue is clean.');
             }
+            if (expiring.length) {
+              core.summary.addRaw(`\n${expiring.length} waiting run(s) inside the ${warnDays}d warning window.`);
+            }
             await core.summary.write();
-            console.log(`${dryRun ? 'Would cancel' : 'Cancelled'} ${stale.length} stale waiting run(s).`);
+
+            // Publish to the Conductor Log. Silence when there is nothing to say —
+            // a daily comment saying "queue is clean" trains everyone to ignore it.
+            if (stale.length || expiring.length) {
+              const label = (r) => `[${r.id}](${r.url}) — ${r.name || '(unnamed)'}`;
+              const body = [];
+              body.push(`### 734 stale waiting-run janitor${dryRun ? ' (dry run — nothing was cancelled)' : ''}`);
+              body.push('');
+              body.push(`Threshold: waiting runs are cancelled after **${maxAgeDays}d**, warned about for the last **${warnDays}d**.`);
+              if (stale.length) {
+                body.push('');
+                body.push(dryRun ? `#### Would cancel (${stale.length})` : `#### Cancelled (${stale.length})`);
+                body.push('');
+                for (const r of stale) {
+                  body.push(`- ${label(r)} — waiting since \`${r.created}\` — ${r.outcome}`);
+                }
+                body.push('');
+                body.push('A cancelled run cannot be resumed from its gate: it must be **re-dispatched**.');
+              }
+              if (expiring.length) {
+                body.push('');
+                body.push(`#### Expiring within ${warnDays}d (${expiring.length})`);
+                body.push('');
+                for (const r of expiring) {
+                  body.push(`- ${label(r)} — waiting since \`${r.created}\` — **will be cancelled at \`${r.cancelAt}\`**`);
+                }
+                body.push('');
+                body.push('Times are the janitor\'s own next daily tick after each run crosses the threshold — not the threshold itself.');
+              }
+              try {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: logIssue, body: body.join('\n'),
+                });
+              } catch (e) {
+                // Reporting must never turn a completed sweep red.
+                console.log(`Could not comment on #${logIssue}: ${e.status || e.message}`);
+              }
+            }
+            console.log(`${dryRun ? 'Would cancel' : 'Cancelled'} ${stale.length} stale waiting run(s); ${expiring.length} expiring.`);

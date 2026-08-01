@@ -421,6 +421,249 @@ def test_the_selector_is_not_a_bare_find():
     assert "started_at" in raw, "latest-attempt ordering must use started_at, set on in-flight runs"
 
 
+# ---------------------------------------------------------------------------
+# Conductor runs that started and never ended (#970).
+#
+# Run 63 posted `## Run 63 — START` on #719 at 2026-08-01T01:05:45Z and died:
+# no END, no commit, no PR, no claim, no label change. Nothing detected it; run
+# 64 found it three hours later by reading the comment tail by hand. A dead run
+# approves no gates, merges no PRs and refreshes no feed — while its START
+# comment leaves the thread looking like it ran.
+# ---------------------------------------------------------------------------
+
+CR_NOW = "2026-08-01T04:00:00Z"
+
+
+def _comment(created_at: str, body: str) -> dict:
+    return {"created_at": created_at, "body": body}
+
+
+def _start(run: int, created_at: str) -> dict:
+    # The header's own timestamp is fuzzed by the Conductor to the minute-tens
+    # digit; the fixtures carry that verbatim so nothing can quietly start
+    # parsing it. `created_at` is the only exact instant.
+    stamp = created_at[:15] + "xZ"
+    return _comment(created_at, f"## Run {run} — START ({stamp})\n\nPlan: land the queue.")
+
+
+def _end(run: int, created_at: str) -> dict:
+    stamp = created_at[:15] + "xZ"
+    return _comment(created_at, f"## Run {run} — END ({stamp}) · core 4910 / 5000\n\nDone.")
+
+
+def _dead(comments: list, now: str = CR_NOW, threshold=None) -> dict:
+    args = {"nowIso": now, "logComments": comments}
+    if threshold is not None:
+        args["deadRunThresholdHours"] = threshold
+    return compute(args)["conductorRuns"]
+
+
+def test_a_run_that_started_and_ended_is_not_reported():
+    cr = _dead([_start(62, "2026-07-31T22:05:28Z"), _end(62, "2026-07-31T22:27:18Z")])
+    assert cr["count"] == 0, cr
+    assert cr["observed"] == 1, "the run was still SEEN — 0 of 0 is an unread log, not a clean week"
+
+
+def test_a_start_with_no_end_past_the_threshold_is_reported():
+    """Run 63, as it actually happened — the regression fixture."""
+    cr = _dead([_start(63, "2026-08-01T01:05:45Z")])
+    assert cr["count"] == 1, cr
+    assert cr["dead"][0]["run"] == 63, cr
+    assert cr["dead"][0]["startedAt"] == "2026-08-01T01:05:45Z", cr
+    assert cr["dead"][0]["ageHours"] == 2.9, cr
+
+
+def test_a_start_with_no_end_inside_the_threshold_is_a_run_in_flight():
+    """The live conductor run posting this very report must not report itself."""
+    cr = _dead([_start(64, "2026-08-01T03:30:00Z")])  # 0.5h old
+    assert cr["count"] == 0, f"a run 30 minutes in is still working: {cr}"
+    assert cr["observed"] == 1, cr
+
+
+def test_the_run_63_thread_as_it_stood_reports_63_and_nothing_else():
+    """The issue's own verification, run against the real #719 timestamps.
+
+    Runs 60/61/62/64 paired; only 63 is dead. This is the whole metric in one
+    assertion, and it is the case a permissive matcher would also pass — which
+    is why the discrimination tests below exist too.
+    """
+    cr = _dead(
+        [
+            _end(61, "2026-07-31T19:25:04Z"),  # START is off the top of the window
+            _start(62, "2026-07-31T22:05:28Z"),
+            _end(62, "2026-07-31T22:27:18Z"),
+            _start(63, "2026-08-01T01:05:45Z"),
+            _start(64, "2026-08-01T04:06:42Z"),
+            _end(64, "2026-08-01T04:40:46Z"),
+        ],
+        now="2026-08-01T05:00:00Z",
+    )
+    assert [d["run"] for d in cr["dead"]] == [63], cr
+    assert cr["observed"] == 3, "61's END with no START in-window must not invent a run"
+
+
+def test_start_and_end_split_across_a_pagination_boundary_still_pair():
+    """The case that will regress.
+
+    listComments returns <=100 oldest-first, so a START and its END routinely
+    land on different pages — run 61's did on 2026-07-31. Pairing per page (the
+    shape the previous baseline loop used) reports every boundary-split run as
+    dead. The workflow accumulates pages before scanning; this pins it.
+    """
+    page1 = [_start(58, "2026-07-30T06:00:00Z"), _start(59, "2026-07-30T12:00:00Z")]
+    page2 = [_end(58, "2026-07-30T06:40:00Z"), _end(59, "2026-07-30T12:30:00Z")]
+    cr = _dead(page1 + page2)
+    assert cr["count"] == 0, f"pages must be joined before pairing: {cr}"
+    # And per-page scanning is exactly what this would have looked like:
+    assert _dead(page1)["count"] == 2, "sanity: page 1 alone genuinely looks like two dead runs"
+
+
+def test_a_quoted_header_cannot_retire_a_dead_run():
+    """Only a comment's own header — line-start, first line — may pair a run.
+
+    Documenting the incident must not erase it. Run 64's write-up of run 63
+    necessarily contains the string `## Run 63 — END`, and this very PR adds the
+    header format to the thread. Two ways prose reaches the matcher, one per
+    guard: a header quoted in a BLOCKQUOTE on the first line (defeats a matcher
+    that forgot to anchor at line start), and a header further down the body
+    (defeats a matcher that scans the whole comment). Both must leave 63 dead.
+    """
+    blockquoted = _comment(
+        "2026-08-01T04:20:00Z",
+        "> ## Run 63 — END (2026-08-01T01:5xZ)\n\nquoting the header that never arrived.",
+    )
+    buried = _comment(
+        "2026-08-01T04:25:00Z",
+        "Documenting the format the new detector matches:\n\n"
+        "```\n## Run 63 — END (2026-08-01T01:5xZ)\n```\n",
+    )
+    for forged in (blockquoted, buried):
+        cr = _dead([_start(63, "2026-08-01T01:05:45Z"), forged])
+        assert [d["run"] for d in cr["dead"]] == [63], (
+            f"a quoted header must not pair; run 63 stayed dead: {cr}"
+        )
+        assert cr["observed"] == 1, f"the forged header must not register a run either: {cr}"
+
+
+def test_a_level_three_heading_is_not_a_run_header():
+    """`### Run 63 started and died` is prose, not a START."""
+    cr = _dead([_comment("2026-08-01T01:00:00Z", "### Run 63 started and died\n\nnarrative")])
+    assert cr["observed"] == 0, f"a ### heading must not register a run: {cr}"
+    assert cr["count"] == 0, cr
+
+
+def test_an_unreadable_log_is_not_assessed_rather_than_zero():
+    """The reassuring-direction failure this whole class is about.
+
+    The comment fetch is wrapped in try/catch so a transient API error cannot
+    wedge the weekly job. If that swallowed read surfaced as "0 dead runs", the
+    report would be at its most confident exactly when it knows least.
+    """
+    absent = compute({"nowIso": CR_NOW})["conductorRuns"]
+    assert absent["assessed"] is False, absent
+    assert absent["count"] is None, "null, not 0 — 'unknown' and 'none' are different facts"
+    body = render(compute({"nowIso": CR_NOW}), None)
+    assert "not assessed" in body, "the report must say so, not print a zero"
+
+
+def test_the_threshold_is_configurable_and_actually_applied():
+    comments = [_start(63, "2026-08-01T01:05:45Z")]  # 2.9h before CR_NOW
+    assert _dead(comments, threshold=2)["count"] == 1
+    assert _dead(comments, threshold=6)["count"] == 0, "a wider threshold must spare it"
+    assert _dead(comments)["thresholdHours"] == 2, "default stays 2h"
+
+
+def test_a_reposted_start_does_not_reset_the_clock():
+    cr = _dead(
+        [_start(63, "2026-08-01T01:05:45Z"), _start(63, "2026-08-01T03:50:00Z")],
+    )
+    assert cr["count"] == 1, cr
+    assert cr["dead"][0]["startedAt"] == "2026-08-01T01:05:45Z", (
+        f"the run began when it first said it began: {cr}"
+    )
+
+
+def test_the_report_names_the_dead_runs_and_renders_a_trend():
+    m = compute({"nowIso": CR_NOW, "logComments": [_start(63, "2026-08-01T01:05:45Z")]})
+    body = render(m, None)
+    assert "Conductor runs that died" in body, "the table row must render"
+    assert "run 63" in body and "2026-08-01T01:05:45Z" in body, (
+        "a count nobody can investigate a week later is not the metric"
+    )
+    # Trend against a week with no dead runs.
+    prev = compute({"nowIso": "2026-07-25T04:00:00Z", "logComments": []})
+    assert "▲ +1" in render(m, prev), "a run lost since last week must show as a rise"
+
+
+def test_a_report_predating_the_dead_run_field_renders_without_an_arrow():
+    m = compute({"nowIso": CR_NOW, "logComments": [_start(63, "2026-08-01T01:05:45Z")]})
+    out = render(m, {"agenticOs": {"open": 5, "closed": 1}, "claims": {"open": 2}})
+    assert "Conductor runs that died" in out
+    assert "—" in out, "a missing previous value must render an em dash, not an arrow"
+
+
+def _run_comment_pager(pages: list) -> dict:
+    """Run the workflow's OWN comment-paging loop against fixtured pages.
+
+    Extracted from the YAML rather than restated here: a copy in the test would
+    keep passing after the workflow went back to scanning one page at a time,
+    which is the exact mutation this guards. `github.rest.issues.listComments`
+    is stubbed to serve `pages` and record which pages were requested.
+    """
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
+    start = raw.index("const acc = [];")
+    end = raw.index("logComments = acc;", start) + len("logComments = acc;")
+    loop = "\n".join(line.strip() for line in raw[start:end].splitlines())
+    code = (
+        "const pages=JSON.parse(process.argv[1]);"
+        "const MAX_BASELINE_PAGES=10, owner='o', repo='r', logIssue=719, since='s';"
+        "const asked=[];"
+        "const github={rest:{issues:{listComments:async(p)=>{"
+        "asked.push(p.page);return {data:pages[p.page-1]||[]};}}}};"
+        "let logComments=null;"
+        f"(async()=>{{{loop}\n"
+        "process.stdout.write(JSON.stringify({comments:logComments,asked}));})();"
+    )
+    proc = subprocess.run(
+        ["node", "-e", code, json.dumps(pages)],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"node failed: {proc.stderr}")
+    return json.loads(proc.stdout)
+
+
+def test_the_workflow_joins_every_page_before_the_scan_sees_them():
+    """A START on page 1 and its END on page 2 must reach the lib together.
+
+    Run 61's did on 2026-07-31. If the workflow hands the lib one page at a
+    time, every boundary-split run is reported dead — a false alarm on the
+    supervisor itself, which is worse than the silence it replaces.
+    """
+    filler = [_comment("2026-07-30T05:00:00Z", "routine note") for _ in range(98)]
+    page1 = [_start(58, "2026-07-30T06:00:00Z"), _start(59, "2026-07-30T12:00:00Z")] + filler
+    page2 = [_end(58, "2026-07-30T06:40:00Z"), _end(59, "2026-07-30T12:30:00Z")]
+    assert len(page1) == 100, "page 1 must be full or the loop stops before page 2"
+
+    out = _run_comment_pager([page1, page2])
+    assert out["asked"] == [1, 2], f"a full page must be followed by the next: {out['asked']}"
+    assert len(out["comments"]) == 102, (
+        f"every page must survive into one list, got {len(out['comments'])}"
+    )
+    # And the joined list is what makes the pairing correct.
+    cr = _dead(out["comments"], now="2026-07-31T00:00:00Z")
+    assert cr["count"] == 0, f"58 and 59 both ended; neither is dead: {cr}"
+
+
+def test_the_workflow_wiring_feeds_one_read_to_both_consumers():
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
+    assert "logComments," in raw, "the workflow must pass the fetched comments to computeMetrics"
+    assert "extractPreviousMetrics(logComments)" in raw, (
+        "baseline and dead-run scan must share ONE read of #719 — not two"
+    )
+    assert "per_page: 100" in raw and "page: bp" in raw, "the comment read must be paginated"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

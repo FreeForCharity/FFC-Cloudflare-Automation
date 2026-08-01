@@ -347,6 +347,11 @@ def fetch_board_items(org, project_number, token, _graphql=graphql):
     )
 
 
+def _as_dict(value):
+    """``value`` when it is a dict, else ``{}`` — GraphQL nulls, uniformly."""
+    return value if isinstance(value, dict) else {}
+
+
 def normalize_board_items(nodes):
     """Shape raw project nodes into rows the set arithmetic can use.
 
@@ -358,23 +363,27 @@ def normalize_board_items(nodes):
     for node in nodes or []:
         if not isinstance(node, dict):
             continue
-        status_field = node.get("fieldValueByName") or {}
-        status = status_field.get("name") if isinstance(status_field, dict) else None
-        content = node.get("content") or {}
-        repo = ((content.get("repository") or {}) if isinstance(content, dict) else {}).get(
-            "nameWithOwner"
-        )
-        number = content.get("number") if isinstance(content, dict) else None
-        state = (content.get("state") or "") if isinstance(content, dict) else ""
+        # `fieldValueByName` is null for an item with no Status, and `content`
+        # is null for an item whose issue was deleted. Coerce both to {} once,
+        # rather than guarding at each field: GraphQL nulls are the normal case
+        # here, not an error to detect.
+        status_field = _as_dict(node.get("fieldValueByName"))
+        content = _as_dict(node.get("content"))
+        repository = _as_dict(content.get("repository"))
+
+        status = status_field.get("name")
+        repo = repository.get("nameWithOwner")
+        number = content.get("number")
+        state = content.get("state") or ""
         rows.append(
             {
                 "id": node.get("id"),
                 "key": (repo, number) if repo and number is not None else None,
                 "repo": repo,
                 "number": number,
-                "type": content.get("__typename") if isinstance(content, dict) else None,
-                "title": (content.get("title") or "") if isinstance(content, dict) else "",
-                "url": (content.get("url") or "") if isinstance(content, dict) else "",
+                "type": content.get("__typename"),
+                "title": content.get("title") or "",
+                "url": content.get("url") or "",
                 "status": status or None,
                 # GraphQL reports OPEN / CLOSED for an Issue and OPEN / CLOSED /
                 # MERGED for a PullRequest. A merged PR is finished work whose

@@ -181,6 +181,16 @@ def test_a_boarded_item_is_not_reported_missing():
 # ---------------------------------------------------------------- the other two sets
 
 
+def test_as_dict_rejects_a_non_dict_rather_than_passing_it_through():
+    """The mutation ritual found this claim unchecked: `value or {}` passes the
+    mutation, because no fixture feeds a truthy non-dict — and it would then
+    crash at the caller's `.get`. Pinned rather than shipped on trust."""
+    assert M._as_dict({"a": 1}) == {"a": 1}
+    assert M._as_dict(None) == {}, "a GraphQL null must become an empty mapping"
+    assert M._as_dict("not a dict") == {}, "a truthy non-dict must not pass through"
+    assert M._as_dict([1, 2]) == {}
+
+
 def test_statusless_board_items_are_reported_including_drafts():
     rows = M.normalize_board_items(
         [

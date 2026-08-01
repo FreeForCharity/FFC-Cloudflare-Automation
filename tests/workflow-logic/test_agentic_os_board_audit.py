@@ -538,6 +538,34 @@ def test_the_report_prints_both_denominators():
     assert "repos_swept=2" in text, text
 
 
+def test_a_card_with_no_content_is_not_labelled_a_draft():
+    """Three kinds of card, three remedies — so three labels (Copilot, #968).
+
+    A card whose issue was deleted (or whose repo this token cannot read) has
+    no repo AND no `DraftIssue` type. Labelling it "(draft item)" sent triage
+    hunting for a draft that does not exist, and hid the one row that may need
+    the card deleted outright."""
+    deleted = {"id": "gone", "fieldValueByName": None, "content": None}
+    # All three are statusless, so all three appear in the same section and the
+    # labels can be compared side by side. A card with a Status and an open
+    # issue lands in no section at all — asserting on it here would be asserting
+    # on the absence of a row for the wrong reason.
+    rows = M.normalize_board_items(
+        [deleted, draft_node("a real draft"), board_node(HUB, 7, status=None)]
+    )
+    text = M.render(M.audit({}, rows), ORG, 9, None, [HUB])
+    assert text.count("(draft item)") == 1, f"only the DraftIssue may be called a draft:\n{text}"
+    assert "no readable content" in text, f"the contentless card must say so:\n{text}"
+    assert "FFC-Cloudflare-Automation#7" in text, f"a real issue keeps its identity:\n{text}"
+
+
+def test_a_contentless_card_still_reaches_the_statusless_set():
+    """It is kept precisely so it can be reported; the label fix must not drop it."""
+    rows = M.normalize_board_items([{"id": "gone", "fieldValueByName": None, "content": None}])
+    assert [r["id"] for r in M.audit({}, rows)["statusless"]] == ["gone"]
+    assert rows[0]["key"] is None, "a contentless card must carry no comparison key"
+
+
 def test_the_report_names_every_finding():
     expected = {
         (HUB, 965): {"repo": HUB, "number": 965, "title": "a new PR", "url": "", "is_pr": True}

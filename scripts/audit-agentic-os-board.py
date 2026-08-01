@@ -441,7 +441,22 @@ def has_findings(result):
 
 
 def _describe(row):
-    label = f"{row.get('repo')}#{row.get('number')}" if row.get("repo") else "(draft item)"
+    """One report line for a board row.
+
+    Three kinds of card reach this, and they need three different remedies, so
+    they must not share a label. A `repo` means a real issue or PR. A
+    `DraftIssue` is a card someone typed straight onto the board — give it a
+    Status, or convert it. Anything else has **null content**: the issue or PR
+    was deleted, or it lives in a repository this token cannot read. Calling
+    that third case "(draft item)" — as the first version of this function did —
+    sends whoever triages the statusless set hunting for a draft that does not
+    exist, and hides the one row that may need the card deleted outright."""
+    if row.get("repo"):
+        label = f"{row['repo']}#{row['number']}"
+    elif row.get("type") == "DraftIssue":
+        label = "(draft item)"
+    else:
+        label = "(no readable content: deleted, or in a repo this token cannot see)"
     status = row.get("status") or "-"
     title = (row.get("title") or "").strip()
     if len(title) > 70:

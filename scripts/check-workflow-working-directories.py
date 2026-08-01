@@ -31,7 +31,16 @@ WHAT COUNTS AS A VIOLATION
 
     Any `working-directory:` matching none of those is a typo or a stale name.
     Order is part of the rule: a directory created by a *later* step does not
-    exist yet when the step runs, so it is still a finding.
+    exist yet when the step runs, so it is still a finding. A step that cannot
+    itself run contributes nothing either — its `mkdir` never executes.
+
+    `defaults.run.working-directory` (workflow or job scope) is judged the same
+    way, against what is proven at the FIRST `run:` step that inherits it, and
+    reported once per job. The circular case is the one that matters: a `mkdir`
+    in a `run:` step can never prove the default, because that step itself
+    starts in the unproven directory and fails before the `mkdir` executes.
+    An `actions/checkout` can, since `defaults.run` does not apply to `uses:`
+    steps.
 
     A path *inside* a checked-out or freshly-made directory (`ffc-ex/apps/web`)
     is accepted on the prefix. The contents of a foreign checkout are not in
@@ -70,6 +79,7 @@ disk.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import shlex
@@ -213,15 +223,20 @@ def _dirs_created_by(run_script: str) -> set[str]:
 
 
 def _repo_dirs(root: pathlib.Path) -> set[str]:
-    """Every directory committed in this repository, workspace-relative."""
+    """Every directory committed in this repository, workspace-relative.
+
+    Walks with `os.walk` and PRUNES the ignored names in place, rather than
+    listing everything and filtering afterwards. The filtering version returned
+    the same set while still descending into `.git` — thousands of loose-object
+    directories on a full clone, stat-ed on every CI run for a result that was
+    thrown away.
+    """
     dirs: set[str] = set()
-    for path in root.rglob("*"):
-        if not path.is_dir():
-            continue
-        rel = path.relative_to(root).as_posix()
-        if any(part in IGNORED_TREE_DIRS for part in rel.split("/")):
-            continue
-        dirs.add(rel)
+    for current, subdirs, _files in os.walk(root):
+        subdirs[:] = [d for d in subdirs if d not in IGNORED_TREE_DIRS]
+        here = pathlib.Path(current)
+        for name in subdirs:
+            dirs.add((here / name).relative_to(root).as_posix())
     return dirs
 
 
@@ -322,23 +337,11 @@ def find_findings(
         if job_id == _LINE_KEY or not isinstance(job, dict):
             continue
 
-        # Everything the job could ever hold, for judging job/workflow-level
-        # defaults — those apply from the first run step, before the guard can
-        # say which checkouts have happened, so they are judged against the
-        # union rather than invented into a finding.
-        job_wide = set(base_dirs)
         unreadable_checkout: str | None = None
         for step in _steps(job):
             checkout = _checkout_path(step)
-            if checkout is not None:
-                kind, value = checkout
-                if kind == CHECKOUT_UNREADABLE:
-                    unreadable_checkout = value
-                elif kind == CHECKOUT_DIR:
-                    job_wide.add(_normalize(value))
-            run_script = step.get("run")
-            if isinstance(run_script, str):
-                job_wide |= _dirs_created_by(run_script)
+            if checkout is not None and checkout[0] == CHECKOUT_UNREADABLE:
+                unreadable_checkout = checkout[1]
 
         job_line = job.get(_LINE_KEY, 0)
         if unreadable_checkout is not None:
@@ -356,38 +359,62 @@ def find_findings(
                 )
             )
 
+        # A job default falls back to the workflow default. `defaults.run`
+        # applies to `run:` steps ONLY — a `uses:` step is unaffected, which is
+        # what lets an `actions/checkout` legitimately create the very directory
+        # the default names.
         job_default = _default_wd(job)
-        for scope, value in (("workflow", workflow_default), ("job", job_default)):
-            if value is None:
-                continue
-            found.extend(
-                _judge(
-                    path, lines, job_line, str(job_id), f"defaults.run ({scope})", value, job_wide
-                )
-            )
+        effective_default = job_default if job_default is not None else workflow_default
 
-        # Step scope: only what earlier steps have produced counts.
+        # One ordered pass: every step is judged against what the steps BEFORE
+        # it have proven, and contributes its own effects only afterwards.
         available = set(base_dirs)
+        default_reported = False
+
         for index, step in enumerate(_steps(job)):
-            value = step.get("working-directory")
-            if isinstance(value, str):
-                found.extend(
-                    _judge(
-                        path,
-                        lines,
-                        step.get(_LINE_KEY, job_line),
-                        str(job_id),
-                        _step_label(step, index),
-                        value,
-                        available,
-                    )
+            own = step.get("working-directory")
+            own = own if isinstance(own, str) else None
+            run_script = step.get("run")
+            is_run = isinstance(run_script, str)
+
+            step_findings: list[Finding] = []
+            if own is not None:
+                step_findings = _judge(
+                    path,
+                    lines,
+                    step.get(_LINE_KEY, job_line),
+                    str(job_id),
+                    _step_label(step, index),
+                    own,
+                    available,
                 )
-            # This step's own effects land after it is judged.
+            elif is_run and effective_default is not None and not default_reported:
+                # The default is a property of the job, so one finding per job
+                # says it — attributed to the first step that would actually
+                # execute under it, which is where it fails.
+                scope = "job" if job_default is not None else "workflow"
+                step_findings = _judge(
+                    path,
+                    lines,
+                    step.get(_LINE_KEY, job_line),
+                    str(job_id),
+                    f"{_step_label(step, index)} (via defaults.run, {scope} scope)",
+                    effective_default,
+                    available,
+                )
+                default_reported = bool(step_findings)
+
+            found.extend(step_findings)
+
+            # This step's own effects land after it is judged, and only if the
+            # step can run at all. A `mkdir` cannot prove the directory its own
+            # step executes in: that step starts in the unproven directory and
+            # fails before the mkdir ever runs. Counting it was the circular
+            # fail-open this pass replaced.
             checkout = _checkout_path(step)
             if checkout is not None and checkout[0] == CHECKOUT_DIR:
                 available.add(_normalize(checkout[1]))
-            run_script = step.get("run")
-            if isinstance(run_script, str):
+            if is_run and not step_findings:
                 available |= _dirs_created_by(run_script)
 
     return found

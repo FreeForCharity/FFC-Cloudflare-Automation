@@ -218,7 +218,11 @@ jobs:
             const { data: open } = await github.rest.issues.listForRepo({
               owner, repo, state: 'open', labels: 'agentic-os,whmcs', per_page: 50,
             });
-            const existing = open.find((i) => i.body && i.body.includes(marker));
+            // `listForRepo` returns pull requests too, and the empty-queue path below
+            // CLOSES what this selects — a PR quoting the (invisible, HTML-comment)
+            // marker would be closed by this scheduled run. Labels do not save us: PRs
+            // carry labels as well. Refs #980.
+            const existing = open.find((i) => !i.pull_request && i.body && i.body.includes(marker));
             const now = new Date().toISOString();
 
             // Empty queue → nothing to track. Close the rolling issue if one is open.

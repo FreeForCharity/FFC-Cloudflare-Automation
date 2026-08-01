@@ -5,6 +5,9 @@
 //   - github.rest.actions.listWorkflowRunsForRepo (paginated over a fixture set)
 //   - github.rest.actions.cancelWorkflowRun (records every attempt; can be told
 //     to fail specific ids so error handling is exercised)
+//   - github.rest.issues.createComment (records the janitor's warning/cancel
+//     report to the Conductor Log; can be told to throw so the "reporting must
+//     not fail the sweep" path is exercised)
 //   - a chainable core.summary stub (addHeading/addRaw/addTable/write)
 //
 // Inputs (env):
@@ -13,10 +16,12 @@
 //   TEST_RUNS_FILE     JSON array of run objects [{id,name,created_at,html_url}]
 //                      returned (paginated, 100/page) by listWorkflowRunsForRepo
 //   TEST_CANCEL_FAIL_IDS  comma-separated run ids whose cancel call throws (409)
-//   plus whatever env the step itself reads (MAX_AGE_DAYS, DRY_RUN, …)
+//   TEST_COMMENT_FAILS    '1' to make createComment throw (503)
+//   plus whatever env the step itself reads (MAX_AGE_DAYS, WARN_DAYS, DRY_RUN, …)
 //
 // Emits one JSON result line:
-//   { failed, threw, notices, logs, listCalls, cancelAttempts, cancelledIds, summaryText }
+//   { failed, threw, notices, logs, listCalls, cancelAttempts, cancelledIds,
+//     summaryText, comments }
 
 import { readFileSync } from 'node:fs';
 
@@ -29,6 +34,8 @@ const cancelFailIds = new Set(
   (process.env.TEST_CANCEL_FAIL_IDS || '').split(',').filter(Boolean).map(Number),
 );
 
+const commentFails = process.env.TEST_COMMENT_FAILS === '1';
+
 const PER_PAGE = 100;
 const notices = [];
 const logs = [];
@@ -36,6 +43,7 @@ const listCalls = [];
 const cancelAttempts = [];
 const cancelledIds = [];
 const summaryText = [];
+const comments = [];
 let failed = null;
 
 const summary = {
@@ -91,6 +99,17 @@ const github = {
         return { data: {} };
       },
     },
+    issues: {
+      createComment: async (args) => {
+        if (commentFails) {
+          const e = new Error('service unavailable');
+          e.status = 503;
+          throw e;
+        }
+        comments.push({ issue_number: args.issue_number, body: String(args.body) });
+        return { data: {} };
+      },
+    },
   },
 };
 
@@ -119,5 +138,6 @@ console.log(
     cancelAttempts,
     cancelledIds,
     summaryText,
+    comments,
   }),
 );

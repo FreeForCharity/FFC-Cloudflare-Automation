@@ -36,6 +36,38 @@
 - Never "fix" a test, or hold a PR, on the strength of a local harness crash — confirm against CI
   first.
 
+## Windows host facts (validated 2026-07-31, conductor run 57)
+
+The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to rediscover.
+
+- **Native Python cannot open a git-bash path.** `open('/c/Users/…')` raises `FileNotFoundError`
+  while `ls /c/Users/…` works — bash resolves the redirect, native Python does not. The tell is a
+  command that writes a file successfully and a reader that insists it is missing. Use `C:/Users/…`
+  for anything a Windows binary will open, and keep `/c/…` for the shell's own redirects.
+- **`gh pr merge --delete-branch` is rejected where a merge queue is enabled**:
+  `Cannot use -d or --delete-branch when merge queue enabled`. Same family as the existing
+  no-strategy-flag rule — enqueue with `gh pr merge --auto` or the `enqueuePullRequest` mutation and
+  let the queue delete the branch.
+- **`scripts/generate-agentic-os-status.py` needs `PYTHONUTF8=1` on Windows** until #945 lands. It
+  writes issue titles to stdout and dies with
+  `UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f6a8'` on the 🚨 in #921's
+  title. It also needs `GH_TOKEN` exported (`export GH_TOKEN=$(gh auth token)`) — it does not read
+  `gh`'s keyring.
+- **The generator's `--output` writes CRLF on Windows.** `.gitattributes` (`* text=auto eol=lf`)
+  normalizes it, so the _committed_ blob is LF and byte-identical to a Linux run — but verify the
+  staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) before claiming 502 will not
+  report phantom drift.
+- **The full workflow-logic suite takes over 2 minutes once it actually runs.** It used to finish in
+  seconds only because the modules were aborting; a 2-minute command timeout now reads as a hang.
+- **Each full suite run leaves a zero-byte `U+F022 U+F022` file in the repo root.** Reproducible,
+  untracked; it is suite output, not a checkout artifact. Tracked on #945.
+- **When a PR declines to tick a platform-specific criterion, supply the platform.** Agents working
+  from a Linux sandbox correctly refuse to claim a Windows result they cannot measure (#944 did
+  exactly this). The move is neither to merge on trust nor to bounce the PR — it is to run that
+  criterion here, because this is the only host that can. Doing so on #944 turned an unverifiable
+  claim into a measured `129 → 0`, and surfaced a scope correction (the cause explained 8 of 26
+  modules, not 21) that the author had no way to see.
+
 ## Board & PR-creation env facts (validated 2026-07-24)
 
 - **The public "Agentic OS" board (org project #9) has NO automation.** Its only enabled built-in
@@ -43,9 +75,46 @@
   `Pull request merged` are **disabled**. So **neither issues nor PRs auto-add, and statuses never
   self-update** — every item and every status is placed by hand. Do not assume a new `agentic-os`
   issue reached the board. Check:
+
   ```bash
   gh api graphql -f query='query{organization(login:"FreeForCharity"){projectV2(number:9){workflows(first:20){nodes{name enabled}}}}}'
   ```
+
+  - **Audit the board with `scripts/audit-agentic-os-board.py`, not by hand.** Because nothing
+    auto-adds, every run re-derives the same three sets — missing from the board, on the board with
+    no Status, closed/merged but not `Done` — and hand-rolling it was wrong twice in two runs, in
+    two different ways (#966). Run 61 read `items(first:100)` and got 100 of 208. Run 62 built the
+    _expected_ half from `gh search issues` and got 52 where REST returned 53: the **search index
+    lags writes**, so it under-reports precisely for the newest items, which are the ones most
+    likely to be missing from a hand-maintained board. It failed silently and in the reassuring
+    direction. The script reads both sides from authoritative endpoints (REST per repo; GraphQL
+    paginated on `$endCursor`), prints `expected=N board=M` so a short denominator is visible rather
+    than invisible, and exits non-zero on any finding **or** any failed enumeration — never 0 on a
+    read it could not complete. Read-only; it adds nothing and sets no status.
+    ```bash
+    GH_TOKEN=… python3 scripts/audit-agentic-os-board.py          # prose report
+    GH_TOKEN=… python3 scripts/audit-agentic-os-board.py --json   # machine-readable
+    ```
+
+- **A negative read straight after a successful GitHub write means "unknown", not "failed".** The
+  write APIs are strongly consistent; the _list/read_ endpoints behind them are not, and the lag is
+  seconds. Three instances so far: `mergeQueueEntry` reads `null` for a few seconds after a good
+  `--auto` enqueue (2026-07-24); `gh project item-list` read back the full board **without** an
+  issue that `gh project item-add` had just added successfully (2026-07-25, org project #9); and the
+  `POST /pulls` HTTP-500 episode below, where the branch had in fact been pushed. Re-poll before
+  concluding anything failed, and **never let an immediate negative read trigger a retry loop** —
+  run 41 burned ~51 attempts that way. Where the write is idempotent (`item-add` is: two calls
+  produced one row) a retry is merely wasteful; where it is not, it is destructive.
+  - **Separately: some fields are not lagging, they simply never carry the state you want.** On
+    2026-07-31 (run 60) `gh pr merge --auto` printed nothing for #914/#958/#959 and `.auto_merge`
+    read `null` for all three — but `enqueuePullRequest` answered "already in the queue" for every
+    one. That `null` was not a few-second lag that re-polling would clear; `.auto_merge` describes
+    the _auto-merge flag_, and a PR that went straight into the merge queue never sets it. So
+    distinguish the two failure shapes: re-poll cures a stale read, but no amount of re-polling
+    cures a field that does not model the thing. When a read looks negative, confirm against the
+    endpoint that is **authoritative for that state** (here, the `enqueuePullRequest` mutation)
+    before either retrying or concluding anything — and note that silence from `gh pr merge --auto`
+    is success, not a no-op.
 - **Push the branch before opening the PR.** On 2026-07-24, `POST /repos/…/pulls` returned **HTTP
   500 with an empty body** for >20 minutes, across **multiple FFC repos**
   (`FFC-IN-freeforcharity.org` and `FFC-Cloudflare-Automation`) and all three clients (`gh`, REST,
@@ -60,6 +129,49 @@
   visible only by counting. This generalizes past shell: whenever a loop reports success per item,
   the loop's own output cannot tell you whether an item was skipped before it ever started. Print a
   count and compare it, or terminate the file with a newline and still compare the count.
+
+## Windows host facts (the Conductor's git-bash environment, validated 2026-07-31)
+
+The scheduled Conductor runs on Windows 11 under git-bash, which is **not** the environment CI uses.
+These are the ways that difference has actually bitten, each found the expensive way.
+
+- **A `--jq` expression containing `//` is mangled the same way** (ledger L51). MSYS rewrites
+  `(.conclusion//"null")` into a Windows path, and jq then fails with a **type** error —
+  `cannot add: string ("completedC:/Program File …")` — which reads like a malformed filter and
+  sends you to rewrite the query instead of the quoting. Use `\(.field)` interpolation rather than
+  jq's `//` default operator, or prefix with `MSYS_NO_PATHCONV=1`.
+- **`git show <rev>:<path>` is mangled by MSYS path conversion.** `git show origin/main:.github/…`
+  reaches git as `origin\main;.github\workflows\…` and aborts with `fatal: ambiguous argument`.
+  Prefix with `MSYS_NO_PATHCONV=1` (and quote the argument). The failure is loud — but see the next
+  point for how it gets swallowed.
+- **Never let `||` supply a benign default for a command that can crash** (ledger L42). A
+  `cmd | grep … || echo "none found"` prints the reassuring branch when `cmd` _fails_, not only when
+  the match is empty. That silently turned a failed supersession check into a pass. Check the exit
+  status, or make the fallback read `CHECK FAILED`.
+- **Never read an exit code through a pipe** (ledger L50). `cmd | tail; echo $?` reports `tail`'s
+  status, not `cmd`'s. `scripts/audit-agentic-os-board.py | tail -45; echo "EXIT=$?"` printed
+  `EXIT=0` while the script had exited **1** with six real findings — the script's entire contract
+  is to exit non-zero on any finding or any enumeration it could not complete, and the pipe threw
+  exactly that away. Redirect to a file and read `$?` before piping, or `set -o pipefail`.
+- **`gh` inside a `while read` loop eats the loop's stdin**, losing one input line per invocation.
+  Read from a dedicated descriptor (`while read … <&3; done 3< file`) or redirect the child
+  (`gh … </dev/null`). A board audit silently processed 73 of 74 rows this way.
+- **Space-delimited `awk` columns break on human labels.** Project board statuses include
+  `In Progress` and `In Review`, so `$6` reads an item id instead of a state. Emit tab-delimited
+  rows (`IFS=$'\t'`) for anything carrying a human-authored field.
+- **Native Windows Python cannot open a git-bash path.** `open('/tmp/x')` raises `FileNotFoundError`
+  while `ls /tmp/x` works, so a bash heredoc that writes to `/tmp` and a Python reader disagree
+  about the same filename. Use `C:/…` paths (the session scratch dir) whenever Python is on either
+  end.
+- **Text-mode `subprocess` decodes with cp1252 here, not UTF-8** — pass `PYTHONUTF8=1` or an
+  explicit `encoding=`. `scripts/generate-agentic-os-status.py` is a production script that dies on
+  an emoji in an issue title without it, and the public status feed now routinely contains 🚨 alert
+  titles. Enumerated and tracked in #945.
+- **The full `tests/workflow-logic/` suite takes >2 minutes here** once it actually runs. A 2-minute
+  command timeout reads as a hang. (Crashes used to make it finish fast — see ledger L35.)
+- **You cannot approve your own PR, and every agent authenticates as `clarkemoyer`.**
+  `gh pr review --approve` returns `Can not approve your own pull request`. A conductor review is
+  therefore a **comment**, and the merge queue's required checks — not an approval — are the gate.
 
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 

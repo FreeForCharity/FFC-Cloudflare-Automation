@@ -139,7 +139,7 @@ def tracked_powershell_files(root: pathlib.Path) -> list[str]:
         ["git", "ls-files", "*.ps1", "*.psm1"],
         cwd=root,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         check=True,
     )
     return sorted(line for line in proc.stdout.splitlines() if line.strip())
@@ -168,7 +168,7 @@ def extract_facts(
             + (["-IncludeInventory"] if include_inventory else []),
             cwd=root,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
         )
     finally:
         os.unlink(list_file)

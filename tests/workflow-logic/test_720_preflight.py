@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import step_run
+from wf_extract import child_env, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 
@@ -25,18 +25,18 @@ def run_preflight(env_overrides: dict) -> tuple[subprocess.CompletedProcess, str
         tdp = pathlib.Path(td)
         summary = tdp / "summary.md"
         summary.touch()
-        env = {
-            "PATH": f"{HARNESS_DIR}:/usr/bin:/bin",
-            "GITHUB_STEP_SUMMARY": str(summary),
-            "HOME": str(tdp),
-            "IN_REPO": "FFC-EX-example.org",
-        }
+        env = child_env(
+            HARNESS_DIR,
+            GITHUB_STEP_SUMMARY=str(summary),
+            HOME=str(tdp),
+            IN_REPO="FFC-EX-example.org",
+        )
         env.update(env_overrides)
         proc = subprocess.run(
             ["bash", "-c", script],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=60,
         )
         return proc, summary.read_text(encoding="utf-8")

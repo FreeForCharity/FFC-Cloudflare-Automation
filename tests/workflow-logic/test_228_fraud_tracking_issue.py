@@ -32,7 +32,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import find_step, load_workflow, step_github_script  # noqa: E402
+from wf_extract import child_env, find_step, load_workflow, step_github_script  # noqa: E402
 
 WORKFLOW = "228-whmcs-fraud-review.yml"
 JOB = "tracking_issue"
@@ -61,10 +61,7 @@ def _run(review_json, *, open_issues=None):
     script = step_github_script(WORKFLOW, JOB, STEP)
     context = {"repo": {"owner": "FreeForCharity", "repo": "FFC-Cloudflare-Automation"}}
     raw = review_json if isinstance(review_json, str) else json.dumps(review_json)
-    env = {
-        "PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin",
-        "FRAUD_REVIEW_JSON": raw,
-    }
+    env = child_env(pathlib.Path(NODE).parent, FRAUD_REVIEW_JSON=raw)
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
         (tdp / "script.js").write_text(script, encoding="utf-8")
@@ -74,7 +71,7 @@ def _run(review_json, *, open_issues=None):
         env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
         env["TEST_OPEN_ISSUES_FILE"] = str(tdp / "open.json")
         proc = subprocess.run(
-            [NODE, str(HARNESS)], env=env, capture_output=True, text=True, timeout=60
+            [NODE, str(HARNESS)], env=env, capture_output=True, text=True, encoding="utf-8", timeout=60
         )
     if proc.returncode != 0:
         raise AssertionError(f"harness crashed: {proc.stderr}")

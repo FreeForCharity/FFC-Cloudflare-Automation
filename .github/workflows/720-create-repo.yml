@@ -203,6 +203,12 @@ jobs:
               $params.Add("CNAME", "${{ inputs.CNAME }}")
           }
 
+          # Seed $LASTEXITCODE: in DryRun the script invokes no native command, so
+          # $LASTEXITCODE keeps whatever it held (often $null) and the check below
+          # throws "failed with exit code " on a run that actually succeeded —
+          # observed live on run 30163114593, which reported [DRY RUN] success then
+          # failed.
+          $LASTEXITCODE = 0
           ./scripts/Create-GitHubRepo.ps1 @params
           if ($LASTEXITCODE -ne 0) {
             throw "Create-GitHubRepo.ps1 failed with exit code $LASTEXITCODE"

@@ -34,7 +34,7 @@ def recommend(
     proc = subprocess.run(
         ["pwsh", "-NoProfile", "-Command", script],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=120,
     )
     if proc.returncode != 0:

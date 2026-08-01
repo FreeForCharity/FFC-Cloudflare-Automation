@@ -239,6 +239,23 @@ function round3(n) {
  * @param {number} [thresholdHours]  override for DEAD_RUN_THRESHOLD_HOURS.
  */
 function findDeadConductorRuns(comments, nowIso, thresholdHours) {
+  // The unreadable-log guard lives HERE, ahead of the clock check, because this
+  // is the only exported entry point to the scan — buildConductorRuns is
+  // internal, so a guard held only there protects the workflow and nothing
+  // else. A failed read arriving as null/undefined must surface as
+  // `assessed: false`, never as `count: 0`: this is the one argument whose
+  // invalid form fails in the REASSURING direction, so it is the one that most
+  // needs the check. An array that is merely empty is a real reading and falls
+  // through — `observed: 0` is what discloses it.
+  if (!Array.isArray(comments)) {
+    return {
+      assessed: false,
+      thresholdHours: DEAD_RUN_THRESHOLD_HOURS,
+      observed: 0,
+      count: null,
+      dead: [],
+    };
+  }
   // Exported, so this is a public entry point and cannot lean on
   // computeMetrics having already validated the clock. An invalid `nowIso`
   // makes every age NaN, and `NaN < threshold` is false — so every unmatched
@@ -317,15 +334,6 @@ function findDeadConductorRuns(comments, nowIso, thresholdHours) {
 // wedge the weekly report, and a swallowed read must not surface as "0 dead".
 // That is exactly the "presence mistaken for validity" shape the ledger is about.
 function buildConductorRuns(input, nowIso) {
-  if (!Array.isArray(input.logComments)) {
-    return {
-      assessed: false,
-      thresholdHours: DEAD_RUN_THRESHOLD_HOURS,
-      observed: 0,
-      count: null,
-      dead: [],
-    };
-  }
   return findDeadConductorRuns(input.logComments, nowIso, input.deadRunThresholdHours);
 }
 

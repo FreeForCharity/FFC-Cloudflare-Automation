@@ -618,6 +618,32 @@ def test_a_direct_call_with_a_broken_clock_fails_fast():
         raise AssertionError(f"expected findDeadConductorRuns to throw for nowIso={bad!r}")
 
 
+def test_a_direct_call_with_an_unreadable_log_is_not_a_reassuring_zero():
+    """Same reasoning as the broken clock, applied to the comments argument.
+
+    `buildConductorRuns` guards `Array.isArray(logComments)` so the *workflow*
+    path is correct today, but that guard is internal and unexported, while
+    `findDeadConductorRuns` is the only exported entry point to the scan. A
+    direct caller handed a failed read got `assessed: true, count: 0` — the
+    reassuring zero the design exists to prevent, and the one direction the
+    other two validations were fixed for.
+    """
+    for bad in (None, "", 0, False, {}, {"body": "## Run 63 - START"}):
+        cr = _node(
+            "const a=JSON.parse(process.argv[1]);"
+            "process.stdout.write(JSON.stringify(l.findDeadConductorRuns(a.c,a.now)));",
+            json.dumps({"c": bad, "now": NOW}),
+        )
+        assert cr["assessed"] is False, f"non-array {bad!r} must not read as assessed: {cr}"
+        assert cr["count"] is None, f"non-array {bad!r} must not report a count: {cr}"
+        assert cr["dead"] == [], cr
+
+    # An array that is merely empty is a different thing and stays assessed:
+    # the log was read and held no runs, which `observed: 0` discloses.
+    cr = _dead([])
+    assert cr["assessed"] is True and cr["count"] == 0 and cr["observed"] == 0, cr
+
+
 def test_a_reposted_start_does_not_reset_the_clock():
     cr = _dead(
         [_start(63, "2026-08-01T01:05:45Z"), _start(63, "2026-08-01T03:50:00Z")],

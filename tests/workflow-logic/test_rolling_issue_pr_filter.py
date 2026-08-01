@@ -27,6 +27,14 @@ for that (each asserts a marked PR is never selected, and that a marked issue
 is still found when a marked PR is listed ahead of it). What this adds is that
 a NEW copy of the pattern cannot land unnoticed.
 
+Two limits worth stating rather than discovering. A pre-filter anywhere in the
+script satisfies every selection in it, so a script that filters one listing and
+then hand-rolls an unguarded match against a *different* listing would pass; and
+the scan is line-based, so a `.find(` whose marker test wraps onto the next line
+is not recognised as a selection. Both are accepted: the behavioural tests are
+what actually hold the invariant, and a shape check that tried to parse
+JavaScript would be a worse thing to maintain than the defect it prevents.
+
 Per AGENTS.md §Merging, a guard that cannot be shown to fail is decoration, so
 `test_the_scan_flags_the_pre_fix_form_of_a_real_workflow` reconstructs the
 actual pre-#980 line in each shipped file and asserts the scan rejects it.
@@ -37,6 +45,7 @@ Refs #980, #979, #977, #752.
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 
 import yaml
@@ -44,8 +53,13 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from wf_extract import WORKFLOWS  # noqa: E402
 
-# The six fixed in #980 plus the two that were already right. Named so a removal
-# is visible: if one of these stops matching the "lists and closes" shape, the
+# The six fixed in #980, plus 744 — the one that already selected safely AND
+# closes, so it matches the shape this guard looks for. The other two workflows
+# that drop PRs correctly, 737 and 739, are deliberately absent: they enumerate
+# issues to *report* and never close one, so they do not match "lists and
+# closes" and asserting they do would fail for the wrong reason.
+#
+# Named so a removal is visible: if one of these stops matching the shape, the
 # coverage assertion below fails rather than the file silently dropping out.
 KNOWN_ROLLING_MONITORS = {
     "228-whmcs-fraud-review.yml",
@@ -69,31 +83,49 @@ def selects_from_a_listing(script: str) -> bool:
     return "issues.listForRepo" in script
 
 
+# `!i.pull_request` / `!item.pull_request` — the NEGATED test. Matching a bare
+# `pull_request` would accept `.find(i => i.pull_request && …)`, which selects
+# pull requests exclusively: the defect inverted, not fixed.
+DROPS_PRS = re.compile(r"!\s*[A-Za-z_$][\w$]*\.pull_request")
+
+
+def _code_lines(script: str) -> list[str]:
+    return [
+        ln.strip() for ln in script.splitlines() if not ln.strip().startswith("//")
+    ]
+
+
 def scan_script(script: str) -> list[str]:
     """Reasons this script's rolling-issue lookup is unsafe. Empty == fine."""
     if not (selects_from_a_listing(script) and closes_an_issue(script)):
         return []
-    # A library lookup is the preferred form: it is unit-tested in one place
-    # rather than re-derived per workflow, which is how this spread.
-    if "findRollingIssue(" in script:
-        return []
-    # Otherwise the in-line selection must drop pull requests itself. The
-    # selection is the `.find(...)` that matches the marker.
-    selections = [
-        ln.strip()
-        for ln in script.splitlines()
-        if ".find(" in ln and ".includes(" in ln and not ln.strip().startswith("//")
-    ]
-    if not selections:
-        return [
-            "lists open issues and closes one, but no marker lookup is visible — "
-            "if the selection moved, teach this guard where it went (#980)"
-        ]
-    return [
+    lines = _code_lines(script)
+    # A pre-filter on the listing is as safe as filtering inside the `.find(`,
+    # and it is the form 737 already uses:
+    #   (await listOpen(…)).filter((i) => !i.pull_request)
+    # Rejecting it would push authors away from correct code, which is how a
+    # guard earns a `continue-on-error` instead of a fix.
+    prefiltered = any(".filter(" in ln and DROPS_PRS.search(ln) for ln in lines)
+    # The selection is the `.find(...)` that matches the marker. Every one is
+    # checked even when a library call is also present: a script can call
+    # `lib.findRollingIssue(open)` in one place and still hand-roll a second,
+    # unguarded match — which would reintroduce the defect while the library
+    # call made the workflow look fixed. This is exactly what the per-workflow
+    # tests assert with `"includes(lib.MARKER)" not in script`.
+    selections = [ln for ln in lines if ".find(" in ln and ".includes(" in ln]
+    reasons = [
         f"selects the rolling issue without dropping pull requests: {ln}"
         for ln in selections
-        if "pull_request" not in ln
+        if not (DROPS_PRS.search(ln) or prefiltered)
     ]
+    if not selections and "findRollingIssue(" not in script:
+        # Fail closed: if the marker match moved somewhere this scan cannot see,
+        # say so. Failing open here would make every future copy invisible.
+        reasons.append(
+            "lists open issues and closes one, but no marker lookup is visible — "
+            "if the selection moved, teach this guard where it went (#980)"
+        )
+    return reasons
 
 
 def github_script_bodies(path: pathlib.Path) -> list[str]:
@@ -228,6 +260,59 @@ def test_a_guarded_inline_selection_passes():
 
 def test_a_library_lookup_passes():
     assert scan_script(_synthetic("const existing = lib.findRollingIssue(open);")) == []
+
+
+def test_a_hand_rolled_match_is_flagged_even_when_a_library_call_is_present():
+    """A library call must not launder a second, unguarded match beside it.
+
+    Returning early on `findRollingIssue(` would let exactly this through, while
+    the library call made the workflow look fixed — the same "looks fixed" shape
+    the per-workflow tests block with `"includes(lib.MARKER)" not in script`.
+    Raised by Copilot on #982.
+    """
+    script = _synthetic(
+        "const existing = lib.findRollingIssue(open);\n"
+        "const legacy = open.find((i) => i.body && i.body.includes(lib.MARKER));"
+    )
+    reasons = scan_script(script)
+    assert reasons and "legacy" in reasons[0], reasons
+
+
+def test_the_pre_filter_form_used_by_737_is_accepted():
+    """Filtering the listing is as safe as filtering inside the `.find(`.
+
+    737 already ships this form. Rejecting correct code is how a guard earns a
+    `continue-on-error` rather than a fix. Raised by Copilot on #982.
+    """
+    script = (
+        "const open = (await github.paginate(github.rest.issues.listForRepo, "
+        "{ owner, repo, state: 'open' })).filter((i) => !i.pull_request);\n"
+        "const existing = open.find((i) => i.body && i.body.includes(lib.MARKER));\n"
+        + CLOSE_TAIL
+    )
+    assert scan_script(script) == []
+
+
+def test_a_filter_that_keeps_only_pull_requests_is_still_flagged():
+    """`i.pull_request` is the defect inverted; only the NEGATED test is safe.
+
+    A substring check for `pull_request` would accept both, so the guard would
+    bless a script that closes nothing but pull requests.
+    """
+    for selection in [
+        "const existing = open.find(i => i.pull_request && i.body.includes(marker));",
+        "const bad = open.filter((i) => i.pull_request);\n"
+        "const existing = open.find(i => i.body && i.body.includes(marker));",
+    ]:
+        assert scan_script(_synthetic(selection)), selection
+
+
+def test_a_commented_out_filter_does_not_satisfy_the_guard():
+    script = _synthetic(
+        "// const open2 = open.filter((i) => !i.pull_request);\n"
+        "const existing = open.find(i => i.body && i.body.includes(marker));"
+    )
+    assert scan_script(script)
 
 
 def test_a_lost_selection_is_reported_rather_than_passing_silently():

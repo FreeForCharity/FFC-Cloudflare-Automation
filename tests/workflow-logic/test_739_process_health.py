@@ -573,6 +573,51 @@ def test_the_threshold_is_configurable_and_actually_applied():
     assert _dead(comments)["thresholdHours"] == 2, "default stays 2h"
 
 
+def test_an_unusable_threshold_override_falls_back_instead_of_alarming():
+    """Both coercion failures fail in the ALARMING direction, and neither is loud.
+
+    `Number('')` is 0, so every in-flight run reads dead. `Number('2h')` is NaN,
+    and `ageHours < NaN` is false, so the in-flight skip never fires — again
+    every unmatched START reads dead. A false alarm about the supervisor is
+    worse than the silence this metric replaces, and workflow_dispatch inputs
+    arrive as strings, so the bad value is a plausible input rather than a
+    hypothetical one. The effective threshold is returned and rendered, so the
+    fallback announces itself rather than hiding.
+    """
+    fresh = [_start(64, "2026-08-01T03:30:00Z")]  # 0.5h old: alive
+    # `Number()` maps every one of these to 0 or NaN. Note "" / "   " / False /
+    # [] coerce to 0 — finite AND non-negative — so a value check alone passes
+    # them; the type has to be narrowed first. (NaN itself is unreachable
+    # through this harness: JSON has no NaN literal, so "NaN" covers the branch.)
+    for bad in ("", "   ", "2h", "abc", "NaN", -1, False, True, [], [5], {}):
+        cr = _dead(fresh, threshold=bad)
+        assert cr["thresholdHours"] == 2, f"threshold={bad!r} must fall back to the default: {cr}"
+        assert cr["count"] == 0, f"threshold={bad!r} must not report a live run dead: {cr}"
+    # A usable override still wins — the fallback must not swallow real values.
+    assert _dead(fresh, threshold=0.25)["count"] == 1, "0.5h exceeds a 0.25h threshold"
+    assert _dead(fresh, threshold=0)["thresholdHours"] == 0, "zero is a real value, not 'unset'"
+
+
+def test_a_direct_call_with_a_broken_clock_fails_fast():
+    """`findDeadConductorRuns` is exported, so it cannot lean on computeMetrics.
+
+    An invalid nowIso makes every age NaN; `NaN < threshold` is false, so the
+    in-flight skip never fires and every unmatched START is reported dead with
+    ageHours serialising to null.
+    """
+    for bad in ("", "not-a-date", None):
+        try:
+            _node(
+                "const a=JSON.parse(process.argv[1]);"
+                "process.stdout.write(JSON.stringify(l.findDeadConductorRuns(a.c,a.now)));",
+                json.dumps({"c": [_start(63, "2026-08-01T01:05:45Z")], "now": bad}),
+            )
+        except AssertionError as e:
+            assert "nowIso" in str(e), e
+            continue
+        raise AssertionError(f"expected findDeadConductorRuns to throw for nowIso={bad!r}")
+
+
 def test_a_reposted_start_does_not_reset_the_clock():
     cr = _dead(
         [_start(63, "2026-08-01T01:05:45Z"), _start(63, "2026-08-01T03:50:00Z")],

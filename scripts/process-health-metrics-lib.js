@@ -239,10 +239,35 @@ function round3(n) {
  * @param {number} [thresholdHours]  override for DEAD_RUN_THRESHOLD_HOURS.
  */
 function findDeadConductorRuns(comments, nowIso, thresholdHours) {
-  const threshold =
-    thresholdHours === null || thresholdHours === undefined
-      ? DEAD_RUN_THRESHOLD_HOURS
-      : Number(thresholdHours);
+  // Exported, so this is a public entry point and cannot lean on
+  // computeMetrics having already validated the clock. An invalid `nowIso`
+  // makes every age NaN, and `NaN < threshold` is false — so every unmatched
+  // START would be reported dead, with `ageHours` serialising to null. A false
+  // alarm about the supervisor is worse than the silence this replaces, so
+  // fail fast exactly as computeMetrics does.
+  if (!nowIso || Number.isNaN(new Date(nowIso).getTime())) {
+    throw new Error('findDeadConductorRuns: nowIso must be a valid ISO timestamp');
+  }
+  // An unusable override falls back to the default rather than throwing: this
+  // is an optional knob on a health report, and killing the weekly run over it
+  // would cost more than it saves. `Number('')` is 0 (every in-flight run reads
+  // dead) and `Number('2h')` is NaN (the `< threshold` test never fires, so
+  // every unmatched START reads dead) — both fail in the alarming direction,
+  // and neither is loud. The effective value is returned as `thresholdHours`
+  // and rendered in the report, so a fallback announces itself.
+  //
+  // `Number()` alone is not enough to validate with, which is the trap: it maps
+  // '', '   ', null, false and [] all to 0 — a *finite, non-negative* number
+  // that passes a naive `Number.isFinite(n) && n >= 0` check and then reports
+  // every in-flight run dead. Narrow the accepted TYPES first, then the value.
+  let threshold = DEAD_RUN_THRESHOLD_HOURS;
+  if (
+    typeof thresholdHours === 'number' ||
+    (typeof thresholdHours === 'string' && thresholdHours.trim() !== '')
+  ) {
+    const requested = Number(thresholdHours);
+    if (Number.isFinite(requested) && requested >= 0) threshold = requested;
+  }
   const started = new Map(); // run number -> earliest START created_at
   const ended = new Set();
 

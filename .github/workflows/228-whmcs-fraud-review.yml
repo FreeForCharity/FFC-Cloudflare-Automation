@@ -98,15 +98,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Validate required Azure secrets
+      # Repository Variables, NOT environment secrets. `fraudlabspro-prod-read`
+      # carries no secrets, so the previous `secrets.READ_ALL_FFC_AZURE_*` form
+      # resolved to the empty string and this job failed on every run it ever
+      # had (#912). The identifiers are non-secret GUIDs held as repo Variables,
+      # which resolve in every environment — the job above already reads them
+      # that way.
+      - name: Validate required Azure OIDC identifiers
         shell: bash
+        env:
+          AZURE_KV_CLIENT_ID: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
         run: |
-          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
-            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID secret is not set (environment: fraudlabspro-prod-read); see docs/fraudlabspro-api.md";
+          if [ -z "$AZURE_KV_CLIENT_ID" ]; then
+            echo "::error::repository Variable READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set; see docs/fraudlabspro-api.md";
             exit 1;
           fi
-          if [ -z "${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
-            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID secret is not set (environment: fraudlabspro-prod-read); see docs/fraudlabspro-api.md";
+          if [ -z "$AZURE_TENANT_ID" ]; then
+            echo "::error::repository Variable READ_ALL_FFC_AZURE_TENANT_ID is not set; see docs/fraudlabspro-api.md";
             exit 1;
           fi
 
@@ -120,8 +129,8 @@ jobs:
       - uses: ./.github/actions/fraudlabspro-keys-from-kv
         with:
           scope: read
-          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: FraudLabs Pro review (read-only)
         shell: pwsh
@@ -152,7 +161,7 @@ jobs:
 
   # Daily rolling tracking issue (issue #813 item 2). Only on the scheduled run — a manual dispatch
   # stays a pure review (artifact + step summary) and never mutates the tracking issue. Mirrors the
-  # 732 rolling-issue state machine: upsert ONE issue while Fraud orders remain, auto-close it on the
+  # 740 rolling-issue state machine: upsert ONE issue while Fraud orders remain, auto-close it on the
   # first scheduled run that finds the queue clear. Ambient GITHUB_TOKEN, hub-only (no gate).
   tracking_issue:
     needs: fraud_review

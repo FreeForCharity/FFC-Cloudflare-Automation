@@ -53,6 +53,8 @@ function ageDays(fromIso, nowIso) {
  *   agenticOpen          number                   open `agentic-os` issues.
  *   agenticClosedRecent  number                   `agentic-os` issues closed in
  *                        the throughput window.
+ *   readyWaiting         [{number, readySinceIso, parked}] PRs that are green,
+ *                        clean and still in draft (#900). See buildReadyWaiting.
  *   pipelineRuns         [{name, conclusion}]     data-pipeline Actions runs in
  *                        the pipeline window (which workflows count is the
  *                        workflow's policy, not the lib's).
@@ -112,13 +114,72 @@ function computeMetrics(input) {
     agenticOs: {
       open: Number(input.agenticOpen || 0),
       closed: Number(input.agenticClosedRecent || 0),
+      // The band the Conductor routine actually means (#922). `open` counts the
+      // whole `agentic-os` topic label — epics, machine-managed rolling issues,
+      // human-blocked items and durable findings included — so it can never sit
+      // in "5-15 issues a sandboxed agent can execute", and eight consecutive
+      // runs of trimming failed to move it. `ready` counts `agent-ready`, which
+      // is that sentence's actual population. Both are reported: `open` is still
+      // the honest size of the programme, `ready` is the one to steer by.
+      ready: Number(input.readyOpen || 0),
     },
+    readyWaiting: buildReadyWaiting(input.readyWaiting, nowIso),
     dataPipeline: {
       runs,
       success,
       successRate: runs ? round3(success / runs) : null,
       byWorkflow,
     },
+  };
+}
+
+/**
+ * "Green, clean, and stuck in draft" (#900).
+ *
+ * Every health signal the Agentic OS emits reads GREEN while finished agent work
+ * sits unlanded. 739 counts backlog and open claims — both of which look
+ * *healthier* as work moves into finished-but-unmerged PRs. 740 alerts on
+ * failures; nothing here fails. Validate Repository, Phantom Revert Guard and
+ * Copilot all pass — passing is the state being complained about. And a draft PR
+ * is indistinguishable from genuine work-in-progress everywhere it is displayed.
+ *
+ * Four consecutive landing runs rediscovered this and wrote it up as a prose
+ * LESSON rather than as a metric. This is the metric.
+ *
+ * `candidates` is [{ number, readySinceIso, parked }] — the workflow decides
+ * which PRs qualify (draft AND mergeable_state clean AND required checks green);
+ * the lib stays pure. Age runs from the moment a PR became LANDABLE, not from
+ * `created_at`: a PR is only "waiting" once there is nothing left to do to it.
+ *
+ * PARKED is the load-bearing exclusion. Two different things look identical
+ * here: a PR parked for a stated reason (its own description sequences external
+ * provisioning before merge) and one that is simply forgotten. Counting the
+ * first alerts forever and trains everyone to ignore the metric — the failure
+ * mode of every alert that cannot express "known, and correct". Parked PRs are
+ * still LISTED, just not counted.
+ */
+function buildReadyWaiting(candidates, nowIso) {
+  const all = candidates || [];
+  const counted = all.filter((c) => !c.parked);
+  const parked = all.filter((c) => c.parked);
+  const ages = counted.map((c) => round1(ageDays(c.readySinceIso, nowIso)));
+
+  let oldest = null;
+  if (counted.length) {
+    let idx = 0;
+    for (let i = 1; i < counted.length; i++) if (ages[i] > ages[idx]) idx = i;
+    oldest = { number: counted[idx].number, ageDays: ages[idx] };
+  }
+
+  return {
+    count: counted.length,
+    meanAgeDays: mean(ages),
+    // null (renders "—") rather than 0 for an empty set: "nothing is waiting"
+    // and "something has been waiting zero days" are different facts.
+    maxAgeDays: ages.length ? Math.max(...ages) : null,
+    oldest,
+    numbers: counted.map((c) => c.number),
+    parked: parked.map((c) => c.number),
   };
 }
 
@@ -189,6 +250,17 @@ function renderReport(metrics, prev, opts) {
   const pcl = p.claims || {};
   const ao = m.agenticOs;
   const pao = p.agenticOs || {};
+  // A report written before #900 has no readyWaiting block; default it so the
+  // delta reads '—' instead of throwing (extractPreviousMetrics tolerates
+  // missing keys and this must too).
+  const rw = m.readyWaiting || {
+    count: 0,
+    numbers: [],
+    parked: [],
+    maxAgeDays: null,
+    oldest: null,
+  };
+  const prw = p.readyWaiting || {};
   const dp = m.dataPipeline;
   const pdp = p.dataPipeline || {};
 
@@ -225,12 +297,44 @@ function renderReport(metrics, prev, opts) {
   );
   lines.push(`| Open agentic-os backlog | ${fmt(ao.open)} | ${delta(ao.open, pao.open)} |`);
   lines.push(
+    `| **Ready queue (agent-ready, band 5-15)** | ${fmt(ao.ready)} | ${delta(ao.ready, pao.ready)} |`,
+  );
+  lines.push(
+    `| **PRs ready but unlanded** | ${fmt(rw.count)}${rw.oldest ? ` (oldest ${rw.oldest.ageDays}d)` : ''} | ${delta(rw.count, prw.count)} |`,
+  );
+  lines.push(
     `| agentic-os closed (${m.windowDays.throughput}d) | ${fmt(ao.closed)} | ${delta(ao.closed, pao.closed)} |`,
   );
   lines.push(
     `| Data-pipeline success (${m.windowDays.pipeline}d) | ${pct(dp.successRate)} (${dp.success}/${dp.runs}) | ${delta(dp.successRate === null ? null : round(dp.successRate * 100, 1), pdp.successRate === null || pdp.successRate === undefined ? null : round(pdp.successRate * 100, 1), 1)} |`,
   );
   lines.push('');
+
+  // "Ready but unlanded" (#900). Rendered as its own callout rather than only a
+  // table cell: a count nobody can act on is what the previous four landing runs
+  // already had. Naming the PR numbers is the whole point.
+  if (rw.count) {
+    const oldestBit = rw.oldest
+      ? ` — oldest **#${rw.oldest.number}** at ${rw.oldest.ageDays}d`
+      : '';
+    lines.push(
+      `> **${rw.count} PR${rw.count === 1 ? '' : 's'} green, clean and waiting on a human` +
+        `${oldestBit}.** ${rw.numbers.map((n) => `#${n}`).join(', ')}`,
+    );
+    if (rw.maxAgeDays !== null && rw.maxAgeDays >= 1) {
+      lines.push('>');
+      lines.push(
+        '> Nothing is failing and nothing is blocked — these need promoting out of draft. ' +
+          'Every other signal in this report reads green while they sit.',
+      );
+    }
+    if (rw.parked.length) {
+      lines.push('>');
+      lines.push(`> Excluded as deliberately parked: ${rw.parked.map((n) => `#${n}`).join(', ')}.`);
+    }
+    lines.push('');
+  }
+
   if (dp.byWorkflow.length) {
     lines.push('<details><summary>Data-pipeline runs by workflow</summary>');
     lines.push('');

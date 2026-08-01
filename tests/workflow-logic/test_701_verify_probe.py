@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import step_run
+from wf_extract import child_env, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 
@@ -27,23 +27,23 @@ def run_probe(env_overrides: dict) -> tuple[subprocess.CompletedProcess, str, st
         outputs = tdp / "output.txt"
         summary.touch()
         outputs.touch()
-        env = {
-            # Harness first: fake curl (CRLF headers) and no-op sleep.
-            "PATH": f"{HARNESS_DIR}:/usr/bin:/bin",
-            "GITHUB_STEP_SUMMARY": str(summary),
-            "GITHUB_OUTPUT": str(outputs),
-            "HOME": str(tdp),
-            "DOMAIN": "example.org",
-        }
+        # Harness first: fake curl (CRLF headers) and no-op sleep.
+        env = child_env(
+            HARNESS_DIR,
+            GITHUB_STEP_SUMMARY=str(summary),
+            GITHUB_OUTPUT=str(outputs),
+            HOME=str(tdp),
+            DOMAIN="example.org",
+        )
         env.update(env_overrides)
         proc = subprocess.run(
             ["bash", "-c", script],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=120,
         )
-        return proc, summary.read_text(), outputs.read_text()
+        return proc, summary.read_text(encoding="utf-8"), outputs.read_text(encoding="utf-8")
 
 
 def test_serving_site_detected_despite_crlf_headers():

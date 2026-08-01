@@ -32,7 +32,7 @@ def _node(expr_body: str, *argv: str) -> object:
     proc = subprocess.run(
         ["node", "-e", code, *argv],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=60,
     )
     if proc.returncode != 0:
@@ -364,7 +364,7 @@ def test_render_out_of_scope_and_unreadable_sections():
 # --- workflow wiring shape -------------------------------------------------
 
 def test_workflow_requires_lib_and_is_read_only():
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert "scripts/fleet-audit-coverage-lib.js" in raw, "workflow must require the shipped lib"
     wf = load_workflow(WF_FILE)
     perms = wf["permissions"]
@@ -405,24 +405,469 @@ def test_741_header_never_wraps_mid_hyphenated_word():
     pattern (`squash- or`) and predates this PR, so a repo-wide guard would fail
     on unrelated work. Widening it is a worthwhile follow-up.
     """
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     header = [ln for ln in raw.splitlines() if ln.startswith("#")]
     offenders = [ln for ln in header if ln.rstrip().endswith("-")]
     assert not offenders, offenders
 
-    catalog = json.loads((REPO_ROOT / "docs" / "workflow-catalog.json").read_text())
+    catalog = json.loads((REPO_ROOT / "docs" / "workflow-catalog.json").read_text(encoding="utf-8"))
     entries = catalog["workflows"] if isinstance(catalog, dict) else catalog
     mine = next(w for w in entries if w.get("number") == 741)
     import re as _re
     assert not _re.search(r"\w+- \w+", mine["description"]), mine["description"]
 
 
+def test_workflow_header_does_not_claim_zero_external_apis():
+    """The header text ships verbatim to the PUBLIC catalog (ffcadmin.org/automation/).
+
+    `npm ci --dry-run` reads the npm registry, so the old "No external API" line
+    became false the moment the lockfile stage landed — a safety claim drifting
+    out of sync with what the job does (Copilot, #910).
+    """
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
+    header = raw.split("on:", 1)[0]
+    assert "No external API" not in header, header
+    assert "npm registry" in header, header
+
+
 def test_workflow_never_writes_to_a_fleet_repo():
     # Remediation belongs to #822; this workflow only measures. The single write
     # is the rolling issue in this repo.
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     for forbidden in ["create_or_update_file", "git push", "peter-evans/create-pull-request"]:
         assert forbidden not in raw, f"741 must not write to fleet repos ({forbidden})"
+
+
+# --- lockfile resolution (#889, ledger L06) --------------------------------
+#
+# The strings below are VERBATIM `npm ci --dry-run --ignore-scripts` output,
+# captured from npm 10.9.7 on 2026-07-29 against purpose-built fixtures — not
+# transcribed from npm's documentation. That matters: this classifier's whole
+# job is to read npm's mind, and a fixture written from memory would test the
+# classifier against the same guess it encodes.
+
+NPM_OUT_OF_SYNC_MISSING = """npm error code EUSAGE
+npm error
+npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync. Please update your lock file with `npm install` before continuing.
+npm error
+npm error Missing: is-odd@3.0.1 from lock file
+npm error Missing: is-number@6.0.0 from lock file
+npm error
+npm error A complete log of this run can be found in: /root/.npm/_logs/x-debug-0.log
+"""
+
+NPM_OUT_OF_SYNC_INVALID = """npm error code EUSAGE
+npm error
+npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync. Please update your lock file with `npm install` before continuing.
+npm error
+npm error Invalid: lock file's left-pad@1.3.0 does not satisfy left-pad@1.1.3
+npm error
+"""
+
+NPM_NO_LOCKFILE = """npm error code EUSAGE
+npm error
+npm error The `npm ci` command can only install with an existing package-lock.json or
+npm error npm-shrinkwrap.json with lockfileVersion >= 1. Run an install with npm@5 or
+npm error later to generate a package-lock.json file, then try again.
+"""
+
+NPM_ETARGET = """npm error code ETARGET
+npm error notarget No matching version found for left-pad@^1.9.9.
+npm error notarget In most cases you or one of your dependencies are requesting
+npm error notarget a package version that doesn't exist.
+"""
+
+NPM_REGISTRY_502 = """npm error code E502
+npm error 502 Bad Gateway - GET https://registry.example/left-pad
+"""
+
+NPM_OFFLINE = """npm error code ENOTCACHED
+npm error request to https://registry.example/is-odd failed: cache mode is 'only-if-cached' but no cached response is available.
+"""
+
+# A real in-sync pair, so the end-to-end test below drives actual npm rather
+# than a fixture. Generated by `npm install --package-lock-only`; left-pad is
+# used because it is tiny, and --dry-run never downloads it anyway.
+FIXTURE_PACKAGE_JSON = json.dumps(
+    {"name": "insync", "version": "1.0.0", "dependencies": {"left-pad": "1.3.0"}}
+)
+FIXTURE_LOCKFILE = json.dumps(
+    {
+        "name": "insync",
+        "version": "1.0.0",
+        "lockfileVersion": 3,
+        "requires": True,
+        "packages": {
+            "": {"name": "insync", "version": "1.0.0",
+                 "dependencies": {"left-pad": "1.3.0"}},
+            "node_modules/left-pad": {
+                "version": "1.3.0",
+                "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",
+                "integrity": "sha512-XI5MPzVNApjAyhQzphX8BkmKsKUxD4LdyK24iZeQGinBN9yTQT3bFlCBy/aVx2HrNcqQGsdot8ghrjyrvMCoEA==",
+            },
+        },
+    }
+)
+
+
+def classify(exit_code: int, output: str) -> dict:
+    return _node(
+        "process.stdout.write(JSON.stringify("
+        "l.classifyLockResolution(Number(process.argv[1]), process.argv[2])));",
+        str(exit_code),
+        output,
+    )
+
+
+def has_dependencies(raw: str) -> bool:
+    return _node(
+        "process.stdout.write(JSON.stringify(l.hasDependencies(process.argv[1])));", raw
+    )
+
+
+def _node_repo(repo: str, lock: dict | None, covered: bool = True) -> dict:
+    e = {"repo": repo, "hasPackageJson": True, "hasWorkflow": covered,
+         "hasScript": covered, "cron": "17 6 * * *" if covered else None}
+    if lock is not None:
+        e["lockfile"] = lock
+    return e
+
+
+def test_exit_zero_is_the_only_way_to_read_as_resolving():
+    assert classify(0, "added 1 package in 300ms")["state"] == "resolves"
+
+
+def test_real_npm_sync_failure_reads_as_out_of_sync_and_names_the_package():
+    r = classify(1, NPM_OUT_OF_SYNC_MISSING)
+    assert r["state"] == "out-of-sync", r
+    # The detail is what makes the report actionable without opening the repo.
+    assert "Missing: is-odd@3.0.1 from lock file" in r["detail"], r
+
+
+def test_real_npm_invalid_version_reads_as_out_of_sync():
+    r = classify(1, NPM_OUT_OF_SYNC_INVALID)
+    assert r["state"] == "out-of-sync", r
+    assert "does not satisfy left-pad@1.1.3" in r["detail"], r
+
+
+def test_absent_lockfile_message_is_distinguished_from_drift():
+    # Same EUSAGE code, different remedy — #889 asks for these to be separate
+    # buckets, and the two messages differ only in wording.
+    r = classify(1, NPM_NO_LOCKFILE)
+    assert r["state"] == "missing", r
+
+
+def test_unsatisfiable_range_is_unresolvable_not_out_of_sync():
+    # `npm install` does NOT fix this one, so folding it into out-of-sync would
+    # print the wrong remediation next to it.
+    r = classify(1, NPM_ETARGET)
+    assert r["state"] == "unresolvable", r
+    assert "left-pad@^1.9.9" in r["detail"], r
+
+
+def test_registry_failure_is_unverified_never_broken():
+    # The finding this whole audit exists to prevent, one level up: a transient
+    # 502 must not put a charity repo on a remediation list.
+    r = classify(1, NPM_REGISTRY_502)
+    assert r["state"] == "unverified", r
+    assert "E502" in r["detail"], r
+
+
+def test_offline_enotcached_is_unverified():
+    # npm consults the registry precisely WHEN the lockfile does not satisfy
+    # package.json, so a network-less runner turns every genuinely out-of-sync
+    # repo into ENOTCACHED. Right answer, wrong reason, if read as out-of-sync.
+    r = classify(1, NPM_OFFLINE)
+    assert r["state"] == "unverified", r
+    # Asserting the REASON, not just the state: an unrecognized failure also
+    # lands on `unverified`, so a state-only assertion would pass even if the
+    # classifier had stopped recognizing offline runs at all.
+    assert r["detail"] == "registry/network failure (ENOTCACHED)", r
+
+
+def test_timeout_is_unverified():
+    assert classify(124, "")["state"] == "unverified"
+    assert "timed out" in classify(124, "")["detail"]
+
+
+def test_unrecognized_failure_is_unverified_and_carries_the_message():
+    r = classify(1, "npm error code EACCES\nnpm error permission denied\n")
+    assert r["state"] == "unverified", r
+    assert "EACCES" in r["detail"] or "permission denied" in r["detail"], r
+
+
+def test_npm9_err_prefix_still_parses():
+    # npm 9 wrote `npm ERR!`; npm 10+ writes `npm error`. A runner image change
+    # must not silently turn every verdict into "unverified".
+    old = NPM_OUT_OF_SYNC_MISSING.replace("npm error", "npm ERR!")
+    r = classify(1, old)
+    assert r["state"] == "out-of-sync", r
+    assert "is-odd@3.0.1" in r["detail"], r
+
+
+def absent_lock(probes: list) -> dict:
+    return _node(
+        "process.stdout.write(JSON.stringify("
+        "l.classifyAbsentLockfile(JSON.parse(process.argv[1]))));",
+        json.dumps(probes),
+    )
+
+
+def test_no_lockfile_anywhere_is_missing():
+    r = absent_lock([{"path": "pnpm-lock.yaml", "status": "ABSENT"},
+                     {"path": "yarn.lock", "status": "ABSENT"}])
+    assert r == {"state": "missing", "detail": "no package-lock.json in the repo"}, r
+
+
+def test_a_found_alt_lockfile_is_not_a_finding():
+    r = absent_lock([{"path": "pnpm-lock.yaml", "status": "OK"}])
+    assert r == {"state": "other-lockfile", "detail": "pnpm-lock.yaml"}, r
+
+
+def test_a_failed_alt_probe_is_unverified_not_missing():
+    # Copilot's finding on #910. A rate-limited probe is not evidence that the
+    # file is absent, and `missing` is a remediation finding — so believing a
+    # failed probe would put a pnpm repo on a to-fix list on evidence that was
+    # never collected. Same substitution this whole audit exists to catch.
+    r = absent_lock([{"path": "pnpm-lock.yaml", "status": "ERROR:HTTP 403 rate limited"},
+                     {"path": "yarn.lock", "status": "ABSENT"}])
+    assert r["state"] == "unverified", r
+    assert "pnpm-lock.yaml" in r["detail"], r
+
+
+def test_a_confirmed_alt_lockfile_beats_a_failed_probe():
+    # Knowing the answer makes the failed probe irrelevant; reporting
+    # `unverified` here would discard evidence actually in hand.
+    r = absent_lock([{"path": "pnpm-lock.yaml", "status": "ERROR:boom"},
+                     {"path": "yarn.lock", "status": "OK"}])
+    assert r == {"state": "other-lockfile", "detail": "yarn.lock"}, r
+
+
+def test_absent_lockfile_classifier_handles_no_probes():
+    assert absent_lock([])["state"] == "missing"
+
+
+def test_workflow_routes_alt_probe_failures_through_the_library():
+    # The bash must not decide this itself — the branch that would regress is
+    # exactly the one that reads a failed probe as an absent file.
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
+    assert "lib.classifyAbsentLockfile" in raw, raw[:0]
+
+
+def test_has_dependencies_distinguishes_an_empty_tree():
+    assert has_dependencies(FIXTURE_PACKAGE_JSON) is True
+    assert has_dependencies('{"scripts": {"build": "next build"}}') is False
+    assert has_dependencies('{"dependencies": {}}') is False
+    assert has_dependencies('{"devDependencies": {"a": "1"}}') is True
+    assert has_dependencies("{not json") is False
+
+
+# --- lockfile buckets ------------------------------------------------------
+
+def test_broken_lockfile_is_a_gap_even_when_the_repo_is_covered():
+    # The finding #889 is about: coverage means the workflow is wired, not that
+    # it can run. Both halves present + `npm ci` failing = a repo that reports
+    # clean while scanning nothing.
+    r = analyze([_node_repo("FreeForCharity/FFC-EX-a.org",
+                            {"state": "out-of-sync", "detail": "Missing: x"})])
+    assert r["hasGap"] is True, r
+    assert len(r["covered"]) == 1, r
+    assert r["lockfiles"]["broken"] == [
+        {"repo": "FreeForCharity/FFC-EX-a.org", "state": "out-of-sync", "detail": "Missing: x"}
+    ], r
+
+
+def test_missing_lockfile_is_a_gap_and_a_separate_state():
+    r = analyze([_node_repo("FreeForCharity/FFC-EX-a.org", {"state": "missing"})])
+    assert r["hasGap"] is True, r
+    assert r["lockfiles"]["broken"] == [
+        {"repo": "FreeForCharity/FFC-EX-a.org", "state": "missing", "detail": ""}
+    ], r
+
+
+def test_resolving_lockfile_is_not_a_gap():
+    r = analyze([_node_repo("FreeForCharity/FFC-EX-a.org", {"state": "resolves"})])
+    assert r["hasGap"] is False, r
+    assert r["lockfiles"]["resolves"] == ["FreeForCharity/FFC-EX-a.org"], r
+
+
+def test_unverified_lockfile_never_sets_has_gap():
+    r = analyze([_node_repo("FreeForCharity/FFC-EX-a.org",
+                            {"state": "unverified", "detail": "registry/network failure (E502)"})])
+    assert r["hasGap"] is False, r
+    assert r["lockfiles"]["broken"] == [], r
+    assert r["lockfiles"]["unverified"] == [
+        {"repo": "FreeForCharity/FFC-EX-a.org", "state": "unverified",
+         "detail": "registry/network failure (E502)"}
+    ], r
+
+
+def test_pnpm_repo_is_not_reported_as_a_missing_lockfile():
+    # A pnpm repo is correctly without package-lock.json (#771); flagging it
+    # would be a finding nobody can act on.
+    r = analyze([_node_repo("FreeForCharity/FFC-EX-a.org",
+                            {"state": "other-lockfile", "detail": "pnpm-lock.yaml"})])
+    assert r["hasGap"] is False, r
+    # Compared as a whole list rather than by index: a mutation that empties the
+    # bucket must FAIL this test, not crash it with an IndexError. A crashed
+    # module prints no FAIL line, which is ledger L07 — the shape where a broken
+    # guard reads as a passing one.
+    assert r["lockfiles"]["skipped"] == [
+        {"repo": "FreeForCharity/FFC-EX-a.org", "state": "other-lockfile",
+         "detail": "pnpm-lock.yaml"}
+    ], r
+
+
+def test_dependency_free_repo_is_not_a_broken_lockfile():
+    r = analyze([_node_repo("FreeForCharity/FFC-EX-a.org", {"state": "no-dependencies"})])
+    assert r["hasGap"] is False, r
+    assert r["lockfiles"]["skipped"] == [
+        {"repo": "FreeForCharity/FFC-EX-a.org", "state": "no-dependencies", "detail": ""}
+    ], r
+
+
+def test_a_repo_with_no_lockfile_record_reads_as_unverified_not_ok():
+    # An unmeasured repo must never land in `resolves`. Substituting
+    # not-measured for measured-and-fine is ledger L06 itself.
+    r = analyze([_node_repo("FreeForCharity/FFC-EX-a.org", None)])
+    assert r["lockfiles"]["resolves"] == [], r
+    assert r["lockfiles"]["unverified"] == [
+        {"repo": "FreeForCharity/FFC-EX-a.org", "state": "not-measured", "detail": "not measured"}
+    ], r
+    assert r["hasGap"] is False, r
+
+
+def test_unknown_future_state_fails_benign():
+    r = analyze([_node_repo("FreeForCharity/FFC-EX-a.org", {"state": "quantum"})])
+    assert r["hasGap"] is False, r
+    assert r["lockfiles"]["unverified"] == [
+        {"repo": "FreeForCharity/FFC-EX-a.org", "state": "unverified",
+         "detail": "unrecognized state 'quantum'"}
+    ], r
+
+
+def test_non_node_and_unreadable_repos_get_no_lockfile_record():
+    r = analyze([{"repo": "FreeForCharity/FFC-EX-static.org", "hasPackageJson": False},
+                 {"repo": "FreeForCharity/FFC-EX-priv.org", "error": "HTTP 403"}])
+    locks = r["lockfiles"]
+    assert locks["resolves"] == [] and locks["broken"] == [], locks
+    assert locks["unverified"] == [] and locks["skipped"] == [], locks
+
+
+def test_render_lists_broken_lockfiles_with_their_fix():
+    analysis = analyze([
+        _node_repo("FreeForCharity/FFC-EX-drift.org",
+                   {"state": "out-of-sync", "detail": "Missing: is-odd@3.0.1 from lock file"}),
+        _node_repo("FreeForCharity/FFC-EX-nolock.org", {"state": "missing"}),
+    ])
+    body = render(analysis, "t")
+    assert "Lockfile does not resolve — the audit scans nothing (2)" in body, body
+    assert "Missing: is-odd@3.0.1 from lock file" in body, body
+    assert "`npm install` and commit the lockfile" in body, body
+    assert "Refs #838, #889" in body, body
+
+
+def test_render_reports_unverified_lockfiles_separately_from_broken_ones():
+    analysis = analyze([
+        _node_repo("FreeForCharity/FFC-EX-a.org", {"state": "unverified", "detail": "E502"}),
+        _node_repo("FreeForCharity/FFC-EX-b.org",
+                   {"state": "other-lockfile", "detail": "pnpm-lock.yaml"}),
+    ])
+    body = render(analysis, "t")
+    assert "Lockfile unverified (1)" in body, body
+    assert "Lockfile n/a (1)" in body, body
+    assert "NOT asserted" in body, body
+
+
+def test_render_states_the_real_auto_close_condition():
+    # `hasGap` ignores unverified lockfiles, so the report must not promise that
+    # a close means every lockfile resolved (Copilot, #910). A close condition
+    # stated more strongly than the code implements is a documentation defect
+    # with the same shape as the bug this workflow hunts.
+    body = render(analyze([_node_repo("FreeForCharity/FFC-EX-a.org", {"state": "resolves"})]), "t")
+    assert "no lockfile is broken" in body, body
+    assert "Unverified lockfiles do not hold it open" in body, body
+    assert "every lockfile resolves." not in body, body
+
+
+# --- end-to-end against real npm -------------------------------------------
+
+def test_real_npm_agrees_with_the_classifier_on_a_valid_pair():
+    """Drive actual `npm ci --dry-run` rather than a fixture.
+
+    A classifier tested only against captured strings proves it can read a
+    transcript, not that npm still speaks that way. This case needs no registry
+    (npm builds the tree from a lockfile that already satisfies package.json),
+    so it is safe on an offline runner.
+    """
+    import shutil
+    import tempfile
+
+    if not shutil.which("npm"):
+        return  # no npm on this host; the fixture tests still ran
+    with tempfile.TemporaryDirectory() as d:
+        work = pathlib.Path(d)
+        (work / "package.json").write_text(FIXTURE_PACKAGE_JSON, encoding="utf-8")
+        (work / "package-lock.json").write_text(FIXTURE_LOCKFILE, encoding="utf-8")
+        proc = subprocess.run(
+            ["npm", "ci", "--dry-run", "--ignore-scripts", "--no-audit", "--no-fund"],
+            cwd=work, capture_output=True, text=True, encoding="utf-8", timeout=180,
+        )
+        r = classify(proc.returncode, proc.stdout + proc.stderr)
+    assert r["state"] == "resolves", (r, proc.returncode, proc.stdout, proc.stderr)
+
+
+def test_real_npm_drift_never_reads_as_resolving():
+    """The mutation of the case above: add a dependency the lockfile lacks.
+
+    Asserted as "never `resolves`" rather than "always `out-of-sync`" because
+    npm reaches the registry to answer this one — offline it says ENOTCACHED,
+    which is correctly `unverified`. Both are right; `resolves` is the answer
+    that would be a lie, and it is the one the test forbids.
+    """
+    import shutil
+    import tempfile
+
+    if not shutil.which("npm"):
+        return
+    drifted = json.dumps(
+        {"name": "insync", "version": "1.0.0",
+         "dependencies": {"left-pad": "1.3.0", "is-odd": "3.0.1"}}
+    )
+    with tempfile.TemporaryDirectory() as d:
+        work = pathlib.Path(d)
+        (work / "package.json").write_text(drifted, encoding="utf-8")
+        (work / "package-lock.json").write_text(FIXTURE_LOCKFILE, encoding="utf-8")
+        proc = subprocess.run(
+            ["npm", "ci", "--dry-run", "--ignore-scripts", "--no-audit", "--no-fund"],
+            cwd=work, capture_output=True, text=True, encoding="utf-8", timeout=180,
+        )
+        r = classify(proc.returncode, proc.stdout + proc.stderr)
+    assert proc.returncode != 0, (proc.stdout, proc.stderr)
+    assert r["state"] in ("out-of-sync", "unverified"), (r, proc.stdout, proc.stderr)
+    assert r["state"] != "resolves", r
+
+
+# --- workflow wiring for the lockfile stage --------------------------------
+
+def test_workflow_runs_npm_safely_and_bounded():
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
+    assert "npm ci --dry-run" in raw, "the verdict must come from real npm"
+    # --dry-run installs nothing and --ignore-scripts runs nothing, so a fleet
+    # lockfile can never execute code inside this job.
+    assert "--ignore-scripts" in raw, "must not run lifecycle scripts from fleet repos"
+    assert "timeout 180 npm ci" in raw, "an npm hang must not hang the weekly audit"
+    assert "lib.classifyLockResolution" in raw, "classification must come from the shipped lib"
+    assert "lib.hasDependencies" in raw
+
+
+def test_workflow_pins_the_npm_that_judges():
+    # The classifier keys on npm's wording; which npm answers is a decision.
+    wf = load_workflow(WF_FILE)
+    steps = wf["jobs"]["audit"]["steps"]
+    node_step = [s for s in steps if str(s.get("uses", "")).startswith("actions/setup-node")]
+    assert node_step, steps
+    assert str(node_step[0]["with"]["node-version"]) == "24", node_step
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

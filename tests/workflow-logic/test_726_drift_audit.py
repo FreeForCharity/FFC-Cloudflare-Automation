@@ -15,7 +15,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import step_run
+from wf_extract import child_env, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 
@@ -33,23 +33,23 @@ def run_audit(env_overrides: dict) -> tuple[str, str, str]:
         summary = td / "summary.md"
         gh_log = td / "gh.log"
         summary.touch()
-        env = {
-            "PATH": f"{HARNESS_DIR}:/usr/bin:/bin",
-            "GITHUB_STEP_SUMMARY": str(summary),
-            "TEST_GH_LOG": str(gh_log),
-            "HOME": str(td),
-        }
+        env = child_env(
+            HARNESS_DIR,
+            GITHUB_STEP_SUMMARY=str(summary),
+            TEST_GH_LOG=str(gh_log),
+            HOME=str(td),
+        )
         env.update(env_overrides)
         proc = subprocess.run(
             ["bash", "-c", script],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=120,
         )
         if proc.returncode != 0:
             raise AssertionError(f"audit script exited {proc.returncode}: {proc.stderr}")
-        return summary.read_text(), proc.stdout, gh_log.read_text()
+        return summary.read_text(encoding="utf-8"), proc.stdout, gh_log.read_text(encoding="utf-8")
 
 
 def run_audit_allow_failure(env_overrides: dict) -> tuple[str, str, int]:
@@ -65,17 +65,17 @@ def run_audit_allow_failure(env_overrides: dict) -> tuple[str, str, int]:
         td = pathlib.Path(td)
         summary = td / "summary.md"
         summary.touch()
-        env = {
-            "PATH": f"{HARNESS_DIR}:/usr/bin:/bin",
-            "GITHUB_STEP_SUMMARY": str(summary),
-            "TEST_GH_LOG": str(td / "gh.log"),
-            "HOME": str(td),
-        }
+        env = child_env(
+            HARNESS_DIR,
+            GITHUB_STEP_SUMMARY=str(summary),
+            TEST_GH_LOG=str(td / "gh.log"),
+            HOME=str(td),
+        )
         env.update(env_overrides)
         proc = subprocess.run(
-            ["bash", "-c", script], env=env, capture_output=True, text=True, timeout=120
+            ["bash", "-c", script], env=env, capture_output=True, text=True, encoding="utf-8", timeout=120
         )
-        return summary.read_text(), proc.stdout + proc.stderr, proc.returncode
+        return summary.read_text(encoding="utf-8"), proc.stdout + proc.stderr, proc.returncode
 
 
 def test_unreadable_org_rulesets_fails_and_never_reports_present():
@@ -179,6 +179,42 @@ def test_clean_public_repo_reports_no_drift_flags():
     )
     for flag in ("no-merge-queue", "missing-teams", "teams-check-failed", "squash-enabled"):
         assert flag not in report, (flag, report)
+
+
+def test_report_step_skips_when_the_audit_never_ran():
+    """The reporting step must not fire when the audit step was skipped.
+
+    It runs `if: always()` so a FAILED audit still delivers its INCOMPLETE
+    report (#854). But when the preflight or the Azure login bails, there is no
+    report AND no GH_TOKEN, so `gh issue list` dies and the step reports
+    "Could not search for an existing tracking issue" — a second error that
+    reads like an API fault and buries the real cause. Seen for real on run
+    30334346136, dispatched against the unprovisioned github-prod-read lane.
+
+    Both halves matter, so both are asserted: drop `always()` and a failed
+    audit stops reporting; drop the skip guard and a bailed job emits the
+    misleading duplicate-issue error.
+    """
+    import yaml as _yaml
+
+    from wf_extract import WORKFLOWS as _WORKFLOWS
+
+    wf = _yaml.safe_load(
+        (_WORKFLOWS / "726-repo-rulesets-drift-audit.yml").read_text(encoding="utf-8-sig")
+    )
+    steps = wf["jobs"]["audit"]["steps"]
+    report_step = next(s for s in steps if "tracking issue" in str(s.get("name", "")).lower())
+    cond = str(report_step.get("if", ""))
+
+    assert "always()" in cond, (
+        "the reporting step lost always(): a failed audit must still deliver its "
+        f"INCOMPLETE report (#854). Condition is {cond!r}"
+    )
+    assert "skipped" in cond and "steps.audit" in cond, (
+        "the reporting step must not run when the audit step was skipped — "
+        "otherwise a preflight/login bail emits a misleading "
+        f"'could not search for an existing tracking issue' error. Condition is {cond!r}"
+    )
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

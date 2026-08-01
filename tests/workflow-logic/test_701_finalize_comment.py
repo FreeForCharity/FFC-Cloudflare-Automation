@@ -15,7 +15,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import step_github_script
+from wf_extract import child_env, step_github_script
 
 HARNESS = pathlib.Path(__file__).resolve().parent / "harness" / "github_script_shim.mjs"
 
@@ -42,20 +42,19 @@ def run_finalize(env_overrides: dict) -> dict:
     with tempfile.TemporaryDirectory() as td:
         script_file = pathlib.Path(td) / "script.js"
         context_file = pathlib.Path(td) / "context.json"
-        script_file.write_text(script)
-        context_file.write_text(json.dumps(context))
-        env = {
-            "TEST_SCRIPT_FILE": str(script_file),
-            "TEST_CONTEXT_FILE": str(context_file),
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
-        }
+        script_file.write_text(script, encoding="utf-8")
+        context_file.write_text(json.dumps(context), encoding="utf-8")
+        env = child_env(
+            TEST_SCRIPT_FILE=str(script_file),
+            TEST_CONTEXT_FILE=str(context_file),
+        )
         env.update(BASE_ENV)
         env.update(env_overrides)
         proc = subprocess.run(
             ["node", str(HARNESS)],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=60,
         )
     if proc.returncode != 0:

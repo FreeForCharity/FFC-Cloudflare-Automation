@@ -3,11 +3,13 @@ run-name: 'Dependabot Affected Repos'
 
 # Regenerates data/dependabot-affected-repos.json (the org repo inventory that
 # feeds the smoke-protected Dependabot waves) and delivers it as an auto-merging
-# PR. Migrated from FFC-IN-ClarkeMoyerAdmin. Uses the github-prod environment so
-# the PR is opened with a real PAT — a PR opened by GITHUB_TOKEN does not trigger
-# the pull_request checks / Copilot review this repo requires, so it would never
-# satisfy branch protection. The PAT comes from Key Vault (`wr-all-cbm-github-pat`)
-# over OIDC, never a GitHub secret — see #844. Read-only against the org; PR-only.
+# PR. Migrated from FFC-IN-ClarkeMoyerAdmin. Runs on the UNGATED github-prod-read
+# lane (#834): the org inventory it consumes is a Read, and a weekly gated run
+# fires at 06:15 UTC with nobody watching. It still needs a real PAT — a PR opened
+# by GITHUB_TOKEN does not trigger the pull_request checks / Copilot review this
+# repo requires, so it would never satisfy branch protection. The PAT comes from
+# Key Vault (`read-all-cbm-github-pat`) over OIDC on the READER identity, never a
+# GitHub secret — see #844. Read-only against the org; PR-only.
 
 on:
   schedule:
@@ -32,13 +34,26 @@ jobs:
   update:
     name: Update repo inventory
     runs-on: ubuntu-latest
-    environment: github-prod
+    environment: github-prod-read
     steps:
+      # Fail fast on a half-provisioned lane — see the same note in 726.
+      # Especially valuable here: this is a WEEKLY run, so a silent
+      # mis-provisioning would otherwise be rediscovered next Monday.
+      - name: Validate required Azure OIDC identifiers
+        shell: bash
+        run: |
+          if [ -z "${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set. It is a repo-level Variable (non-secret GUID), read via vars.*, not an environment secret. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+          if [ -z "${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID is not set. It is a repo-level Variable (non-secret GUID), read via vars.*, not an environment secret. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+
       - name: Azure login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
         with:
-          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
       # Key Vault is the single source of truth for credentials (#844). Rotation is
@@ -49,10 +64,10 @@ jobs:
           set -euo pipefail
           token="$(az keyvault secret show \
             --vault-name kv-ffc-admin-prod-cbm \
-            --name wr-all-cbm-github-pat \
+            --name read-all-cbm-github-pat \
             --query value -o tsv)"
           if [ -z "$token" ]; then
-            echo "::error::wr-all-cbm-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
+            echo "::error::read-all-cbm-github-pat came back empty from Key Vault — check the reader identity's role on kv-ffc-admin-prod-cbm."
             exit 1
           fi
           echo "::add-mask::$token"

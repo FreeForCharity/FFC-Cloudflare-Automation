@@ -155,7 +155,7 @@ UNCOVERED_34 = [
 def _node(lib: pathlib.Path, expr_body: str, *argv: str) -> object:
     code = f"const l=require({json.dumps(str(lib))});{expr_body}"
     proc = subprocess.run(
-        ["node", "-e", code, *argv], capture_output=True, text=True, timeout=60
+        ["node", "-e", code, *argv], capture_output=True, text=True, encoding="utf-8", timeout=60
     )
     if proc.returncode != 0:
         raise AssertionError(f"node failed: {proc.stderr}")
@@ -239,7 +239,7 @@ def coverage_cron(wf_raw: str):
 
 def cli(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["node", str(CLI), *args], capture_output=True, text=True, timeout=60
+        ["node", str(CLI), *args], capture_output=True, text=True, encoding="utf-8", timeout=60
     )
 
 
@@ -252,21 +252,21 @@ def _fake_repo(
 ) -> str:
     root = pathlib.Path(tmp) / name
     root.mkdir(parents=True)
-    (root / "package.json").write_text(pkg)
+    (root / "package.json").write_text(pkg, encoding="utf-8")
     # A lockfile by default: `npm ci` requires one, so the CLI blocks a clone
     # without it, and a fixture lacking one would not represent a real target.
     if with_lockfile:
-        (root / "package-lock.json").write_text('{"lockfileVersion": 3}\n')
+        (root / "package-lock.json").write_text('{"lockfileVersion": 3}\n', encoding="utf-8")
     if with_workflow is not None:
         wfdir = root / ".github" / "workflows"
         wfdir.mkdir(parents=True)
-        (wfdir / "security-audit.yml").write_text(with_workflow)
+        (wfdir / "security-audit.yml").write_text(with_workflow, encoding="utf-8")
     return str(root)
 
 
 def _template_file(tmp: str, raw: str = CANONICAL) -> str:
     p = pathlib.Path(tmp) / "canonical.yml"
-    p.write_text(raw)
+    p.write_text(raw, encoding="utf-8")
     return str(p)
 
 
@@ -645,10 +645,10 @@ def test_apply_writes_both_halves_and_agrees_with_741():
         assert result["cron"] == "42 6 * * *", result
 
         wf = pathlib.Path(repo) / ".github" / "workflows" / "security-audit.yml"
-        pkg = (pathlib.Path(repo) / "package.json").read_text()
+        pkg = (pathlib.Path(repo) / "package.json").read_text(encoding="utf-8")
         assert wf.exists()
         assert coverage_says_covered(pkg) is True
-        assert coverage_cron(wf.read_text()) == "42 6 * * *"
+        assert coverage_cron(wf.read_text(encoding="utf-8")) == "42 6 * * *"
         assert verify_only_added(PKG, pkg)["ok"] is True
 
 
@@ -663,7 +663,7 @@ def test_apply_writes_NOTHING_when_the_package_json_is_unusable():
         assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
         assert "scripts" in proc.stderr
         assert not (pathlib.Path(repo) / ".github" / "workflows" / "security-audit.yml").exists()
-        assert (pathlib.Path(repo) / "package.json").read_text() == '{\n  "name": "x"\n}\n'
+        assert (pathlib.Path(repo) / "package.json").read_text(encoding="utf-8") == '{\n  "name": "x"\n}\n'
 
 
 def test_apply_writes_nothing_when_the_template_is_unusable():
@@ -673,7 +673,7 @@ def test_apply_writes_nothing_when_the_template_is_unusable():
         proc = cli("apply", repo, "FreeForCharity/FFC-EX-a.org", "42 6 * * *", bad)
         assert proc.returncode == 2, (proc.returncode, proc.stderr)
         assert not (pathlib.Path(repo) / ".github" / "workflows" / "security-audit.yml").exists()
-        assert (pathlib.Path(repo) / "package.json").read_text() == PKG
+        assert (pathlib.Path(repo) / "package.json").read_text(encoding="utf-8") == PKG
 
 
 def test_apply_is_idempotent():
@@ -683,17 +683,17 @@ def test_apply_is_idempotent():
         repo = _fake_repo(tmp)
         tpl = _template_file(tmp)
         assert cli("apply", repo, "R", "42 6 * * *", tpl).returncode == 0
-        first_pkg = (pathlib.Path(repo) / "package.json").read_text()
-        first_wf = (pathlib.Path(repo) / ".github/workflows/security-audit.yml").read_text()
+        first_pkg = (pathlib.Path(repo) / "package.json").read_text(encoding="utf-8")
+        first_wf = (pathlib.Path(repo) / ".github/workflows/security-audit.yml").read_text(encoding="utf-8")
 
         proc = cli("apply", repo, "R", "42 6 * * *", tpl)
         assert proc.returncode == 0, proc.stderr
         result = json.loads(proc.stdout)
         assert result["wroteWorkflow"] is False and result["wroteScript"] is False, result
-        assert (pathlib.Path(repo) / "package.json").read_text() == first_pkg
+        assert (pathlib.Path(repo) / "package.json").read_text(encoding="utf-8") == first_pkg
         assert (
             pathlib.Path(repo) / ".github/workflows/security-audit.yml"
-        ).read_text() == first_wf
+        ).read_text(encoding="utf-8") == first_wf
 
 
 def test_apply_does_not_overwrite_an_existing_workflow():
@@ -709,7 +709,7 @@ def test_apply_does_not_overwrite_an_existing_workflow():
         assert result["wroteWorkflow"] is False and result["wroteScript"] is True, result
         assert (
             pathlib.Path(repo) / ".github/workflows/security-audit.yml"
-        ).read_text() == existing
+        ).read_text(encoding="utf-8") == existing
 
 
 def test_apply_rechecks_the_lockfile_after_the_gate():
@@ -729,7 +729,7 @@ def test_apply_rechecks_the_lockfile_after_the_gate():
         assert "package-lock.json" in proc.stderr, proc.stderr
         # And, as ever, nothing written.
         assert not (pathlib.Path(repo) / ".github" / "workflows" / "security-audit.yml").exists()
-        assert (pathlib.Path(repo) / "package.json").read_text() == PKG
+        assert (pathlib.Path(repo) / "package.json").read_text(encoding="utf-8") == PKG
 
 
 def _filter_matches(only_repos: str, fleet: list) -> list:
@@ -739,7 +739,7 @@ def _filter_matches(only_repos: str, fleet: list) -> list:
     change to the workflow that breaks matching fails here instead of silently
     processing the wrong repos.
     """
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     norm = next(l.strip() for l in raw.splitlines() if l.strip().startswith("ONLY_REPOS="))
     # ONLY_REPOS arrives through the environment, exactly as the workflow input
     # does. Embedding it in the script text instead would mean a tab written as
@@ -757,7 +757,7 @@ def _filter_matches(only_repos: str, fleet: list) -> list:
     proc = subprocess.run(
         ["bash", "-c", script],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=30,
         env={**os.environ, "ONLY_REPOS": only_repos},
     )
@@ -801,7 +801,7 @@ def test_unmatched_only_repos_entry_hard_fails():
     failure this workflow must never present as success, so it exits nonzero
     rather than warning. Raised in review on #842.
     """
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert "matched_filter" in raw, raw
     assert "only_repos named repos that are not in the non-archived FFC-EX fleet" in raw, raw
     # It must be an error + exit, not a warning.
@@ -816,7 +816,7 @@ def test_the_jq_comment_states_the_real_hazard():
     non-existent bug. Raised in review on #842; the fix to the test in the prior
     round did not reach the workflow's own prose.
     """
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert "value too great for base" in raw, raw
     assert "version-independence" in raw, raw
     # The false claim must be gone.
@@ -835,7 +835,7 @@ def test_root_listing_404_gets_its_own_skip_reason():
     scope-miscounting is the defect #838 exists to correct. Raised in review
     on #842.
     """
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert "skipReason" in raw, raw
     assert "root listing returned 404" in raw, raw
     # Recorded as not-a-Node-app (a skip), never as an error (a block).
@@ -868,7 +868,7 @@ def test_a_distinct_skip_reason_survives_into_the_plan():
     # And the two are distinguishable in the rendered summary.
     with tempfile.TemporaryDirectory() as tmp:
         f = pathlib.Path(tmp) / "plan.json"
-        f.write_text(json.dumps(p))
+        f.write_text(json.dumps(p), encoding="utf-8")
         out = cli("summary", str(f), "true", "10").stdout
         assert "404" in out, out
 
@@ -893,9 +893,9 @@ def test_validate_template_cli_exit_codes():
 def test_probe_cli_matches_741():
     with tempfile.TemporaryDirectory() as tmp:
         p = pathlib.Path(tmp) / "package.json"
-        p.write_text(PKG)
+        p.write_text(PKG, encoding="utf-8")
         assert cli("probe", str(p)).stdout == "false"
-        p.write_text(add_script(PKG)["content"])
+        p.write_text(add_script(PKG)["content"], encoding="utf-8")
         assert cli("probe", str(p)).stdout == "true"
 
 
@@ -903,7 +903,7 @@ def test_summary_flags_a_truncated_batch():
     p = plan([_cand(f"FreeForCharity/FFC-EX-{n}.org") for n in "abcde"])
     with tempfile.TemporaryDirectory() as tmp:
         f = pathlib.Path(tmp) / "plan.json"
-        f.write_text(json.dumps(p))
+        f.write_text(json.dumps(p), encoding="utf-8")
         out = cli("summary", str(f), "true", "2").stdout
         assert "Batch limit" in out, out
         assert "re-dispatch for the rest" in out.lower(), out
@@ -916,7 +916,7 @@ def test_pr_body_states_that_red_is_the_expected_outcome():
     PR breaking their site, and must be pointed at #822 for the fix."""
     with tempfile.TemporaryDirectory() as tmp:
         f = pathlib.Path(tmp) / "t.json"
-        f.write_text(json.dumps({"repo": "FreeForCharity/FFC-EX-a.org", "cron": "42 6 * * *"}))
+        f.write_text(json.dumps({"repo": "FreeForCharity/FFC-EX-a.org", "cron": "42 6 * * *"}), encoding="utf-8")
         body = cli("pr-body", str(f)).stdout
         assert "822" in body, body
         assert "red" in body.lower(), body
@@ -964,9 +964,9 @@ def test_target_list_is_derived_live_never_hardcoded():
     44). If any fleet repo name appears literally in the shipped files, the
     35th repo provisioned next month is invisible to this workflow."""
     shipped = [
-        (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(),
-        LIB.read_text(),
-        CLI.read_text(),
+        (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8"),
+        LIB.read_text(encoding="utf-8"),
+        CLI.read_text(encoding="utf-8"),
     ]
     for text in shipped:
         offenders = [r for r in UNCOVERED_34 if r in text]
@@ -974,7 +974,7 @@ def test_target_list_is_derived_live_never_hardcoded():
 
 
 def test_workflow_never_pushes_a_target_default_branch():
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert "git push" in raw
     for bad in ["git push origin main", 'git push -u origin "$DEFBRANCH"', "git push origin HEAD"]:
         assert bad not in raw, bad
@@ -987,7 +987,7 @@ def test_workflow_never_pushes_a_target_default_branch():
 
 
 def test_apply_step_guards_the_set_of_paths_it_may_change():
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert "git diff --cached --name-only" in raw
     assert "unexpected paths staged" in raw
 
@@ -996,7 +996,7 @@ def test_canonical_template_is_fetched_not_vendored():
     """#838: 'do not write a new one'. A checked-in copy would drift from the
     source of truth, which is precisely what 738 exists to detect elsewhere."""
     assert not (REPO_ROOT / ".github" / "workflows" / "security-audit.yml").exists()
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert "CANONICAL_REPO" in raw
     # Validated on BOTH sides of the gate — the file can change while waiting.
     assert raw.count("validate-template") == 2, raw.count("validate-template")
@@ -1013,7 +1013,7 @@ def test_no_dependency_manifest_sections_are_touched():
     assertion could never fail. Caught in review on #842.)
     """
     for path in [REPO_ROOT / ".github" / "workflows" / WF_FILE, LIB, CLI]:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         for forbidden in [
             '"dependencies"',
             '"devDependencies"',
@@ -1036,7 +1036,7 @@ def test_apply_step_distinguishes_blocked_from_an_internal_error():
     single `if !` collapsing both would let the job report success while
     internal errors occurred — the looks-fine-but-lied failure this workflow
     exists to avoid, in the workflow itself. Caught in review on #842."""
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert '[ "$rc" -eq 2 ]' in raw, raw
     assert '[ "$rc" -ne 0 ]' in raw, raw
     # The error branch must count toward the job's failure tally; blocked must not.
@@ -1061,7 +1061,7 @@ def test_max_repos_is_normalized_to_base_ten():
     hard error ("value too great for base"), so the `10#` form is the correct
     way to write this regardless of jq.
     """
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     assert 'limit="$((10#$MAX_REPOS))"' in raw, raw
     assert '--argjson n "$limit"' in raw, raw
     assert '--argjson n "$MAX_REPOS"' not in raw, raw
@@ -1070,14 +1070,14 @@ def test_max_repos_is_normalized_to_base_ten():
 
     # Record the actual behaviour of the jq in use, whichever it is.
     probe = subprocess.run(
-        ["jq", "-n", "--argjson", "n", "08", "$n"], capture_output=True, text=True
+        ["jq", "-n", "--argjson", "n", "08", "$n"], capture_output=True, text=True, encoding="utf-8"
     )
     if probe.returncode == 0:
         assert probe.stdout.strip() == "8", probe.stdout
     # And the bash hazard the 10# form exists for.
-    bare = subprocess.run(["bash", "-c", 'x=08; echo $((x))'], capture_output=True, text=True)
+    bare = subprocess.run(["bash", "-c", 'x=08; echo $((x))'], capture_output=True, text=True, encoding="utf-8")
     assert bare.returncode != 0, "bash accepted $((08)) — check the 10# rationale"
-    fixed = subprocess.run(["bash", "-c", 'x=08; echo $((10#$x))'], capture_output=True, text=True)
+    fixed = subprocess.run(["bash", "-c", 'x=08; echo $((10#$x))'], capture_output=True, text=True, encoding="utf-8")
     assert fixed.stdout.strip() == "8", fixed
 
 
@@ -1085,7 +1085,7 @@ def test_header_never_wraps_mid_hyphenated_word():
     """The catalog generator joins header comment lines with a space, so a word
     split across the wrap ships to the public catalog as `dependency- vulner…`
     (caught on #840 by review)."""
-    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text()
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
     header = [ln for ln in raw.splitlines() if ln.startswith("#")]
     offenders = [ln for ln in header if ln.rstrip().endswith("-")]
     assert not offenders, offenders

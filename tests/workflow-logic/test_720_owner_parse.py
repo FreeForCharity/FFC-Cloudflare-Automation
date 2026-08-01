@@ -13,7 +13,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import find_step, load_workflow
+from wf_extract import child_env, find_step, load_workflow
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 
@@ -27,18 +27,14 @@ def run_grant_step(repo_name: str) -> tuple[str, str]:
         gh_log.touch()
         proc = subprocess.run(
             ["pwsh", "-NoProfile", "-Command", script],
-            env={
-                "PATH": f"{HARNESS_DIR}:/usr/bin:/bin:/usr/local/bin",
-                "TEST_GH_LOG": str(gh_log),
-                "HOME": td,
-            },
+            env=child_env(HARNESS_DIR, TEST_GH_LOG=str(gh_log), HOME=td),
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=120,
         )
         if proc.returncode != 0:
             raise AssertionError(f"grant step exited {proc.returncode}: {proc.stderr}")
-        return proc.stdout, gh_log.read_text()
+        return proc.stdout, gh_log.read_text(encoding="utf-8")
 
 
 def test_bare_repo_name_grants_all_five_teams():

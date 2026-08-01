@@ -9,23 +9,27 @@ on:
 
 # Daily read-only audit of FreeForCharity org repository rulesets and settings
 # drift (branch protections, merge queues, Actions policies) against the
-# documented standard, reported as issues under the github-prod approval gate.
-# The PAT comes from Key Vault (`wr-all-cbm-ffc-copilot-mcp-github-pat`) over OIDC,
-# never a GitHub secret — see #844. That token (not `wr-all-cbm-github-pat`) is the
-# one with Organization Administration read+write, which GitHub requires even to
-# READ org rulesets via a fine-grained PAT.
+# documented standard, reported as issues.
 #
-# Supersede-on-newer (#722): these daily runs pause at an approval gate; without
-# this, unapproved runs pile up ~12-deep until the janitor reaps them at 7 days.
-# cancel-in-progress cancels the older queued/waiting run the moment the next
-# scheduled run starts, so at most ONE run ever waits at the gate. Ref-scoped
-# so a dispatch from a PR branch can never cancel main's scheduled run.
-# Trade-off (accepted): cancel-in-progress could interrupt an EXECUTING run,
-# but execution lasts minutes against a 24h cadence — in practice only
-# gate-waiting runs are ever superseded; janitor 734 remains the backstop.
+# Runs on the UNGATED github-prod-read lane (#834). A scheduled Reads workflow
+# behind a required-reviewers gate fires at 13:00 UTC with nobody watching and
+# waits — then either its next scheduled run cancels it (when cancel-in-progress
+# is true, as this workflow had) or it sits until janitor 734 reaps it at 7 days.
+# Both happened here: 3 `failure` + 2 `cancelled` across 8 scheduled runs. Either
+# way the audit did not run on its schedule.
+# The PAT comes from Key Vault (`read-all-cbm-ffc-copilot-mcp-github-pat`) over
+# OIDC on the READER identity, never a GitHub secret — see #844. That token (not
+# `read-all-cbm-github-pat`) is the one with Organization Administration read,
+# which GitHub requires even to READ org rulesets via a fine-grained PAT.
+#
+# cancel-in-progress: false (#834). Its entire justification (#722) was that gated
+# runs piled up ~12-deep waiting for approval until janitor 734 reaped them at 7
+# days. Ungated, nothing ever waits, so the only run it could still cancel is an
+# EXECUTING one — the trade-off #722 accepted as the lesser evil becomes pure
+# downside. Ref-scoped so a dispatch from a PR branch cannot collide with main's.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-supersede
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -36,13 +40,29 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    environment: github-prod
+    environment: github-prod-read
     steps:
+      # Fail fast on a half-provisioned lane. Without this, missing identifiers
+      # surface inside azure/login as a blank/invalid client-id — which reads
+      # like an Entra problem, not a "the repo Variables are missing" problem.
+      # These are non-secret GUIDs held as repo Variables (see CLAUDE.md and
+      # docs/azure-oidc-federated-credentials.md); the per-environment federated
+      # credential is what actually authorizes the exchange (#834).
+      - name: Validate required Azure OIDC identifiers
+        shell: bash
+        run: |
+          if [ -z "${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set. It is a repo-level Variable (non-secret GUID), read via vars.*, not an environment secret. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+          if [ -z "${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID is not set. It is a repo-level Variable (non-secret GUID), read via vars.*, not an environment secret. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+
       - name: Azure login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
         with:
-          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
       # Key Vault is the single source of truth for credentials (#844). Rotation is
@@ -54,10 +74,10 @@ jobs:
           set -euo pipefail
           token="$(az keyvault secret show \
             --vault-name kv-ffc-admin-prod-cbm \
-            --name wr-all-cbm-ffc-copilot-mcp-github-pat \
+            --name read-all-cbm-ffc-copilot-mcp-github-pat \
             --query value -o tsv)"
           if [ -z "$token" ]; then
-            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault — check the reader identity's role on kv-ffc-admin-prod-cbm."
             exit 1
           fi
           echo "::add-mask::$token"
@@ -122,7 +142,7 @@ jobs:
                 echo "**No conclusion should be drawn about drift from this run.**"
                 echo ""
                 echo "Check the Organization Administration permission on the PAT in"
-                echo "\`wr-all-cbm-ffc-copilot-mcp-github-pat\`."
+                echo "\`read-all-cbm-ffc-copilot-mcp-github-pat\`."
               } > /tmp/drift-report.md
               exit 1
             fi
@@ -269,8 +289,33 @@ jobs:
           cp "$REPORT" /tmp/drift-report.md
 
       - name: Open / update tracking issue if drift detected
-        if: ${{ always() }}
+        # always() so a FAILED audit still delivers a report — the hard-fail path
+        # above deliberately writes an INCOMPLETE report rather than leaving a
+        # stale or missing one (#854).
+        #
+        # ...but NOT when the audit never ran. If the preflight or the Azure login
+        # bails, there is no report to deliver AND no GH_TOKEN, so this step dies
+        # on `gh issue list` and reports "Could not search for an existing tracking
+        # issue — refusing to risk opening a duplicate". That is a true statement
+        # about a situation that does not exist, and it buries the real one-line
+        # cause under a second error that looks like an API or permissions fault.
+        # Observed on run 30334346136 (dispatch against the unprovisioned
+        # github-prod-read lane): the preflight said exactly what was wrong in two
+        # seconds, and this step immediately contradicted it.
+        if: ${{ always() && steps.audit.conclusion != 'skipped' }}
         shell: bash
+        # The tracking issue lives in THIS repo, so the ambient token is both
+        # sufficient and correct here — the job already declares `issues: write`.
+        # The Key Vault PAT is a READ credential (that is the whole point of the
+        # github-prod-read lane) and it is exported to GITHUB_ENV as GH_TOKEN by
+        # the Key Vault step, so without this override it leaks into the delivery
+        # step and fails with `Resource not accessible by personal access token
+        # (updateIssue)` — searching an issue and editing one are different
+        # permissions, exactly as the comment above warns. Step-level env wins
+        # over GITHUB_ENV, so the org read keeps the PAT and only the write here
+        # falls back to GITHUB_TOKEN. Observed on run 30469439392 (#834).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
           repo=FreeForCharity/FFC-Cloudflare-Automation

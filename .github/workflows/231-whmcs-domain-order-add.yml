@@ -1,0 +1,246 @@
+name: '231. WHMCS - Domain Order Add (Register/Transfer) (Admin) [WHMCS]'
+run-name: 'Domain Order Add (${{ inputs.mode }}, ${{ inputs.order_type }}): ${{ inputs.domain }}'
+
+# Places a WHMCS domain order for an existing client by wrapping
+# scripts/whmcs-order-add.ps1 (WHMCS AddOrder). This is the entry point the
+# inbound migration path (workflow 123 / docs/wix-domain-migration.md) needs:
+# a charity whose domain sits at a foreign registrar has no domain product in
+# WHMCS, so there is nothing to drive the transfer from until one is placed.
+#
+# Products (group 6):
+#   transfer -> pid 41  "Transfer your Existing Domain Name to the FFC CloudFlare"
+#   register -> pid 39  "Free new .org Domain Name in the FFC CloudFlare"
+#
+# SAFETY: this is the first WRITE against production billing in this area.
+#   * mode=dry-run (default) previews the AddOrder request and writes nothing.
+#   * mode=execute places a real order. Gated behind the whmcs-prod environment
+#     approval on top of that.
+#   * The underlying script skips when the client already has a non-terminated
+#     service for the product, unless allow_duplicate is set.
+#   * no_email defaults to true so a first live run cannot surprise a charity
+#     with an unexpected order confirmation. Turn it off deliberately.
+#
+# Find client_id with 221 (Application Search) or 219 (Application Detail).
+# Confirm the registrar situation first with 123 (Inbound Transfer Preflight).
+
+on:
+  workflow_dispatch:
+    inputs:
+      client_id:
+        description: 'WHMCS client id that the order belongs to (e.g. from workflow 219/221)'
+        required: true
+        type: string
+      domain:
+        description: 'Domain for the order (e.g. example.org) -- no scheme, no www'
+        required: true
+        type: string
+      order_type:
+        description: 'transfer = pid 41 (domain already registered elsewhere); register = pid 39'
+        required: true
+        type: choice
+        options:
+          - transfer
+          - register
+        default: transfer
+      mode:
+        description: 'dry-run = preview the request, no write; execute = place the order'
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - execute
+        default: dry-run
+      billing_cycle:
+        description: 'WHMCS billing cycle (pids 39/41 are onetime products)'
+        required: false
+        type: choice
+        options:
+          - onetime
+          - free
+        default: onetime
+      payment_method:
+        description: 'WHMCS payment method gateway name (FFC charity orders use mailin)'
+        required: false
+        type: string
+        default: 'mailin'
+      allow_duplicate:
+        description: 'Place the order even if the client already has this product (default: skip)'
+        required: false
+        type: boolean
+        default: false
+      no_invoice:
+        description: 'Suppress invoice generation (these products are $0)'
+        required: false
+        type: boolean
+        default: true
+      no_email:
+        description: 'Suppress the order confirmation email to the client'
+        required: false
+        type: boolean
+        default: true
+      issue_number:
+        description: 'Optional: issue number to comment the result back to'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+# Serialize runs: a second dispatch queues behind the first rather than racing
+# it into a duplicate order.
+concurrency:
+  group: 231-whmcs-domain-order-add
+  cancel-in-progress: false
+
+jobs:
+  add_order:
+    runs-on: windows-latest
+    environment: whmcs-prod
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Validate inputs
+        shell: pwsh
+        # Inputs travel via env and are never interpolated into the script body:
+        # a quote in a dispatch input would otherwise terminate the string
+        # literal and let the remainder run as code.
+        env:
+          INPUT_CLIENT_ID: ${{ inputs.client_id }}
+          INPUT_DOMAIN: ${{ inputs.domain }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $clientRaw = "$env:INPUT_CLIENT_ID".Trim()
+          if ($clientRaw -notmatch '^[0-9]+$') { throw "client_id must be a positive integer (got '$clientRaw')." }
+          $clientId = [int]$clientRaw
+          if ($clientId -le 0) { throw 'client_id must be greater than zero.' }
+
+          $domain = "$env:INPUT_DOMAIN".Trim().ToLowerInvariant().Trim('.')
+          $domain = $domain -replace '^https?://', '' -replace '/.*$', ''
+          if ($domain -notmatch '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$') {
+            throw "Not a valid domain name: '$domain'."
+          }
+
+          "client_id=$clientId"     | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "order_domain=$domain"    | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Validated: client $clientId / $domain"
+
+      - name: Place domain order
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          INPUT_ORDER_TYPE: ${{ inputs.order_type }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_BILLING_CYCLE: ${{ inputs.billing_cycle }}
+          INPUT_PAYMENT_METHOD: ${{ inputs.payment_method }}
+          INPUT_ALLOW_DUPLICATE: ${{ inputs.allow_duplicate }}
+          INPUT_NO_INVOICE: ${{ inputs.no_invoice }}
+          INPUT_NO_EMAIL: ${{ inputs.no_email }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Product ids are install-specific; these two are the group-6 domain
+          # products confirmed from the 202 products export.
+          $pid = switch ("$env:INPUT_ORDER_TYPE") {
+            'transfer' { 41 }
+            'register' { 39 }
+            default { throw "Unknown order_type '$env:INPUT_ORDER_TYPE'." }
+          }
+
+          $paymentMethod = "$env:INPUT_PAYMENT_METHOD".Trim()
+          if ([string]::IsNullOrWhiteSpace($paymentMethod)) { $paymentMethod = 'mailin' }
+
+          $scriptArgs = @(
+            '-ClientId', "$env:client_id"
+            '-ProductId', "$pid"
+            '-Domain', "$env:order_domain"
+            '-BillingCycle', "$env:INPUT_BILLING_CYCLE"
+            '-PaymentMethod', $paymentMethod
+            '-PriceOverride', '0'
+          )
+          if ("$env:INPUT_MODE" -ne 'execute') { $scriptArgs += '-DryRun' }
+          if ("$env:INPUT_ALLOW_DUPLICATE" -eq 'true') { $scriptArgs += '-AllowDuplicate' }
+          if ("$env:INPUT_NO_INVOICE" -eq 'true') { $scriptArgs += '-NoInvoice' }
+          if ("$env:INPUT_NO_EMAIL" -eq 'true') { $scriptArgs += '-NoEmail' }
+
+          Write-Host ("Mode: {0} | product: pid {1} ({2}) | client: {3} | domain: {4}" -f `
+              "$env:INPUT_MODE", $pid, "$env:INPUT_ORDER_TYPE", "$env:client_id", "$env:order_domain")
+
+          $ErrorActionPreference = 'Continue'
+          $out = & pwsh -NoProfile -File .\scripts\whmcs-order-add.ps1 @scriptArgs
+          $exit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          if ($exit -ne 0) { throw "whmcs-order-add.ps1 failed (exit $exit)." }
+
+          $summary = ($out | Out-String)
+          Write-Host $summary
+          New-Item -ItemType Directory -Force -Path artifacts/order | Out-Null
+          $summary.TrimEnd() | Out-File -FilePath artifacts/order/order_add_result.json -Encoding utf8
+
+          $fence = [string][char]0x60 * 3
+          $heading = "### Domain order add ($env:INPUT_MODE, $env:INPUT_ORDER_TYPE pid $pid): $env:order_domain"
+          $lines = @($heading, '', "Client: **$env:client_id**", '', ($fence + 'json'), $summary.TrimEnd(), $fence)
+          if ("$env:INPUT_MODE" -ne 'execute') {
+            $lines += @('', '_Dry run -- no order was placed. Re-run with mode=execute to place it._')
+          }
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload result
+        uses: actions/upload-artifact@v7
+        with:
+          name: whmcs-domain-order-add
+          path: artifacts/order/order_add_result.json
+          if-no-files-found: error
+
+      - name: Comment result back to issue
+        if: ${{ inputs.issue_number != '' }}
+        uses: actions/github-script@v9
+        env:
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_ORDER_TYPE: ${{ inputs.order_type }}
+        with:
+          script: |
+            const fs = require('fs');
+            const issueNumber = Number(process.env.INPUT_ISSUE_NUMBER);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed(`Not a valid issue number: ${process.env.INPUT_ISSUE_NUMBER}`);
+              return;
+            }
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let result = '';
+            try {
+              result = fs.readFileSync('artifacts/order/order_add_result.json', 'utf8').trim();
+            } catch (e) {
+              result = '(could not read order result)';
+            }
+            const dry = process.env.INPUT_MODE !== 'execute';
+            const body = [
+              `WHMCS domain order add (**${process.env.INPUT_MODE}**, ${process.env.INPUT_ORDER_TYPE})`,
+              '',
+              '```json',
+              result,
+              '```',
+              '',
+              dry ? '_Dry run — no order was placed._' : '_Order placed._',
+              '',
+              `Run: ${runUrl}`,
+              '',
+              '---',
+              '_Generated by [Claude Code](https://claude.ai/code)_',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });

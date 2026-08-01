@@ -32,6 +32,22 @@ jobs:
         run: |
           set -euo pipefail
 
+          # `gh` writes its error body to STDOUT, so the previous form
+          # (`gh api … 2>/dev/null | sort || true`) piped the error text into `names`
+          # and the loop below iterated over an API error message as if those lines
+          # were environment names (ledger L02 / #854 / #889). Two separate steps now:
+          # capture with an explicit exit-code check, sort afterwards — no pipeline in
+          # the capture at all, so `pipefail` has nothing to hide.
+          api_get() {
+            local out rc
+            out=$(gh api "$@" 2>&1); rc=$?
+            if [ "$rc" -ne 0 ]; then
+              printf '%s\n' "$out" >&2
+              return "$rc"
+            fi
+            printf '%s' "$out"
+          }
+
           {
             echo "## Environment approval gates — \`$REPO\`"
             echo ""
@@ -39,17 +55,29 @@ jobs:
             echo "| --- | --- | --- | --- |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          names=$(gh api "repos/$REPO/environments" --paginate --jq '.environments[].name' 2>/dev/null | sort || true)
+          readable=1
+          names=""
+          if raw_names=$(api_get "repos/$REPO/environments" --paginate --jq '.environments[].name'); then
+            names=$(printf '%s\n' "$raw_names" | sort)
+          else
+            readable=0
+          fi
 
-          if [ -z "$names" ]; then
-            echo "| (none returned — the token may lack access to read environments) | — | — | — |" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$readable" -eq 0 ]; then
+            # "cannot read the environments" and "this repo has no environments" are
+            # opposite findings. Collapsing them lets an unreadable audit render as a
+            # clean bill of health for the gates it never saw.
+            echo "| ⚠️ could not read the environment list — this audit measured nothing | — | — | — |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Cannot read environments for $REPO — check the token's permissions. An unreadable environment list must never be reported as 'no gates'."
+          elif [ -z "$names" ]; then
+            echo "| (no environments defined on this repository) | — | — | — |" >> "$GITHUB_STEP_SUMMARY"
           else
             while IFS= read -r e; do
               if [ -z "$e" ]; then continue; fi
               enc=$(jq -rn --arg s "$e" '$s|@uri')
               # Detect a failed fetch explicitly — never let an error render as "no reviewers / any",
               # which would misreport a gated environment as ungated.
-              if json=$(gh api "repos/$REPO/environments/$enc" 2>/dev/null); then
+              if json=$(api_get "repos/$REPO/environments/$enc"); then
                 reviewers=$(printf '%s' "$json" | jq -r '[.protection_rules[]? | select(.type=="required_reviewers") | .reviewers[]?.reviewer.login] | join(", ")')
                 if [ -z "$reviewers" ]; then reviewers="—"; fi
                 wait_min=$(printf '%s' "$json" | jq -r '([.protection_rules[]? | select(.type=="wait_timer") | .wait_timer] | first) // "—"')
@@ -68,3 +96,10 @@ jobs:
 
           echo "----- summary (also above) -----"
           cat "$GITHUB_STEP_SUMMARY"
+
+          # Fail last, so the summary above is still published: an audit that could not
+          # read its subject has to be red, or the fleet's gate posture looks verified
+          # on the strength of a run that saw nothing.
+          if [ "$readable" -eq 0 ]; then
+            exit 1
+          fi

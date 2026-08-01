@@ -17,6 +17,27 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
+        with:
+          # Full history: the large-blob guard below scans every commit a PR
+          # introduces, not just its tip tree. ~26 MB / ~1300 commits, so the
+          # extra fetch is negligible against the rest of this job.
+          fetch-depth: 0
+
+      # Runs on merge_group too, not just pull_request. This job is a required
+      # check, and for a queued PR the merge group is where the required checks
+      # are evaluated (a branch-level failure does not dequeue). A guard that
+      # skipped on merge_group could therefore be satisfied without ever having
+      # scanned, which is the same false clean the guard exists to prevent.
+      # In a group batching several PRs the range covers all of them, so one
+      # oversized branch fails the group -- correct: none of them should reach
+      # main carrying the blob.
+      - name: Guard against large blobs in any commit of the PR
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: bash scripts/check-large-blobs.sh "$BASE_SHA" "$HEAD_SHA"
 
       - name: Validate workflow name prefixes (Actions UI order)
         shell: bash
@@ -118,6 +139,30 @@ jobs:
           # or stops dot-sourcing the library.
           python3 scripts/check-cloudflare-bulk-lib-consumption.py
 
+      - name: Validate every PowerShell command call resolves
+        shell: bash
+        run: |
+          # 221 called Remove-Html, a command defined nowhere in the repo (#929):
+          # PowerShell resolves commands at runtime, PSScriptAnalyzer says nothing,
+          # and the lane sat behind an approval gate so nobody saw it die. This
+          # parses every .ps1 with the PowerShell parser and fails when a call
+          # resolves neither to a known cmdlet nor to a function the file defines
+          # or dot-sources. Guards the #930 class. Needs a PowerShell host and
+          # fails closed without one — the pwsh steps below share that dependency.
+          python3 scripts/check-powershell-command-resolution.py
+
+      - name: Validate text-mode subprocess calls pin an encoding
+        shell: bash
+        run: |
+          # Text-mode subprocess decodes with locale.getencoding(): UTF-8 on this
+          # runner, cp1252 on a Windows host. 41 test modules and 2 scripts passed
+          # text=True with no encoding=, so they were green here and died on a
+          # maintainer's machine the moment a child emitted an emoji — and the
+          # alert workflows open issues titled "🚨 Scheduled workflow failing".
+          # Like #944 / ledger L35, this class can never turn CI red, so it is
+          # checked against the SOURCE, where it is visible from every platform.
+          python3 scripts/check-subprocess-encoding.py
+
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v7
         with:
@@ -201,9 +246,25 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module PSScriptAnalyzer
-          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity @('Error','Warning') | Where-Object { $_.ScriptPath -like '*.ps1' }
+          # 'ParseError' MUST be in this list. PSScriptAnalyzer reports a script that does not
+          # parse with Severity 'ParseError' — NOT 'Error' — so filtering to @('Error','Warning')
+          # discarded them silently. Invoke-Formatter (next step) also returns unparseable input
+          # unchanged and raises nothing. Both gates therefore went green on a .ps1 that PowerShell
+          # cannot even load, which is a strictly worse failure than any rule violation they do
+          # catch. Verified live: a file containing `"at line $line: x"` (an unbraced variable
+          # followed by ':', which PowerShell reads as a scope qualifier) passed the full CI suite.
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity @('ParseError','Error','Warning') | Where-Object { $_.ScriptPath -like '*.ps1' }
+          $parseErrors = $results | Where-Object { $_.Severity -eq 'ParseError' }
           $errors = $results | Where-Object { $_.Severity -eq 'Error' }
           $warnings = $results | Where-Object { $_.Severity -eq 'Warning' }
+
+          # Reported before the others: a parse error makes every other finding in that file
+          # unreliable, so it should be the first thing read in the log.
+          if ($parseErrors) {
+            Write-Host "PowerShell PARSE ERRORS (these scripts cannot run at all):" -ForegroundColor Red
+            $parseErrors | Select-Object ScriptPath,Line,Message | Format-Table -AutoSize -Wrap | Out-String | Write-Host
+            throw "PSScriptAnalyzer found $($parseErrors.Count) parse error(s)."
+          }
 
           if ($warnings) {
             Write-Host "PSScriptAnalyzer warnings:" -ForegroundColor Yellow
@@ -248,15 +309,37 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path scripts/tests)) {
-            Write-Host 'No scripts/tests directory; skipping Pester.'
+
+          # BOTH directories. This ran only scripts/tests, so every .Tests.ps1 under tests/
+          # was dead weight — present, passing locally, and never executed by any required
+          # check. tests/whmcs-application-triage.Tests.ps1 had been in that state for its
+          # whole life. A test that does not run is worse than a missing one: it reads as
+          # coverage in review, so nobody writes the test that would have run.
+          #
+          # Discovered by directory rather than listed, so a new location cannot be silently
+          # dropped again — and the count is printed so "0 files" is visible instead of
+          # looking like a clean pass.
+          $testDirs = @('scripts/tests', 'tests') | Where-Object { Test-Path $_ }
+
+          if (-not $testDirs) {
+            Write-Host 'No Pester test directories found; skipping.'
             exit 0
           }
+
+          $testFiles = Get-ChildItem -Path $testDirs -Filter *.Tests.ps1 -Recurse -File
+          Write-Host "Pester directories: $($testDirs -join ', ')"
+          Write-Host "Pester files found: $($testFiles.Count)"
+          $testFiles | ForEach-Object { Write-Host "  - $($_.FullName)" }
+
+          if ($testFiles.Count -eq 0) {
+            throw 'Pester test directories exist but contain no *.Tests.ps1 files — refusing to report a pass on zero tests.'
+          }
+
           if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version.Major -ge 5 })) {
             Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
             Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck
           }
-          Invoke-Pester -Path scripts/tests -Output Detailed -CI
+          Invoke-Pester -Path $testDirs -Output Detailed -CI
 
       - name: Check for sensitive files
         run: |

@@ -57,9 +57,9 @@ A `clear-recommended` order is one a reviewer can clear with one tap via workflo
 
 The sensitive value — the **FraudLabs Pro API key** — never lives in a GitHub secret; Key Vault is
 its single source of truth, consumed at runtime via OIDC (identical pattern to
-`docs/candid-api-and-mcp.md`). The Azure OIDC identifiers added in step 3 are non-secret GUIDs
-(client/tenant ids) that happen to be stored as environment secrets. Steps, all done once by an
-admin:
+`docs/candid-api-and-mcp.md`). The Azure OIDC identifiers the lane needs are non-secret GUIDs
+(client/tenant ids) held as **repository Variables**, so no environment secret is involved at all.
+Steps, all done once by an admin:
 
 1. **Get a FraudLabs Pro API key** from the FraudLabs Pro account that owns the WHMCS module
    (Account → API Key). One account key covers the read API.
@@ -68,10 +68,16 @@ admin:
    the review is read-only). Until set, seed a placeholder value `PLACEHOLDER-SET-VIA-AZURE-PORTAL`
    — the composite action detects it and fails with a setup hint, so the scaffold stays dormant.
 3. **Create the `fraudlabspro-prod-read` environment** (Settings → Environments), **no required
-   reviewers** (this is a read-only env, like `whmcs-prod-read` / `candid-prod-read`). Add the two
-   environment secrets the KV-reader identity uses:
-   - `READ_ALL_FFC_AZURE_KV_CLIENT_ID`
-   - `READ_ALL_FFC_AZURE_TENANT_ID`
+   reviewers** (this is a read-only env, like `whmcs-prod-read` / `candid-prod-read`). **Add nothing
+   to it.** Since #912 the `fraud_review` job reads `vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID` /
+   `vars.READ_ALL_FFC_AZURE_TENANT_ID` — repo Variables, which resolve in every environment. A
+   secret copy added here would simply be dead weight: **nothing reads it, and no check can see it**
+   — an environment's secret inventory is not visible to CI (ledger L31). What _is_ enforced is the
+   workflow side: `scripts/check-env-secret-references.py` fails **Validate Repository** if a
+   workflow reintroduces a `secrets.READ_ALL_FFC_AZURE_*` **reference** under this environment. That
+   reference is what broke the lane — the copies were never created, so `fraud_review` failed
+   **every** scheduled run from the day it shipped while the sibling job in the same file, on
+   `vars.*`, succeeded.
 4. **Add a federated credential** for the reader app (`ffc-admin-kv-reader`) with subject
    `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:fraudlabspro-prod-read` — follow
    `docs/azure-oidc-federated-credentials.md` (mind the trailing-hyphen subject typo documented

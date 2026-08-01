@@ -17,6 +17,27 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
+        with:
+          # Full history: the large-blob guard below scans every commit a PR
+          # introduces, not just its tip tree. ~26 MB / ~1300 commits, so the
+          # extra fetch is negligible against the rest of this job.
+          fetch-depth: 0
+
+      # Runs on merge_group too, not just pull_request. This job is a required
+      # check, and for a queued PR the merge group is where the required checks
+      # are evaluated (a branch-level failure does not dequeue). A guard that
+      # skipped on merge_group could therefore be satisfied without ever having
+      # scanned, which is the same false clean the guard exists to prevent.
+      # In a group batching several PRs the range covers all of them, so one
+      # oversized branch fails the group -- correct: none of them should reach
+      # main carrying the blob.
+      - name: Guard against large blobs in any commit of the PR
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: bash scripts/check-large-blobs.sh "$BASE_SHA" "$HEAD_SHA"
 
       - name: Validate workflow name prefixes (Actions UI order)
         shell: bash
@@ -117,6 +138,52 @@ jobs:
           # if a bulk script re-grows private plumbing, pastes a Pages IP literal,
           # or stops dot-sourcing the library.
           python3 scripts/check-cloudflare-bulk-lib-consumption.py
+
+      - name: Validate every PowerShell command call resolves
+        shell: bash
+        run: |
+          # 221 called Remove-Html, a command defined nowhere in the repo (#929):
+          # PowerShell resolves commands at runtime, PSScriptAnalyzer says nothing,
+          # and the lane sat behind an approval gate so nobody saw it die. This
+          # parses every .ps1 with the PowerShell parser and fails when a call
+          # resolves neither to a known cmdlet nor to a function the file defines
+          # or dot-sources. Guards the #930 class. Needs a PowerShell host and
+          # fails closed without one — the pwsh steps below share that dependency.
+          python3 scripts/check-powershell-command-resolution.py
+
+      - name: Validate text-mode subprocess calls pin an encoding
+        shell: bash
+        run: |
+          # Text-mode subprocess decodes with locale.getencoding(): UTF-8 on this
+          # runner, cp1252 on a Windows host. 41 test modules and 2 scripts passed
+          # text=True with no encoding=, so they were green here and died on a
+          # maintainer's machine the moment a child emitted an emoji — and the
+          # alert workflows open issues titled "🚨 Scheduled workflow failing".
+          # Like #944 / ledger L35, this class can never turn CI red, so it is
+          # checked against the SOURCE, where it is visible from every platform.
+          python3 scripts/check-subprocess-encoding.py
+
+      - name: Validate every working-directory exists
+        shell: bash
+        run: |
+          # #858 shipped `working-directory: target-repo` into 702's dry-run
+          # branch: the target repo is checked out at `path: ffc-ex`, and
+          # `target` is the step id producing the repo NAME. Every dry run would
+          # have died before the shell started. Valid YAML, silent actionlint,
+          # every other guard green — and the path was gated, so it had never
+          # run. Like #929/#945, a class CI can never turn red on, so it is read
+          # out of the source: each working-directory: must be the workspace
+          # root, a repository directory, an actions/checkout path, or made by
+          # an earlier step. Fails closed on anything it cannot resolve.
+          #
+          # This is the first step in the job to need PyYAML, and the runner
+          # image only happens to preinstall it — the workflow-logic step below
+          # installs it defensively for exactly that reason. Repeat the install
+          # here rather than depend on step order or on the image: without it,
+          # an image that drops PyYAML turns this guard into an ImportError,
+          # which is a red build that says nothing about working directories.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 scripts/check-workflow-working-directories.py
 
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v7

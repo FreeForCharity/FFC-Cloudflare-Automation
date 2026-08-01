@@ -11,12 +11,17 @@ This is used for:
 - `m365-prod` (Microsoft 365 / Graph / Exchange Online workflows)
 - `wpmudev-prod` (WPMUDEV domain/site inventory workflows)
 
-> **Current required-reviewer config (audited 2026-06-30 by workflow
-> `730. Repo - Audit Environment Approval Gates [Repo]`).** Gated (require reviewer `clarkemoyer`,
-> so jobs pause for approval): `cloudflare-prod`, `cloudflare-prod-write`, `whmcs-prod`,
-> `github-prod`, `m365-prod`, `wpmudev-prod`. Not gated (runs proceed): `cloudflare-prod-read`,
-> `zeffy-prod`. See [workflow-safety-and-approvals.md](workflow-safety-and-approvals.md) for the
-> per-workflow table; re-run workflow 730 to refresh after any change in _Settings → Environments_.
+> **Which environments require a reviewer:** see §2 of
+> [workflow-safety-and-approvals.md](workflow-safety-and-approvals.md) — that list is the single
+> source of truth (re-audited 2026-07-31) and it carries the per-workflow table alongside it. Gated
+> environments pause a job at `status: waiting` until reviewer `clarkemoyer` approves; ungated ones
+> run straight through. Refresh both by re-running workflow
+> `730. Repo - Audit Environment Approval Gates [Repo]` after any change in _Settings →
+> Environments_.
+>
+> This note deliberately does **not** repeat the environment names. It used to, and the copy went
+> stale: it still showed the 2026-06-30 audit — missing `google-prod-write` from the gated list —
+> after the re-audit corrected §2, so the two docs disagreed about which environments gate.
 
 ## Where to configure Environments
 

@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import step_github_script
+from wf_extract import child_env, step_github_script
 
 HARNESS = pathlib.Path(__file__).resolve().parent / "harness" / "github_script_shim.mjs"
 
@@ -28,9 +28,11 @@ def run_parse(context: dict) -> dict:
         context_file.write_text(json.dumps(context), encoding="utf-8")
         proc = subprocess.run(
             ["node", str(HARNESS)],
-            env={"TEST_SCRIPT_FILE": str(script_file), "TEST_CONTEXT_FILE": str(context_file), "PATH": "/usr/bin:/bin:/usr/local/bin"},
+            env=child_env(
+                TEST_SCRIPT_FILE=str(script_file), TEST_CONTEXT_FILE=str(context_file)
+            ),
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=60,
         )
     if proc.returncode != 0:

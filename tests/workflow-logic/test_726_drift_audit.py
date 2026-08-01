@@ -15,7 +15,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import step_run
+from wf_extract import child_env, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 
@@ -33,18 +33,18 @@ def run_audit(env_overrides: dict) -> tuple[str, str, str]:
         summary = td / "summary.md"
         gh_log = td / "gh.log"
         summary.touch()
-        env = {
-            "PATH": f"{HARNESS_DIR}:/usr/bin:/bin",
-            "GITHUB_STEP_SUMMARY": str(summary),
-            "TEST_GH_LOG": str(gh_log),
-            "HOME": str(td),
-        }
+        env = child_env(
+            HARNESS_DIR,
+            GITHUB_STEP_SUMMARY=str(summary),
+            TEST_GH_LOG=str(gh_log),
+            HOME=str(td),
+        )
         env.update(env_overrides)
         proc = subprocess.run(
             ["bash", "-c", script],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=120,
         )
         if proc.returncode != 0:
@@ -65,15 +65,15 @@ def run_audit_allow_failure(env_overrides: dict) -> tuple[str, str, int]:
         td = pathlib.Path(td)
         summary = td / "summary.md"
         summary.touch()
-        env = {
-            "PATH": f"{HARNESS_DIR}:/usr/bin:/bin",
-            "GITHUB_STEP_SUMMARY": str(summary),
-            "TEST_GH_LOG": str(td / "gh.log"),
-            "HOME": str(td),
-        }
+        env = child_env(
+            HARNESS_DIR,
+            GITHUB_STEP_SUMMARY=str(summary),
+            TEST_GH_LOG=str(td / "gh.log"),
+            HOME=str(td),
+        )
         env.update(env_overrides)
         proc = subprocess.run(
-            ["bash", "-c", script], env=env, capture_output=True, text=True, timeout=120
+            ["bash", "-c", script], env=env, capture_output=True, text=True, encoding="utf-8", timeout=120
         )
         return summary.read_text(encoding="utf-8"), proc.stdout + proc.stderr, proc.returncode
 

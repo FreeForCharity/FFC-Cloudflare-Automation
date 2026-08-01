@@ -154,16 +154,6 @@ jobs:
     runs-on: windows-latest
     needs: preflight
     environment: github-prod
-    # A dry run must not reach this job (#983): `github-prod` is reviewer-gated
-    # and the step below pulls the `wr-all-cbm-github-pat` writer PAT out of Key
-    # Vault, both of which happened before `DryRun` was consulted at step level.
-    # The ungated `preflight` job keeps doing the rehearsal that matters here —
-    # it is the check that refuses a create for a repo that already exists.
-    #
-    # `!= true` matches the step-level form already used below, and 720 is
-    # workflow_dispatch-only so `inputs.DryRun` is always defined. Note the
-    # casing: 720 spells this input `DryRun` where 701/702 use `dry_run`.
-    if: inputs.DryRun != true
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1

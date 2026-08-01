@@ -936,24 +936,96 @@ jobs:
               body,
             });
 
+  # 111's `preview` half, for DNS (#983). The rehearsal is RELOCATED to the
+  # ungated read lane, not deleted: this runs the identical
+  # `Update-CloudflareDns.ps1 -EnforceStandard -GitHubPagesOnly` with `-DryRun`
+  # forced on, plus the `-Audit` pass, and uploads the same plan artifact — so a
+  # dry dispatch still produces the change plan a human reviews, without parking
+  # on a reviewer gate or minting a write-scoped token.
+  #
+  # `scope: read` is sound because every write in that script sits behind
+  # `if ($DryRun) { log; return }` — the dry path issues GETs only. `zone_check`
+  # is NOT this job: it only asks whether the zone exists in FFC or CM and emits
+  # four booleans; it never enumerates a record or computes the apex/www plan.
+  #
+  # Runs on live dispatches too (like 111's preview), so the plan is always in
+  # the log next to what `dns` then applied.
+  dns_preview:
+    runs-on: windows-latest
+    environment: cloudflare-prod-read
+    needs: [resolve, zone_check]
+    if: >-
+      needs.resolve.outputs.skip != 'true' && needs.zone_check.outputs.zone_controlled == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Preview GitHub Pages DNS changes (apex + www)
+        id: preview
+        shell: pwsh
+        # Issue-derived value — passed by environment, not interpolated into the
+        # script text. See the note in zone_check and ledger L28.
+        env:
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = [string]$env:DOMAIN
+
+          $outDir = Join-Path $env:RUNNER_TEMP 'website-provision-dns-preview'
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          # -DryRun is hard-coded here: this job exists to rehearse, and it holds
+          # a read-scoped token that could not perform a write in any case.
+          $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -GitHubPagesOnly -DryRun *>&1
+          $outPath = Join-Path $outDir 'dns-enforce-preview.txt'
+          $out | Out-File -FilePath $outPath -Encoding utf8
+
+          $audit = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -Audit -ErrorAction Continue *>&1
+          $auditPath = Join-Path $outDir 'dns-audit-before.txt'
+          $audit | Out-File -FilePath $auditPath -Encoding utf8
+
+          "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload DNS preview
+        uses: actions/upload-artifact@v7
+        with:
+          name: website-provision-dns-preview
+          path: ${{ steps.preview.outputs.out_dir }}/*.txt
+          if-no-files-found: error
+
   dns:
     runs-on: windows-latest
     environment: cloudflare-prod-write
-    needs: [resolve, zone_check]
-    # A dry run must not reach this job at all (#983). `dry_run` used to be
-    # enforced only INSIDE the step below, so the job still started, still
-    # parked the run on the `cloudflare-prod-write` reviewer gate, and still
-    # minted a write-scoped Cloudflare token — before any step decided to do
-    # nothing. The rehearsal survives: `zone_check` does the same Cloudflare
-    # reads on the ungated read lane, which is 111's preview/apply split.
+    needs: [resolve, zone_check, dns_preview]
+    # 111's `apply` half. A dry run must not reach this job at all (#983):
+    # `dry_run` used to be enforced only INSIDE the step below, so the job still
+    # started, still parked the run on the `cloudflare-prod-write` reviewer
+    # gate, and still minted a write-scoped Cloudflare token — before any step
+    # decided to do nothing. The rehearsal is not lost by skipping it, because
+    # `dns_preview` above performs it on the read lane.
     #
-    # `!= true`, NOT 111's `== false`. 111 is workflow_dispatch-only; 701 also
-    # runs on `issues` and `repository_dispatch`, where the `inputs` context is
-    # empty. `inputs.dry_run == false` evaluates FALSE there and would skip
-    # this job on a real, issue-triggered provisioning run.
+    # `!= true`, NOT 111's `== false`. Both are correct on the dispatch path,
+    # and on 701's `issues` / `repository_dispatch` paths `inputs.dry_run` is
+    # null, which casts to 0 — so `== false` is `0 == 0` → TRUE and the job runs
+    # there either way. The reason to prefer `!= true` is the STRING case: a
+    # value read as `github.event.inputs.dry_run`, or an input later retyped
+    # from `boolean` to `choice`/`string`, yields the string "false", which
+    # casts to NaN. `"false" == false` is then FALSE and the job would be
+    # silently SKIPPED on a live run — a missed DNS repoint that reads as
+    # success. `!= true` survives that (NaN != 1). See the Actions expression
+    # casting table: Null → 0, false → 0, "false" → NaN.
     if: >-
-      inputs.dry_run != true && needs.resolve.outputs.skip != 'true' &&
-      needs.zone_check.outputs.zone_controlled == 'true'
+      always() && inputs.dry_run != true && needs.resolve.outputs.skip != 'true' &&
+      needs.zone_check.outputs.zone_controlled == 'true' && (needs.dns_preview.result == 'success'
+      || needs.dns_preview.result == 'skipped')
     permissions:
       contents: read
       id-token: write
@@ -1006,14 +1078,9 @@ jobs:
     runs-on: windows-latest
     environment: github-prod
     needs: [resolve, zone_check, dns]
-    # See the note on `dns`: gated `github-prod` + a write PAT from Key Vault,
-    # neither of which a dry run should ever reach (#983). `always()` is kept —
-    # it is what lets a *live* run proceed when `dns` was legitimately skipped
-    # (uncontrolled zone) — so the dry_run term has to be spelled out here as
-    # well; `always()` would otherwise run this job regardless.
     if: >-
-      always() && inputs.dry_run != true && needs.resolve.outputs.skip != 'true' &&
-      (needs.dns.result == 'success' || needs.dns.result == 'skipped')
+      always() && needs.resolve.outputs.skip != 'true' && (needs.dns.result == 'success' ||
+      needs.dns.result == 'skipped')
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -1140,11 +1207,7 @@ jobs:
     runs-on: windows-latest
     environment: github-prod
     needs: [resolve, zone_check, repo]
-    # Same gate and same Key Vault write PAT as `repo` (#983). A skipped `repo`
-    # would already skip this job by dependency, but the term is spelled out so
-    # the invariant is readable at the job it protects rather than inferred two
-    # jobs away — and so it survives a future `always()` being added here.
-    if: inputs.dry_run != true && needs.resolve.outputs.skip != 'true'
+    if: needs.resolve.outputs.skip != 'true'
     # Best-effort by design: content patching is cosmetic polish on an already-provisioned
     # site. The inner try/catch covers the patch/commit/push, but earlier steps (clone,
     # gh auth setup-git) can still fail the job — continue-on-error ensures no content

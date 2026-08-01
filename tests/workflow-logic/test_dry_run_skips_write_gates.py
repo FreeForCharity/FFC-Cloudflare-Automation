@@ -106,10 +106,20 @@ KV_CREDENTIAL_ACTIONS = (
 # and it is the question the 702/736 entries in KNOWN_UNGUARDED answer with
 # "nothing, the rehearsal is inside this job".
 MUST_SKIP_ON_DRY_RUN = {
-    ("701-website-provision.yml", "dns"): "zone_check (cloudflare-prod-read)",
-    ("701-website-provision.yml", "repo"): "zone_check (cloudflare-prod-read)",
-    ("701-website-provision.yml", "content"): "zone_check (cloudflare-prod-read)",
-    ("720-create-repo.yml", "create-repo"): "preflight (ungated)",
+    ("701-website-provision.yml", "dns"): "dns_preview (cloudflare-prod-read)",
+}
+
+# The ungated job that performs the rehearsal a skipped job would otherwise have
+# performed. This is the pairing that makes a skip legitimate, and it is checked
+# — test_a_skipped_job_has_a_real_rehearsal_counterpart asserts the named job
+# exists, is ungated, and actually runs the script the gated job runs.
+#
+# A zone-EXISTENCE probe does not qualify. 701's `zone_check` runs
+# `cloudflare-zone-get.ps1` and emits four booleans; it never enumerates a
+# record or computes the apex/www plan, so citing it as the preserved rehearsal
+# (as the first draft of #983's fix did) is wrong.
+REHEARSAL_COUNTERPART = {
+    ("701-website-provision.yml", "dns"): ("dns_preview", "Update-CloudflareDns.ps1"),
 }
 
 # Already correct before #983 — the pattern was established, just not applied
@@ -154,6 +164,18 @@ KNOWN_UNGUARDED = {
     ("702-ffc-ex-clone-deploy.yml", "clone-deploy"),
     ("704-website-analytics-wire.yml", "wire"),
     ("729-repo-add-collaborator.yml", "add-collaborator"),
+    # REHEARSAL-INSIDE, blocked on a working GitHub read lane. These three run
+    # `Create-GitHubRepo.ps1 -DryRun` / the content dry path, which is the only
+    # rehearsal 701's repo side and 720 have — 720's `preflight` checks that the
+    # name is free and nothing more, so skipping `create-repo` on a dry run
+    # would make 720's `DryRun` input decorative. Relocating them the way `dns`
+    # was relocated needs an ungated GitHub read lane: `github-prod-read` does
+    # exist (#834), but its credential `read-all-cbm-github-pat` is dead (#848,
+    # 502's deliver job 401s on it), so moving the rehearsal there today would
+    # move it onto a credential that cannot authenticate. Blocked on #848.
+    ("701-website-provision.yml", "repo"),
+    ("701-website-provision.yml", "content"),
+    ("720-create-repo.yml", "create-repo"),
     # REHEARSAL-INSIDE: the dry run is the preview that the LIVE run's preflight
     # requires as evidence within 48h. Skipping it defeats the control.
     ("736-repo-archive.yml", "archive"),
@@ -210,6 +232,18 @@ def _dry_run_input(wf: dict) -> str | None:
         for name in spec.get("inputs") or {}:
             if str(name).lower().replace("-", "_") in ("dry_run", "dryrun"):
                 return str(name)
+    return None
+
+
+def _dry_run_input_type(wf: dict, input_name: str) -> str | None:
+    """The declared `type:` of the dry-run input, or None if undeclared."""
+    for trigger in ("workflow_dispatch", "workflow_call"):
+        spec = _triggers(wf).get(trigger)
+        if not isinstance(spec, dict):
+            continue
+        declared = (spec.get("inputs") or {}).get(input_name)
+        if isinstance(declared, dict) and declared.get("type"):
+            return str(declared["type"])
     return None
 
 
@@ -405,37 +439,107 @@ def test_983_jobs_are_skipped_on_a_dry_run():
     assert not violations, "\n".join(violations)
 
 
-def test_multi_trigger_workflows_use_not_true_rather_than_equals_false():
-    """The trap that makes 111's exact expression wrong for 701.
+def test_string_valued_dry_run_never_uses_equals_false():
+    """`== false` is unsafe when the value can be a STRING, not when it can be null.
 
-    `inputs` is empty for any event that is not `workflow_dispatch` /
-    `workflow_call`. 111 is dispatch-only, so `inputs.dry_run == false` is safe
-    there. 701 also runs on `issues` and `repository_dispatch`, where that
-    expression evaluates FALSE — it would skip the gated jobs on a REAL,
-    issue-triggered provisioning run, i.e. silently break provisioning while
-    looking like a security fix. `!= true` is correct for both shapes.
+    Corrected on review of #985 — the first version of this test asserted that
+    `== false` breaks on 701's `issues` / `repository_dispatch` paths because
+    the empty `inputs` context makes it FALSE. That is backwards. Per the
+    documented casting table for loose equality, **Null → 0** and
+    **`false` → 0**, so `null == false` is `0 == 0` → **TRUE**: the job RUNS on
+    an issue-triggered run, which is the desired behaviour. (An empty string
+    also casts to 0, so the claim fails under that reading too.)
+
+    The real hazard is the string. A **String** casts to "any legal JSON number
+    format, otherwise NaN" — so `"false"` → NaN, and `"false" == false` is
+    FALSE. That arises two ways, both live in this repo's future:
+
+    - reading `github.event.inputs.<name>`, which is always a string, even for
+      a `type: boolean` input;
+    - retyping an input from `boolean` to `choice` / `string`.
+
+    In either case a `== false` guard SKIPS the gated job on a **live** run —
+    a missed DNS repoint or repo create that reports success. `!= true`
+    survives both (NaN != 1), which is why the #983 fixes use it.
+
+    So this test polices the shapes that actually carry a string, and leaves
+    `== false` alone where the input is a declared boolean read via `inputs.`
+    (111, 122, 742, 103 — all correct).
     """
     violations = []
     for name, wf in _workflows():
         dry_input = _dry_run_input(wf)
         if not dry_input:
             continue
-        manual_only = set(_triggers(wf)) <= {"workflow_dispatch", "workflow_call"}
-        if manual_only:
-            continue
+        declared_type = _dry_run_input_type(wf, dry_input)
         for job_id, job in (wf.get("jobs") or {}).items():
             if not isinstance(job, dict):
                 continue
             condition = str(job.get("if") or "")
-            if re.search(rf"inputs\.{re.escape(dry_input)}\s*==\s*false", condition, re.IGNORECASE):
+
+            # `github.event.inputs.*` is a string even for a boolean input.
+            if re.search(
+                rf"github\.event\.inputs\.{re.escape(dry_input)}\s*==\s*false",
+                condition,
+                re.IGNORECASE,
+            ):
                 violations.append(
-                    f"{name}: job '{job_id}' uses `inputs.{dry_input} == false`, but "
-                    f"this workflow also triggers on {sorted(set(_triggers(wf)) - {'workflow_dispatch', 'workflow_call'})}, "
-                    "where the `inputs` context is empty and that expression is "
-                    "FALSE — the job would be skipped on a real run. Use "
+                    f"{name}: job '{job_id}' compares "
+                    f"`github.event.inputs.{dry_input} == false`. That context yields "
+                    'the STRING "false", which casts to NaN, so the comparison is '
+                    "FALSE and the job is skipped on a LIVE run. Use "
                     f"`inputs.{dry_input} != true`."
                 )
+
+            if declared_type and declared_type != "boolean" and re.search(
+                rf"(?<!event\.)inputs\.{re.escape(dry_input)}\s*==\s*false",
+                condition,
+                re.IGNORECASE,
+            ):
+                violations.append(
+                    f"{name}: job '{job_id}' uses `inputs.{dry_input} == false`, but "
+                    f"the input is declared `type: {declared_type}`, so its value is a "
+                    'string. "false" casts to NaN and the comparison is FALSE — the '
+                    f"job is skipped on a LIVE run. Use `inputs.{dry_input} != true`."
+                )
     assert not violations, "\n".join(violations)
+
+
+def test_a_skipped_job_has_a_real_rehearsal_counterpart():
+    """A skip is only legitimate if some ungated job still does the rehearsal.
+
+    This is the rule the module already applies to 702 and 736 in the other
+    direction, applied to the jobs that ARE skipped — it is what stops the
+    guard from endorsing "make the dry run a no-op" as a fix. The counterpart
+    must exist, must be ungated, and must actually invoke the same script the
+    gated job invokes; a job that merely touches the same API does not count.
+    """
+    for (name, job_id), (counterpart_id, script) in REHEARSAL_COUNTERPART.items():
+        wf = dict(_workflows())[name]
+        counterpart = (wf.get("jobs") or {}).get(counterpart_id)
+        assert isinstance(counterpart, dict), (
+            f"{name}: job '{job_id}' is skipped on dry runs and names "
+            f"'{counterpart_id}' as the job that still rehearses — but that job "
+            "does not exist. A skip with no counterpart deletes the rehearsal."
+        )
+
+        gated = _job_environments(counterpart) & GATED_ENVS
+        assert not gated, (
+            f"{name}: rehearsal job '{counterpart_id}' is itself on a gated "
+            f"environment {sorted(gated)} — a dry run would still park on it."
+        )
+        assert not _write_credentials(counterpart), (
+            f"{name}: rehearsal job '{counterpart_id}' loads a write-scoped "
+            "credential, so relocating the rehearsal there defeats the purpose."
+        )
+
+        body = "\n".join(str(s.get("run") or "") for s in counterpart.get("steps") or [])
+        assert script in body, (
+            f"{name}: rehearsal job '{counterpart_id}' never invokes {script}, the "
+            f"script '{job_id}' runs — so it is not a rehearsal of that job. (This "
+            "is exactly why `zone_check` does not qualify: it runs "
+            "cloudflare-zone-get.ps1 and emits four booleans.)"
+        )
 
 
 def test_a_skipped_gated_job_cannot_turn_a_dry_run_red():

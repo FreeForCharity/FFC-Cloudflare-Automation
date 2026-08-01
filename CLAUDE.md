@@ -147,7 +147,8 @@ titles, board item titles and PR bodies routinely contain em-dashes, arrows and 
 Always:
 
 ```python
-json.load(open(path, encoding="utf-8"))
+with open(path, encoding="utf-8") as fh:
+    data = json.load(fh)
 ```
 
 Same for `pathlib.Path(p).read_text(encoding="utf-8")` and any `write_text`. This costs one failed
@@ -710,7 +711,8 @@ The response shape does not match the `pending_deployments` GET, so even an arra
 errors. On 2026-07-25 this exact command:
 
 ```bash
-gh api -X POST …/pending_deployments -F "environment_ids[]=$ENV_ID" -f state=approved \
+gh api -X POST repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$RUN_ID/pending_deployments \
+  -F "environment_ids[]=$ENV_ID" -f state=approved \
   --jq '.[0] | "\(.status) \(.environment.name)"'
 ```
 

@@ -23,10 +23,17 @@ job** does the rehearsal and the gated `apply` job carries
 credential one — *no write-scoped credential on a dry run* — and a workflow can
 satisfy it two ways:
 
-- **Skip the gated job**, when some *other, ungated* job already performs the
-  rehearsal (701's `zone_check`, 720's `preflight`).
 - **Move the rehearsal out** of the gated job into an ungated one, then skip
-  the gated remainder (111's shape).
+  the gated remainder (111's shape). This is what 701's `dns` now does, via the
+  `dns_preview` job on `cloudflare-prod-read`.
+- **Skip the gated job outright**, but ONLY when some other, ungated job already
+  performs the *same* rehearsal — which is far rarer than it looks. The first
+  draft of #983's fix claimed 701's `zone_check` and 720's `preflight` qualified.
+  Neither does: `zone_check` emits four booleans from `cloudflare-zone-get.ps1`
+  and never computes the apex/www plan, and `preflight` only checks that a repo
+  name is free. `test_a_skipped_job_has_a_real_rehearsal_counterpart` now makes
+  the claim checkable instead of rhetorical — the named counterpart must be
+  ungated, hold no write credential, and invoke the same script.
 
 The distinction matters, and getting it backwards is destructive rather than
 merely useless. Two workflows in this repo prove it:
@@ -55,13 +62,17 @@ the same reason: a count is not evidence, the list is.
 #983's table named five jobs, derived from the three workflows a Conductor run
 happened to dispatch. Parsing every workflow instead — which is what acceptance
 criterion 4 asks for, so "a seventh copy is caught" — the real population is
-**27 credential-bearing jobs across 23 workflows**. The four fixed here are the
-ones #983 scoped; the rest are enumerated in `KNOWN_UNGUARDED` below and tracked
-as follow-up work, so the number is visible instead of implied.
+**27 credential-bearing jobs across 23 workflows**. Exactly one — 701's `dns` —
+is fixed here, because it is the only one whose rehearsal could be relocated to
+an ungated read lane today. The GitHub-side jobs (701 `repo`/`content`, 720
+`create-repo`) need `github-prod-read`, which exists (#834) but whose credential
+`read-all-cbm-github-pat` is dead (#848). The rest are enumerated in
+`KNOWN_UNGUARDED` below, so the number is visible instead of implied.
 """
 
 from __future__ import annotations
 
+import functools
 import pathlib
 import re
 import sys
@@ -198,14 +209,27 @@ REHEARSAL_INSIDE_THE_GATED_JOB = {
 }
 
 
-def _workflows():
-    """(name, parsed-yaml) for every workflow file, parsed once."""
-    out = []
+@functools.lru_cache(maxsize=1)
+def _workflows_cached() -> tuple:
+    parsed = []
     for path in sorted(WORKFLOWS.glob("*.yml")):
         wf = yaml.safe_load(path.read_text(encoding="utf-8-sig"))
         if isinstance(wf, dict):
-            out.append((path.name, wf))
-    return out
+            parsed.append((path.name, wf))
+    return tuple(parsed)
+
+
+def _workflows():
+    """(name, parsed-yaml) for every workflow file, parsed once per session.
+
+    Actually once, now — the docstring used to say "parsed once" while the body
+    re-read and re-parsed all ~100 files on every call, and several tests call
+    it indirectly through `_credential_jobs()` (raised in review on #985). The
+    cache is safe because every consumer here only reads the parsed structures;
+    nothing mutates them. Mutation testing works on the FILES and runs the
+    module as a fresh process, so a stale cache cannot mask a mutation.
+    """
+    return list(_workflows_cached())
 
 
 def _triggers(wf: dict) -> dict:

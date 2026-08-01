@@ -985,16 +985,35 @@ jobs:
           # -DryRun is hard-coded here: this job exists to rehearse, and it holds
           # a read-scoped token that could not perform a write in any case.
           $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -GitHubPagesOnly -DryRun *>&1
+          # Capture IMMEDIATELY: $ErrorActionPreference = 'Stop' does not throw on
+          # a native command's non-zero exit, so without this the step goes green
+          # having uploaded an error transcript as if it were a change plan — a
+          # rehearsal that silently fails is worse than no rehearsal, because the
+          # artifact looks like a plan. The audit call below overwrites
+          # $LASTEXITCODE, which is the other reason this cannot wait.
+          $enforceExit = $LASTEXITCODE
           $outPath = Join-Path $outDir 'dns-enforce-preview.txt'
           $out | Out-File -FilePath $outPath -Encoding utf8
 
+          # Best-effort and deliberately unchecked: the audit is context for the
+          # reader, not the rehearsal's verdict.
           $audit = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -Audit -ErrorAction Continue *>&1
           $auditPath = Join-Path $outDir 'dns-audit-before.txt'
           $audit | Out-File -FilePath $auditPath -Encoding utf8
 
           "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+          # Fail AFTER both transcripts are written and out_dir is published, so
+          # the upload step below still has something to attach for diagnosis.
+          if ($enforceExit -ne 0) {
+            throw "Update-CloudflareDns.ps1 (preview) failed with exit code $enforceExit - see the website-provision-dns-preview artifact."
+          }
+
       - name: Upload DNS preview
+        # always(): the transcript matters most when the preview FAILED. Guarded
+        # on out_dir so a failure before the directory was published cannot turn
+        # into a second, misleading "no files found" error.
+        if: always() && steps.preview.outputs.out_dir != ''
         uses: actions/upload-artifact@v7
         with:
           name: website-provision-dns-preview
@@ -1058,16 +1077,36 @@ jobs:
           # serves both modes and the dry path cannot drift from the live one.
           $dryRun = ([string]$env:DRY_RUN) -eq 'true'
           $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -GitHubPagesOnly -DryRun:$dryRun *>&1
+          # Pre-existing hole, found while reviewing the preview job above (#985):
+          # nothing checked this exit code, so a FAILED DNS repoint on a live
+          # provisioning run reported success — the run went green, the artifact
+          # held an error transcript, and the site never resolved. That is the
+          # #918 / #934 shape ("the cutover reported OK"). `-ErrorActionPreference
+          # Stop` does not cover a native command's exit code; only this does.
+          # Captured immediately because the audit call below overwrites it.
+          $enforceExit = $LASTEXITCODE
           $outPath = Join-Path $outDir 'dns-enforce.txt'
           $out | Out-File -FilePath $outPath -Encoding utf8
 
+          # Best-effort and deliberately unchecked (note its -ErrorAction Continue):
+          # the after-audit is context for the reader, not the enforcement verdict.
           $audit = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -Audit -ErrorAction Continue *>&1
           $auditPath = Join-Path $outDir 'dns-audit-after.txt'
           $audit | Out-File -FilePath $auditPath -Encoding utf8
 
           "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+          # Fail AFTER the transcripts are written and out_dir is published, so
+          # the upload step still has the evidence to attach.
+          if ($enforceExit -ne 0) {
+            throw "Update-CloudflareDns.ps1 failed with exit code $enforceExit - see the website-provision-dns artifact."
+          }
+
       - name: Upload DNS outputs
+        # always(): the transcript matters most when the enforcement FAILED.
+        # Guarded on out_dir so a failure before it was published cannot become a
+        # second, misleading "no files found" error.
+        if: always() && steps.enforce.outputs.out_dir != ''
         uses: actions/upload-artifact@v7
         with:
           name: website-provision-dns

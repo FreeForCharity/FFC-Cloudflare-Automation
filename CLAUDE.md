@@ -238,6 +238,31 @@ Two habits, both cheap:
 
 This is the same class as the `#719` log tail needing `--paginate` to find the true run number.
 
+### …but `--paginate` with an **array-building** `--jq` produces invalid JSON
+
+`--paginate` runs the jq expression **once per page** and concatenates the results. Which shape you
+ask for decides whether that is correct:
+
+- **Streaming** — `--jq '.[] | "\(.created_at) \(.body)"'` — emits one line per item, so the pages
+  concatenate cleanly. This is the form AGENTS.md teaches for reading the #719 tail, and it is
+  right.
+- **Array-building** — `--jq '[.[] | {body, created_at}]'` — emits one **array per page**:
+  `[…][…][…]`. That is not valid JSON. `gh` exits 0 and says nothing; the failure surfaces later in
+  whatever parses the file, as an error pointing at a byte offset in the middle of page 2, nowhere
+  near the command that caused it.
+
+The fix is not the obvious one: `--slurp` is the right flag but **cannot be combined with `--jq`**
+(`gh` rejects it outright). Fetch raw, then flatten:
+
+```bash
+gh api --paginate --slurp repos/OWNER/REPO/issues/719/comments > pages.json
+# pages.json is an array OF PAGES — flatten it before use
+```
+
+Hit on 2026-08-01 (run 70) doing a whole-thread read of #719 for the #988 review. A mechanical guard
+is filed as #989; until it lands this is prose, because `.claude/hooks/` changes are reviewed by
+Clarke by standing rule.
+
 ## On a merge-queue repo, `autoMergeRequest` is always `null` — `mergeQueueEntry` is the proof
 
 `main` here is governed by a merge queue, and that changes which field records an enqueue.

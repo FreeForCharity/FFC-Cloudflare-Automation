@@ -513,10 +513,14 @@ These are the ways that difference has actually bitten, each found the expensive
   `cannot add: string ("completedC:/Program File …")` — which reads like a malformed filter and
   sends you to rewrite the query instead of the quoting. Use `\(.field)` interpolation rather than
   jq's `//` default operator, or prefix with `MSYS_NO_PATHCONV=1`.
-- **`git show <rev>:<path>` is mangled by MSYS path conversion.** `git show origin/main:.github/…`
-  reaches git as `origin\main;.github\workflows\…` and aborts with `fatal: ambiguous argument`.
-  Prefix with `MSYS_NO_PATHCONV=1` (and quote the argument). The failure is loud — but see the next
-  point for how it gets swallowed.
+- **`git show <rev>:<path>` is mangled by MSYS path conversion — but only when the path starts with
+  a dot.** `git show origin/main:.github/…` reaches git as `origin\main;.github\workflows\…` and
+  aborts with `fatal: ambiguous argument`; `git show origin/main:docs/foo.md` works untouched on the
+  same command line. It is the leading dot that trips the heuristic, not the colon or the slashes —
+  the full validation is in the section above. Prefix dot-paths with `MSYS_NO_PATHCONV=1` (and quote
+  the argument). Do **not** read this as "always prefix `git show`": stating the rule without its
+  qualifier is what made an automated reviewer file a false finding against a correct command on
+  #981. The failure is loud — but see the next point for how it gets swallowed.
 - **Never let `||` supply a benign default for a command that can crash** (ledger L42). A
   `cmd | grep … || echo "none found"` prints the reassuring branch when `cmd` _fails_, not only when
   the match is empty. That silently turned a failed supersession check into a pass. Check the exit

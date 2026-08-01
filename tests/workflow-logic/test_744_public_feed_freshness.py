@@ -348,6 +348,69 @@ def test_the_summary_reports_checked_against_registered():
     assert "unreadable=1" in line, line
 
 
+# --- rolling-issue lookup (the close path decides what this returns) -------
+
+
+def _find(items):
+    return _node(
+        "process.stdout.write(JSON.stringify(l.findRollingIssue(JSON.parse(process.argv[1]))));",
+        json.dumps(items),
+    )
+
+
+MARKED = "<!-- public-feed-freshness -->\n\nbody"
+
+
+def test_a_pull_request_carrying_the_marker_is_never_selected():
+    """`issues.listForRepo` returns PRs too, and the clean-run path CLOSES what
+    this selects — so a PR quoting the marker would be closed by the monitor.
+
+    The marker is an HTML comment, i.e. invisible in a rendered PR body, so a PR
+    can carry it without its author ever seeing it.
+    """
+    assert _find([{"number": 5, "body": MARKED, "pull_request": {"url": "…"}}]) is None
+
+
+def test_the_issue_is_selected_when_a_marked_pr_is_listed_first():
+    got = _find(
+        [
+            {"number": 5, "body": MARKED, "pull_request": {"url": "…"}},
+            {"number": 9, "body": MARKED},
+        ]
+    )
+    assert got and got["number"] == 9, got
+
+
+def test_a_plain_marked_issue_is_selected():
+    got = _find([{"number": 9, "body": MARKED}])
+    assert got and got["number"] == 9, got
+
+
+def test_no_marker_selects_nothing():
+    assert _find([{"number": 9, "body": "unrelated issue"}]) is None
+
+
+def test_a_null_or_missing_body_does_not_throw():
+    assert _find([{"number": 1, "body": None}, {"number": 2}, None]) is None
+
+
+def test_an_empty_listing_selects_nothing():
+    assert _find([]) is None
+
+
+def test_the_workflow_uses_the_library_lookup_and_does_not_hand_roll_it():
+    step = next(
+        s
+        for s in load_workflow(WF_FILE)["jobs"]["check"]["steps"]
+        if "upsert" in (s.get("name") or "")
+    )
+    script = step["with"]["script"]
+    assert "lib.findRollingIssue(" in script, script
+    # A second, unguarded marker match would reintroduce the defect while the
+    # library call above still made it look fixed.
+    assert "includes(lib.MARKER)" not in script, script
+
+
 # --- workflow shape --------------------------------------------------------
 
 

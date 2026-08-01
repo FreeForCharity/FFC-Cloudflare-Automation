@@ -207,6 +207,35 @@ function analyze(input) {
   };
 }
 
+/**
+ * Pick this monitor's rolling issue out of an open-issue listing.
+ *
+ * `issues.listForRepo` returns **pull requests as well as issues** — they are
+ * the same object in the REST model, distinguished only by a `pull_request`
+ * key. Without that filter, any open PR whose body happened to contain the
+ * marker would be selected as "the rolling issue", and the clean-run path would
+ * comment on it and then `issues.update({state: 'closed'})` — this workflow
+ * would close somebody's pull request.
+ *
+ * That is not a remote hazard: the marker is an HTML comment, so it is INVISIBLE
+ * in a rendered PR body. A PR that documents or quotes the marker (a lessons
+ * entry, a change to this file) carries it without its author ever seeing it.
+ *
+ * 739 already guards this — "Issues API returns PRs too; drop them everywhere" —
+ * so the rule was known in this repo and simply never reached the rolling-issue
+ * pattern this workflow was asked to copy.
+ *
+ * @param {Array<{body?:string, pull_request?:object}>} items an open-issue listing
+ * @returns {object|null} the rolling issue, or null when there is none
+ */
+function findRollingIssue(items) {
+  return (
+    (items || []).find(
+      (i) => i && !i.pull_request && typeof i.body === 'string' && i.body.includes(MARKER),
+    ) || null
+  );
+}
+
 /** One-line summary for `core.notice` and the recovery comment. */
 function summary(a) {
   return (
@@ -331,6 +360,7 @@ module.exports = {
   ISSUE_LABELS,
   classifyFeed,
   analyze,
+  findRollingIssue,
   summary,
   renderBody,
 };

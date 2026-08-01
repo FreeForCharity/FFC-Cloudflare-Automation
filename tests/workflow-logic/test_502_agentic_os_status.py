@@ -77,6 +77,18 @@ _PEM = (
 )
 
 
+# The exact `READY_RULE` that shipped before #974 — prose promising "unclaimed"
+# over a `collect_ready()` that never checked the label. Kept verbatim so the
+# rule-wording assertion can be shown to REJECT it; a predicate that accepts this
+# string is not testing anything.
+PRE_974_READY_RULE = (
+    "Open issues labeled 'agent-ready': unclaimed, unblocked, one-PR-scoped and carrying "
+    "acceptance criteria — the queue a sandboxed agent can pick from now. A strict subset of "
+    "backlog_issues, which stays the full 'agentic-os' topic set (epics, machine-managed rolling "
+    "issues, human-blocked items and durable findings all remain counted there)."
+)
+
+
 def _comment(login, ts, body):
     return {"user": {"login": login}, "created_at": ts, "body": body, "html_url": f"c-{ts}"}
 
@@ -623,9 +635,22 @@ def main():
     # The published rule is what readers act on, so it has to describe the filter
     # the code actually applies. A reworded rule that stops saying so is the
     # defect #974 was: prose promising `unclaimed` over code that never checked.
+    # A plain `"claimed" in READY_RULE` cannot express that, because the pre-#974
+    # rule read "unclaimed, unblocked, …" and "unclaimed" CONTAINS "claimed" — the
+    # one string this assertion exists to reject is a string that satisfies it.
+    # Match the label as a word not preceded by "un", and pin that by running the
+    # same predicate over the real pre-#974 literal, so a future weakening back to
+    # a substring test fails here instead of passing quietly.
+    def names_exclusion(rule):
+        return re.search(r"(?<!un)\bclaimed\b", rule) is not None
+
     check(
-        "claimed" in m.READY_RULE,
+        names_exclusion(m.READY_RULE),
         "ready_rule must state the claimed exclusion it now implements",
+    )
+    check(
+        not names_exclusion(PRE_974_READY_RULE),
+        "the pre-#974 rule promised 'unclaimed' over code that never checked — it must not pass",
     )
 
     # The ready queue is a STRICT SUBSET: `backlog_issues` must keep every row.

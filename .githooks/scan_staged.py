@@ -24,7 +24,7 @@ import traceback
 DID_NOT_RUN = "pre-commit: SECRET SCAN DID NOT RUN"
 
 
-def _git(args):
+def _git(args, check=True):
     # Decode git's output as UTF-8 explicitly. Git emits UTF-8 regardless of
     # the console codepage, so this is correct everywhere -- whereas bare
     # text=True decodes with the LOCALE codec, which is cp1252 on the Windows
@@ -41,17 +41,39 @@ def _git(args):
     # tests/workflow-logic/test_githooks_scan_staged.py pins the real set.
     # errors="replace" degrades a genuinely undecodable byte to one character
     # instead of losing the whole file.
-    return subprocess.run(
+    proc = subprocess.run(
         ["git", *args],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-    ).stdout
+    )
+    # A git command that FAILS must not look like a git command that found
+    # nothing. Returning "" here let `git diff --cached` exit 128 ("index file
+    # corrupt") and still produce exit 0 with an empty stderr -- the same silent
+    # fail-open #996 is about, reached through the non-exception path, so the
+    # handler at the bottom of this file never saw it. Raising routes it there,
+    # which is where the DID_NOT_RUN notice already lives.
+    #
+    # stdout is None when the reader thread died mid-decode; that is a failed
+    # read too, even though the return code is 0. UNTESTED AND CURRENTLY
+    # UNREACHABLE: with the codec pinned above, the decode cannot raise, so
+    # nothing can kill that thread. It is kept as defence in depth for whoever
+    # removes `encoding=` again -- do not read it as a covered path.
+    if check and (proc.returncode != 0 or proc.stdout is None):
+        raise RuntimeError(
+            "git " + " ".join(args) + f" exited {proc.returncode}"
+            + (" and produced no readable output" if proc.stdout is None else "")
+            + ": " + ((proc.stderr or "").strip()[:500] or "<no stderr>")
+        )
+    return proc.stdout or ""
 
 
 def repo_root():
-    root = _git(["rev-parse", "--show-toplevel"]).strip()
+    # check=False deliberately: this one call has a legitimate failure mode
+    # (invoked outside a work tree, e.g. manual path mode) and its own fallback.
+    # Every other caller wants a failed git command to be loud.
+    root = _git(["rev-parse", "--show-toplevel"], check=False).strip()
     return root or os.getcwd()
 
 

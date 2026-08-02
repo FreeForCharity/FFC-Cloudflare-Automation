@@ -460,10 +460,16 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
   `UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f6a8'` on the 🚨 in #921's
   title. It also needs `GH_TOKEN` exported (`export GH_TOKEN=$(gh auth token)`) — it does not read
   `gh`'s keyring.
-- **The generator's `--output` writes CRLF on Windows.** `.gitattributes` (`* text=auto eol=lf`)
-  normalizes it, so the _committed_ blob is LF and byte-identical to a Linux run — but verify the
-  staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) before claiming 502 will not
-  report phantom drift.
+- **The generator's `--output` used to write CRLF on Windows — fixed at the source (run 74).**
+  `scripts/generate-agentic-os-status.py` now writes through `write_feed()`, which pins
+  `newline="\n"` beside the `encoding="utf-8"` that was already there, so both hosts emit identical
+  bytes. Two things had been masking it and neither was a fix: ffcadmin's `.gitattributes`
+  (`* text=auto eol=lf`) normalized the _committed_ blob, and this repo's CI is Linux, where text
+  mode never translates — so no test could observe it by running the script.
+  `test_502_agentic_os_status.py` therefore asserts on the **`open()` call's keywords**, not on the
+  bytes written; a round-trip check would pass on `ubuntu-latest` with or without the fix.
+  - Verifying the staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) is still the
+    right habit for any hand-delivered feed — it just no longer has anything to catch here.
   - **And do not run that check in Python text mode - it reports `0` whether or not the CRs are
     there.** `io.open(p, encoding='utf-8').read().count('\r')` applies universal-newline
     translation, so CRLF is silently rewritten on the way IN. On 2026-08-02 (run 72) that returned a

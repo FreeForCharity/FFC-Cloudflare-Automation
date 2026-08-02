@@ -25,7 +25,14 @@ DID_NOT_RUN = "pre-commit: SECRET SCAN DID NOT RUN"
 
 
 class GitFailed(Exception):
-    """A git command exited non-zero, so its output was never read.
+    """A git command exited non-zero, so its output cannot be trusted.
+
+    Not "its output was never read" -- `_git()` captures stdout and stderr
+    unconditionally, and a failing git often still writes to stdout. The defect
+    this guards is narrower and worse: on a non-zero exit that output is
+    *partial or meaningless*, and the caller treating it as a complete file list
+    is what turns a broken git into an empty scan. Raising here is what stops
+    that; the captured text survives only inside the message, as evidence.
 
     Named rather than a bare RuntimeError so the traceback in the fail-open
     notice says what happened at a glance. Adopted from #1002, which found

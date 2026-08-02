@@ -43,6 +43,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -446,8 +447,19 @@ def _run_audit_step(python_exit: int, stdout: str = "", stderr: str = ""):
     why this drives `bash -e -o pipefail` explicitly rather than `bash -c`.
     """
     script = step_run(WF_FILE, "audit", "Run the board audit")
-    with tempfile.TemporaryDirectory() as td:
-        td = pathlib.Path(td)
+    # `mkdtemp` + an ignore_errors teardown rather than TemporaryDirectory().
+    # The child's cwd is INSIDE this directory — it has to be, because the step
+    # writes board-audit.json/.err relative to cwd and pointing that at
+    # REPO_ROOT would litter the tree on every suite run (#945). On Windows a
+    # process's working directory is an open handle on that directory, so the
+    # context manager's rmtree races the just-exited bash and raises
+    # `PermissionError: [WinError 32]` — reported from the Conductor's host,
+    # where it failed the whole module. This is the only helper in the suite
+    # that sets cwd into its temp dir (test_729 and friends run the child in
+    # REPO_ROOT), which is why nothing else hits it. A cleanup race must never
+    # decide whether the assertions passed.
+    td = pathlib.Path(tempfile.mkdtemp(prefix="wf745-"))
+    try:
         # A stub python3 ahead of the real one: the point is the exit code, and
         # the step must never reach the network in a unit test.
         stub = td / "bin"
@@ -475,6 +487,24 @@ def _run_audit_step(python_exit: int, stdout: str = "", stderr: str = ""):
             timeout=60,
         )
         return proc.returncode, out_file.read_text(encoding="utf-8"), proc.stdout + proc.stderr
+    finally:
+        # Attempt a STRICT removal and report what stops it, rather than
+        # `ignore_errors=True`. Both forms keep a teardown race from deciding
+        # whether the assertions passed, but the blanket one is unconditional
+        # and silent on every platform — so a genuine leak on Linux, where this
+        # race has no known cause, would look exactly like the expected Windows
+        # case and accumulate directories with nothing to say so. L72 is the
+        # same shape: a fail-open is a sound trade, and being silent about it
+        # is the defect.
+        #
+        # Deliberately NOT re-raising on non-Windows, tempting as it is: this
+        # runs in a `finally`, so an exception raised here would replace an
+        # in-flight assertion failure with a teardown error and hide the thing
+        # the test was actually for.
+        try:
+            shutil.rmtree(td)
+        except OSError as exc:
+            print(f"  NOTE: temp dir not removed on {sys.platform}: {td}: {exc}")
 
 
 def test_a_findings_exit_does_not_kill_the_step_before_it_can_report():

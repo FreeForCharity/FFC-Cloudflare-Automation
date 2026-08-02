@@ -476,6 +476,23 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
     confident `CR bytes: 0` for a freshly generated feed that in fact carried **1264** CRs, which
     `tr -cd '\r' | wc -c` found immediately. Read `'rb'` (or use `tr`). A check whose failure mode
     is to print the answer you were hoping for is worse than no check.
+  - **The same translation runs on the way OUT, which breaks restore-after-mutation.**
+    `pathlib.write_text()` uses text mode, so writing a file back converts every `\n` to `\r\n` on
+    this host. Reviewing #1015 (run 76) the Conductor mutated `run_all.py` in place six times and
+    asserted `sha256(path.read_text().encode())` matched the original after each restore. It matched
+    every time and proved nothing — the read side translated the CRLFs back out, so a file rewritten
+    end to end hashed identical to the LF original. The only tell was `git status` listing the file
+    as modified with an **empty** `git diff`. Pass `newline=""` when writing, and verify restores
+    with `tr`/`'rb'`, never `read_text`. (`newline=""` and `newline="\n"` are byte-identical on
+    **write** — measured here on both LF and CRLF content — so the choice is intent, not behaviour:
+    `""` for "restore verbatim", `"\n"` for "force LF" as the generators in `scripts/` do. Only the
+    default is wrong, and it is worse than "adds CR": a string that already holds `\r\n` comes out
+    `\r\r\n`.)
+  - **Better: mutate a copy and leave the original alone.** The repo's own mutation sites already do
+    this — `test_737_claim_sync.py:206` and `test_powershell_command_resolution.py:138` copy into a
+    `tempfile.TemporaryDirectory()` and mutate there, so restore fidelity is never in question. The
+    in-place-and-restore pattern is the ad-hoc reviewer's habit, and it is the one that needs the
+    binary check.
 - **The full workflow-logic suite takes over 2 minutes once it actually runs.** It used to finish in
   seconds only because the modules were aborting; a 2-minute command timeout now reads as a hang.
 - **Each full suite run leaves a zero-byte `U+F022 U+F022` file in the repo root.** Reproducible,

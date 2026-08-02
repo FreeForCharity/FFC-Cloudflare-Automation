@@ -137,9 +137,19 @@ jobs:
           GH_TOKEN: ${{ env.BOARD_AUDIT_TOKEN }}
         run: |
           set -uo pipefail
+          # `|| code=$?` rather than a bare call followed by `code=$?`.
+          # The runner's DEFAULT shell is `bash --noprofile --norc -e -o pipefail`,
+          # and `set -uo pipefail` does not clear an inherited `-e` — so a bare
+          # invocation aborts the step the instant python exits non-zero, which
+          # is the NORMAL case here (a board with findings). That is what run 1
+          # of this workflow did: exit 1, step failed, and the report step below
+          # was skipped, so the findings never reached #719 and the one job this
+          # workflow exists to do went undone. A command on the left of `||` is
+          # exempt from `-e`, so this form captures the code instead of dying on
+          # it. Do not "simplify" it back.
+          code=0
           python3 scripts/audit-agentic-os-board.py --json \
-            > board-audit.json 2> board-audit.err
-          code=$?
+            > board-audit.json 2> board-audit.err || code=$?
           echo "exit-code=${code}" >> "$GITHUB_OUTPUT"
           echo "Audit exited ${code}; $(wc -c < board-audit.json) bytes of report."
           # stderr carries the script's own diagnostics on the failure paths

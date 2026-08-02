@@ -633,7 +633,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 742 | Repo - Fleet Security Audit Backfill [Org] | `742-fleet-security-audit-backfill.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
 | 743 | Website - Fleet Security Header Audit | `743-fleet-security-header-audit.yml` | schedule, workflow_dispatch | Reads | — |
 | 744 | Repo - Public Feed Freshness [GH] | `744-repo-public-feed-freshness.yml` | schedule, workflow_dispatch | Reads | — |
-| 745 | Repo - Agentic OS Board Audit [GH] | `745-agentic-os-board-audit.yml` | schedule, workflow_dispatch | Reads | — |
+| 745 | Repo - Agentic OS Board Audit [GH] | `745-agentic-os-board-audit.yml` | schedule, workflow_dispatch | Reads | github-prod-read |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

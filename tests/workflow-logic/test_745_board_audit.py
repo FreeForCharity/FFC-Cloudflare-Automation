@@ -495,6 +495,20 @@ def test_the_catalog_agrees_with_the_workflow():
     assert entry["environments"] == [_job()["environment"]], entry
 
 
+def test_the_generated_readme_row_agrees_too():
+    # One generator run writes BOTH docs/workflow-catalog.json and the README
+    # catalog section, so the two can disagree only if someone regenerated and
+    # then reverted a subset. That is not hypothetical: restoring after a
+    # mutation test with hand-listed file copies put the catalog back and left
+    # the README carrying the mutated value, which reached CI as
+    # `Catalog out of date; regenerate` naming the README alone. Asserting the
+    # third file here makes the trio fail together in one module rather than
+    # only in the repo-wide `--check`.
+    readme = (REPO_ROOT / ".github" / "workflows" / "README.md").read_text(encoding="utf-8")
+    row = next(ln for ln in readme.split("\n") if ln.startswith("| 745 "))
+    assert f"| {_job()['environment']} |" in row, row
+
+
 def test_the_header_never_wraps_mid_hyphenated_word():
     # The catalog generator joins header comment lines with a space, so a word
     # split across the wrap ships to the public catalog as `read- only` (#840).

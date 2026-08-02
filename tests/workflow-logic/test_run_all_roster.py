@@ -126,6 +126,29 @@ EXEMPT_MARKER = (
     'RUN_ALL_ROSTER_EXEMPT = "runs one main() and prints a single summary line"\n'
 )
 
+# Loses EXACTLY ONE test: the LAST one raises a non-AssertionError. This is the
+# boundary of the truncation comparison, and the shape a long module gets most
+# often -- a final test subscripting an empty result. TRUNCATED above loses 3,
+# so it is caught by `<` and by an off-by-one `< len(declared) - 1` alike, and
+# cannot pin which one is implemented.
+LOSES_EXACTLY_ONE = (
+    "import sys\n\n"
+    "def test_a():\n    assert True\n\n"
+    "def test_b():\n    assert True\n\n"
+    "def test_c():\n    assert True\n\n"
+    "def test_d():\n    empty = []\n    assert empty[0]\n" + RUNNER
+)
+
+# Defines no `def test_*` at all: asserts inline at import and prints. Exits 0
+# with non-empty output, so the silence guard -- deliberately weak, any output
+# counts -- cannot see it. Only the zero-declared branch catches it.
+INLINE_NO_ROSTER = (
+    '"""A module that checks things inline and never defines a test function."""\n'
+    "VALUE = 1 + 1\n"
+    "assert VALUE == 2\n"
+    "print('checked VALUE')\n"
+)
+
 # A module that reports one outcome out of three -- truncated on the counts
 # alone. With the marker it is exempt; without it, it must redden. That
 # difference is what makes the marker load-bearing rather than decorative.
@@ -216,6 +239,43 @@ def test_a_truncated_roster_is_reported_with_both_counts_and_the_last_test():
     assert "defines 4 tests but reported 1" in out, out
     assert "the last test to report was test_a" in out.lower(), out
     assert "IndexError" in out, "the module's own traceback must still be shown\n" + out
+
+
+def test_a_module_losing_exactly_one_test_is_still_truncated():
+    """The BOUNDARY of the comparison, which no other fixture reaches.
+
+    `TRUNCATED` loses 3 of 4, so it reddens under `<` and under an off-by-one
+    `< len(declared) - 1` alike -- it cannot tell those implementations apart.
+    Losing exactly one is both the strictest case and the likeliest one in a
+    long module (a final test subscripting an empty result), and it is the
+    single test that keeps the comparison from silently drifting by one.
+    """
+    with tempfile.TemporaryDirectory(prefix="roster-") as tmp:
+        _write(pathlib.Path(tmp), "test_lose_one.py", LOSES_EXACTLY_ONE)
+        code, out = _run_all_on(pathlib.Path(tmp))
+    assert code == 1, out
+    assert "truncated roster" in out, out
+    assert "defines 4 tests but reported 3" in out, out
+    assert "the last test to report was test_c" in out.lower(), out
+
+
+def test_a_module_defining_no_tests_and_no_marker_is_reported():
+    """The zero-declared branch, which nothing else exercises.
+
+    `test_the_502_module_carries_the_marker...` asserts statically about the one
+    real module in this state; it never drives this branch through `run_all`.
+    Without this case the branch can be deleted outright -- `if not declared:
+    return None` -- and the whole suite stays green while a module that covers
+    NOTHING passes. The silence guard cannot cover it: `_reported_any_test` is
+    deliberately weak, and this module prints.
+    """
+    with tempfile.TemporaryDirectory(prefix="roster-") as tmp:
+        _write(pathlib.Path(tmp), "test_inline_checks.py", INLINE_NO_ROSTER)
+        code, out = _run_all_on(pathlib.Path(tmp))
+    assert code == 1, out
+    assert "defines no top-level" in out, out
+    assert "test_inline_checks.py" in out, out
+    assert run_all.EXEMPT_NAME in out, "the message must name the escape hatch\n" + out
 
 
 def test_an_ordinary_failing_test_is_not_called_truncated():

@@ -115,7 +115,13 @@ def main():
     check_warn("paginate + array jq", "guard_bash.py",
                bash("gh api --paginate repos/o/r/issues/719/comments --jq '[.[]|{body}]'"), True, tag="[#989]")
     check_warn("paginate + array jq, -q spelling", "guard_bash.py",
-               bash("gh api --paginate repos/o/r/issues --q '[.[]|.number]'"), True, tag="[#989]")
+               bash("gh api --paginate repos/o/r/issues -q '[.[]|.number]'"), True, tag="[#989]")
+    # This case is the discriminator for the one above. `--q` is not a gh flag,
+    # and it is what that case used to send -- passing on the `-q` SUBSTRING
+    # while the real short flag went untested. Pinning silence here means the
+    # `-q` case can only stay green by matching the flag itself.
+    check_warn("paginate + array jq, --q is not the -q flag", "guard_bash.py",
+               bash("gh api --paginate repos/o/r/issues --q '[.[]|.number]'"), False, tag="[#989]")
     check_warn("paginate + array jq, double quotes", "guard_bash.py",
                bash('gh api --paginate repos/o/r/pulls --jq "[.[]|.number]"'), True, tag="[#989]")
     check_warn("paginate + array jq, jq before endpoint", "guard_bash.py",

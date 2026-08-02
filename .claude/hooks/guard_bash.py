@@ -154,8 +154,16 @@ def _gh_api_endpoint(cmd):
 
 
 def _jq_expression(cmd):
-    """The expression passed to `--jq`/`-q`, unquoted, or None."""
-    m = re.search(r"(?:--jq|-q)\s+(?:'([^']*)'|\"([^\"]*)\"|(\S+))", cmd)
+    """The expression passed to `--jq`/`-q`, unquoted, or None.
+
+    The `(?<![\\w-])` guard is what makes the `-q` alternative mean the FLAG.
+    Without it `-q` also matches inside any longer flag ending in those two
+    characters -- `--q` being the one that bit: the test case named for the
+    short spelling was sending `--q`, which `gh` does not accept, and it
+    passed anyway on the substring. A rule that matches a flag nobody can
+    type cannot tell you the real flag is covered.
+    """
+    m = re.search(r"(?<![\w-])(?:--jq|-q)\s+(?:'([^']*)'|\"([^\"]*)\"|(\S+))", cmd)
     if not m:
         return None
     return next((g for g in m.groups() if g is not None), None)

@@ -27,8 +27,13 @@ change:
   **added** lines so pre-existing content never trips it; or
 - adds a sensitive file (`.env`, `*.pem`, `*.key`, `secrets/`, …).
 
-Placeholders (`your-token-here`, `${{ secrets.* }}`) are ignored. Detection fails open, so a scanner
-error never blocks a commit.
+Placeholders (`your-token-here`, `${{ secrets.* }}`) are ignored.
+
+Detection **fails open**, so a scanner error never blocks a commit — but it prints
+`pre-commit: SECRET SCAN DID NOT RUN` to stderr when that happens. A silent fail-open made a total
+failure indistinguishable from a clean scan, which is how a cp1252 decode crash left every commit
+containing an em dash unscanned on the Windows host (#996). **If you see that line, your commit was
+not checked** — re-run the scan or report it; a successful commit is not a passing scan.
 
 ## Bypass a confirmed false positive
 

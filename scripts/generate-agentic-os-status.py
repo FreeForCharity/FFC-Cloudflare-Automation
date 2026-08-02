@@ -670,9 +670,11 @@ def write_feed(path, text):
       can observe it by running the script.
 
     Both are masks, not fixes: the first is one ``.gitattributes`` edit away
-    from failing, and the second means CI will never warn. ``CLAUDE.md`` ("The
-    generator's ``--output`` writes CRLF on Windows") documents the downstream
-    workaround that this makes unnecessary.
+    from failing, and the second means CI will never warn. ``CLAUDE.md``'s
+    Windows-host notes carry the history and the downstream staged-blob check
+    this makes unnecessary; deliberately not quoted here, because the same PR
+    rewrote that bullet and a verbatim citation would have been stale on the
+    commit that introduced it.
     """
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)

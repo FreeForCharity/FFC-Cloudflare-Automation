@@ -117,7 +117,7 @@ def run_scanner(files, common_src=None, legacy_locale=True, args=(), scan_env=No
             cwd=d,
             # scan_env applies to the SCAN only, never to the setup above, so a
             # test can break git for the scanner while still staging real files.
-            env={**env, **(scan_env or {})},
+            env={**os.environ, **env, **(scan_env or {})},
             capture_output=True,  # bytes -- see the docstring
         )
         return proc.returncode, (proc.stderr or b"").decode("utf-8", "replace")

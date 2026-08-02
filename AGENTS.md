@@ -84,13 +84,13 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   the tests discriminate; it cannot establish that the code behaves against real data, because every
   test injects its own fixtures and its own clock. For a script that only reads — the board audit,
   the catalog generator, the status-feed generator — a live run against production is free (no gate,
-  no write) and routinely produces the strongest evidence in the review. On #1012 nine mutations all
-  passed, and the finding that actually settled the review was the live run: the first item the new
-  grace window deferred in production was **#1012 itself**, uncarded and 43 minutes old, in the same
-  invocation that still exited 1 on a genuine finding. That demonstrates the tolerate-latency and
-  still-catch-drift halves simultaneously, on real timestamps, which no unit test in the PR could
-  do. Check the script's auth contract first (most take `GH_TOKEN` and nothing else) and confirm it
-  takes no write path before running it.
+  no write) and routinely produces the strongest evidence in the review. On #1012 every mutation the
+  reviewer applied was caught, and the finding that actually settled the review was the live run:
+  the first item the new grace window deferred in production was **#1012 itself**, uncarded and 43
+  minutes old, in the same invocation that still exited 1 on a genuine finding. That demonstrates
+  the tolerate-latency and still-catch-drift halves simultaneously, on real timestamps, which no
+  unit test in the PR could do. Check the script's auth contract first (most take `GH_TOKEN` and
+  nothing else) and confirm it takes no write path before running it.
 - **Supersession check before ready+queue.** Before promoting a PR, grep `main` for the
   function/capability names the PR adds — a same-purpose implementation may have landed on `main`
   after the PR branched (on 2026-07-20, #772's basePath probe duplicated `basePathMismatch` merged
@@ -118,8 +118,8 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
     `NOT_FOUND: "Could not resolve to a node with the global id"` means **your node id is wrong**,
     and it is indistinguishable at a glance from the legitimate reading "this PR no longer exists" —
     the shape that would make a run conclude a queued PR had vanished. Derive the id in the same
-    command rather than pasting a literal: `PRID=$(gh pr view <n> --json id -q .id)`. Hit on run 75;
-    cost was small only because the PR was known-good at the time.
+    command rather than pasting a literal: `PRID=$(gh pr view <n> --json id --jq .id)`. Hit on run
+    75; cost was small only because the PR was known-good at the time.
 - **Debugging tip:** `gh pr merge --auto` can mask the real blocker behind a GraphQL "rate limit"
   error. The `enqueuePullRequest` mutation returns the true reason (unresolved conversation, CodeQL
   still running, …).

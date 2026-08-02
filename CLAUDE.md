@@ -272,18 +272,18 @@ Clarke by standing rule.
 ! The merge strategy for main is set by the merge queue
 ```
 
-and then **`autoMergeRequest` ends up `null`** — the PR is in the queue, not in auto-merge.
-Reading that `null` as "the enqueue failed" is wrong, and on 2026-07-29 it nearly caused a duplicate
-merge attempt; the second `gh pr merge` answered `Pull request … is already queued to merge`, which
-is what revealed the mistake.
+and then **`autoMergeRequest` ends up `null`** — the PR is in the queue, not in auto-merge. Reading
+that `null` as "the enqueue failed" is wrong, and on 2026-07-29 it nearly caused a duplicate merge
+attempt; the second `gh pr merge` answered `Pull request … is already queued to merge`, which is
+what revealed the mistake.
 
-**The field is not constant, so reading it once tells you nothing.** Observed on 2026-08-02 (run 71):
-immediately after `gh pr merge --auto` on #991, while its checks were still running,
+**The field is not constant, so reading it once tells you nothing.** Observed on 2026-08-02 (run
+71): immediately after `gh pr merge --auto` on #991, while its checks were still running,
 `autoMergeRequest` read **non-null** (`enabledAt`, `mergeMethod: MERGE`); once the checks went green
 and the queue took the PR, the same field read `null`. So a non-null value means "enabled, not yet
 queued" and `null` means either "never enabled" **or** "already queued" — the two states you most
-need to tell apart map to the same reading. The near-miss repeated here: `null` on #990 looked like a
-failed enable, and the disambiguator was the mutation, which answered
+need to tell apart map to the same reading. The near-miss repeated here: `null` on #990 looked like
+a failed enable, and the disambiguator was the mutation, which answered
 `Pull request is already in the queue`. Never re-push to a branch on the strength of a `null`.
 
 Confirm with `mergeQueueEntry` instead:

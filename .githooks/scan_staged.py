@@ -53,13 +53,18 @@ try:
     import common  # shared detection logic
 except Exception:
     # Shared module unavailable -> don't block commits, but don't let the
-    # commit look scanned either.
-    sys.stderr.write(
-        "\n" + DID_NOT_RUN + ": .claude/hooks/common.py could not be imported,\n"
-        "so this commit was NOT checked for secrets. This is not a passing scan.\n\n"
-        + traceback.format_exc()
-        + "\n"
-    )
+    # commit look scanned either. Wrapped for the same reason as the handler at
+    # the bottom of this file: anything raised while reporting a fail-open
+    # would escape it and wedge the commit.
+    try:
+        sys.stderr.write(
+            "\n" + DID_NOT_RUN + ": .claude/hooks/common.py could not be imported,\n"
+            "so this commit was NOT checked for secrets. This is not a passing scan.\n\n"
+            + traceback.format_exc()
+            + "\n"
+        )
+    except Exception:
+        pass
     sys.exit(0)
 
 

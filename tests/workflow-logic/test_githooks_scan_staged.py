@@ -86,7 +86,7 @@ def _env(extra=None):
     return env
 
 
-def run_scanner(files, common_src=None, legacy_locale=True, args=()):
+def run_scanner(files, common_src=None, legacy_locale=True, args=(), init_repo=True):
     """Stage `files` ({path: content}) in a throwaway repo and run the scanner.
 
     Returns (returncode, stderr).
@@ -105,13 +105,21 @@ def run_scanner(files, common_src=None, legacy_locale=True, args=()):
         os.makedirs(os.path.join(d, ".githooks"))
         shutil.copy(str(common_src or REAL_COMMON), os.path.join(d, ".claude", "hooks", "common.py"))
         shutil.copy(str(SCANNER), os.path.join(d, ".githooks", "scan_staged.py"))
-        subprocess.run(["git", "init", "-q"], cwd=d, env=env, capture_output=True)
+        if init_repo:
+            # check=True on BOTH setup calls: a failed init or add leaves
+            # nothing staged, the scanner finds no files and exits 0, and
+            # every allow-case below would go green on a broken harness --
+            # the system under test made indistinguishable from its setup.
+            subprocess.run(["git", "init", "-q"], cwd=d, env=env,
+                           capture_output=True, check=True)
         for path, content in files.items():
             full = os.path.join(d, path)
             os.makedirs(os.path.dirname(full), exist_ok=True) if os.path.dirname(path) else None
             with open(full, "w", encoding="utf-8") as fh:
                 fh.write(content)
-            subprocess.run(["git", "add", path], cwd=d, env=env, capture_output=True)
+            if init_repo:
+                subprocess.run(["git", "add", path], cwd=d, env=env,
+                               capture_output=True, check=True)
         proc = subprocess.run(
             [sys.executable, os.path.join(d, ".githooks", "scan_staged.py"), *args],
             cwd=d,
@@ -280,6 +288,28 @@ def test_missing_shared_module_is_reported_not_swallowed():
 # --------------------------------------------------------------------------
 # AC5: the clean path is unchanged, so the notice keeps meaning something.
 # --------------------------------------------------------------------------
+
+
+def test_a_failing_git_is_reported_not_read_as_nothing_staged():
+    """The non-exception silent fail-open (Copilot review on #1000).
+
+    `_git()` used to return `.stdout` whatever git's exit code was, so a failed
+    `diff --cached` yielded "" -- indistinguishable from "nothing is staged".
+    The scan then completed over an empty file list and exited 0 through the
+    SUCCESS path, never reaching the handler that prints the notice. A staged
+    secret went unscanned, silently, with no crash anywhere.
+
+    Driven by running outside a work tree, which is the real shape of it: git
+    exits non-zero and prints to stderr, and the old code read that as clean.
+    """
+    rc, err = run_scanner(
+        {"doc.md": f'token = "{FAKE_PAT}"\n'}, init_repo=False, legacy_locale=False
+    )
+    assert rc == 0, f"a git failure must still fail OPEN, not wedge the commit (rc={rc})"
+    assert "SECRET SCAN DID NOT RUN" in err, (
+        "git failed, so nothing was scanned -- that must not be reported as a "
+        f"clean scan. Got stderr:\n{err!r}"
+    )
 
 
 def test_clean_commit_is_silent():

@@ -24,7 +24,18 @@ import traceback
 DID_NOT_RUN = "pre-commit: SECRET SCAN DID NOT RUN"
 
 
-def _git(args):
+class GitFailed(Exception):
+    """A git command exited non-zero, so its output was never read.
+
+    Raised rather than returning "" because an empty string is
+    indistinguishable from "nothing is staged": that read as a clean scan and
+    exited 0 in silence -- the same defect as the decode crash below, reached
+    through the non-exception path instead. The handler at the bottom of this
+    file turns this into a loud fail-open.
+    """
+
+
+def _git(args, required=True):
     # Decode git's output as UTF-8 explicitly. Git emits UTF-8 regardless of
     # the console codepage, so this is correct everywhere -- whereas bare
     # text=True decodes with the LOCALE codec, which is cp1252 on the Windows
@@ -41,17 +52,26 @@ def _git(args):
     # tests/workflow-logic/test_githooks_scan_staged.py pins the real set.
     # errors="replace" degrades a genuinely undecodable byte to one character
     # instead of losing the whole file.
-    return subprocess.run(
+    proc = subprocess.run(
         ["git", *args],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-    ).stdout
+    )
+    if required and proc.returncode != 0:
+        raise GitFailed(
+            "git %s exited %d: %s"
+            % (" ".join(args), proc.returncode, (proc.stderr or "").strip()[:500])
+        )
+    return proc.stdout or ""
 
 
 def repo_root():
-    root = _git(["rev-parse", "--show-toplevel"]).strip()
+    # required=False: outside a work tree this legitimately fails, and the
+    # cwd fallback is the answer. Everything that actually READS content keeps
+    # required=True, so a failure there can never pass for "nothing staged".
+    root = _git(["rev-parse", "--show-toplevel"], required=False).strip()
     return root or os.getcwd()
 
 

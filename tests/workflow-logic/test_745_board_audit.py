@@ -45,9 +45,10 @@ import json
 import pathlib
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import load_workflow
+from wf_extract import child_env, load_workflow, step_run
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 LIB = REPO_ROOT / "scripts" / "board-audit-report-lib.js"
@@ -421,15 +422,83 @@ def test_it_does_not_load_the_dead_pat():
     assert f"--name {DEAD_SECRET}" not in WF_RAW
 
 
-def test_the_audit_exit_code_is_captured_not_propagated():
-    # The report has to be published before the job goes red, or a finding fails
-    # the run with nothing on #719 explaining it.
+def test_the_audit_step_reads_structured_output():
     step = next(s for s in _job()["steps"] if s.get("id") == "audit")
     assert "exit-code=" in step["run"], "the exit code must reach GITHUB_OUTPUT"
     assert "--json" in step["run"], "the classifier parses structured output, not prose"
-    assert "set -e" not in step["run"], (
-        "set -e would abort on the audit's non-zero exit and skip the report step"
-    )
+
+
+def _run_audit_step(python_exit: int, stdout: str = "", stderr: str = ""):
+    """Execute the REAL audit step under the runner's exact shell.
+
+    Returns (returncode, exit_code_output, stdout+stderr).
+
+    Run 1 of this workflow failed here and the previous version of this test
+    could not have caught it. That test asserted `"set -e" not in step["run"]`,
+    which was true and irrelevant: the `-e` is not in the script body, it is in
+    the shell the runner INVOKES the body with —
+
+        shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+
+    and `set -uo pipefail` does not clear an inherited `-e`. So a textual check
+    over the body was reading the one place the flag could never appear. The
+    only way to know is to run the thing the way the runner runs it, which is
+    why this drives `bash -e -o pipefail` explicitly rather than `bash -c`.
+    """
+    script = step_run(WF_FILE, "audit", "Run the board audit")
+    with tempfile.TemporaryDirectory() as td:
+        td = pathlib.Path(td)
+        # A stub python3 ahead of the real one: the point is the exit code, and
+        # the step must never reach the network in a unit test.
+        stub = td / "bin"
+        stub.mkdir()
+        (stub / "python3").write_text(
+            "#!/usr/bin/env bash\n"
+            f"printf '%s' {json.dumps(stdout)}\n"
+            f"printf '%s' {json.dumps(stderr)} >&2\n"
+            f"exit {python_exit}\n",
+            encoding="utf-8",
+        )
+        (stub / "python3").chmod(0o755)
+        out_file = td / "step_output"
+        out_file.touch()
+        env = child_env(stub, GITHUB_OUTPUT=str(out_file), GH_TOKEN="stub")
+        proc = subprocess.run(
+            # Exactly the runner's shell, `-e` included. Using plain `bash -c`
+            # here would silently make every case pass.
+            ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
+            env=env,
+            cwd=str(td),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+        return proc.returncode, out_file.read_text(encoding="utf-8"), proc.stdout + proc.stderr
+
+
+def test_a_findings_exit_does_not_kill_the_step_before_it_can_report():
+    # THE run-1 REGRESSION. A board with findings makes the audit exit 1, which
+    # is the normal case; if that ends the step, the report step is skipped and
+    # the findings never reach #719 — the workflow's entire purpose, undone by
+    # its own success condition.
+    rc, output, log = _run_audit_step(1, stdout='{"missing_from_board": []}')
+    assert rc == 0, f"the step must survive a non-zero audit exit\n{log}"
+    assert "exit-code=1" in output, f"the real exit code must reach GITHUB_OUTPUT\n{output}"
+
+
+def test_a_clean_exit_is_reported_as_zero():
+    rc, output, log = _run_audit_step(0, stdout='{"missing_from_board": []}')
+    assert rc == 0, log
+    assert "exit-code=0" in output, output
+
+
+def test_an_auth_failure_exit_also_survives_to_be_classified():
+    # The dead-PAT path: no stdout at all, non-zero exit. It must reach the
+    # classifier as `incomplete` rather than killing the step.
+    rc, output, log = _run_audit_step(1, stdout="", stderr="error: 401")
+    assert rc == 0, log
+    assert "exit-code=1" in output, output
 
 
 def test_the_conductor_log_comment_uses_the_ambient_token():

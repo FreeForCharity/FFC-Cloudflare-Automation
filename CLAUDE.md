@@ -263,7 +263,7 @@ Hit on 2026-08-01 (run 70) doing a whole-thread read of #719 for the #988 review
 is filed as #989; until it lands this is prose, because `.claude/hooks/` changes are reviewed by
 Clarke by standing rule.
 
-## On a merge-queue repo, `autoMergeRequest` is always `null` — `mergeQueueEntry` is the proof
+## On a merge-queue repo, a `null` `autoMergeRequest` does not mean the enqueue failed — `mergeQueueEntry` is the proof
 
 `main` here is governed by a merge queue, and that changes which field records an enqueue.
 `gh pr merge --auto` succeeds, prints only the advisory

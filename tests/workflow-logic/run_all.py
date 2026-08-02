@@ -137,9 +137,14 @@ def roster_finding(
             f"at module level."
         )
     if not reported:
+        # Say only what the outcome lines can support. "Nothing ran" is a
+        # stronger claim than their absence licenses: a module that raises in
+        # its first test, or at import, executed code and reported nothing. The
+        # honest statement is that no test reached the point of reporting.
         return (
             f"{name} defines {len(declared)} tests and reported an outcome for none of "
-            f"them, so nothing in it ran. Its output above is the diagnosis."
+            f"them, so not one of them ran to completion -- the module stopped before, "
+            f"during, or at the end of its first test. Its output above is the diagnosis."
         )
     if len(reported) < len(declared):
         return (

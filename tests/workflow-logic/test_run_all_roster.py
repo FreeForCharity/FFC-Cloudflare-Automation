@@ -96,6 +96,22 @@ ORDINARY_FAILURE = (
 # Defines tests, has no runner: exits 0 having executed none of them.
 SILENT = "def test_a():\n    assert True\n\n\ndef test_b():\n    assert True\n"
 
+# Two ways to report no outcomes while HAVING executed code: a crash in the
+# first test, and a crash at import. Both exit non-zero with a traceback, so
+# "no outcomes" must not be reported as "nothing ran".
+CRASH_IN_FIRST_TEST = (
+    "import sys\n\n"
+    "def test_a():\n    empty = []\n    assert empty[0]\n\n"
+    "def test_b():\n    assert True\n" + RUNNER
+)
+
+CRASH_AT_IMPORT = (
+    "import sys\n\n"
+    "def test_a():\n    assert True\n\n"
+    "def test_b():\n    assert True\n\n"
+    "raise RuntimeError('the module could not import')\n" + RUNNER
+)
+
 WHOLE_MODULE_SKIP = (
     "import sys\n\n"
     "def test_a():\n    assert True\n\n"
@@ -233,6 +249,35 @@ def test_a_module_that_reports_nothing_still_trips_the_silence_guard():
         "'ran nothing' must not be re-labelled as 'ran some and stopped' -- the "
         "remedy is different (add a runner vs. find the crash)\n" + out
     )
+
+
+def test_a_module_that_crashed_before_reporting_is_not_told_nothing_ran():
+    """Report what the outcome lines license, and no more.
+
+    An empty roster means no test reached the point of reporting. It does NOT
+    mean no code ran: a module that raises in its first test, or at import,
+    executed plenty and reported nothing. The first wording of this branch said
+    "so nothing in it ran", which sends triage looking for a missing runner when
+    the traceback right above it names the real cause (Copilot on #1015).
+    """
+    for name, source, exc in (
+        ("test_crash_first.py", CRASH_IN_FIRST_TEST, "IndexError"),
+        ("test_crash_import.py", CRASH_AT_IMPORT, "RuntimeError"),
+    ):
+        with tempfile.TemporaryDirectory(prefix="roster-") as tmp:
+            _write(pathlib.Path(tmp), name, source)
+            code, out = _run_all_on(pathlib.Path(tmp))
+        assert code == 1, out
+        assert "reported an outcome for none of" in out, out
+        assert "ran to completion" in out, out
+        assert "nothing in it ran" not in out, (
+            "the finding must not claim the module executed no code -- it crashed, "
+            "and the traceback says where\n" + out
+        )
+        assert exc in out, f"the module's own {exc} must still be shown\n{out}"
+        assert "exited 0 without printing anything" not in out, (
+            "a crash is not the ran-nothing (no runner) shape\n" + out
+        )
 
 
 def test_the_two_guards_report_distinct_findings():

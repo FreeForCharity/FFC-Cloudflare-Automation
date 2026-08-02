@@ -464,6 +464,12 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
   normalizes it, so the _committed_ blob is LF and byte-identical to a Linux run — but verify the
   staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) before claiming 502 will not
   report phantom drift.
+  - **And do not run that check in Python text mode - it reports `0` whether or not the CRs are
+    there.** `io.open(p, encoding='utf-8').read().count('\r')` applies universal-newline
+    translation, so CRLF is silently rewritten on the way IN. On 2026-08-02 (run 72) that returned a
+    confident `CR bytes: 0` for a freshly generated feed that in fact carried **1264** CRs, which
+    `tr -cd '\r' | wc -c` found immediately. Read `'rb'` (or use `tr`). A check whose failure mode
+    is to print the answer you were hoping for is worse than no check.
 - **The full workflow-logic suite takes over 2 minutes once it actually runs.** It used to finish in
   seconds only because the modules were aborting; a 2-minute command timeout now reads as a hang.
 - **Each full suite run leaves a zero-byte `U+F022 U+F022` file in the repo root.** Reproducible,

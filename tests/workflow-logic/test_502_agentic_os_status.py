@@ -667,12 +667,17 @@ def main():
     # --- write_feed pins UTF-8 AND LF, and the LF half cannot be tested by
     # --- running it here (see the docstring on write_feed).
     #
-    # This asserts on the `open()` CALL rather than on the bytes on disk, and
-    # that is deliberate. CI is `ubuntu-latest`, where text mode never
+    # This asserts on the CALL and its keywords rather than on the bytes on
+    # disk, and that is deliberate. CI is `ubuntu-latest`, where text mode never
     # translates `\n`, so a round-trip test would write LF and pass **whether or
     # not `newline=` is set** — green for the wrong reason on the only platform
     # that runs it, which is the L75 trap. The contract is the keyword; the
     # keyword is what gets checked.
+    #
+    # NB: the L07 encoding guard in test_lessons_ledger.py scans this file as
+    # TEXT, so writing the builtin's name followed by parentheses in a comment
+    # is reported as an undeclared text-I/O call. Spelled around deliberately —
+    # a fail-closed encoding guard is not worth loosening to accommodate prose.
     opened = {}
     real_open = builtins.open
 

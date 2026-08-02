@@ -2024,6 +2024,27 @@
       "categoryCode": "GH"
     },
     {
+      "number": 745,
+      "title": "Repo - Agentic OS Board Audit",
+      "apis": [
+        "GH"
+      ],
+      "file": "745-agentic-os-board-audit.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod-read"
+      ],
+      "description": "Runs scripts/audit-agentic-os-board.py daily against the public \"Agentic OS\" board (org project #9) and reports to the Conductor Log (#719) when \u2014 and only when \u2014 the audit has something to say.  WHY A WORKFLOW AND NOT A SCRIPT (#969). The script landed in #968 and works: it found four real defects the first time it was pointed at the live board. But nothing invoked it, and a script that runs when a human remembers to run it is the same category of assurance as not having it. The board has NO auto-add automation \u2014 org project #9 enables only `Auto-add sub-issues`, while `Item closed` and `Pull request merged` are disabled \u2014 so every card and every Status transition is placed by hand, and that is not going to change. This audit is the compensating control, and a compensating control on a manual process has to be automatic or it inherits the same failure mode. It had already failed twice in two runs by the time #969 was filed, in both directions, and run 62's mess sat unnoticed for ~6 hours.  UNGATED, DELIBERATELY. `github-prod-read` has no required reviewers. A daily read-only audit pinned to a gated environment parks at an approval gate that nobody is watching at 07:47 UTC and is eventually reaped by janitor 734 \u2014 which is #834 exactly, and what tests/workflow-logic/test_gated_env_hygiene.py exists to prevent.  THE CREDENTIAL IS NOT read-all-cbm-github-pat, and that is a deviation from 969's text. The audit needs a real PAT \u2014 the ambient GITHUB_TOKEN is repository-scoped and cannot read an ORG-level ProjectsV2 board \u2014 but the secret #969 named has been dead since 2026-07-29T22:26Z (#848: 502's deliver job has failed on a 401 every day since). Wiring a new daily workflow to it would ship a guaranteed-red cron and manufacture a 740 alert on its first tick. This follows 726 instead: the same reader identity on the same ungated lane, loading read-all-cbm-ffc-copilot-mcp-github-pat, which 321 reported live on 2026-08-01T10:05Z. Key Vault stays the single source of truth (#844); rotation is a new KV version and no GitHub change.  SILENT WHEN CLEAN, following 734 and #967. A daily \"the board is clean\" comment on #719 trains everyone to stop reading the thread. Silence is reserved for the one outcome that established something: the audit ran, read both sides, and found nothing. An audit that could not complete is reported, never skipped.  Read-only against GitHub: no card is added, no Status is set, nothing is closed. The only write of any kind is the Conductor Log comment, which uses the ambient GITHUB_TOKEN and never the Key Vault PAT \u2014 an own-repo issue write belongs on the ambient token (#834's lesson from 726).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "daily audit of the public Agentic OS board (org project #9) against the real backlog, running `scripts/audit-agentic-os-board.py` \u2014 which #968 shipped and nothing invoked, making it assurance only when a human remembered (#969); the board has NO auto-add so every card and Status is placed by hand and the audit is the compensating control, which on a manual process has to be automatic or it inherits the same failure mode; reports the three sets (missing from board / no Status / closed-or-merged but not `Done`) to the Conductor Log and is SILENT when clean, following 734; a run that could not read one of its two sides is reported as INCOMPLETE and never as clean, since the script exits 1 for both findings and enumeration failure and the exit code alone cannot tell them apart; read-only against GitHub (adds no card, sets no Status, closes nothing), Key Vault PAT on the reader identity for the org-level ProjectsV2 read the ambient token cannot do, ambient GITHUB_TOKEN for the issue comment, ungated",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 801,
       "title": "Candid - Charity Check (EIN)",
       "apis": [

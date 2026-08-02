@@ -99,6 +99,7 @@ jobs:
             741. Repo - Fleet Security Audit Coverage [Org]
             743. Website - Fleet Security Header Audit
             744. Repo - Public Feed Freshness [GH]
+            745. Repo - Agentic OS Board Audit [GH]
         with:
           script: |
             const owner = context.repo.owner;

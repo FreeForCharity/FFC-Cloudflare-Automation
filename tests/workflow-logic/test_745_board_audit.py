@@ -488,7 +488,23 @@ def _run_audit_step(python_exit: int, stdout: str = "", stderr: str = ""):
         )
         return proc.returncode, out_file.read_text(encoding="utf-8"), proc.stdout + proc.stderr
     finally:
-        shutil.rmtree(td, ignore_errors=True)
+        # Attempt a STRICT removal and report what stops it, rather than
+        # `ignore_errors=True`. Both forms keep a teardown race from deciding
+        # whether the assertions passed, but the blanket one is unconditional
+        # and silent on every platform — so a genuine leak on Linux, where this
+        # race has no known cause, would look exactly like the expected Windows
+        # case and accumulate directories with nothing to say so. L72 is the
+        # same shape: a fail-open is a sound trade, and being silent about it
+        # is the defect.
+        #
+        # Deliberately NOT re-raising on non-Windows, tempting as it is: this
+        # runs in a `finally`, so an exception raised here would replace an
+        # in-flight assertion failure with a teardown error and hide the thing
+        # the test was actually for.
+        try:
+            shutil.rmtree(td)
+        except OSError as exc:
+            print(f"  NOTE: temp dir not removed on {sys.platform}: {td}: {exc}")
 
 
 def test_a_findings_exit_does_not_kill_the_step_before_it_can_report():

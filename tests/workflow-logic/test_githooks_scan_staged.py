@@ -86,7 +86,7 @@ def _env(extra=None):
     return env
 
 
-def run_scanner(files, common_src=None, legacy_locale=True, args=()):
+def run_scanner(files, common_src=None, legacy_locale=True, args=(), scan_env=None):
     """Stage `files` ({path: content}) in a throwaway repo and run the scanner.
 
     Returns (returncode, stderr).
@@ -115,7 +115,9 @@ def run_scanner(files, common_src=None, legacy_locale=True, args=()):
         proc = subprocess.run(
             [sys.executable, os.path.join(d, ".githooks", "scan_staged.py"), *args],
             cwd=d,
-            env=env,
+            # scan_env applies to the SCAN only, never to the setup above, so a
+            # test can break git for the scanner while still staging real files.
+            env={**env, **(scan_env or {})},
             capture_output=True,  # bytes -- see the docstring
         )
         return proc.returncode, (proc.stderr or b"").decode("utf-8", "replace")
@@ -298,6 +300,30 @@ def test_manual_path_mode_reads_the_worktree():
         {"doc.md": f"{NON_ASCII_LINE}\ntoken = \"{FAKE_PAT}\"\n"}, args=("doc.md",)
     )
     assert rc == 1, f"explicit-path mode must detect the same secret, got rc={rc}\n{err}"
+
+
+def test_a_failing_git_command_does_not_look_like_a_clean_scan():
+    """A non-zero git exit is a failed read, not an empty diff (Copilot, #1000).
+
+    Reached through the NON-exception path: `_git()` used to return "" when git
+    exited 128, so `staged_files()` saw no files, `main()` found no problems and
+    exited 0 through the ordinary success path -- never reaching the handler
+    where the DID_NOT_RUN notice lives. Reproduced with a corrupt index, which
+    fails `git diff --cached` while leaving `git rev-parse` (and therefore the
+    `common` import) working, so the import fail-open cannot mask the case.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        bad_index = os.path.join(tmp, "index")
+        with open(bad_index, "wb") as fh:
+            fh.write(b"NOT A GIT INDEX \x00\x01\x02" * 8)
+        rc, err = run_scanner(
+            {"leak.md": f'token = "{FAKE_PAT}"\n'}, scan_env={"GIT_INDEX_FILE": bad_index}
+        )
+    assert rc == 0, f"the fail-open must be preserved, got rc={rc}\n{err}"
+    assert "SECRET SCAN DID NOT RUN" in err, (
+        "git exited non-zero, so nothing was scanned -- that must not be silent, "
+        f"which is exactly the #996 defect via a second route\n{err!r}"
+    )
 
 
 # --------------------------------------------------------------------------

@@ -95,7 +95,13 @@ def roster_exemption(path: pathlib.Path) -> str | None:
 
 
 def reported_outcomes(output: str) -> list[str]:
-    """The test names a module reported an outcome for, in order."""
+    """The test names a module reported an outcome for, in order.
+
+    A module that ECHOES captured child output (an assertion message quoting a
+    fixture run) inflates this count. The error is one-directional and the safe
+    direction: an inflated count can mask a truncation in a module that is
+    already red and printing FAILs, but it can never invent one in a green run.
+    """
     return OUTCOME_RE.findall(output)
 
 

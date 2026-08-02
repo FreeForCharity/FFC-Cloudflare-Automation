@@ -56,7 +56,18 @@ When you add or change embedded workflow logic, add a scenario here:
 3. `run_all.py` auto-discovers any `test_*.py` module — no registration.
 4. **Give the module a runner.** `run_all.py` executes each module as a plain script
    (`python3 test_x.py`), so a module without an `if __name__ == "__main__":` block defines its
-   tests and executes none of them — and exits 0, which the harness reported as a pass. The modules
-   do not share one reporting convention (most print `  PASS <name>` per test; `test_502` prints a
-   single summary line), but a module that exits 0 **in silence** is now failed as having run
-   nothing.
+   tests and executes none of them — and exits 0, which the harness reported as a pass. A module
+   that exits 0 **in silence** is failed as having run nothing.
+5. **Report one line per test.** `run_all.py` counts the module's top-level `def test_*` functions
+   (with `ast`) and compares them against the `  PASS <name>` / `  FAIL <name>: …` /
+   `  SKIP <name>: …` lines it printed. A module that reports **some** of its tests and then stops
+   is failed as a **truncated roster**, naming the last test that reported — the module died in the
+   test after it, because the shared runner catches `AssertionError` and nothing else, so an
+   `IndexError` ends the module while the PASSes already printed still read as green (L82, #1013).
+   Two escapes, both explicit:
+   - `  SKIP all (<why>)` — the whole module opted out of this run (228 and 720 print it when the
+     environment has no PowerShell host).
+   - `RUN_ALL_ROSTER_EXEMPT = "<why>"` at module level — a permanent opt-out for a module that
+     genuinely does not report a per-test roster (`test_502_agentic_os_status.py` runs one `main()`
+     and prints a summary line). It is a declared marker rather than a count heuristic on purpose: a
+     module that quietly stops following the convention must be caught, not excused.

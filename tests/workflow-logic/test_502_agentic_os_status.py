@@ -52,6 +52,17 @@ import urllib.parse
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "generate-agentic-os-status.py"
 
+# run_all.py compares each module's reported roster against its `def test_*`
+# count, so a module that dies partway through cannot pass itself off as a pass
+# list (L82). This module is the documented exception: it runs one `main()` of
+# inline `check(...)` assertions and prints a single summary line. Declared
+# explicitly rather than inferred from the counts -- a module that silently
+# stops following the roster convention must be caught, not excused.
+RUN_ALL_ROSTER_EXEMPT = (
+    "runs a single main() of check(...) assertions and prints one summary line, "
+    "not a per-test roster"
+)
+
 ORG = "FreeForCharity"
 HUB = "FreeForCharity/FFC-Cloudflare-Automation"
 ADMIN = "FreeForCharity/FFC-IN-ffcadmin.org"  # the repo #925 found invisible

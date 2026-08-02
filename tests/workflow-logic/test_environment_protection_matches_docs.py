@@ -42,6 +42,12 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 CHECKER = REPO_ROOT / "scripts" / "check-environment-protection.py"
 
 _SPEC = importlib.util.spec_from_file_location("check_environment_protection", CHECKER)
+# Fail here, saying what is wrong, rather than several lines down with an
+# AttributeError on None. If the checker is renamed or moved, THIS is the
+# message that should appear — not a TypeError about a NoneType loader.
+assert _SPEC is not None and _SPEC.loader is not None, (
+    f"cannot load the checker from {CHECKER} — does that file still exist?"
+)
 _MOD = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MOD)
 
@@ -91,6 +97,17 @@ def _run(payload):
             except SystemExit as exc:  # argparse / fail-closed paths
                 code = exc.code if isinstance(exc.code, int) else 1
                 buf.write(str(exc))
+            except Exception:  # noqa: BLE001 - a crash is a RESULT here, not an error
+                # Without this the checker crashing takes the whole module down
+                # mid-run: the remaining tests never execute, and the one
+                # assertion that cares -- "the guard exits with a message rather
+                # than a traceback" -- can never see the traceback it is looking
+                # for. Recording it as output makes a crash a clean FAIL on the
+                # test that provoked it, and lets the rest of the suite finish.
+                import traceback
+
+                code = 1
+                buf.write(traceback.format_exc())
         return code, buf.getvalue()
 
 
@@ -217,6 +234,61 @@ def test_an_unrecognised_payload_shape_fails():
     """Refuse to interpret a response we do not understand as 'no gates'."""
     code, out = _run({"message": "Not Found"})
     assert code == 1, f"a payload with no 'environments' key must fail, got exit {code}:\n{out}"
+    assert "no 'environments' key" in out, f"the message must say what was wrong:\n{out}"
+
+
+def test_a_malformed_environments_value_fails_closed_with_a_message():
+    """Every not-a-list shape is rejected, not coerced.
+
+    The coercing form (`payload.get("environments") or []`) turns a dict into a
+    list of its KEYS, so the rows become strings and the first `.get()`
+    downstream raises AttributeError — a traceback about our own bookkeeping
+    instead of about the malformed response. Exit 1 either way, but only one of
+    them tells the reader what happened, and this guard exists to be readable
+    when it fires.
+    """
+    for value in (None, {"github-prod": "gated"}, "environments", 7):
+        code, out = _run({"total_count": 0, "environments": value})
+        assert code == 1, f"environments={value!r} must fail closed, got exit {code}:\n{out}"
+        assert "not a list" in out, (
+            f"environments={value!r} must be rejected by name, not crash: {out}"
+        )
+        assert "Traceback" not in out, f"environments={value!r} crashed instead of exiting:\n{out}"
+
+
+def test_a_non_object_environment_entry_fails_closed_with_a_message():
+    """A list is not enough — its entries have to be objects we can read."""
+    for entry in ("github-prod", None, 42, ["github-prod"]):
+        code, out = _run({"total_count": 1, "environments": [entry]})
+        assert code == 1, f"entry {entry!r} must fail closed, got exit {code}:\n{out}"
+        assert "non-object entry" in out, f"entry {entry!r} must be rejected by name:\n{out}"
+        assert "Traceback" not in out, f"entry {entry!r} crashed instead of exiting:\n{out}"
+
+
+def test_both_entry_points_share_one_definition_of_a_valid_payload():
+    """The paged fetch and protection_map must not drift apart on shape.
+
+    They had two partial copies of the check; the fetch path accepted a dict for
+    `environments` that protection_map would then crash on. One validator, used
+    by both, is what makes the tests above cover the network path too.
+    """
+    import ast
+
+    tree = ast.parse(CHECKER.read_text(encoding="utf-8"))
+    funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    assert list(funcs).count("environment_rows") == 1, "exactly one shape validator, please"
+    for caller in ("fetch_environments_payload", "protection_map"):
+        assert caller in funcs, f"{caller} is gone — this test is no longer checking anything"
+        called = {
+            n.func.id
+            for n in ast.walk(funcs[caller])
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        }
+        assert "environment_rows" in called, (
+            f"{caller}() must route through environment_rows(), or the definition of "
+            "a valid payload has drifted into two copies again — which is how the "
+            "fetch path came to accept a dict that protection_map then crashed on"
+        )
 
 
 # --------------------------------------------------------------------------

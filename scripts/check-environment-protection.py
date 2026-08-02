@@ -231,12 +231,7 @@ def fetch_environments_payload(repo, token):
                 "The environment list could not be read, so this check reports "
                 "nothing rather than a clean bill of health."
             )
-        if not isinstance(payload, dict) or "environments" not in payload:
-            raise SystemExit(
-                f"error: unexpected response shape from {url} — no 'environments' key. "
-                "Refusing to interpret an unrecognised payload as 'no gates'."
-            )
-        batch = payload.get("environments") or []
+        batch = environment_rows(payload, url)
         rows.extend(batch)
         if total is None:
             total = payload.get("total_count")
@@ -252,15 +247,47 @@ def fetch_environments_payload(repo, token):
     return {"total_count": total if total is not None else len(rows), "environments": rows}
 
 
-def protection_map(payload):
-    """{environment name -> sorted list of protection rule types}."""
+def environment_rows(payload, source):
+    """The `environments` list out of a payload, or exit saying why it is not one.
+
+    One validator for both entry points — the paged fetch and `protection_map` —
+    because "what a valid payload looks like" must have exactly one definition.
+    Each shape below is rejected rather than coerced: a `null`, a dict, or a list
+    holding anything but objects all mean we are not looking at the response we
+    think we are, and this guard's whole contract is that it would rather say so
+    than interpret an unrecognised payload as "no gates".
+
+    Coercing instead (the earlier `payload.get("environments") or []`) fails in
+    the worst available way: a dict extends a list with its *keys*, so the rows
+    become strings and the first `.get()` downstream raises AttributeError —
+    a traceback pointing at our own bookkeeping rather than at the malformed
+    response, which is #962's lesson in a new place.
+    """
     if not isinstance(payload, dict) or "environments" not in payload:
         raise SystemExit(
-            "error: environments payload has no 'environments' key. Refusing to "
-            "interpret an unrecognised payload as 'no gates'."
+            f"error: unexpected response shape from {source} — no 'environments' key. "
+            "Refusing to interpret an unrecognised payload as 'no gates'."
         )
+    rows = payload["environments"]
+    if not isinstance(rows, list):
+        raise SystemExit(
+            f"error: 'environments' from {source} is {type(rows).__name__}, not a list. "
+            "Refusing to interpret an unrecognised payload as 'no gates'."
+        )
+    for entry in rows:
+        if not isinstance(entry, dict):
+            raise SystemExit(
+                f"error: 'environments' from {source} contains a non-object entry "
+                f"({type(entry).__name__}): {entry!r}. Refusing to interpret an "
+                "unrecognised payload as 'no gates'."
+            )
+    return rows
+
+
+def protection_map(payload):
+    """{environment name -> sorted list of protection rule types}."""
     rules = {}
-    for env in payload["environments"]:
+    for env in environment_rows(payload, "the environments payload"):
         name = env.get("name")
         if not name:
             raise SystemExit(f"error: environments payload contains a nameless entry: {env!r}")

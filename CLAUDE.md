@@ -483,7 +483,11 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
     every time and proved nothing — the read side translated the CRLFs back out, so a file rewritten
     end to end hashed identical to the LF original. The only tell was `git status` listing the file
     as modified with an **empty** `git diff`. Pass `newline=""` when writing, and verify restores
-    with `tr`/`'rb'`, never `read_text`.
+    with `tr`/`'rb'`, never `read_text`. (`newline=""` and `newline="\n"` are byte-identical on
+    **write** — measured here on both LF and CRLF content — so the choice is intent, not behaviour:
+    `""` for "restore verbatim", `"\n"` for "force LF" as the generators in `scripts/` do. Only the
+    default is wrong, and it is worse than "adds CR": a string that already holds `\r\n` comes out
+    `\r\r\n`.)
   - **Better: mutate a copy and leave the original alone.** The repo's own mutation sites already do
     this — `test_737_claim_sync.py:206` and `test_powershell_command_resolution.py:138` copy into a
     `tempfile.TemporaryDirectory()` and mutate there, so restore fidelity is never in question. The

@@ -320,8 +320,13 @@ def evaluate(lanes, gated, actual):
         if env not in actual:
             errors.append(
                 f"{env}: referenced by {users} but no such environment exists on the "
-                "platform. A typo'd `environment:` is created on first run with NO "
-                "protection rules, which silently ungates the lane."
+                "platform. GitHub creates it with NO protection rules on first use, so "
+                "the declared posture stays unverified until someone provisions it. "
+                "Fatal even where the docs call this lane ungated, because the declared "
+                "side cannot settle this case on its own: a name typo'd off a gated lane "
+                "can never appear in the gated set, so it reads as 'ungated' by "
+                "construction — which is the silent gate-loss this rule exists to catch. "
+                "Create it under Settings -> Environments, or stop referencing it."
             )
             continue
         has_reviewer = REVIEWER_RULE in actual[env]

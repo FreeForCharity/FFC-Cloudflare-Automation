@@ -219,6 +219,33 @@ def test_a_referenced_environment_missing_from_the_api_fails():
     assert env in out, f"the finding must name {env}:\n{out}"
 
 
+def test_an_absent_lane_is_fatal_even_when_the_docs_call_it_ungated():
+    """Why `absent -> fatal` cannot be split by declared gatedness.
+
+    Reviewed and nearly changed on #1005: make an absent environment fatal only
+    when the docs call it GATED, and merely reported when they call it ungated,
+    so a knowingly-unprovisioned ungated lane could pass. That is appealing —
+    an auto-created rule-less environment does match an "ungated" declaration —
+    and it fails against the threat the rule exists to stop.
+
+    A typo'd name can never appear in the gated set, so the declared side
+    classifies it as UNGATED **by construction**. Under the split, a workflow
+    that typos its way off a gated lane would emit a warning and merge, losing
+    the gate silently. The declared side is untrustworthy in exactly the case
+    that matters, which is what makes the unconditional rule load-bearing.
+
+    Pinned as a test so the reasoning is not re-litigated from the wording of
+    the error message alone.
+    """
+    typo = _a_gated_lane() + "-raed"
+    assert typo not in _gated(), "premise: a typo cannot be in the declared gated set"
+    errors, warnings = evaluate({typo: ["999-does-a-write.yml"]}, _gated(), {})
+    assert any(typo in e for e in errors), (
+        "an absent environment must be fatal even though the declared side reads it "
+        f"as ungated — that is the whole point. errors={errors} warnings={warnings}"
+    )
+
+
 def test_an_empty_environment_list_fails_rather_than_reading_as_no_gates():
     """The failure mode workflow 730 states in its own error path.
 

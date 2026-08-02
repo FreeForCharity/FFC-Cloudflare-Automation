@@ -27,12 +27,20 @@ DID_NOT_RUN = "pre-commit: SECRET SCAN DID NOT RUN"
 def _git(args):
     # Decode git's output as UTF-8 explicitly. Git emits UTF-8 regardless of
     # the console codepage, so this is correct everywhere -- whereas bare
-    # text=True decodes with the LOCALE codec, and on a cp1252 host any em
-    # dash, curly quote or emoji in the diff raised UnicodeDecodeError right
-    # here, before find_secrets() ever ran. The fail-open below then turned
-    # that total failure into a silent, successful commit (#996; same root
-    # cause as ledger L35 / #945). errors="replace" degrades a genuinely
-    # undecodable byte to one character instead of skipping the whole file.
+    # text=True decodes with the LOCALE codec, which is cp1252 on the Windows
+    # Conductor host. cp1252 leaves five byte values undefined
+    # (0x81/0x8D/0x8F/0x90/0x9D), so a staged line carrying a character whose
+    # UTF-8 encoding contains one of them -- U+201D, the RIGHT curly double
+    # quote, and U+274C, the cross mark, both via 0x9D -- aborted the read
+    # before find_secrets() ever ran. The fail-open below then turned that
+    # total failure into a successful commit (#996; same root cause as ledger
+    # L35 / #945).
+    #
+    # NOT the em dash, despite what #996 and L07 both said: e2 80 94 is fully
+    # defined in cp1252, so it decoded to mojibake and the scan completed.
+    # tests/workflow-logic/test_githooks_scan_staged.py pins the real set.
+    # errors="replace" degrades a genuinely undecodable byte to one character
+    # instead of losing the whole file.
     return subprocess.run(
         ["git", *args],
         capture_output=True,

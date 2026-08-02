@@ -6,11 +6,15 @@ defect is that the fail-open was *silent*, so a total failure and a clean scan
 produced the identical observable result -- the same shape as #722's large-blob
 guard going green for the wrong reason.
 
-The failure was real and routine, not theoretical: `_git()` decoded git's output
-with the LOCALE codec, and on the Windows Conductor host that is cp1252. Every
-em dash, curly quote and emoji in this repo's prose (which is house style, and
-which the Conductor commits every run) raised UnicodeDecodeError inside the diff
-read -- before find_secrets() was ever called -- and the commit succeeded.
+The failure was real, not theoretical: `_git()` decoded git's output with the
+LOCALE codec, and on the Windows Conductor host that is cp1252. A staged line
+carrying a character whose UTF-8 bytes cp1252 leaves undefined raised
+UnicodeDecodeError inside the diff read -- before find_secrets() was ever called
+-- and the commit succeeded.
+
+It is a narrower set than #996 claimed, and the bottom of this file pins it:
+cp1252 rejects only 0x81/0x8D/0x8F/0x90/0x9D, so `”` (U+201D) and `❌` (U+274C)
+abort the read while the **em dash does not**. Measured, not assumed.
 
 So the tests here are mostly about the direction that produces a **falsely clean**
 scan:
@@ -294,6 +298,92 @@ def test_manual_path_mode_reads_the_worktree():
         {"doc.md": f"{NON_ASCII_LINE}\ntoken = \"{FAKE_PAT}\"\n"}, args=("doc.md",)
     )
     assert rc == 1, f"explicit-path mode must detect the same secret, got rc={rc}\n{err}"
+
+
+# --------------------------------------------------------------------------
+# Which characters actually trigger this, pinned as executable fact.
+#
+# #996, this PR's first draft, and ledger L07 all said "an em dash crashes the
+# cp1252 read". Measured on the Windows Conductor host, that is FALSE: cp1252
+# leaves only five byte values undefined, and an em dash's UTF-8 bytes are not
+# among them -- it decodes to mojibake and the scan completes, so a secret on an
+# em-dash line was always caught. The characters that really abort the read are
+# the ones whose UTF-8 encoding contains 0x81/0x8D/0x8F/0x90/0x9D -- in this
+# repo's prose that is U+201D (the RIGHT curly double quote) and U+274C (the
+# cross mark), both carrying 0x9D. L07's original crash was the cross mark, not
+# the em dashes it blamed.
+#
+# This matters beyond pedantry: "every commit with an em dash was unscanned"
+# implies the scanner was dead on nearly every commit this repo has ever taken,
+# when in fact it worked on most of them and died on a narrow class. Anyone
+# auditing which past commits went unscanned would get a wildly wrong answer,
+# and anyone "confirming the bug" by committing an em dash on Windows would
+# watch it block correctly and conclude the defect did not exist.
+# --------------------------------------------------------------------------
+
+CP1252_UNDEFINED = {0x81, 0x8D, 0x8F, 0x90, 0x9D}
+
+
+def _decodes_as_cp1252(raw: bytes) -> bool:
+    """True if an 8-bit cp1252 read would survive these bytes.
+
+    Decodes with the codec by name rather than relying on the host's locale, so
+    this measures the same thing on the Windows host and on ubuntu CI.
+    """
+    try:
+        raw.decode("cp1252")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+# (label, char, does an 8-bit cp1252 read abort on it?)
+TRIGGER_TABLE = [
+    ("em dash U+2014", "—", False),
+    ("en dash U+2013", "–", False),
+    ("left curly dq U+201C", "“", False),
+    ("right curly sq U+2019", "’", False),
+    ("ellipsis U+2026", "…", False),
+    ("bullet U+2022", "•", False),
+    ("check mark U+2713", "✓", False),
+    ("siren emoji U+1F6A8", "\U0001f6a8", False),
+    ("right curly dq U+201D", "”", True),
+    ("cross mark U+274C", "❌", True),
+]
+
+
+def test_the_cp1252_undefined_byte_set_is_exactly_five():
+    measured = {i for i in range(256) if not _decodes_as_cp1252(bytes([i]))}
+    assert measured == CP1252_UNDEFINED, (
+        "the premise of every claim in this file is which bytes cp1252 rejects; "
+        f"expected {sorted(CP1252_UNDEFINED)}, measured {sorted(measured)}"
+    )
+
+
+def test_the_em_dash_does_not_trigger_the_crash_but_u201d_does():
+    wrong = []
+    for label, char, should_abort in TRIGGER_TABLE:
+        aborts = not _decodes_as_cp1252(char.encode("utf-8"))
+        if aborts != should_abort:
+            wrong.append(f"{label}: expected abort={should_abort}, measured {aborts}")
+    assert not wrong, (
+        "the documented trigger set no longer matches reality -- fix the prose in "
+        ".githooks/scan_staged.py, .githooks/README.md and docs/lessons-ledger.md "
+        "rather than this table:\n  " + "\n  ".join(wrong)
+    )
+
+
+def test_the_shared_fixture_really_contains_a_triggering_character():
+    """NON_ASCII_LINE reproduces on a real cp1252 host only because of U+201D.
+
+    Drop the curly quotes from it and every non-ASCII case above still passes
+    under the forced-ASCII CI locale while quietly ceasing to reproduce the bug
+    on the host that actually has it.
+    """
+    triggering = [c for c in NON_ASCII_LINE if not _decodes_as_cp1252(c.encode("utf-8"))]
+    assert triggering, (
+        "NON_ASCII_LINE contains no character that aborts a cp1252 read, so it "
+        "cannot reproduce #996 on the Windows host -- only under forced ASCII"
+    )
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

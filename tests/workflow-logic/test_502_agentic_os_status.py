@@ -40,9 +40,11 @@ Run: python3 tests/workflow-logic/test_502_agentic_os_status.py
 
 from __future__ import annotations
 
+import builtins
 import importlib.util
 import json
 import pathlib
+import tempfile
 import re
 import sys
 import urllib.parse
@@ -661,6 +663,50 @@ def main():
         all(r in backlog for r in ready),
         "every ready row must still be a backlog row — ready is a subset, not a replacement",
     )
+
+    # --- write_feed pins UTF-8 AND LF, and the LF half cannot be tested by
+    # --- running it here (see the docstring on write_feed).
+    #
+    # This asserts on the `open()` CALL rather than on the bytes on disk, and
+    # that is deliberate. CI is `ubuntu-latest`, where text mode never
+    # translates `\n`, so a round-trip test would write LF and pass **whether or
+    # not `newline=` is set** — green for the wrong reason on the only platform
+    # that runs it, which is the L75 trap. The contract is the keyword; the
+    # keyword is what gets checked.
+    opened = {}
+    real_open = builtins.open
+
+    def recording_open(path, mode="r", *args, **kwargs):
+        opened["path"], opened["mode"], opened["kwargs"] = path, mode, kwargs
+        return real_open(path, mode, *args, **kwargs)
+
+    with tempfile.TemporaryDirectory() as td:
+        target = pathlib.Path(td) / "feed.json"
+        builtins.open = recording_open
+        try:
+            m.write_feed(str(target), '{"a": 1}\n')
+        finally:
+            builtins.open = real_open
+
+        check(opened.get("mode") == "w", "write_feed must open for writing")
+        check(
+            opened.get("kwargs", {}).get("encoding") == "utf-8",
+            "write_feed must pin encoding='utf-8' — the host default is cp1252 and the "
+            "feed carries emoji issue titles",
+        )
+        check(
+            opened.get("kwargs", {}).get("newline") == "\n",
+            "write_feed must pin newline='\\n' — without it the Windows hand-delivery path "
+            "emits CRLF, and neither Linux CI nor ffcadmin's eol=lf .gitattributes can see it",
+        )
+        # The round-trip is still worth asserting: it is the half that would
+        # catch a regression on the Conductor's own Windows host, where it DOES
+        # discriminate. It proves nothing in CI, and says so.
+        with real_open(target, "rb") as fh:
+            check(
+                fh.read() == b'{"a": 1}\n',
+                "write_feed round-trip must be byte-exact (discriminating on Windows only)",
+            )
 
     print("test_502_agentic_os_status: all assertions passed")
     return 0

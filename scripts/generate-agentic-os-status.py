@@ -649,6 +649,35 @@ def build_feed(repo, token, org=DEFAULT_ORG):
     }
 
 
+def write_feed(path, text):
+    """Write the feed to ``path`` as UTF-8 with LF line endings.
+
+    ``newline="\\n"`` is as load-bearing here as ``encoding=`` is beside it, and
+    for the same reason: this script runs on both ``ubuntu-latest`` (502's
+    ``deliver`` job) and the Conductor's Windows host (the hand-delivery path
+    used on every delivery #848 has blocked so far). In text mode with the
+    default ``newline=None``, Python translates ``\\n`` to ``\\r\\n`` on
+    Windows, so identical feed content ships as different bytes depending on
+    which host generated it.
+
+    Nothing downstream has caught that, which is exactly why it is worth pinning
+    rather than leaving to convention:
+
+    * ffcadmin's ``.gitattributes`` (``* text=auto eol=lf``) normalises the
+      committed blob, so the published file has always been correct and the
+      difference is invisible to any check that reads git rather than the file;
+    * this repo's CI is Linux, where the translation never happens, so no test
+      can observe it by running the script.
+
+    Both are masks, not fixes: the first is one ``.gitattributes`` edit away
+    from failing, and the second means CI will never warn. ``CLAUDE.md`` ("The
+    generator's ``--output`` writes CRLF on Windows") documents the downstream
+    workaround that this makes unnecessary.
+    """
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -680,8 +709,7 @@ def main():
     text = json.dumps(feed, indent=2, ensure_ascii=False) + "\n"
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as fh:
-            fh.write(text)
+        write_feed(args.output, text)
         counts = (
             f"{len(feed['backlog_issues'])} issues, "
             f"{len(feed['in_flight_prs'])} of {feed['open_prs_total']} open PRs "

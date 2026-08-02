@@ -118,10 +118,10 @@ family as ledger **L42**.
 
 ## Out of scope — do not touch
 
-Six branches back open PRs and are **not** part of this review. **This mapping was read from
-`gh pr list --json headRefName`, not inferred from branch names** — an earlier draft of this
-document guessed it from the branch naming pattern and got two of six wrong in a way that would have
-proposed a live branch for deletion:
+Six branches each have an open PR against them, and are **not** part of this review. **This mapping
+was read from `gh pr list --json headRefName`, not inferred from branch names** — an earlier draft
+of this document guessed it from the branch naming pattern and got two of six wrong in a way that
+would have proposed a live branch for deletion:
 
 | Branch                                    | Open PR |
 | ----------------------------------------- | ------- |

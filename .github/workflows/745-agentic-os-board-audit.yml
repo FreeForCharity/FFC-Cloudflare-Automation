@@ -1,0 +1,209 @@
+name: '745. Repo - Agentic OS Board Audit [GH]'
+run-name: 'Agentic OS board audit'
+
+# Runs scripts/audit-agentic-os-board.py daily against the public "Agentic OS"
+# board (org project #9) and reports to the Conductor Log (#719) when — and only
+# when — the audit has something to say.
+#
+# WHY A WORKFLOW AND NOT A SCRIPT (#969). The script landed in #968 and works: it
+# found four real defects the first time it was pointed at the live board. But
+# nothing invoked it, and a script that runs when a human remembers to run it is
+# the same category of assurance as not having it. The board has NO auto-add
+# automation — org project #9 enables only `Auto-add sub-issues`, while
+# `Item closed` and `Pull request merged` are disabled — so every card and every
+# Status transition is placed by hand, and that is not going to change. This
+# audit is the compensating control, and a compensating control on a manual
+# process has to be automatic or it inherits the same failure mode. It had
+# already failed twice in two runs by the time #969 was filed, in both
+# directions, and run 62's mess sat unnoticed for ~6 hours.
+#
+# UNGATED, DELIBERATELY. `github-prod-read` has no required reviewers. A daily
+# read-only audit pinned to a gated environment parks at an approval gate that
+# nobody is watching at 07:47 UTC and is eventually reaped by janitor 734 — which
+# is #834 exactly, and what tests/workflow-logic/test_gated_env_hygiene.py
+# exists to prevent.
+#
+# THE CREDENTIAL IS NOT read-all-cbm-github-pat, and that is a deviation from
+# #969's text. The audit needs a real PAT — the ambient GITHUB_TOKEN is
+# repository-scoped and cannot read an ORG-level ProjectsV2 board — but the
+# secret #969 named has been dead since 2026-07-29T22:26Z (#848: 502's deliver
+# job has failed on a 401 every day since). Wiring a new daily workflow to it
+# would ship a guaranteed-red cron and manufacture a 740 alert on its first tick.
+# This follows 726 instead: the same reader identity on the same ungated lane,
+# loading read-all-cbm-ffc-copilot-mcp-github-pat, which 321 reported live on
+# 2026-08-01T10:05Z. Key Vault stays the single source of truth (#844); rotation
+# is a new KV version and no GitHub change.
+#
+# SILENT WHEN CLEAN, following 734 and #967. A daily "the board is clean" comment
+# on #719 trains everyone to stop reading the thread. Silence is reserved for the
+# one outcome that established something: the audit ran, read both sides, and
+# found nothing. An audit that could not complete is reported, never skipped.
+#
+# Read-only against GitHub: no card is added, no Status is set, nothing is closed.
+# The only write of any kind is the Conductor Log comment, which uses the ambient
+# GITHUB_TOKEN and never the Key Vault PAT — an own-repo issue write belongs on
+# the ambient token (#834's lesson from 726).
+
+on:
+  schedule:
+    # Daily, 07:47 UTC. Off the :00/:30 crowd so it does not queue behind the
+    # other hub monitors, and after the 06:31Z janitor tick.
+    - cron: '47 7 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  # The Conductor Log comment.
+  issues: write
+  # Required for the OIDC exchange that fetches the PAT from Key Vault (#844).
+  id-token: write
+
+# Serialize: a manual dispatch overlapping the daily run would post two reports
+# of the same board seconds apart. `cancel-in-progress: false` because cancelling
+# a read-only audit mid-flight buys nothing and, on a gated lane, is the
+# self-cancelling shape #834 documents.
+concurrency:
+  group: agentic-os-board-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Audit the Agentic OS board
+    runs-on: ubuntu-latest
+    environment: github-prod-read
+    steps:
+      # Fail fast on a half-provisioned lane — the same guard 726 and 735 carry.
+      # Especially worth it on a scheduled job: a silent mis-provisioning would
+      # otherwise be rediscovered a day later, by nobody.
+      - name: Validate required Azure OIDC identifiers
+        shell: bash
+        run: |
+          if [ -z "${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set. It is a repo-level Variable (non-secret GUID), read via vars.*, not an environment secret. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+          if [ -z "${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID is not set. It is a repo-level Variable (non-secret GUID), read via vars.*, not an environment secret. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Never a
+      # GitHub-secret copy — that drift is what broke the Cloudflare token for
+      # four months.
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show \
+            --vault-name kv-ffc-admin-prod-cbm \
+            --name read-all-cbm-ffc-copilot-mcp-github-pat \
+            --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault — check the reader identity's role on kv-ffc-admin-prod-cbm."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          d="BOARDPAT_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "BOARD_AUDIT_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      # The exit code is CAPTURED, not propagated: the reporting step below has
+      # to run in order to say anything, and a non-zero exit here is the normal
+      # case for a board with findings. The job's redness is decided in the
+      # report step from the classification, so a finding still fails the run —
+      # it just fails it after it has been published.
+      #
+      # `--json` rather than the prose renderer: the report is re-rendered as
+      # markdown by scripts/board-audit-report-lib.js, and parsing structured
+      # output is what lets the reporting step tell "four defects" apart from
+      # "I read nothing", which the exit code alone cannot (both are 1).
+      - name: Run the board audit
+        id: audit
+        shell: bash
+        env:
+          # The Key Vault PAT set by the step above. The audit script's only
+          # auth input is GH_TOKEN.
+          GH_TOKEN: ${{ env.BOARD_AUDIT_TOKEN }}
+        run: |
+          set -uo pipefail
+          python3 scripts/audit-agentic-os-board.py --json \
+            > board-audit.json 2> board-audit.err
+          code=$?
+          echo "exit-code=${code}" >> "$GITHUB_OUTPUT"
+          echo "Audit exited ${code}; $(wc -c < board-audit.json) bytes of report."
+          # stderr carries the script's own diagnostics on the failure paths
+          # (auth, enumeration). Surfacing it in the log costs nothing and is
+          # the first thing anyone reads when the classification says
+          # "incomplete". The token is masked by the loader above.
+          if [ -s board-audit.err ]; then
+            echo "--- stderr ---"
+            cat board-audit.err
+          fi
+
+      - name: Report to the Conductor Log
+        uses: actions/github-script@v9
+        env:
+          AUDIT_EXIT_CODE: ${{ steps.audit.outputs.exit-code }}
+        with:
+          script: |
+            const fs = require('fs');
+            const lib = require('./scripts/board-audit-report-lib.js');
+
+            const read = (p) => {
+              try {
+                return fs.readFileSync(p, 'utf8');
+              } catch (e) {
+                // An unreadable artifact is itself an incomplete run — it flows
+                // into classify() as unparseable output rather than being
+                // defaulted to something that could read as clean.
+                return '';
+              }
+            };
+
+            const classification = lib.classify({
+              exitCode: process.env.AUDIT_EXIT_CODE,
+              stdout: read('board-audit.json'),
+              stderr: read('board-audit.err'),
+            });
+
+            core.notice(lib.summary(classification));
+
+            const { owner, repo } = context.repo;
+            const runUrl =
+              `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = lib.renderBody(classification, { runUrl });
+
+            if (body) {
+              await core.summary.addRaw(body).write();
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: lib.LOG_ISSUE,
+                body,
+              });
+              console.log(`Reported to #${lib.LOG_ISSUE}.`);
+            } else {
+              await core.summary
+                .addRaw('Board is consistent with the backlog — nothing reported.')
+                .write();
+              console.log('Board is clean; staying silent by design.');
+            }
+
+            if (lib.shouldFail(classification)) {
+              core.setFailed(
+                classification.outcome === 'incomplete'
+                  ? `Board audit could not complete: ${classification.reason}`
+                  : `Board audit found ${classification.count} finding(s) — see #${lib.LOG_ISSUE}.`,
+              );
+            }

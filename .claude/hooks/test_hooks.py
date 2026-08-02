@@ -23,18 +23,48 @@ def run(script, payload):
         text=True,
         capture_output=True,
     )
-    return proc.returncode
+    return proc.returncode, proc.stderr
 
 
 def check(name, script, payload, expect_block):
     global PASS, FAIL
-    rc = run(script, payload)
+    rc, _ = run(script, payload)
     blocked = rc == 2
     ok = blocked == expect_block
     PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
     status = "ok  " if ok else "FAIL"
     want = "block" if expect_block else "allow"
     got = "block" if blocked else f"allow(rc={rc})"
+    print(f"  [{status}] {name}: want={want} got={got}")
+
+
+# An advisory rule exits 0 exactly like a silent allow, so `check` above cannot
+# tell "warned" from "said nothing" -- and a warning nobody can assert on is a
+# warning that can rot without any test noticing. Assert on the marker instead.
+WARN_MARKER = "FFC-HOOK-WARNING"
+
+
+def check_warn(name, script, payload, expect_warn, tag=None):
+    """Assert whether a command warns, holding the exit code at 0 either way.
+
+    `tag` names WHICH rule must (or must not) have fired -- e.g. "[#971]".
+    Without it this could only ask "did anything warn", and the two rules
+    overlap on real commands: `gh api repos/o/r/issues --jq '[...]'` is an
+    unpaginated list read (#971 fires, correctly) and is NOT a paginated
+    array-jq (#989 must stay quiet). An untagged assertion reads that as a
+    single "warn" and cannot tell a correct rule from a leaking one.
+    """
+    global PASS, FAIL
+    rc, err = run(script, payload)
+    warned = (tag in err) if tag else (WARN_MARKER in err)
+    # A warn case that blocks is a failure even if it "warned" -- the whole
+    # point of the tier is that the command still runs.
+    ok = (warned == expect_warn) and rc == 0
+    PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
+    status = "ok  " if ok else "FAIL"
+    label = f"{tag} " if tag else ""
+    want = f"{label}warn" if expect_warn else f"{label}silent"
+    got = ("warn" if warned else "silent") + (f", rc={rc}" if rc != 0 else "")
     print(f"  [{status}] {name}: want={want} got={got}")
 
 
@@ -79,6 +109,63 @@ def main():
           bash("git push --force origin feature/main"), False)
     check("echo lowercase secret var", "guard_bash.py",
           bash("echo $cloudflare_api_token"), True)
+
+    # --- #989: gh api --paginate with an array-building --jq (WARN) ---
+    print("guard_bash / #989 paginate + array-jq:")
+    check_warn("paginate + array jq", "guard_bash.py",
+               bash("gh api --paginate repos/o/r/issues/719/comments --jq '[.[]|{body}]'"), True, tag="[#989]")
+    check_warn("paginate + array jq, -q spelling", "guard_bash.py",
+               bash("gh api --paginate repos/o/r/issues --q '[.[]|.number]'"), True, tag="[#989]")
+    check_warn("paginate + array jq, double quotes", "guard_bash.py",
+               bash('gh api --paginate repos/o/r/pulls --jq "[.[]|.number]"'), True, tag="[#989]")
+    check_warn("paginate + array jq, jq before endpoint", "guard_bash.py",
+               bash("gh api --paginate --jq '[.[]|.id]' repos/o/r/commits"), True, tag="[#989]")
+    # The documented-correct forms must all stay silent.
+    check_warn("paginate + STREAMING jq silent", "guard_bash.py",
+               bash("gh api --paginate repos/o/r/issues/719/comments --jq '.[] | .number'"), False, tag="[#989]")
+    check_warn("array jq WITHOUT paginate silent", "guard_bash.py",
+               bash("gh api repos/o/r/issues --jq '[.[]|.number]'"), False, tag="[#989]")
+    check_warn("paginate + slurp, no jq, silent", "guard_bash.py",
+               bash("gh api --paginate --slurp repos/o/r/issues/719/comments"), False, tag="[#989]")
+    check_warn("gh pr list array jq is not gh api", "guard_bash.py",
+               bash("gh pr list --json number --jq '[.[]|.number]'"), False, tag="[#989]")
+    # The measured counter-example that decided this rule's tier: 726 reduces
+    # each page to a scalar and re-joins downstream, so it is CORRECT. It still
+    # warns -- an advisory tier is allowed to be noticed on correct code -- but
+    # it must never be blocked, which is what this case pins.
+    check("726's real usage warns but is NOT blocked", "guard_bash.py",
+          bash("gh api --paginate \"repos/$org/$repo/teams?per_page=100\" --jq '[.[] | .slug] | join(\",\")'"),
+          False)
+
+    # --- #971: unpaginated gh api LIST read (WARN, never block) ---
+    print("guard_bash / #971 unpaginated list read:")
+    check_warn("the run-64 command warns", "guard_bash.py",
+               bash("gh api 'repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows?per_page=100'"),
+               True, tag="[#971]")
+    check_warn("nested collection warns", "guard_bash.py",
+               bash("gh api repos/o/r/issues/719/comments"), True, tag="[#971]")
+    check_warn("deep route ending in a collection warns", "guard_bash.py",
+               bash("gh api repos/o/r/actions/workflows/502-x.yml/runs"), True, tag="[#971]")
+    check_warn("org repos listing warns", "guard_bash.py",
+               bash("gh api orgs/FreeForCharity/repos"), True, tag="[#971]")
+    # Allows.
+    check_warn("--paginate is silent", "guard_bash.py",
+               bash("gh api --paginate repos/o/r/actions/workflows"), False, tag="[#971]")
+    check_warn("explicit page= is silent", "guard_bash.py",
+               bash("gh api 'repos/o/r/actions/workflows?per_page=100&page=2'"), False, tag="[#971]")
+    check_warn("single-object read is silent", "guard_bash.py",
+               bash("gh api repos/o/r/pulls/123"), False, tag="[#971]")
+    check_warn("repo root is not a collection", "guard_bash.py",
+               bash("gh api repos/FreeForCharity/FFC-Cloudflare-Automation"), False, tag="[#971]")
+    check_warn("graphql is not a collection", "guard_bash.py",
+               bash("gh api graphql -f query='{viewer{login}}'"), False, tag="[#971]")
+    check_warn("a write is not a list read", "guard_bash.py",
+               bash("gh api -X DELETE repos/o/r/git/refs/heads/x"), False, tag="[#971]")
+    check_warn("non-gh command with the same words is silent", "guard_bash.py",
+               bash("echo 'gh api repos/o/r/issues is a list read'"), False, tag="[#971]")
+    # The tier itself: a warned command must still be ALLOWED to run.
+    check("warned list read is still allowed", "guard_bash.py",
+          bash("gh api repos/o/r/issues/719/comments"), False)
 
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)

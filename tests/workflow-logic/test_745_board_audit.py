@@ -464,6 +464,37 @@ def test_the_workflow_has_a_safety_table_row():
     assert "| 745 " in doc, "add a row to docs/workflow-safety-and-approvals.md"
 
 
+def test_the_safety_row_names_the_environment_the_job_actually_declares():
+    # The row shipped with `—` in the Approval env column, copied from 743/744 —
+    # which are correct for THEM, because they declare no environment at all
+    # (744 deliberately holds no Key Vault credential so it cannot go dark with
+    # the feed it watches). 745 does declare one, and the read-lane precedent
+    # 726/735 both name it. Caught by review, not by any guard.
+    #
+    # It matters past tidiness because the column is the SOURCE the catalog
+    # generator reads: `parse_safety_table()` sets `approvalEnv` from this cell
+    # and nothing cross-checks it against the YAML, so one wrong cell propagates
+    # silently into docs/workflow-catalog.json and the workflows README — three
+    # files disagreeing with the workflow, from one edit.
+    doc = (REPO_ROOT / "docs" / "workflow-safety-and-approvals.md").read_text(encoding="utf-8")
+    row = next(ln for ln in doc.split("\n") if ln.startswith("| 745 "))
+    approval_env = row.split("|")[4].strip()
+    assert approval_env == _job()["environment"], (
+        f"safety-table Approval env is {approval_env!r} but the job declares "
+        f"{_job()['environment']!r}"
+    )
+
+
+def test_the_catalog_agrees_with_the_workflow():
+    # The generated end of the same contract: whatever the doc says has to
+    # survive regeneration into the catalog, which is what tooling reads.
+    catalog = json.loads((REPO_ROOT / "docs" / "workflow-catalog.json").read_text(encoding="utf-8"))
+    rows = catalog["workflows"] if isinstance(catalog, dict) else catalog
+    entry = next(w for w in rows if str(w.get("number")) == "745")
+    assert entry["approvalEnv"] == _job()["environment"], entry
+    assert entry["environments"] == [_job()["environment"]], entry
+
+
 def test_the_header_never_wraps_mid_hyphenated_word():
     # The catalog generator joins header comment lines with a space, so a word
     # split across the wrap ships to the public catalog as `read- only` (#840).

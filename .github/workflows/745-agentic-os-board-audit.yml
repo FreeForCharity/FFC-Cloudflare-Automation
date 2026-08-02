@@ -147,8 +147,14 @@ jobs:
           # workflow exists to do went undone. A command on the left of `||` is
           # exempt from `-e`, so this form captures the code instead of dying on
           # it. Do not "simplify" it back.
+          # `--grace-minutes` is stated here rather than left to the script's
+          # default so the tolerance is visible at the call site: 90 minutes is
+          # the gap between this 07:47Z tick and a Conductor run getting to the
+          # board, and an uncarded item younger than that is latency, not drift
+          # (#992). It applies to the missing-card set only — a card with no
+          # Status, or closed work not marked Done, still fails at any age.
           code=0
-          python3 scripts/audit-agentic-os-board.py --json \
+          python3 scripts/audit-agentic-os-board.py --json --grace-minutes 90 \
             > board-audit.json 2> board-audit.err || code=$?
           echo "exit-code=${code}" >> "$GITHUB_OUTPUT"
           echo "Audit exited ${code}; $(wc -c < board-audit.json) bytes of report."

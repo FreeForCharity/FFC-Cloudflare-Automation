@@ -539,7 +539,22 @@ def audit(expected, board_rows, grace_minutes=0, now=None):
             continue
         item = dict(expected[key])
         age = age_in_minutes(item.get("created_at"), now)
-        item["age_minutes"] = None if age is None else round(age, 1)
+        if age is not None:
+            # Clamp, because a NEGATIVE age is deferral's fail-open. A
+            # future-dated `created_at` — clock skew between GitHub and this
+            # runner, or a value someone set — makes `age < grace_minutes` true
+            # for EVERY window including `--grace-minutes 0`, which is
+            # documented as disabling deferral. An item could then sit uncarded
+            # forever and never be reported, with the window switched off.
+            # Clamped to 0 it is merely "brand new": deferred while a window is
+            # open, and a finding the moment one is not.
+            age = max(0.0, age)
+        # Stored UNROUNDED, and rounded only for display. `round(age, 1)` here
+        # pushed 89.95 to 90.0, which `format_age` then rendered as `1.5h` — a
+        # row deferred by a 90-minute window that reads as older than it. The
+        # displayed age is how a reader checks the deferral, so it must never
+        # be able to contradict the classification that produced it.
+        item["age_minutes"] = age
 
         if item.get("is_self_alert"):
             self_referential_alerts.append(item)

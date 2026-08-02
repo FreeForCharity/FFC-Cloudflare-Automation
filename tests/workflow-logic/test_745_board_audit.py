@@ -536,6 +536,42 @@ def test_zero_grace_restores_the_pre_992_behaviour():
     assert [r["number"] for r in result["missing_from_board"]] == [991]
 
 
+def test_a_future_dated_item_cannot_defer_itself_past_a_disabled_window():
+    # Deferral's fail-open, found by Copilot on #1012. A negative age — clock
+    # skew, or a created_at in the future — satisfies `age < grace_minutes` for
+    # EVERY window, including `--grace-minutes 0`, which is documented as
+    # disabling deferral. An item could sit uncarded forever, never reported,
+    # with the window switched off. Clamping to 0 makes it merely "brand new".
+    result = _audit(_expected(991, -120), grace=0)
+    assert [r["number"] for r in result["missing_from_board"]] == [991]
+    assert result["recently_opened_not_yet_carded"] == []
+    assert result["missing_from_board"][0]["age_minutes"] == 0
+
+    # …and with a window open it IS deferred, because "created in the future"
+    # is the one thing that cannot mean "stale".
+    open_window = _audit(_expected(991, -120), grace=GRACE)
+    assert [r["number"] for r in open_window["recently_opened_not_yet_carded"]] == [991]
+
+
+def test_the_displayed_age_cannot_contradict_the_deferral():
+    # Also Copilot on #1012. `round(age, 1)` pushed 89.95 to 90.0, which
+    # format_age rendered as `1.5h` — a row deferred BY a 90-minute window,
+    # displayed as older than it. The rendered age is how a reader checks the
+    # deferral, so it must never disagree with the classification. Stored
+    # unrounded; rounding is the renderer's job.
+    mod = _load_audit_script()
+    result = _audit(_expected(991, 89.95))
+    rows = result["recently_opened_not_yet_carded"]
+    assert len(rows) == 1, rows
+    assert rows[0]["age_minutes"] == 89.95, "the stored age must not be pre-rounded"
+    assert mod.format_age(rows[0]["age_minutes"]) == "90m"
+    assert "h old" not in mod._describe(rows[0]), mod._describe(rows[0])
+    # The JS renderer has to agree — it formats the same number independently.
+    assert (
+        _node("process.stdout.write(JSON.stringify(l.formatAge(89.95)));") == "90m"
+    )
+
+
 def test_deferred_rows_carry_their_age():
     # AC3. A deferral nobody can date is a deferral nobody can check.
     #

@@ -506,6 +506,13 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
     `tempfile.TemporaryDirectory()` and mutate there, so restore fidelity is never in question. The
     in-place-and-restore pattern is the ad-hoc reviewer's habit, and it is the one that needs the
     binary check.
+  - **And do not build the mutating script through a shell heredoc.** `python - <<'PY'` does not
+    deliver backslash escapes intact on this host: run 77 lost every `\n` in a `"\n".join(...)` to a
+    carriage return and committed `docs/lessons-ledger.md` with **0 LF and 169 CR**, while prettier
+    reported "unchanged", the pre-commit hook passed and `git status` was clean. `CLAUDE.md`, edited
+    with the file-editing tool in the same minutes, was untouched — that is the control case. Write
+    files with the editing tool; if a script must transform one, put the script in a file and run it
+    by path. Ledger **L88**.
 - **The full workflow-logic suite takes over 2 minutes once it actually runs.** It used to finish in
   seconds only because the modules were aborting; a 2-minute command timeout now reads as a hang.
 - **One module — `test_729_add_collaborator.py` — leaves a zero-byte `U+F022 U+F022` file in the

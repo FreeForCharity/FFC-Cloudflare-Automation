@@ -13,6 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Reading this repo's own environment protection rules
+      # (GET /repos/:owner/:repo/environments) — the scope workflow 730 uses for
+      # the same endpoint. Read-only; nothing in this job deploys.
+      actions: read
 
     steps:
       - name: Checkout repository
@@ -162,6 +166,27 @@ jobs:
           # Like #944 / ledger L35, this class can never turn CI red, so it is
           # checked against the SOURCE, where it is visible from every platform.
           python3 scripts/check-subprocess-encoding.py
+
+      - name: Validate environment protection matches the docs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # Every "gated" / "ungated" claim in this repo was asserted against
+          # itself: the workflow-logic suite compares a workflow's environment:
+          # to the safety doc and the catalog — our files to our other files.
+          # All three can agree perfectly and be wrong together, because the
+          # protection rules live in Settings -> Environments and are in no
+          # artifact here. Adding required_reviewers to github-prod-read would
+          # turn every workflow on that lane into a gate-parker (#834) and leave
+          # the whole suite green. This step is the only one that asks GitHub.
+          #
+          # Read-only: GET /repos/:owner/:repo/environments on our own repo,
+          # which the ambient token covers — workflow 730 has been reading the
+          # same endpoint with ${{ github.token }} and actions: read. It fails
+          # closed on a missing token or an unreadable list, because "we could
+          # not read the environments" must never render as "no gates" (#993).
+          python3 scripts/check-environment-protection.py
 
       - name: Validate every working-directory exists
         shell: bash

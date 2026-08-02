@@ -52,12 +52,64 @@ def _strip_quoted(text):
     return "".join(out)
 
 
+def _strip_single_quoted(text):
+    """Blank out single-quoted spans only, preserving length.
+
+    The counterpart to `_strip_quoted`, and the right tool for `$?`: inside
+    DOUBLE quotes the shell still expands it (`echo "EXIT=$?"` is the exact
+    shape ledger L50 is about), while inside SINGLE quotes it is a literal that
+    reads nothing -- `echo '$?'` prints two characters. Blanking both would
+    discard the case worth catching; blanking neither blocks a correct command.
+    """
+    out = list(text)
+    quote = None
+    for i, ch in enumerate(text):
+        if quote:
+            if ch == quote:
+                quote = None
+                if ch == "'":
+                    out[i] = " "
+            elif quote == "'":
+                out[i] = " "
+        elif ch in "'\"":
+            quote = ch
+            if ch == "'":
+                out[i] = " "
+    return "".join(out)
+
+
+def _split_statements(line):
+    """Split one line on `;` separators that are outside quotes.
+
+    A bare `line.split(";")` also splits the semicolons inside
+    `python -c "import x; print(y)"`, tearing one statement into two whose
+    quoting no longer balances. That both invents statement boundaries where
+    the shell sees none and lets a `$?` inside a quoted argument read as a
+    separate statement. `_strip_quoted` preserves length, so offsets into the
+    blanked copy index the original.
+    """
+    bare = _strip_quoted(line)
+    parts = []
+    start = 0
+    for i, ch in enumerate(bare):
+        if ch == ";":
+            parts.append(line[start:i])
+            start = i + 1
+    parts.append(line[start:])
+    return parts
+
+
 def _statements(cmd):
     """Split a command into ordered statements, skipping heredoc bodies.
 
     Heredoc payloads are skipped rather than parsed: a Python or jq body is not
     shell, and a `|` inside one is not a pipeline. Including them produced the
     only false positive found while developing this rule.
+
+    The heredoc *header* is shell and is kept. Skipping the whole line meant a
+    pipeline written there -- `python - <<PY | tail; echo "EXIT=$?"` -- was
+    never analysed, so the rule missed its own target shape rather than
+    over-reporting it.
     """
     stmts = []
     lines = cmd.splitlines()
@@ -65,17 +117,15 @@ def _statements(cmd):
     while i < len(lines):
         line = lines[i]
         m = re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", line)
-        if m:
-            terminator = m.group(1)
-            i += 1
-            while i < len(lines) and lines[i].strip() != terminator:
-                i += 1
-            i += 1
-            continue
-        for part in line.split(";"):
+        for part in _split_statements(line):
             if part.strip():
                 stmts.append(part)
         i += 1
+        if m:
+            terminator = m.group(1)
+            while i < len(lines) and lines[i].strip() != terminator:
+                i += 1
+            i += 1
     return stmts
 
 
@@ -100,7 +150,7 @@ def pipeline_exit_code_violation(cmd):
         # A real pipeline: a single `|` that is not `||` and not `|&`.
         if not re.search(r"(?<!\|)\|(?![|&])", bare):
             continue
-        if "$?" in nxt:
+        if "$?" in _strip_single_quoted(nxt):
             return (
                 "Reading `$?` straight after a pipeline reports the LAST command's "
                 "status, not the one you care about (ledger L50).\n"
@@ -110,6 +160,46 @@ def pipeline_exit_code_violation(cmd):
                 "`set -o pipefail`. This has silently turned a failing audit into "
                 "a green one more than once."
             )
+    return None
+
+
+CALL_SPAN = 240
+
+
+def _call_args(text, start):
+    """The argument text of a call whose `(` has just been consumed at `start`.
+
+    Scans to the *matching* `)`, tracking nesting and quoted spans, and returns
+    None when it cannot find one inside `CALL_SPAN` characters.
+
+    Truncating at the first `)` instead -- the earlier form -- reads
+    `open(os.path.join(a, b), encoding="utf-8")` as `os.path.join(a, b`, which
+    contains no `encoding=`, and so blocked a correct command. A nested call in
+    the first argument is the ordinary way to write this, not an edge case.
+    """
+    depth = 1
+    quote = None
+    escaped = False
+    out = []
+    for ch in text[start:start + CALL_SPAN]:
+        if quote:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in "'\"":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return "".join(out)
+        out.append(ch)
     return None
 
 
@@ -129,8 +219,13 @@ def inline_python_encoding_violation(cmd):
     if not re.search(r"\bpython[0-9.]*\s+(-c\b|-\s*<<|-\s*$)", cmd, re.MULTILINE):
         return None
     for m in re.finditer(r"(?<![\w.])open\s*\(|\bio\.open\s*\(", cmd):
-        args = cmd[m.end():m.end() + 240]
-        args = args.split(")")[0]
+        args = _call_args(cmd, m.end())
+        # An unbalanced or over-long call is one this rule cannot read. It says
+        # nothing rather than guessing: unlike the security rules above, this is
+        # an ergonomics guard against a local cp1252 crash, and the module's
+        # standing contract is that an internal uncertainty allows the command.
+        if args is None:
+            continue
         if "encoding" in args:
             continue
         # Binary mode needs no encoding, and asking for one is an error.

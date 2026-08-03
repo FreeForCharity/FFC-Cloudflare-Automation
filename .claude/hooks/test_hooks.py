@@ -116,6 +116,24 @@ def main():
     check("REST paginate allowed", "guard_bash.py",
           bash("gh api --paginate repos/FreeForCharity/FFC-Cloudflare-Automation/issues/719/comments"),
           False)
+    # The name must be DECLARED by the operation, not merely present on the
+    # command line. This is the false negative a whole-command scan allows: the
+    # query still paginates on $cursor and would re-fetch page 1 forever, while
+    # an unrelated mention downstream satisfies a substring test.
+    check("$endCursor outside the query does not count", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($cursor:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$cursor){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"
+               " ; echo $endCursor"), True)
+    # ... and the named-operation form is a real declaration, so it must pass.
+    # Without this, tightening the regex to `query(` would silently start
+    # blocking a correct command.
+    check("named operation declaring $endCursor allowed", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query Board($endCursor:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$endCursor){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), False)
 
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)

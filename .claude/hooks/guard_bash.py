@@ -114,7 +114,19 @@ def main():
         # silent-infinite-loop this rule exists to catch. A GraphQL variable name
         # is [_A-Za-z][_0-9A-Za-z]*, so the exact name is the one not followed by
         # another name character. `low` is already lowercased.
-        if not re.search(r"\$endcursor(?![0-9a-z_])", low):
+        #
+        # It must also be declared IN THE OPERATION'S VARIABLE LIST, not merely
+        # present somewhere on the command line. Scanning the whole command lets
+        # an unrelated mention satisfy the check -- `... -f query='query($cursor:
+        # String){...}' ; echo $endCursor` would pass while the query still
+        # paginates on `$cursor`, i.e. the exact command this rule exists to
+        # stop. gh substitutes into the operation's declared variable, so that
+        # declaration is the only place the name counts. The optional name between
+        # `query` and `(` covers the named form `query Foo($endCursor:String)`.
+        declares_cursor = re.search(
+            r"query\s*(?:[a-z_][0-9a-z_]*\s*)?\([^)]*\$endcursor(?![0-9a-z_])", low
+        )
+        if not declares_cursor:
             block(
                 "`gh api graphql --paginate` requires the cursor variable to be named "
                 "exactly `$endCursor` (and the query to request `pageInfo{hasNextPage "

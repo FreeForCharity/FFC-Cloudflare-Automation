@@ -576,8 +576,19 @@ def test_the_report_names_every_finding():
 
 
 def test_an_empty_section_says_none_rather_than_nothing():
+    # Counted against the script's own section lists rather than a literal, so
+    # adding a set without rendering it fails here (#992 added two).
+    sections = len(M.FAILING_SECTIONS) + len(M.DEFERRED_SECTIONS)
     text = M.render(M.audit({}, []), ORG, 9, None, [HUB])
-    assert text.count("(none)") == 3, "each empty set must be visibly empty, not absent"
+    assert text.count("(none)") == sections, "each empty set must be visibly empty, not absent"
+
+
+def test_the_prose_report_marks_the_deferred_sections_as_non_failing():
+    # A reader scanning the prose output must be able to tell which sections
+    # they are on the hook for. Both deferred blurbs say so in the same words.
+    text = M.render(M.audit({}, []), ORG, 9, None, [HUB])
+    assert text.count("does NOT fail the run") == len(M.DEFERRED_SECTIONS), text
+    assert "grace_minutes=" in text
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

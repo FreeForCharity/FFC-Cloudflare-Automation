@@ -53,6 +53,8 @@ const LOG_ISSUE = 719;
 // a set of a hundred; the comment stays readable and says how many it dropped.
 const MAX_ROWS_PER_SECTION = 25;
 
+// The sets that fail the run. Mirrors FAILING_SECTIONS in
+// scripts/audit-agentic-os-board.py.
 const SECTIONS = [
   {
     key: 'missing_from_board',
@@ -71,6 +73,35 @@ const SECTIONS = [
   },
 ];
 
+// Reported, never failing (#992). Mirrors DEFERRED_SECTIONS in the script.
+//
+// These are rendered but excluded from `hasFindings`, so a run whose only
+// content is deferred rows classifies `clean` and stays silent. They are still
+// PARSED as strictly as the failing sections — an absent key is a malformed
+// report either way — and they are still printed whenever a comment is posted
+// for another reason, because a deferral nobody can see is indistinguishable
+// from a check that was quietly deleted.
+const DEFERRED_SECTIONS = [
+  {
+    key: 'recently_opened_not_yet_carded',
+    heading: 'Recently opened, not yet carded',
+    blurb:
+      'younger than the grace window — latency, not drift. Listed so the deferral is ' +
+      'visible; these do **not** fail the run and need no action unless they are still ' +
+      'here tomorrow.',
+  },
+  {
+    key: 'self_referential_alerts',
+    heading: "This audit's own failure alert",
+    blurb:
+      "740's rolling alert for 745 itself. Counting it as a finding keeps 745 red, which " +
+      'keeps the alert open, which keeps 745 red — a monitor must not be able to ' +
+      'manufacture its own findings.',
+  },
+];
+
+const ALL_SECTIONS = [...SECTIONS, ...DEFERRED_SECTIONS];
+
 /** Parse the audit script's `--json` stdout. Never throws. */
 function parseReport(stdout) {
   if (typeof stdout !== 'string' || !stdout.trim()) {
@@ -88,7 +119,7 @@ function parseReport(stdout) {
   // A report missing a section is not a report with an empty section. Treating
   // an absent key as `[]` would let a truncated or half-written document read as
   // a clean board — the same fail-open direction the audit exists to close.
-  for (const s of SECTIONS) {
+  for (const s of ALL_SECTIONS) {
     if (!Array.isArray(parsed[s.key])) {
       return { report: null, parseError: `missing or non-array section: ${s.key}` };
     }
@@ -96,18 +127,31 @@ function parseReport(stdout) {
   return { report: parsed, parseError: null };
 }
 
-/** True when any of the three sets is non-empty. Mirrors the script's `has_findings`. */
+/**
+ * True when any of the three FAILING sets is non-empty. Mirrors the script's
+ * `has_findings`, deferred sections and all — if this counted them, the run
+ * would go red for a PR opened twenty minutes ago and #992 would be unfixed.
+ */
 function hasFindings(report) {
   if (!report) return false;
   return SECTIONS.some((s) => Array.isArray(report[s.key]) && report[s.key].length > 0);
 }
 
-function findingCount(report) {
+function countIn(report, sections) {
   if (!report) return 0;
-  return SECTIONS.reduce(
+  return sections.reduce(
     (n, s) => n + (Array.isArray(report[s.key]) ? report[s.key].length : 0),
     0,
   );
+}
+
+function findingCount(report) {
+  return countIn(report, SECTIONS);
+}
+
+/** How many rows were deferred. Never contributes to the outcome; always shown. */
+function deferredCount(report) {
+  return countIn(report, DEFERRED_SECTIONS);
 }
 
 /**
@@ -198,10 +242,32 @@ function describeRow(row) {
   }
   const status = r.status ? `\`${r.status}\`` : '`-`';
   const title = truncate(r.title, 70);
-  return `- ${label} ${status} ${title}`.trimEnd();
+  const age = formatAge(r.age_minutes);
+  const suffix = age ? ` — ${age} old` : '';
+  return `- ${label} ${status} ${title}${suffix}`.trimEnd();
 }
 
-/** One-line console/notice summary. Always safe to log. */
+/**
+ * A short human age, or '' when unknown. Mirrors the script's `format_age`.
+ * Rendered on every row that carries one, which in practice is the deferred
+ * sections: a deferral a reader cannot date is a deferral they cannot check.
+ */
+function formatAge(minutes) {
+  if (typeof minutes !== 'number' || !Number.isFinite(minutes)) return '';
+  if (minutes < 0) return '0m';
+  if (minutes < 90) return `${Math.round(minutes)}m`;
+  if (minutes < 48 * 60) return `${(minutes / 60).toFixed(1)}h`;
+  return `${(minutes / 1440).toFixed(1)}d`;
+}
+
+/**
+ * One-line console/notice summary. Always safe to log.
+ *
+ * Deferred counts are on this line even on a clean run, which is the only place
+ * they surface when the board is otherwise fine — `renderBody` returns null for
+ * `clean`, by design (#967). So `core.notice` is where "we deferred 3 things
+ * today" is auditable without opening the JSON.
+ */
 function summary(classification) {
   const c = classification || {};
   const rep = c.report || {};
@@ -209,7 +275,7 @@ function summary(classification) {
     rep.expected_count != null && rep.board_count != null
       ? ` expected=${rep.expected_count} board=${rep.board_count}`
       : '';
-  const counts = SECTIONS.map(
+  const counts = ALL_SECTIONS.map(
     (s) => `${s.key}=${Array.isArray(rep[s.key]) ? rep[s.key].length : '?'}`,
   ).join(' ');
   return `board audit: ${c.outcome}${denominators} ${counts}`.trim();
@@ -286,6 +352,34 @@ function renderBody(classification, ctx) {
         '`Auto-add sub-issues`; `Item closed` and `Pull request merged` are disabled), so every ' +
         'one of these is placed by hand and nothing else will place them.',
     );
+
+    const deferred = deferredCount(rep);
+    if (deferred > 0) {
+      lines.push('');
+      lines.push(
+        `<details><summary>Deferred, not counted as findings: ${deferred} ` +
+          `(grace window: ${rep.grace_minutes == null ? '?' : rep.grace_minutes} minutes)</summary>`,
+      );
+      for (const s of DEFERRED_SECTIONS) {
+        const rows = Array.isArray(rep[s.key]) ? rep[s.key] : [];
+        if (!rows.length) continue;
+        lines.push('');
+        lines.push(`##### ${s.heading}: ${rows.length}`);
+        lines.push('');
+        lines.push(`_${s.blurb}_`);
+        lines.push('');
+        for (const row of rows.slice(0, MAX_ROWS_PER_SECTION)) {
+          lines.push(describeRow(row));
+        }
+        if (rows.length > MAX_ROWS_PER_SECTION) {
+          lines.push(
+            `- …and ${rows.length - MAX_ROWS_PER_SECTION} more (list truncated for length)`,
+          );
+        }
+      }
+      lines.push('');
+      lines.push('</details>');
+    }
   }
 
   if (runUrl) {
@@ -305,13 +399,17 @@ module.exports = {
   LOG_ISSUE,
   MAX_ROWS_PER_SECTION,
   SECTIONS,
+  DEFERRED_SECTIONS,
+  ALL_SECTIONS,
   parseReport,
   hasFindings,
   findingCount,
+  deferredCount,
   classify,
   shouldComment,
   shouldFail,
   describeRow,
+  formatAge,
   summary,
   renderBody,
 };

@@ -24,17 +24,27 @@
 
 ## Verifying tests: CI is authoritative, local runs may be false-red
 
-- **`tests/workflow-logic/` cannot be run reliably from every local sandbox.** In the Windows
-  git-bash environment the Conductor runs in, `python3 tests/workflow-logic/run_all.py` reports most
-  modules failing with `harness crashed:` and a node abort —
-  `Assertion failed: ncrypto::CSPRNG(nullptr, 0)`. A plain `node -e "…"` works fine; only the
-  harness-spawned node dies, so this is an environment/entropy problem, **not** a test defect.
-  Pure-python assertions in the same modules still pass.
-- **Treat a local red here as no signal at all.** The authority is CI's **Validate Repository**
-  check, which runs the same suite on `ubuntu-latest`. Verified 2026-07-24: the identical tree that
-  failed ~17 modules locally passed `Validate Repository` in CI (PR #828).
-- Never "fix" a test, or hold a PR, on the strength of a local harness crash — confirm against CI
-  first.
+> **This section's premise expired on 2026-07-31 and the section outlived it.** The
+> `harness crashed:` epidemic below was **#943**, and #943 is **closed**. Measured on the
+> Conductor's Windows host on 2026-08-02 (run 77), a full `python tests/workflow-logic/run_all.py`:
+> **`harness crashed` count = 0**, 895 `PASS`, 83 `FAIL`, 16 modules named with specific diagnoses.
+> Read what follows as history, and read the corrected rule first.
+
+- **A local red now carries signal, and discarding it costs real defects.** The 16 modules failing
+  here fail for stated reasons — a `FileNotFoundError` on a temp path, a preflight refusing an
+  unparseable response — not a node abort. Run 77 followed one of them (`test_729_add_collaborator`)
+  to a live defect that CI cannot see at all: the module runs the step under test with
+  `cwd=REPO_ROOT`, loses all five of its tests to the first one, and leaves a stray file in the
+  working tree. Tracked on **#1023**.
+- **CI is still authoritative for green, and is still the only cross-platform judge.** Do not "fix"
+  a test or hold a PR on a local red without saying _which_ module and _what_ the failure text was —
+  the standard is now the same one applied to any other measurement, not a blanket dismissal.
+- **Historical (pre-#943, kept because the shape recurs):** the harness used to report most modules
+  failing with `harness crashed:` and `Assertion failed: ncrypto::CSPRNG(nullptr, 0)`, because each
+  module built a fresh minimal `env` dict for `subprocess.run` and Windows node cannot start without
+  the inherited environment. Verified 2026-07-24 (PR #828): a tree failing ~17 modules locally
+  passed `Validate Repository` in CI. If a _new_ wave of `harness crashed:` appears, that is the
+  shape to suspect — and it is a regression to file, not a fact to route around.
 - **But "the harness is broken here" is not a reason to review a guard by reading it.** When the
   harness cannot run, **test the module it wraps.** Only the harness-spawned node dies; `node`
   itself is fine, so a pure module under `scripts/` can be `require`d directly and exercised on the
@@ -76,8 +86,11 @@ all) — exactly what the "never pass a scrubbed `env=`" rule below already says
 
 Rewriting `PATH` changes nothing; inheriting the whole environment fixes it outright. So the
 standing advice is narrower than it looks: **local red is no signal only until the env dict is
-fixed** — it is not an unfixable property of this host, and it is not entropy. Tracked as **#943**.
-Until that lands, the probe technique above is the workaround, not the diagnosis.
+fixed** — it is not an unfixable property of this host, and it is not entropy. Tracked as **#943**,
+**which landed and closed on 2026-07-31**: run 77 measured `harness crashed` **0 times** in a full
+local suite. This prediction came true, and the section above has been corrected to match. The probe
+technique above was the workaround while it was open; it is now a technique for a module whose
+harness is broken for its own reasons, not the standing answer to this host.
 
 ## Prefer the machine's claim to your own: a hand-written `claimed` label expires in 48h (validated 2026-07-31)
 
@@ -460,20 +473,54 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
   `UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f6a8'` on the 🚨 in #921's
   title. It also needs `GH_TOKEN` exported (`export GH_TOKEN=$(gh auth token)`) — it does not read
   `gh`'s keyring.
-- **The generator's `--output` writes CRLF on Windows.** `.gitattributes` (`* text=auto eol=lf`)
-  normalizes it, so the _committed_ blob is LF and byte-identical to a Linux run — but verify the
-  staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) before claiming 502 will not
-  report phantom drift.
+- **The generator's `--output` used to write CRLF on Windows — fixed at the source (run 74).**
+  `scripts/generate-agentic-os-status.py` now writes through `write_feed()`, which pins
+  `newline="\n"` beside the `encoding="utf-8"` that was already there, so both hosts emit identical
+  bytes. Two things had been masking it and neither was a fix: ffcadmin's `.gitattributes`
+  (`* text=auto eol=lf`) normalized the _committed_ blob, and this repo's CI is Linux, where text
+  mode never translates — so no test could observe it by running the script.
+  `test_502_agentic_os_status.py` therefore asserts on the **`open()` call's keywords**, not on the
+  bytes written; a round-trip check would pass on `ubuntu-latest` with or without the fix.
+  - Verifying the staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) is still the
+    right habit for any hand-delivered feed — it just no longer has anything to catch here.
   - **And do not run that check in Python text mode - it reports `0` whether or not the CRs are
     there.** `io.open(p, encoding='utf-8').read().count('\r')` applies universal-newline
     translation, so CRLF is silently rewritten on the way IN. On 2026-08-02 (run 72) that returned a
     confident `CR bytes: 0` for a freshly generated feed that in fact carried **1264** CRs, which
     `tr -cd '\r' | wc -c` found immediately. Read `'rb'` (or use `tr`). A check whose failure mode
     is to print the answer you were hoping for is worse than no check.
+  - **The same translation runs on the way OUT, which breaks restore-after-mutation.**
+    `pathlib.write_text()` uses text mode, so writing a file back converts every `\n` to `\r\n` on
+    this host. Reviewing #1015 (run 76) the Conductor mutated `run_all.py` in place six times and
+    asserted `sha256(path.read_text().encode())` matched the original after each restore. It matched
+    every time and proved nothing — the read side translated the CRLFs back out, so a file rewritten
+    end to end hashed identical to the LF original. The only tell was `git status` listing the file
+    as modified with an **empty** `git diff`. Pass `newline=""` when writing, and verify restores
+    with `tr`/`'rb'`, never `read_text`. (`newline=""` and `newline="\n"` are byte-identical on
+    **write** — measured here on both LF and CRLF content — so the choice is intent, not behaviour:
+    `""` for "restore verbatim", `"\n"` for "force LF" as the generators in `scripts/` do. Only the
+    default is wrong, and it is worse than "adds CR": a string that already holds `\r\n` comes out
+    `\r\r\n`.)
+  - **Better: mutate a copy and leave the original alone.** The repo's own mutation sites already do
+    this — `test_737_claim_sync.py:206` and `test_powershell_command_resolution.py:138` copy into a
+    `tempfile.TemporaryDirectory()` and mutate there, so restore fidelity is never in question. The
+    in-place-and-restore pattern is the ad-hoc reviewer's habit, and it is the one that needs the
+    binary check.
+  - **And do not build the mutating script through a shell heredoc.** `python - <<'PY'` does not
+    deliver backslash escapes intact on this host: run 77 lost every `\n` in a `"\n".join(...)` to a
+    carriage return and committed `docs/lessons-ledger.md` with **0 LF and 169 CR**, while prettier
+    reported "unchanged", the pre-commit hook passed and `git status` was clean. `CLAUDE.md`, edited
+    with the file-editing tool in the same minutes, was untouched — that is the control case. Write
+    files with the editing tool; if a script must transform one, put the script in a file and run it
+    by path. Ledger **L88**.
 - **The full workflow-logic suite takes over 2 minutes once it actually runs.** It used to finish in
   seconds only because the modules were aborting; a 2-minute command timeout now reads as a hang.
-- **Each full suite run leaves a zero-byte `U+F022 U+F022` file in the repo root.** Reproducible,
-  untracked; it is suite output, not a checkout artifact. Tracked on #945.
+- **One module — `test_729_add_collaborator.py` — leaves a zero-byte `U+F022 U+F022` file in the
+  repo root.** Reproducible, untracked; it is suite output, not a checkout artifact. `ls -b` renders
+  the name `""`, which is what Windows maps `"` to. Bisected in run 77 by running all 50 modules in
+  order: it is that one module, not "each full suite run" as this line used to claim, and it is
+  there because the test passes `cwd=REPO_ROOT`. Tracked on **#1023** — #945, which this line named
+  until run 77, closed on 2026-07-31 while the artifact went on reproducing.
 - **When a PR declines to tick a platform-specific criterion, supply the platform.** Agents working
   from a Linux sandbox correctly refuse to claim a Windows result they cannot measure (#944 did
   exactly this). The move is neither to merge on trust nor to bounce the PR — it is to run that

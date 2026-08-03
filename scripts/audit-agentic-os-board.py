@@ -11,6 +11,35 @@ different ways, and #966 is the record of both.
 Read-only. This script issues no mutation of any kind: no items added, no
 statuses set, no comments. It reports and sets an exit code.
 
+Latency is not drift (#992)
+---------------------------
+The missing-card set answers "which items have no card", and that question has
+two very different answers folded into it: a PR a worker opened 35 minutes ago
+that nobody has been awake to place, and run 62's board, which sat six items
+short for six hours. Only the second is drift. With ~9.6 new agentic-os items a
+day and a 07:47Z cron, failing on the first makes this audit red most mornings —
+and 745 is on 740's watch list, so a red morning becomes a rolling alert issue
+that reopens daily. An alert that fires most days is one nobody reads, and the
+day it catches a real six-hour gap it will look like the twenty days before it.
+
+So ``--grace-minutes`` splits the missing set. An uncarded item younger than the
+window is reported under ``recently_opened_not_yet_carded`` and does **not**
+fail the run; the same item, older, is a finding exactly as before. The window
+applies to the missing set **only**: a card with no Status is not "recently
+added", it is misfiled from the moment it exists, and finished work whose card
+still reads live is not excused by elapsed time.
+
+``self_referential_alerts`` closes the other half, which the window cannot reach
+(#992, AC8). 740 upserts ``🚨 Scheduled workflow failing: 745…`` labelled
+``agentic-os``; nothing auto-adds it to the board; so 745's next run reports its
+own failure alert as a finding, stays red, and keeps the alert open. That loop
+sustains itself and has done so twice. The alert is created minutes *after* a
+07:47Z tick and is therefore ~22h old at the next one — far outside any sane
+grace window — so age is the wrong lever. 745's own alert is instead recognised
+by 740's body marker and deferred at any age. Alerts about *other* workflows are
+ordinary uncarded items and keep failing: the exclusion is exactly as wide as
+the feedback loop and no wider.
+
 Why the expected set comes from REST and never from search
 ----------------------------------------------------------
 Run 62 built the "what should be on the board" half from
@@ -44,11 +73,13 @@ Examples:
   GH_TOKEN=... python3 scripts/audit-agentic-os-board.py --repo FreeForCharity/FFC-Cloudflare-Automation
 
 Exit codes:
-  0  board is consistent with the backlog — all three sets empty
-  1  at least one set is non-empty (the audit found something), OR any API,
-     auth or config error. **Never 0 on a failed enumeration**: an audit that
-     cannot read one of its two sides has no verdict to report, and reporting
-     "clean" would be the exact silence-read-as-green shape #966 is about.
+  0  board is consistent with the backlog — all three FAILING sets empty. The
+     two deferred sets may be non-empty here; that is the point of them.
+  1  at least one failing set is non-empty (the audit found something), OR any
+     API, auth or config error. **Never 0 on a failed enumeration**: an audit
+     that cannot read one of its two sides has no verdict to report, and
+     reporting "clean" would be the exact silence-read-as-green shape #966 is
+     about.
 """
 
 from __future__ import annotations
@@ -60,12 +91,33 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 
 DEFAULT_ORG = "FreeForCharity"
 DEFAULT_PROJECT_NUMBER = 9
 HUB_REPO = "FreeForCharity/FFC-Cloudflare-Automation"
 LABEL = "agentic-os"
 DONE_STATUS = "Done"
+
+# How long an uncarded item is treated as latency rather than drift. 90 minutes
+# is the cron-to-Conductor gap being tolerated, not a guess at how long carding
+# "should" take — the audit ticks at 07:47Z and a human gets to the board when
+# they get to it. Widening this trades detection latency for quiet; it must
+# never widen so far that run 62's six-hour gap would be deferred.
+DEFAULT_GRACE_MINUTES = 90
+
+# 740 marks each rolling alert issue with the watched workflow's name, so one
+# workflow's alert can never be confused with another's
+# (740-scheduled-workflow-failure-alert.yml). This is the marker for THIS
+# audit's own workflow — the one item whose presence in the finding set is
+# caused by the finding set.
+#
+# Pinned as a literal rather than read from the YAML because this script must
+# stay import-clean and dependency-free; `test_745_board_audit.py` asserts the
+# name against `.github/workflows/745-agentic-os-board-audit.yml`, so a rename
+# fails a test rather than silently reopening the loop.
+SELF_WORKFLOW_NAME = "745. Repo - Agentic OS Board Audit [GH]"
+SELF_ALERT_MARKER = f"<!-- scheduled-workflow-failure-alert:{SELF_WORKFLOW_NAME} -->"
 
 API_ROOT = "https://api.github.com"
 GRAPHQL_URL = "https://api.github.com/graphql"
@@ -296,8 +348,38 @@ def collect_expected(repos, token):
                 "title": it.get("title") or "",
                 "url": it.get("html_url") or "",
                 "is_pr": "pull_request" in it,
+                # The grace window's input. Kept as the raw API string so the
+                # comparison lives in `audit()`, where it is testable without a
+                # network.
+                "created_at": it.get("created_at") or "",
+                # Resolved HERE, and the body deliberately not carried forward:
+                # every value in this dict is serialized into the --json report,
+                # and 740's alert bodies grow an entry per failed run.
+                "is_self_alert": is_self_referential_alert(it),
             }
     return expected
+
+
+def is_self_referential_alert(issue):
+    """True when ``issue`` is 740's rolling failure alert **for this audit**.
+
+    Matched on 740's body marker rather than on the title, the author, or the
+    ``bug`` label. The title carries an emoji and the workflow's display name
+    and would drift on any rename; the author is whatever token 740 ran under.
+    The marker is the identifier 740 itself relies on to keep one workflow's
+    alert from closing another's, so it is the narrowest true statement
+    available — and it names the workflow, which is what makes this test
+    *self*-referential rather than "ignore bot issues".
+
+    A pull request is never one of these: 740 opens issues, and `open.find`
+    in 740 explicitly skips PRs for the same reason (a PR quoting the marker
+    must not be mistaken for the alert)."""
+    if not isinstance(issue, dict):
+        return False
+    if "pull_request" in issue:
+        return False
+    body = issue.get("body")
+    return isinstance(body, str) and SELF_ALERT_MARKER in body
 
 
 # --------------------------------------------------------------------------
@@ -399,17 +481,92 @@ def normalize_board_items(nodes):
 # --------------------------------------------------------------------------
 
 
-def audit(expected, board_rows):
-    """Compare the two sides and return the three sets plus both denominators.
+def parse_timestamp(value):
+    """A GitHub ISO-8601 timestamp as an aware UTC datetime, or ``None``.
+
+    ``None`` for anything unparseable, and every caller treats ``None`` as "too
+    old to defer" — an item whose age cannot be established must not be excused
+    by a window that is defined in terms of its age."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def age_in_minutes(created_at, now):
+    """Minutes between ``created_at`` and ``now``, or ``None`` if unparseable."""
+    created = parse_timestamp(created_at)
+    if created is None:
+        return None
+    return (now - created).total_seconds() / 60.0
+
+
+def audit(expected, board_rows, grace_minutes=0, now=None):
+    """Compare the two sides and return the five sets plus both denominators.
 
     ``expected`` is ``collect_expected``'s mapping; ``board_rows`` is
     ``normalize_board_items``' output. Nothing here does I/O, so the comparison
-    that ships is the comparison the tests run."""
+    that ships is the comparison the tests run — hence ``now`` being injectable
+    rather than read from the clock inside.
+
+    Three of the five sets fail the run (see ``has_findings``). The other two —
+    ``recently_opened_not_yet_carded`` and ``self_referential_alerts`` — are
+    reported and do not. ``grace_minutes`` defaults to 0 so that calling this
+    with two arguments keeps the pre-#992 behaviour exactly: no deferral at all.
+
+    Note the ORDER of the two deferral tests below. The self-alert check comes
+    first and is unconditional on age, because the 740/745 loop is not a latency
+    problem and a window that would catch it would have to be ~22 hours wide,
+    which would defer run 62's six-hour gap as well — the exact regression #992
+    warns the fix must not degrade into."""
+    now = now or datetime.now(timezone.utc)
     board_keys = {r["key"] for r in board_rows if r["key"]}
 
-    ordered = sorted(expected, key=lambda k: (k[0], k[1]))
-    missing_from_board = [expected[k] for k in ordered if k not in board_keys]
+    missing_from_board = []
+    recently_opened_not_yet_carded = []
+    self_referential_alerts = []
 
+    for key in sorted(expected, key=lambda k: (k[0], k[1])):
+        if key in board_keys:
+            continue
+        item = dict(expected[key])
+        age = age_in_minutes(item.get("created_at"), now)
+        if age is not None:
+            # Clamp, because a NEGATIVE age is deferral's fail-open. A
+            # future-dated `created_at` — clock skew between GitHub and this
+            # runner, or a value someone set — makes `age < grace_minutes` true
+            # for EVERY window including `--grace-minutes 0`, which is
+            # documented as disabling deferral. An item could then sit uncarded
+            # forever and never be reported, with the window switched off.
+            # Clamped to 0 it is merely "brand new": deferred while a window is
+            # open, and a finding the moment one is not.
+            age = max(0.0, age)
+        # Stored UNROUNDED, and rounded only for display. `round(age, 1)` here
+        # pushed 89.95 to 90.0, which `format_age` then rendered as `1.5h` — a
+        # row deferred by a 90-minute window that reads as older than it. The
+        # displayed age is how a reader checks the deferral, so it must never
+        # be able to contradict the classification that produced it.
+        item["age_minutes"] = age
+
+        if item.get("is_self_alert"):
+            self_referential_alerts.append(item)
+        elif age is not None and age < grace_minutes:
+            recently_opened_not_yet_carded.append(item)
+        else:
+            missing_from_board.append(item)
+
+    # No window on either of these, at any age. A card with no Status is not
+    # "recently added" — it is misfiled from the moment it exists — and closed
+    # work whose card still reads live is not excused by having been closed a
+    # long time ago. #992 AC4.
     statusless = [r for r in board_rows if not r["status"]]
 
     closed_not_done = [
@@ -419,20 +576,35 @@ def audit(expected, board_rows):
     return {
         "expected_count": len(expected),
         "board_count": len(board_rows),
+        "grace_minutes": grace_minutes,
         "missing_from_board": missing_from_board,
         "statusless": statusless,
         "closed_not_done": closed_not_done,
+        "recently_opened_not_yet_carded": recently_opened_not_yet_carded,
+        "self_referential_alerts": self_referential_alerts,
     }
 
 
+# The sets that fail the run, and the sets that are reported without failing it.
+# Named once, here, so `has_findings`, `render` and the JS library cannot drift
+# into disagreeing about which is which.
+FAILING_SECTIONS = ("missing_from_board", "statusless", "closed_not_done")
+DEFERRED_SECTIONS = ("recently_opened_not_yet_carded", "self_referential_alerts")
+
+
 def has_findings(result):
-    """True when any of the three sets is non-empty — the exit-code decision.
+    """True when any of the three FAILING sets is non-empty — the exit code.
 
     Separated from ``main`` so the non-zero path can be asserted in-process. A
     test that runs the script as a subprocess against a clean board only ever
     exercises the zero path, and would pass against a ``main`` that returned 0
-    unconditionally (the lesson recorded on #912/#927)."""
-    return bool(result["missing_from_board"] or result["statusless"] or result["closed_not_done"])
+    unconditionally (the lesson recorded on #912/#927).
+
+    The deferred sets are deliberately absent from this expression. That is the
+    whole change in #992, and it is also the sentence to read twice before
+    adding a fourth section: anything listed here fails the run and therefore
+    feeds 740."""
+    return any(result[key] for key in FAILING_SECTIONS)
 
 
 # --------------------------------------------------------------------------
@@ -461,7 +633,26 @@ def _describe(row):
     title = (row.get("title") or "").strip()
     if len(title) > 70:
         title = title[:67] + "..."
-    return f"{label} [{status}] {title}"
+    # The age is what makes a deferred row auditable: a reader has to be able to
+    # see that the thing was deferred for being 20 minutes old and not for being
+    # invisible. Suppressing these rows entirely would trade a noisy monitor for
+    # a blind one (#992 AC3).
+    age = format_age(row.get("age_minutes"))
+    suffix = f" ({age} old)" if age else ""
+    return f"{label} [{status}] {title}{suffix}"
+
+
+def format_age(minutes):
+    """A short human age for a report line, or ``""`` when it is unknown."""
+    if not isinstance(minutes, (int, float)) or isinstance(minutes, bool):
+        return ""
+    if minutes < 0:
+        return "0m"
+    if minutes < 90:
+        return f"{int(round(minutes))}m"
+    if minutes < 48 * 60:
+        return f"{minutes / 60:.1f}h"
+    return f"{minutes / 1440:.1f}d"
 
 
 def render(result, org, project_number, board_title, repos):
@@ -478,7 +669,7 @@ def render(result, org, project_number, board_title, repos):
     )
     lines.append(
         f"expected={result['expected_count']} board={result['board_count']} "
-        f"repos_swept={len(repos)}"
+        f"repos_swept={len(repos)} grace_minutes={result.get('grace_minutes', 0)}"
     )
     lines.append("")
 
@@ -499,7 +690,21 @@ def render(result, org, project_number, board_title, repos):
             "finished work whose card still reads as live",
         ),
     ]
-    for name, rows, blurb in sections:
+    deferred = [
+        (
+            "recently opened, not yet carded",
+            result.get("recently_opened_not_yet_carded") or [],
+            f"younger than the {result.get('grace_minutes', 0)}-minute grace window — "
+            "latency, not drift; does NOT fail the run",
+        ),
+        (
+            "this audit's own failure alert",
+            result.get("self_referential_alerts") or [],
+            "740's rolling alert for 745 — counting it would keep 745 red and the alert "
+            "open; does NOT fail the run",
+        ),
+    ]
+    for name, rows, blurb in sections + deferred:
         lines.append(f"## {name}: {len(rows)}  ({blurb})")
         for row in rows:
             lines.append(f"  - {_describe(row)}")
@@ -525,8 +730,24 @@ def main(argv=None):
         help="Pin the swept repo set to owner/repo (repeatable). Default: every "
         "non-archived repo in the org, enumerated via REST.",
     )
+    ap.add_argument(
+        "--grace-minutes",
+        type=int,
+        default=DEFAULT_GRACE_MINUTES,
+        metavar="N",
+        help="Treat an uncarded item younger than N minutes as latency rather than "
+        "drift: report it separately and do not fail the run (default: %(default)s). "
+        "Applies to the missing-card set ONLY — a card with no Status, or closed work "
+        "not marked Done, is drift at any age. Pass 0 to disable.",
+    )
     ap.add_argument("--json", action="store_true", help="Emit the result as JSON instead of prose")
     args = ap.parse_args(argv)
+
+    if args.grace_minutes < 0:
+        # Not clamped to 0: a negative window is a caller who meant something
+        # this script cannot do, and silently reinterpreting it as "no window"
+        # would hide that.
+        ap.error("--grace-minutes must be >= 0 (0 disables the window)")
 
     # Issue titles in this org routinely carry emoji — the alert workflows open
     # issues titled "🚨 Scheduled workflow failing: …". Python encodes stdout
@@ -550,7 +771,7 @@ def main(argv=None):
     expected = collect_expected(repos, token)
     board_title, nodes = fetch_board_items(args.org, args.project, token)
     board_rows = normalize_board_items(nodes)
-    result = audit(expected, board_rows)
+    result = audit(expected, board_rows, grace_minutes=args.grace_minutes)
 
     if args.json:
         print(

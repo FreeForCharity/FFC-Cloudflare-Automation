@@ -40,15 +40,28 @@ Run: python3 tests/workflow-logic/test_502_agentic_os_status.py
 
 from __future__ import annotations
 
+import builtins
 import importlib.util
 import json
 import pathlib
+import tempfile
 import re
 import sys
 import urllib.parse
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "generate-agentic-os-status.py"
+
+# run_all.py compares each module's reported roster against its `def test_*`
+# count, so a module that dies partway through cannot pass itself off as a pass
+# list (L82). This module is the documented exception: it runs one `main()` of
+# inline `check(...)` assertions and prints a single summary line. Declared
+# explicitly rather than inferred from the counts -- a module that silently
+# stops following the roster convention must be caught, not excused.
+RUN_ALL_ROSTER_EXEMPT = (
+    "runs a single main() of check(...) assertions and prints one summary line, "
+    "not a per-test roster"
+)
 
 ORG = "FreeForCharity"
 HUB = "FreeForCharity/FFC-Cloudflare-Automation"
@@ -661,6 +674,55 @@ def main():
         all(r in backlog for r in ready),
         "every ready row must still be a backlog row — ready is a subset, not a replacement",
     )
+
+    # --- write_feed pins UTF-8 AND LF, and the LF half cannot be tested by
+    # --- running it here (see the docstring on write_feed).
+    #
+    # This asserts on the CALL and its keywords rather than on the bytes on
+    # disk, and that is deliberate. CI is `ubuntu-latest`, where text mode never
+    # translates `\n`, so a round-trip test would write LF and pass **whether or
+    # not `newline=` is set** — green for the wrong reason on the only platform
+    # that runs it, which is the L75 trap. The contract is the keyword; the
+    # keyword is what gets checked.
+    #
+    # NB: the L07 encoding guard in test_lessons_ledger.py scans this file as
+    # TEXT, so writing the builtin's name followed by parentheses in a comment
+    # is reported as an undeclared text-I/O call. Spelled around deliberately —
+    # a fail-closed encoding guard is not worth loosening to accommodate prose.
+    opened = {}
+    real_open = builtins.open
+
+    def recording_open(path, mode="r", *args, **kwargs):
+        opened["path"], opened["mode"], opened["kwargs"] = path, mode, kwargs
+        return real_open(path, mode, *args, **kwargs)
+
+    with tempfile.TemporaryDirectory() as td:
+        target = pathlib.Path(td) / "feed.json"
+        builtins.open = recording_open
+        try:
+            m.write_feed(str(target), '{"a": 1}\n')
+        finally:
+            builtins.open = real_open
+
+        check(opened.get("mode") == "w", "write_feed must open for writing")
+        check(
+            opened.get("kwargs", {}).get("encoding") == "utf-8",
+            "write_feed must pin encoding='utf-8' — the host default is cp1252 and the "
+            "feed carries emoji issue titles",
+        )
+        check(
+            opened.get("kwargs", {}).get("newline") == "\n",
+            "write_feed must pin newline='\\n' — without it the Windows hand-delivery path "
+            "emits CRLF, and neither Linux CI nor ffcadmin's eol=lf .gitattributes can see it",
+        )
+        # The round-trip is still worth asserting: it is the half that would
+        # catch a regression on the Conductor's own Windows host, where it DOES
+        # discriminate. It proves nothing in CI, and says so.
+        with real_open(target, "rb") as fh:
+            check(
+                fh.read() == b'{"a": 1}\n',
+                "write_feed round-trip must be byte-exact (discriminating on Windows only)",
+            )
 
     print("test_502_agentic_os_status: all assertions passed")
     return 0

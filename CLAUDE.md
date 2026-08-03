@@ -18,6 +18,16 @@
 - GraphQL and REST have **separate rate pools** (5,000/hr each, shared account-wide). When GraphQL
   is exhausted, reads still work via REST; check with `gh api rate_limit`.
 - Never `--admin`-merge; never push to `main` directly.
+- **After `gh pr ready`, the first `enqueuePullRequest` usually fails — retry, don't diagnose.**
+  Promoting a draft re-registers the branch checks, so the mutation returns
+  `Required status check "Phantom Revert Guard" is expected` even when that exact SHA already
+  carries a green run of it. It is a re-registration race, not a missing check. Poll the head SHA's
+  `check-runs` via REST and retry; on 2026-07-30 (#938) the retry ~60s later enqueued at position 1.
+- **`AWAITING_CHECKS` on a queue entry is not a stall.** `mergeQueueEntry.state` sat at
+  `AWAITING_CHECKS` with a fixed `estimatedTimeToMerge` for several minutes _after_ every
+  `merge_group` run had reported success (722 success, 723 success, 727 skipped — a skip is a pass
+  here). The merge landed on its own. Do not dequeue, re-push, or "fix" the branch on the strength
+  of that state; poll `pulls/N --jq .merged` via REST and let it finish.
 - **Format with the CI-pinned prettier.** `722-ci.yml` checks with `npx --yes prettier@3.8.1`; plain
   `npx prettier` fetches the latest version, whose Markdown reflow differs — producing
   local-pass/CI-fail loops. Always run `npx --yes prettier@3.8.1 --write <files>`.

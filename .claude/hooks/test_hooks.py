@@ -143,6 +143,116 @@ def main():
     check("pipeline without $? allowed", "guard_bash.py",
           bash('git log --oneline | head -5'), False)
 
+    # Ledger L50 -- $? read through a pipe. The first two are verbatim the
+    # commands that misreported this run and in run 72; both printed a confident
+    # zero for a script that had exited 1.
+    check("exit code through a pipe", "guard_bash.py",
+          bash('python scripts/audit-agentic-os-board.py | tail -30; echo "EXIT=$?"'), True)
+    check("exit code through a pipe, rc= form", "guard_bash.py",
+          bash("check.py --strict | head -3\nrc=$?"), True)
+    check("pipefail clears the rule", "guard_bash.py",
+          bash('set -o pipefail\npython audit.py | tail -30; echo "EXIT=$?"'), False)
+    check("$? with no pipeline allowed", "guard_bash.py",
+          bash('python audit.py > out.txt; echo "EXIT=$?"'), False)
+    check("|| is not a pipeline", "guard_bash.py",
+          bash('python audit.py || echo failed; echo "EXIT=$?"'), False)
+    check("pipe in a quoted string is not a pipeline", "guard_bash.py",
+          bash('grep -E "a|b" f.txt; echo "EXIT=$?"'), False)
+    check("pipeline with no $? after it allowed", "guard_bash.py",
+          bash("gh pr list --json number | head -5"), False)
+    # A pipeline written on a heredoc HEADER is still a pipeline. Skipping the
+    # whole line made the rule miss its own target shape -- a false negative,
+    # which for a guard is the expensive direction.
+    check("pipeline on a heredoc header line still caught", "guard_bash.py",
+          bash('python3 - <<PY | tail -3\nprint(1)\nPY\necho "EXIT=$?"'), True)
+    # `$?` in SINGLE quotes is a literal and reads nothing; in double quotes the
+    # shell expands it. Only the second is the L50 shape.
+    check("single-quoted literal $? after a pipe allowed", "guard_bash.py",
+          bash("ls | wc -l; echo '$? is a literal'"), False)
+    check("double-quoted $? after a pipe still caught", "guard_bash.py",
+          bash('ls | wc -l; echo "EXIT=$?"'), True)
+    # `;` inside quotes is not a statement separator -- splitting there invents
+    # a boundary the shell never sees.
+    check("semicolon inside quotes is not a statement break", "guard_bash.py",
+          bash('ls | grep -m1 x --label "a; echo $?"'), False)
+
+    # cp1252: inline Python reading FFC data without encoding=. Both forms below
+    # crashed this run on a U+274C in a board card title.
+    check("inline python open() without encoding", "guard_bash.py",
+          bash('python -c "import json;d=json.load(open(\'items.json\'))"'), True)
+    check("python heredoc open() without encoding", "guard_bash.py",
+          bash('python - <<PY\nimport json\nd=json.load(open("items.json"))\nPY'), True)
+    check("inline python with encoding= allowed", "guard_bash.py",
+          bash('python -c "import json;d=json.load(open(\'items.json\', encoding=\'utf-8\'))"'), False)
+    check("inline python binary mode allowed", "guard_bash.py",
+          bash('python -c "d=open(\'feed.json\', \'rb\').read()"'), False)
+    check("open() in a non-python command allowed", "guard_bash.py",
+          bash("grep -n 'open(' scripts/*.py"), False)
+    check("os.open is not the builtin", "guard_bash.py",
+          bash('python -c "import os;fd=os.open(\'f\', os.O_RDONLY)"'), False)
+    # A nested call in the first argument is the ordinary way to write this.
+    # Truncating at the first `)` hid the `encoding=` and blocked a correct
+    # command -- the failure mode that gets a guard switched off.
+    check("nested call before encoding= allowed", "guard_bash.py",
+          bash('python -c "import os,json;d=json.load('
+               'open(os.path.join(a, b), encoding=\'utf-8\'))"'), False)
+    check("nested call, still missing encoding=, blocked", "guard_bash.py",
+          bash('python -c "import os,json;d=json.load(open(os.path.join(a, b)))"'), True)
+    # `gh api graphql --paginate` must declare $endCursor -- gh substitutes the
+    # page cursor into that exact name, so any other name silently re-fetches
+    # page 1 forever. The wrong-name case is the one that actually happened.
+    check("graphql paginate with $cursor", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($cursor:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$cursor){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), True)
+    check("graphql paginate with no cursor var", "guard_bash.py",
+          bash("gh api graphql --paginate -f query='query{viewer{login}}'"), True)
+    check("graphql paginate with $endCursor allowed", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($endCursor:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$endCursor){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), False)
+    # A name that merely STARTS with endCursor is a different variable and gh
+    # substitutes into neither -- so these must block, not ride the substring.
+    # They are also the discriminators for the exact-match case above: without
+    # them a bare `$endcursor in low` test passes every case in this block.
+    check("graphql paginate with $endCursorX", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($endCursorX:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$endCursorX){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), True)
+    check("graphql paginate with $endCursor_2", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($endCursor_2:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$endCursor_2){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), True)
+    # Only --paginate needs the cursor: a single-shot graphql call is fine, and
+    # REST --paginate has no query variables at all.
+    check("graphql single-shot allowed", "guard_bash.py",
+          bash("gh api graphql -f query='query{viewer{login}}'"), False)
+    check("REST paginate allowed", "guard_bash.py",
+          bash("gh api --paginate repos/FreeForCharity/FFC-Cloudflare-Automation/issues/719/comments"),
+          False)
+    # The name must be DECLARED by the operation, not merely present on the
+    # command line. This is the false negative a whole-command scan allows: the
+    # query still paginates on $cursor and would re-fetch page 1 forever, while
+    # an unrelated mention downstream satisfies a substring test.
+    check("$endCursor outside the query does not count", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($cursor:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$cursor){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"
+               " ; echo $endCursor"), True)
+    # ... and the named-operation form is a real declaration, so it must pass.
+    # Without this, tightening the regex to `query(` would silently start
+    # blocking a correct command.
+    check("named operation declaring $endCursor allowed", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query Board($endCursor:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$endCursor){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), False)
+
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)
     check("write key.pem", "guard_edit.py", write("certs/key.pem", "x"), True)

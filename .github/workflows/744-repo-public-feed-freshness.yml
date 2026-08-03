@@ -1,0 +1,185 @@
+name: '744. Repo - Public Feed Freshness [GH]'
+run-name: 'Public Agentic OS feed freshness'
+
+# Daily outcome check on the PUBLISHED Agentic OS status feed in
+# FFC-IN-ffcadmin.org — the data behind https://ffcadmin.org/agentic-os/.
+#
+# Why (#977): three separate mechanisms are supposed to keep that page current,
+# and none of them checks whether its data is fresh. #921 (via 740) watches
+# whether 502 succeeds, not whether its PR merged. #908 watches data-refresh PRs
+# hanging behind main, not the publisher never opening one. #771 watches drift
+# between the two copies, not both being equally stale. All three are PROCESS
+# checks, and every one of them was green while the public feed sat three days
+# old — 502's deliver job had been failing since 2026-07-29 on a dead PAT
+# (#848), and nobody connected the two.
+#
+# This workflow asserts the outcome instead: how old is the timestamp the public
+# page is actually serving. That catches all three causes above plus the next
+# unknown one, and it is cheap.
+#
+# Both published copies are checked and reported by path, because they are
+# written separately and can disagree (#771).
+#
+# A path that is missing, unreadable, or carries an absent, empty, non-ISO or
+# future `generated_at` is reported as a FINDING, never as fresh. "Could not
+# check" and "checked, fine" are different answers, and collapsing them is the
+# exact fail-open this workflow exists to close (ledger L02).
+#
+# Credentials: NONE beyond the ambient GITHUB_TOKEN. The two files are public
+# and the only write is one issue in this repository. Using
+# `read-all-cbm-github-pat` here would be circular: a freshness monitor that
+# depends on the credential whose death it exists to reveal goes dark at
+# precisely the moment it is needed. No Key Vault access, no environment, no
+# approval gate.
+#
+# Classification + report logic lives in scripts/public-feed-freshness-lib.js
+# (unit-tested under tests/workflow-logic/).
+
+on:
+  schedule:
+    # Daily 10:13 UTC — about three hours after 502's daily 07:17 publish, so a
+    # same-morning refresh has time to land before this reads it. Minute :13 is
+    # used by no other hub workflow (the collision guard in the test module).
+    - cron: '13 10 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # A cancelled half-check leaves paths unread while the run still reads as
+  # handled — the #834 self-cancelling-cron shape.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for the classification library)
+        uses: actions/checkout@v7.0.1
+
+      - name: Read the published feed + upsert/close rolling issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const lib = require('./scripts/public-feed-freshness-lib.js');
+
+            // --- 1. Fetch each registered path. Failure detail is carried
+            // forward as an observation; it is never swallowed into a default.
+            const observations = [];
+            for (const path of lib.FEED_PATHS) {
+              try {
+                const res = await github.rest.repos.getContent({
+                  owner: lib.FEED_OWNER,
+                  repo: lib.FEED_REPO,
+                  path,
+                  // Raw avoids the contents API's 1 MB base64 ceiling; this feed
+                  // carries the whole backlog and grows with it.
+                  mediaType: { format: 'raw' },
+                });
+                observations.push({
+                  path,
+                  status: res.status,
+                  text: typeof res.data === 'string' ? res.data : JSON.stringify(res.data),
+                  error: null,
+                });
+              } catch (e) {
+                observations.push({
+                  path,
+                  status: Number.isFinite(Number(e.status)) ? Number(e.status) : null,
+                  text: null,
+                  // A 404 is classified from the status, so no message is
+                  // needed; anything else keeps its reason.
+                  error: Number(e.status) === 404 ? null : String(e.message || e).slice(0, 200),
+                });
+              }
+            }
+
+            const nowIso = new Date().toISOString();
+            const analysis = lib.analyze({ observations, now: nowIso });
+            core.notice(lib.summary(analysis));
+
+            const body = lib.renderBody(analysis, nowIso);
+            fs.writeFileSync('public-feed-freshness.json', JSON.stringify(analysis, null, 2));
+            await core.summary.addRaw(body.replace(lib.MARKER, '')).write();
+
+            const { owner, repo } = context.repo;
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            });
+            // Skips pull requests, which this listing also returns — see the
+            // library. Never hand-roll the marker match here: the close path
+            // below can close whatever this selects.
+            const existing = lib.findRollingIssue(open);
+
+            if (!analysis.hasFinding) {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: existing.number,
+                  body: `✅ Recovered: every published copy of the Agentic OS status feed is readable and within ${lib.STALE_AFTER_HOURS}h (${lib.summary(analysis)}) ([run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})). Auto-closing.`,
+                });
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: existing.number,
+                  state: 'closed',
+                  state_reason: 'completed',
+                });
+                core.notice(`Closed rolling issue #${existing.number}`);
+              } else {
+                core.notice('Published feed is fresh and no open rolling issue — nothing to do.');
+              }
+              return;
+            }
+
+            // Converge the labels on both paths, so a manually stripped label is
+            // restored rather than only the body being refreshed.
+            const labelColors = { bug: 'd73a4a', 'agentic-os': '5319e7' };
+            for (const name of lib.ISSUE_LABELS) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name,
+                  color: labelColors[name] || 'ededed',
+                });
+              } catch (e) {
+                if (e.status !== 422) throw e; // 422 = already exists
+              }
+            }
+
+            if (existing) {
+              await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: existing.number,
+                labels: lib.ISSUE_LABELS,
+              });
+              core.notice(`Updated rolling issue #${existing.number} — ${lib.summary(analysis)}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner,
+                repo,
+                title: lib.ISSUE_TITLE,
+                labels: lib.ISSUE_LABELS,
+                body,
+              });
+              core.notice(`Opened rolling issue #${created.data.number} — ${lib.summary(analysis)}`);
+            }
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: public-feed-freshness
+          path: public-feed-freshness.json
+          retention-days: 90
+          if-no-files-found: warn

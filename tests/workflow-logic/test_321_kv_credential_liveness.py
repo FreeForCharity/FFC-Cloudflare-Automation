@@ -36,7 +36,7 @@ NOW = "2026-07-25T00:00:00Z"
 def _node(expr_body: str, *argv: str, expect_fail: bool = False):
     code = f"const l=require({json.dumps(str(LIB))});{expr_body}"
     proc = subprocess.run(
-        ["node", "-e", code, *argv], capture_output=True, text=True, timeout=60
+        ["node", "-e", code, *argv], capture_output=True, text=True, encoding="utf-8", timeout=60
     )
     if expect_fail:
         assert proc.returncode != 0, f"expected a throw, got: {proc.stdout}"
@@ -636,6 +636,79 @@ def test_the_workflow_has_a_safety_table_row():
     doc = (REPO_ROOT / "docs" / "workflow-safety-and-approvals.md").read_text(encoding="utf-8")
     assert "| 321 " in doc, "add a row to docs/workflow-safety-and-approvals.md"
 
+
+# --- rolling-issue lookup: never select a pull request (#980) --------------
+#
+# `issues.listForRepo` returns pull requests as well as issues, and the
+# recovery path CLOSES whatever this lookup selects — so a PR carrying the
+# marker would be closed by this scheduled monitor, with a comment claiming a
+# recovery. The marker is an HTML comment, invisible in a rendered PR body, so
+# a PR can carry it without its author ever seeing it (one quoting the library
+# constant, a lessons entry describing the pattern, a pasted issue body used as
+# evidence). These assert the BEHAVIOUR, not that the YAML mentions
+# `pull_request`: drop the filter from the library and they fail.
+
+_MARKER_CACHE: dict[str, str] = {}
+
+
+def _marker() -> str:
+    if "m" not in _MARKER_CACHE:
+        _MARKER_CACHE["m"] = _node("process.stdout.write(JSON.stringify(l.MARKER));")
+    return _MARKER_CACHE["m"]
+
+
+def _find(items):
+    return _node(
+        "process.stdout.write(JSON.stringify(l.findRollingIssue(JSON.parse(process.argv[1]))));",
+        json.dumps(items),
+    )
+
+
+def _marked(number: int, **extra) -> dict:
+    return {"number": number, "body": f"{_marker()}\n\nrolling body", **extra}
+
+
+def test_a_pull_request_carrying_the_marker_is_never_selected():
+    assert _find([_marked(5, pull_request={"url": "…"})]) is None
+
+
+def test_the_issue_is_selected_when_a_marked_pr_is_listed_first():
+    got = _find([_marked(5, pull_request={"url": "…"}), _marked(9)])
+    assert got and got["number"] == 9, got
+
+
+def test_a_plain_marked_issue_is_selected():
+    got = _find([_marked(9)])
+    assert got and got["number"] == 9, got
+
+
+def test_no_marker_selects_nothing():
+    assert _find([{"number": 9, "body": "an unrelated open issue"}]) is None
+
+
+def test_a_null_or_missing_body_does_not_throw():
+    assert _find([{"number": 1, "body": None}, {"number": 2}, None]) is None
+
+
+def test_an_empty_listing_selects_nothing():
+    assert _find([]) is None
+
+
+def test_the_workflow_uses_the_library_lookup_and_does_not_hand_roll_it():
+    scripts = [
+        s["with"]["script"]
+        for j in load_workflow(WF_FILE)["jobs"].values()
+        for s in (j.get("steps") or [])
+        if str(s.get("uses", "")).startswith("actions/github-script")
+        and "script" in (s.get("with") or {})
+    ]
+    upserts = [s for s in scripts if "issues.listForRepo" in s]
+    assert upserts, "no github-script step lists open issues"
+    for script in upserts:
+        assert "lib.findRollingIssue(" in script, script
+        # A second, unguarded marker match would reintroduce the defect while
+        # the library call above still made the workflow look fixed.
+        assert "includes(lib.MARKER)" not in script, script
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 

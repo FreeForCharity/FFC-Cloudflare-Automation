@@ -544,6 +544,34 @@ function _lockFix(state) {
   return 'correct the dependency range in package.json';
 }
 
+/**
+ * Find this monitor's rolling issue in an open-issue listing.
+ *
+ * `issues.listForRepo` returns **pull requests as well as issues** — the same
+ * object in the REST model, told apart only by a `pull_request` key — and the
+ * clean-run path CLOSES whatever this returns. Without the filter a scheduled
+ * monitor can close somebody's open pull request with a comment claiming a
+ * recovery.
+ *
+ * The marker is an HTML comment, i.e. invisible in a rendered PR body, so a PR
+ * can carry it without its author ever seeing it (a PR quoting this constant, a
+ * lessons entry describing the pattern, a pasted issue body used as evidence).
+ *
+ * 739 already carried the rule — "Issues API returns PRs too; drop them
+ * everywhere" — and it reached the workflows that enumerate issues to *report*,
+ * never the ones that enumerate them to *close one*. Refs #980.
+ *
+ * @param {Array<{body?:string, pull_request?:object}>} items an open-issue listing
+ * @returns {object|null} the rolling issue, or null when there is none
+ */
+function findRollingIssue(items) {
+  return (
+    (items || []).find(
+      (i) => i && !i.pull_request && typeof i.body === 'string' && i.body.includes(MARKER),
+    ) || null
+  );
+}
+
 module.exports = {
   AUDIT_WORKFLOW_PATH,
   AUDIT_SCRIPT,
@@ -552,6 +580,7 @@ module.exports = {
   LOCK_BROKEN_STATES,
   LOCK_BENIGN_STATES,
   MARKER,
+  findRollingIssue,
   ISSUE_TITLE,
   ISSUE_LABELS,
   analyze,

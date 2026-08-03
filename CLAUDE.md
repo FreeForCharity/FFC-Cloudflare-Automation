@@ -34,17 +34,509 @@
 
 ## Verifying tests: CI is authoritative, local runs may be false-red
 
-- **`tests/workflow-logic/` cannot be run reliably from every local sandbox.** In the Windows
-  git-bash environment the Conductor runs in, `python3 tests/workflow-logic/run_all.py` reports most
-  modules failing with `harness crashed:` and a node abort —
-  `Assertion failed: ncrypto::CSPRNG(nullptr, 0)`. A plain `node -e "…"` works fine; only the
-  harness-spawned node dies, so this is an environment/entropy problem, **not** a test defect.
-  Pure-python assertions in the same modules still pass.
-- **Treat a local red here as no signal at all.** The authority is CI's **Validate Repository**
-  check, which runs the same suite on `ubuntu-latest`. Verified 2026-07-24: the identical tree that
-  failed ~17 modules locally passed `Validate Repository` in CI (PR #828).
-- Never "fix" a test, or hold a PR, on the strength of a local harness crash — confirm against CI
-  first.
+> **This section's premise expired on 2026-07-31 and the section outlived it.** The
+> `harness crashed:` epidemic below was **#943**, and #943 is **closed**. Measured on the
+> Conductor's Windows host on 2026-08-02 (run 77), a full `python tests/workflow-logic/run_all.py`:
+> **`harness crashed` count = 0**, 895 `PASS`, 83 `FAIL`, 16 modules named with specific diagnoses.
+> Read what follows as history, and read the corrected rule first.
+
+- **A local red now carries signal, and discarding it costs real defects.** The 16 modules failing
+  here fail for stated reasons — a `FileNotFoundError` on a temp path, a preflight refusing an
+  unparseable response — not a node abort. Run 77 followed one of them (`test_729_add_collaborator`)
+  to a live defect that CI cannot see at all: the module runs the step under test with
+  `cwd=REPO_ROOT`, loses all five of its tests to the first one, and leaves a stray file in the
+  working tree. Tracked on **#1023**.
+- **CI is still authoritative for green, and is still the only cross-platform judge.** Do not "fix"
+  a test or hold a PR on a local red without saying _which_ module and _what_ the failure text was —
+  the standard is now the same one applied to any other measurement, not a blanket dismissal.
+- **Historical (pre-#943, kept because the shape recurs):** the harness used to report most modules
+  failing with `harness crashed:` and `Assertion failed: ncrypto::CSPRNG(nullptr, 0)`, because each
+  module built a fresh minimal `env` dict for `subprocess.run` and Windows node cannot start without
+  the inherited environment. Verified 2026-07-24 (PR #828): a tree failing ~17 modules locally
+  passed `Validate Repository` in CI. If a _new_ wave of `harness crashed:` appears, that is the
+  shape to suspect — and it is a regression to file, not a fact to route around.
+- **But "the harness is broken here" is not a reason to review a guard by reading it.** When the
+  harness cannot run, **test the module it wraps.** Only the harness-spawned node dies; `node`
+  itself is fine, so a pure module under `scripts/` can be `require`d directly and exercised on the
+  spot. Validated 2026-07-31 on PR #941: its test module reported **14 `harness crashed:` FAILs**
+  locally while CI was green, so instead of trusting the PR's own reported output — which the #935
+  rule forbids — the Conductor wrote a standalone 9-case node probe against
+  `scripts/claim-sync-lib.js`, then mutated the source (`(${NWO})?#` → `()#`, and the repo
+  comparison → `if (false)`) and re-ran it. Both mutations flipped exactly the expected cases and
+  left the rest green, which is the whole point: the checks pass by **discrimination, not
+  permissiveness**. Full mutation review was recovered on a host where the official harness is
+  unusable.
+  - Two mechanics that make this work: `require()` resolves relative paths against the **probe
+    file's** directory, not the cwd — pass an absolute `C:/…` path; and assert the mutation's anchor
+    text is present **before** substituting, so a refactor that moved the guard fails loudly instead
+    of silently testing nothing.
+
+### The harness crash is the scrubbed-`env` bug, and it is fixable (measured 2026-07-31)
+
+The two facts above and the `subprocess.run` rule further down are **the same bug**, and reading
+them as separate is what made "local red is no signal" feel permanent. On `main` (`d956a78d`),
+`run_all.py` fails **26 modules**, all with a node abort in
+`node::InitializeOncePerProcessInternal`. The cause is that each module builds a **fresh, minimal**
+env dict for `subprocess.run`, e.g. `tests/workflow-logic/test_724_initialize_labels.py:61`:
+
+```python
+env = {"PATH": f"{pathlib.Path(NODE).parent}:/usr/bin:/bin:/usr/local/bin"}
+```
+
+On Linux that suffices; on Windows node cannot start without inherited variables (`SYSTEMROOT` above
+all) — exactly what the "never pass a scrubbed `env=`" rule below already says about `bash`.
+
+**The POSIX-looking `/usr/bin:/bin` is a red herring — falsify it before acting on it:**
+
+| change to `test_724` / `test_228` | crashes              | pass        |
+| --------------------------------- | -------------------- | ----------- |
+| unmodified                        | 8 / 8                | 2 / 5       |
+| `PATH` → `os.environ["PATH"]`     | **8 / 8, unchanged** | 2 / 5       |
+| `env = dict(os.environ)`          | **0 / 0**            | **10 / 13** |
+
+Rewriting `PATH` changes nothing; inheriting the whole environment fixes it outright. So the
+standing advice is narrower than it looks: **local red is no signal only until the env dict is
+fixed** — it is not an unfixable property of this host, and it is not entropy. Tracked as **#943**,
+**which landed and closed on 2026-07-31**: run 77 measured `harness crashed` **0 times** in a full
+local suite. This prediction came true, and the section above has been corrected to match. The probe
+technique above was the workaround while it was open; it is now a technique for a module whose
+harness is broken for its own reasons, not the standing answer to this host.
+
+## Prefer the machine's claim to your own: a hand-written `claimed` label expires in 48h (validated 2026-07-31)
+
+737 treats a claim bearing `<!-- claim-sync:linked-pr -->` (the sweep's own comment) as strictly
+stronger than a hand-written `CLAIM:` comment. From the release path
+(`.github/workflows/737-claim-sync.yml`):
+
+```js
+if (!searchOk && claimedByLinkedPR) continue;   // a MARKER holds through a search failure
+```
+
+A marker-bearing claim survives an unreadable org search; an unmarked one is deliberately given
+**exactly 48h** and then released, so two agents cannot collide on a stale hand-label. Confirmed by
+driving the sweep with a frozen clock and a 100h-idle issue: PR open + healthy search → held; no PR
+anywhere → released (the backstop, correct); **PR open + search over the result cap → released, a
+live claim lost.**
+
+Consequence for the Conductor: hand-labelling `claimed` buys ~48 hours, not a claim, and the cost is
+a standing "re-check these every run" thread — runs 54 and 55 each carried one. The durable move is
+to **remove the hand label and dispatch 737** once the sweep can actually see the PR; it re-applies
+the claim with a marker in seconds, and it finds referencing PRs a human enumerating by hand will
+miss (on 2026-07-31 it added canary #21/#22, FOT #123 and hub #940 to three issues that had been
+hand-labelled with one PR each).
+
+## A test asserting a non-zero exit code must also assert on the output (validated 2026-07-29)
+
+**Never pass a scrubbed `env=` to `subprocess.run`.** Writing
+`subprocess.run([...], env={"PATH": os.environ["PATH"]})` to isolate a test broke `bash` on this box
+— a bare `bash` here resolves to the WSL shim, which needs `SYSTEMROOT` and friends:
+
+```
+Catastrophic failure
+Error code: Bash/Service/E_UNEXPECTED
+```
+
+That surfaced as **exit 1**. The system under test also returns exit 1, for "a violation was found".
+Six tests in `test_722_large_blob_guard.py` failed honestly, but the seventh asserted only
+`returncode == 1` and went **green for the wrong reason** — the harness was broken and the test read
+it as a successful detection.
+
+The rule generalizes past this box: **a test that asserts a failure exit code must also assert
+something about stdout/stderr**, or it cannot distinguish the system under test from its harness.
+Prefer `env = dict(os.environ)` plus the one or two overrides you actually need.
+
+Related, same file: on `win32`, prefer Git-for-Windows bash explicitly —
+
+```python
+r"C:\Program Files\Git\bin\bash.exe"   # handles C:\... arguments
+```
+
+A bare `bash` (the WSL shim) strips drive letters out of Windows-style path arguments and exits 127
+with `No such file or directory` naming a path with every separator removed. No effect on
+`ubuntu-latest`, so this is a local-run fact only.
+
+## Reading `gh --format json` on the Windows Conductor box (validated 2026-07-25)
+
+**Open the file as UTF-8 explicitly, or Python decodes it as cp1252 and dies.** Piping
+`gh project item-list … --format json` (or any `gh` JSON output) to a file and reading it back with
+plain `open(path)` fails on this box:
+
+```
+UnicodeDecodeError: 'charmap' codec can't decode byte 0x9d in position 20770
+```
+
+Nothing is wrong with the data — Python's default encoding on Windows is cp1252, and FFC issue
+titles, board item titles and PR bodies routinely contain em-dashes, arrows and smart quotes.
+Always:
+
+```python
+with open(path, encoding="utf-8") as fh:
+    data = json.load(fh)
+```
+
+Same for `pathlib.Path(p).read_text(encoding="utf-8")` and any `write_text`. This costs one failed
+call every time it is rediscovered, which has now happened more than once.
+
+**It bites on the way out too — set `PYTHONIOENCODING=utf-8`.** Reading UTF-8 correctly and then
+`print`ing what you read fails at the terminal instead:
+
+```
+UnicodeEncodeError: 'charmap' codec can't encode character '→' in position 78
+```
+
+On 2026-07-30 both halves fired inside one command while inspecting `agentic-os-status.json`,
+because a live workflow really is named _Redirect Rule: trendylittlegeek.com → aprilhansen.com_. The
+decode error names a byte offset and the encode error names a codepoint — worth knowing apart, since
+the first means "reopen the file" and the second means "the file was fine, your stdout is cp1252".
+This is not confined to `gh` output: any FFC JSON can carry an arrow, so treat **both** env-var and
+`encoding=` as the default for feed work.
+
+## Python on this host cannot open a git-bash `/c/...` path (validated 2026-07-30)
+
+**Every shell builtin accepts `/c/Users/...`; Python does not.** The interpreter is native Windows,
+so it never sees the MSYS mount table:
+
+```
+>>> io.open('/c/Users/clark/.../feed.json', encoding='utf-8')
+FileNotFoundError: [Errno 2] No such file or directory: '/c/Users/clark/.../feed.json'
+```
+
+The path is real — `cat` on the very same string works. Write `C:/Users/...` in Python string
+literals (forward slashes are fine; it is the `/c/` _prefix_ that fails). Same family as the
+`MSYS_NO_PATHCONV` fact below: a path that is correct for the shell is not automatically correct for
+the process the shell hands it to. Bites hardest when a heredoc script is copying files the
+surrounding `cd`/`ls` already proved exist.
+
+## A symptom that disappears on its own has not verified your fix (validated 2026-07-30)
+
+**Check the cause was still present before claiming the fix suppressed it.** #924 filters GitHub's
+platform agents out of the public gate panel. The first feed generated after it merged showed no
+`copilot` row — which looks like proof and is not: that waiting run had resolved by itself minutes
+earlier, so the filter had nothing to act on and was never exercised.
+
+The mistake is cheap to avoid and expensive to make, because it retires a real verification task
+while feeling like it completed one. Before reading an absence as evidence, re-read the _input_:
+
+```
+gh api "repos/OWNER/REPO/actions/runs?status=waiting&per_page=20" --jq '.workflow_runs[].name'
+```
+
+If the thing you filter is not in there, the run proves nothing about the filter.
+Deliberately-injected input — a mutation test — is what actually verifies it, which is why #924
+shipped with one.
+
+## `git cat-file` / `git show` with a `.github/…` path needs `MSYS_NO_PATHCONV=1` (validated 2026-07-25)
+
+**git-bash rewrites a `rev:path` argument when the path starts with a dot.** Reading a file out of a
+branch without checking it out:
+
+```
+$ git cat-file -p "origin/claude/some-branch:.github/workflows/742-x.yml"
+fatal: Not a valid object name origin\claude\some-branch;.github\workflows\742-x.yml
+```
+
+MSYS path conversion turned the `:` into `;` and every `/` into `\`. The tell is the mangled path in
+the error — the ref is fine. It is **the leading dot in the path** that trips the heuristic, not the
+slashes in the branch name: `origin/main:docs/foo.md` works on the same command line and
+`origin/branch:.github/…` does not, so this looks like it works right up until you touch a workflow
+file. Prefix the command:
+
+```bash
+MSYS_NO_PATHCONV=1 git cat-file -p "origin/<branch>:.github/workflows/<file>.yml"
+```
+
+## `gh api` list endpoints silently truncate at `per_page` — paginate before concluding "absent"
+
+`per_page=100` returns 100 items and **no warning** that more exist. On 2026-07-25 this produced a
+false alarm mid-run: a just-merged workflow appeared to be unregistered because the repo had
+`total_count: 105` workflows and the 105th was on page 2. The near-miss is the shape to remember —
+the conclusion "the alerter did not register" was about to be reported as a defect.
+
+Two habits, both cheap:
+
+- Add `--paginate` to any `gh api` list call whose result feeds a **negative** conclusion ("X is
+  missing", "nothing is pending", "zero failures").
+- When an endpoint returns `total_count`, compare it against the length of what you actually got
+  before drawing a conclusion from the absence of something.
+
+This is the same class as the `#719` log tail needing `--paginate` to find the true run number.
+
+### …but `--paginate` with an **array-building** `--jq` produces invalid JSON
+
+`--paginate` runs the jq expression **once per page** and concatenates the results. Which shape you
+ask for decides whether that is correct:
+
+- **Streaming** — `--jq '.[] | "\(.created_at) \(.body)"'` — emits one line per item, so the pages
+  concatenate cleanly. This is the form AGENTS.md teaches for reading the #719 tail, and it is
+  right.
+- **Array-building** — `--jq '[.[] | {body, created_at}]'` — emits one **array per page**:
+  `[…][…][…]`. That is not valid JSON. `gh` exits 0 and says nothing; the failure surfaces later in
+  whatever parses the file, as an error pointing at a byte offset in the middle of page 2, nowhere
+  near the command that caused it.
+
+The fix is not the obvious one: `--slurp` is the right flag but **cannot be combined with `--jq`**
+(`gh` rejects it outright). Fetch raw, then flatten:
+
+```bash
+gh api --paginate --slurp repos/OWNER/REPO/issues/719/comments > pages.json
+# pages.json is an array OF PAGES — flatten it before use
+```
+
+Hit on 2026-08-01 (run 70) doing a whole-thread read of #719 for the #988 review. A mechanical guard
+is filed as #989; until it lands this is prose, because `.claude/hooks/` changes are reviewed by
+Clarke by standing rule.
+
+## On a merge-queue repo, a `null` `autoMergeRequest` does not mean the enqueue failed — `mergeQueueEntry` is the proof
+
+`main` here is governed by a merge queue, and that changes which field records an enqueue.
+`gh pr merge --auto` succeeds, prints only the advisory
+
+```
+! The merge strategy for main is set by the merge queue
+```
+
+and then **`autoMergeRequest` ends up `null`** — the PR is in the queue, not in auto-merge. Reading
+that `null` as "the enqueue failed" is wrong, and on 2026-07-29 it nearly caused a duplicate merge
+attempt; the second `gh pr merge` answered `Pull request … is already queued to merge`, which is
+what revealed the mistake.
+
+**The field is not constant, so reading it once tells you nothing.** Observed on 2026-08-02 (run
+71): immediately after `gh pr merge --auto` on #991, while its checks were still running,
+`autoMergeRequest` read **non-null** (`enabledAt`, `mergeMethod: MERGE`); once the checks went green
+and the queue took the PR, the same field read `null`. So a non-null value means "enabled, not yet
+queued" and `null` means either "never enabled" **or** "already queued" — the two states you most
+need to tell apart map to the same reading. The near-miss repeated here: `null` on #990 looked like
+a failed enable, and the disambiguator was the mutation, which answered
+`Pull request is already in the queue`. Never re-push to a branch on the strength of a `null`.
+
+Confirm with `mergeQueueEntry` instead:
+
+```bash
+gh api graphql -f query='{repository(owner:"FreeForCharity",name:"FFC-Cloudflare-Automation"){
+  pullRequest(number:905){ mergeQueueEntry{ position state enqueuedAt } }}}'
+# → {"position":1,"state":"AWAITING_CHECKS","enqueuedAt":"2026-07-29T13:10:06Z"}
+```
+
+Note the advisory goes to **stderr and the command still exits 0**, so a `>/dev/null` wrapper hides
+the one hint that the queue — not auto-merge — took the request.
+
+This is the third instance of the same underlying rule already in this file: **confirm a GitHub
+write by re-reading the state it should have changed, and make sure you re-read the _right_ field.**
+The gate-approval note above says don't trust the POST body; this says don't trust the field that
+would have been correct on a non-queue repo. Both fail the same way — a truthful-looking negative.
+
+**The `null` is not even stable, so a second reading is not a second opinion.** On 2026-07-30, #904
+read `autoMergeRequest` non-null with `mergeStateStatus=BLOCKED` immediately after `--auto`, then
+`null` with `CLEAN` a few minutes later — two different-looking states for one unchanged fact. Only
+the mutation settled it:
+
+```bash
+gh api graphql -f query="mutation{enqueuePullRequest(input:{pullRequestId:\"$NID\"}){mergeQueueEntry{position state}}}"
+# → errors[0].message: "Pull request is already in the queue"
+```
+
+`enqueuePullRequest` is safe to use as a _probe_ precisely because it is idempotent — an
+already-queued PR is rejected rather than double-enqueued, so the error message is the answer.
+
+**`--auto` can also print nothing at all, and REST `.auto_merge` can read `false`, while the enqueue
+took.** On 2026-07-30 this happened on three PRs in one run (#923, #887, ffcadmin #744): no
+advisory, no error, exit 0, `.auto_merge == false` on the very next call — and `enqueuePullRequest`
+answered `"already in the queue"` for two of them and `"Pull request is closed"` for the third,
+which had already merged. So the absence of the stderr advisory is **not** the signal that the queue
+declined the request. Empty output is not evidence; only the probe is.
+
+### Promoting a draft can hard-block the enqueue — a different case from the one AGENTS.md covers
+
+AGENTS.md says a branch-level check failure does not dequeue an **already-queued** PR, so leave the
+branch alone. The inverse case has the opposite remedy. #887 sat `clean` and all-green **as a
+draft**; `gh pr ready` re-ran branch CI and Phantom Revert Guard failed:
+
+```
+Phantom-revert risk: branch has untouched updates in critical paths and is 11 commits
+behind main (threshold: 5). Update the branch (merge main in or rebase) before merging.
+```
+
+Because the PR was not yet queued, this was a real block — `enqueuePullRequest` returned
+`"has failing required statuses"`, not `"already in the queue"`. Fix it with
+
+```bash
+gh api -X PUT repos/FreeForCharity/FFC-Cloudflare-Automation/pulls/<n>/update-branch
+```
+
+and note the ordering that makes this safe: **the enqueue rejection is what proved the PR was out of
+the queue.** Probing first, then updating, satisfies AGENTS.md's "only merge `main` into a branch
+that is genuinely out of the queue" — doing it in the other order risks a 422 against a queued
+branch. Also expect a **draft that has been green for days to fail on promotion for staleness
+alone**: the guard's 5-commit threshold is measured at run time, so age accrues silently while the
+PR waits.
+
+**But do not pre-emptively update the branch on every promotion — being behind is the trigger, not
+promoting.** After three consecutive cases it was tempting to read this as "promotion breaks the
+guard". It does not. On 2026-07-30 #931 sat ~40 minutes as a draft, was **0 behind / 2 ahead**, and
+`gh pr ready` re-ran branch CI with the guard **passing**. Promotion only re-runs the check; the
+5-commit threshold decides the outcome. Check first and touch the branch only if the number says to
+— it is a worker's branch, and an unnecessary merge commit on it is not free:
+
+```bash
+gh api repos/FreeForCharity/FFC-Cloudflare-Automation/compare/main...<branch> --jq '{ahead:.ahead_by,behind:.behind_by}'
+```
+
+## Code scanning can block the merge queue even when every required check is green
+
+The ruleset is not the whole story. On 2026-07-30 #931 had both required contexts green — ruleset
+`16768928` requires exactly `Validate Repository` and `Phantom Revert Guard` — and the CodeQL
+workflow itself was `success` with `Perform CodeQL Analysis=success`. The enqueue still refused:
+
+```
+UNPROCESSABLE: Code scanning is waiting for results from CodeQL for the commits 3b73753 or 387c28d.
+```
+
+That is **code scanning merge protection**, a separate gate from required status checks, so reading
+`rulesets/<id>` `required_status_checks` will never show it and its absence there proves nothing.
+
+The cause is upload targeting, not analysis failure. Merge protection wants an analysis for the
+current **test-merge** commit, and a second push to the branch moves that sha:
+
+```bash
+gh api "repos/FreeForCharity/FFC-Cloudflare-Automation/code-scanning/analyses?ref=refs/pull/931/merge" \
+  --jq '.[]|"\(.commit_sha[0:7]) \(.created_at)"'
+# → 4e81727 2026-07-30T12:24:10Z     ... the PREVIOUS head's merge sha; neither sha in the error
+```
+
+Re-running the CodeQL workflow uploads for the current merge commit, and the enqueue then succeeds:
+
+```bash
+gh run rerun <codeql-run-id> --repo FreeForCharity/FFC-Cloudflare-Automation
+# ~3 min later the analyses list carries 3b73753, and enqueuePullRequest returns
+# "already in the queue" — the earlier silent --auto had been queued behind this all along
+```
+
+Diagnostic order: the enqueue-probe error **names the two shas it will accept** — start there, list
+the analyses on `refs/pull/N/merge`, compare, then re-run CodeQL. Do not push an empty commit to
+force it; the analysis, not the branch, is what is missing.
+
+## Narrowing a workflow to a read lane surfaces the writes that were riding on the old credential
+
+**Before moving a workflow to a `*-prod-read` environment, enumerate what it writes.** Validated the
+hard way on 2026-07-29 (#834): `726` was moved off the gated `github-prod` onto `github-prod-read`,
+and its Key Vault step exports the **read-scoped** PAT to `GITHUB_ENV` as `GH_TOKEN` — which then
+applies to every later step, including the one that **updates the rolling tracking issue**. The
+org-wide audit passed and the run died on the last step:
+
+```
+Updating issue #667
+failed to update .../issues/667: GraphQL: Resource not accessible by
+personal access token (updateIssue)
+```
+
+Searching an issue and editing one are different permissions, so the failure only appears at the
+write. That write had worked for months purely because the gated lane happened to hand it a
+**writer** PAT — the narrowing did not break it so much as reveal it.
+
+The fix is the pattern `737` already uses: an own-repo issue write belongs on the **ambient**
+`GITHUB_TOKEN`, not on a Key Vault credential. A step-level `env:` beats `GITHUB_ENV`, so the read
+step keeps the PAT and only the write falls back:
+
+```yaml
+- name: Open / update tracking issue
+  env:
+    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run: |
+    gh issue edit "$existing" --repo "$repo" --body "$body"
+```
+
+The job must declare `issues: write` (726 already did). Corollary worth keeping: **a workflow's own
+error message states what its author assumed, not what the repo can do.** 726's preflight asserted
+"These OIDC identifiers are ENVIRONMENT secrets — a repo Variable does not satisfy a `secrets.*`
+reference." True about `secrets.*`, and a false diagnosis: the identifiers were already repo
+Variables and the correct fix was to reference them as `vars.*`. That message was escalated to a
+human as a provisioning request before anyone checked `gh api repos/<r>/actions/variables`.
+
+## The Conductor cannot `--request-changes` on a cloud-worker PR
+
+Every cloud-worker PR in this org is authored by `clarkemoyer`, and the Conductor is authenticated
+as the same account, so GitHub refuses the review:
+
+```
+failed to create review: GraphQL: Review Can not request changes on your own
+pull request (addPullRequestReview)
+```
+
+This is not a scope problem and adding permissions will not fix it. Post blocking feedback with
+`gh pr comment <n> --body-file <f>` instead, and simply do not promote the PR out of draft until the
+finding is addressed — leaving it draft is what actually holds the merge, not the review state.
+
+## Windows host facts (validated 2026-07-31, conductor run 57)
+
+The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to rediscover.
+
+- **Native Python cannot open a git-bash path.** `open('/c/Users/…')` raises `FileNotFoundError`
+  while `ls /c/Users/…` works — bash resolves the redirect, native Python does not. The tell is a
+  command that writes a file successfully and a reader that insists it is missing. Use `C:/Users/…`
+  for anything a Windows binary will open, and keep `/c/…` for the shell's own redirects.
+- **`gh pr merge --delete-branch` is rejected where a merge queue is enabled**:
+  `Cannot use -d or --delete-branch when merge queue enabled`. Same family as the existing
+  no-strategy-flag rule — enqueue with `gh pr merge --auto` or the `enqueuePullRequest` mutation and
+  let the queue delete the branch.
+- **`scripts/generate-agentic-os-status.py` needs `PYTHONUTF8=1` on Windows** until #945 lands. It
+  writes issue titles to stdout and dies with
+  `UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f6a8'` on the 🚨 in #921's
+  title. It also needs `GH_TOKEN` exported (`export GH_TOKEN=$(gh auth token)`) — it does not read
+  `gh`'s keyring.
+- **The generator's `--output` used to write CRLF on Windows — fixed at the source (run 74).**
+  `scripts/generate-agentic-os-status.py` now writes through `write_feed()`, which pins
+  `newline="\n"` beside the `encoding="utf-8"` that was already there, so both hosts emit identical
+  bytes. Two things had been masking it and neither was a fix: ffcadmin's `.gitattributes`
+  (`* text=auto eol=lf`) normalized the _committed_ blob, and this repo's CI is Linux, where text
+  mode never translates — so no test could observe it by running the script.
+  `test_502_agentic_os_status.py` therefore asserts on the **`open()` call's keywords**, not on the
+  bytes written; a round-trip check would pass on `ubuntu-latest` with or without the fix.
+  - Verifying the staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) is still the
+    right habit for any hand-delivered feed — it just no longer has anything to catch here.
+  - **And do not run that check in Python text mode - it reports `0` whether or not the CRs are
+    there.** `io.open(p, encoding='utf-8').read().count('\r')` applies universal-newline
+    translation, so CRLF is silently rewritten on the way IN. On 2026-08-02 (run 72) that returned a
+    confident `CR bytes: 0` for a freshly generated feed that in fact carried **1264** CRs, which
+    `tr -cd '\r' | wc -c` found immediately. Read `'rb'` (or use `tr`). A check whose failure mode
+    is to print the answer you were hoping for is worse than no check.
+  - **The same translation runs on the way OUT, which breaks restore-after-mutation.**
+    `pathlib.write_text()` uses text mode, so writing a file back converts every `\n` to `\r\n` on
+    this host. Reviewing #1015 (run 76) the Conductor mutated `run_all.py` in place six times and
+    asserted `sha256(path.read_text().encode())` matched the original after each restore. It matched
+    every time and proved nothing — the read side translated the CRLFs back out, so a file rewritten
+    end to end hashed identical to the LF original. The only tell was `git status` listing the file
+    as modified with an **empty** `git diff`. Pass `newline=""` when writing, and verify restores
+    with `tr`/`'rb'`, never `read_text`. (`newline=""` and `newline="\n"` are byte-identical on
+    **write** — measured here on both LF and CRLF content — so the choice is intent, not behaviour:
+    `""` for "restore verbatim", `"\n"` for "force LF" as the generators in `scripts/` do. Only the
+    default is wrong, and it is worse than "adds CR": a string that already holds `\r\n` comes out
+    `\r\r\n`.)
+  - **Better: mutate a copy and leave the original alone.** The repo's own mutation sites already do
+    this — `test_737_claim_sync.py:206` and `test_powershell_command_resolution.py:138` copy into a
+    `tempfile.TemporaryDirectory()` and mutate there, so restore fidelity is never in question. The
+    in-place-and-restore pattern is the ad-hoc reviewer's habit, and it is the one that needs the
+    binary check.
+  - **And do not build the mutating script through a shell heredoc.** `python - <<'PY'` does not
+    deliver backslash escapes intact on this host: run 77 lost every `\n` in a `"\n".join(...)` to a
+    carriage return and committed `docs/lessons-ledger.md` with **0 LF and 169 CR**, while prettier
+    reported "unchanged", the pre-commit hook passed and `git status` was clean. `CLAUDE.md`, edited
+    with the file-editing tool in the same minutes, was untouched — that is the control case. Write
+    files with the editing tool; if a script must transform one, put the script in a file and run it
+    by path. Ledger **L88**.
+- **The full workflow-logic suite takes over 2 minutes once it actually runs.** It used to finish in
+  seconds only because the modules were aborting; a 2-minute command timeout now reads as a hang.
+- **One module — `test_729_add_collaborator.py` — leaves a zero-byte `U+F022 U+F022` file in the
+  repo root.** Reproducible, untracked; it is suite output, not a checkout artifact. `ls -b` renders
+  the name `""`, which is what Windows maps `"` to. Bisected in run 77 by running all 50 modules in
+  order: it is that one module, not "each full suite run" as this line used to claim, and it is
+  there because the test passes `cwd=REPO_ROOT`. Tracked on **#1023** — #945, which this line named
+  until run 77, closed on 2026-07-31 while the artifact went on reproducing.
+- **When a PR declines to tick a platform-specific criterion, supply the platform.** Agents working
+  from a Linux sandbox correctly refuse to claim a Windows result they cannot measure (#944 did
+  exactly this). The move is neither to merge on trust nor to bounce the PR — it is to run that
+  criterion here, because this is the only host that can. Doing so on #944 turned an unverifiable
+  claim into a measured `129 → 0`, and surfaced a scope correction (the cause explained 8 of 26
+  modules, not 21) that the author had no way to see.
 
 ## Board & PR-creation env facts (validated 2026-07-24)
 
@@ -53,9 +545,46 @@
   `Pull request merged` are **disabled**. So **neither issues nor PRs auto-add, and statuses never
   self-update** — every item and every status is placed by hand. Do not assume a new `agentic-os`
   issue reached the board. Check:
+
   ```bash
   gh api graphql -f query='query{organization(login:"FreeForCharity"){projectV2(number:9){workflows(first:20){nodes{name enabled}}}}}'
   ```
+
+  - **Audit the board with `scripts/audit-agentic-os-board.py`, not by hand.** Because nothing
+    auto-adds, every run re-derives the same three sets — missing from the board, on the board with
+    no Status, closed/merged but not `Done` — and hand-rolling it was wrong twice in two runs, in
+    two different ways (#966). Run 61 read `items(first:100)` and got 100 of 208. Run 62 built the
+    _expected_ half from `gh search issues` and got 52 where REST returned 53: the **search index
+    lags writes**, so it under-reports precisely for the newest items, which are the ones most
+    likely to be missing from a hand-maintained board. It failed silently and in the reassuring
+    direction. The script reads both sides from authoritative endpoints (REST per repo; GraphQL
+    paginated on `$endCursor`), prints `expected=N board=M` so a short denominator is visible rather
+    than invisible, and exits non-zero on any finding **or** any failed enumeration — never 0 on a
+    read it could not complete. Read-only; it adds nothing and sets no status.
+    ```bash
+    GH_TOKEN=… python3 scripts/audit-agentic-os-board.py          # prose report
+    GH_TOKEN=… python3 scripts/audit-agentic-os-board.py --json   # machine-readable
+    ```
+
+- **A negative read straight after a successful GitHub write means "unknown", not "failed".** The
+  write APIs are strongly consistent; the _list/read_ endpoints behind them are not, and the lag is
+  seconds. Three instances so far: `mergeQueueEntry` reads `null` for a few seconds after a good
+  `--auto` enqueue (2026-07-24); `gh project item-list` read back the full board **without** an
+  issue that `gh project item-add` had just added successfully (2026-07-25, org project #9); and the
+  `POST /pulls` HTTP-500 episode below, where the branch had in fact been pushed. Re-poll before
+  concluding anything failed, and **never let an immediate negative read trigger a retry loop** —
+  run 41 burned ~51 attempts that way. Where the write is idempotent (`item-add` is: two calls
+  produced one row) a retry is merely wasteful; where it is not, it is destructive.
+  - **Separately: some fields are not lagging, they simply never carry the state you want.** On
+    2026-07-31 (run 60) `gh pr merge --auto` printed nothing for #914/#958/#959 and `.auto_merge`
+    read `null` for all three — but `enqueuePullRequest` answered "already in the queue" for every
+    one. That `null` was not a few-second lag that re-polling would clear; `.auto_merge` describes
+    the _auto-merge flag_, and a PR that went straight into the merge queue never sets it. So
+    distinguish the two failure shapes: re-poll cures a stale read, but no amount of re-polling
+    cures a field that does not model the thing. When a read looks negative, confirm against the
+    endpoint that is **authoritative for that state** (here, the `enqueuePullRequest` mutation)
+    before either retrying or concluding anything — and note that silence from `gh pr merge --auto`
+    is success, not a no-op.
 - **Push the branch before opening the PR.** On 2026-07-24, `POST /repos/…/pulls` returned **HTTP
   500 with an empty body** for >20 minutes, across **multiple FFC repos**
   (`FFC-IN-freeforcharity.org` and `FFC-Cloudflare-Automation`) and all three clients (`gh`, REST,
@@ -63,6 +592,123 @@
   reported all-operational throughout — so treat "GitHub is green" as no guarantee that PR creation
   works. Because the work was committed and pushed first, nothing was lost: the branches simply wait
   for their PRs. **Adopt commit-and-push-first as the default order.**
+- **A per-item success log is not evidence of completeness — assert `processed == expected`.** On
+  2026-07-30 a conductor run fed 22 board items to `while read … done < missing.txt` and added
+  **21**. The file had no trailing newline (`'\n'.join(...)` from Python), so `read` discarded the
+  final line. Every line that _did_ run printed `ADDED`, so the log looked perfect; the miss was
+  visible only by counting. This generalizes past shell: whenever a loop reports success per item,
+  the loop's own output cannot tell you whether an item was skipped before it ever started. Print a
+  count and compare it, or terminate the file with a newline and still compare the count.
+
+## Windows host facts (the Conductor's git-bash environment, validated 2026-07-31)
+
+The scheduled Conductor runs on Windows 11 under git-bash, which is **not** the environment CI uses.
+These are the ways that difference has actually bitten, each found the expensive way.
+
+- **A `--jq` expression containing `//` is mangled the same way** (ledger L51). MSYS rewrites
+  `(.conclusion//"null")` into a Windows path, and jq then fails with a **type** error —
+  `cannot add: string ("completedC:/Program File …")` — which reads like a malformed filter and
+  sends you to rewrite the query instead of the quoting. Use `\(.field)` interpolation rather than
+  jq's `//` default operator, or prefix with `MSYS_NO_PATHCONV=1`.
+- **`git show <rev>:<path>` is mangled by MSYS path conversion — but only when the path starts with
+  a dot.** `git show origin/main:.github/…` reaches git as `origin\main;.github\workflows\…` and
+  aborts with `fatal: ambiguous argument`; `git show origin/main:docs/foo.md` works untouched on the
+  same command line. It is the leading dot that trips the heuristic, not the colon or the slashes —
+  the full validation is in the section above. Prefix dot-paths with `MSYS_NO_PATHCONV=1` (and quote
+  the argument). Do **not** read this as "always prefix `git show`": stating the rule without its
+  qualifier is what made an automated reviewer file a false finding against a correct command on
+  #981. The failure is loud — but see the next point for how it gets swallowed.
+- **Never let `||` supply a benign default for a command that can crash** (ledger L42). A
+  `cmd | grep … || echo "none found"` prints the reassuring branch when `cmd` _fails_, not only when
+  the match is empty. That silently turned a failed supersession check into a pass. Check the exit
+  status, or make the fallback read `CHECK FAILED`.
+- **Never read an exit code through a pipe** (ledger L50). `cmd | tail; echo $?` reports `tail`'s
+  status, not `cmd`'s. `scripts/audit-agentic-os-board.py | tail -45; echo "EXIT=$?"` printed
+  `EXIT=0` while the script had exited **1** with six real findings — the script's entire contract
+  is to exit non-zero on any finding or any enumeration it could not complete, and the pipe threw
+  exactly that away. Redirect to a file and read `$?` before piping, or `set -o pipefail`.
+- **`gh` inside a `while read` loop eats the loop's stdin**, losing one input line per invocation.
+  Read from a dedicated descriptor (`while read … <&3; done 3< file`) or redirect the child
+  (`gh … </dev/null`). A board audit silently processed 73 of 74 rows this way.
+- **Space-delimited `awk` columns break on human labels.** Project board statuses include
+  `In Progress` and `In Review`, so `$6` reads an item id instead of a state. Emit tab-delimited
+  rows (`IFS=$'\t'`) for anything carrying a human-authored field.
+- **Native Windows Python cannot open a git-bash path.** `open('/tmp/x')` raises `FileNotFoundError`
+  while `ls /tmp/x` works, so a bash heredoc that writes to `/tmp` and a Python reader disagree
+  about the same filename. Use `C:/…` paths (the session scratch dir) whenever Python is on either
+  end.
+- **Text-mode `subprocess` decodes with cp1252 here, not UTF-8** — pass `PYTHONUTF8=1` or an
+  explicit `encoding=`. `scripts/generate-agentic-os-status.py` is a production script that dies on
+  an emoji in an issue title without it, and the public status feed now routinely contains 🚨 alert
+  titles. Enumerated and tracked in #945.
+- **The full `tests/workflow-logic/` suite takes >2 minutes here** once it actually runs. A 2-minute
+  command timeout reads as a hang. (Crashes used to make it finish fast — see ledger L35.)
+- **You cannot approve your own PR, and every agent authenticates as `clarkemoyer`.**
+  `gh pr review --approve` returns `Can not approve your own pull request`. A conductor review is
+  therefore a **comment**, and the merge queue's required checks — not an approval — are the gate.
+
+## "The workflow is blocked" is not "the outcome is blocked" (validated 2026-07-30)
+
+**Before escalating a reporting or visibility outcome to a human, check whether the artifact can be
+produced by any path you already control.**
+
+The public `/agentic-os` status feed sat frozen for ~12 hours and was recorded as un-completable,
+blocked on Clarke rotating a revoked Key Vault PAT. What was actually blocked was workflow **502's
+`deliver` job** — which 401s at its `Generate Agentic OS status feed` step. The generator itself
+states its auth contract in its own docstring:
+
+> REST only (no `gh` CLI, no GraphQL), so it runs anywhere a token is present. Authentication is a
+> single environment variable, `GH_TOKEN`.
+
+So the Conductor ran it locally and delivered the result by the same branch + PR route `deliver`
+would have used:
+
+```bash
+GH_TOKEN=$(gh auth token) python3 scripts/generate-agentic-os-status.py --output feed.json
+# then: cp to src/data/ AND public/data/ on a branch, PR, merge queue
+```
+
+A stale public dashboard is bad; a public dashboard that **misreports which approvals are
+outstanding** is worse, and that was the actual state. The dead credential was a real finding and
+still needs rotating — but it gated one delivery path, not the outcome. Read the script's auth
+contract before concluding a human is the blocker.
+
+## When something claims a mechanism is dead, look for an artifact that mechanism produced (validated 2026-07-30)
+
+An issue asserted that the whole failure-alerting layer was dead, on solid evidence:
+`event=workflow_run` in this repo totals **0**, and both alerter workflows had never produced a run.
+That evidence was still literally true — and the conclusion was wrong by six days, because 740 had
+since been converted from `workflow_run` to a `schedule` poll (`cron: '9,39 * * * *'`) and had **115
+successful runs**.
+
+The decisive evidence was not the run list. It was a _rolling alert issue that existed_, whose
+footer read `Managed by 740. Repo - Scheduled Workflow Failure Alert.` — created **7 seconds** after
+740's run started. An artifact the mechanism emitted outranks any inference about whether the
+mechanism works, and it is usually cheaper to find. Two issues closed on that single observation.
+
+Corollary: an issue's stated premise can decay while every fact quoted in it stays true. Re-derive
+the premise, not the facts.
+
+## The local Conductor workspace is not the state — the log issue is (validated 2026-07-30)
+
+`state\CONDUCTOR.md` is a convenience cache, exactly as the routine says, and it will silently fall
+behind: it was last written at run 45 while runs **46 and 47 both completed** without updating it.
+Two runs of gate decisions, merges and open threads existed only in the #719 thread.
+
+**Derive run state (including the run number) from the newest entries in the log issue first**, and
+treat the local file as corroboration. A local file that is _usually_ current is more dangerous than
+one that is obviously absent, because nothing about reading it feels like a risk.
+
+## Review threads are GraphQL-only — `--json reviewThreads` is not a field (validated 2026-07-30)
+
+`gh pr view <n> --json reviewThreads` errors and dumps the full valid-field list. AGENTS.md already
+requires GraphQL to _resolve_ a thread; the **read** side is equally GraphQL-only, which is easy to
+assume otherwise when every other PR attribute is available over REST.
+
+```bash
+gh api graphql -f query='{repository(owner:"FreeForCharity",name:"FFC-Cloudflare-Automation"){
+  pullRequest(number:904){reviewThreads(first:50){nodes{isResolved path}}}}}'
+```
 
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 
@@ -168,8 +814,39 @@ gh api -X POST repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$RUN_
   -F "environment_ids[]=<env_id>" -f state=approved -f comment="approved"
 ```
 
-(Note: the approval API returns an array of deployment objects; don't apply a `--jq` filter that
-assumes a single object.)
+**Do not try to confirm the approval from the POST's own output — confirm by re-reading the run.**
+The response shape does not match the `pending_deployments` GET, so even an array-aware filter
+errors. On 2026-07-25 this exact command:
+
+```bash
+gh api -X POST repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$RUN_ID/pending_deployments \
+  -F "environment_ids[]=$ENV_ID" -f state=approved \
+  --jq '.[0] | "\(.status) \(.environment.name)"'
+```
+
+printed `expected an object but got: string ("github-prod")` — while the approval had **succeeded**
+and the run moved `waiting → in_progress`. Same trap as the read-after-write note above: the failure
+was in the confirmation, not the action, and reacting to it would mean re-approving an
+already-approved gate. Drop the `--jq` on the POST and verify with:
+
+```bash
+gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$RUN_ID --jq '.status'
+```
+
+**"Drop the `--jq`" does not mean "discard the output" — read it for errors, just never for
+confirmation.** A conductor run on 2026-07-25 took the rule above one step too far and sent the
+approval with `> /dev/null 2>&1`, then reported it approved on the strength of the rule. It had not
+been: the command used `-f "environment_ids[]=$ENV_ID"` instead of `-F`, and `-f` sends `["<id>"]` —
+an array of **strings** — where the API requires integers. The POST rejected it, the run stayed at
+`status: waiting`, and the one place that said so had been routed to `/dev/null`.
+
+So the two halves are not interchangeable:
+
+- the **POST output** is the only place a _rejected_ approval reports itself;
+- the **run's `status`** is the only trustworthy sign an _accepted_ one took effect.
+
+Use `-F` for `environment_ids[]` (typed — `-f` is string-only and fails this endpoint silently from
+the caller's point of view), keep the POST's stderr, and still confirm from the run.
 
 ### Watch a run / read results
 

@@ -71,7 +71,7 @@ def _run(review_json, *, open_issues=None):
         env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
         env["TEST_OPEN_ISSUES_FILE"] = str(tdp / "open.json")
         proc = subprocess.run(
-            [NODE, str(HARNESS)], env=env, capture_output=True, text=True, timeout=60
+            [NODE, str(HARNESS)], env=env, capture_output=True, text=True, encoding="utf-8", timeout=60
         )
     if proc.returncode != 0:
         raise AssertionError(f"harness crashed: {proc.stderr}")
@@ -221,6 +221,45 @@ def test_tracking_step_never_touches_gate_approvals():
     step = find_step(load_workflow(WORKFLOW), JOB, STEP)
     assert "github-script" in step.get("uses", ""), step
 
+
+# --- the tracker lookup must never select a pull request (#980) -----------
+#
+# `issues.listForRepo` returns pull requests as well as issues — the same object
+# in the REST model, told apart only by a `pull_request` key — and the
+# empty-queue branch above CLOSES whatever the lookup selects. The `labels:`
+# narrowing does not save us: pull requests carry labels too. The marker is an
+# HTML comment, so it is invisible in a rendered PR body and a PR can carry it
+# without its author ever seeing it (one editing this workflow and quoting the
+# marker, a lessons PR describing the rolling-issue pattern, a pasted issue body
+# used as evidence). A weekday schedule only needs that to coincide once.
+
+
+def _tracker_pr(number=5, **kw):
+    """A PULL REQUEST carrying the marker, as listForRepo really returns it."""
+    return {**_tracker(number, **kw), "pull_request": {"url": "https://api…/pulls/5"}}
+
+
+def test_empty_queue_never_closes_a_pull_request_carrying_the_marker():
+    r = _run([], open_issues=[_tracker_pr(5)])
+    assert r["threw"] is None, r
+    assert r["updates"] == [], r  # the PR is NOT closed
+    assert r["comments"] == [], r  # and gets no "auto-closing" comment
+    assert r["created"] == [], r
+
+
+def test_fraud_orders_never_comment_on_a_pull_request_carrying_the_marker():
+    r = _run([_order()], open_issues=[_tracker_pr(5)])
+    assert r["threw"] is None, r
+    assert r["comments"] == [], r
+    # the PR is not the tracker, so the real tracker still gets opened
+    assert len(r["created"]) == 1, r
+
+
+def test_the_tracker_is_found_when_a_marked_pull_request_is_listed_first():
+    r = _run([], open_issues=[_tracker_pr(5), _tracker(9)])
+    assert r["threw"] is None, r
+    assert r["updates"] == [{"issue_number": 9, "state": "closed"}], r
+    assert [c["issue_number"] for c in r["comments"]] == [9], r
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 

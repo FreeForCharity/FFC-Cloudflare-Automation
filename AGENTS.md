@@ -66,6 +66,31 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
 - **Copilot re-reviews every push and can file fresh threads.** After pushing fixes, re-poll
   `reviewThreads` before promoting or queueing — one resolution pass is not enough (a 2026-07-20 PR
   needed three rounds).
+- **Reviewing a guard: reintroduce the defect it claims to catch.** Reading the workflow proves a
+  new check is _wired_ (present in the `validate` job, no `continue-on-error`); it proves nothing
+  about whether it _detects_. Put the original defect back and watch the guard fail. Do it in a
+  throwaway worktree so the author's branch is never mutated:
+  `git worktree add "$(mktemp -d)" --detach origin/<branch>`, break the thing, run the checker,
+  expect a non-zero exit naming the real call site. Let `mktemp -d` pick the path rather than
+  hard-coding one: a fixed `/tmp/wt` collides when the directory already exists or two reviewers run
+  concurrently, and in the Windows git-bash environment `/tmp` resolves to a _different_ directory
+  for bash than for a Windows `python3`, so a worktree bash created there is `FileNotFoundError` to
+  the checker you then run against it. On #933 (the #930 command-resolution guard) deleting
+  `Remove-Html` from `scripts/whmcs-api-common.ps1` reproduced the exact #929 finding at
+  `scripts/whmcs-application-search.ps1:128`. Also probe the fail-closed claims the same way — a
+  corrupt input file and a missing tool should each exit 1, not skip. A guard that cannot be shown
+  to fail is decoration.
+- **If the thing under review is read-only, also run it live.** Mutation-proving establishes that
+  the tests discriminate; it cannot establish that the code behaves against real data, because every
+  test injects its own fixtures and its own clock. For a script that only reads — the board audit,
+  the catalog generator, the status-feed generator — a live run against production is free (no gate,
+  no write) and routinely produces the strongest evidence in the review. On #1012 every mutation the
+  reviewer applied was caught, and the finding that actually settled the review was the live run:
+  the first item the new grace window deferred in production was **#1012 itself**, uncarded and 43
+  minutes old, in the same invocation that still exited 1 on a genuine finding. That demonstrates
+  the tolerate-latency and still-catch-drift halves simultaneously, on real timestamps, which no
+  unit test in the PR could do. Check the script's auth contract first (most take `GH_TOKEN` and
+  nothing else) and confirm it takes no write path before running it.
 - **Supersession check before ready+queue.** Before promoting a PR, grep `main` for the
   function/capability names the PR adds — a same-purpose implementation may have landed on `main`
   after the PR branched (on 2026-07-20, #772's basePath probe duplicated `basePathMismatch` merged
@@ -87,6 +112,14 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   prove a dequeue (it can read null while queued — see below); the authoritative probe is the
   `enqueuePullRequest` mutation ("already in the queue"). Or enqueue directly:
   `gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:"<node_id>"}){mergeQueueEntry{position state}}}'`
+  - **Read that probe's three answers apart, because one of them is a typo wearing a real answer's
+    clothes.** `UNPROCESSABLE: "Pull request is already in the queue"` means queued — the answer you
+    are usually after. A populated `mergeQueueEntry` means you just enqueued it. But
+    `NOT_FOUND: "Could not resolve to a node with the global id"` means **your node id is wrong**,
+    and it is indistinguishable at a glance from the legitimate reading "this PR no longer exists" —
+    the shape that would make a run conclude a queued PR had vanished. Derive the id in the same
+    command rather than pasting a literal: `PRID=$(gh pr view <n> --json id --jq .id)`. Hit on run
+    75; cost was small only because the PR was known-good at the time.
 - **Debugging tip:** `gh pr merge --auto` can mask the real blocker behind a GraphQL "rate limit"
   error. The `enqueuePullRequest` mutation returns the true reason (unresolved conversation, CodeQL
   still running, …).
@@ -135,6 +168,15 @@ and all authenticate as the same user. Before starting ANY issue:
 1. **Available = `is:open -label:claimed`.** The pickup query is
    `org:FreeForCharity label:agentic-os is:open -label:claimed`. If an issue has the `claimed` label
    or an open linked PR, it is TAKEN — pick something else.
+   - **Prefer `agent-ready`.** `org:FreeForCharity label:agent-ready is:open -label:claimed` is the
+     same query narrowed to issues that are _actually pickable_: unclaimed, unblocked, one-PR-scoped
+     and carrying acceptance criteria. `agentic-os` is the programme-wide **topic** label and stays
+     on everything, so it also counts epics, machine-managed rolling issues (740/738 open and close
+     those themselves), items blocked on a human with credentials, and durable findings kept as
+     records — none of which an agent can execute. Counting the topic label is why the Conductor's
+     "keep 5–15 open" band read 46 and drifted upward for eight consecutive runs of trimming that
+     could never converge (#922). Add `agent-ready` when you file an issue that meets the bar;
+     remove it when the issue becomes blocked.
    - **`-label:claimed` currently under-reports: check for a cross-repo PR before you start.** The
      backlog lives in the hub while much of the code lives in a template or site repo, so the normal
      shape is a hub issue implemented by a PR in another repository — and 737 neither runs in those
@@ -153,13 +195,25 @@ and all authenticate as the same user. Before starting ANY issue:
    (`conductor-run-N`, `live-session`, `copilot-agent`, or a human name — the shared login does not
    identify you). Opening a PR that says `Closes #N` is also a claim (automation will sync the label
    from linked PRs once the claim-sync workflow lands).
+   - **`Refs`/`Closes` CLAIM. To merely cite an issue, use a full link.** The two readings of
+     `Refs #N` — "this PR does part of that issue" and "that issue is where the related work lives"
+     — are indistinguishable to 737, which claims on both. A citation written as `Refs #N` therefore
+     removes a live pickup from the query for as long as the PR stays open, silently and invisibly
+     to its author: a docs draft citing #945 hid the run's designated top pickup for six hours
+     (#948). So **cite with `https://github.com/FreeForCharity/<repo>/issues/N`** (or a bare
+     `<repo>#N` with no keyword) and keep `Refs`/`Closes` for work you are actually taking. 737
+     comments on the PR naming every issue it claimed, so a mistake is visible immediately — rewrite
+     the reference as a link and remove the `claimed` label.
    - **From another repo, qualify the reference.** The backlog is here; the code usually is not. A
      bare `#N` in a template or `FFC-EX-*` PR means _that_ repo's issue #N, so write the hub issue
      out in full — `Refs FreeForCharity/FFC-Cloudflare-Automation#N`. That qualified form is what
      737's daily sweep reads to claim the hub issue on your behalf; a bare number claims nothing
      here and leaves the issue in the pickup query for someone else to duplicate (#939).
 3. **Release on stop**: if you abandon the work, remove the label and comment. Claims with no open
-   linked PR and no activity for 48h are considered expired and may be swept.
+   linked PR and no activity for 48h are considered expired and may be swept. **A draft PR holds a
+   claim as hard as a ready one** — 737's daily sweep reports (never releases) every issue whose
+   only claimant is a draft older than 48h, so if a draft of yours shows up there, promote it or
+   close it rather than leaving the pickup suppressed.
    - **Multi-repo / multi-part issues: claim your portion, not the issue.** Post the
      `CLAIM: <actor> …` comment scoped to the part you are taking (name the repo/portion) and do
      **not** add the exclusive `claimed` label — the remainder must stay visible in the pickup
@@ -228,6 +282,21 @@ gh api -X POST repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id>/
 ```
 
 Poll runs in a background task with an `until` loop — never foreground-sleep.
+
+**Find a workflow's runs by FILE NAME, never by matching the run's `.name` (L33).** A run object's
+`.name` is the rendered `run-name:`, not the workflow's `name:`. Workflow 228 titles its runs
+`WHMCS Fraud Review (FraudLabs Pro)`, so filtering `actions/runs` for a name starting with `228`
+returns **zero results while 228 is actively failing on a schedule** — a silent wrong answer, not an
+error. Resolve the workflow first, then list its runs:
+
+```bash
+id=$(gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/228-whmcs-fraud-review.yml --jq .id)
+gh api "repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/$id/runs?branch=main&per_page=10" \
+  --jq '.workflow_runs[] | "\(.created_at) \(.event) \(.conclusion)"'
+```
+
+Workflow 740 already gets this right (`740-scheduled-workflow-failure-alert.yml:169-170`) — the trap
+is in ad-hoc queries, which nothing guards.
 
 ## Key docs
 

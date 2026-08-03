@@ -155,7 +155,7 @@ UNCOVERED_34 = [
 def _node(lib: pathlib.Path, expr_body: str, *argv: str) -> object:
     code = f"const l=require({json.dumps(str(lib))});{expr_body}"
     proc = subprocess.run(
-        ["node", "-e", code, *argv], capture_output=True, text=True, timeout=60
+        ["node", "-e", code, *argv], capture_output=True, text=True, encoding="utf-8", timeout=60
     )
     if proc.returncode != 0:
         raise AssertionError(f"node failed: {proc.stderr}")
@@ -239,7 +239,7 @@ def coverage_cron(wf_raw: str):
 
 def cli(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["node", str(CLI), *args], capture_output=True, text=True, timeout=60
+        ["node", str(CLI), *args], capture_output=True, text=True, encoding="utf-8", timeout=60
     )
 
 
@@ -757,7 +757,7 @@ def _filter_matches(only_repos: str, fleet: list) -> list:
     proc = subprocess.run(
         ["bash", "-c", script],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=30,
         env={**os.environ, "ONLY_REPOS": only_repos},
     )
@@ -1070,14 +1070,14 @@ def test_max_repos_is_normalized_to_base_ten():
 
     # Record the actual behaviour of the jq in use, whichever it is.
     probe = subprocess.run(
-        ["jq", "-n", "--argjson", "n", "08", "$n"], capture_output=True, text=True
+        ["jq", "-n", "--argjson", "n", "08", "$n"], capture_output=True, text=True, encoding="utf-8"
     )
     if probe.returncode == 0:
         assert probe.stdout.strip() == "8", probe.stdout
     # And the bash hazard the 10# form exists for.
-    bare = subprocess.run(["bash", "-c", 'x=08; echo $((x))'], capture_output=True, text=True)
+    bare = subprocess.run(["bash", "-c", 'x=08; echo $((x))'], capture_output=True, text=True, encoding="utf-8")
     assert bare.returncode != 0, "bash accepted $((08)) — check the 10# rationale"
-    fixed = subprocess.run(["bash", "-c", 'x=08; echo $((10#$x))'], capture_output=True, text=True)
+    fixed = subprocess.run(["bash", "-c", 'x=08; echo $((10#$x))'], capture_output=True, text=True, encoding="utf-8")
     assert fixed.stdout.strip() == "8", fixed
 
 

@@ -17,6 +17,15 @@ on:
 
   workflow_dispatch:
     inputs:
+      dry_run:
+        description: >-
+          Dry-run: resolve the request, check the zone, and rehearse every write without performing
+          it. DNS enforcement, repo creation and the maintainer grant all run with their own DryRun
+          switches, and the content commit and push are skipped. Default: true — set false only for
+          a real run.
+        required: false
+        type: boolean
+        default: true
       domain:
         description: 'Apex domain (example: example.org). This is the only required field.'
         required: true
@@ -927,11 +936,115 @@ jobs:
               body,
             });
 
+  # 111's `preview` half, for DNS (#983). The rehearsal is RELOCATED to the
+  # ungated read lane, not deleted: this runs the identical
+  # `Update-CloudflareDns.ps1 -EnforceStandard -GitHubPagesOnly` with `-DryRun`
+  # forced on, plus the `-Audit` pass, and uploads the same plan artifact — so a
+  # dry dispatch still produces the change plan a human reviews, without parking
+  # on a reviewer gate or minting a write-scoped token.
+  #
+  # `scope: read` is sound because every write in that script sits behind
+  # `if ($DryRun) { log; return }` — the dry path issues GETs only. `zone_check`
+  # is NOT this job: it only asks whether the zone exists in FFC or CM and emits
+  # four booleans; it never enumerates a record or computes the apex/www plan.
+  #
+  # Runs on live dispatches too (like 111's preview), so the plan is always in
+  # the log next to what `dns` then applied.
+  dns_preview:
+    runs-on: windows-latest
+    environment: cloudflare-prod-read
+    needs: [resolve, zone_check]
+    if: >-
+      needs.resolve.outputs.skip != 'true' && needs.zone_check.outputs.zone_controlled == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Preview GitHub Pages DNS changes (apex + www)
+        id: preview
+        shell: pwsh
+        # Issue-derived value — passed by environment, not interpolated into the
+        # script text. See the note in zone_check and ledger L28.
+        env:
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domain = [string]$env:DOMAIN
+
+          $outDir = Join-Path $env:RUNNER_TEMP 'website-provision-dns-preview'
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          # -DryRun is hard-coded here: this job exists to rehearse, and it holds
+          # a read-scoped token that could not perform a write in any case.
+          $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -GitHubPagesOnly -DryRun *>&1
+          # Capture IMMEDIATELY: $ErrorActionPreference = 'Stop' does not throw on
+          # a native command's non-zero exit, so without this the step goes green
+          # having uploaded an error transcript as if it were a change plan — a
+          # rehearsal that silently fails is worse than no rehearsal, because the
+          # artifact looks like a plan. The audit call below overwrites
+          # $LASTEXITCODE, which is the other reason this cannot wait.
+          $enforceExit = $LASTEXITCODE
+          $outPath = Join-Path $outDir 'dns-enforce-preview.txt'
+          $out | Out-File -FilePath $outPath -Encoding utf8
+
+          # Best-effort and deliberately unchecked: the audit is context for the
+          # reader, not the rehearsal's verdict.
+          $audit = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -Audit -ErrorAction Continue *>&1
+          $auditPath = Join-Path $outDir 'dns-audit-before.txt'
+          $audit | Out-File -FilePath $auditPath -Encoding utf8
+
+          "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          # Fail AFTER both transcripts are written and out_dir is published, so
+          # the upload step below still has something to attach for diagnosis.
+          if ($enforceExit -ne 0) {
+            throw "Update-CloudflareDns.ps1 (preview) failed with exit code $enforceExit - see the website-provision-dns-preview artifact."
+          }
+
+      - name: Upload DNS preview
+        # always(): the transcript matters most when the preview FAILED. Guarded
+        # on out_dir so a failure before the directory was published cannot turn
+        # into a second, misleading "no files found" error.
+        if: always() && steps.preview.outputs.out_dir != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: website-provision-dns-preview
+          path: ${{ steps.preview.outputs.out_dir }}/*.txt
+          if-no-files-found: error
+
   dns:
     runs-on: windows-latest
     environment: cloudflare-prod-write
-    needs: [resolve, zone_check]
-    if: needs.resolve.outputs.skip != 'true' && needs.zone_check.outputs.zone_controlled == 'true'
+    needs: [resolve, zone_check, dns_preview]
+    # 111's `apply` half. A dry run must not reach this job at all (#983):
+    # `dry_run` used to be enforced only INSIDE the step below, so the job still
+    # started, still parked the run on the `cloudflare-prod-write` reviewer
+    # gate, and still minted a write-scoped Cloudflare token — before any step
+    # decided to do nothing. The rehearsal is not lost by skipping it, because
+    # `dns_preview` above performs it on the read lane.
+    #
+    # `!= true`, NOT 111's `== false`. Both are correct on the dispatch path,
+    # and on 701's `issues` / `repository_dispatch` paths `inputs.dry_run` is
+    # null, which casts to 0 — so `== false` is `0 == 0` → TRUE and the job runs
+    # there either way. The reason to prefer `!= true` is the STRING case: a
+    # value read as `github.event.inputs.dry_run`, or an input later retyped
+    # from `boolean` to `choice`/`string`, yields the string "false", which
+    # casts to NaN. `"false" == false` is then FALSE and the job would be
+    # silently SKIPPED on a live run — a missed DNS repoint that reads as
+    # success. `!= true` survives that (NaN != 1). See the Actions expression
+    # casting table: Null → 0, false → 0, "false" → NaN.
+    if: >-
+      always() && inputs.dry_run != true && needs.resolve.outputs.skip != 'true' &&
+      needs.zone_check.outputs.zone_controlled == 'true' && (needs.dns_preview.result == 'success'
+      || needs.dns_preview.result == 'skipped')
     permissions:
       contents: read
       id-token: write
@@ -952,6 +1065,7 @@ jobs:
         # script text. See the note in zone_check and ledger L28.
         env:
           DOMAIN: ${{ needs.resolve.outputs.domain }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = [string]$env:DOMAIN
@@ -959,17 +1073,40 @@ jobs:
           $outDir = Join-Path $env:RUNNER_TEMP 'website-provision-dns'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-          $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -GitHubPagesOnly *>&1
+          # -DryRun:$bool — PowerShell's switch-with-value form, so ONE call site
+          # serves both modes and the dry path cannot drift from the live one.
+          $dryRun = ([string]$env:DRY_RUN) -eq 'true'
+          $out = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -GitHubPagesOnly -DryRun:$dryRun *>&1
+          # Pre-existing hole, found while reviewing the preview job above (#985):
+          # nothing checked this exit code, so a FAILED DNS repoint on a live
+          # provisioning run reported success — the run went green, the artifact
+          # held an error transcript, and the site never resolved. That is the
+          # #918 / #934 shape ("the cutover reported OK"). `-ErrorActionPreference
+          # Stop` does not cover a native command's exit code; only this does.
+          # Captured immediately because the audit call below overwrites it.
+          $enforceExit = $LASTEXITCODE
           $outPath = Join-Path $outDir 'dns-enforce.txt'
           $out | Out-File -FilePath $outPath -Encoding utf8
 
+          # Best-effort and deliberately unchecked (note its -ErrorAction Continue):
+          # the after-audit is context for the reader, not the enforcement verdict.
           $audit = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -Audit -ErrorAction Continue *>&1
           $auditPath = Join-Path $outDir 'dns-audit-after.txt'
           $audit | Out-File -FilePath $auditPath -Encoding utf8
 
           "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+          # Fail AFTER the transcripts are written and out_dir is published, so
+          # the upload step still has the evidence to attach.
+          if ($enforceExit -ne 0) {
+            throw "Update-CloudflareDns.ps1 failed with exit code $enforceExit - see the website-provision-dns artifact."
+          }
+
       - name: Upload DNS outputs
+        # always(): the transcript matters most when the enforcement FAILED.
+        # Guarded on out_dir so a failure before it was published cannot become a
+        # second, misleading "no files found" error.
+        if: always() && steps.enforce.outputs.out_dir != ''
         uses: actions/upload-artifact@v7
         with:
           name: website-provision-dns
@@ -1023,8 +1160,10 @@ jobs:
           CHARITY_NAME: ${{ needs.resolve.outputs.charity_name }}
           TEMPLATE_REPO: ${{ needs.resolve.outputs.template_repo }}
           ZONE_CONTROLLED: ${{ needs.zone_check.outputs.zone_controlled }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $dryRun = ([string]$env:DRY_RUN) -eq 'true'
           $repoFull = [string]$env:REPO_FULL
           $repoName = [string]$env:REPO_NAME
           $domain = [string]$env:DOMAIN
@@ -1064,6 +1203,13 @@ jobs:
               $createParams.PagesDomainType = 'github-default'
             }
 
+            if ($dryRun) { $createParams.DryRun = $true }
+
+            # Seed $LASTEXITCODE: in DryRun the script invokes no native command, so
+            # $LASTEXITCODE keeps whatever it held (often $null) and the check below
+            # throws "failed with exit code " on a run that actually succeeded. This
+            # is the defect that made 720's dry run unusable.
+            $LASTEXITCODE = 0
             ./scripts/Create-GitHubRepo.ps1 @createParams
             if ($LASTEXITCODE -ne 0) {
               throw "Create-GitHubRepo.ps1 failed with exit code $LASTEXITCODE"
@@ -1091,6 +1237,9 @@ jobs:
       username: ${{ needs.resolve.outputs.maintainers_csv }}
       permission: maintain
       soft_fail: true
+      # 729 already accepts dry_run over workflow_call — forward it so a 701 dry
+      # run cannot silently perform a real collaborator grant.
+      dry_run: ${{ inputs.dry_run }}
     secrets: inherit
 
   content:
@@ -1165,6 +1314,7 @@ jobs:
           GUIDESTAR_DIRECT_PROFILE_URL: ${{ needs.resolve.outputs.guidestar_direct_profile_url }}
           FOOTER_SOCIAL_JSON: ${{ needs.resolve.outputs.footer_social_json }}
           LEADERSHIP_JSON: ${{ needs.resolve.outputs.leadership_json }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -1308,10 +1458,18 @@ jobs:
             git diff --cached --quiet
             $diffExit = $LASTEXITCODE
             if ($diffExit -eq 1) {
-              git commit -m "chore: apply footer + leadership content" | Out-Null
-              if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit $LASTEXITCODE)." }
-              git push origin HEAD:main
-              if ($LASTEXITCODE -ne 0) { throw "git push to origin main failed (exit $LASTEXITCODE)." }
+              if (([string]$env:DRY_RUN) -eq 'true') {
+                # Everything above already ran — clone, footer/leadership rendering
+                # and staging. Only the write is withheld, so the step is still
+                # fully exercised.
+                Write-Host '::notice::dry_run=true - content rendered and staged, not committed or pushed.'
+                git --no-pager diff --cached --stat
+              } else {
+                git commit -m "chore: apply footer + leadership content" | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit $LASTEXITCODE)." }
+                git push origin HEAD:main
+                if ($LASTEXITCODE -ne 0) { throw "git push to origin main failed (exit $LASTEXITCODE)." }
+              }
             } elseif ($diffExit -eq 0) {
               Write-Host "No content changes detected; skipping commit." -ForegroundColor Yellow
             } else {

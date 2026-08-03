@@ -188,7 +188,7 @@ def _run(
             [NODE, str(HARNESS)],
             env=env,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=60,
         )
     if proc.returncode != 0:
@@ -1066,6 +1066,43 @@ def test_step_is_the_only_writer_and_never_touches_gates():
     step = _step()
     assert "github-script" in step.get("uses", ""), step
 
+
+# --- the alert lookup must never select a pull request (#980) -------------
+#
+# `issues.listForRepo` returns pull requests as well as issues, and the success
+# branch CLOSES whatever the lookup selects — so a PR carrying a marker would be
+# closed by a scheduled sweep, with a comment claiming a recovery it had nothing
+# to do with. The `agentic-os,bug` label narrowing does not help: PRs carry
+# labels too. And the marker is an HTML comment, invisible in a rendered PR
+# body, so a PR can carry it without its author ever seeing it — a lessons PR
+# quoting this file's marker format is the ordinary path.
+
+
+def _alert_pr(number=5, **kw):
+    """A PULL REQUEST carrying the alert marker, as listForRepo returns it."""
+    return {**_alert_issue(number, **kw), "pull_request": {"url": "https://api…/pulls/5"}}
+
+
+def test_a_recovery_never_closes_a_pull_request_carrying_the_marker():
+    r = _run("success", open_issues=[_alert_pr(5)])
+    assert r["threw"] is None, r
+    assert _closes(r) == [], r  # the PR is NOT closed
+    assert r["comments"] == [], r  # and gets no "Recovered" comment
+
+
+def test_a_failure_never_appends_to_a_pull_request_carrying_the_marker():
+    r = _run("failure", open_issues=[_alert_pr(5)])
+    assert r["threw"] is None, r
+    assert [c["issue_number"] for c in r["comments"]] == [], r
+    # the PR is not the alert, so the real rolling alert is still opened
+    assert len(r["created"]) == 1, r
+
+
+def test_the_alert_is_found_when_a_marked_pull_request_is_listed_first():
+    r = _run("success", open_issues=[_alert_pr(5), _alert_issue(9)])
+    assert r["threw"] is None, r
+    assert _closes(r) == [{"issue_number": 9, "state": "closed"}], r
+    assert [c["issue_number"] for c in r["comments"]] == [9], r
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 

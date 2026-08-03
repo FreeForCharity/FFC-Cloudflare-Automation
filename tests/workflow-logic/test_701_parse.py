@@ -32,7 +32,7 @@ def run_parse(context: dict) -> dict:
                 TEST_SCRIPT_FILE=str(script_file), TEST_CONTEXT_FILE=str(context_file)
             ),
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=60,
         )
     if proc.returncode != 0:

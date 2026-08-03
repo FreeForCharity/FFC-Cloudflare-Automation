@@ -63,6 +63,21 @@ from datetime import datetime, timezone
 DEFAULT_REPO = "FreeForCharity/FFC-Cloudflare-Automation"
 DEFAULT_ORG = "FreeForCharity"
 LABEL = "agentic-os"
+# The band label (#922). `agentic-os` stays the program-wide topic label on
+# everything; `agent-ready` marks the strict subset an agent can pick up now.
+READY_LABEL = "agent-ready"
+# Applied by 737 while a linked PR is open, removed when the last one closes.
+# `agent-ready` does NOT come off in the meantime — the two labels coexist by
+# design — so a claim is only visible by consulting this label (#974).
+CLAIMED_LABEL = "claimed"
+READY_RULE = (
+    "Open issues labeled 'agent-ready' and NOT 'claimed': unblocked, one-PR-scoped and carrying "
+    "acceptance criteria — the queue a sandboxed agent can pick from now. An 'agent-ready' issue "
+    "with an open PR against it carries 'claimed' (applied by workflow 737) and is excluded here "
+    "until that PR closes; ready_count counts exactly the rows in ready_issues. A strict subset of "
+    "backlog_issues, which stays the full 'agentic-os' topic set (epics, machine-managed rolling "
+    "issues, human-blocked items and durable findings all remain counted there)."
+)
 CONDUCTOR_LOG_ISSUE = 719
 CONDUCTOR_LOG_LIMIT = 10
 COMMENT_TRUNCATE = 500
@@ -364,6 +379,39 @@ def collect_backlog(items):
     return issues
 
 
+def collect_ready(backlog):
+    """The subset of the backlog a sandboxed agent can actually pick up (#922).
+
+    ``agentic-os`` is one label doing five jobs — executable work-items, epics,
+    machine-managed rolling issues, items blocked on a human, and findings kept
+    as durable records. Only the first is what the Conductor's "keep 5-15 open"
+    band was ever about, so counting the label counted the wrong set: the band
+    read 46 while the executable queue was ~30, and it drifted upward for eight
+    consecutive runs of trimming that could never converge.
+
+    ``agent-ready`` carries that meaning explicitly: unclaimed, unblocked,
+    one-PR-scoped, with acceptance criteria. This filters rather than reclassifies
+    — the label is applied by a human or a conductor run, never inferred here,
+    because "can an agent finish this in one PR" is a judgement and guessing it
+    from an issue body is how the original conflation happened.
+
+    ``claimed`` is the one part of that meaning the label itself cannot carry
+    (#974). Workflow 737 adds it while a linked PR is open and removes it when
+    the last one closes, and ``agent-ready`` deliberately stays put throughout —
+    so the two coexist, and filtering on ``agent-ready`` alone published every
+    live claim as pickable work. That is the #939 duplicate-work class aimed at
+    the surface agents pick from, so the exclusion is here rather than left to
+    each reader: AGENTS.md's pickup query is
+    ``label:agent-ready is:open -label:claimed`` and this is that query.
+    """
+    ready = []
+    for issue in backlog:
+        labels = issue.get("labels") or []
+        if READY_LABEL in labels and CLAIMED_LABEL not in labels:
+            ready.append(issue)
+    return ready
+
+
 def scope_repos(items, hub_repo):
     """Repositories the org-wide panels sweep: every repo carrying an open
     agentic-os item, plus the hub.
@@ -575,12 +623,23 @@ def build_feed(repo, token, org=DEFAULT_ORG):
     backlog = collect_backlog(items)
     repos = scope_repos(items, repo)
     in_flight, open_prs_total = collect_in_flight_prs(repos, token, backlog_issues=backlog)
+    # Derive the ready queue once: the list and its count must describe the same
+    # selection, and two calls could drift if collect_ready ever gains ordering
+    # or side effects.
+    ready = collect_ready(backlog)
     return {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "org": org,
         "repo": repo,
         "repos": repos,
         "backlog_issues": backlog,
+        # ADDITIVE (#922). `backlog_issues` keeps its exact shape and contents —
+        # the ffcadmin renderer reads it, and narrowing it would silently drop
+        # epics and records from the public page. The ready queue is a strict
+        # subset alongside it.
+        "ready_issues": ready,
+        "ready_count": len(ready),
+        "ready_rule": READY_RULE,
         "in_flight_prs": in_flight,
         "in_flight_prs_rule": IN_FLIGHT_RULE,
         "open_prs_total": open_prs_total,
@@ -588,6 +647,37 @@ def build_feed(repo, token, org=DEFAULT_ORG):
         "pending_gates": collect_pending_gates(repo, token),
         "pending_gates_scope": PENDING_GATES_SCOPE.format(repo=repo),
     }
+
+
+def write_feed(path, text):
+    """Write the feed to ``path`` as UTF-8 with LF line endings.
+
+    ``newline="\\n"`` is as load-bearing here as ``encoding=`` is beside it, and
+    for the same reason: this script runs on both ``ubuntu-latest`` (502's
+    ``deliver`` job) and the Conductor's Windows host (the hand-delivery path
+    used on every delivery #848 has blocked so far). In text mode with the
+    default ``newline=None``, Python translates ``\\n`` to ``\\r\\n`` on
+    Windows, so identical feed content ships as different bytes depending on
+    which host generated it.
+
+    Nothing downstream has caught that, which is exactly why it is worth pinning
+    rather than leaving to convention:
+
+    * ffcadmin's ``.gitattributes`` (``* text=auto eol=lf``) normalises the
+      committed blob, so the published file has always been correct and the
+      difference is invisible to any check that reads git rather than the file;
+    * this repo's CI is Linux, where the translation never happens, so no test
+      can observe it by running the script.
+
+    Both are masks, not fixes: the first is one ``.gitattributes`` edit away
+    from failing, and the second means CI will never warn. ``CLAUDE.md``'s
+    Windows-host notes carry the history and the downstream staged-blob check
+    this makes unnecessary; deliberately not quoted here, because the same PR
+    rewrote that bullet and a verbatim citation would have been stale on the
+    commit that introduced it.
+    """
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
 
 
 def main():
@@ -605,13 +695,23 @@ def main():
     ap.add_argument("--output", help="Write JSON here instead of stdout")
     args = ap.parse_args()
 
+    # The feed carries whatever GitHub put in an issue title, and the alert
+    # workflows open issues titled "🚨 Scheduled workflow failing: …". Python
+    # encodes stdout with the OS ANSI codepage — UTF-8 on the runners, cp1252 on
+    # Windows — so writing this feed to stdout from a Windows host died with
+    # `UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f6a8'`
+    # until the caller remembered PYTHONUTF8=1. The file path below was already
+    # pinned; stdout was not, and this script is load-bearing for the public
+    # status page (#945).
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     token = _token()
     feed = build_feed(args.repo, token, org=args.org)
     text = json.dumps(feed, indent=2, ensure_ascii=False) + "\n"
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as fh:
-            fh.write(text)
+        write_feed(args.output, text)
         counts = (
             f"{len(feed['backlog_issues'])} issues, "
             f"{len(feed['in_flight_prs'])} of {feed['open_prs_total']} open PRs "

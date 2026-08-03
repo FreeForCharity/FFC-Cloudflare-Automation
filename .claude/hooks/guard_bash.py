@@ -108,7 +108,13 @@ def main():
     #    a wasteful one: it can never return page 2.
     #    See AGENTS.md "GitHub API rate budget".
     if re.search(r"\bgh\s+api\b", low) and "graphql" in low and "--paginate" in low:
-        if "$endcursor" not in low:
+        # The name must match EXACTLY, so a plain substring test is not enough:
+        # `$endCursorX` and `$endCursor_2` contain `$endcursor` but are different
+        # GraphQL variables, and gh substitutes into neither -- the precise
+        # silent-infinite-loop this rule exists to catch. A GraphQL variable name
+        # is [_A-Za-z][_0-9A-Za-z]*, so the exact name is the one not followed by
+        # another name character. `low` is already lowercased.
+        if not re.search(r"\$endcursor(?![0-9a-z_])", low):
             block(
                 "`gh api graphql --paginate` requires the cursor variable to be named "
                 "exactly `$endCursor` (and the query to request `pageInfo{hasNextPage "

@@ -95,6 +95,20 @@ def main():
                "'query($endCursor:String){organization(login:\"x\"){"
                "projectV2(number:9){items(first:100,after:$endCursor){"
                "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), False)
+    # A name that merely STARTS with endCursor is a different variable and gh
+    # substitutes into neither -- so these must block, not ride the substring.
+    # They are also the discriminators for the exact-match case above: without
+    # them a bare `$endcursor in low` test passes every case in this block.
+    check("graphql paginate with $endCursorX", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($endCursorX:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$endCursorX){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), True)
+    check("graphql paginate with $endCursor_2", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($endCursor_2:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$endCursor_2){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), True)
     # Only --paginate needs the cursor: a single-shot graphql call is fine, and
     # REST --paginate has no query variables at all.
     check("graphql single-shot allowed", "guard_bash.py",

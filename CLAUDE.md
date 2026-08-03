@@ -18,23 +18,43 @@
 - GraphQL and REST have **separate rate pools** (5,000/hr each, shared account-wide). When GraphQL
   is exhausted, reads still work via REST; check with `gh api rate_limit`.
 - Never `--admin`-merge; never push to `main` directly.
+- **After `gh pr ready`, the first `enqueuePullRequest` usually fails — retry, don't diagnose.**
+  Promoting a draft re-registers the branch checks, so the mutation returns
+  `Required status check "Phantom Revert Guard" is expected` even when that exact SHA already
+  carries a green run of it. It is a re-registration race, not a missing check. Poll the head SHA's
+  `check-runs` via REST and retry; on 2026-07-30 (#938) the retry ~60s later enqueued at position 1.
+- **`AWAITING_CHECKS` on a queue entry is not a stall.** `mergeQueueEntry.state` sat at
+  `AWAITING_CHECKS` with a fixed `estimatedTimeToMerge` for several minutes _after_ every
+  `merge_group` run had reported success (722 success, 723 success, 727 skipped — a skip is a pass
+  here). The merge landed on its own. Do not dequeue, re-push, or "fix" the branch on the strength
+  of that state; poll `pulls/N --jq .merged` via REST and let it finish.
 - **Format with the CI-pinned prettier.** `722-ci.yml` checks with `npx --yes prettier@3.8.1`; plain
   `npx prettier` fetches the latest version, whose Markdown reflow differs — producing
   local-pass/CI-fail loops. Always run `npx --yes prettier@3.8.1 --write <files>`.
 
 ## Verifying tests: CI is authoritative, local runs may be false-red
 
-- **`tests/workflow-logic/` cannot be run reliably from every local sandbox.** In the Windows
-  git-bash environment the Conductor runs in, `python3 tests/workflow-logic/run_all.py` reports most
-  modules failing with `harness crashed:` and a node abort —
-  `Assertion failed: ncrypto::CSPRNG(nullptr, 0)`. A plain `node -e "…"` works fine; only the
-  harness-spawned node dies, so this is an environment/entropy problem, **not** a test defect.
-  Pure-python assertions in the same modules still pass.
-- **Treat a local red here as no signal at all.** The authority is CI's **Validate Repository**
-  check, which runs the same suite on `ubuntu-latest`. Verified 2026-07-24: the identical tree that
-  failed ~17 modules locally passed `Validate Repository` in CI (PR #828).
-- Never "fix" a test, or hold a PR, on the strength of a local harness crash — confirm against CI
-  first.
+> **This section's premise expired on 2026-07-31 and the section outlived it.** The
+> `harness crashed:` epidemic below was **#943**, and #943 is **closed**. Measured on the
+> Conductor's Windows host on 2026-08-02 (run 77), a full `python tests/workflow-logic/run_all.py`:
+> **`harness crashed` count = 0**, 895 `PASS`, 83 `FAIL`, 16 modules named with specific diagnoses.
+> Read what follows as history, and read the corrected rule first.
+
+- **A local red now carries signal, and discarding it costs real defects.** The 16 modules failing
+  here fail for stated reasons — a `FileNotFoundError` on a temp path, a preflight refusing an
+  unparseable response — not a node abort. Run 77 followed one of them (`test_729_add_collaborator`)
+  to a live defect that CI cannot see at all: the module runs the step under test with
+  `cwd=REPO_ROOT`, loses all five of its tests to the first one, and leaves a stray file in the
+  working tree. Tracked on **#1023**.
+- **CI is still authoritative for green, and is still the only cross-platform judge.** Do not "fix"
+  a test or hold a PR on a local red without saying _which_ module and _what_ the failure text was —
+  the standard is now the same one applied to any other measurement, not a blanket dismissal.
+- **Historical (pre-#943, kept because the shape recurs):** the harness used to report most modules
+  failing with `harness crashed:` and `Assertion failed: ncrypto::CSPRNG(nullptr, 0)`, because each
+  module built a fresh minimal `env` dict for `subprocess.run` and Windows node cannot start without
+  the inherited environment. Verified 2026-07-24 (PR #828): a tree failing ~17 modules locally
+  passed `Validate Repository` in CI. If a _new_ wave of `harness crashed:` appears, that is the
+  shape to suspect — and it is a regression to file, not a fact to route around.
 - **But "the harness is broken here" is not a reason to review a guard by reading it.** When the
   harness cannot run, **test the module it wraps.** Only the harness-spawned node dies; `node`
   itself is fine, so a pure module under `scripts/` can be `require`d directly and exercised on the
@@ -76,8 +96,11 @@ all) — exactly what the "never pass a scrubbed `env=`" rule below already says
 
 Rewriting `PATH` changes nothing; inheriting the whole environment fixes it outright. So the
 standing advice is narrower than it looks: **local red is no signal only until the env dict is
-fixed** — it is not an unfixable property of this host, and it is not entropy. Tracked as **#943**.
-Until that lands, the probe technique above is the workaround, not the diagnosis.
+fixed** — it is not an unfixable property of this host, and it is not entropy. Tracked as **#943**,
+**which landed and closed on 2026-07-31**: run 77 measured `harness crashed` **0 times** in a full
+local suite. This prediction came true, and the section above has been corrected to match. The probe
+technique above was the workaround while it was open; it is now a technique for a module whose
+harness is broken for its own reasons, not the standing answer to this host.
 
 ## Prefer the machine's claim to your own: a hand-written `claimed` label expires in 48h (validated 2026-07-31)
 
@@ -460,20 +483,141 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
   `UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f6a8'` on the 🚨 in #921's
   title. It also needs `GH_TOKEN` exported (`export GH_TOKEN=$(gh auth token)`) — it does not read
   `gh`'s keyring.
-- **The generator's `--output` writes CRLF on Windows.** `.gitattributes` (`* text=auto eol=lf`)
-  normalizes it, so the _committed_ blob is LF and byte-identical to a Linux run — but verify the
-  staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) before claiming 502 will not
-  report phantom drift.
+- **The generator's `--output` used to write CRLF on Windows — fixed at the source (run 74).**
+  `scripts/generate-agentic-os-status.py` now writes through `write_feed()`, which pins
+  `newline="\n"` beside the `encoding="utf-8"` that was already there, so both hosts emit identical
+  bytes. Two things had been masking it and neither was a fix: ffcadmin's `.gitattributes`
+  (`* text=auto eol=lf`) normalized the _committed_ blob, and this repo's CI is Linux, where text
+  mode never translates — so no test could observe it by running the script.
+  `test_502_agentic_os_status.py` therefore asserts on the **`open()` call's keywords**, not on the
+  bytes written; a round-trip check would pass on `ubuntu-latest` with or without the fix.
+  - Verifying the staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) is still the
+    right habit for any hand-delivered feed — it just no longer has anything to catch here.
+  - **And do not run that check in Python text mode - it reports `0` whether or not the CRs are
+    there.** `io.open(p, encoding='utf-8').read().count('\r')` applies universal-newline
+    translation, so CRLF is silently rewritten on the way IN. On 2026-08-02 (run 72) that returned a
+    confident `CR bytes: 0` for a freshly generated feed that in fact carried **1264** CRs, which
+    `tr -cd '\r' | wc -c` found immediately. Read `'rb'` (or use `tr`). A check whose failure mode
+    is to print the answer you were hoping for is worse than no check.
+  - **The same translation runs on the way OUT, which breaks restore-after-mutation.**
+    `pathlib.write_text()` uses text mode, so writing a file back converts every `\n` to `\r\n` on
+    this host. Reviewing #1015 (run 76) the Conductor mutated `run_all.py` in place six times and
+    asserted `sha256(path.read_text().encode())` matched the original after each restore. It matched
+    every time and proved nothing — the read side translated the CRLFs back out, so a file rewritten
+    end to end hashed identical to the LF original. The only tell was `git status` listing the file
+    as modified with an **empty** `git diff`. Pass `newline=""` when writing, and verify restores
+    with `tr`/`'rb'`, never `read_text`. (`newline=""` and `newline="\n"` are byte-identical on
+    **write** — measured here on both LF and CRLF content — so the choice is intent, not behaviour:
+    `""` for "restore verbatim", `"\n"` for "force LF" as the generators in `scripts/` do. Only the
+    default is wrong, and it is worse than "adds CR": a string that already holds `\r\n` comes out
+    `\r\r\n`.)
+  - **Better: mutate a copy and leave the original alone.** The repo's own mutation sites already do
+    this — `test_737_claim_sync.py:206` and `test_powershell_command_resolution.py:138` copy into a
+    `tempfile.TemporaryDirectory()` and mutate there, so restore fidelity is never in question. The
+    in-place-and-restore pattern is the ad-hoc reviewer's habit, and it is the one that needs the
+    binary check.
+  - **And do not build the mutating script through a shell heredoc.** `python - <<'PY'` does not
+    deliver backslash escapes intact on this host: run 77 lost every `\n` in a `"\n".join(...)` to a
+    carriage return and committed `docs/lessons-ledger.md` with **0 LF and 169 CR**, while prettier
+    reported "unchanged", the pre-commit hook passed and `git status` was clean. `CLAUDE.md`, edited
+    with the file-editing tool in the same minutes, was untouched — that is the control case. Write
+    files with the editing tool; if a script must transform one, put the script in a file and run it
+    by path. Ledger **L88**.
 - **The full workflow-logic suite takes over 2 minutes once it actually runs.** It used to finish in
   seconds only because the modules were aborting; a 2-minute command timeout now reads as a hang.
-- **Each full suite run leaves a zero-byte `U+F022 U+F022` file in the repo root.** Reproducible,
-  untracked; it is suite output, not a checkout artifact. Tracked on #945.
+- **One module — `test_729_add_collaborator.py` — leaves a zero-byte `U+F022 U+F022` file in the
+  repo root.** Reproducible, untracked; it is suite output, not a checkout artifact. `ls -b` renders
+  the name `""`, which is what Windows maps `"` to. Bisected in run 77 by running all 50 modules in
+  order: it is that one module, not "each full suite run" as this line used to claim, and it is
+  there because the test passes `cwd=REPO_ROOT`. Tracked on **#1023** — #945, which this line named
+  until run 77, closed on 2026-07-31 while the artifact went on reproducing.
 - **When a PR declines to tick a platform-specific criterion, supply the platform.** Agents working
   from a Linux sandbox correctly refuse to claim a Windows result they cannot measure (#944 did
   exactly this). The move is neither to merge on trust nor to bounce the PR — it is to run that
   criterion here, because this is the only host that can. Doing so on #944 turned an unverifiable
   claim into a measured `129 → 0`, and surfaced a scope correction (the cause explained 8 of 26
   modules, not 21) that the author had no way to see.
+
+## Windows git-bash: five ways a command lies instead of failing (runs 60–61, 2026-07-31)
+
+Every one of these produces a confident wrong answer rather than an error, which is what makes them
+worth writing down. Two are now blocked by `.claude/hooks/guard_bash.py` — `grep -P` (rule 7) and
+the leading-slash `gh api` endpoint (rule 8); the other three are not mechanically detectable from
+the command text alone and stay here as judgment.
+
+- **`grep -P` matches nothing and exits non-zero.** PCRE is not compiled into this environment's
+  git-bash, so `grep -P` never matches — and because it _fails_ rather than returning "no match",
+  `if grep -qP …` silently takes the **else** branch and `grep -P … || echo <default>` prints the
+  default. Run 60 used it to audit the public board and was told all 10 open PRs were missing from
+  it; all 10 were present. Use a POSIX ERE (`grep -E`) or python. Blocked by `guard_bash.py` rule 7.
+- **`/tmp` is not one directory.** git-bash resolves `/tmp` to its own MSYS mount, while a Windows
+  `python3` in the same pipeline resolves it to `C:\tmp` — so `cmd > /tmp/x.txt` followed by
+  `python3 … open('/tmp/x.txt')` fails with `FileNotFoundError` on a file that bash just wrote and
+  can still read. Do not hand paths between bash and Windows python via `/tmp`; use an absolute
+  Windows-style path (the session scratchpad) for anything that crosses that boundary.
+- **Ad-hoc `python3 -c` printing non-ASCII dies on cp1252.** `print()` encodes with the console
+  codepage, so echoing API data that contains an em dash, an arrow or an emoji raises
+  `UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'` — mid-way through, so you
+  get partial output that looks like a truncated result rather than an encoding fault. Run 60 hit
+  this printing a workflow name (`… → aprilhansen.com`) while verifying the public status feed.
+  Prefix with `PYTHONIOENCODING=utf-8`. This is the same cp1252 root cause as #945/L35, but a
+  _different vector_: `scripts/check-subprocess-encoding.py` guards `subprocess(text=True)` inside
+  committed files and cannot see a one-off command's stdout.
+- **A console `?` is not proof of a mangled file.** The same codepage that breaks `print()` also
+  renders a correctly-stored em dash as `?` in captured output. Before "fixing" an encoding, decode
+  the file with `errors='strict'` and test for `'\ufffd'` — run 60 nearly re-encoded a clean
+  `docs/lessons-ledger.md` on the strength of terminal rendering alone. Re-confirmed run 61 on
+  #963's docstrings: strict-decoded clean, zero replacement characters, no fix needed.
+- **A leading slash in a `gh api` endpoint is rewritten into a filesystem path.** `gh api /markdown`
+  becomes `gh api "C:/Program Files/Git/markdown"` and fails with `invalid API endpoint` — the error
+  blames the endpoint, not the shell, which is what costs the time. Same MSYS argument-mangling
+  class as L42's `origin\main;…`, but on a `gh` endpoint rather than a git ref. Drop the slash:
+  `gh api markdown`. Blocked by `guard_bash.py` rule 8 (run 61).
+
+## Measuring health: a run count is not a time window (run 61, 2026-07-31)
+
+`gh api ".../actions/runs?per_page=N"` returns the newest N runs, so on a busy repo the **time span
+it covers shrinks as activity rises**. On 2026-07-31 the hub's newest 40 runs spanned **51
+minutes**. "0 failures in the last 40 runs" was therefore a statement about the last hour, and it
+read as a clean day — while `228. WHMCS - Fraud Review` and `502. Google - Analytics Report` had
+both failed on schedule that morning and every morning before it. Run 60 published "1 failure/30"
+from the same mistake.
+
+- For a health verdict, ask each **scheduled** workflow for its own recent runs
+  (`actions/workflows/<file>.yml/runs?per_page=N`) rather than sampling the repo-wide feed. A daily
+  cron produces one run a day; it cannot compete with PR churn for a slot in the newest N.
+- `?branch=main` does **not** rescue this — scheduled runs are on `main` too. They are simply older
+  than the window.
+- Separate the two populations before reporting: branch-CI failures on PR head SHAs are normal churn
+  (a promoted draft re-runs Phantom Revert Guard and can fail there legitimately — see AGENTS.md),
+  whereas a failing scheduled workflow is a standing outage.
+- **The workflow file name is not derivable from the number.** `739-process-health.yml` returns a
+  bare `404` that reads like "this workflow does not exist"; the real file is
+  `739-process-health-metrics.yml`. List `.github/workflows/` and match the numeric prefix rather
+  than guessing the slug.
+
+## `gh search` is index-backed and lags — never audit completeness with it (run 62, 2026-07-31)
+
+`gh search issues` / `gh search prs` read GitHub's **search index**, which trails the write APIs by
+an interval nobody controls. So they are fine for "find me something" and **wrong for "is anything
+missing"** — the items they omit are the newest ones, which are exactly the items a completeness
+audit is looking for.
+
+Run 62 built the "what should be on the public board" set from
+`gh search issues --owner FreeForCharity --label agentic-os --state open`: it returned **52** items
+and the audit reported **0 missing**. The authoritative REST enumeration
+(`repos/{owner}/{repo}/issues?state=open&labels=agentic-os`, paginated, per repo) returned **53**,
+and the omitted one — PR #965, created minutes earlier — was genuinely absent from the board. The
+search-based audit was not merely incomplete; it returned a **clean bill of health** for a board
+that had a hole in it.
+
+- For any "everything of kind X" question, enumerate with **REST per repo** and paginate.
+- This is a sibling of the stale-read rule below, but **not** the same thing and the remedy differs:
+  a post-write read is stale for seconds and re-polling cures it; a search index is stale on its own
+  schedule and re-polling is just a slower wrong answer. Change endpoint, don't retry.
+- The tell is a **denominator that looks plausible**. 52 vs 53 raises no alarm on its own — so print
+  both sides' counts (`expected=N board=M`) and treat the comparison, not the empty result set, as
+  the finding. Scripted in issue #966.
 
 ## Board & PR-creation env facts (validated 2026-07-24)
 

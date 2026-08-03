@@ -105,13 +105,17 @@ def run_scanner(files, common_src=None, legacy_locale=True, args=(), scan_env=No
         os.makedirs(os.path.join(d, ".githooks"))
         shutil.copy(str(common_src or REAL_COMMON), os.path.join(d, ".claude", "hooks", "common.py"))
         shutil.copy(str(SCANNER), os.path.join(d, ".githooks", "scan_staged.py"))
-        subprocess.run(["git", "init", "-q"], cwd=d, env=env, capture_output=True)
+        # check=True on BOTH setup calls (adopted from #1002): a failed init
+        # or add leaves nothing staged, the scanner finds no files and exits 0,
+        # and every allow-case in this file goes green on a broken harness --
+        # the system under test made indistinguishable from its own setup.
+        subprocess.run(["git", "init", "-q"], cwd=d, env=env, capture_output=True, check=True)
         for path, content in files.items():
             full = os.path.join(d, path)
             os.makedirs(os.path.dirname(full), exist_ok=True) if os.path.dirname(path) else None
             with open(full, "w", encoding="utf-8") as fh:
                 fh.write(content)
-            subprocess.run(["git", "add", path], cwd=d, env=env, capture_output=True)
+            subprocess.run(["git", "add", path], cwd=d, env=env, capture_output=True, check=True)
         proc = subprocess.run(
             [sys.executable, os.path.join(d, ".githooks", "scan_staged.py"), *args],
             cwd=d,

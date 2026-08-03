@@ -24,6 +24,22 @@ import traceback
 DID_NOT_RUN = "pre-commit: SECRET SCAN DID NOT RUN"
 
 
+class GitFailed(Exception):
+    """A git command exited non-zero, so its output cannot be trusted.
+
+    Not "its output was never read" -- `_git()` captures stdout and stderr
+    unconditionally, and a failing git often still writes to stdout. The defect
+    this guards is narrower and worse: on a non-zero exit that output is
+    *partial or meaningless*, and the caller treating it as a complete file list
+    is what turns a broken git into an empty scan. Raising here is what stops
+    that; the captured text survives only inside the message, as evidence.
+
+    Named rather than a bare RuntimeError so the traceback in the fail-open
+    notice says what happened at a glance. Adopted from #1002, which found
+    this independently.
+    """
+
+
 def _git(args, check=True):
     # Decode git's output as UTF-8 explicitly. Git emits UTF-8 regardless of
     # the console codepage, so this is correct everywhere -- whereas bare
@@ -61,7 +77,7 @@ def _git(args, check=True):
     # nothing can kill that thread. It is kept as defence in depth for whoever
     # removes `encoding=` again -- do not read it as a covered path.
     if check and (proc.returncode != 0 or proc.stdout is None):
-        raise RuntimeError(
+        raise GitFailed(
             "git " + " ".join(args) + f" exited {proc.returncode}"
             + (" and produced no readable output" if proc.stdout is None else "")
             + ": " + ((proc.stderr or "").strip()[:500] or "<no stderr>")

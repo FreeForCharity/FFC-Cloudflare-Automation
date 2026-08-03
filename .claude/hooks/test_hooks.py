@@ -80,6 +80,61 @@ def main():
     check("echo lowercase secret var", "guard_bash.py",
           bash("echo $cloudflare_api_token"), True)
 
+    # Ledger L50 -- $? read through a pipe. The first two are verbatim the
+    # commands that misreported this run and in run 72; both printed a confident
+    # zero for a script that had exited 1.
+    check("exit code through a pipe", "guard_bash.py",
+          bash('python scripts/audit-agentic-os-board.py | tail -30; echo "EXIT=$?"'), True)
+    check("exit code through a pipe, rc= form", "guard_bash.py",
+          bash("check.py --strict | head -3\nrc=$?"), True)
+    check("pipefail clears the rule", "guard_bash.py",
+          bash('set -o pipefail\npython audit.py | tail -30; echo "EXIT=$?"'), False)
+    check("$? with no pipeline allowed", "guard_bash.py",
+          bash('python audit.py > out.txt; echo "EXIT=$?"'), False)
+    check("|| is not a pipeline", "guard_bash.py",
+          bash('python audit.py || echo failed; echo "EXIT=$?"'), False)
+    check("pipe in a quoted string is not a pipeline", "guard_bash.py",
+          bash('grep -E "a|b" f.txt; echo "EXIT=$?"'), False)
+    check("pipeline with no $? after it allowed", "guard_bash.py",
+          bash("gh pr list --json number | head -5"), False)
+    # A pipeline written on a heredoc HEADER is still a pipeline. Skipping the
+    # whole line made the rule miss its own target shape -- a false negative,
+    # which for a guard is the expensive direction.
+    check("pipeline on a heredoc header line still caught", "guard_bash.py",
+          bash('python3 - <<PY | tail -3\nprint(1)\nPY\necho "EXIT=$?"'), True)
+    # `$?` in SINGLE quotes is a literal and reads nothing; in double quotes the
+    # shell expands it. Only the second is the L50 shape.
+    check("single-quoted literal $? after a pipe allowed", "guard_bash.py",
+          bash("ls | wc -l; echo '$? is a literal'"), False)
+    check("double-quoted $? after a pipe still caught", "guard_bash.py",
+          bash('ls | wc -l; echo "EXIT=$?"'), True)
+    # `;` inside quotes is not a statement separator -- splitting there invents
+    # a boundary the shell never sees.
+    check("semicolon inside quotes is not a statement break", "guard_bash.py",
+          bash('ls | grep -m1 x --label "a; echo $?"'), False)
+
+    # cp1252: inline Python reading FFC data without encoding=. Both forms below
+    # crashed this run on a U+274C in a board card title.
+    check("inline python open() without encoding", "guard_bash.py",
+          bash('python -c "import json;d=json.load(open(\'items.json\'))"'), True)
+    check("python heredoc open() without encoding", "guard_bash.py",
+          bash('python - <<PY\nimport json\nd=json.load(open("items.json"))\nPY'), True)
+    check("inline python with encoding= allowed", "guard_bash.py",
+          bash('python -c "import json;d=json.load(open(\'items.json\', encoding=\'utf-8\'))"'), False)
+    check("inline python binary mode allowed", "guard_bash.py",
+          bash('python -c "d=open(\'feed.json\', \'rb\').read()"'), False)
+    check("open() in a non-python command allowed", "guard_bash.py",
+          bash("grep -n 'open(' scripts/*.py"), False)
+    check("os.open is not the builtin", "guard_bash.py",
+          bash('python -c "import os;fd=os.open(\'f\', os.O_RDONLY)"'), False)
+    # A nested call in the first argument is the ordinary way to write this.
+    # Truncating at the first `)` hid the `encoding=` and blocked a correct
+    # command -- the failure mode that gets a guard switched off.
+    check("nested call before encoding= allowed", "guard_bash.py",
+          bash('python -c "import os,json;d=json.load('
+               'open(os.path.join(a, b), encoding=\'utf-8\'))"'), False)
+    check("nested call, still missing encoding=, blocked", "guard_bash.py",
+          bash('python -c "import os,json;d=json.load(open(os.path.join(a, b)))"'), True)
     # `gh api graphql --paginate` must declare $endCursor -- gh substitutes the
     # page cursor into that exact name, so any other name silently re-fetches
     # page 1 forever. The wrong-name case is the one that actually happened.

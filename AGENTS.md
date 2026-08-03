@@ -80,6 +80,14 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   `scripts/whmcs-application-search.ps1:128`. Also probe the fail-closed claims the same way — a
   corrupt input file and a missing tool should each exit 1, not skip. A guard that cannot be shown
   to fail is decoration.
+  - **Prove the plant landed before you believe the result.** A reintroduction that silently does
+    not apply produces a green run, which reads as "the guard has a hole" — the technique's own
+    false negative, and it points the wrong way. On #965 (run 62) a `str.replace(..., 1)` renamed a
+    path in the file's **prose** instead of the ledger row intended; the guard stayed green and the
+    first reading was that its path-existence check did not work. It did — replacing all 5
+    occurrences fired it on all 4 real rows. Assert the mutation: count the occurrences you meant to
+    change and fail loudly if the count is not what you expected, or diff the file, before drawing
+    any conclusion from a green run. Same for neutering a rule to mutation-test it.
 - **If the thing under review is read-only, also run it live.** Mutation-proving establishes that
   the tests discriminate; it cannot establish that the code behaves against real data, because every
   test injects its own fixtures and its own clock. For a script that only reads — the board audit,

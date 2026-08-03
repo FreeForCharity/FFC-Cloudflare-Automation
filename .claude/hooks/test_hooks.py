@@ -79,6 +79,69 @@ def main():
           bash("git push --force origin feature/main"), False)
     check("echo lowercase secret var", "guard_bash.py",
           bash("echo $cloudflare_api_token"), True)
+    # `grep -P` is unavailable in this environment's git-bash and fails by
+    # matching nothing rather than by erroring visibly (run 60, 2026-07-31).
+    check("grep -P", "guard_bash.py", bash("grep -P '^\\| L\\d+' docs/lessons-ledger.md"), True)
+    check("grep -qP in a conditional", "guard_bash.py",
+          bash('if grep -qP "\\t$N\\t" /tmp/items.txt; then echo ON; else echo MISSING; fi'), True)
+    check("grep -oP", "guard_bash.py", bash("gh api x | grep -oP 'runs/\\K[0-9]+'"), True)
+    check("grep --perl-regexp", "guard_bash.py", bash("grep --perl-regexp 'x' f"), True)
+    check("grep -rP recursive", "guard_bash.py", bash("grep -rP 'stripCode' scripts/"), True)
+    # Must NOT fire on the POSIX forms that do work here, nor on a capital P
+    # that is part of the *pattern* rather than a flag.
+    check("grep -E allowed", "guard_bash.py", bash("grep -E '^\\| L[0-9]+' docs/lessons-ledger.md"), False)
+    check("grep -i with P-word pattern allowed", "guard_bash.py",
+          bash("gh pr list | grep -i PASS"), False)
+    check("grep -n literal P allowed", "guard_bash.py", bash("grep -n 'P' notes.txt"), False)
+    check("pgrep not matched", "guard_bash.py", bash("pgrep -f node"), False)
+    check("grep --include allowed", "guard_bash.py",
+          bash("grep -r --include=*.py PATTERN scripts/"), False)
+    check("curl -X POST then grep allowed", "guard_bash.py",
+          bash("curl -sS https://api.example.com | grep foo"), False)
+    # A leading-slash `gh api` endpoint is rewritten by MSYS path conversion
+    # into a Windows filesystem path (run 61, 2026-07-31).
+    check("gh api leading slash", "guard_bash.py", bash("gh api /markdown -X POST"), True)
+    check("gh api leading slash with flags first", "guard_bash.py",
+          bash("gh api --paginate /repos/o/r/issues"), True)
+    check("gh api leading slash after -X", "guard_bash.py",
+          bash("gh api -X POST /repos/o/r/issues/1/comments"), True)
+    # Must NOT fire on the slash-less form, on a slash later in the path, on a
+    # graphql call, or on an unrelated command that merely contains a path.
+    check("gh api slash-less allowed", "guard_bash.py", bash("gh api markdown -X POST"), False)
+    check("gh api nested path allowed", "guard_bash.py",
+          bash("gh api repos/FreeForCharity/FFC-Cloudflare-Automation/pulls/963"), False)
+    check("gh api graphql allowed", "guard_bash.py",
+          bash("gh api graphql -f query='query{viewer{login}}'"), False)
+    check("gh api rate_limit allowed", "guard_bash.py", bash("gh api rate_limit"), False)
+    check("gh pr view with slash path allowed", "guard_bash.py",
+          bash("gh pr view 963 --repo FreeForCharity/FFC-Cloudflare-Automation"), False)
+    # A slash inside a flag VALUE is data, not the endpoint -- must not fire.
+    check("gh api field value with slash allowed", "guard_bash.py",
+          bash("gh api repos/o/r/issues -f body=/tmp/note.md"), False)
+
+    # Rule 9: `$?` after a pipeline reads the LAST stage, not the command meant.
+    # The exact shape that misreported a fail-closed probe on #965 (run 62).
+    check("pipeline then $? on same line", "guard_bash.py",
+          bash('python3 check.py | tail -3; echo "EXIT=$?"'), True)
+    check("pipeline then $? on next line", "guard_bash.py",
+          bash('python3 check.py | grep FAIL\necho "EXIT=$?"'), True)
+    check("pipeline then $? into a variable", "guard_bash.py",
+          bash('make build | tee log.txt\nrc=$?'), True)
+    # The two CORRECT spellings must stay silent, or the rule just trains people
+    # to ignore it.
+    check("PIPESTATUS allowed", "guard_bash.py",
+          bash('python3 check.py | tail -3; echo "EXIT=${PIPESTATUS[0]}"'), False)
+    check("pipefail allowed", "guard_bash.py",
+          bash('set -o pipefail\npython3 check.py | tail -3\necho "EXIT=$?"'), False)
+    # `$?` with no pipeline at all is the normal, correct idiom.
+    check("bare command then $? allowed", "guard_bash.py",
+          bash('python3 check.py\necho "EXIT=$?"'), False)
+    # `||` is not a pipeline -- it must not be mistaken for one.
+    check("logical or then $? allowed", "guard_bash.py",
+          bash('python3 check.py || echo failed\necho "EXIT=$?"'), False)
+    # A pipeline with no `$?` anywhere is the overwhelmingly common case.
+    check("pipeline without $? allowed", "guard_bash.py",
+          bash('git log --oneline | head -5'), False)
 
     # Ledger L50 -- $? read through a pipe. The first two are verbatim the
     # commands that misreported this run and in run 72; both printed a confident

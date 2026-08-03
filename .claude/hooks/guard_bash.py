@@ -359,6 +359,55 @@ def main():
                 "absorbs it, and the duplicate output looks like a successful full sweep."
             )
 
+    # 7. `grep -P` (PCRE) is not available in the Windows git-bash this repo is
+    #    driven from: it exits non-zero with "grep: -P supports only unibyte and
+    #    UTF-8 locales" and matches NOTHING. That is not a loud failure -- the
+    #    error goes to stderr while the exit status silently makes every
+    #    `if grep -qP ...` take the else branch and every `grep -P ... || echo
+    #    MISSING` report MISSING. A 2026-07-31 conductor run used `grep -qP` to
+    #    ask which of 10 open PRs were on the public board and was told all ten
+    #    were absent; every one was in fact present with a status already set.
+    #    Acting on that would have re-added ten duplicate board items.
+    #    Use `grep -E` (POSIX ERE) or awk instead.
+    #    (Rule 6 is the `--paginate`/`$endCursor` guard, landed in #940. This
+    #    branch also carried a rule 9 for `$?` read through a pipeline; it was
+    #    dropped before merge because #1007 landed the same check as
+    #    pipeline_exit_code_violation(), which strips quotes and splits
+    #    statements. Superset verified, not assumed: all 8 of rule 9's own
+    #    assertions hold against the function, and they are kept in
+    #    test_hooks.py so the coverage survives the implementation.)
+    if re.search(r"(?<![\w-])grep\b[^\n|;&]*?\s-(?:-perl-regexp\b|[A-Za-z]*P[A-Za-z]*\b)", cmd):
+        block(
+            "`grep -P` (PCRE) is unavailable in this environment's git-bash: it matches "
+            "nothing and exits non-zero, so conditionals silently take the negative branch "
+            "and you get confident, wrong answers rather than an error. Use `grep -E` for "
+            "extended regex, or awk for field-wise matching."
+        )
+
+    # 8. `gh api /<path>` with a LEADING SLASH is rewritten by MSYS path
+    #    conversion before gh ever sees it: `gh api /markdown` becomes
+    #    `gh api "C:/Program Files/Git/markdown"` and fails with
+    #    `invalid API endpoint`. Same argument-mangling class as the
+    #    `origin\main;...` corruption in ledger L42, but on a gh endpoint
+    #    rather than a git ref, and the error text blames the endpoint rather
+    #    than the shell -- which is what makes it cost time. Every `gh api`
+    #    example in AGENTS.md is already slash-less; this keeps it that way.
+    #    Hit on 2026-07-31 (run 61) rendering a table through `gh api
+    #    /markdown` to settle a review question.
+    #    Drop the leading slash: `gh api markdown`, `gh api rate_limit`.
+    #    Matched as "a whitespace-led /path token anywhere in the `gh api`
+    #    invocation" rather than by enumerating flags first: the endpoint can
+    #    follow a flag that takes a separate value (`gh api -X POST /repos/...`),
+    #    which a flags-then-endpoint pattern misses. The `(?<=\s)` keeps it off
+    #    an embedded value like `-f path=/x`, where the slash is data.
+    if re.search(r"(?<![\w-])gh\s+api\b[^\n|;&]*?(?<=\s)/[A-Za-z]", cmd):
+        block(
+            "`gh api` with a leading-slash endpoint is mangled by MSYS path conversion in "
+            "this environment's git-bash -- `gh api /markdown` is rewritten to a filesystem "
+            "path and fails with `invalid API endpoint`, blaming the endpoint rather than "
+            "the shell. Drop the leading slash: `gh api markdown`."
+        )
+
     sys.exit(0)
 
 

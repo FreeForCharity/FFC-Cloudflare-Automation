@@ -66,9 +66,15 @@ LABEL = "agentic-os"
 # The band label (#922). `agentic-os` stays the program-wide topic label on
 # everything; `agent-ready` marks the strict subset an agent can pick up now.
 READY_LABEL = "agent-ready"
+# Applied by 737 while a linked PR is open, removed when the last one closes.
+# `agent-ready` does NOT come off in the meantime — the two labels coexist by
+# design — so a claim is only visible by consulting this label (#974).
+CLAIMED_LABEL = "claimed"
 READY_RULE = (
-    "Open issues labeled 'agent-ready': unclaimed, unblocked, one-PR-scoped and carrying "
-    "acceptance criteria — the queue a sandboxed agent can pick from now. A strict subset of "
+    "Open issues labeled 'agent-ready' and NOT 'claimed': unblocked, one-PR-scoped and carrying "
+    "acceptance criteria — the queue a sandboxed agent can pick from now. An 'agent-ready' issue "
+    "with an open PR against it carries 'claimed' (applied by workflow 737) and is excluded here "
+    "until that PR closes; ready_count counts exactly the rows in ready_issues. A strict subset of "
     "backlog_issues, which stays the full 'agentic-os' topic set (epics, machine-managed rolling "
     "issues, human-blocked items and durable findings all remain counted there)."
 )
@@ -388,8 +394,22 @@ def collect_ready(backlog):
     — the label is applied by a human or a conductor run, never inferred here,
     because "can an agent finish this in one PR" is a judgement and guessing it
     from an issue body is how the original conflation happened.
+
+    ``claimed`` is the one part of that meaning the label itself cannot carry
+    (#974). Workflow 737 adds it while a linked PR is open and removes it when
+    the last one closes, and ``agent-ready`` deliberately stays put throughout —
+    so the two coexist, and filtering on ``agent-ready`` alone published every
+    live claim as pickable work. That is the #939 duplicate-work class aimed at
+    the surface agents pick from, so the exclusion is here rather than left to
+    each reader: AGENTS.md's pickup query is
+    ``label:agent-ready is:open -label:claimed`` and this is that query.
     """
-    return [i for i in backlog if READY_LABEL in (i.get("labels") or [])]
+    ready = []
+    for issue in backlog:
+        labels = issue.get("labels") or []
+        if READY_LABEL in labels and CLAIMED_LABEL not in labels:
+            ready.append(issue)
+    return ready
 
 
 def scope_repos(items, hub_repo):
@@ -629,6 +649,37 @@ def build_feed(repo, token, org=DEFAULT_ORG):
     }
 
 
+def write_feed(path, text):
+    """Write the feed to ``path`` as UTF-8 with LF line endings.
+
+    ``newline="\\n"`` is as load-bearing here as ``encoding=`` is beside it, and
+    for the same reason: this script runs on both ``ubuntu-latest`` (502's
+    ``deliver`` job) and the Conductor's Windows host (the hand-delivery path
+    used on every delivery #848 has blocked so far). In text mode with the
+    default ``newline=None``, Python translates ``\\n`` to ``\\r\\n`` on
+    Windows, so identical feed content ships as different bytes depending on
+    which host generated it.
+
+    Nothing downstream has caught that, which is exactly why it is worth pinning
+    rather than leaving to convention:
+
+    * ffcadmin's ``.gitattributes`` (``* text=auto eol=lf``) normalises the
+      committed blob, so the published file has always been correct and the
+      difference is invisible to any check that reads git rather than the file;
+    * this repo's CI is Linux, where the translation never happens, so no test
+      can observe it by running the script.
+
+    Both are masks, not fixes: the first is one ``.gitattributes`` edit away
+    from failing, and the second means CI will never warn. ``CLAUDE.md``'s
+    Windows-host notes carry the history and the downstream staged-blob check
+    this makes unnecessary; deliberately not quoted here, because the same PR
+    rewrote that bullet and a verbatim citation would have been stale on the
+    commit that introduced it.
+    """
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -660,8 +711,7 @@ def main():
     text = json.dumps(feed, indent=2, ensure_ascii=False) + "\n"
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as fh:
-            fh.write(text)
+        write_feed(args.output, text)
         counts = (
             f"{len(feed['backlog_issues'])} issues, "
             f"{len(feed['in_flight_prs'])} of {feed['open_prs_total']} open PRs "

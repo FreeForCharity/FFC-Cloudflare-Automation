@@ -88,6 +88,17 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
     occurrences fired it on all 4 real rows. Assert the mutation: count the occurrences you meant to
     change and fail loudly if the count is not what you expected, or diff the file, before drawing
     any conclusion from a green run. Same for neutering a rule to mutation-test it.
+- **If the thing under review is read-only, also run it live.** Mutation-proving establishes that
+  the tests discriminate; it cannot establish that the code behaves against real data, because every
+  test injects its own fixtures and its own clock. For a script that only reads — the board audit,
+  the catalog generator, the status-feed generator — a live run against production is free (no gate,
+  no write) and routinely produces the strongest evidence in the review. On #1012 every mutation the
+  reviewer applied was caught, and the finding that actually settled the review was the live run:
+  the first item the new grace window deferred in production was **#1012 itself**, uncarded and 43
+  minutes old, in the same invocation that still exited 1 on a genuine finding. That demonstrates
+  the tolerate-latency and still-catch-drift halves simultaneously, on real timestamps, which no
+  unit test in the PR could do. Check the script's auth contract first (most take `GH_TOKEN` and
+  nothing else) and confirm it takes no write path before running it.
 - **Supersession check before ready+queue.** Before promoting a PR, grep `main` for the
   function/capability names the PR adds — a same-purpose implementation may have landed on `main`
   after the PR branched (on 2026-07-20, #772's basePath probe duplicated `basePathMismatch` merged
@@ -109,6 +120,14 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   prove a dequeue (it can read null while queued — see below); the authoritative probe is the
   `enqueuePullRequest` mutation ("already in the queue"). Or enqueue directly:
   `gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:"<node_id>"}){mergeQueueEntry{position state}}}'`
+  - **Read that probe's three answers apart, because one of them is a typo wearing a real answer's
+    clothes.** `UNPROCESSABLE: "Pull request is already in the queue"` means queued — the answer you
+    are usually after. A populated `mergeQueueEntry` means you just enqueued it. But
+    `NOT_FOUND: "Could not resolve to a node with the global id"` means **your node id is wrong**,
+    and it is indistinguishable at a glance from the legitimate reading "this PR no longer exists" —
+    the shape that would make a run conclude a queued PR had vanished. Derive the id in the same
+    command rather than pasting a literal: `PRID=$(gh pr view <n> --json id --jq .id)`. Hit on run
+    75; cost was small only because the PR was known-good at the time.
 - **Debugging tip:** `gh pr merge --auto` can mask the real blocker behind a GraphQL "rate limit"
   error. The `enqueuePullRequest` mutation returns the true reason (unresolved conversation, CodeQL
   still running, …).
@@ -240,6 +259,21 @@ gh api -X POST repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id>/
 ```
 
 Poll runs in a background task with an `until` loop — never foreground-sleep.
+
+**Find a workflow's runs by FILE NAME, never by matching the run's `.name` (L33).** A run object's
+`.name` is the rendered `run-name:`, not the workflow's `name:`. Workflow 228 titles its runs
+`WHMCS Fraud Review (FraudLabs Pro)`, so filtering `actions/runs` for a name starting with `228`
+returns **zero results while 228 is actively failing on a schedule** — a silent wrong answer, not an
+error. Resolve the workflow first, then list its runs:
+
+```bash
+id=$(gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/228-whmcs-fraud-review.yml --jq .id)
+gh api "repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/$id/runs?branch=main&per_page=10" \
+  --jq '.workflow_runs[] | "\(.created_at) \(.event) \(.conclusion)"'
+```
+
+Workflow 740 already gets this right (`740-scheduled-workflow-failure-alert.yml:169-170`) — the trap
+is in ad-hoc queries, which nothing guards.
 
 ## Key docs
 

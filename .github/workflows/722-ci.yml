@@ -163,6 +163,28 @@ jobs:
           # checked against the SOURCE, where it is visible from every platform.
           python3 scripts/check-subprocess-encoding.py
 
+      - name: Validate every working-directory exists
+        shell: bash
+        run: |
+          # #858 shipped `working-directory: target-repo` into 702's dry-run
+          # branch: the target repo is checked out at `path: ffc-ex`, and
+          # `target` is the step id producing the repo NAME. Every dry run would
+          # have died before the shell started. Valid YAML, silent actionlint,
+          # every other guard green — and the path was gated, so it had never
+          # run. Like #929/#945, a class CI can never turn red on, so it is read
+          # out of the source: each working-directory: must be the workspace
+          # root, a repository directory, an actions/checkout path, or made by
+          # an earlier step. Fails closed on anything it cannot resolve.
+          #
+          # This is the first step in the job to need PyYAML, and the runner
+          # image only happens to preinstall it — the workflow-logic step below
+          # installs it defensively for exactly that reason. Repeat the install
+          # here rather than depend on step order or on the image: without it,
+          # an image that drops PyYAML turns this guard into an ImportError,
+          # which is a red build that says nothing about working directories.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 scripts/check-workflow-working-directories.py
+
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v7
         with:

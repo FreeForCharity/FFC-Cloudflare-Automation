@@ -23,7 +23,22 @@ const LOG_ISSUE = 719;
 const THROUGHPUT_WINDOW_DAYS = 30;
 const PIPELINE_WINDOW_DAYS = 7;
 
+// A conductor run that has posted a START and no END for longer than this is
+// treated as dead (#970). Runs 60/61/62 took 20-30 minutes START->END, so two
+// hours is several times the observed worst case — deliberately loose, because
+// the cost of a false "dead" is a wrong entry in a weekly report and the cost of
+// a false "alive" is the failure this metric exists to catch going unseen.
+const DEAD_RUN_THRESHOLD_HOURS = 2;
+
+// The Conductor's own run headers on #719, e.g. `## Run 63 — START (…)`.
+// Matched against the FIRST line of a comment only (see findDeadConductorRuns):
+// the header is the first line by construction, and anchoring there means prose
+// in a later comment that quotes a header cannot forge a START or — worse —
+// clear a real one with a forged END.
+const RUN_HEADER = /^##[ \t]+Run[ \t]+(\d+)[ \t]+[—–-][ \t]+(START|END)\b/;
+
 const DAY_MS = 24 * 3600 * 1000;
+const HOUR_MS = 3600 * 1000;
 
 function round1(n) {
   return Math.round(n * 10) / 10;
@@ -58,6 +73,11 @@ function ageDays(fromIso, nowIso) {
  *   pipelineRuns         [{name, conclusion}]     data-pipeline Actions runs in
  *                        the pipeline window (which workflows count is the
  *                        workflow's policy, not the lib's).
+ *   logComments          [{created_at, body}]     #719's comments across ALL
+ *                        fetched pages, for the dead-run scan (#970). Omit /
+ *                        non-array ⇒ `conductorRuns.assessed: false` rather
+ *                        than a reassuring zero.
+ *   deadRunThresholdHours  optional override of DEAD_RUN_THRESHOLD_HOURS.
  */
 function computeMetrics(input) {
   const nowIso = input && input.nowIso;
@@ -124,6 +144,10 @@ function computeMetrics(input) {
       ready: Number(input.readyOpen || 0),
     },
     readyWaiting: buildReadyWaiting(input.readyWaiting, nowIso),
+    // Conductor runs that started and never ended (#970). Weekly cadence means
+    // this reports the PATTERN ("we lost 2 runs this week"), not the incident —
+    // a stated limitation, not an oversight.
+    conductorRuns: buildConductorRuns(input, nowIso),
     dataPipeline: {
       runs,
       success,
@@ -185,6 +209,132 @@ function buildReadyWaiting(candidates, nowIso) {
 
 function round3(n) {
   return Math.round(n * 1000) / 1000;
+}
+
+/**
+ * Conductor runs that started and never ended (#970).
+ *
+ * A conductor run is the privileged supervisor: it approves gates, merges PRs,
+ * refreshes the public status feed and grooms the backlog. Run 63 posted a START
+ * on #719 at 2026-08-01T01:05:45Z and died — no END, no commit, no PR, no label
+ * change — and nothing noticed for three hours. The visible artifacts (a START
+ * comment and a plan) make the thread *look* like the run happened, which is why
+ * every other signal stayed green.
+ *
+ * Both halves are already published by the Conductor in a fixed format, so this
+ * needs no new instrumentation, only a reader. Two deliberate choices:
+ *
+ *  - **Age comes from the comment's `created_at`, never from the timestamp in
+ *    the header.** The Conductor fuzzes that one to the minute-tens digit
+ *    (`## Run 63 — START (2026-08-01T01:0xZ)`), so it is not a parseable
+ *    instant; `created_at` is exact and set by GitHub.
+ *  - **Only the first line of a comment is examined**, so a post-mortem quoting
+ *    `## Run 63 — END` in its prose cannot retire a run that never ended.
+ *
+ * @param {Array}  comments  [{created_at, body}] — #719's comments, oldest→newest,
+ *                           ACROSS ALL PAGES. A START and its END routinely land
+ *                           on different pages (run 61, 2026-07-31); pairing per
+ *                           page reports every boundary-split run as dead.
+ * @param {string} nowIso    report time.
+ * @param {number} [thresholdHours]  override for DEAD_RUN_THRESHOLD_HOURS.
+ */
+function findDeadConductorRuns(comments, nowIso, thresholdHours) {
+  // The unreadable-log guard lives HERE, ahead of the clock check, because this
+  // is the only exported entry point to the scan — buildConductorRuns is
+  // internal, so a guard held only there protects the workflow and nothing
+  // else. A failed read arriving as null/undefined must surface as
+  // `assessed: false`, never as `count: 0`: this is the one argument whose
+  // invalid form fails in the REASSURING direction, so it is the one that most
+  // needs the check. An array that is merely empty is a real reading and falls
+  // through — `observed: 0` is what discloses it.
+  if (!Array.isArray(comments)) {
+    return {
+      assessed: false,
+      thresholdHours: DEAD_RUN_THRESHOLD_HOURS,
+      observed: 0,
+      count: null,
+      dead: [],
+    };
+  }
+  // Exported, so this is a public entry point and cannot lean on
+  // computeMetrics having already validated the clock. An invalid `nowIso`
+  // makes every age NaN, and `NaN < threshold` is false — so every unmatched
+  // START would be reported dead, with `ageHours` serialising to null. A false
+  // alarm about the supervisor is worse than the silence this replaces, so
+  // fail fast exactly as computeMetrics does.
+  if (!nowIso || Number.isNaN(new Date(nowIso).getTime())) {
+    throw new Error('findDeadConductorRuns: nowIso must be a valid ISO timestamp');
+  }
+  // An unusable override falls back to the default rather than throwing: this
+  // is an optional knob on a health report, and killing the weekly run over it
+  // would cost more than it saves. `Number('')` is 0 (every in-flight run reads
+  // dead) and `Number('2h')` is NaN (the `< threshold` test never fires, so
+  // every unmatched START reads dead) — both fail in the alarming direction,
+  // and neither is loud. The effective value is returned as `thresholdHours`
+  // and rendered in the report, so a fallback announces itself.
+  //
+  // `Number()` alone is not enough to validate with, which is the trap: it maps
+  // '', '   ', null, false and [] all to 0 — a *finite, non-negative* number
+  // that passes a naive `Number.isFinite(n) && n >= 0` check and then reports
+  // every in-flight run dead. Narrow the accepted TYPES first, then the value.
+  let threshold = DEAD_RUN_THRESHOLD_HOURS;
+  if (
+    typeof thresholdHours === 'number' ||
+    (typeof thresholdHours === 'string' && thresholdHours.trim() !== '')
+  ) {
+    const requested = Number(thresholdHours);
+    if (Number.isFinite(requested) && requested >= 0) threshold = requested;
+  }
+  const started = new Map(); // run number -> earliest START created_at
+  const ended = new Set();
+
+  for (const c of comments || []) {
+    const body = c && c.body;
+    if (typeof body !== 'string') continue;
+    const firstLine = body.split('\n', 1)[0].trim();
+    const m = RUN_HEADER.exec(firstLine);
+    if (!m) continue;
+    const run = Number(m[1]);
+    if (m[2] === 'END') {
+      ended.add(run);
+      continue;
+    }
+    // A re-posted START keeps the earliest one: the run began when it said it
+    // began, and taking the latest would let a repost reset the clock.
+    const at = c.created_at;
+    if (!at || Number.isNaN(new Date(at).getTime())) continue;
+    const prevStart = started.get(run);
+    if (!prevStart || new Date(at) < new Date(prevStart)) started.set(run, at);
+  }
+
+  const now = new Date(nowIso).getTime();
+  const dead = [];
+  for (const [run, startedAt] of started) {
+    if (ended.has(run)) continue;
+    const ageHours = Math.max(0, (now - new Date(startedAt).getTime()) / HOUR_MS);
+    // Younger than the threshold is a run still in flight, not a dead one.
+    if (ageHours < threshold) continue;
+    dead.push({ run, startedAt, ageHours: round1(ageHours) });
+  }
+  dead.sort((a, b) => a.run - b.run);
+
+  return {
+    assessed: true,
+    thresholdHours: threshold,
+    // The denominator, printed rather than implied: "0 dead out of 0 runs seen"
+    // is an unread log, not a healthy week, and the two must not look alike.
+    observed: started.size,
+    count: dead.length,
+    dead,
+  };
+}
+
+// `assessed: false` is the honest reading when #719 could not be read at all —
+// the comment fetch is wrapped in a try/catch so a transient API failure cannot
+// wedge the weekly report, and a swallowed read must not surface as "0 dead".
+// That is exactly the "presence mistaken for validity" shape the ledger is about.
+function buildConductorRuns(input, nowIso) {
+  return findDeadConductorRuns(input.logComments, nowIso, input.deadRunThresholdHours);
 }
 
 // Scan issue-comment bodies (oldest→newest as returned by the REST list) and
@@ -261,6 +411,10 @@ function renderReport(metrics, prev, opts) {
     oldest: null,
   };
   const prw = p.readyWaiting || {};
+  // A report predating #970 has no conductorRuns block; default it so the delta
+  // reads '—' instead of throwing.
+  const cr = m.conductorRuns || { assessed: false, count: null, dead: [], observed: 0 };
+  const pcr = p.conductorRuns || {};
   const dp = m.dataPipeline;
   const pdp = p.dataPipeline || {};
 
@@ -303,6 +457,11 @@ function renderReport(metrics, prev, opts) {
     `| **PRs ready but unlanded** | ${fmt(rw.count)}${rw.oldest ? ` (oldest ${rw.oldest.ageDays}d)` : ''} | ${delta(rw.count, prw.count)} |`,
   );
   lines.push(
+    `| **Conductor runs that died (START, no END)** | ${
+      cr.assessed ? `${fmt(cr.count)} of ${cr.observed} seen` : 'not assessed'
+    } | ${delta(cr.count, pcr.count)} |`,
+  );
+  lines.push(
     `| agentic-os closed (${m.windowDays.throughput}d) | ${fmt(ao.closed)} | ${delta(ao.closed, pao.closed)} |`,
   );
   lines.push(
@@ -332,6 +491,29 @@ function renderReport(metrics, prev, opts) {
       lines.push('>');
       lines.push(`> Excluded as deliberately parked: ${rw.parked.map((n) => `#${n}`).join(', ')}.`);
     }
+    lines.push('');
+  }
+
+  // Dead conductor runs (#970). Named, dated and aged — "2 runs died" that does
+  // not say WHICH is a number nobody can investigate a week later.
+  if (cr.assessed && cr.count) {
+    lines.push(
+      `> **${cr.count} conductor run${cr.count === 1 ? '' : 's'} started and never ended** ` +
+        `(no END comment ${cr.thresholdHours}h+ after START): ` +
+        `${cr.dead.map((d) => `run ${d.run} (START ${d.startedAt}, ${d.ageHours}h ago)`).join('; ')}.`,
+    );
+    lines.push('>');
+    lines.push(
+      '> A dead run approves no gates, merges no PRs and refreshes no feed — while its START ' +
+        'comment leaves the thread looking like it ran. This report is weekly, so it detects the ' +
+        'pattern, not the incident.',
+    );
+    lines.push('');
+  } else if (!cr.assessed) {
+    lines.push(
+      `> Conductor run START/END pairing was **not assessed** this week — #${LOG_ISSUE}'s comments ` +
+        'could not be read. Absence of a finding here is not evidence of a healthy week.',
+    );
     lines.push('');
   }
 
@@ -372,9 +554,11 @@ module.exports = {
   LOG_ISSUE,
   THROUGHPUT_WINDOW_DAYS,
   PIPELINE_WINDOW_DAYS,
+  DEAD_RUN_THRESHOLD_HOURS,
   mean,
   ageDays,
   computeMetrics,
+  findDeadConductorRuns,
   extractPreviousMetrics,
   delta,
   renderReport,

@@ -198,8 +198,47 @@ jobs:
               runPage++;
             }
 
+            // #719's comments, read ONCE and used twice: the trend baseline
+            // (newest hidden data block) and the dead-conductor-run scan (#970).
+            // #719 is the long-lived Conductor log, so we must NOT paginate its
+            // full history. The listComments endpoint has no sort/direction, so
+            // bound the read by a `since` window instead: this report runs weekly,
+            // so both the prior baseline and any run that died since it are
+            // always inside it. A lookback wide enough to absorb a few skipped
+            // runs plus a hard page cap keeps the read bounded no matter how long
+            // the log grows.
+            //
+            // Pages are ACCUMULATED, not processed one at a time: a run's START
+            // and its END routinely land on different pages (run 61, 2026-07-31),
+            // and pairing per page reports every boundary-split run as dead.
+            const logIssue = Number(process.env.LOG_ISSUE);
+            const BASELINE_LOOKBACK_DAYS = 28;
+            const MAX_BASELINE_PAGES = 10;
+            const since = new Date(nowMs - BASELINE_LOOKBACK_DAYS * 86400e3).toISOString();
+            let logComments = null;
+            try {
+              const acc = [];
+              for (let bp = 1; bp <= MAX_BASELINE_PAGES; bp++) {
+                const { data } = await github.rest.issues.listComments({
+                  owner, repo, issue_number: logIssue, since, per_page: 100, page: bp,
+                });
+                acc.push(...data);
+                if (data.length < 100) break;
+              }
+              logComments = acc;
+            } catch (e) {
+              // Leave logComments null: computeMetrics then reports the dead-run
+              // scan as `assessed: false` rather than a reassuring zero, and the
+              // trend renders "first report". Missing the baseline is acceptable
+              // degradation vs. an unbounded scan or a wedged weekly job.
+              core.warning(`Could not read #${logIssue} comments: ${e.message}`);
+            }
+            // Comments come back oldest-first, so the last data block found wins.
+            const previous = logComments ? lib.extractPreviousMetrics(logComments) : null;
+
             const metrics = lib.computeMetrics({
               nowIso,
+              logComments,
               smokeOpen: smokeOpen.map((i) => ({ created_at: i.created_at })),
               smokeClosedRecent: smokeClosed.map((i) => ({
                 created_at: i.created_at, closed_at: i.closed_at,
@@ -211,34 +250,6 @@ jobs:
               readyWaiting,
               pipelineRuns,
             });
-
-            // Previous metrics: newest hidden data block among #719's comments.
-            // #719 is the long-lived Conductor log, so we must NOT paginate its
-            // full history. The listComments endpoint has no sort/direction, so
-            // bound the read by a `since` window instead: this report runs weekly,
-            // so the prior baseline is always recent. A lookback wide enough to
-            // absorb a few skipped runs plus a hard page cap keeps the read
-            // bounded no matter how long the log grows; extractPreviousMetrics
-            // keeps the latest data block among what we fetch (comments come back
-            // oldest-first). Missing the baseline just renders "first report"
-            // (no trend) — acceptable degradation vs. an unbounded scan.
-            const logIssue = Number(process.env.LOG_ISSUE);
-            const BASELINE_LOOKBACK_DAYS = 28;
-            const MAX_BASELINE_PAGES = 10;
-            const since = new Date(nowMs - BASELINE_LOOKBACK_DAYS * 86400e3).toISOString();
-            let previous = null;
-            try {
-              for (let bp = 1; bp <= MAX_BASELINE_PAGES; bp++) {
-                const { data } = await github.rest.issues.listComments({
-                  owner, repo, issue_number: logIssue, since, per_page: 100, page: bp,
-                });
-                const found = lib.extractPreviousMetrics(data);
-                if (found) previous = found; // ascending order → last page with a block wins
-                if (data.length < 100) break;
-              }
-            } catch (e) {
-              core.warning(`Could not read #${logIssue} comments for trend baseline: ${e.message}`);
-            }
 
             const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
             const body = lib.renderReport(metrics, previous, { runUrl });
@@ -255,6 +266,11 @@ jobs:
                   `${metrics.claims.open}; agentic-os backlog: ${metrics.agenticOs.open}; ` +
                   `ready queue: ${metrics.agenticOs.ready}; ` +
                   `ready-but-unlanded PRs: ${metrics.readyWaiting.count}; ` +
+                  `dead conductor runs: ${
+                    metrics.conductorRuns.assessed
+                      ? `${metrics.conductorRuns.count} of ${metrics.conductorRuns.observed} seen`
+                      : 'not assessed'
+                  }; ` +
                   `data-pipeline success: ${metrics.dataPipeline.success}/${metrics.dataPipeline.runs}. ` +
                   `Posted to #${logIssue}.`,
               )

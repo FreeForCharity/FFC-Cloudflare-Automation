@@ -98,6 +98,8 @@ jobs:
             739. Repo - Process Health Metrics Report [GH]
             741. Repo - Fleet Security Audit Coverage [Org]
             743. Website - Fleet Security Header Audit
+            744. Repo - Public Feed Freshness [GH]
+            745. Repo - Agentic OS Board Audit [GH]
         with:
           script: |
             const owner = context.repo.owner;
@@ -232,7 +234,10 @@ jobs:
                 }
               }
               const open = await listOpenAlerts();
-              const existing = open.find(i => i.body && i.body.includes(marker));
+              // `listForRepo` returns pull requests too, and the success path below CLOSES
+              // what this selects — a PR quoting the (invisible, HTML-comment) marker would
+              // be closed by the alerter, with a comment claiming a recovery. Refs #980.
+              const existing = open.find(i => !i.pull_request && i.body && i.body.includes(marker));
               if (run.conclusion === 'success') {
                 if (existing) {
                   await github.rest.issues.createComment({

@@ -354,8 +354,42 @@ def _literal_fragments(node):
             if isinstance(n, ast.Constant) and isinstance(n.value, str)]
 
 
+def _reason_sinks(tree, funcs, loop_sources):
+    """The functions guard_bash.py uses to report a reason to the agent.
+
+    DISCOVERED, never hard-coded. `block` is not special -- it is simply the
+    only sink that exists on main. The rule is "any module-level function that
+    main() hands a human-readable message to is reporting that message to the
+    agent", which is a property of the call, not of the name.
+
+    Hard-coding `node.func.id == "block"` is a real blind channel, not a
+    hypothetical one: #1018 adds `warn(reason)` (accumulates) and `finish()`
+    (flushes to stderr, exit 0) for the #971 rules. On a tree carrying both
+    PRs, a name-anchored walker derives the same 10 sites, all claimed, and
+    reports green while two rules have no case at all -- because warn's sites
+    are invisible to it. Discovering sinks turns that silent under-report into
+    a red naming the unclaimed warn sites. Found in review of #1039; the wider
+    model merge (a channel on Rule, warn polarity, #1018's `tag` collapsing
+    into `signature`) is #1040 -- this check is what forces it rather than
+    letting it be forgotten.
+    """
+    main_fn = funcs.get("main")
+    if main_fn is None:
+        return set()
+    sinks = set()
+    for node in ast.walk(main_fn):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id not in funcs or not node.args:
+            continue
+        arg = node.args[0]
+        if _literal_fragments(arg) or (isinstance(arg, ast.Name) and arg.id in loop_sources):
+            sinks.add(node.func.id)
+    return sinks
+
+
 def block_sites(path=GUARD_BASH):
-    """Every distinct refusal message guard_bash.py can emit.
+    """Every distinct refusal message guard_bash.py can emit, on every channel.
 
     Returns [(label, [literal fragments])]. A site whose fragments are EMPTY is
     one this function could not follow; it is returned rather than dropped so
@@ -379,16 +413,23 @@ def block_sites(path=GUARD_BASH):
             if called:
                 loop_sources[node.target.id] = called
 
+    sinks = _reason_sinks(tree, funcs, loop_sources)
+    if not sinks:
+        # No channel found at all means this resolver no longer understands the
+        # file. Reporting "0 sites, all covered" would be a green that means
+        # nothing, so hand back one unresolvable site instead.
+        return [("guard_bash.py: no reason-reporting function found at all", [])]
+
     sites = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id == "block"):
+                and node.func.id in sinks):
             continue
         arg = node.args[0] if node.args else None
         frags = _literal_fragments(arg)
         if frags:
-            sites.append((f"guard_bash.py:{node.lineno} block(...)", frags))
+            sites.append((f"guard_bash.py:{node.lineno} {node.func.id}(...)", frags))
             continue
         if isinstance(arg, ast.Name) and arg.id in loop_sources:
             for fname in loop_sources[arg.id]:
@@ -403,7 +444,8 @@ def block_sites(path=GUARD_BASH):
                     sites.append((f"guard_bash.py:{ret.lineno} return in {fname}()",
                                   _literal_fragments(ret.value)))
             continue
-        sites.append((f"guard_bash.py:{node.lineno} block({ast.dump(arg)[:40]}...)", []))
+        sites.append((f"guard_bash.py:{node.lineno} "
+                      f"{node.func.id}({ast.dump(arg)[:40] if arg else ''}...)", []))
     return sites
 
 
@@ -455,6 +497,13 @@ def test_block_site_coverage():
 
     Derived from the AST, not from a count (AC4): adding a rule to
     guard_bash.py with no registered case turns this red and names the line.
+
+    The reporting channels are discovered too (see _reason_sinks), so this
+    holds for a rule added on a NEW channel -- #1018's warn() -- and not only
+    for block(). Polarity and attribution are still block-only: a warned
+    command exits 0, so check()'s `blocked = rc == 2` reads it as ALLOW and
+    Rule has no polarity for it. That is #1040's model merge; this check is
+    what makes it impossible to skip quietly.
     """
     sites = block_sites()
     problems = []
@@ -475,10 +524,10 @@ def test_block_site_coverage():
     for rule in RULES:
         if not any(rule.signature in f for _, frags in sites for f in frags):
             problems.append(f"rule '{rule.id}' signature {rule.signature!r} matches no "
-                            f"block() site in guard_bash.py -- the rule was removed or "
+                            f"refusal site in guard_bash.py -- the rule was removed or "
                             f"its message was reworded")
 
-    record(f"every block() site in guard_bash.py is covered ({len(sites)} sites derived)",
+    record(f"every refusal site in guard_bash.py is covered ({len(sites)} sites derived)",
            not problems, "\n".join(problems))
 
 

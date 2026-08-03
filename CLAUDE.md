@@ -18,6 +18,16 @@
 - GraphQL and REST have **separate rate pools** (5,000/hr each, shared account-wide). When GraphQL
   is exhausted, reads still work via REST; check with `gh api rate_limit`.
 - Never `--admin`-merge; never push to `main` directly.
+- **After `gh pr ready`, the first `enqueuePullRequest` usually fails — retry, don't diagnose.**
+  Promoting a draft re-registers the branch checks, so the mutation returns
+  `Required status check "Phantom Revert Guard" is expected` even when that exact SHA already
+  carries a green run of it. It is a re-registration race, not a missing check. Poll the head SHA's
+  `check-runs` via REST and retry; on 2026-07-30 (#938) the retry ~60s later enqueued at position 1.
+- **`AWAITING_CHECKS` on a queue entry is not a stall.** `mergeQueueEntry.state` sat at
+  `AWAITING_CHECKS` with a fixed `estimatedTimeToMerge` for several minutes _after_ every
+  `merge_group` run had reported success (722 success, 723 success, 727 skipped — a skip is a pass
+  here). The merge landed on its own. Do not dequeue, re-push, or "fix" the branch on the strength
+  of that state; poll `pulls/N --jq .merged` via REST and let it finish.
 - **Format with the CI-pinned prettier.** `722-ci.yml` checks with `npx --yes prettier@3.8.1`; plain
   `npx prettier` fetches the latest version, whose Markdown reflow differs — producing
   local-pass/CI-fail loops. Always run `npx --yes prettier@3.8.1 --write <files>`.
@@ -527,6 +537,87 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
   criterion here, because this is the only host that can. Doing so on #944 turned an unverifiable
   claim into a measured `129 → 0`, and surfaced a scope correction (the cause explained 8 of 26
   modules, not 21) that the author had no way to see.
+
+## Windows git-bash: five ways a command lies instead of failing (runs 60–61, 2026-07-31)
+
+Every one of these produces a confident wrong answer rather than an error, which is what makes them
+worth writing down. Two are now blocked by `.claude/hooks/guard_bash.py` — `grep -P` (rule 7) and
+the leading-slash `gh api` endpoint (rule 8); the other three are not mechanically detectable from
+the command text alone and stay here as judgment.
+
+- **`grep -P` matches nothing and exits non-zero.** PCRE is not compiled into this environment's
+  git-bash, so `grep -P` never matches — and because it _fails_ rather than returning "no match",
+  `if grep -qP …` silently takes the **else** branch and `grep -P … || echo <default>` prints the
+  default. Run 60 used it to audit the public board and was told all 10 open PRs were missing from
+  it; all 10 were present. Use a POSIX ERE (`grep -E`) or python. Blocked by `guard_bash.py` rule 7.
+- **`/tmp` is not one directory.** git-bash resolves `/tmp` to its own MSYS mount, while a Windows
+  `python3` in the same pipeline resolves it to `C:\tmp` — so `cmd > /tmp/x.txt` followed by
+  `python3 … open('/tmp/x.txt')` fails with `FileNotFoundError` on a file that bash just wrote and
+  can still read. Do not hand paths between bash and Windows python via `/tmp`; use an absolute
+  Windows-style path (the session scratchpad) for anything that crosses that boundary.
+- **Ad-hoc `python3 -c` printing non-ASCII dies on cp1252.** `print()` encodes with the console
+  codepage, so echoing API data that contains an em dash, an arrow or an emoji raises
+  `UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'` — mid-way through, so you
+  get partial output that looks like a truncated result rather than an encoding fault. Run 60 hit
+  this printing a workflow name (`… → aprilhansen.com`) while verifying the public status feed.
+  Prefix with `PYTHONIOENCODING=utf-8`. This is the same cp1252 root cause as #945/L35, but a
+  _different vector_: `scripts/check-subprocess-encoding.py` guards `subprocess(text=True)` inside
+  committed files and cannot see a one-off command's stdout.
+- **A console `?` is not proof of a mangled file.** The same codepage that breaks `print()` also
+  renders a correctly-stored em dash as `?` in captured output. Before "fixing" an encoding, decode
+  the file with `errors='strict'` and test for `'\ufffd'` — run 60 nearly re-encoded a clean
+  `docs/lessons-ledger.md` on the strength of terminal rendering alone. Re-confirmed run 61 on
+  #963's docstrings: strict-decoded clean, zero replacement characters, no fix needed.
+- **A leading slash in a `gh api` endpoint is rewritten into a filesystem path.** `gh api /markdown`
+  becomes `gh api "C:/Program Files/Git/markdown"` and fails with `invalid API endpoint` — the error
+  blames the endpoint, not the shell, which is what costs the time. Same MSYS argument-mangling
+  class as L42's `origin\main;…`, but on a `gh` endpoint rather than a git ref. Drop the slash:
+  `gh api markdown`. Blocked by `guard_bash.py` rule 8 (run 61).
+
+## Measuring health: a run count is not a time window (run 61, 2026-07-31)
+
+`gh api ".../actions/runs?per_page=N"` returns the newest N runs, so on a busy repo the **time span
+it covers shrinks as activity rises**. On 2026-07-31 the hub's newest 40 runs spanned **51
+minutes**. "0 failures in the last 40 runs" was therefore a statement about the last hour, and it
+read as a clean day — while `228. WHMCS - Fraud Review` and `502. Google - Analytics Report` had
+both failed on schedule that morning and every morning before it. Run 60 published "1 failure/30"
+from the same mistake.
+
+- For a health verdict, ask each **scheduled** workflow for its own recent runs
+  (`actions/workflows/<file>.yml/runs?per_page=N`) rather than sampling the repo-wide feed. A daily
+  cron produces one run a day; it cannot compete with PR churn for a slot in the newest N.
+- `?branch=main` does **not** rescue this — scheduled runs are on `main` too. They are simply older
+  than the window.
+- Separate the two populations before reporting: branch-CI failures on PR head SHAs are normal churn
+  (a promoted draft re-runs Phantom Revert Guard and can fail there legitimately — see AGENTS.md),
+  whereas a failing scheduled workflow is a standing outage.
+- **The workflow file name is not derivable from the number.** `739-process-health.yml` returns a
+  bare `404` that reads like "this workflow does not exist"; the real file is
+  `739-process-health-metrics.yml`. List `.github/workflows/` and match the numeric prefix rather
+  than guessing the slug.
+
+## `gh search` is index-backed and lags — never audit completeness with it (run 62, 2026-07-31)
+
+`gh search issues` / `gh search prs` read GitHub's **search index**, which trails the write APIs by
+an interval nobody controls. So they are fine for "find me something" and **wrong for "is anything
+missing"** — the items they omit are the newest ones, which are exactly the items a completeness
+audit is looking for.
+
+Run 62 built the "what should be on the public board" set from
+`gh search issues --owner FreeForCharity --label agentic-os --state open`: it returned **52** items
+and the audit reported **0 missing**. The authoritative REST enumeration
+(`repos/{owner}/{repo}/issues?state=open&labels=agentic-os`, paginated, per repo) returned **53**,
+and the omitted one — PR #965, created minutes earlier — was genuinely absent from the board. The
+search-based audit was not merely incomplete; it returned a **clean bill of health** for a board
+that had a hole in it.
+
+- For any "everything of kind X" question, enumerate with **REST per repo** and paginate.
+- This is a sibling of the stale-read rule below, but **not** the same thing and the remedy differs:
+  a post-write read is stale for seconds and re-polling cures it; a search index is stale on its own
+  schedule and re-polling is just a slower wrong answer. Change endpoint, don't retry.
+- The tell is a **denominator that looks plausible**. 52 vs 53 raises no alarm on its own — so print
+  both sides' counts (`expected=N board=M`) and treat the comparison, not the empty result set, as
+  the finding. Scripted in issue #966.
 
 ## Board & PR-creation env facts (validated 2026-07-24)
 

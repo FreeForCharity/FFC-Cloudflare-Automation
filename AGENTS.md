@@ -80,6 +80,14 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   `scripts/whmcs-application-search.ps1:128`. Also probe the fail-closed claims the same way — a
   corrupt input file and a missing tool should each exit 1, not skip. A guard that cannot be shown
   to fail is decoration.
+  - **Prove the plant landed before you believe the result.** A reintroduction that silently does
+    not apply produces a green run, which reads as "the guard has a hole" — the technique's own
+    false negative, and it points the wrong way. On #965 (run 62) a `str.replace(..., 1)` renamed a
+    path in the file's **prose** instead of the ledger row intended; the guard stayed green and the
+    first reading was that its path-existence check did not work. It did — replacing all 5
+    occurrences fired it on all 4 real rows. Assert the mutation: count the occurrences you meant to
+    change and fail loudly if the count is not what you expected, or diff the file, before drawing
+    any conclusion from a green run. Same for neutering a rule to mutation-test it.
 - **If the thing under review is read-only, also run it live.** Mutation-proving establishes that
   the tests discriminate; it cannot establish that the code behaves against real data, because every
   test injects its own fixtures and its own clock. For a script that only reads — the board audit,
@@ -177,6 +185,19 @@ and all authenticate as the same user. Before starting ANY issue:
      "keep 5–15 open" band read 46 and drifted upward for eight consecutive runs of trimming that
      could never converge (#922). Add `agent-ready` when you file an issue that meets the bar;
      remove it when the issue becomes blocked.
+   - **`-label:claimed` currently under-reports: check for a cross-repo PR before you start.** The
+     backlog lives in the hub while much of the code lives in a template or site repo, so the normal
+     shape is a hub issue implemented by a PR in another repository — and 737 neither runs in those
+     repositories nor matches the qualified reference form they use. On 2026-07-30 three
+     `priority: high` hub issues (#934, #893, #880) sat in the pickup query with finished PRs
+     against them. Until #939 lands, search open PRs **org-wide** for the issue number before
+     claiming: `gh api -X GET search/issues -f q='org:FreeForCharity is:pr is:open <N>'`.
+   - **A grep for `refs #N` is not a check for "does any PR reference this issue".** The qualified
+     cross-repo form — `Refs FreeForCharity/FFC-Cloudflare-Automation#934` — has the `owner/repo`
+     between the keyword and the `#`, so a pattern anchored on `keyword` + `#` matches nothing and
+     reports a _clean_ result. Match `(closes|fixes|refs)[: ]+(owner/repo)?#N`. This is the same
+     blind spot as `claim-sync-lib.js`'s `LINK_RE`, and it fooled a conductor run before it was
+     found in the code (#939).
 2. **Claim before working**: add the `claimed` label AND post one comment
    `CLAIM: <actor> <planned-branch> <UTC timestamp>` where `<actor>` identifies you
    (`conductor-run-N`, `live-session`, `copilot-agent`, or a human name — the shared login does not
@@ -264,6 +285,25 @@ have exhausted the points budget for hours.
   the 30 default. Add `--paginate`, or compare `.total_count` against what you actually received.
   `guard_bash.py` warns (#971); a bounded single-page read is fine when you want the newest N and
   are claiming nothing about the rest.
+
+- **`gh api graphql --paginate` only advances a variable named exactly `$endCursor`.** `gh`
+  substitutes the next page cursor into that name and no other, so a query declaring `$cursor` (or
+  anything else) keeps `after:` null and **re-fetches page 1 until the budget stops it**. It fails
+  silently and looks like success: a large file of well-formed, entirely duplicate rows. **The rate
+  limiter is the only thing that ends it.** On 2026-07-30 this ran for ~6.5 hours in a backgrounded
+  task, wrote **2,454,201 rows / 98 MB** — 24,542 re-fetches of page 1 — that `sort -u` collapsed to
+  **107**, and **drained the shared 5,000-point GraphQL budget to zero**, starving every other agent
+  session on the account until the hourly reset. (The 107-rather-than-100 is itself the proof: page
+  1's _contents_ drifted as board items were added during those hours, while the page index never
+  moved.) Two tells, and **the second one matters more**: a line count that is a clean multiple of
+  100 with a `sort -u` that collapses it — and, if you background the command, a `gh api rate_limit`
+  that keeps falling after you believe it finished. Do not conclude a backgrounded `gh` loop has
+  stopped from a process listing; the 2026-07-30 run checked `ps` and saw no `gh`, then sampled the
+  file at 18,000 rows and reported that figure — understating the real damage **136-fold**. The fix
+  is
+  `query($endCursor:String){ … items(first:100, after:$endCursor){ pageInfo{hasNextPage endCursor} … } }`.
+  `guard_bash.py` now blocks the wrong-name form outright, since such a command can never return
+  page 2. Plain **REST** `--paginate` takes no variables and is unaffected.
 
 ## Dispatch / watch / approve recipes
 

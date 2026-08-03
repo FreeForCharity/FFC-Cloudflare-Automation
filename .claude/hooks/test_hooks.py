@@ -80,6 +80,61 @@ def main():
     check("echo lowercase secret var", "guard_bash.py",
           bash("echo $cloudflare_api_token"), True)
 
+    # `gh api graphql --paginate` must declare $endCursor -- gh substitutes the
+    # page cursor into that exact name, so any other name silently re-fetches
+    # page 1 forever. The wrong-name case is the one that actually happened.
+    check("graphql paginate with $cursor", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($cursor:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$cursor){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), True)
+    check("graphql paginate with no cursor var", "guard_bash.py",
+          bash("gh api graphql --paginate -f query='query{viewer{login}}'"), True)
+    check("graphql paginate with $endCursor allowed", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($endCursor:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$endCursor){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), False)
+    # A name that merely STARTS with endCursor is a different variable and gh
+    # substitutes into neither -- so these must block, not ride the substring.
+    # They are also the discriminators for the exact-match case above: without
+    # them a bare `$endcursor in low` test passes every case in this block.
+    check("graphql paginate with $endCursorX", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($endCursorX:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$endCursorX){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), True)
+    check("graphql paginate with $endCursor_2", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($endCursor_2:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$endCursor_2){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), True)
+    # Only --paginate needs the cursor: a single-shot graphql call is fine, and
+    # REST --paginate has no query variables at all.
+    check("graphql single-shot allowed", "guard_bash.py",
+          bash("gh api graphql -f query='query{viewer{login}}'"), False)
+    check("REST paginate allowed", "guard_bash.py",
+          bash("gh api --paginate repos/FreeForCharity/FFC-Cloudflare-Automation/issues/719/comments"),
+          False)
+    # The name must be DECLARED by the operation, not merely present on the
+    # command line. This is the false negative a whole-command scan allows: the
+    # query still paginates on $cursor and would re-fetch page 1 forever, while
+    # an unrelated mention downstream satisfies a substring test.
+    check("$endCursor outside the query does not count", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query($cursor:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$cursor){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"
+               " ; echo $endCursor"), True)
+    # ... and the named-operation form is a real declaration, so it must pass.
+    # Without this, tightening the regex to `query(` would silently start
+    # blocking a correct command.
+    check("named operation declaring $endCursor allowed", "guard_bash.py",
+          bash('gh api graphql --paginate -f query='
+               "'query Board($endCursor:String){organization(login:\"x\"){"
+               "projectV2(number:9){items(first:100,after:$endCursor){"
+               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), False)
+
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)
     check("write key.pem", "guard_edit.py", write("certs/key.pem", "x"), True)

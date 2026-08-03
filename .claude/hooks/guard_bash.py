@@ -95,6 +95,46 @@ def main():
         if dangerous:
             block("Refusing a destructive 'rm -rf' targeting a root/home/.git path.")
 
+    # 6. `gh api graphql --paginate` whose query does not declare $endCursor.
+    #    gh substitutes the page cursor into a variable named EXACTLY $endCursor;
+    #    with any other name the `after:` argument stays null, so every page is
+    #    page 1 and the loop runs until the RATE LIMITER stops it -- there is no
+    #    other termination condition. It fails SILENTLY and looks like success:
+    #    a large output of well-formed, entirely duplicate rows. A 2026-07-30
+    #    conductor run wrote 2,454,201 rows / 98 MB (24,542 re-fetches of page 1)
+    #    that deduplicated to 107, and drained the shared 5,000-point GraphQL
+    #    budget to ZERO over ~6.5 hours -- starving every other agent session on
+    #    the account until the hourly reset. This is a broken command, not merely
+    #    a wasteful one: it can never return page 2.
+    #    See AGENTS.md "GitHub API rate budget".
+    if re.search(r"\bgh\s+api\b", low) and "graphql" in low and "--paginate" in low:
+        # The name must match EXACTLY, so a plain substring test is not enough:
+        # `$endCursorX` and `$endCursor_2` contain `$endcursor` but are different
+        # GraphQL variables, and gh substitutes into neither -- the precise
+        # silent-infinite-loop this rule exists to catch. A GraphQL variable name
+        # is [_A-Za-z][_0-9A-Za-z]*, so the exact name is the one not followed by
+        # another name character. `low` is already lowercased.
+        #
+        # It must also be declared IN THE OPERATION'S VARIABLE LIST, not merely
+        # present somewhere on the command line. Scanning the whole command lets
+        # an unrelated mention satisfy the check -- `... -f query='query($cursor:
+        # String){...}' ; echo $endCursor` would pass while the query still
+        # paginates on `$cursor`, i.e. the exact command this rule exists to
+        # stop. gh substitutes into the operation's declared variable, so that
+        # declaration is the only place the name counts. The optional name between
+        # `query` and `(` covers the named form `query Foo($endCursor:String)`.
+        declares_cursor = re.search(
+            r"query\s*(?:[a-z_][0-9a-z_]*\s*)?\([^)]*\$endcursor(?![0-9a-z_])", low
+        )
+        if not declares_cursor:
+            block(
+                "`gh api graphql --paginate` requires the cursor variable to be named "
+                "exactly `$endCursor` (and the query to request `pageInfo{hasNextPage "
+                "endCursor}`). This query declares no `$endCursor`, so gh cannot advance "
+                "the cursor: it will re-fetch page 1 until the shared GraphQL budget "
+                "absorbs it, and the duplicate output looks like a successful full sweep."
+            )
+
     sys.exit(0)
 
 

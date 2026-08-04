@@ -23,6 +23,15 @@ on:
           only) so GitHub can validate and issue SSL.'
         type: boolean
         default: false
+      mail_provider:
+        description:
+          "Mail provider for MX/SPF (and M365 service CNAMEs/SRVs). CUTOVER: the other provider's
+          mail records are REMOVED once the new set is in place. Ignored when pages_only is true."
+        type: choice
+        options:
+          - microsoft365
+          - google
+        default: microsoft365
       dmarc_mgmt_debug:
         description: 'Debug: run DMARC Management API probe/attempts (noisy)'
         type: boolean
@@ -58,54 +67,88 @@ jobs:
 
       - name: Enforce FFC Standard Configuration
         shell: pwsh
+        # User-supplied values by env, never interpolated into the script body,
+        # so they cannot break out of the string and inject PowerShell (same
+        # rule 105 documents on its "Manage DNS Record" step).
         env:
           FFC_CF_DMARCMGMT_DEBUG: ${{ inputs.dmarc_mgmt_debug && '1' || '0' }}
+          REC_DOMAIN: ${{ inputs.domain }}
+          REC_DRY_RUN: ${{ inputs.dry_run }}
+          REC_PAGES_ONLY: ${{ inputs.pages_only }}
+          REC_PROXY_ON: ${{ inputs.proxy_on }}
+          REC_MAIL_PROVIDER: ${{ inputs.mail_provider }}
         run: |
-          $Domain = "${{ inputs.domain }}"
-          $DryRun = "${{ inputs.dry_run }}"
-          $PagesOnly = "${{ inputs.pages_only }}"
-          $ProxyOn = "${{ inputs.proxy_on }}"
+          $Domain = [string]$env:REC_DOMAIN
+          $DryRun = [string]$env:REC_DRY_RUN
+          $PagesOnly = [string]$env:REC_PAGES_ONLY
+          $ProxyOn = [string]$env:REC_PROXY_ON
 
-          if ($DryRun -eq "true") {
+          # Workflow inputs are lowercase for a readable dropdown; the script's
+          # ValidateSet is PascalCase. Map explicitly and fail loudly on anything
+          # unrecognised rather than silently defaulting to a provider.
+          switch ([string]$env:REC_MAIL_PROVIDER) {
+            'google' { $MailProvider = 'Google' }
+            'microsoft365' { $MailProvider = 'Microsoft365' }
+            '' { $MailProvider = 'Microsoft365' }
+            default { throw "Unsupported mail_provider '$($env:REC_MAIL_PROVIDER)'" }
+          }
+
+          # Built as an argument list rather than nested if/else: with dry-run,
+          # pages-only, proxy and provider that would be 16 near-identical
+          # branches, and the M365/Google split is exactly where a copy-paste
+          # slip would send a live cutover down the wrong one.
+          $argsList = @('-Zone', $Domain, '-EnforceStandard')
+
+          if ($PagesOnly -eq 'true') {
+            # GitHubPagesOnly returns before any mail record is touched, so the
+            # provider is inert here. Left off the list to keep that explicit.
+            $argsList += '-GitHubPagesOnly'
+            Write-Host "Pages-only: mail records (and mail_provider) are not touched."
+          } else {
+            $argsList += @('-MailProvider', $MailProvider)
+          }
+
+          if ($ProxyOn -eq 'true') { $argsList += '-ProxyGitHubPages' }
+
+          if ($DryRun -eq 'true') {
             Write-Host "--- DRY RUN MODE: PREVIEWING CHANGES ---"
-            if ($PagesOnly -eq 'true') {
-              if ($ProxyOn -eq 'true') {
-                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly -ProxyGitHubPages -DryRun
-              } else {
-                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly -DryRun
-              }
-            } else {
-              if ($ProxyOn -eq 'true') {
-                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -ProxyGitHubPages -DryRun
-              } else {
-                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -DryRun
-              }
-            }
+            $argsList += '-DryRun'
           } else {
             Write-Host "--- LIVE MODE: APPLYING FIXES ---"
-            if ($PagesOnly -eq 'true') {
-              if ($ProxyOn -eq 'true') {
-                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly -ProxyGitHubPages
-              } else {
-                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -GitHubPagesOnly
-              }
-            } else {
-              if ($ProxyOn -eq 'true') {
-                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard -ProxyGitHubPages
-              } else {
-                .\Update-CloudflareDns.ps1 -Zone $Domain -EnforceStandard
-              }
-            }
           }
+
+          Write-Host "Update-CloudflareDns.ps1 $($argsList -join ' ')"
+          & .\Update-CloudflareDns.ps1 @argsList
 
       - name: Post-Enforce Compliance Audit
         shell: pwsh
         # CLOUDFLARE_API_TOKEN_{FFC,CM} already in env from the composite action above.
+        # User-supplied values by env — see the enforce step above.
+        env:
+          REC_DOMAIN: ${{ inputs.domain }}
+          REC_PROXY_ON: ${{ inputs.proxy_on }}
+          REC_PAGES_ONLY: ${{ inputs.pages_only }}
+          REC_MAIL_PROVIDER: ${{ inputs.mail_provider }}
         run: |
-          $Domain = "${{ inputs.domain }}"
-          $ProxyOn = "${{ inputs.proxy_on }}"
-          if ($ProxyOn -eq 'true') {
-            .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ProxyGitHubPages -ErrorAction Continue
-          } else {
-            .\Update-CloudflareDns.ps1 -Zone $Domain -Audit -ErrorAction Continue
+          $Domain = [string]$env:REC_DOMAIN
+          $ProxyOn = [string]$env:REC_PROXY_ON
+          $PagesOnly = [string]$env:REC_PAGES_ONLY
+
+          $argsList = @('-Zone', $Domain, '-Audit')
+
+          # Audit against the provider we just enforced, not whatever the zone
+          # happens to resolve to. If the cutover half-failed, auto-detection
+          # would read the OLD provider off the surviving MX and report a clean
+          # bill of health for it — the one outcome this step exists to catch.
+          if ($PagesOnly -ne 'true') {
+            switch ([string]$env:REC_MAIL_PROVIDER) {
+              'google' { $argsList += @('-MailProvider', 'Google') }
+              'microsoft365' { $argsList += @('-MailProvider', 'Microsoft365') }
+              '' { $argsList += @('-MailProvider', 'Microsoft365') }
+              default { throw "Unsupported mail_provider '$($env:REC_MAIL_PROVIDER)'" }
+            }
           }
+
+          if ($ProxyOn -eq 'true') { $argsList += '-ProxyGitHubPages' }
+
+          & .\Update-CloudflareDns.ps1 @argsList -ErrorAction Continue

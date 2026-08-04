@@ -357,7 +357,22 @@ def _strip_assignments(segment):
 # A print verb anywhere in the segment. Kept broad on purpose: narrowing it to
 # "the segment's command word" would miss `foo && echo $TOKEN` shapes that the
 # splitter has not separated.
-PRINT_VERB_RE = re.compile(r"\b(?:echo|printf|printenv|env)\b", re.IGNORECASE)
+#
+# `env` must NOT match after a `$`: PowerShell spells a variable READ
+# `$env:PASSWORD`, and `\benv\b` treats `$` and `:` as word boundaries, so the
+# bare name `$env:PASSWORD` read as "the env command plus a secret" and blocked
+# an assignment that prints nothing (Copilot, #1062).
+#
+# Removing that accident costs real coverage unless it is replaced, because
+# `Write-Host $env:GH_TOKEN` was blocked on `main` ONLY by the same stray match
+# -- `Write-Host` was never a listed verb. This repo is PowerShell-first, so
+# the Write-* stream cmdlets are now named explicitly and the coverage is
+# deliberate rather than incidental.
+PRINT_VERB_RE = re.compile(
+    r"\b(?:echo|printf|printenv)\b"
+    r"|(?<!\$)\benv\b"
+    r"|\bWrite-(?:Host|Output|Information|Verbose|Debug|Warning|Error)\b",
+    re.IGNORECASE)
 
 # A conventionally-secret-suffixed identifier (FFC_CLOUDFLARE_API_TOKEN,
 # WHMCS_API_SECRET, ...). Matched with or without a leading `$`, because

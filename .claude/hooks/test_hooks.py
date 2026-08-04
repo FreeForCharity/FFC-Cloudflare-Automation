@@ -135,6 +135,21 @@ def main():
     check("printf a secret", "guard_bash.py", bash("printf '%s' \"$TOKEN\""), True)
     check("echo bare lowercase $token", "guard_bash.py", bash("echo $token"), True)
     check("echo $env:SECRET", "guard_bash.py", bash("echo $env:SECRET"), True)
+    # `$env:X` is a PowerShell variable READ, not the `env` command: `\benv\b`
+    # treats `$` and `:` as word boundaries, so the bare name armed the rule on
+    # a statement that prints nothing (Copilot's finding on #1062). The second
+    # case was a false positive on `main` too.
+    check("powershell env var assignment allowed", "guard_bash.py",
+          bash("X=$env:PASSWORD"), False)
+    check("powershell env var set in a subshell allowed", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN = \"x\"; python y.py'"), False)
+    # ... but `main` blocked `Write-Host $env:GH_TOKEN` only via that same stray
+    # `env` match, so these two keep the coverage after the accident is removed.
+    # They are the discriminator for the Write-* branch.
+    check("Write-Host a secret", "guard_bash.py",
+          bash("Write-Host $env:GH_TOKEN"), True)
+    check("Write-Output a secret", "guard_bash.py",
+          bash("Write-Output $env:CLOUDFLARE_API_TOKEN"), True)
     # A suffixed name that is NOT on the known-vars list -- the only case that
     # reaches the suffix pattern on its own.
     check("echo a suffixed name outside the known list", "guard_bash.py",

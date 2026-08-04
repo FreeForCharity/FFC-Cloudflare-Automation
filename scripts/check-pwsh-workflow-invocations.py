@@ -523,7 +523,13 @@ def scan_repo(
 def main() -> int:
     try:
         findings, scanned = scan_repo()
-    except RuntimeError as error:
+    except (RuntimeError, OSError, json.JSONDecodeError) as error:
+        # OSError covers the host vanishing between `which` and `subprocess.run`
+        # (FileNotFoundError), and JSONDecodeError the facts script exiting 0 with
+        # output that is not the contract. Both already failed CLOSED — an uncaught
+        # exception still exits non-zero — but they exited through a traceback, so
+        # the run said "crashed" where it meant "could not measure". Naming them
+        # keeps the distinction the RuntimeError branch exists to draw.
         print(f"pwsh invocation guard could not run: {error}")
         return 1
 
@@ -542,7 +548,10 @@ def main() -> int:
 
     print(
         f"pwsh invocation binding OK: {scanned} PowerShell run: bodies scanned; every "
-        f"splat into a repo script binds by name and every parameter name resolves."
+        f"splat into a repo script binds by name and every parameter name resolves.\n"
+        f"Not judged: an invocation whose command name is a VARIABLE (`& $scriptPath -Foo 1`). "
+        f"{scanned} is the SCAN denominator, not the judgement denominator; widening the rule "
+        f"to cover those call sites and printing both counts is issue #1060."
     )
     return 0
 

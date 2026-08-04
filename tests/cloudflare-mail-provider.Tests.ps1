@@ -33,7 +33,9 @@ BeforeAll {
         return $fn
     }
 
-    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord')) {
+    $script:RegistryPath = (Resolve-Path (Join-Path $PSScriptRoot '..' 'data' 'mail-providers.json')).Path
+
+    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord', 'ConvertTo-MailProviderName', 'Get-MailProviderRegistry', 'Resolve-MailProviderForZone')) {
         . ([scriptblock]::Create((Get-FunctionFromFile -Path $script:SourcePath -Name $name).Extent.Text))
     }
 }
@@ -311,5 +313,135 @@ Describe 'Get-SpfWithInclude' {
             -RemoveIncludes @('include:spf.protection.outlook.com')
         ([regex]::Matches($out, 'v=spf1')).Count | Should -Be 1
         ([regex]::Matches($out, 'include:')).Count | Should -Be 1
+    }
+}
+
+Describe 'ConvertTo-MailProviderName' {
+    It 'canonicalises the spellings a human might write' {
+        foreach ($v in @('google', 'Google', ' GOOGLE ', 'gsuite', 'google-workspace')) {
+            ConvertTo-MailProviderName -Value $v | Should -Be 'Google'
+        }
+        foreach ($v in @('microsoft365', 'M365', 'o365', 'microsoft')) {
+            ConvertTo-MailProviderName -Value $v | Should -Be 'Microsoft365'
+        }
+    }
+
+    It 'returns null for anything it does not recognise' {
+        # Must NOT fall back to a default: silently picking a provider for an
+        # unrecognised value would choose a charity's mail host for them.
+        foreach ($v in @('fastmail', '', 'goo', $null)) {
+            ConvertTo-MailProviderName -Value $v | Should -BeNullOrEmpty
+        }
+    }
+}
+
+Describe 'Get-MailProviderRegistry' {
+    It 'reads the tracked registry that ships with the repo' {
+        $reg = Get-MailProviderRegistry -Path $script:RegistryPath
+        $reg.Default | Should -Be 'Microsoft365'
+        $reg.Domains['slopestohope.org'] | Should -Be 'Google'
+    }
+
+    It 'treats a missing file as everything-Microsoft' {
+        $reg = Get-MailProviderRegistry -Path (Join-Path $TestDrive 'does-not-exist.json')
+        $reg.Default | Should -Be 'Microsoft365'
+        $reg.Domains.Count | Should -Be 0
+    }
+
+    It 'THROWS on an unknown provider rather than falling back' {
+        # The dangerous failure mode. A typo'd value that quietly resolved to the
+        # default would cut every Google domain over to Microsoft on the next
+        # enforcement run.
+        $bad = Join-Path $TestDrive 'bad.json'
+        '{"default":"microsoft365","domains":{"a.org":"gmial"}}' | Set-Content -Path $bad -Encoding utf8
+        { Get-MailProviderRegistry -Path $bad } | Should -Throw '*gmial*'
+    }
+
+    It 'THROWS on an unknown default' {
+        $bad = Join-Path $TestDrive 'baddefault.json'
+        '{"default":"yahoo","domains":{}}' | Set-Content -Path $bad -Encoding utf8
+        { Get-MailProviderRegistry -Path $bad } | Should -Throw '*yahoo*'
+    }
+
+    It 'is case-insensitive on domain keys' {
+        $f = Join-Path $TestDrive 'case.json'
+        '{"default":"microsoft365","domains":{"MiXeD.OrG":"google"}}' | Set-Content -Path $f -Encoding utf8
+        (Get-MailProviderRegistry -Path $f).Domains['mixed.org'] | Should -Be 'Google'
+    }
+}
+
+Describe 'Resolve-MailProviderForZone' {
+    BeforeAll {
+        $script:Reg = Get-MailProviderRegistry -Path $script:RegistryPath
+    }
+
+    It 'returns the registry entry for a listed domain' {
+        Resolve-MailProviderForZone -ZoneName 'slopestohope.org' -Registry $script:Reg -Explicit '' |
+            Should -Be 'Google'
+    }
+
+    It 'defaults an unlisted domain to Microsoft' {
+        Resolve-MailProviderForZone -ZoneName 'some-other-charity.org' -Registry $script:Reg -Explicit '' |
+            Should -Be 'Microsoft365'
+    }
+
+    It 'lets an explicit choice override the registry' {
+        Resolve-MailProviderForZone -ZoneName 'slopestohope.org' -Registry $script:Reg -Explicit 'Microsoft365' |
+            Should -Be 'Microsoft365'
+    }
+
+    It 'is case-insensitive on the zone name' {
+        Resolve-MailProviderForZone -ZoneName 'SlopesToHope.ORG' -Registry $script:Reg -Explicit '' |
+            Should -Be 'Google'
+    }
+
+    It 'throws on an unknown explicit value' {
+        { Resolve-MailProviderForZone -ZoneName 'a.org' -Registry $script:Reg -Explicit 'fastmail' } |
+            Should -Throw '*fastmail*'
+    }
+}
+
+Describe 'Exactly-one provider (set-and-match)' {
+    It 'produces disjoint record sets for the two providers' {
+        # The core invariant. Whatever one provider enforces, the other must
+        # consider foreign, or a zone could satisfy both at once.
+        $zone = 'example.org'
+        $g = Get-MailProviderProfile -Provider 'Google' -ZoneName $zone
+        $m = Get-MailProviderProfile -Provider 'Microsoft365' -ZoneName $zone
+
+        foreach ($mx in $g.MxRecords) { $mx.Content | Should -Not -BeLike $m.MxMatch }
+        foreach ($mx in $m.MxRecords) { $mx.Content | Should -Not -BeLike $g.MxMatch }
+        $g.SpfInclude | Should -Not -Be $m.SpfInclude
+    }
+
+    It 'selects the whole M365 set as foreign when the domain resolves to Google' {
+        $zone = 'example.org'
+        $m = Get-MailProviderProfile -Provider 'Microsoft365' -ZoneName $zone
+        $records = @(
+            [pscustomobject]@{ id = 'mx'; type = 'MX'; name = $zone; content = 'example-org.mail.protection.outlook.com' }
+        )
+        foreach ($c in $m.Cnames) {
+            $records += [pscustomobject]@{ id = "c-$($c.Name)"; type = 'CNAME'; name = "$($c.Name).$zone"; content = $c.Content }
+        }
+        foreach ($s in $m.Srvs) {
+            $records += [pscustomobject]@{ id = "s-$($s.Name)"; type = 'SRV'; name = "$($s.Name).$zone"; data = @{ target = $s.Data.target } }
+        }
+
+        # 1 MX + 5 CNAMEs + 2 SRVs: the entire set goes, not a subset.
+        @(Get-ForeignMailRecord -Records $records -ForeignProfile $m -ZoneName $zone).Count |
+            Should -Be $records.Count
+    }
+
+    It 'sweeps up a split-brain zone so exactly one provider survives' {
+        # Both providers present -> enforcing Google must select every Microsoft
+        # record for removal and no Google one.
+        $zone = 'example.org'
+        $m = Get-MailProviderProfile -Provider 'Microsoft365' -ZoneName $zone
+        $records = @(
+            [pscustomobject]@{ id = 'goog'; type = 'MX'; name = $zone; content = 'smtp.google.com' }
+            [pscustomobject]@{ id = 'ms'; type = 'MX'; name = $zone; content = 'example-org.mail.protection.outlook.com' }
+        )
+        $foreign = @(Get-ForeignMailRecord -Records $records -ForeignProfile $m -ZoneName $zone)
+        $foreign.id | Should -Be @('ms')
     }
 }

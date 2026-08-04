@@ -25,15 +25,16 @@ on:
         default: false
       mail_provider:
         description:
-          "Mail cutover. 'unchanged' (default) touches no mail records and deletes nothing. Picking
-          a provider is a CUTOVER: the OTHER provider's MX/CNAME/SRV are REMOVED once the new set is
-          in place. Ignored when pages_only is true."
+          "Which mail provider this domain is on. 'from-registry' (default) reads
+          data/mail-providers.json; anything not listed there is microsoft365. A domain is on
+          EXACTLY ONE provider, so enforcing REMOVES the other provider's MX/CNAME/SRV. Picking a
+          value here overrides the registry for this run only. Ignored when pages_only is true."
         type: choice
         options:
-          - unchanged
+          - from-registry
           - microsoft365
           - google
-        default: unchanged
+        default: from-registry
       dmarc_mgmt_debug:
         description: 'Debug: run DMARC Management API probe/attempts (noisy)'
         type: boolean
@@ -89,16 +90,15 @@ jobs:
           # ValidateSet is PascalCase. Map explicitly and fail loudly on anything
           # unrecognised rather than silently defaulting to a provider.
           #
-          # 'unchanged' maps to EMPTY, and an empty value means -MailProvider is
-          # never passed. That is what makes deletion genuinely opt-in: the
-          # script gates its cutover on the parameter being bound, so a default
-          # run of 106 enforces the standard exactly as it always has and
-          # removes nothing. Defaulting this to a real provider would have made
-          # every routine 106 run a live mail cutover.
+          # 'from-registry' maps to EMPTY, and an empty value means -MailProvider
+          # is not passed, so the script resolves each domain from
+          # data/mail-providers.json. That is the normal path: the registry is
+          # what lets a Google domain stay Google across routine runs. The two
+          # explicit values are a per-run override for moving a domain.
           switch ([string]$env:REC_MAIL_PROVIDER) {
             'google' { $MailProvider = 'Google' }
             'microsoft365' { $MailProvider = 'Microsoft365' }
-            'unchanged' { $MailProvider = '' }
+            'from-registry' { $MailProvider = '' }
             '' { $MailProvider = '' }
             default { throw "Unsupported mail_provider '$($env:REC_MAIL_PROVIDER)'" }
           }
@@ -115,10 +115,10 @@ jobs:
             $argsList += '-GitHubPagesOnly'
             Write-Host "Pages-only: mail records (and mail_provider) are not touched."
           } elseif ($MailProvider) {
-            Write-Host "Mail CUTOVER requested: $MailProvider (the other provider's records will be removed)"
+            Write-Host "Mail provider OVERRIDE: $MailProvider (the other provider's records will be removed)"
             $argsList += @('-MailProvider', $MailProvider)
           } else {
-            Write-Host "mail_provider=unchanged: enforcing the standard without a mail cutover; nothing will be deleted."
+            Write-Host "mail_provider=from-registry: provider resolved per-domain from data/mail-providers.json."
           }
 
           if ($ProxyOn -eq 'true') { $argsList += '-ProxyGitHubPages' }
@@ -155,14 +155,14 @@ jobs:
           # surviving MX and report a clean bill of health for it — the one
           # outcome this step exists to catch.
           #
-          # With 'unchanged' we pass nothing and let the audit detect the
-          # provider from the zone's own MX, which is the correct behaviour for
-          # a run that was never about mail.
+          # With 'from-registry' we pass nothing and let the script resolve the
+          # domain from the registry — the same resolution the enforce step just
+          # used, so the audit checks the same provider it enforced.
           if ($PagesOnly -ne 'true') {
             switch ([string]$env:REC_MAIL_PROVIDER) {
               'google' { $argsList += @('-MailProvider', 'Google') }
               'microsoft365' { $argsList += @('-MailProvider', 'Microsoft365') }
-              'unchanged' { }
+              'from-registry' { }
               '' { }
               default { throw "Unsupported mail_provider '$($env:REC_MAIL_PROVIDER)'" }
             }

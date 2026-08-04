@@ -45,19 +45,33 @@
     List records for the zone/name.
 
 .PARAMETER MailProvider
-    Mail provider the zone should follow: 'Microsoft365' (default) or 'Google'.
-    Used by -EnforceStandard and -Audit.
+    Overrides the registry for one run: 'Microsoft365' or 'Google'. Used by
+    -EnforceStandard and -Audit. Omit it and the provider comes from
+    -MailProviderRegistry, which is the normal path.
 
-    With -EnforceStandard this is a CUTOVER, not an addition. The desired
-    provider's MX/SPF (and, for M365, its service CNAMEs and Teams SRVs) are
-    created first, then the OTHER provider's mail records are removed, so the
-    zone never sits with two live MX sets pointing at different providers.
+    A domain is on EXACTLY ONE provider — the record set is matched and applied
+    as a unit, never mixed. With -EnforceStandard the resolved provider's
+    MX/SPF (and, for M365, its service CNAMEs and Teams SRVs) are created
+    first, then the OTHER provider's mail records are removed, so the zone
+    never sits with two live MX sets pointing at different providers.
+
     SPF is rewritten in place rather than duplicated: a second v=spf1 TXT is a
     permerror, so the foreign include is swapped out of the existing record.
 
     DKIM is deliberately out of scope. A Google DKIM key is generated in the
     Google Admin console and cannot be derived here, so google._domainkey is
     never created and an existing one is never deleted.
+
+.PARAMETER MailProviderRegistry
+    Path to the domain -> provider registry (default: data/mail-providers.json
+    next to this script). Anything not listed resolves to the file's 'default',
+    which is microsoft365.
+
+    This is what makes "default Microsoft, Google if picked" survive a run.
+    Without it, fleet enforcement would read a Google zone as non-standard and
+    cut it back to Microsoft. A missing file means "everything is Microsoft
+    365"; a MALFORMED file throws rather than falling back, because silently
+    defaulting would do exactly that cut-back to every Google domain at once.
 
 .EXAMPLE
     # Cut a zone over to Google Workspace mail (preview first)
@@ -140,6 +154,12 @@ param(
     [Parameter(ParameterSetName = 'Audit')]
     [ValidateSet('Microsoft365', 'Google')]
     [string]$MailProvider = 'Microsoft365',
+
+    # Domain -> provider registry. Omitted callers get data/mail-providers.json
+    # next to this script; -MailProvider still overrides it per run.
+    [Parameter(ParameterSetName = 'Enforce')]
+    [Parameter(ParameterSetName = 'Audit')]
+    [string]$MailProviderRegistry = (Join-Path $PSScriptRoot 'data/mail-providers.json'),
 
     [Parameter(ParameterSetName = 'ExportAll', Mandatory = $true)]
     [switch]$ExportAll,
@@ -768,6 +788,86 @@ function Resolve-MailProvider {
     return $Fallback
 }
 
+# Accept the spellings a human might put in the registry or on the command line
+# and return the canonical name, or $null so the caller can reject it. Silently
+# defaulting an unrecognised value would pick a mail provider for a charity.
+function ConvertTo-MailProviderName {
+    param([AllowNull()][AllowEmptyString()][string]$Value)
+
+    switch (([string]$Value).Trim().ToLowerInvariant()) {
+        'google' { return 'Google' }
+        'googleworkspace' { return 'Google' }
+        'google-workspace' { return 'Google' }
+        'gsuite' { return 'Google' }
+        'microsoft365' { return 'Microsoft365' }
+        'microsoft-365' { return 'Microsoft365' }
+        'microsoft' { return 'Microsoft365' }
+        'm365' { return 'Microsoft365' }
+        'o365' { return 'Microsoft365' }
+        default { return $null }
+    }
+}
+
+# The tracked domain -> provider registry (data/mail-providers.json).
+#
+# This exists because "default Microsoft, Google if picked" has to survive a run.
+# Without a record of which domains are on Google, any fleet enforcement would
+# read a Google zone as non-standard and cut it back to Microsoft. The registry
+# is the intent; the zone is the current state; enforcement makes the second
+# match the first.
+#
+# A missing file is fine and means "everything is Microsoft 365". A malformed
+# one is NOT fine and throws: silently falling back to the default would cut
+# every Google domain over to Microsoft on the next run.
+function Get-MailProviderRegistry {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Path)
+
+    $registry = [pscustomobject]@{ Default = 'Microsoft365'; Domains = @{} }
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return $registry
+    }
+
+    $json = (Get-Content -LiteralPath $Path -Raw) | ConvertFrom-Json
+
+    $names = @($json.PSObject.Properties.Name)
+    if ($names -contains 'default') {
+        $resolvedDefault = ConvertTo-MailProviderName -Value $json.default
+        if (-not $resolvedDefault) { throw "Unknown default mail provider '$($json.default)' in $Path" }
+        $registry.Default = $resolvedDefault
+    }
+
+    if ($names -contains 'domains' -and $json.domains) {
+        foreach ($entry in $json.domains.PSObject.Properties) {
+            $resolved = ConvertTo-MailProviderName -Value $entry.Value
+            if (-not $resolved) { throw "Unknown mail provider '$($entry.Value)' for domain '$($entry.Name)' in $Path" }
+            $registry.Domains[$entry.Name.Trim().ToLowerInvariant()] = $resolved
+        }
+    }
+
+    return $registry
+}
+
+# Which provider a zone should be on: an explicit choice wins, else the
+# registry, else the registry's default.
+function Resolve-MailProviderForZone {
+    param(
+        [Parameter(Mandatory = $true)][string]$ZoneName,
+        [Parameter(Mandatory = $true)][object]$Registry,
+        [AllowNull()][AllowEmptyString()][string]$Explicit
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Explicit)) {
+        $resolved = ConvertTo-MailProviderName -Value $Explicit
+        if (-not $resolved) { throw "Unknown mail provider '$Explicit'" }
+        return $resolved
+    }
+
+    $key = $ZoneName.Trim().ToLowerInvariant()
+    if ($Registry.Domains.ContainsKey($key)) { return $Registry.Domains[$key] }
+    return $Registry.Default
+}
+
 # The records belonging to a provider we are migrating AWAY from — i.e. the
 # delete list for a cutover. Pure and separate from the deletion itself so the
 # selection can be tested; an over-broad matcher here removes a charity's live
@@ -918,14 +1018,14 @@ try {
             }
         }
 
-        # Which provider to audit against. When -MailProvider was not passed
-        # explicitly, read it off the zone's own MX records: a fleet sweep
-        # (107) audits many zones in one run and must not report every Google
-        # zone as a pile of missing Microsoft records.
-        $auditProvider = $MailProvider
-        if (-not $PSBoundParameters.ContainsKey('MailProvider')) {
-            $auditProvider = Resolve-MailProvider -Records $allRecords -ZoneName $Zone -Fallback $MailProvider
-        }
+        # Audit against the provider the domain is SUPPOSED to be on — explicit
+        # choice, else the registry. Auditing against whatever the zone happens
+        # to have would make every zone self-consistent by definition and the
+        # check worthless; the point is to surface the gap between intent and
+        # reality, including "this should be Google and it is not".
+        $explicitProvider = if ($PSBoundParameters.ContainsKey('MailProvider')) { $MailProvider } else { '' }
+        $registry = Get-MailProviderRegistry -Path $MailProviderRegistry
+        $auditProvider = Resolve-MailProviderForZone -ZoneName $Zone -Registry $registry -Explicit $explicitProvider
         $mailProfile = Get-MailProviderProfile -Provider $auditProvider -ZoneName $Zone
         Write-Host "Auditing mail against provider: $($mailProfile.DisplayName)" -ForegroundColor Cyan
 
@@ -1230,16 +1330,31 @@ try {
             }
         }
 
-        $mailProfile = Get-MailProviderProfile -Provider $MailProvider -ZoneName $Zone
-        $foreignProvider = if ($MailProvider -eq 'Google') { 'Microsoft365' } else { 'Google' }
+        # A domain is on EXACTLY ONE provider. Resolve which, then enforce that
+        # provider's whole set and retire the other's — the two halves are not
+        # independently selectable, which is the point: a zone carrying both
+        # providers' MX has its inbound mail split between them.
+        $explicitProvider = if ($PSBoundParameters.ContainsKey('MailProvider')) { $MailProvider } else { '' }
+        $registry = Get-MailProviderRegistry -Path $MailProviderRegistry
+        $resolvedProvider = Resolve-MailProviderForZone -ZoneName $Zone -Registry $registry -Explicit $explicitProvider
+
+        $mailProfile = Get-MailProviderProfile -Provider $resolvedProvider -ZoneName $Zone
+        $foreignProvider = if ($resolvedProvider -eq 'Google') { 'Microsoft365' } else { 'Google' }
         $foreignProfile = Get-MailProviderProfile -Provider $foreignProvider -ZoneName $Zone
 
-        # A cutover only happens when the caller NAMED a provider. Callers that
-        # just want the standard enforced (101, 102, 103) pass no -MailProvider
-        # and must keep their pre-existing, non-destructive behaviour: no
-        # deletions, and no rewriting of an SPF record that already exists.
-        $mailCutover = $PSBoundParameters.ContainsKey('MailProvider')
-        Write-Host "Mail provider: $($mailProfile.DisplayName) (cutover: $mailCutover)" -ForegroundColor Cyan
+        $providerSource = if ($explicitProvider) { '-MailProvider' } elseif ($registry.Domains.ContainsKey($Zone.Trim().ToLowerInvariant())) { 'registry' } else { "registry default" }
+        Write-Host "Mail provider: $($mailProfile.DisplayName) (from $providerSource)" -ForegroundColor Cyan
+
+        # If the zone's live MX says something different from what we resolved,
+        # say so loudly BEFORE acting. This is the shape of a missing registry
+        # entry, and in a dry run it is the operator's chance to notice that a
+        # Google domain is about to be cut back to Microsoft.
+        $livedProvider = Resolve-MailProvider -Records $allRecords -ZoneName $Zone -Fallback $resolvedProvider
+        if ($livedProvider -ne $resolvedProvider) {
+            $livedProfile = Get-MailProviderProfile -Provider $livedProvider -ZoneName $Zone
+            Write-Warning "[DRIFT] $Zone currently has $($livedProfile.DisplayName) mail records but resolves to $($mailProfile.DisplayName)."
+            Write-Warning "[DRIFT] Enforcing will REPLACE its mail records. If that is wrong, add the correct entry to data/mail-providers.json first."
+        }
 
         $wwwTarget = Get-GhPagesWwwTarget
 
@@ -1255,7 +1370,7 @@ try {
             # SPF: rewrite the provider include in place. MatchContains finds an
             # already-correct record; SpfCutover tells the TXT branch to edit an
             # existing v=spf1 rather than add a second one (two = permerror).
-            @{ Type = 'TXT'; Name = '@'; Content = $mailProfile.SpfContent; MatchContains = $mailProfile.SpfInclude; SpfCutover = $mailCutover; SpfRemoveIncludes = @($foreignProfile.SpfInclude) },
+            @{ Type = 'TXT'; Name = '@'; Content = $mailProfile.SpfContent; MatchContains = $mailProfile.SpfInclude; SpfCutover = $true; SpfRemoveIncludes = @($foreignProfile.SpfInclude) },
             # DMARC: preserve Cloudflare-generated rua (if present) and always include internal rua.
             @{ Type = 'TXT'; Name = '_dmarc'; Content = 'v=DMARC1; p=none'; EnsureInternalRua = $true; PreserveCloudflareRua = $true; InternalRua = 'mailto:dmarc-rua@freeforcharity.org' }
         )
@@ -1556,13 +1671,15 @@ try {
 
         # --- Mail provider cutover: retire the OTHER provider's records ---
         #
-        # OPT-IN ONLY. Deleting runs solely when the caller named a provider.
-        # 101, 102 and 103 all call -EnforceStandard with no -MailProvider, and
-        # 102/103 run live against the whole fleet; if this pass were
-        # unconditional they would start deleting the Google MX off any zone an
-        # admin had deliberately put on Google outside this tooling. Enforcing
-        # "the standard" has never meant removing mail records, and it must not
-        # start meaning that as a side effect of adding provider support.
+        # Always runs: a domain is on exactly one provider, so the other's
+        # records are by definition wrong and splitting inbound mail.
+        #
+        # What keeps this safe for 101/102/103 — which pass no -MailProvider —
+        # is the registry, not restraint. They resolve each domain to its
+        # RECORDED provider, so a zone deliberately put on Google stays on
+        # Google. That is why the registry had to exist before this pass could
+        # be unconditional: without it, "enforce the standard" would have meant
+        # "cut every unlisted Google domain back to Microsoft".
         #
         # Runs last, on purpose. The desired provider's MX is already in place by
         # the time anything is deleted, so the zone never sits with no MX at all —
@@ -1573,11 +1690,6 @@ try {
         # it is a single shared record that the standards loop above rewrites in
         # place, and DKIM (google._domainkey, selector*._domainkey) is left alone
         # because those keys are minted in the provider's admin console.
-        if (-not $mailCutover) {
-            Write-Host "--- Mail Cutover: skipped (no -MailProvider given; existing mail records left alone) ---" -ForegroundColor DarkGray
-            return
-        }
-
         Write-Host "--- Mail Cutover: retiring $($foreignProfile.DisplayName) records ---" -ForegroundColor Cyan
 
         $foreignRecords = @(Get-ForeignMailRecord -Records $allRecords -ForeignProfile $foreignProfile -ZoneName $Zone)

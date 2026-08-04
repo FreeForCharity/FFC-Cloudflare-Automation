@@ -1,0 +1,18 @@
+{
+  "_comment": [
+    "Per-domain mail provider. A domain is on EXACTLY ONE provider: enforcement",
+    "creates that provider's full record set and removes the other's, so a zone",
+    "never ends up with two MX sets pointing at different providers.",
+    "",
+    "Anything not listed under 'domains' resolves to 'default'. To move a domain,",
+    "add or change its entry here FIRST, then dispatch 106 (or 103) with",
+    "mail_provider=from-registry. Nothing here runs on a schedule -- this file",
+    "records intent; a human still dispatches the workflow that acts on it.",
+    "",
+    "Valid values: 'microsoft365', 'google'."
+  ],
+  "default": "microsoft365",
+  "domains": {
+    "slopestohope.org": "google"
+  }
+}

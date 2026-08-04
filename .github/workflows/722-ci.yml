@@ -155,6 +155,22 @@ jobs:
           # fails closed without one — the pwsh steps below share that dependency.
           python3 scripts/check-powershell-command-resolution.py
 
+      - name: Validate every pwsh invocation of a repo script can bind
+        shell: bash
+        run: |
+          # #1050 refactored 106 to `$argsList = @('-Zone', $Domain, …)` +
+          # `& .\Update-CloudflareDns.ps1 @argsList`. Array splatting binds
+          # POSITIONALLY, so '-Zone' arrived as a VALUE — every job, every input
+          # combination, discovered only after a human spent an approval on the
+          # gate. Update-CloudflareDns.ps1 has 263 Pester cases; the ~20 places a
+          # workflow decides how to CALL it had none. Where the target has a free
+          # positional slot the same code binds the flag string and exits 0, so
+          # this checks the SHAPE as well as binding the names against each
+          # script's real param() block. Needs a PowerShell host, like the #930
+          # guard above, and fails closed without one.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 scripts/check-pwsh-workflow-invocations.py
+
       - name: Validate text-mode subprocess calls pin an encoding
         shell: bash
         run: |

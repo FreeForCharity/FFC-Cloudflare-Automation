@@ -705,14 +705,19 @@ function Get-MailProviderProfile {
     if ($Provider -eq 'Google') {
         # Google's current documented setup for a new domain is a single MX at
         # priority 1. The legacy ASPMX.L.GOOGLE.COM + ALT1-4 set is still valid
-        # at Google's end; MxMatch is deliberately broad enough to recognise it
-        # so a zone already on the legacy layout is not reported as missing.
+        # at Google's end, so MxMatch has to recognise it too.
+        #
+        # The leading dot is load-bearing. '*google.com' would also match
+        # 'notgoogle.com' and 'mygoogle.com' — enough to misidentify a zone's
+        # provider and, worse, to target a third party's MX for deletion during
+        # a Microsoft cutover. '*.google.com' matches only true subdomains,
+        # which is every MX host Google actually publishes.
         return [pscustomobject]@{
             DisplayName = 'Google Workspace'
             MxRecords   = @(
                 @{ Content = 'smtp.google.com'; Priority = 1 }
             )
-            MxMatch     = '*google.com'
+            MxMatch     = '*.google.com'
             SpfInclude  = 'include:_spf.google.com'
             SpfContent  = 'v=spf1 include:_spf.google.com ~all'
             Cnames      = @()
@@ -761,6 +766,43 @@ function Resolve-MailProvider {
     }
 
     return $Fallback
+}
+
+# The records belonging to a provider we are migrating AWAY from — i.e. the
+# delete list for a cutover. Pure and separate from the deletion itself so the
+# selection can be tested; an over-broad matcher here removes a charity's live
+# mail records, which is the most expensive mistake this script can make.
+#
+# Every comparison is exact except the MX host, which must stay a wildcard
+# because a provider publishes several (Google's legacy ALT* set, M365's
+# per-tenant host). Matching a service CNAME on a substring of its target would
+# let an unrelated record that merely CONTAINS 'autodiscover.outlook.com' be
+# swept up, so those use -eq, consistent with the audit path.
+function Get-ForeignMailRecord {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Records,
+        [Parameter(Mandatory = $true)][object]$ForeignProfile,
+        [Parameter(Mandatory = $true)][string]$ZoneName
+    )
+
+    $found = @()
+    $found += @($Records | Where-Object { $_.type -eq 'MX' -and $_.content -like $ForeignProfile.MxMatch })
+
+    foreach ($cname in $ForeignProfile.Cnames) {
+        $fqdn = "$($cname.Name).$ZoneName"
+        $found += @($Records | Where-Object {
+                $_.type -eq 'CNAME' -and $_.name -eq $fqdn -and $_.content -eq $cname.Content
+            })
+    }
+
+    foreach ($srv in $ForeignProfile.Srvs) {
+        $fqdn = "$($srv.Name).$ZoneName"
+        $found += @($Records | Where-Object {
+                $_.type -eq 'SRV' -and $_.name -eq $fqdn -and $_.data -and $_.data.target -eq $srv.Data.target
+            })
+    }
+
+    return $found
 }
 
 # Swap the mail-provider include in an existing SPF record.
@@ -1538,16 +1580,7 @@ try {
 
         Write-Host "--- Mail Cutover: retiring $($foreignProfile.DisplayName) records ---" -ForegroundColor Cyan
 
-        $foreignRecords = @()
-        $foreignRecords += @($allRecords | Where-Object { $_.type -eq 'MX' -and $_.content -like $foreignProfile.MxMatch })
-        foreach ($cname in $foreignProfile.Cnames) {
-            $cnameFqdn = "$($cname.Name).$Zone"
-            $foreignRecords += @($allRecords | Where-Object { $_.type -eq 'CNAME' -and $_.name -eq $cnameFqdn -and $_.content -like "*$($cname.Content)*" })
-        }
-        foreach ($srv in $foreignProfile.Srvs) {
-            $srvFqdn = "$($srv.Name).$Zone"
-            $foreignRecords += @($allRecords | Where-Object { $_.type -eq 'SRV' -and $_.name -eq $srvFqdn })
-        }
+        $foreignRecords = @(Get-ForeignMailRecord -Records $allRecords -ForeignProfile $foreignProfile -ZoneName $Zone)
 
         if ($foreignRecords.Count -eq 0) {
             Write-Host "  [OK] No $($foreignProfile.DisplayName) mail records present." -ForegroundColor Green

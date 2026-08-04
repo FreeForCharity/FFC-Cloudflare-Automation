@@ -25,13 +25,15 @@ on:
         default: false
       mail_provider:
         description:
-          "Mail provider for MX/SPF (and M365 service CNAMEs/SRVs). CUTOVER: the other provider's
-          mail records are REMOVED once the new set is in place. Ignored when pages_only is true."
+          "Mail cutover. 'unchanged' (default) touches no mail records and deletes nothing. Picking
+          a provider is a CUTOVER: the OTHER provider's MX/CNAME/SRV are REMOVED once the new set is
+          in place. Ignored when pages_only is true."
         type: choice
         options:
+          - unchanged
           - microsoft365
           - google
-        default: microsoft365
+        default: unchanged
       dmarc_mgmt_debug:
         description: 'Debug: run DMARC Management API probe/attempts (noisy)'
         type: boolean
@@ -86,10 +88,18 @@ jobs:
           # Workflow inputs are lowercase for a readable dropdown; the script's
           # ValidateSet is PascalCase. Map explicitly and fail loudly on anything
           # unrecognised rather than silently defaulting to a provider.
+          #
+          # 'unchanged' maps to EMPTY, and an empty value means -MailProvider is
+          # never passed. That is what makes deletion genuinely opt-in: the
+          # script gates its cutover on the parameter being bound, so a default
+          # run of 106 enforces the standard exactly as it always has and
+          # removes nothing. Defaulting this to a real provider would have made
+          # every routine 106 run a live mail cutover.
           switch ([string]$env:REC_MAIL_PROVIDER) {
             'google' { $MailProvider = 'Google' }
             'microsoft365' { $MailProvider = 'Microsoft365' }
-            '' { $MailProvider = 'Microsoft365' }
+            'unchanged' { $MailProvider = '' }
+            '' { $MailProvider = '' }
             default { throw "Unsupported mail_provider '$($env:REC_MAIL_PROVIDER)'" }
           }
 
@@ -104,8 +114,11 @@ jobs:
             # provider is inert here. Left off the list to keep that explicit.
             $argsList += '-GitHubPagesOnly'
             Write-Host "Pages-only: mail records (and mail_provider) are not touched."
-          } else {
+          } elseif ($MailProvider) {
+            Write-Host "Mail CUTOVER requested: $MailProvider (the other provider's records will be removed)"
             $argsList += @('-MailProvider', $MailProvider)
+          } else {
+            Write-Host "mail_provider=unchanged: enforcing the standard without a mail cutover; nothing will be deleted."
           }
 
           if ($ProxyOn -eq 'true') { $argsList += '-ProxyGitHubPages' }
@@ -136,15 +149,21 @@ jobs:
 
           $argsList = @('-Zone', $Domain, '-Audit')
 
-          # Audit against the provider we just enforced, not whatever the zone
-          # happens to resolve to. If the cutover half-failed, auto-detection
-          # would read the OLD provider off the surviving MX and report a clean
-          # bill of health for it — the one outcome this step exists to catch.
+          # When a cutover was requested, audit against the provider we just
+          # enforced rather than whatever the zone resolves to. If the cutover
+          # half-failed, auto-detection would read the OLD provider off the
+          # surviving MX and report a clean bill of health for it — the one
+          # outcome this step exists to catch.
+          #
+          # With 'unchanged' we pass nothing and let the audit detect the
+          # provider from the zone's own MX, which is the correct behaviour for
+          # a run that was never about mail.
           if ($PagesOnly -ne 'true') {
             switch ([string]$env:REC_MAIL_PROVIDER) {
               'google' { $argsList += @('-MailProvider', 'Google') }
               'microsoft365' { $argsList += @('-MailProvider', 'Microsoft365') }
-              '' { $argsList += @('-MailProvider', 'Microsoft365') }
+              'unchanged' { }
+              '' { }
               default { throw "Unsupported mail_provider '$($env:REC_MAIL_PROVIDER)'" }
             }
           }

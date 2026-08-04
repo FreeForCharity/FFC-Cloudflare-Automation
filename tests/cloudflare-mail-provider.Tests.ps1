@@ -33,7 +33,7 @@ BeforeAll {
         return $fn
     }
 
-    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude')) {
+    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord')) {
         . ([scriptblock]::Create((Get-FunctionFromFile -Path $script:SourcePath -Name $name).Extent.Text))
     }
 }
@@ -151,6 +151,93 @@ Describe 'Resolve-MailProvider' {
 
     It 'accepts an empty record set' {
         Resolve-MailProvider -Records @() -ZoneName 'example.org' -Fallback 'Google' | Should -Be 'Google'
+    }
+
+    It 'does not mistake a lookalike domain for Google' {
+        # Regression, PR #1050 review. MxMatch was '*google.com', and -like is
+        # anchored at the end, so 'notgoogle.com' matched. That is not just a
+        # misdetection: on a Microsoft cutover the delete list is built from
+        # this same matcher, so a third party's MX would have been removed.
+        # NB: not $host — that is a read-only PowerShell automatic variable.
+        foreach ($mxHost in @('notgoogle.com', 'mygoogle.com', 'evilgoogle.com')) {
+            $records = @([pscustomobject]@{ type = 'MX'; content = $mxHost })
+            Resolve-MailProvider -Records $records -ZoneName 'example.org' -Fallback 'Microsoft365' |
+                Should -Be 'Microsoft365' -Because "$mxHost is not a Google host"
+        }
+    }
+}
+
+Describe 'Get-ForeignMailRecord' {
+    BeforeAll {
+        $script:M365 = Get-MailProviderProfile -Provider 'Microsoft365' -ZoneName 'example.org'
+        $script:Goog = Get-MailProviderProfile -Provider 'Google' -ZoneName 'example.org'
+    }
+
+    It 'selects the M365 MX, service CNAMEs and SRVs for a Google cutover' {
+        $records = @(
+            [pscustomobject]@{ id = '1'; type = 'MX'; name = 'example.org'; content = 'example-org.mail.protection.outlook.com' }
+            [pscustomobject]@{ id = '2'; type = 'CNAME'; name = 'autodiscover.example.org'; content = 'autodiscover.outlook.com' }
+            [pscustomobject]@{ id = '3'; type = 'SRV'; name = '_sip._tls.example.org'; data = @{ target = 'sipdir.online.lync.com' } }
+        )
+        (Get-ForeignMailRecord -Records $records -ForeignProfile $script:M365 -ZoneName 'example.org').id |
+            Sort-Object | Should -Be @('1', '2', '3')
+    }
+
+    It 'leaves records that are not the foreign provider alone' {
+        # The apex A, the www CNAME, SPF/DMARC TXT and a third-party MX must all
+        # survive a cutover. This is the blast-radius test.
+        $records = @(
+            [pscustomobject]@{ id = 'a'; type = 'A'; name = 'example.org'; content = '185.199.108.153' }
+            [pscustomobject]@{ id = 'b'; type = 'CNAME'; name = 'www.example.org'; content = 'freeforcharity.github.io' }
+            [pscustomobject]@{ id = 'c'; type = 'TXT'; name = 'example.org'; content = 'v=spf1 include:_spf.google.com ~all' }
+            [pscustomobject]@{ id = 'd'; type = 'MX'; name = 'example.org'; content = 'mx1.mailgun.org' }
+            [pscustomobject]@{ id = 'e'; type = 'CNAME'; name = 'hfqjxalfj5ef.example.org'; content = 'gv-2wbkdyugdfdd33.dv.googlehosted.com' }
+        )
+        Get-ForeignMailRecord -Records $records -ForeignProfile $script:M365 -ZoneName 'example.org' |
+            Should -BeNullOrEmpty
+    }
+
+    It 'matches a service CNAME exactly, not by substring' {
+        # Regression, PR #1050 review. The matcher was -like "*<target>*", so a
+        # CNAME at the same name pointing somewhere that merely CONTAINS the
+        # M365 target was swept into the delete list.
+        $records = @(
+            [pscustomobject]@{ id = 'x'; type = 'CNAME'; name = 'autodiscover.example.org'; content = 'autodiscover.outlook.com.cdn.example.net' }
+        )
+        Get-ForeignMailRecord -Records $records -ForeignProfile $script:M365 -ZoneName 'example.org' |
+            Should -BeNullOrEmpty
+    }
+
+    It 'does not delete an SRV at the right name pointing at the wrong target' {
+        $records = @(
+            [pscustomobject]@{ id = 'y'; type = 'SRV'; name = '_sip._tls.example.org'; data = @{ target = 'sip.someone-else.example' } }
+        )
+        Get-ForeignMailRecord -Records $records -ForeignProfile $script:M365 -ZoneName 'example.org' |
+            Should -BeNullOrEmpty
+    }
+
+    It 'does not select a lookalike domain when cutting over to Microsoft' {
+        $records = @([pscustomobject]@{ id = 'z'; type = 'MX'; name = 'example.org'; content = 'notgoogle.com' })
+        Get-ForeignMailRecord -Records $records -ForeignProfile $script:Goog -ZoneName 'example.org' |
+            Should -BeNullOrEmpty
+    }
+
+    It 'selects Google MX in both modern and legacy layouts for a Microsoft cutover' {
+        $records = @(
+            [pscustomobject]@{ id = 'm'; type = 'MX'; name = 'example.org'; content = 'smtp.google.com' }
+            [pscustomobject]@{ id = 'l'; type = 'MX'; name = 'example.org'; content = 'alt1.aspmx.l.google.com' }
+        )
+        (Get-ForeignMailRecord -Records $records -ForeignProfile $script:Goog -ZoneName 'example.org').id |
+            Sort-Object | Should -Be @('l', 'm')
+    }
+
+    It 'scopes service CNAMEs to the zone being enforced' {
+        # Same record name under a different zone must not be selected.
+        $records = @(
+            [pscustomobject]@{ id = 'o'; type = 'CNAME'; name = 'autodiscover.other.org'; content = 'autodiscover.outlook.com' }
+        )
+        Get-ForeignMailRecord -Records $records -ForeignProfile $script:M365 -ZoneName 'example.org' |
+            Should -BeNullOrEmpty
     }
 }
 

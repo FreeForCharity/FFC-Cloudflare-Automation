@@ -79,6 +79,93 @@ def main():
           bash("git push --force origin feature/main"), False)
     check("echo lowercase secret var", "guard_bash.py",
           bash("echo $cloudflare_api_token"), True)
+
+    # echo-secret-var decides per STATEMENT (#1041). Judging the whole command
+    # made "a secret-named variable appears somewhere" AND "an echo appears
+    # somewhere" a violation -- which is the Conductor's standard idiom, since
+    # audit-agentic-os-board.py and generate-agentic-os-status.py both refuse to
+    # run without GH_TOKEN and are normally invoked next to an echo. Cases A and
+    # B are verbatim from the issue; nothing in either can emit the token.
+    check("token prefix then echo literal on next line", "guard_bash.py",
+          bash('GH_TOKEN=$(gh auth token) python x.py\necho "done"'), False)
+    check("token prefix then echo EXIT on next line", "guard_bash.py",
+          bash('GH_TOKEN=$(gh auth token) python x.py\necho "EXIT=$?"'), False)
+    check("export token then echo", "guard_bash.py",
+          bash('export GH_TOKEN=$(gh auth token)\necho "starting"'), False)
+    check("token prefix then echo via &&", "guard_bash.py",
+          bash('GH_TOKEN=$(gh auth token) python x.py && echo "done"'), False)
+    check("token prefix then echo via ;", "guard_bash.py",
+          bash('GH_TOKEN=$(gh auth token) python x.py ; echo "done"'), False)
+    check("real conductor idiom", "guard_bash.py",
+          bash('GH_TOKEN=$(gh auth token) python scripts/audit-agentic-os-board.py > out.txt\n'
+               'echo "audit written"'), False)
+    # Using a secret as an ARGUMENT is not printing it. These two are what make
+    # the statement/`&&` splitting load-bearing: with the whole command judged
+    # as one unit, the token in the curl header arms the unrelated echo. Both
+    # survive every mutation of the assignment stripper, so they test the
+    # splitter and nothing else.
+    check("secret in a curl header then echo on next line", "guard_bash.py",
+          bash('curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" '
+               'https://api.cloudflare.com/zones\necho "done"'), False)
+    check("secret in a curl header then echo via &&", "guard_bash.py",
+          bash('curl -H "Authorization: Bearer $GH_TOKEN" '
+               'https://api.github.com/user && echo "ok"'), False)
+    # AC4 in one line: the prefix form is not a leak even when the SAME
+    # statement also runs a print verb, because the verb prints something else.
+    check("token prefix with a print verb in the same statement", "guard_bash.py",
+          bash("GH_TOKEN=$(gh auth token) printenv HOME"), False)
+    check("token prefix wrapping an echo in a subshell", "guard_bash.py",
+          bash("GH_TOKEN=$(gh auth token) bash -c 'echo start; python x.py'"), False)
+    # The bare short names are only secrets when EXPANDED. "token" is an
+    # ordinary English word and `$KEY` is an ordinary loop variable; matching
+    # either unanchored blocks correct commands, which is how a guard gets
+    # switched off.
+    check("the word token in a message allowed", "guard_bash.py",
+          bash('echo "no token found in the response"'), False)
+    check("loop variable KEY allowed", "guard_bash.py",
+          bash("for KEY in a b; do echo $KEY; done"), False)
+
+    # ... and the genuine forms must all still block. The bare-name spellings
+    # below were ALLOWED before this change: the old pattern required a
+    # `_TOKEN`-style suffix preceded by at least one character, so `$TOKEN`
+    # itself matched nothing.
+    check("echo bare $TOKEN", "guard_bash.py", bash("echo $TOKEN"), True)
+    check("echo quoted $TOKEN", "guard_bash.py", bash('echo "$TOKEN"'), True)
+    check("echo braced ${TOKEN}", "guard_bash.py", bash("echo ${TOKEN}"), True)
+    check("printf a secret", "guard_bash.py", bash("printf '%s' \"$TOKEN\""), True)
+    check("echo bare lowercase $token", "guard_bash.py", bash("echo $token"), True)
+    check("echo $env:SECRET", "guard_bash.py", bash("echo $env:SECRET"), True)
+    # A suffixed name that is NOT on the known-vars list -- the only case that
+    # reaches the suffix pattern on its own.
+    check("echo a suffixed name outside the known list", "guard_bash.py",
+          bash('echo "$AZURE_CLIENT_SECRET"'), True)
+    # A secret printed on a LATER line is still printed -- per-statement must
+    # not become "only the first statement".
+    check("secret echoed on a later line", "guard_bash.py",
+          bash('python x.py\necho "$WHMCS_API_SECRET"'), True)
+    # The assigned VALUE is judged too, or stripping the assignment would hide
+    # the leak it was meant to excuse.
+    check("secret echoed inside an assignment value", "guard_bash.py",
+          bash("X=$(echo $GH_TOKEN)"), True)
+    # A pipeline is one unit: printenv's output reaches grep.
+    check("printenv piped to grep for a secret", "guard_bash.py",
+          bash("printenv | grep GH_TOKEN"), True)
+    check("env piped to grep for a secret", "guard_bash.py",
+          bash("env | grep CLOUDFLARE_API_TOKEN"), True)
+    # Heredoc bodies are shell here, unlike in the pipeline rule: dropping them
+    # would turn a blocked command into an allowed one.
+    check("secret echoed inside a heredoc body", "guard_bash.py",
+          bash("bash <<EOF\necho $GH_TOKEN\nEOF"), True)
+    check("workflow secrets expression", "guard_bash.py",
+          bash('echo "${{ secrets.CBM_TOKEN }}"'), True)
+    # Two discriminators, each the only case that reaches one clause. Without
+    # them the WHMCS_* list and the `${{ secrets. }}` test are dead code that
+    # every other case passes through the suffix pattern, and deleting either
+    # would leave the suite green.
+    check("echo a WHMCS var with no secret suffix", "guard_bash.py",
+          bash("echo $WHMCS_API_IDENTIFIER"), True)
+    check("workflow secrets expression with no secret suffix", "guard_bash.py",
+          bash('echo "${{ secrets.AZURE_CLIENT_ID }}"'), True)
     # `grep -P` is unavailable in this environment's git-bash and fails by
     # matching nothing rather than by erroring visibly (run 60, 2026-07-31).
     check("grep -P", "guard_bash.py", bash("grep -P '^\\| L\\d+' docs/lessons-ledger.md"), True)

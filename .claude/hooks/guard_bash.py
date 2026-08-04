@@ -243,6 +243,179 @@ def inline_python_encoding_violation(cmd):
     return None
 
 
+def _split_on_logical(stmt):
+    """Split one statement on `&&` / `||` outside quotes.
+
+    A pipeline (`|`) is deliberately NOT split: `printenv | grep GH_TOKEN`
+    prints a secret and must stay one unit, whereas
+    `python x.py && echo done` is two independent commands. `&` is left alone
+    too -- splitting it would tear `echo >&2 $TOKEN` into a half holding the
+    verb and a half holding the variable, which is the one direction a guard
+    must never fail in.
+    """
+    bare = _strip_quoted(stmt)
+    parts = []
+    start = 0
+    i = 0
+    while i < len(bare):
+        if bare.startswith("&&", i) or bare.startswith("||", i):
+            parts.append(stmt[start:i])
+            i += 2
+            start = i
+            continue
+        i += 1
+    parts.append(stmt[start:])
+    return parts
+
+
+def _echo_segments(cmd):
+    """Every shell segment of `cmd`, heredoc bodies INCLUDED.
+
+    Deliberately not `_statements()`: that skips heredoc payloads because a
+    Python body is not shell, which is right for the pipeline rule and wrong
+    here -- `bash <<EOF` ... `echo $GH_TOKEN` ... `EOF` prints a secret, and
+    dropping the body would turn a blocked command into an allowed one.
+    """
+    for line in cmd.splitlines():
+        for part in _split_statements(line):
+            for seg in _split_on_logical(part):
+                if seg.strip():
+                    yield seg
+
+
+def _skip_word(text, i):
+    """Index just past the shell word starting at `i`.
+
+    Tracks quotes and `$(`/`(` nesting so a command substitution containing
+    spaces -- `$(gh auth token)` -- is one word rather than three.
+    """
+    quote = None
+    depth = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "'\"`":
+            quote = ch
+            i += 1
+            continue
+        if ch == "\\":
+            i += 2
+            continue
+        if text.startswith("$(", i):
+            depth += 1
+            i += 2
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif ch.isspace() and depth == 0:
+            break
+        i += 1
+    return i
+
+
+def _strip_assignments(segment):
+    """Split a segment into (command part, [assigned values]).
+
+    `VAR=$(...)` -- including the `VAR=$(...) cmd` prefix form that hands a
+    token to one command without exporting it -- is never a leak on its own,
+    so the assignment is removed before the segment is judged. The assigned
+    VALUES are returned rather than discarded, rather than trusting the
+    stripper: `X=$(echo $GH_TOKEN)` still has to be judged, and it is judged
+    as its own chunk.
+    """
+    text = segment
+    i = 0
+    values = []
+    while i < len(text) and text[i].isspace():
+        i += 1
+    while True:
+        kw = re.match(r"(?:export|local|readonly|declare|typeset)\s+", text[i:])
+        if kw:
+            i += kw.end()
+            continue
+        assign = re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", text[i:])
+        if not assign:
+            break
+        i += assign.end()
+        start = i
+        i = _skip_word(text, i)
+        values.append(text[start:i])
+        while i < len(text) and text[i] in " \t":
+            i += 1
+    return text[i:], values
+
+
+# A print verb anywhere in the segment. Kept broad on purpose: narrowing it to
+# "the segment's command word" would miss `foo && echo $TOKEN` shapes that the
+# splitter has not separated.
+PRINT_VERB_RE = re.compile(r"\b(?:echo|printf|printenv|env)\b", re.IGNORECASE)
+
+# A conventionally-secret-suffixed identifier (FFC_CLOUDFLARE_API_TOKEN,
+# WHMCS_API_SECRET, ...). Matched with or without a leading `$`, because
+# `printenv GH_TOKEN` and `env | grep GH_TOKEN` name the variable bare.
+SECRET_SUFFIXED_RE = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_]*_(?:TOKEN|SECRET|KEY|PASSWORD|APIKEY|API_KEY)\b",
+    re.IGNORECASE)
+
+# The bare short names -- `$TOKEN`, `${SECRET}`, `$env:PASSWORD`. These are
+# required to appear as an EXPANSION: unlike `GH_TOKEN`, the bare word "token"
+# occurs constantly in ordinary prose (`echo "no token found"`), so matching it
+# unanchored would block correct commands. `KEY` is excluded even here -- `for
+# KEY in ...; do echo $KEY; done` is a normal loop, not a leak.
+BARE_SECRET_REF_RE = re.compile(
+    r"\$\{?(?:env:)?(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY)\b", re.IGNORECASE)
+
+KNOWN_SECRET_VARS_RE = re.compile(
+    r"\b(?:CLOUDFLARE_API_TOKEN|GH_TOKEN|GITHUB_TOKEN|WHMCS_[A-Z_]+)\b", re.IGNORECASE)
+
+
+def _names_a_secret(chunk):
+    return bool(
+        SECRET_SUFFIXED_RE.search(chunk)
+        or BARE_SECRET_REF_RE.search(chunk)
+        or KNOWN_SECRET_VARS_RE.search(chunk)
+        or "${{ secrets." in chunk
+    )
+
+
+def echo_secret_violation(cmd):
+    """`echo $GH_TOKEN` -- a secret printed into the log.
+
+    The rule decides per STATEMENT. Judging the whole command made
+    `GH_TOKEN=$(gh auth token) python x.py` + a later `echo "done"` a
+    violation, because a secret-named variable appeared somewhere and an
+    `echo` appeared somewhere else -- and that pair is the Conductor's
+    standard idiom, since both `scripts/audit-agentic-os-board.py` and
+    `scripts/generate-agentic-os-status.py` refuse to run without `GH_TOKEN`
+    and are normally invoked next to an `echo` (#1041).
+
+    Nothing in that command can emit the token: `echo "done"` prints a string
+    literal, and a `VAR=$(...)` assignment is not a print. The rule now asks
+    whether THIS statement prints THAT variable.
+    """
+    for segment in _echo_segments(cmd):
+        command_part, assigned = _strip_assignments(segment)
+        for chunk in [command_part] + assigned:
+            if PRINT_VERB_RE.search(chunk) and _names_a_secret(chunk):
+                return (
+                    "Refusing to echo/print a secret value to logs:\n"
+                    f"  {chunk.strip()[:160]}\n"
+                    "Reference the value through an env var the command reads "
+                    "itself. `VAR=$(...) cmd` is fine -- it is printing it that "
+                    "is not."
+                )
+    return None
+
+
 def main():
     raw = sys.stdin.read()
     try:
@@ -276,15 +449,12 @@ def main():
         if re.search(r"(?<![\w./-])(main|master)(?![\w/-])", low):
             block("Force-push to a protected branch (main/master) is not allowed.")
 
-    # 3. Printing secrets to logs. Case-insensitive so a lowercase env var
+    # 3. Printing secrets to logs, decided per statement (see
+    #    echo_secret_violation). Case-insensitive so a lowercase env var
     #    (e.g. $cloudflare_api_token) can't slip past.
-    secret_var = r"[A-Za-z_][A-Za-z0-9_]*(?:_TOKEN|_SECRET|_KEY|_PASSWORD|_APIKEY|_API_KEY)\b"
-    known_vars = r"(CLOUDFLARE_API_TOKEN|GH_TOKEN|GITHUB_TOKEN|WHMCS_[A-Z_]+)"
-    if re.search(r"\b(echo|printf|printenv|env)\b", low):
-        if (re.search(secret_var, cmd, re.IGNORECASE)
-                or re.search(known_vars, cmd, re.IGNORECASE)
-                or "${{ secrets." in cmd):
-            block("Refusing to echo/print a secret value to logs.")
+    reason = echo_secret_violation(cmd)
+    if reason:
+        block(reason)
 
     # 4. A real-looking secret literal pasted into the command.
     findings = common.find_secrets(cmd)

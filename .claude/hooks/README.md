@@ -31,8 +31,10 @@ Wired up in [`../settings.json`](../settings.json):
   `NODE_TLS_REJECT_UNAUTHORIZED=0`, `git config http.sslVerify false`, `unset HTTPS_PROXY`, …) —
   forbidden by the environment.
 - Force-pushing to `main`/`master` (`--force` / `--force-with-lease` / `-f`).
-- Printing secrets to logs (`echo`/`printenv`/`env` of `*_TOKEN`/`*_SECRET`/
-  `*_KEY`/`CLOUDFLARE_API_TOKEN`/`${{ secrets.* }}`).
+- Printing secrets to logs (`echo`/`printf`/`printenv`/`env` of `*_TOKEN`/`*_SECRET`/`*_KEY`/
+  `CLOUDFLARE_API_TOKEN`/`${{ secrets.* }}`, and the bare `$TOKEN`/`$SECRET`/`$PASSWORD` spellings).
+  Judged **per statement**: `GH_TOKEN=$(gh auth token) cmd` next to an unrelated `echo` is not a
+  leak, because that `echo` prints something else (#1041).
 - A real-looking secret literal pasted into the command.
 - Destructive `rm -rf` of `/`, `~`, `$HOME`, or `.git`.
 

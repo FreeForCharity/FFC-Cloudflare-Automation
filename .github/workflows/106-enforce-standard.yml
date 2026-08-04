@@ -114,25 +114,36 @@ jobs:
             default { throw "Unsupported mail_provider '$($env:REC_MAIL_PROVIDER)'" }
           }
 
-          # Built as an argument list rather than nested if/else: with dry-run,
-          # pages-only, proxy and provider that would be 16 near-identical
-          # branches, and the M365/Google split is exactly where a copy-paste
-          # slip would send a live cutover down the wrong one.
-          $argsList = @('-Zone', $Domain, '-EnforceStandard')
+          # Built as a parameter HASHTABLE rather than nested if/else: with
+          # dry-run, pages-only, proxy and provider that would be 16
+          # near-identical branches, and the M365/Google split is exactly where a
+          # copy-paste slip would send a live cutover down the wrong one.
+          #
+          # It MUST be a hashtable, not an array. Splatting an ARRAY into an
+          # in-process script call passes the elements POSITIONALLY, so '-Zone'
+          # arrives as a value rather than a parameter name and binding dies with
+          # "A positional parameter cannot be found that accepts argument
+          # '-Zone'". That is exactly what the first real dry run of this step
+          # hit. (103 splats an array and gets away with it only because it
+          # shells out via `pwsh -File`, where a separate process re-parses argv.)
+          $params = @{
+            Zone            = $Domain
+            EnforceStandard = $true
+          }
 
           if ($PagesOnly -eq 'true') {
             # GitHubPagesOnly returns before any mail record is touched, so the
-            # provider is inert here. Left off the list to keep that explicit.
-            $argsList += '-GitHubPagesOnly'
+            # provider is inert here. Left out to keep that explicit.
+            $params['GitHubPagesOnly'] = $true
             Write-Host "Pages-only: mail records (and mail_provider) are not touched."
           } elseif ($MailProvider) {
             Write-Host "Mail provider OVERRIDE: $MailProvider (the other provider's records will be removed)"
-            $argsList += @('-MailProvider', $MailProvider)
+            $params['MailProvider'] = $MailProvider
           } else {
             Write-Host "mail_provider=from-registry: provider resolved per-domain from data/mail-providers.json."
           }
 
-          if ($ProxyOn -eq 'true') { $argsList += '-ProxyGitHubPages' }
+          if ($ProxyOn -eq 'true') { $params['ProxyGitHubPages'] = $true }
 
           # Passed through verbatim; the script compares it to the zone name and
           # ignores anything that does not match, so a blank or stale value can
@@ -140,18 +151,18 @@ jobs:
           $ConfirmChange = [string]$env:REC_CONFIRM_MAIL_CHANGE
           if (-not [string]::IsNullOrWhiteSpace($ConfirmChange)) {
             Write-Host "confirm_mail_change supplied: '$ConfirmChange'"
-            $argsList += @('-ConfirmMailProviderChange', $ConfirmChange)
+            $params['ConfirmMailProviderChange'] = $ConfirmChange
           }
 
           if ($DryRun -eq 'true') {
             Write-Host "--- DRY RUN MODE: PREVIEWING CHANGES ---"
-            $argsList += '-DryRun'
+            $params['DryRun'] = $true
           } else {
             Write-Host "--- LIVE MODE: APPLYING FIXES ---"
           }
 
-          Write-Host "Update-CloudflareDns.ps1 $($argsList -join ' ')"
-          & .\Update-CloudflareDns.ps1 @argsList
+          Write-Host ("Update-CloudflareDns.ps1 " + (($params.Keys | Sort-Object | ForEach-Object { "-$_ $($params[$_])" }) -join ' '))
+          & .\Update-CloudflareDns.ps1 @params
 
       - name: Post-Enforce Compliance Audit
         shell: pwsh
@@ -167,7 +178,11 @@ jobs:
           $ProxyOn = [string]$env:REC_PROXY_ON
           $PagesOnly = [string]$env:REC_PAGES_ONLY
 
-          $argsList = @('-Zone', $Domain, '-Audit')
+          # Hashtable, not an array — see the enforce step above.
+          $params = @{
+            Zone  = $Domain
+            Audit = $true
+          }
 
           # When a cutover was requested, audit against the provider we just
           # enforced rather than whatever the zone resolves to. If the cutover
@@ -180,15 +195,15 @@ jobs:
           # used, so the audit checks the same provider it enforced.
           if ($PagesOnly -ne 'true') {
             switch ([string]$env:REC_MAIL_PROVIDER) {
-              'google' { $argsList += @('-MailProvider', 'Google') }
-              'microsoft365' { $argsList += @('-MailProvider', 'Microsoft365') }
-              'unchanged' { $argsList += @('-MailProvider', 'Unchanged') }
+              'google' { $params['MailProvider'] = 'Google' }
+              'microsoft365' { $params['MailProvider'] = 'Microsoft365' }
+              'unchanged' { $params['MailProvider'] = 'Unchanged' }
               'from-registry' { }
               '' { }
               default { throw "Unsupported mail_provider '$($env:REC_MAIL_PROVIDER)'" }
             }
           }
 
-          if ($ProxyOn -eq 'true') { $argsList += '-ProxyGitHubPages' }
+          if ($ProxyOn -eq 'true') { $params['ProxyGitHubPages'] = $true }
 
-          & .\Update-CloudflareDns.ps1 @argsList -ErrorAction Continue
+          & .\Update-CloudflareDns.ps1 @params -ErrorAction Continue

@@ -46,7 +46,14 @@ LEDGER = REPO_ROOT / "docs" / "lessons-ledger.md"
 HERE = pathlib.Path(__file__).resolve().parent
 
 # A row of the ledger: | L07 | lesson | evidence | enforced by |
-_ROW = re.compile(r"^\|\s*(L\d{2})\s*\|(.*)$")
+#
+# `\d{2,}`, not `\d{2}`: the ledger passed L99 in #1054 and a two-digit pattern
+# matches `L10` in `| L109 |` and then demands a `|` where the `9` is, so it does
+# not match AT ALL. Eleven rows (L100–L110) were invisible to every `_rows()`-based
+# check the moment they landed — including the guard-path existence check, which is
+# this module's whole reason for existing. It failed silently and in the reassuring
+# direction: fewer rows parsed, nothing to complain about (#1055).
+_ROW = re.compile(r"^\|\s*(L\d{2,})\s*\|(.*)$")
 
 # A backticked token is a claim about the tree only when it looks like a path —
 # otherwise cells could not mention `api_get` or `npm ci` without the existence
@@ -333,9 +340,111 @@ def id_problems(text: str, label: str = "docs/lessons-ledger.md") -> list[str]:
     return problems
 
 
+# A row start, matched ANYWHERE in the line rather than anchored to its start:
+# once prettier has reflowed an orphan, the row can end up appended to the
+# paragraph above it, and an anchored pattern would report the lesson as simply
+# absent — which is the same silence the orphan already produces.
+_ROW_ANYWHERE = re.compile(r"\|\s*(L\d{2,})\s*\|")
+
+
+def orphaned_row_problems(
+    text: str, label: str = "docs/lessons-ledger.md"
+) -> list[str]:
+    """Rows that are not inside a table (#1055).
+
+    Every check above operates on lines that LOOK like rows, and is sound about
+    the rows it sees. None of them asks whether a row is in a table, so a row
+    separated from its table by a single blank line is not a malformed row — it
+    is a row in a table of its own, and the tree is green.
+
+    That gap is not theoretical, because the formatter closes it destructively:
+
+      1. author inserts a row one blank line off — still well-formed
+      2. the guard passes, legitimately
+      3. `prettier --write` (pre-commit, lint-staged, or by hand) sees a `|` line
+         with no delimiter under it, so it is a PARAGRAPH, and hard-wraps it
+      4. four cells become one, and nobody re-runs the guard, because step 2
+
+    Measured on run 90 by orphaning two real rows and running the CI-pinned
+    prettier: `L48` reddened only incidentally, via the cell count, with a message
+    about unescaped pipes that points at the wrong cause; `L109` — three digits,
+    so invisible to `_ROW` before the fix above — was 19 PASS / 0 FAIL.
+    """
+    lines = text.splitlines()
+    in_table = {lineno for t in _tables(text) for lineno, _ in t["rows"]}
+    problems: list[str] = []
+    fenced = False
+    for lineno, line in enumerate(lines, start=1):
+        if _FENCE.match(line):
+            fenced = not fenced
+            continue
+        # A sample row inside a fence is documentation, not a table (the same
+        # carve-out `_tables` makes), and `in_table` lines are the good case.
+        if fenced or lineno in in_table:
+            continue
+        m = _ROW_ANYWHERE.search(line)
+        if not m:
+            continue
+        # State the OBSERVATION, then the likely cause — not the cause as though
+        # it were measured. What is checked here is table membership: this line
+        # carries a row start and no header/delimiter pair put it in a table. The
+        # preceding line is never inspected, and a row start absorbed into a
+        # paragraph can sit directly under a perfectly good table row, so a
+        # message asserting "the line above is not a row" is sometimes just false
+        # (Copilot, #1056). A guard that names a cause it did not measure sends
+        # the next reader to the wrong place — the 726-preflight failure mode.
+        problems.append(
+            f"{label}:{lineno}: row {m.group(1)} is on a line that no table "
+            "contains — a ledger row start appears here, but no header/delimiter "
+            "pair puts it in a table. Usually the row is one blank line adrift "
+            "from its table; after `prettier --write` it can instead be a row "
+            "already reflowed into a paragraph, in which case its other cells are "
+            "on the following lines and are no longer cells. A row one blank line "
+            "adrift is still well-formed, so every other guard here passes; "
+            "prettier then hard-wraps it and the lesson is destroyed while the "
+            "tree stays green (#1055). Move the row back against its table."
+        )
+    return problems
+
+
 def test_every_ledger_row_has_the_column_count_its_header_declares():
     problems = column_count_problems(LEDGER.read_text(encoding="utf-8"))
     assert not problems, "\n".join(problems)
+
+
+def test_every_ledger_row_is_contiguous_with_its_table():
+    problems = orphaned_row_problems(LEDGER.read_text(encoding="utf-8"))
+    assert not problems, "\n".join(problems)
+
+
+def test_both_row_parsers_agree_on_which_lessons_exist():
+    """The cross-check that would have named the `L\\d{2}` blindness outright.
+
+    Two parsers read this file — `_ROW` line by line, and `_tables` by table
+    structure — and five checks hang off the first while three hang off the
+    second. When they disagree, the rows in the gap are held by whichever set of
+    checks did not see them, and nothing says so: `_rows()` returned 98 of 109 for
+    as long as three-digit ids existed, and every count it fed still looked
+    plausible (#1055).
+
+    Deliberately a set comparison and not a count against a constant (AC5): a
+    literal would need editing by the next author to add a lesson, and would go
+    green again the moment they did.
+    """
+    text = LEDGER.read_text(encoding="utf-8")
+    by_line = {lid for lid, _ in _rows()}
+    by_table = {
+        cells[0].strip()
+        for t in _tables(text)
+        for _, cells in t["rows"]
+        if cells and re.fullmatch(r"L\d+", cells[0].strip())
+    }
+    assert by_line == by_table, (
+        "the line parser and the table parser disagree about which lessons exist "
+        f"— only `_ROW` saw {sorted(by_line - by_table)}, only `_tables` saw "
+        f"{sorted(by_table - by_line)}. Rows in the gap are unchecked by half this "
+        "module and nothing else reports it."
+    )
 
 
 def test_every_lesson_id_is_present_well_formed_and_unique():
@@ -398,6 +507,127 @@ def test_the_id_guard_sees_a_planted_duplicate_and_an_empty_cell():
     )
     assert any("ID column reads ''" in p for p in problems), (
         f"an empty ID cell must be reported: {problems}"
+    )
+
+
+def test_the_orphan_guard_sees_a_row_one_blank_line_adrift():
+    """Step 1–2 of the sequence: the state prettier has not reached yet.
+
+    The row is perfectly well-formed here — four cells, a real id — which is why
+    every other check in this module passes on it and why catching it at THIS
+    point is the whole value. Once prettier runs, the lesson text is gone.
+    """
+    planted = _FIXTURE_HEADER + (
+        "| L90 | a lesson long enough to be transferable to a reader | #1 | `doc — why` |\n"
+        "\n"
+        "| L91 | an orphan, well-formed, one blank line from its table | #2 | `doc — why` |\n"
+    )
+    assert not column_count_problems(planted, label="planted.md"), (
+        "the orphan is a well-formed 4-cell row, so the column count is silent — "
+        "that silence is what this guard is for"
+    )
+    problems = orphaned_row_problems(planted, label="planted.md")
+    assert len(problems) == 1, f"exactly the orphan must fail, not its table: {problems}"
+    assert "L91" in problems[0] and "L90" not in problems[0], (
+        f"the failure must name the orphaned row: {problems}"
+    )
+
+
+def test_the_orphan_guard_sees_a_row_prettier_has_already_reflowed():
+    """Step 3: the shape on disk after `npx prettier@3.8.1 --write`.
+
+    Reproduced on run 90 against the real ledger. The first line still starts
+    `| L109 |`, so anything anchored on the id keeps matching; the trailing pipe
+    and the other three cells are on continuation lines that are prose. The cell
+    count cannot see it at all — the lines are in no table — so this case needs
+    its own check rather than riding on AC1's contiguity rule.
+    """
+    reflowed = _FIXTURE_HEADER + (
+        "| L100 | a lesson long enough to be transferable to a reader | #1 | `doc — why` |\n"
+        "\n"
+        "| L109 | **A filter the API silently ignores returns an empty list, and an\n"
+        "empty list reads as 'nothing has happened yet'.** Polling `actions/runs` for\n"
+        "CI returned an empty array eight times. | #1049 | `doc — why prose is it` |\n"
+    )
+    assert not column_count_problems(reflowed, label="planted.md"), (
+        "the reflowed row is in no table, so the column-count guard is structurally "
+        "unable to see it — asserted so this test fails if that stops being true"
+    )
+    problems = orphaned_row_problems(reflowed, label="planted.md")
+    assert problems and "L109" in problems[0], (
+        f"a row prettier has reflowed into prose must fail, naming it: {problems}"
+    )
+
+
+def test_the_orphan_message_claims_only_what_the_check_measured():
+    """A row start absorbed into a paragraph directly under a good table row.
+
+    The first draft of this message said "the line above it is neither a row, a
+    delimiter, nor a header" — a cause `orphaned_row_problems` never inspects. It
+    checks table MEMBERSHIP, and the two come apart exactly here: line 4 below is
+    flagged while the line above it is a perfectly good table row, so the claim
+    was false and pointed the reader at the wrong line (Copilot, #1056).
+
+    Pinned as a case rather than fixed in prose, because the wording is what a
+    future author edits without re-deriving what the function actually looks at.
+    """
+    planted = _FIXTURE_HEADER + (
+        "| L90 | a lesson long enough to be transferable to a reader | #1 | `doc — why` |\n"
+        "prose that absorbed a row start | L91 | a | b | c |\n"
+    )
+    problems = orphaned_row_problems(planted, label="planted.md")
+    assert problems and "L91" in problems[0], (
+        f"a row start outside any table must be reported wherever it sits: {problems}"
+    )
+    assert "line above" not in problems[0], (
+        "the message must not assert anything about the preceding line — this "
+        f"fixture's preceding line IS a table row: {problems[0]}"
+    )
+
+
+def test_the_orphan_guard_leaves_a_correct_table_and_a_fenced_sample_alone():
+    """The other direction: a tripwire that fires on safe shapes gets deleted.
+
+    The fenced sample matters specifically — this module's own docstrings and the
+    ledger's "Adding a lesson" section teach the row format by showing one, and a
+    guard that reddened on the documentation of its own rule would be removed
+    within a run.
+    """
+    clean = _FIXTURE_HEADER + (
+        "| L90 | a lesson long enough to be transferable to a reader | #1 | `doc — why` |\n"
+        "| L91 | a second row, contiguous with the first, as rows should be | #2 | `x.py` |\n"
+        "\n"
+        "Prose about the table, then an example of the row format:\n"
+        "\n"
+        "```\n"
+        "| L92 | a sample row inside a fence is documentation, not a table | #3 | `x.py` |\n"
+        "```\n"
+    )
+    assert not orphaned_row_problems(clean, label="planted.md"), (
+        "contiguous rows and a fenced sample row are both correct and must pass"
+    )
+
+
+def test_the_row_pattern_matches_a_three_digit_lesson_id():
+    """The blindness itself, pinned (#1055).
+
+    `L\\d{2}` matches `L10` inside `L109` and then requires a `|` where the `9`
+    is, so the row does not match at all — and an unmatched row is skipped, not
+    reported. The ledger crossed L99 in #1054, so this is the difference between
+    the guard-path existence check covering 109 rows and covering 98.
+    """
+    row = "| L109 | a lesson long enough to be transferable to a reader | #1 | `x.py` |"
+    m = _ROW.match(row)
+    assert m and m.group(1) == "L109", (
+        "a three-digit lesson id must parse as a row — with `L\\d{2}` this returns "
+        "None and eleven real rows go unchecked in silence"
+    )
+    assert re.compile(r"^\|\s*(L\d{2})\s*\|(.*)$").match(row) is None, (
+        "the pre-fix pattern must be shown NOT to match this row, or this test is "
+        "asserting nothing about the bug it exists for"
+    )
+    assert _ROW.match("| L07 | still a two-digit id | #1 | `x.py` |"), (
+        "widening the pattern must not drop the two-digit ids it already held"
     )
 
 

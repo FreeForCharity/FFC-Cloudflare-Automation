@@ -368,9 +368,13 @@ def _strip_assignments(segment):
 # -- `Write-Host` was never a listed verb. This repo is PowerShell-first, so
 # the Write-* stream cmdlets are now named explicitly and the coverage is
 # deliberate rather than incidental.
+# The second lookbehind is the braced spelling: `${env:PASSWORD}` puts a `{`
+# between the `$` and the name, so a `(?<!\$)` alone still sees a word boundary
+# and the accident survives one spelling over -- reinstating the very false
+# positive above for `X=${env:PASSWORD}` (Conductor run 92).
 PRINT_VERB_RE = re.compile(
     r"\b(?:echo|printf|printenv)\b"
-    r"|(?<!\$)\benv\b"
+    r"|(?<!\$)(?<!\$\{)\benv\b"
     r"|\bWrite-(?:Host|Output|Information|Verbose|Debug|Warning|Error)\b",
     re.IGNORECASE)
 
@@ -386,11 +390,43 @@ SECRET_SUFFIXED_RE = re.compile(
 # occurs constantly in ordinary prose (`echo "no token found"`), so matching it
 # unanchored would block correct commands. `KEY` is excluded even here -- `for
 # KEY in ...; do echo $KEY; done` is a normal loop, not a leak.
+BARE_SECRET_NAMES = r"(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY)"
 BARE_SECRET_REF_RE = re.compile(
-    r"\$\{?(?:env:)?(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY)\b", re.IGNORECASE)
+    rf"\$\{{?(?:env:)?{BARE_SECRET_NAMES}\b", re.IGNORECASE)
+BARE_SECRET_NAME_RE = re.compile(rf"\A{BARE_SECRET_NAMES}\Z", re.IGNORECASE)
 
 KNOWN_SECRET_VARS_RE = re.compile(
     r"\b(?:CLOUDFLARE_API_TOKEN|GH_TOKEN|GITHUB_TOKEN|WHMCS_[A-Z_]+)\b", re.IGNORECASE)
+
+
+# PowerShell's implicit output: a bare expression statement IS a print, so
+# `pwsh -c '$env:GH_TOKEN'` writes the token to the log with no verb anywhere.
+# `main` caught this only as collateral of the stray `\benv\b` match, and
+# replacing that accident with a list of Write-* CONSUMERS could not cover it:
+# there is no verb to enumerate (Conductor run 92). Terminators are `|`, a
+# closing quote, or end-of-chunk; `=` is deliberately absent, which is what
+# keeps every assignment form allowed. The leading `['"]` alternative matters
+# more than the `^` one -- through the Bash tool the realistic spelling is
+# `pwsh -c '$env:GH_TOKEN'`, where the statement starts after the `-c` quote.
+PS_IMPLICIT_OUTPUT_RE = re.compile(
+    r"""(?:\A|['"])\s*\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?\s*(?:\||['"]|\Z)""",
+    re.IGNORECASE)
+
+
+def _ps_implicit_secret_output(chunk):
+    """The env var a bare PowerShell expansion would print, if it is a secret.
+
+    The name is re-tested against the SAME patterns the rest of the rule uses
+    rather than re-enumerated here -- a third copy of the secret-name list is a
+    place for the three to drift apart, and drift in this direction is silent.
+    """
+    for match in PS_IMPLICIT_OUTPUT_RE.finditer(chunk):
+        name = match.group(1)
+        if (SECRET_SUFFIXED_RE.search(name)
+                or KNOWN_SECRET_VARS_RE.search(name)
+                or BARE_SECRET_NAME_RE.match(name)):
+            return name
+    return None
 
 
 def _secret_label(chunk):
@@ -451,6 +487,22 @@ def echo_secret_violation(cmd):
     """
     for index, segment in enumerate(_echo_segments(cmd), start=1):
         command_part, assigned = _strip_assignments(segment)
+        # Command part ONLY -- never an assignment value. `_strip_assignments`
+        # hands back the value as its own chunk, so `X=$env:PASSWORD` arrives
+        # here as the chunk `$env:PASSWORD`, and testing the values too would
+        # re-block the assignment this rule was just fixed to allow. (Found by
+        # the run-92 patch failing `powershell env var assignment allowed`.)
+        implicit = _ps_implicit_secret_output(command_part)
+        if implicit:
+            return (
+                "Refusing to echo/print a secret value to logs.\n"
+                f"  statement {index}: a bare PowerShell expansion of "
+                f"`{implicit[:40]}`\n"
+                "In PowerShell a bare expression statement IS output, so this "
+                "writes the value to the log with no print verb involved.\n"
+                "Assign it, pass it as an argument, or let the command read the "
+                "variable itself."
+            )
         for chunk in [command_part] + assigned:
             verb = PRINT_VERB_RE.search(chunk)
             if verb and _names_a_secret(chunk):

@@ -169,6 +169,38 @@ def main():
           bash("Write-Host $env:GH_TOKEN"), True)
     check("Write-Output a secret", "guard_bash.py",
           bash("Write-Output $env:CLOUDFLARE_API_TOKEN"), True)
+    # PowerShell's implicit output: a bare expression statement IS a print, so
+    # these leak with NO verb anywhere. `main` caught them only as collateral of
+    # the stray `env` match, and a list of Write-* consumers cannot reach them --
+    # there is no verb to enumerate (Conductor run 92). Every other `$env:` case
+    # in this file pairs the expansion with a verb or an `=`; these are the
+    # spelling with neither.
+    check("bare powershell expansion of a secret", "guard_bash.py",
+          bash("$env:GH_TOKEN"), True)
+    check("bare powershell expansion via pwsh -c", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN'"), True)
+    check("bare powershell expansion piped to a consumer", "guard_bash.py",
+          bash("$env:GH_TOKEN | Out-Host"), True)
+    check("bare powershell expansion after &&", "guard_bash.py",
+          bash("true && $env:CLOUDFLARE_API_TOKEN"), True)
+    check("braced bare powershell expansion", "guard_bash.py",
+          bash("${env:GH_TOKEN}"), True)
+    # The braced spelling puts a `{` between the `$` and the name, so a
+    # `(?<!\$)` lookbehind alone still sees a word boundary and reinstates the
+    # false positive one spelling over.
+    check("braced powershell env assignment allowed", "guard_bash.py",
+          bash("X=${env:PASSWORD}"), False)
+    # A non-secret env var is not a leak however it is spelled, and passing a
+    # token as an ARGUMENT is not printing it -- `main` blocked both by the
+    # same accident.
+    check("bare expansion of a non-secret allowed", "guard_bash.py",
+          bash("$env:TEMP | Out-Host"), False)
+    check("braced non-secret expansion allowed", "guard_bash.py",
+          bash("cat ${env:HOME}/x"), False)
+    check("secret passed as a pwsh argument allowed", "guard_bash.py",
+          bash('pwsh -c "./x.ps1 -Token $env:GH_TOKEN"'), False)
+    check("secret in a curl header, powershell spelling, allowed", "guard_bash.py",
+          bash('curl -H "Authorization: Bearer $env:GH_TOKEN" https://api.github.com'), False)
     # A suffixed name that is NOT on the known-vars list -- the only case that
     # reaches the suffix pattern on its own.
     check("echo a suffixed name outside the known list", "guard_bash.py",

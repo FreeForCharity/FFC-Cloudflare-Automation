@@ -35,7 +35,7 @@ BeforeAll {
 
     $script:RegistryPath = (Resolve-Path (Join-Path $PSScriptRoot '..' 'data' 'mail-providers.json')).Path
 
-    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord', 'ConvertTo-MailProviderName', 'Get-MailProviderRegistry', 'Resolve-MailProviderForZone')) {
+    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord', 'Get-ProviderMxRecord', 'ConvertTo-MailProviderName', 'Get-MailProviderRegistry', 'Resolve-MailProviderForZone')) {
         . ([scriptblock]::Create((Get-FunctionFromFile -Path $script:SourcePath -Name $name).Extent.Text))
     }
 }
@@ -117,7 +117,7 @@ Describe 'Get-MailProviderProfile' {
 
 Describe 'Resolve-MailProvider' {
     It 'detects Google from a modern smtp.google.com MX' {
-        $records = @([pscustomobject]@{ type = 'MX'; content = 'smtp.google.com' })
+        $records = @([pscustomobject]@{ type = 'MX'; name = 'example.org'; content = 'smtp.google.com' })
         Resolve-MailProvider -Records $records -ZoneName 'example.org' -Fallback 'Microsoft365' |
             Should -Be 'Google'
     }
@@ -126,27 +126,27 @@ Describe 'Resolve-MailProvider' {
         # A zone set up years ago still has ALT1-4. Auditing it as Microsoft
         # would report a working Google tenant as entirely non-compliant.
         $records = @(
-            [pscustomobject]@{ type = 'MX'; content = 'aspmx.l.google.com' },
-            [pscustomobject]@{ type = 'MX'; content = 'alt1.aspmx.l.google.com' }
+            [pscustomobject]@{ type = 'MX'; name = 'example.org'; content = 'aspmx.l.google.com' },
+            [pscustomobject]@{ type = 'MX'; name = 'example.org'; content = 'alt1.aspmx.l.google.com' }
         )
         Resolve-MailProvider -Records $records -ZoneName 'example.org' -Fallback 'Microsoft365' |
             Should -Be 'Google'
     }
 
     It 'detects Microsoft 365 from the tenant mail host' {
-        $records = @([pscustomobject]@{ type = 'MX'; content = 'example-org.mail.protection.outlook.com' })
+        $records = @([pscustomobject]@{ type = 'MX'; name = 'example.org'; content = 'example-org.mail.protection.outlook.com' })
         Resolve-MailProvider -Records $records -ZoneName 'example.org' -Fallback 'Google' |
             Should -Be 'Microsoft365'
     }
 
     It 'falls back when the zone has no MX at all' {
-        $records = @([pscustomobject]@{ type = 'A'; content = '203.0.113.10' })
+        $records = @([pscustomobject]@{ type = 'A'; name = 'example.org'; content = '203.0.113.10' })
         Resolve-MailProvider -Records $records -ZoneName 'example.org' -Fallback 'Microsoft365' |
             Should -Be 'Microsoft365'
     }
 
     It 'falls back when the MX belongs to neither provider' {
-        $records = @([pscustomobject]@{ type = 'MX'; content = 'mx1.mailgun.org' })
+        $records = @([pscustomobject]@{ type = 'MX'; name = 'example.org'; content = 'mx1.mailgun.org' })
         Resolve-MailProvider -Records $records -ZoneName 'example.org' -Fallback 'Microsoft365' |
             Should -Be 'Microsoft365'
     }
@@ -162,7 +162,7 @@ Describe 'Resolve-MailProvider' {
         # this same matcher, so a third party's MX would have been removed.
         # NB: not $host — that is a read-only PowerShell automatic variable.
         foreach ($mxHost in @('notgoogle.com', 'mygoogle.com', 'evilgoogle.com')) {
-            $records = @([pscustomobject]@{ type = 'MX'; content = $mxHost })
+            $records = @([pscustomobject]@{ type = 'MX'; name = 'example.org'; content = $mxHost })
             Resolve-MailProvider -Records $records -ZoneName 'example.org' -Fallback 'Microsoft365' |
                 Should -Be 'Microsoft365' -Because "$mxHost is not a Google host"
         }
@@ -443,5 +443,54 @@ Describe 'Exactly-one provider (set-and-match)' {
         )
         $foreign = @(Get-ForeignMailRecord -Records $records -ForeignProfile $m -ZoneName $zone)
         $foreign.id | Should -Be @('ms')
+    }
+}
+
+Describe 'Apex scoping' {
+    # Regression, PR #1050 second review. Every provider question was matched on
+    # MX content alone, so a subdomain MX could answer for the zone. Inbound mail
+    # is decided by the APEX MX; a subdomain's is a different mail stream that
+    # this tooling has no mandate over.
+    BeforeAll {
+        $script:Zone = 'example.org'
+        $script:Goog = Get-MailProviderProfile -Provider 'Google' -ZoneName $script:Zone
+        $script:M365 = Get-MailProviderProfile -Provider 'Microsoft365' -ZoneName $script:Zone
+        # A Google-hosted subdomain alongside a Microsoft apex — the exact shape
+        # that used to misreport, falsely pass, and get deleted.
+        $script:Mixed = @(
+            [pscustomobject]@{ id = 'apex'; type = 'MX'; name = 'example.org'; content = 'example-org.mail.protection.outlook.com' }
+            [pscustomobject]@{ id = 'sub'; type = 'MX'; name = 'mail.example.org'; content = 'smtp.google.com' }
+        )
+    }
+
+    It 'Get-ProviderMxRecord returns only apex records' {
+        (Get-ProviderMxRecord -Records $script:Mixed -MailProfile $script:M365 -ZoneName $script:Zone).id |
+            Should -Be @('apex')
+    }
+
+    It 'ignores a subdomain MX when detecting the provider' {
+        Resolve-MailProvider -Records $script:Mixed -ZoneName $script:Zone -Fallback 'Google' |
+            Should -Be 'Microsoft365'
+    }
+
+    It 'never puts a subdomain MX on the cutover delete list' {
+        # The serious one: a Microsoft cutover would have deleted the Google MX
+        # of an unrelated subdomain.
+        Get-ForeignMailRecord -Records $script:Mixed -ForeignProfile $script:Goog -ZoneName $script:Zone |
+            Should -BeNullOrEmpty
+    }
+
+    It 'does not let a subdomain MX satisfy the apex presence check' {
+        $subOnly = @([pscustomobject]@{ id = 's'; type = 'MX'; name = 'mail.example.org'; content = 'smtp.google.com' })
+        Get-ProviderMxRecord -Records $subOnly -MailProfile $script:Goog -ZoneName $script:Zone |
+            Should -BeNullOrEmpty
+        Resolve-MailProvider -Records $subOnly -ZoneName $script:Zone -Fallback 'Microsoft365' |
+            Should -Be 'Microsoft365'
+    }
+
+    It 'still selects a genuine apex MX for deletion' {
+        # The scoping must not be so tight that the cutover stops working.
+        (Get-ForeignMailRecord -Records $script:Mixed -ForeignProfile $script:M365 -ZoneName $script:Zone).id |
+            Should -Be @('apex')
     }
 }

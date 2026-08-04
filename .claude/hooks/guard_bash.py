@@ -393,6 +393,38 @@ KNOWN_SECRET_VARS_RE = re.compile(
     r"\b(?:CLOUDFLARE_API_TOKEN|GH_TOKEN|GITHUB_TOKEN|WHMCS_[A-Z_]+)\b", re.IGNORECASE)
 
 
+def _secret_label(chunk):
+    """Name WHAT armed the rule, never the text that did it.
+
+    Quoting the offending statement was diagnostic and wrong: rule 3 runs
+    before the secret-literal rule, so `echo "MY_API_KEY=<real value>"` is
+    judged here -- and the message went to this hook's stderr, which lands in
+    the transcript. A guard that exists to keep secrets out of logs must not
+    print one while refusing to (Copilot, #1062).
+
+    A variable NAME is safe to report where its value is not: the whole rule
+    is premised on the value living in the variable. The regexes match
+    identifier characters only, so a name cannot smuggle a quoted payload --
+    but it is still capped and re-scanned with the shared secret detector, so
+    the claim "this message cannot carry a credential" is enforced rather than
+    argued.
+    """
+    for pattern in (KNOWN_SECRET_VARS_RE, SECRET_SUFFIXED_RE, BARE_SECRET_REF_RE):
+        match = pattern.search(chunk)
+        if not match:
+            continue
+        name = match.group(0).lstrip("$").lstrip("{")
+        if name.lower().startswith("env:"):
+            name = name[4:]
+        name = name[:40]
+        if not name or common.find_secrets(name):
+            break
+        return f"`{name}`"
+    if "${{ secrets." in chunk:
+        return "a `${{ secrets.* }}` expression"
+    return "a secret-named variable"
+
+
 def _names_a_secret(chunk):
     return bool(
         SECRET_SUFFIXED_RE.search(chunk)
@@ -417,13 +449,18 @@ def echo_secret_violation(cmd):
     literal, and a `VAR=$(...)` assignment is not a print. The rule now asks
     whether THIS statement prints THAT variable.
     """
-    for segment in _echo_segments(cmd):
+    for index, segment in enumerate(_echo_segments(cmd), start=1):
         command_part, assigned = _strip_assignments(segment)
         for chunk in [command_part] + assigned:
-            if PRINT_VERB_RE.search(chunk) and _names_a_secret(chunk):
+            verb = PRINT_VERB_RE.search(chunk)
+            if verb and _names_a_secret(chunk):
                 return (
-                    "Refusing to echo/print a secret value to logs:\n"
-                    f"  {chunk.strip()[:160]}\n"
+                    "Refusing to echo/print a secret value to logs.\n"
+                    f"  statement {index}: `{verb.group(0)}` together with "
+                    f"{_secret_label(chunk)}\n"
+                    "The offending text is deliberately NOT quoted here -- this "
+                    "hook's own stderr lands in the transcript, so echoing a "
+                    "pasted literal back would be the leak it exists to stop.\n"
                     "Reference the value through an env var the command reads "
                     "itself. `VAR=$(...) cmd` is fine -- it is printing it that "
                     "is not."

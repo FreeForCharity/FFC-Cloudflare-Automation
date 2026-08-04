@@ -17,13 +17,32 @@ PASS, FAIL = 0, 0
 
 
 def run(script, payload):
-    proc = subprocess.run(
+    return run_full(script, payload).returncode
+
+
+def run_full(script, payload):
+    return subprocess.run(
         [sys.executable, os.path.join(HOOKS, script)],
         input=json.dumps(payload),
         text=True,
         capture_output=True,
     )
-    return proc.returncode
+
+
+def check_stderr_omits(name, script, payload, needle):
+    """A hook must block WITHOUT quoting the payload back.
+
+    Exit-code-only assertions cannot see this: the command is refused either
+    way, and the leak is in the refusal. rc is asserted too, so a hook that
+    stopped blocking cannot pass by printing nothing.
+    """
+    global PASS, FAIL
+    proc = run_full(script, payload)
+    ok = proc.returncode == 2 and needle not in proc.stderr and needle not in proc.stdout
+    PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
+    detail = "blocked, payload not echoed" if ok else (
+        f"rc={proc.returncode}, payload_echoed={needle in proc.stderr + proc.stdout}")
+    print(f"  [{'ok  ' if ok else 'FAIL'}] {name}: {detail}")
 
 
 def check(name, script, payload, expect_block):
@@ -173,6 +192,23 @@ def main():
           bash("bash <<EOF\necho $GH_TOKEN\nEOF"), True)
     check("workflow secrets expression", "guard_bash.py",
           bash('echo "${{ secrets.CBM_TOKEN }}"'), True)
+    # The refusal must not quote the offending statement back. This rule runs
+    # BEFORE the secret-literal rule, so a pasted value reaches it first, and
+    # the hook's stderr lands in the transcript -- quoting it would be the leak
+    # the rule exists to stop. An exit-code assertion cannot see this: the
+    # command is refused either way.
+    check_stderr_omits("block message does not echo a pasted literal", "guard_bash.py",
+                       bash(f'echo "MY_API_KEY={REAL_CF}"'), REAL_CF)
+    check_stderr_omits("block message does not echo a heredoc literal", "guard_bash.py",
+                       bash(f'bash <<EOF\necho "WHMCS_API_SECRET={REAL_CF}"\nEOF'), REAL_CF)
+    # ... and the reported NAME is re-scanned, not merely capped. A variable
+    # named `<token>_KEY` matches the suffix pattern, and the 40-char cap lands
+    # exactly on the token's end -- restoring the word boundary that the `_KEY`
+    # suffix had suppressed, so the truncated name IS a well-formed credential.
+    # This is the only case that reaches the find_secrets() fallback.
+    pat = "ghp_" + "b" * 36
+    check_stderr_omits("block message does not echo a token-shaped var name", "guard_bash.py",
+                       bash(f"echo ${pat}_KEY"), pat)
     # Two discriminators, each the only case that reaches one clause. Without
     # them the WHMCS_* list and the `${{ secrets. }}` test are dead code that
     # every other case passes through the suffix pattern, and deleting either

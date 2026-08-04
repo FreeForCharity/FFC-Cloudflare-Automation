@@ -385,13 +385,24 @@ def orphaned_row_problems(
         m = _ROW_ANYWHERE.search(line)
         if not m:
             continue
+        # State the OBSERVATION, then the likely cause — not the cause as though
+        # it were measured. What is checked here is table membership: this line
+        # carries a row start and no header/delimiter pair put it in a table. The
+        # preceding line is never inspected, and a row start absorbed into a
+        # paragraph can sit directly under a perfectly good table row, so a
+        # message asserting "the line above is not a row" is sometimes just false
+        # (Copilot, #1056). A guard that names a cause it did not measure sends
+        # the next reader to the wrong place — the 726-preflight failure mode.
         problems.append(
-            f"{label}:{lineno}: row {m.group(1)} is not inside a table — the line "
-            "above it is neither a row, a delimiter (`| --- |`), nor a header. A "
-            "row one blank line adrift is still well-formed, so every other guard "
-            "here passes; `prettier --write` then reflows it into a hard-wrapped "
-            "paragraph and the lesson's cells are destroyed while the tree stays "
-            "green (#1055). Move the row back against its table."
+            f"{label}:{lineno}: row {m.group(1)} is on a line that no table "
+            "contains — a ledger row start appears here, but no header/delimiter "
+            "pair puts it in a table. Usually the row is one blank line adrift "
+            "from its table; after `prettier --write` it can instead be a row "
+            "already reflowed into a paragraph, in which case its other cells are "
+            "on the following lines and are no longer cells. A row one blank line "
+            "adrift is still well-formed, so every other guard here passes; "
+            "prettier then hard-wraps it and the lesson is destroyed while the "
+            "tree stays green (#1055). Move the row back against its table."
         )
     return problems
 
@@ -545,6 +556,32 @@ def test_the_orphan_guard_sees_a_row_prettier_has_already_reflowed():
     problems = orphaned_row_problems(reflowed, label="planted.md")
     assert problems and "L109" in problems[0], (
         f"a row prettier has reflowed into prose must fail, naming it: {problems}"
+    )
+
+
+def test_the_orphan_message_claims_only_what_the_check_measured():
+    """A row start absorbed into a paragraph directly under a good table row.
+
+    The first draft of this message said "the line above it is neither a row, a
+    delimiter, nor a header" — a cause `orphaned_row_problems` never inspects. It
+    checks table MEMBERSHIP, and the two come apart exactly here: line 4 below is
+    flagged while the line above it is a perfectly good table row, so the claim
+    was false and pointed the reader at the wrong line (Copilot, #1056).
+
+    Pinned as a case rather than fixed in prose, because the wording is what a
+    future author edits without re-deriving what the function actually looks at.
+    """
+    planted = _FIXTURE_HEADER + (
+        "| L90 | a lesson long enough to be transferable to a reader | #1 | `doc — why` |\n"
+        "prose that absorbed a row start | L91 | a | b | c |\n"
+    )
+    problems = orphaned_row_problems(planted, label="planted.md")
+    assert problems and "L91" in problems[0], (
+        f"a row start outside any table must be reported wherever it sits: {problems}"
+    )
+    assert "line above" not in problems[0], (
+        "the message must not assert anything about the preceding line — this "
+        f"fixture's preceding line IS a table row: {problems[0]}"
     )
 
 

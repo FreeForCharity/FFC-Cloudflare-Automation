@@ -26,15 +26,24 @@ on:
       mail_provider:
         description:
           "Which mail provider this domain is on. 'from-registry' (default) reads
-          data/mail-providers.json; anything not listed there is microsoft365. A domain is on
-          EXACTLY ONE provider, so enforcing REMOVES the other provider's MX/CNAME/SRV. Picking a
-          value here overrides the registry for this run only. Ignored when pages_only is true."
+          data/mail-providers.json; a domain NOT LISTED there has its mail left completely alone. A
+          listed domain is on EXACTLY ONE provider, so enforcing REMOVES the other provider's
+          MX/CNAME/SRV. Picking a value here overrides the registry for this run only. MOVING a
+          domain between providers also needs confirm_mail_change. Ignored when pages_only is true."
         type: choice
         options:
           - from-registry
+          - unchanged
           - microsoft365
           - google
         default: from-registry
+      confirm_mail_change:
+        description:
+          "Type the domain name here ONLY to authorise MOVING its mail between providers. Required
+          whenever the zone's live provider differs from the one it resolves to. Leave blank
+          otherwise - a blank value cannot move any domain's mail."
+        type: string
+        default: ''
       dmarc_mgmt_debug:
         description: 'Debug: run DMARC Management API probe/attempts (noisy)'
         type: boolean
@@ -80,6 +89,7 @@ jobs:
           REC_PAGES_ONLY: ${{ inputs.pages_only }}
           REC_PROXY_ON: ${{ inputs.proxy_on }}
           REC_MAIL_PROVIDER: ${{ inputs.mail_provider }}
+          REC_CONFIRM_MAIL_CHANGE: ${{ inputs.confirm_mail_change }}
         run: |
           $Domain = [string]$env:REC_DOMAIN
           $DryRun = [string]$env:REC_DRY_RUN
@@ -98,6 +108,7 @@ jobs:
           switch ([string]$env:REC_MAIL_PROVIDER) {
             'google' { $MailProvider = 'Google' }
             'microsoft365' { $MailProvider = 'Microsoft365' }
+            'unchanged' { $MailProvider = 'Unchanged' }
             'from-registry' { $MailProvider = '' }
             '' { $MailProvider = '' }
             default { throw "Unsupported mail_provider '$($env:REC_MAIL_PROVIDER)'" }
@@ -122,6 +133,15 @@ jobs:
           }
 
           if ($ProxyOn -eq 'true') { $argsList += '-ProxyGitHubPages' }
+
+          # Passed through verbatim; the script compares it to the zone name and
+          # ignores anything that does not match, so a blank or stale value can
+          # never authorise a move.
+          $ConfirmChange = [string]$env:REC_CONFIRM_MAIL_CHANGE
+          if (-not [string]::IsNullOrWhiteSpace($ConfirmChange)) {
+            Write-Host "confirm_mail_change supplied: '$ConfirmChange'"
+            $argsList += @('-ConfirmMailProviderChange', $ConfirmChange)
+          }
 
           if ($DryRun -eq 'true') {
             Write-Host "--- DRY RUN MODE: PREVIEWING CHANGES ---"
@@ -162,6 +182,7 @@ jobs:
             switch ([string]$env:REC_MAIL_PROVIDER) {
               'google' { $argsList += @('-MailProvider', 'Google') }
               'microsoft365' { $argsList += @('-MailProvider', 'Microsoft365') }
+              'unchanged' { $argsList += @('-MailProvider', 'Unchanged') }
               'from-registry' { }
               '' { }
               default { throw "Unsupported mail_provider '$($env:REC_MAIL_PROVIDER)'" }

@@ -45,12 +45,16 @@
     List records for the zone/name.
 
 .PARAMETER MailProvider
-    Overrides the registry for one run: 'Microsoft365' or 'Google'. Used by
-    -EnforceStandard and -Audit. Omit it and the provider comes from
-    -MailProviderRegistry, which is the normal path.
+    Overrides the registry for one run: 'Microsoft365', 'Google', or
+    'Unchanged'. Used by -EnforceStandard and -Audit. Omit it and the provider
+    comes from -MailProviderRegistry, which is the normal path.
 
-    A domain is on EXACTLY ONE provider — the record set is matched and applied
-    as a unit, never mixed. With -EnforceStandard the resolved provider's
+    THE DEFAULT IS NO CHANGE. A domain that is neither listed in the registry
+    nor named here has its mail records left completely alone — no MX, no SPF,
+    no service records are created, changed or deleted for it.
+
+    A managed domain is on EXACTLY ONE provider — the record set is matched and
+    applied as a unit, never mixed. With -EnforceStandard the resolved provider's
     MX/SPF (and, for M365, its service CNAMEs and Teams SRVs) are created
     first, then the OTHER provider's mail records are removed, so the zone
     never sits with two live MX sets pointing at different providers.
@@ -67,11 +71,15 @@
     next to this script). Anything not listed resolves to the file's 'default',
     which is microsoft365.
 
-    This is what makes "default Microsoft, Google if picked" survive a run.
-    Without it, fleet enforcement would read a Google zone as non-standard and
-    cut it back to Microsoft. A missing file means "everything is Microsoft
-    365"; a MALFORMED file throws rather than falling back, because silently
-    defaulting would do exactly that cut-back to every Google domain at once.
+    Listing a domain is what opts it in to mail enforcement at all; the
+    file's 'default' is 'unchanged', so an unlisted domain is never touched.
+    A missing file therefore means "manage nobody's mail". A MALFORMED file
+    THROWS rather than falling back, because a silent fallback on a file that
+    was meant to list providers is indistinguishable from an empty one.
+
+    Moving a listed domain between providers additionally requires
+    -ConfirmMailProviderChange. Editing this file records intent; it does not
+    authorise the move on its own.
 
 .EXAMPLE
     # Cut a zone over to Google Workspace mail (preview first)
@@ -153,14 +161,24 @@ param(
     # -MailProviderRegistry; neither auto-detects from the zone's own MX.
     [Parameter(ParameterSetName = 'Enforce')]
     [Parameter(ParameterSetName = 'Audit')]
-    [ValidateSet('Microsoft365', 'Google')]
-    [string]$MailProvider = 'Microsoft365',
+    [ValidateSet('Microsoft365', 'Google', 'Unchanged')]
+    [string]$MailProvider = 'Unchanged',
 
     # Domain -> provider registry. Omitted callers get data/mail-providers.json
     # next to this script; -MailProvider still overrides it per run.
     [Parameter(ParameterSetName = 'Enforce')]
     [Parameter(ParameterSetName = 'Audit')]
     [string]$MailProviderRegistry = (Join-Path $PSScriptRoot 'data/mail-providers.json'),
+
+    # Typed confirmation to MOVE a domain's mail between providers. Must equal
+    # the zone name. Required whenever the zone's live provider differs from the
+    # one it resolves to — no matter where that came from, registry included.
+    #
+    # The registry states policy; this states "yes, move it, now". Keeping them
+    # separate is what stops a routine enforcement run from migrating mail as a
+    # side effect of some unrelated fix.
+    [Parameter(ParameterSetName = 'Enforce')]
+    [string]$ConfirmMailProviderChange,
 
     [Parameter(ParameterSetName = 'ExportAll', Mandatory = $true)]
     [switch]$ExportAll,
@@ -828,6 +846,9 @@ function ConvertTo-MailProviderName {
         'microsoft' { return 'Microsoft365' }
         'm365' { return 'Microsoft365' }
         'o365' { return 'Microsoft365' }
+        'unchanged' { return 'Unchanged' }
+        'none' { return 'Unchanged' }
+        'leave' { return 'Unchanged' }
         default { return $null }
     }
 }
@@ -846,7 +867,11 @@ function ConvertTo-MailProviderName {
 function Get-MailProviderRegistry {
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Path)
 
-    $registry = [pscustomobject]@{ Default = 'Microsoft365'; Domains = @{} }
+    # Default is NO CHANGE: an unlisted domain has its mail left alone. A
+    # Microsoft default would impose Microsoft mail on every unlisted zone —
+    # which the 2026-08-04 survey showed would target 35 live Google domains
+    # and 46 pointing at other providers entirely.
+    $registry = [pscustomobject]@{ Default = 'Unchanged'; Domains = @{} }
 
     if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
         return $registry
@@ -890,6 +915,21 @@ function Resolve-MailProviderForZone {
     $key = $ZoneName.Trim().ToLowerInvariant()
     if ($Registry.Domains.ContainsKey($key)) { return $Registry.Domains[$key] }
     return $Registry.Default
+}
+
+# Whether a typed confirmation authorises moving THIS zone's mail.
+#
+# Deliberately exact and case-insensitive on the zone name rather than a
+# boolean: a blanket -Force would be carried along by muscle memory across
+# domains, whereas typing the domain cannot be reused by accident.
+function Test-MailProviderChangeConfirmed {
+    param(
+        [Parameter(Mandatory = $true)][string]$ZoneName,
+        [AllowNull()][AllowEmptyString()][string]$Confirmation
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Confirmation)) { return $false }
+    return ($Confirmation.Trim().ToLowerInvariant() -eq $ZoneName.Trim().ToLowerInvariant())
 }
 
 # The records belonging to a provider we are migrating AWAY from — i.e. the
@@ -1050,14 +1090,27 @@ try {
         $explicitProvider = if ($PSBoundParameters.ContainsKey('MailProvider')) { $MailProvider } else { '' }
         $registry = Get-MailProviderRegistry -Path $MailProviderRegistry
         $auditProvider = Resolve-MailProviderForZone -ZoneName $Zone -Registry $registry -Explicit $explicitProvider
-        $mailProfile = Get-MailProviderProfile -Provider $auditProvider -ZoneName $Zone
-        Write-Host "Auditing mail against provider: $($mailProfile.DisplayName)" -ForegroundColor Cyan
+        $auditMail = ($auditProvider -ne 'Unchanged')
+
+        if ($auditMail) {
+            $mailProfile = Get-MailProviderProfile -Provider $auditProvider -ZoneName $Zone
+            Write-Host "Auditing mail against provider: $($mailProfile.DisplayName)" -ForegroundColor Cyan
+        }
+        else {
+            # Report what it has, assert nothing. An unmanaged domain is not
+            # non-compliant for having whatever mail its owner set up.
+            $observed = Resolve-MailProvider -Records $allRecords -ZoneName $Zone -Fallback 'Unchanged'
+            $observedLabel = if ($observed -eq 'Unchanged') { 'no recognised provider' } else { (Get-MailProviderProfile -Provider $observed -ZoneName $Zone).DisplayName }
+            Write-Host "Mail: NOT MANAGED for $Zone (not in the registry) - observed: $observedLabel. No mail assertions made." -ForegroundColor DarkGray
+        }
 
         # 0b. Required CNAMEs (provider service records + GitHub Pages)
         $githubPagesProxied = [bool]$ProxyGitHubPages
         $requiredCnames = @()
-        foreach ($cname in $mailProfile.Cnames) {
-            $requiredCnames += @{ Name = "$($cname.Name).$Zone"; Content = $cname.Content; Proxied = $false }
+        if ($auditMail) {
+            foreach ($cname in $mailProfile.Cnames) {
+                $requiredCnames += @{ Name = "$($cname.Name).$Zone"; Content = $cname.Content; Proxied = $false }
+            }
         }
         $requiredCnames += @{ Name = "www.$Zone"; Content = (Get-GhPagesWwwTarget); Proxied = $githubPagesProxied }
 
@@ -1079,8 +1132,10 @@ try {
 
         # 0c. Required SRV records (provider service records; Google has none)
         $requiredSrvs = @()
-        foreach ($srv in $mailProfile.Srvs) {
-            $requiredSrvs += @{ Name = "$($srv.Name).$Zone"; Priority = $srv.Data.priority; Weight = $srv.Data.weight; Port = $srv.Data.port; Target = $srv.Data.target }
+        if ($auditMail) {
+            foreach ($srv in $mailProfile.Srvs) {
+                $requiredSrvs += @{ Name = "$($srv.Name).$Zone"; Priority = $srv.Data.priority; Weight = $srv.Data.weight; Port = $srv.Data.port; Target = $srv.Data.target }
+            }
         }
 
         foreach ($req in $requiredSrvs) {
@@ -1105,28 +1160,32 @@ try {
             }
         }
         
-        # 1. Mail provider MX
-        $mx = Get-ProviderMxRecord -Records $allRecords -MailProfile $mailProfile -ZoneName $Zone
-        if ($mx) { Write-Host "[OK] $($mailProfile.DisplayName) MX Record found ($($mx.content))" -ForegroundColor Green }
-        else { Write-Warning "[MISSING] $($mailProfile.DisplayName) MX Record ($($mailProfile.MxMatch))" }
+        # 1. Mail provider MX (managed domains only)
+        if ($auditMail) {
+            $mx = Get-ProviderMxRecord -Records $allRecords -MailProfile $mailProfile -ZoneName $Zone
+            if ($mx) { Write-Host "[OK] $($mailProfile.DisplayName) MX Record found ($($mx.content))" -ForegroundColor Green }
+            else { Write-Warning "[MISSING] $($mailProfile.DisplayName) MX Record ($($mailProfile.MxMatch))" }
 
-        # 1b. A second provider's MX alongside the expected one splits inbound
-        # delivery, so surface it as a finding rather than leaving it silent.
-        $otherProvider = if ($auditProvider -eq 'Google') { 'Microsoft365' } else { 'Google' }
-        $otherProfile = Get-MailProviderProfile -Provider $otherProvider -ZoneName $Zone
-        $strayMx = Get-ProviderMxRecord -Records $allRecords -MailProfile $otherProfile -ZoneName $Zone
-        if ($strayMx) {
-            Write-Warning "[CONFLICT] $($otherProfile.DisplayName) MX also present ($($strayMx.content)) - inbound mail is split between two providers"
+            # 1b. A second provider's MX alongside the expected one splits inbound
+            # delivery, so surface it as a finding rather than leaving it silent.
+            $otherProvider = if ($auditProvider -eq 'Google') { 'Microsoft365' } else { 'Google' }
+            $otherProfile = Get-MailProviderProfile -Provider $otherProvider -ZoneName $Zone
+            $strayMx = Get-ProviderMxRecord -Records $allRecords -MailProfile $otherProfile -ZoneName $Zone
+            if ($strayMx) {
+                Write-Warning "[CONFLICT] $($otherProfile.DisplayName) MX also present ($($strayMx.content)) - inbound mail is split between two providers"
+            }
         }
 
         # 2. SPF
         # Note: Cloudflare's API/UI frequently normalizes TXT quoting. Treat normalized content as authoritative
         # to avoid false diffs and unnecessary rewrites.
-        $spf = $allRecords | Where-Object { $_.type -eq 'TXT' -and $_.name -eq $Zone -and (Normalize-TxtContent -Value $_.content) -like "*$($mailProfile.SpfInclude)*" }
-        if ($spf) {
-            Write-Host "[OK] $($mailProfile.DisplayName) SPF Record found" -ForegroundColor Green
+        if ($auditMail) {
+            $spf = $allRecords | Where-Object { $_.type -eq 'TXT' -and $_.name -eq $Zone -and (Normalize-TxtContent -Value $_.content) -like "*$($mailProfile.SpfInclude)*" }
+            if ($spf) {
+                Write-Host "[OK] $($mailProfile.DisplayName) SPF Record found" -ForegroundColor Green
+            }
+            else { Write-Warning "[MISSING] $($mailProfile.DisplayName) SPF Record ($($mailProfile.SpfInclude))" }
         }
-        else { Write-Warning "[MISSING] $($mailProfile.DisplayName) SPF Record ($($mailProfile.SpfInclude))" }
 
         # 3. DMARC
         $dmarc = $allRecords | Where-Object { $_.type -eq 'TXT' -and $_.name -like "_dmarc.$Zone" }
@@ -1362,56 +1421,62 @@ try {
         $registry = Get-MailProviderRegistry -Path $MailProviderRegistry
         $resolvedProvider = Resolve-MailProviderForZone -ZoneName $Zone -Registry $registry -Explicit $explicitProvider
 
-        $mailProfile = Get-MailProviderProfile -Provider $resolvedProvider -ZoneName $Zone
-        $foreignProvider = if ($resolvedProvider -eq 'Google') { 'Microsoft365' } else { 'Google' }
-        $foreignProfile = Get-MailProviderProfile -Provider $foreignProvider -ZoneName $Zone
+        # NOT LISTED = NOT MANAGED. No MX, no SPF, no service records are
+        # created, changed or deleted for a domain nobody opted in. This is the
+        # default on purpose: of the 391 domains surveyed on 2026-08-04, only 56
+        # are FFC-managed mailboxes, and imposing a provider on the rest would
+        # have broken live mail for 35 Google zones and 46 on other hosts.
+        $manageMail = ($resolvedProvider -ne 'Unchanged')
+        $providerSource = if ($explicitProvider) { '-MailProvider' } elseif ($registry.Domains.ContainsKey($Zone.Trim().ToLowerInvariant())) { 'registry' } else { 'registry default' }
 
-        $providerSource = if ($explicitProvider) { '-MailProvider' } elseif ($registry.Domains.ContainsKey($Zone.Trim().ToLowerInvariant())) { 'registry' } else { "registry default" }
-        Write-Host "Mail provider: $($mailProfile.DisplayName) (from $providerSource)" -ForegroundColor Cyan
+        if ($manageMail) {
+            $mailProfile = Get-MailProviderProfile -Provider $resolvedProvider -ZoneName $Zone
+            $foreignProvider = if ($resolvedProvider -eq 'Google') { 'Microsoft365' } else { 'Google' }
+            $foreignProfile = Get-MailProviderProfile -Provider $foreignProvider -ZoneName $Zone
+            Write-Host "Mail provider: $($mailProfile.DisplayName) (from $providerSource)" -ForegroundColor Cyan
+        }
+        else {
+            Write-Host "Mail: NOT MANAGED for $Zone (no registry entry, no -MailProvider). Mail records will not be touched." -ForegroundColor DarkGray
+        }
 
-        # Guard the one case that can silently move a domain's mail: the zone is
-        # live on one provider, resolves to the other, and NOTHING recorded that
-        # intent — no registry entry, no -MailProvider, just the default.
-        #
-        # This is the fleet blast radius. 101/102/103 pass no -MailProvider, so
-        # without this a live run would cut an unregistered Google domain back to
-        # Microsoft on the strength of a default. Refusing costs one PR to
-        # register the domain; the alternative costs a charity its mail.
-        #
-        # It deliberately does NOT weaken exactly-one. A domain with a registry
-        # entry, or an explicit override, converges as normal — including a
-        # split-brain zone carrying both providers, which is what the pass is
-        # for. Only "we were never told, and reality disagrees" stops the run.
+        # MOVING mail between providers ALWAYS requires typed confirmation —
+        # registry entry or not. The registry states policy; the confirmation
+        # states "yes, move it, now". Keeping those separate is what stops a
+        # routine enforcement run from migrating a charity's mail as a side
+        # effect of some unrelated fix, and it makes editing the registry safe
+        # on its own.
         #
         # Checked here, before a single record is written, so a refusal leaves
-        # the zone untouched rather than half-migrated.
-        $livedProvider = Resolve-MailProvider -Records $allRecords -ZoneName $Zone -Fallback $resolvedProvider
-        if ($livedProvider -ne $resolvedProvider) {
-            $livedProfile = Get-MailProviderProfile -Provider $livedProvider -ZoneName $Zone
-            Write-Warning "[DRIFT] $Zone has $($livedProfile.DisplayName) mail records but resolves to $($mailProfile.DisplayName)."
+        # the zone exactly as it was rather than half-migrated.
+        if ($manageMail) {
+            $livedProvider = Resolve-MailProvider -Records $allRecords -ZoneName $Zone -Fallback $resolvedProvider
+            if ($livedProvider -ne $resolvedProvider) {
+                $livedProfile = Get-MailProviderProfile -Provider $livedProvider -ZoneName $Zone
+                Write-Warning "[MAIL MOVE] $Zone currently has $($livedProfile.DisplayName) mail records; it resolves to $($mailProfile.DisplayName) (from $providerSource)."
 
-            if ($providerSource -eq 'registry default') {
-                $message = @(
-                    "Refusing to change the mail provider for '$Zone' on an unrecorded default.",
-                    "It currently has $($livedProfile.DisplayName) records, and nothing says it should:",
-                    "no entry in $MailProviderRegistry and no -MailProvider given.",
-                    "If it should be $($livedProfile.DisplayName), add it to the registry.",
-                    "If it should really be $($mailProfile.DisplayName), register that or pass -MailProvider explicitly."
-                ) -join ' '
-
-                # A dry run writes nothing, so let it PREVIEW the diff — that is
-                # how an operator discovers the domain needs registering. Only a
-                # live run is refused.
-                if ($DryRun) {
-                    Write-Warning "[DRIFT] $message"
-                    Write-Warning "[DRIFT] Previewing anyway because this is a dry run; a live run would stop here."
+                if (Test-MailProviderChangeConfirmed -ZoneName $Zone -Confirmation $ConfirmMailProviderChange) {
+                    Write-Host "[MAIL MOVE] Confirmed for $Zone - proceeding with the move." -ForegroundColor Yellow
                 }
                 else {
-                    throw $message
+                    $message = @(
+                        "Refusing to move mail for '$Zone' from $($livedProfile.DisplayName) to $($mailProfile.DisplayName) without confirmation.",
+                        "This changes where the domain's inbound mail is delivered.",
+                        "If that is intended, re-run with -ConfirmMailProviderChange '$Zone'",
+                        "(workflow 106: set confirm_mail_change to '$Zone').",
+                        "If it is NOT intended, correct data/mail-providers.json instead."
+                    ) -join ' '
+
+                    # A dry run writes nothing, so let it show the diff — that is
+                    # how an operator sees what the move would do before agreeing
+                    # to it. Only a live run is refused.
+                    if ($DryRun) {
+                        Write-Warning "[MAIL MOVE] $message"
+                        Write-Warning "[MAIL MOVE] Previewing anyway because this is a dry run; a live run would stop here."
+                    }
+                    else {
+                        throw $message
+                    }
                 }
-            }
-            else {
-                Write-Warning "[DRIFT] Enforcing will REPLACE its mail records (provider came from $providerSource)."
             }
         }
 
@@ -1425,26 +1490,30 @@ try {
         #
         # The mail half comes from the provider profile; DMARC and the GitHub
         # Pages records below are provider-agnostic and apply either way.
+        # DMARC is provider-agnostic and applies to every zone; the mail
+        # records below are added only for a domain that opted in.
         $standards = @(
-            # SPF: rewrite the provider include in place. MatchContains finds an
-            # already-correct record; SpfCutover tells the TXT branch to edit an
-            # existing v=spf1 rather than add a second one (two = permerror).
-            @{ Type = 'TXT'; Name = '@'; Content = $mailProfile.SpfContent; MatchContains = $mailProfile.SpfInclude; SpfCutover = $true; SpfRemoveIncludes = @($foreignProfile.SpfInclude) },
-            # DMARC: preserve Cloudflare-generated rua (if present) and always include internal rua.
             @{ Type = 'TXT'; Name = '_dmarc'; Content = 'v=DMARC1; p=none'; EnsureInternalRua = $true; PreserveCloudflareRua = $true; InternalRua = 'mailto:dmarc-rua@freeforcharity.org' }
         )
 
-        # Mail: MX first, then any provider service records (M365 has CNAMEs and
-        # Teams SRVs; Google has none). Created BEFORE the foreign provider's
-        # records are removed, so the zone is never left without an MX.
-        foreach ($mx in $mailProfile.MxRecords) {
-            $standards += @{ Type = 'MX'; Name = '@'; Content = $mx.Content; Priority = $mx.Priority; MatchContent = $mailProfile.MxMatch }
-        }
-        foreach ($cname in $mailProfile.Cnames) {
-            $standards += @{ Type = 'CNAME'; Name = $cname.Name; Content = $cname.Content; Proxied = $false }
-        }
-        foreach ($srv in $mailProfile.Srvs) {
-            $standards += @{ Type = 'SRV'; Name = $srv.Name; Data = $srv.Data }
+        if ($manageMail) {
+            # SPF: rewrite the provider include in place. MatchContains finds an
+            # already-correct record; SpfCutover tells the TXT branch to edit an
+            # existing v=spf1 rather than add a second one (two = permerror).
+            $standards += @{ Type = 'TXT'; Name = '@'; Content = $mailProfile.SpfContent; MatchContains = $mailProfile.SpfInclude; SpfCutover = $true; SpfRemoveIncludes = @($foreignProfile.SpfInclude) }
+
+            # MX first, then any provider service records (M365 has CNAMEs and
+            # Teams SRVs; Google has none). Created BEFORE the foreign provider's
+            # records are removed, so the zone is never left without an MX.
+            foreach ($mx in $mailProfile.MxRecords) {
+                $standards += @{ Type = 'MX'; Name = '@'; Content = $mx.Content; Priority = $mx.Priority; MatchContent = $mailProfile.MxMatch }
+            }
+            foreach ($cname in $mailProfile.Cnames) {
+                $standards += @{ Type = 'CNAME'; Name = $cname.Name; Content = $cname.Content; Proxied = $false }
+            }
+            foreach ($srv in $mailProfile.Srvs) {
+                $standards += @{ Type = 'SRV'; Name = $srv.Name; Data = $srv.Data }
+            }
         }
 
         # GitHub Pages apex A/AAAA + www CNAME — generated from the shared lib
@@ -1749,6 +1818,11 @@ try {
         # it is a single shared record that the standards loop above rewrites in
         # place, and DKIM (google._domainkey, selector*._domainkey) is left alone
         # because those keys are minted in the provider's admin console.
+        if (-not $manageMail) {
+            Write-Host "--- Mail Cutover: skipped ($Zone is not managed) ---" -ForegroundColor DarkGray
+            return
+        }
+
         Write-Host "--- Mail Cutover: retiring $($foreignProfile.DisplayName) records ---" -ForegroundColor Cyan
 
         $foreignRecords = @(Get-ForeignMailRecord -Records $allRecords -ForeignProfile $foreignProfile -ZoneName $Zone)

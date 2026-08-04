@@ -35,7 +35,7 @@ BeforeAll {
 
     $script:RegistryPath = (Resolve-Path (Join-Path $PSScriptRoot '..' 'data' 'mail-providers.json')).Path
 
-    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord', 'Get-ProviderMxRecord', 'ConvertTo-MailProviderName', 'Get-MailProviderRegistry', 'Resolve-MailProviderForZone')) {
+    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord', 'Get-ProviderMxRecord', 'ConvertTo-MailProviderName', 'Get-MailProviderRegistry', 'Resolve-MailProviderForZone', 'Test-MailProviderChangeConfirmed')) {
         . ([scriptblock]::Create((Get-FunctionFromFile -Path $script:SourcePath -Name $name).Extent.Text))
     }
 }
@@ -338,14 +338,30 @@ Describe 'ConvertTo-MailProviderName' {
 Describe 'Get-MailProviderRegistry' {
     It 'reads the tracked registry that ships with the repo' {
         $reg = Get-MailProviderRegistry -Path $script:RegistryPath
-        $reg.Default | Should -Be 'Microsoft365'
+        $reg.Default | Should -Be 'Unchanged'
         $reg.Domains['slopestohope.org'] | Should -Be 'Google'
+        # Populated from the 2026-08-04 fleet survey, not a stub.
+        $reg.Domains.Count | Should -BeGreaterThan 40
     }
 
-    It 'treats a missing file as everything-Microsoft' {
+    It 'defaults to NO CHANGE, never to a provider' {
+        # The single most dangerous value in this file. A Microsoft default
+        # would impose Microsoft mail on every unlisted zone -- 35 live Google
+        # domains and 46 on other hosts, per the same survey.
+        (Get-MailProviderRegistry -Path $script:RegistryPath).Default | Should -Be 'Unchanged'
+    }
+
+    It 'treats a missing file as manage-nobody' {
         $reg = Get-MailProviderRegistry -Path (Join-Path $TestDrive 'does-not-exist.json')
-        $reg.Default | Should -Be 'Microsoft365'
+        $reg.Default | Should -Be 'Unchanged'
         $reg.Domains.Count | Should -Be 0
+    }
+
+    It 'every shipped entry is a real provider, never Unchanged' {
+        $reg = Get-MailProviderRegistry -Path $script:RegistryPath
+        foreach ($kv in $reg.Domains.GetEnumerator()) {
+            $kv.Value | Should -BeIn @('Microsoft365', 'Google')
+        }
     }
 
     It 'THROWS on an unknown provider rather than falling back' {
@@ -380,9 +396,18 @@ Describe 'Resolve-MailProviderForZone' {
             Should -Be 'Google'
     }
 
-    It 'defaults an unlisted domain to Microsoft' {
+    It 'leaves an unlisted domain UNCHANGED, not Microsoft' {
         Resolve-MailProviderForZone -ZoneName 'some-other-charity.org' -Registry $script:Reg -Explicit '' |
-            Should -Be 'Microsoft365'
+            Should -Be 'Unchanged'
+    }
+
+    It 'leaves every surveyed non-FFC-mail domain unchanged' {
+        # Spot-check domains the survey found on other providers. These must
+        # never resolve to a provider, or enforcement would clobber live mail.
+        foreach ($d in @('ptuganda.org', 'exceptionalridersprogram.com', 'ffc.ngo', 'clarasbridge.org')) {
+            Resolve-MailProviderForZone -ZoneName $d -Registry $script:Reg -Explicit '' |
+                Should -Be 'Unchanged' -Because "$d is on a third-party mail host"
+        }
     }
 
     It 'lets an explicit choice override the registry' {
@@ -492,5 +517,67 @@ Describe 'Apex scoping' {
         # The scoping must not be so tight that the cutover stops working.
         (Get-ForeignMailRecord -Records $script:Mixed -ForeignProfile $script:M365 -ZoneName $script:Zone).id |
             Should -Be @('apex')
+    }
+}
+
+Describe 'Test-MailProviderChangeConfirmed' {
+    # Moving a domain between providers changes where its inbound mail is
+    # delivered, so it needs an explicit per-run confirmation that the registry
+    # alone cannot supply. Typed rather than boolean on purpose: a -Force flag
+    # gets carried across domains by muscle memory; a domain name cannot.
+    It 'accepts the exact zone name' {
+        Test-MailProviderChangeConfirmed -ZoneName 'slopestohope.org' -Confirmation 'slopestohope.org' |
+            Should -BeTrue
+    }
+
+    It 'is case- and whitespace-insensitive' {
+        Test-MailProviderChangeConfirmed -ZoneName 'slopestohope.org' -Confirmation '  SlopesToHope.ORG ' |
+            Should -BeTrue
+    }
+
+    It 'rejects blank, which is the default' {
+        # The whole safety property rests on this: an operator who does not fill
+        # the field in cannot move anything.
+        foreach ($v in @('', '   ', $null)) {
+            Test-MailProviderChangeConfirmed -ZoneName 'slopestohope.org' -Confirmation $v | Should -BeFalse
+        }
+    }
+
+    It 'rejects a confirmation for a DIFFERENT domain' {
+        # Stops a value pasted from a previous run authorising this one.
+        Test-MailProviderChangeConfirmed -ZoneName 'slopestohope.org' -Confirmation 'nochaos.org' |
+            Should -BeFalse
+    }
+
+    It 'rejects generic affirmatives' {
+        foreach ($v in @('yes', 'true', 'y', 'confirm', '*')) {
+            Test-MailProviderChangeConfirmed -ZoneName 'slopestohope.org' -Confirmation $v | Should -BeFalse
+        }
+    }
+
+    It 'rejects a partial or superstring match' {
+        foreach ($v in @('slopestohope', 'slopestohope.org.uk', 'xslopestohope.org')) {
+            Test-MailProviderChangeConfirmed -ZoneName 'slopestohope.org' -Confirmation $v | Should -BeFalse
+        }
+    }
+}
+
+Describe 'Registry reflects the surveyed fleet' {
+    BeforeAll { $script:Reg2 = Get-MailProviderRegistry -Path $script:RegistryPath }
+
+    It 'records the known Google zones' {
+        foreach ($d in @('thekccf.org', 'tamkeensports.org', 'bintobetter.org', 'fencingtogether.org')) {
+            $script:Reg2.Domains[$d] | Should -Be 'Google' -Because "$d has Google MX live"
+        }
+    }
+
+    It 'records the known Microsoft zones' {
+        foreach ($d in @('freeforcharity.org', 'ffcadmin.org', 'nochaos.org', 'amargraves.org')) {
+            $script:Reg2.Domains[$d] | Should -Be 'Microsoft365' -Because "$d has M365 MX live"
+        }
+    }
+
+    It 'keeps slopestohope.org recorded as the pending Google move' {
+        $script:Reg2.Domains['slopestohope.org'] | Should -Be 'Google'
     }
 }

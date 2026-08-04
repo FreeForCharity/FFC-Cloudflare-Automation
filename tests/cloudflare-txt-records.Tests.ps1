@@ -131,3 +131,50 @@ Describe 'Idempotency across input shapes' {
         Is-TxtQuoted -Value $script:DkimStored | Should -BeTrue
     }
 }
+
+Describe 'Chunking measures BYTES, not characters' {
+    # RFC 1035 3.3.14 caps a character-string at 255 BYTES. Everything this repo
+    # writes is ASCII, where bytes and characters coincide — but chunking on
+    # .Length would silently emit an illegal record the first time a non-ASCII
+    # value turned up, and nothing else in the suite would notice.
+    It 'keeps every chunk within 255 BYTES for a multi-byte value' {
+        # 'é' is 2 bytes in UTF-8, so 200 of them is 400 bytes: one character
+        # chunk under the old rule, two byte chunks under the correct one.
+        $multi = ([string][char]0x00E9) * 200
+        $q = Quote-TxtContent -Value $multi
+        $segs = [regex]::Matches($q, "$($script:DQ)([^$($script:DQ)]*)$($script:DQ)")
+        $segs.Count | Should -BeGreaterThan 1
+        foreach ($s in $segs) {
+            [System.Text.Encoding]::UTF8.GetByteCount($s.Groups[1].Value) | Should -BeLessOrEqual 255
+        }
+    }
+
+    It 'round-trips a multi-byte value without loss' {
+        $multi = ([string][char]0x00E9) * 200
+        Normalize-TxtContent -Value (Quote-TxtContent -Value $multi) | Should -Be $multi
+    }
+
+    It 'never splits a surrogate pair' {
+        # U+1F600 is a surrogate pair in UTF-16 and 4 bytes in UTF-8. Splitting
+        # between the halves produces an unpaired surrogate and a corrupt record.
+        $emoji = [char]::ConvertFromUtf32(0x1F600)
+        $long = $emoji * 100          # 400 bytes
+        $q = Quote-TxtContent -Value $long
+        foreach ($m in [regex]::Matches($q, "$($script:DQ)([^$($script:DQ)]*)$($script:DQ)")) {
+            $v = $m.Groups[1].Value
+            [char]::IsLowSurrogate($v[0]) | Should -BeFalse -Because 'a chunk must not begin mid-pair'
+            [char]::IsHighSurrogate($v[$v.Length - 1]) | Should -BeFalse -Because 'a chunk must not end mid-pair'
+        }
+        Normalize-TxtContent -Value $q | Should -Be $long
+    }
+
+    It 'leaves an ASCII value chunked exactly as before' {
+        # The DKIM fixture must be unaffected by the byte-based rule.
+        Quote-TxtContent -Value $script:DkimPasted | Should -Be $script:DkimStored
+    }
+
+    It 'treats a 255-byte ASCII value as a single character-string' {
+        $exact = 'a' * 255
+        Quote-TxtContent -Value $exact | Should -Be "$($script:DQ)$exact$($script:DQ)"
+    }
+}

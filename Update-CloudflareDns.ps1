@@ -466,18 +466,43 @@ function Is-TxtQuoted {
 }
 
 function Quote-TxtContent {
-    # Emit a TXT value in the quoted form Cloudflare's UI expects, splitting
-    # into 255-char character-strings when the value is too long for one.
-    # Emitting a single over-length string is not a legal TXT record.
+    # Emit a TXT value in the quoted form Cloudflare returns and the UI expects,
+    # splitting it into character-strings when it is too long for one. A single
+    # over-length string is not a legal TXT record.
+    #
+    # The limit is 255 BYTES, not characters (RFC 1035 3.3.14). Everything this
+    # repo writes -- SPF, DMARC, DKIM, verification tokens -- is ASCII, where the
+    # two coincide; but chunking on .Length would silently emit an illegal record
+    # the first time a non-ASCII value appeared, so the split measures UTF-8
+    # bytes and never lands inside a surrogate pair.
     param([AllowNull()][string]$Value)
     $normalized = Normalize-TxtContent -Value $Value
-    if ($normalized.Length -le 255) { return '"' + $normalized + '"' }
+    if ([System.Text.Encoding]::UTF8.GetByteCount($normalized) -le 255) {
+        return '"' + $normalized + '"'
+    }
 
     $chunks = @()
-    for ($i = 0; $i -lt $normalized.Length; $i += 255) {
-        $len = [Math]::Min(255, $normalized.Length - $i)
-        $chunks += '"' + $normalized.Substring($i, $len) + '"'
+    $current = [System.Text.StringBuilder]::new()
+    $currentBytes = 0
+    $i = 0
+    while ($i -lt $normalized.Length) {
+        # Advance a whole code point so a surrogate pair is never split.
+        $step = if ([char]::IsHighSurrogate($normalized[$i]) -and ($i + 1) -lt $normalized.Length) { 2 } else { 1 }
+        $piece = $normalized.Substring($i, $step)
+        $pieceBytes = [System.Text.Encoding]::UTF8.GetByteCount($piece)
+
+        if ($currentBytes -gt 0 -and ($currentBytes + $pieceBytes) -gt 255) {
+            $chunks += '"' + $current.ToString() + '"'
+            $null = $current.Clear()
+            $currentBytes = 0
+        }
+
+        $null = $current.Append($piece)
+        $currentBytes += $pieceBytes
+        $i += $step
     }
+    if ($current.Length -gt 0) { $chunks += '"' + $current.ToString() + '"' }
+
     return ($chunks -join ' ')
 }
 
@@ -1904,10 +1929,16 @@ try {
     # --- SET (Create/Update) Operation ---
     
     # Prepare payload
+    #
+    # TXT goes out through Quote-TxtContent. The enforce path already does this
+    # at its create call, and that is how every SPF and DMARC record in the fleet
+    # was written -- this path simply never did, so it would push a single
+    # over-length character-string for anything past 255 bytes (a 2048-bit DKIM
+    # key). That is not a legal record whatever Cloudflare chooses to do with it.
     $payload = @{
         type    = $Type
         name    = $RecordName
-        content = $Content
+        content = if ($Type -eq 'TXT') { Quote-TxtContent -Value $Content } else { $Content }
         ttl     = $Ttl
     }
 

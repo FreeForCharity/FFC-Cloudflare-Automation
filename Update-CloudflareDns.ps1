@@ -435,13 +435,27 @@ function Get-AllDnsRecords {
 }
 
 function Normalize-TxtContent {
+    # The LOGICAL value of a TXT record, independent of how DNS chopped it up.
+    #
+    # A character-string maxes out at 255 bytes (RFC 1035 3.3.14), so anything
+    # longer is stored as several of them and joined with NO separator. That is
+    # why a 2048-bit DKIM key comes back split mid-base64 as
+    # "v=DKIM1; ...MIIBIjANBg" "kqhkiG9w0...IDAQAB" and why the join must be
+    # empty rather than a space — a space would corrupt the key.
+    #
+    # Comparisons must run on this value. The raw text Cloudflare returns for a
+    # long record never equals the text that was sent, so a raw -eq reports the
+    # record as absent forever.
     param([AllowNull()][string]$Value)
     if ($null -eq $Value) { return '' }
     $trimmed = $Value.Trim()
-    if ($trimmed.Length -ge 2 -and $trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) {
-        return $trimmed.Substring(1, $trimmed.Length - 2)
+    if ($trimmed.Length -lt 2 -or -not $trimmed.StartsWith('"') -or -not $trimmed.EndsWith('"')) {
+        return $trimmed
     }
-    return $trimmed
+    $inner = $trimmed.Substring(1, $trimmed.Length - 2)
+    # Unescaped quote-space-quote is a segment boundary; a literal quote inside a
+    # character-string arrives escaped as \" and is left alone.
+    return ($inner -replace '(?<!\\)"\s*"', '')
 }
 
 function Is-TxtQuoted {
@@ -452,9 +466,19 @@ function Is-TxtQuoted {
 }
 
 function Quote-TxtContent {
+    # Emit a TXT value in the quoted form Cloudflare's UI expects, splitting
+    # into 255-char character-strings when the value is too long for one.
+    # Emitting a single over-length string is not a legal TXT record.
     param([AllowNull()][string]$Value)
     $normalized = Normalize-TxtContent -Value $Value
-    return '"' + $normalized + '"'
+    if ($normalized.Length -le 255) { return '"' + $normalized + '"' }
+
+    $chunks = @()
+    for ($i = 0; $i -lt $normalized.Length; $i += 255) {
+        $len = [Math]::Min(255, $normalized.Length - $i)
+        $chunks += '"' + $normalized.Substring($i, $len) + '"'
+    }
+    return ($chunks -join ' ')
 }
 
 function Enable-DmarcManagement {
@@ -1904,9 +1928,20 @@ try {
     # These types allow multiple records with the same name.
     # Logic: Ensure ONE record exists with this content. Do not overwrite others.
     if ($Type -in @('MX', 'TXT')) {
-        $exactMatch = $existingSameType | Where-Object { 
-            $_.content -eq $Content -and 
-            ($Type -ne 'MX' -or $_.priority -eq $Priority)
+        # TXT compares on the LOGICAL value, not the raw stored text. Cloudflare
+        # returns a >255-char record as several quoted character-strings, so a
+        # raw -eq never matches what was sent: a 2048-bit DKIM key would read as
+        # absent on every re-run and get appended again, leaving two TXT records
+        # at one selector — which breaks the selector rather than duplicating it
+        # harmlessly.
+        $desiredTxt = if ($Type -eq 'TXT') { Normalize-TxtContent -Value $Content } else { $null }
+        $exactMatch = $existingSameType | Where-Object {
+            $contentMatches = if ($Type -eq 'TXT') {
+                (Normalize-TxtContent -Value $_.content) -eq $desiredTxt
+            }
+            else { $_.content -eq $Content }
+
+            $contentMatches -and ($Type -ne 'MX' -or $_.priority -eq $Priority)
         }
 
         if ($exactMatch) {

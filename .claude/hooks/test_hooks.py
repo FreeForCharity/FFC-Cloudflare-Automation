@@ -23,35 +23,25 @@ PASS, FAIL = 0, 0
 
 
 def run(script, payload):
-    return subprocess.run(
+    proc = subprocess.run(
         [sys.executable, os.path.join(HOOKS, script)],
         input=json.dumps(payload),
         text=True,
         capture_output=True,
     )
-
-
-def record(name, ok, detail=""):
-    """Count one assertion and print it in the same shape as check()."""
-    global PASS, FAIL
-    PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
-    print(f"  [{'ok  ' if ok else 'FAIL'}] {name}{'' if ok else ':'}")
-    if not ok and detail:
-        for line in detail.splitlines():
-            print(f"         {line}")
+    return proc.returncode, proc.stderr
 
 
 def check(name, script, payload, expect_block):
     global PASS, FAIL
-    proc = run(script, payload)
-    blocked = proc.returncode == 2
+    rc, _ = run(script, payload)
+    blocked = rc == 2
     ok = blocked == expect_block
     PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
     status = "ok  " if ok else "FAIL"
     want = "block" if expect_block else "allow"
-    got = "block" if blocked else f"allow(rc={proc.returncode})"
+    got = "block" if blocked else f"allow(rc={rc})"
     print(f"  [{status}] {name}: want={want} got={got}")
-    return proc
 
 
 def bash(cmd):
@@ -98,6 +88,34 @@ REAL_CF = "em7XiooYdKI4T3d3" + "Oo1j31-ekEV2Fi" + "UfZxwQvzT9"
 #     own AST, so a rule added with no case turns it red without anyone
 #     maintaining a count.
 BLOCK, ALLOW = True, False
+
+
+def record(name, ok, detail=""):
+    """Count one assertion and print it in the same shape as check()."""
+    global PASS, FAIL
+    PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
+    print(f"  [{'ok  ' if ok else 'FAIL'}] {name}{'' if ok else ':'}")
+    if not ok and detail:
+        for line in detail.splitlines():
+            print(f"         {line}")
+
+
+def check_emitting(name, script, payload, expect_block):
+    """`check`, plus the stderr the hook produced.
+
+    A separate function rather than a return value bolted onto `check`, so
+    `run`/`check` above stay byte-identical to the spelling #1018 introduces.
+    Every in-flight hooks PR edits this same block; one shared spelling is what
+    lets them merge in any order instead of the second one to land hitting a
+    hand resolution. Counting and printing stay in `record` so there is still
+    exactly one place that can miscount.
+    """
+    rc, err = run(script, payload)
+    blocked = rc == 2
+    want = "block" if expect_block else "allow"
+    got = "block" if blocked else f"allow(rc={rc})"
+    record(f"{name}: want={want} got={got}", blocked == expect_block)
+    return rc, err
 
 
 class Rule:
@@ -535,9 +553,9 @@ def main():
     print("guard_bash (by rule):")
     for rule in RULES:
         for name, cmd, expect in rule.cases:
-            proc = check(f"{rule.id} / {name}", "guard_bash.py", bash(cmd), expect)
-            if proc.returncode == 2:
-                rule.emitted.append((name, proc.stderr))
+            rc, err = check_emitting(f"{rule.id} / {name}", "guard_bash.py", bash(cmd), expect)
+            if rc == 2:
+                rule.emitted.append((name, err))
 
     print("guard_bash (general, rule-independent):")
     for name, cmd in GENERAL_ALLOWS:

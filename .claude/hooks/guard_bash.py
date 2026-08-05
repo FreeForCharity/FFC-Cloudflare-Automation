@@ -129,120 +129,6 @@ def _statements(cmd):
     return stmts
 
 
-def pipeline_exit_code_violation(cmd):
-    """`cmd | filter; echo $?` reports the FILTER's status, not the command's.
-
-    Ledger L50. `scripts/audit-agentic-os-board.py | tail -45; echo "EXIT=$?"`
-    printed `EXIT=0` while the script had exited 1 with six real findings, and
-    the same shape recurred twice in run 73 -- once while verifying that a guard
-    fails closed, which reported a confident `exit=0` for a script that had in
-    fact exited 1. A check whose failure mode is to print the answer you were
-    hoping for is worse than no check.
-
-    `set -o pipefail` makes the idiom correct, so its presence anywhere in the
-    command clears the rule.
-    """
-    if re.search(r"\bset\s+[-a-z]*o\s+pipefail\b|\bset\s+-o\s+pipefail\b", cmd):
-        return None
-    stmts = _statements(cmd)
-    for prev, nxt in zip(stmts, stmts[1:]):
-        bare = _strip_quoted(prev)
-        # A real pipeline: a single `|` that is not `||` and not `|&`.
-        if not re.search(r"(?<!\|)\|(?![|&])", bare):
-            continue
-        if "$?" in _strip_single_quoted(nxt):
-            return (
-                "Reading `$?` straight after a pipeline reports the LAST command's "
-                "status, not the one you care about (ledger L50).\n"
-                f"  pipeline: {prev.strip()[:120]}\n"
-                f"  then:     {nxt.strip()[:120]}\n"
-                "Redirect to a file and read `$?` before piping, or add "
-                "`set -o pipefail`. This has silently turned a failing audit into "
-                "a green one more than once."
-            )
-    return None
-
-
-CALL_SPAN = 240
-
-
-def _call_args(text, start):
-    """The argument text of a call whose `(` has just been consumed at `start`.
-
-    Scans to the *matching* `)`, tracking nesting and quoted spans, and returns
-    None when it cannot find one inside `CALL_SPAN` characters.
-
-    Truncating at the first `)` instead -- the earlier form -- reads
-    `open(os.path.join(a, b), encoding="utf-8")` as `os.path.join(a, b`, which
-    contains no `encoding=`, and so blocked a correct command. A nested call in
-    the first argument is the ordinary way to write this, not an edge case.
-    """
-    depth = 1
-    quote = None
-    escaped = False
-    out = []
-    for ch in text[start:start + CALL_SPAN]:
-        if quote:
-            out.append(ch)
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == quote:
-                quote = None
-            continue
-        if ch in "'\"":
-            quote = ch
-        elif ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth == 0:
-                return "".join(out)
-        out.append(ch)
-    return None
-
-
-def inline_python_encoding_violation(cmd):
-    """`open(path)` in an inline Python script decodes as cp1252 on this host.
-
-    CLAUDE.md has said so since 2026-07-25, and it still cost run 73 two calls:
-    FFC board titles and PR bodies routinely carry em dashes, arrows and the
-    U+274C cross, so `json.load(open(f))` dies with
-    `'charmap' codec can't decode byte 0x9d`. Repo scripts already pin UTF-8;
-    ad-hoc `python -c` / heredoc scripts are the surface that does not, and they
-    read exactly the data that breaks it.
-
-    Only inline Python is inspected -- a checked-in file is covered by
-    scripts/check-subprocess-encoding.py and by review.
-    """
-    if not re.search(r"\bpython[0-9.]*\s+(-c\b|-\s*<<|-\s*$)", cmd, re.MULTILINE):
-        return None
-    for m in re.finditer(r"(?<![\w.])open\s*\(|\bio\.open\s*\(", cmd):
-        args = _call_args(cmd, m.end())
-        # An unbalanced or over-long call is one this rule cannot read. It says
-        # nothing rather than guessing: unlike the security rules above, this is
-        # an ergonomics guard against a local cp1252 crash, and the module's
-        # standing contract is that an internal uncertainty allows the command.
-        if args is None:
-            continue
-        if "encoding" in args:
-            continue
-        # Binary mode needs no encoding, and asking for one is an error.
-        if re.search(r"['\"][rwxa]\+?b\+?['\"]", args):
-            continue
-        return (
-            "Inline Python `open(...)` without `encoding=` decodes as cp1252 on "
-            "this Windows host and dies on FFC data (em dashes, arrows, the "
-            "U+274C in alert titles):\n"
-            f"  open({args.strip()[:120]})\n"
-            "Write `open(path, encoding=\"utf-8\")`. If you are also printing what "
-            "you read, set `PYTHONIOENCODING=utf-8` -- the decode error names a "
-            "byte offset, the encode error names a codepoint. See CLAUDE.md."
-        )
-    return None
-
-
 def _split_on_logical(stmt):
     """Split one statement on `&&` / `||` outside quotes.
 
@@ -517,6 +403,120 @@ def echo_secret_violation(cmd):
                     "itself. `VAR=$(...) cmd` is fine -- it is printing it that "
                     "is not."
                 )
+    return None
+
+
+def pipeline_exit_code_violation(cmd):
+    """`cmd | filter; echo $?` reports the FILTER's status, not the command's.
+
+    Ledger L50. `scripts/audit-agentic-os-board.py | tail -45; echo "EXIT=$?"`
+    printed `EXIT=0` while the script had exited 1 with six real findings, and
+    the same shape recurred twice in run 73 -- once while verifying that a guard
+    fails closed, which reported a confident `exit=0` for a script that had in
+    fact exited 1. A check whose failure mode is to print the answer you were
+    hoping for is worse than no check.
+
+    `set -o pipefail` makes the idiom correct, so its presence anywhere in the
+    command clears the rule.
+    """
+    if re.search(r"\bset\s+[-a-z]*o\s+pipefail\b|\bset\s+-o\s+pipefail\b", cmd):
+        return None
+    stmts = _statements(cmd)
+    for prev, nxt in zip(stmts, stmts[1:]):
+        bare = _strip_quoted(prev)
+        # A real pipeline: a single `|` that is not `||` and not `|&`.
+        if not re.search(r"(?<!\|)\|(?![|&])", bare):
+            continue
+        if "$?" in _strip_single_quoted(nxt):
+            return (
+                "Reading `$?` straight after a pipeline reports the LAST command's "
+                "status, not the one you care about (ledger L50).\n"
+                f"  pipeline: {prev.strip()[:120]}\n"
+                f"  then:     {nxt.strip()[:120]}\n"
+                "Redirect to a file and read `$?` before piping, or add "
+                "`set -o pipefail`. This has silently turned a failing audit into "
+                "a green one more than once."
+            )
+    return None
+
+
+CALL_SPAN = 240
+
+
+def _call_args(text, start):
+    """The argument text of a call whose `(` has just been consumed at `start`.
+
+    Scans to the *matching* `)`, tracking nesting and quoted spans, and returns
+    None when it cannot find one inside `CALL_SPAN` characters.
+
+    Truncating at the first `)` instead -- the earlier form -- reads
+    `open(os.path.join(a, b), encoding="utf-8")` as `os.path.join(a, b`, which
+    contains no `encoding=`, and so blocked a correct command. A nested call in
+    the first argument is the ordinary way to write this, not an edge case.
+    """
+    depth = 1
+    quote = None
+    escaped = False
+    out = []
+    for ch in text[start:start + CALL_SPAN]:
+        if quote:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in "'\"":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return "".join(out)
+        out.append(ch)
+    return None
+
+
+def inline_python_encoding_violation(cmd):
+    """`open(path)` in an inline Python script decodes as cp1252 on this host.
+
+    CLAUDE.md has said so since 2026-07-25, and it still cost run 73 two calls:
+    FFC board titles and PR bodies routinely carry em dashes, arrows and the
+    U+274C cross, so `json.load(open(f))` dies with
+    `'charmap' codec can't decode byte 0x9d`. Repo scripts already pin UTF-8;
+    ad-hoc `python -c` / heredoc scripts are the surface that does not, and they
+    read exactly the data that breaks it.
+
+    Only inline Python is inspected -- a checked-in file is covered by
+    scripts/check-subprocess-encoding.py and by review.
+    """
+    if not re.search(r"\bpython[0-9.]*\s+(-c\b|-\s*<<|-\s*$)", cmd, re.MULTILINE):
+        return None
+    for m in re.finditer(r"(?<![\w.])open\s*\(|\bio\.open\s*\(", cmd):
+        args = _call_args(cmd, m.end())
+        # An unbalanced or over-long call is one this rule cannot read. It says
+        # nothing rather than guessing: unlike the security rules above, this is
+        # an ergonomics guard against a local cp1252 crash, and the module's
+        # standing contract is that an internal uncertainty allows the command.
+        if args is None:
+            continue
+        if "encoding" in args:
+            continue
+        # Binary mode needs no encoding, and asking for one is an error.
+        if re.search(r"['\"][rwxa]\+?b\+?['\"]", args):
+            continue
+        return (
+            "Inline Python `open(...)` without `encoding=` decodes as cp1252 on "
+            "this Windows host and dies on FFC data (em dashes, arrows, the "
+            "U+274C in alert titles):\n"
+            f"  open({args.strip()[:120]})\n"
+            "Write `open(path, encoding=\"utf-8\")`. If you are also printing what "
+            "you read, set `PYTHONIOENCODING=utf-8` -- the decode error names a "
+            "byte offset, the encode error names a codepoint. See CLAUDE.md."
+        )
     return None
 
 

@@ -17,9 +17,44 @@ PASS, FAIL = 0, 0
 
 
 def run(script, payload):
-    return run_full(script, payload).returncode
+    proc = subprocess.run(
+        [sys.executable, os.path.join(HOOKS, script)],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+    )
+    return proc.returncode, proc.stderr
 
 
+def check(name, script, payload, expect_block):
+    global PASS, FAIL
+    rc, _ = run(script, payload)
+    blocked = rc == 2
+    ok = blocked == expect_block
+    PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
+    status = "ok  " if ok else "FAIL"
+    want = "block" if expect_block else "allow"
+    got = "block" if blocked else f"allow(rc={rc})"
+    print(f"  [{status}] {name}: want={want} got={got}")
+
+
+def bash(cmd):
+    return {"tool_name": "Bash", "tool_input": {"command": cmd}}
+
+
+def edit(path, new=""):
+    return {"tool_name": "Edit", "tool_input": {"file_path": path, "new_string": new}}
+
+
+def write(path, content=""):
+    return {"tool_name": "Write", "tool_input": {"file_path": path, "content": content}}
+
+
+# `run` deliberately returns only (rc, stderr): that is the contract #1018
+# introduced, and holding all the in-flight hook PRs to ONE spelling of it is
+# what lets them merge in any order. `check_stderr_omits` below needs stdout as
+# well, so it reaches for the whole CompletedProcess through `run_full` rather
+# than widening `run`'s return and forking the contract again.
 def run_full(script, payload):
     return subprocess.run(
         [sys.executable, os.path.join(HOOKS, script)],
@@ -43,30 +78,6 @@ def check_stderr_omits(name, script, payload, needle):
     detail = "blocked, payload not echoed" if ok else (
         f"rc={proc.returncode}, payload_echoed={needle in proc.stderr + proc.stdout}")
     print(f"  [{'ok  ' if ok else 'FAIL'}] {name}: {detail}")
-
-
-def check(name, script, payload, expect_block):
-    global PASS, FAIL
-    rc = run(script, payload)
-    blocked = rc == 2
-    ok = blocked == expect_block
-    PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
-    status = "ok  " if ok else "FAIL"
-    want = "block" if expect_block else "allow"
-    got = "block" if blocked else f"allow(rc={rc})"
-    print(f"  [{status}] {name}: want={want} got={got}")
-
-
-def bash(cmd):
-    return {"tool_name": "Bash", "tool_input": {"command": cmd}}
-
-
-def edit(path, new=""):
-    return {"tool_name": "Edit", "tool_input": {"file_path": path, "new_string": new}}
-
-
-def write(path, content=""):
-    return {"tool_name": "Write", "tool_input": {"file_path": path, "content": content}}
 
 
 # Fabricated, CF-shaped token. Split across concatenated literals so the source

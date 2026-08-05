@@ -516,13 +516,39 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
     `tempfile.TemporaryDirectory()` and mutate there, so restore fidelity is never in question. The
     in-place-and-restore pattern is the ad-hoc reviewer's habit, and it is the one that needs the
     binary check.
-  - **And do not build the mutating script through a shell heredoc.** `python - <<'PY'` does not
-    deliver backslash escapes intact on this host: run 77 lost every `\n` in a `"\n".join(...)` to a
-    carriage return and committed `docs/lessons-ledger.md` with **0 LF and 169 CR**, while prettier
-    reported "unchanged", the pre-commit hook passed and `git status` was clean. `CLAUDE.md`, edited
-    with the file-editing tool in the same minutes, was untouched — that is the control case. Write
-    files with the editing tool; if a script must transform one, put the script in a file and run it
-    by path. Ledger **L88**.
+  - **And do not build the mutating script through a Bash-tool command string. The heredoc is not
+    the surface — `\\` collapses to `\` everywhere in the command, including inside single quotes.**
+    Six instances across runs 73-96 were each recorded as "heredoc mangling"; run 96 measured the
+    mechanism and the heredoc turns out to be incidental. Every doubled backslash in a Bash tool
+    command is halved before the shell ever sees it:
+
+    | written                         | reaches the shell |
+    | ------------------------------- | ----------------- |
+    | `printf '%s' 'a\b'`             | `a\b`             |
+    | `printf '%s' 'a\\b'`            | `a\b`             |
+    | `printf '%s' 'a\\\b'`           | `a\\b`            |
+    | `printf '%s' 'a\\\\b'`          | `a\\b`            |
+    | `printf '%s' 'a\tb'` / `'a\$b'` | `a\tb` / `a\$b`   |
+
+    Read the first two rows together: those are **single-quoted** arguments, where POSIX guarantees
+    the shell performs no processing at all, so a shell cannot be responsible. Only `\\` is
+    affected; `\t`, `\$` and a lone `\` pass through, so this is one round of doubled-backslash
+    collapsing, not C-style unescaping. A quoted heredoc (`<<'EOF'`) is documented to pass bytes
+    verbatim and is hit exactly as hard — run 96 lost `(?<!\\)"\s*"` to `(?<!\)"\s*"` inside one,
+    which is why five earlier runs blamed the heredoc.
+
+    Consequences that the "heredoc" framing hid: a `python3 -c "…\\…"` is hit (run 95 recorded this
+    and still filed it under heredocs), a `--jq` filter with an escaped literal is hit, and a
+    `sed 's/\\//'` is hit. Anything you can write with the file-editing tool is safe, because that
+    path never passes through a command string — which is why the standing remedy works, and it
+    works for a reason nobody had measured. Write files with the editing tool; if a script must
+    transform one, put the script in a file and run it by path. Ledger **L88**, corrected by
+    **L135**.
+
+    The failure is loud only by luck. Run 77's cost was a committed file with **0 LF and 169 CR**
+    that prettier called unchanged and `git status` called clean; run 96's was caught only because
+    the mutation harness asserts its anchor is present before substituting, and the assert fired.
+
 - **The full workflow-logic suite takes over 2 minutes once it actually runs.** It used to finish in
   seconds only because the modules were aborting; a 2-minute command timeout now reads as a hang.
 - **One module — `test_729_add_collaborator.py` — leaves a zero-byte `U+F022 U+F022` file in the

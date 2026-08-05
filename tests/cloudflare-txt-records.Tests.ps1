@@ -28,7 +28,14 @@ BeforeAll {
         if (-not $fn) { throw "$Name not found in $Path" }
         return $fn
     }
-    foreach ($n in @('Normalize-TxtContent', 'Is-TxtQuoted', 'Quote-TxtContent')) {
+    # Test-DnsContentMatch and Get-DnsRecordPayload are the two pieces of the
+    # SET path that this PR actually changes. They exist as named functions
+    # precisely so this extractor can reach them -- while the logic was inline
+    # in the Where-Object and the payload literal, reverting either fix left
+    # this suite at 19 passed / 0 failed. Green testified about the helpers and
+    # nothing about the bug.
+    foreach ($n in @('Normalize-TxtContent', 'Is-TxtQuoted', 'Quote-TxtContent',
+            'Test-DnsContentMatch', 'Get-DnsRecordPayload')) {
         . ([scriptblock]::Create((Get-FunctionFromFile -Path $script:SourcePath -Name $n).Extent.Text))
     }
 
@@ -129,6 +136,103 @@ Describe 'Idempotency across input shapes' {
         # The enforce path re-quotes anything unquoted; a segmented record must
         # not be mistaken for unquoted and rewritten on every run.
         Is-TxtQuoted -Value $script:DkimStored | Should -BeTrue
+    }
+}
+
+Describe 'Test-DnsContentMatch — the SET path comparison' {
+    # THE bug. 105's SET path decides create-vs-skip here, and it compared raw
+    # content: a stored multi-segment DKIM key never equalled the freshly pasted
+    # one, so every re-run appended a SECOND record at the same selector.
+    # Two keys at one selector is not a harmless duplicate — verifiers see an
+    # ambiguous key and signatures fail.
+
+    It 'matches a stored multi-segment record against a freshly pasted key' {
+        $rec = [pscustomobject]@{ content = $script:DkimStored; priority = $null }
+        Test-DnsContentMatch -Type 'TXT' -Record $rec -DesiredContent $script:DkimPasted |
+            Should -BeTrue
+    }
+
+    It 'matches when BOTH sides are already in stored form' {
+        $rec = [pscustomobject]@{ content = $script:DkimStored; priority = $null }
+        Test-DnsContentMatch -Type 'TXT' -Record $rec -DesiredContent $script:DkimStored |
+            Should -BeTrue
+    }
+
+    It 'still refuses a genuinely different key' {
+        # The fix must not make everything compare equal — otherwise a rotated
+        # DKIM key would silently never be written.
+        $other = $script:DkimPasted -replace 'IDAQAB$', 'IDAQAC'
+        $rec = [pscustomobject]@{ content = $script:DkimStored; priority = $null }
+        Test-DnsContentMatch -Type 'TXT' -Record $rec -DesiredContent $other |
+            Should -BeFalse
+    }
+
+    It 'matches a single-segment TXT record' {
+        $rec = [pscustomobject]@{ content = "$($script:DQ)v=spf1 include:_spf.google.com ~all$($script:DQ)" }
+        Test-DnsContentMatch -Type 'TXT' -Record $rec -DesiredContent 'v=spf1 include:_spf.google.com ~all' |
+            Should -BeTrue
+    }
+
+    It 'compares non-TXT types on raw content' {
+        $rec = [pscustomobject]@{ content = 'freeforcharity.github.io' }
+        Test-DnsContentMatch -Type 'CNAME' -Record $rec -DesiredContent 'freeforcharity.github.io' |
+            Should -BeTrue
+        Test-DnsContentMatch -Type 'CNAME' -Record $rec -DesiredContent 'elsewhere.github.io' |
+            Should -BeFalse
+    }
+
+    It 'treats the same MX host at a different priority as NOT a match' {
+        # Matching MX on content alone would leave a stale preference forever.
+        $rec = [pscustomobject]@{ content = 'smtp.google.com'; priority = 10 }
+        Test-DnsContentMatch -Type 'MX' -Record $rec -DesiredContent 'smtp.google.com' -Priority 1 |
+            Should -BeFalse
+        Test-DnsContentMatch -Type 'MX' -Record $rec -DesiredContent 'smtp.google.com' -Priority 10 |
+            Should -BeTrue
+    }
+}
+
+Describe 'Get-DnsRecordPayload — what actually goes on the wire' {
+    It 'quotes and chunks a TXT value' {
+        # Pre-fix this shipped one 410-char character-string, which is not a
+        # legal record whatever Cloudflare chooses to do with it.
+        $p = Get-DnsRecordPayload -Type 'TXT' -RecordName 'google._domainkey.x.org' `
+            -Content $script:DkimPasted -Ttl 1
+        $p['content'] | Should -Be $script:DkimStored
+        foreach ($m in [regex]::Matches($p['content'], "$($script:DQ)([^$($script:DQ)]*)$($script:DQ)")) {
+            [System.Text.Encoding]::UTF8.GetByteCount($m.Groups[1].Value) | Should -BeLessOrEqual 255
+        }
+    }
+
+    It 'round-trips: the payload it builds is what the matcher then accepts' {
+        # Write-then-read idempotency, end to end across both functions. If
+        # these two ever disagree, 105 appends a duplicate on every run.
+        $p = Get-DnsRecordPayload -Type 'TXT' -RecordName 'x' -Content $script:DkimPasted -Ttl 1
+        $stored = [pscustomobject]@{ content = $p['content'] }
+        Test-DnsContentMatch -Type 'TXT' -Record $stored -DesiredContent $script:DkimPasted |
+            Should -BeTrue
+    }
+
+    It 'leaves a non-TXT value unquoted' {
+        $p = Get-DnsRecordPayload -Type 'CNAME' -RecordName 'www.x.org' `
+            -Content 'freeforcharity.github.io' -Ttl 1
+        $p['content'] | Should -Be 'freeforcharity.github.io'
+    }
+
+    It 'omits proxied for MX and TXT, and sets it otherwise' {
+        # Sending 'proxied' for MX/TXT is rejected by the API.
+        (Get-DnsRecordPayload -Type 'TXT' -RecordName 'x' -Content 'v=spf1 ~all' -Ttl 1).ContainsKey('proxied') |
+            Should -BeFalse
+        (Get-DnsRecordPayload -Type 'MX' -RecordName 'x' -Content 'smtp.google.com' -Ttl 1 -Priority 1).ContainsKey('proxied') |
+            Should -BeFalse
+        (Get-DnsRecordPayload -Type 'A' -RecordName 'x' -Content '1.2.3.4' -Ttl 1 -Proxied $true)['proxied'] |
+            Should -BeTrue
+    }
+
+    It 'carries priority only for MX' {
+        (Get-DnsRecordPayload -Type 'MX' -RecordName 'x' -Content 'smtp.google.com' -Ttl 1 -Priority 1)['priority'] |
+            Should -Be 1
+        (Get-DnsRecordPayload -Type 'TXT' -RecordName 'x' -Content 'v=spf1 ~all' -Ttl 1).ContainsKey('priority') |
+            Should -BeFalse
     }
 }
 

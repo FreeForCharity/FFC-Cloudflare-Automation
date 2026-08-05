@@ -493,6 +493,24 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
   bytes written; a round-trip check would pass on `ubuntu-latest` with or without the fix.
   - Verifying the staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) is still the
     right habit for any hand-delivered feed — it just no longer has anything to catch here.
+  - **But `ffcadmin.org` rewrites staged JSON in a pre-commit hook, so verify `HEAD:<path>`, not
+    `:<path>`.** That repo runs `lint-staged` → `prettier --write` over `*.{json,md,css}`, which
+    fires **after** the staged-blob check and re-stages whatever it changes. So the standing check
+    above is measuring a blob the commit may not keep, and the two copies plus the generated source
+    can all still agree while the delivered bytes differ from every one of them. Re-run it against
+    the committed blob:
+
+    ```bash
+    git cat-file -p HEAD:src/data/agentic-os-status.json | sha256sum      # vs the generated file
+    git cat-file -p HEAD:public/data/agentic-os-status.json | tr -cd '\r' | wc -c
+    ```
+
+    On 2026-08-05 (run 98, delivery 38) prettier left both blobs byte-identical to the generator's
+    output — it already emits compatible formatting — so nothing was wrong and the pre-commit check
+    was not misleading. It was simply **not evidence**: it described a state that a later step was
+    free to change, which is the same shape as L62/#924 (an absence proves nothing about a step that
+    had no input). The fix is one extra command, and it is the one whose failure would be silent.
+
   - **And do not run that check in Python text mode - it reports `0` whether or not the CRs are
     there.** `io.open(p, encoding='utf-8').read().count('\r')` applies universal-newline
     translation, so CRLF is silently rewritten on the way IN. On 2026-08-02 (run 72) that returned a

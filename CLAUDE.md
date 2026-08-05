@@ -692,6 +692,8 @@ that had a hole in it.
     exactly this as a lookup). Ask the issue instead:
 
     ```bash
+    # Replace 1077 with the issue you are checking; use pullRequest(number:N) for a PR — the
+    # projectItems connection is on both types and reads the same way.
     gh api graphql -f query='{repository(owner:"FreeForCharity",name:"FFC-Cloudflare-Automation"){
       issue(number:1077){ projectItems(first:5){ nodes{ id project{ number title } } } } }}'
     # → {"id":"PVTI_…","project":{"number":9,"title":"Agentic OS"}}   — immediately, while the

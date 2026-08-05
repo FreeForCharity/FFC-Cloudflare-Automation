@@ -493,6 +493,44 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
   bytes written; a round-trip check would pass on `ubuntu-latest` with or without the fix.
   - Verifying the staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) is still the
     right habit for any hand-delivered feed — it just no longer has anything to catch here.
+  - **But `FFC-IN-ffcadmin.org` rewrites staged JSON in a pre-commit hook, so verify `HEAD:<path>` —
+    and only ever _after_ the commit.** That repo runs `lint-staged` → `prettier --write` over
+    `*.{json,md,css}`, which fires **after** the staged-blob check and re-stages whatever it
+    changes. So the staged check is measuring a blob the commit may not keep, and the two copies
+    plus the generated source can all still agree while the delivered bytes differ from every one of
+    them.
+
+    **`HEAD:` has its own trap, and it fails in the reassuring direction: run it before committing
+    and it reads the _previous_ commit's blob and reports a confident pass.** So this is a
+    post-commit step, not a substitute for the staged one. Hash **both** copies against the
+    generated file — CR-counting one of them is not enough, because a `prettier` reformat that
+    preserves LF changes the bytes without adding a single `\r`:
+
+    ```bash
+    GEN=/path/to/generated/agentic-os-status.json
+    git rev-parse --verify HEAD >/dev/null          # you are AFTER the commit, not before it
+    sha256sum "$GEN"
+    git cat-file -p HEAD:src/data/agentic-os-status.json    | sha256sum
+    git cat-file -p HEAD:public/data/agentic-os-status.json | sha256sum
+    # all three must print the same digest; then, separately, the CR check:
+    git cat-file -p HEAD:public/data/agentic-os-status.json | tr -cd '\r' | wc -c   # → 0
+    ```
+
+    Three equal digests subsume the CR check (identical bytes cannot differ in `\r`); it is kept
+    because it names the specific failure this repo has actually had, and because it still applies
+    to a delivery where the copies legitimately differ from the source.
+
+    On 2026-08-05 (run 98, delivery 38) prettier left both blobs byte-identical to the generator's
+    output — it already emits compatible formatting — so nothing was wrong and the pre-commit check
+    was not misleading. It was simply **not evidence**: it described a state that a later step was
+    free to change, which is the same shape as L62/#924 (an absence proves nothing about a step that
+    had no input).
+
+    The first draft of this very note repeated the mistake it describes — it hashed `src/` and only
+    CR-checked `public/`, which a LF-preserving reformat passes. Caught in review on #1076. A
+    procedure that checks two artifacts by two different standards is only as strong as the weaker
+    one, and it reads as thorough precisely because it is two commands.
+
   - **And do not run that check in Python text mode - it reports `0` whether or not the CRs are
     there.** `io.open(p, encoding='utf-8').read().count('\r')` applies universal-newline
     translation, so CRLF is silently rewritten on the way IN. On 2026-08-02 (run 72) that returned a
@@ -682,6 +720,29 @@ that had a hole in it.
   concluding anything failed, and **never let an immediate negative read trigger a retry loop** —
   run 41 burned ~51 attempts that way. Where the write is idempotent (`item-add` is: two calls
   produced one row) a retry is merely wasteful; where it is not, it is destructive.
+  - **For board membership specifically, stop re-polling and change endpoint: the item's own
+    `projectItems` connection is authoritative and does not lag.** On 2026-08-05 (run 99) two
+    `gh project item-add` calls returned exit 0 and **no output**, and
+    `gh project item-list 9 --limit 400` then returned exactly `320` items twice in a row, minutes
+    apart, with neither new card in it. That is the 2026-07-25 instance above repeating — but
+    re-polling the project's item list is the slow way to find out, and on a 320-item board each
+    attempt is an expensive GraphQL page walk (run 71 drained the points budget to 0/5000 doing
+    exactly this as a lookup). Ask the issue instead:
+
+    ```bash
+    # Replace 1077 with the issue you are checking; use pullRequest(number:N) for a PR — the
+    # projectItems connection is on both types and reads the same way.
+    gh api graphql -f query='{repository(owner:"FreeForCharity",name:"FFC-Cloudflare-Automation"){
+      issue(number:1077){ projectItems(first:5){ nodes{ id project{ number title } } } } }}'
+    # → {"id":"PVTI_…","project":{"number":9,"title":"Agentic OS"}}   — immediately, while the
+    #    project's own item-list was still serving a page without it
+    ```
+
+    It answers the question you actually have ("did the card land, and what is its id?"), returns
+    the item id you need for `item-edit` anyway, and costs one small query instead of 320 rows. Same
+    distinction as `.auto_merge` vs `enqueuePullRequest` below: re-polling cures a stale read, but
+    the cheaper move is usually to ask the endpoint that is authoritative for the state.
+
   - **Separately: some fields are not lagging, they simply never carry the state you want.** On
     2026-07-31 (run 60) `gh pr merge --auto` printed nothing for #914/#958/#959 and `.auto_merge`
     read `null` for all three — but `enqueuePullRequest` answered "already in the queue" for every
@@ -692,6 +753,7 @@ that had a hole in it.
     endpoint that is **authoritative for that state** (here, the `enqueuePullRequest` mutation)
     before either retrying or concluding anything — and note that silence from `gh pr merge --auto`
     is success, not a no-op.
+
 - **Push the branch before opening the PR.** On 2026-07-24, `POST /repos/…/pulls` returned **HTTP
   500 with an empty body** for >20 minutes, across **multiple FFC repos**
   (`FFC-IN-freeforcharity.org` and `FFC-Cloudflare-Automation`) and all three clients (`gh`, REST,

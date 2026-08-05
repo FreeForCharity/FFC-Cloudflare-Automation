@@ -252,7 +252,11 @@ query($owner:String!, $repo:String!, $cursor:String) {
       nodes {
         number title isDraft headRefName
         labels(first:20) { nodes { name } }
-        reviewThreads(first:100) { nodes { isResolved } }
+        reviewThreads(first:100) {
+          totalCount
+          pageInfo { hasNextPage }
+          nodes { isResolved }
+        }
         commits(last:1) { nodes { commit {
           oid statusCheckRollup { state } } } }
       }
@@ -281,6 +285,22 @@ def fetch_open_prs(token, owner=OWNER, repo=REPO, graphql=_graphql):
             rollup = None
             if commits and commits[0]["commit"].get("statusCheckRollup"):
                 rollup = commits[0]["commit"]["statusCheckRollup"]["state"]
+
+            # The outer `pullRequests` connection is paginated below; this inner
+            # one is not, and a silent truncation here is worse than one there.
+            # `unresolved` is a COUNT: dropping thread 101 can only ever lower
+            # it, and lowering it to 0 turns a queue-blocked PR into a clean row
+            # -- the precise falsely-clean report this script exists to prevent.
+            # So fail closed rather than paginate: a PR with >100 threads is
+            # vanishingly rare and an unreadable input must be stated (#966).
+            threads = n["reviewThreads"]
+            if threads.get("pageInfo", {}).get("hasNextPage"):
+                raise Incomplete(
+                    "PR #%d has more than 100 review threads (totalCount=%s); "
+                    "the unresolved count would be truncated, and a truncated "
+                    "count can only under-report"
+                    % (n["number"], threads.get("totalCount", "?"))
+                )
             prs.append(
                 {
                     "number": n["number"],

@@ -232,7 +232,8 @@ def graphql_pages(pages):
     return _call, calls
 
 
-def node(number, has_thread_unresolved=0, rollup="SUCCESS"):
+def node(number, has_thread_unresolved=0, rollup="SUCCESS", threads_truncated=False):
+    nodes = [{"isResolved": False}] * has_thread_unresolved + [{"isResolved": True}]
     return {
         "number": number,
         "title": "t%d" % number,
@@ -240,8 +241,12 @@ def node(number, has_thread_unresolved=0, rollup="SUCCESS"):
         "headRefName": "b%d" % number,
         "labels": {"nodes": [{"name": "agentic-os"}]},
         "reviewThreads": {
-            "nodes": [{"isResolved": False}] * has_thread_unresolved
-            + [{"isResolved": True}]
+            # Shaped like the real response: the query asks for totalCount and
+            # pageInfo, so the fixture carries them too. A fixture that omitted
+            # them would let a handler bug hide behind `.get()` defaults.
+            "totalCount": 137 if threads_truncated else len(nodes),
+            "pageInfo": {"hasNextPage": threads_truncated},
+            "nodes": nodes,
         },
         "commits": {
             "nodes": [
@@ -280,6 +285,54 @@ def test_pr_read_aborts_when_hasnextpage_has_no_cursor():
         check("truncated page aborts", False, "returned a partial list as complete")
     except M.Incomplete:
         check("truncated page aborts", True)
+
+
+def test_more_than_a_page_of_review_threads_is_incomplete_not_a_low_count():
+    """A truncated thread list can only ever under-report, so fail closed.
+
+    `unresolved` is a count, and dropping thread 101 can only lower it --
+    lowering it to 0 turns a queue-blocked PR into a clean row, which is the
+    exact falsely-clean report this whole script exists to prevent. Raised by
+    Copilot on #1075 and confirmed against the branch head: the outer
+    `pullRequests` connection was fail-closed and this inner one was not.
+    """
+    call, _ = graphql_pages([page([node(1, threads_truncated=True)])])
+    try:
+        M.fetch_open_prs("tok", graphql=call)
+        check(
+            "a truncated thread list aborts",
+            False,
+            "returned a possibly-undercounted PR as complete",
+        )
+    except M.Incomplete as exc:
+        check("a truncated thread list aborts", True)
+        check(
+            "the message names the PR and the count",
+            "#1" in str(exc) and "137" in str(exc),
+            str(exc),
+        )
+
+
+def test_a_normal_thread_list_is_not_treated_as_truncated():
+    """Guards the other polarity: this must not fire on every PR."""
+    call, _ = graphql_pages([page([node(1, has_thread_unresolved=2)])])
+    prs = M.fetch_open_prs("tok", graphql=call)
+    check("an untruncated list is fine", prs[0]["unresolved"] == 2)
+
+
+def test_the_query_actually_requests_the_truncation_signal():
+    """The handler above is unreachable unless the query asks for `pageInfo`.
+
+    Without this, the fixture would prove the handler while the real response
+    never carried the field -- the check would be dead against live data and
+    every test would still pass. Same class as #993: assert against the thing
+    that talks to GitHub, not against our own other text.
+    """
+    threads = M.PR_QUERY[M.PR_QUERY.index("reviewThreads") :]
+    threads = threads[: threads.index("commits")]
+    check("reviewThreads requests pageInfo", "pageInfo" in threads, threads)
+    check("reviewThreads requests hasNextPage", "hasNextPage" in threads, threads)
+    check("reviewThreads requests totalCount", "totalCount" in threads, threads)
 
 
 def test_unresolved_threads_are_counted_not_just_detected():

@@ -108,9 +108,19 @@ function Get-PopulatePlan {
     $staged = @{}
     $plan = [System.Collections.Generic.List[object]]::new()
     $unmapped = [System.Collections.Generic.List[string]]::new()
+    $seenTargets = [System.Collections.Generic.HashSet[string]]::new()
 
     foreach ($ans in ($Answers.GetEnumerator() | Sort-Object Name)) {
-        $clientName = $MapLookup[$ans.Key]
+        # The map is keyed on product MACHINE-names, but WHMCS may return the
+        # answer as "machine|Label" or as the bare label. Expand the variants
+        # HERE, on the lookup side, rather than storing one entry per variant in
+        # $Answers -- that inflated a single product field into three, so the two
+        # spellings the map does not carry were reported as unmapped alongside
+        # the one that matched, and the report exists to be read.
+        $clientName = $null
+        foreach ($nn in (Get-NormNames $ans.Key)) {
+            if ($MapLookup.ContainsKey($nn)) { $clientName = $MapLookup[$nn]; break }
+        }
         if (-not $clientName) {
             if (-not $unmapped.Contains($ans.Key)) { [void]$unmapped.Add($ans.Key) }
             continue
@@ -121,6 +131,9 @@ function Get-PopulatePlan {
             [void]$plan.Add([pscustomobject]@{ product = $ans.Key; client = $clientName; action = 'skip'; reason = 'client field not found' })
             continue
         }
+        # One row per CLIENT field: two product spellings that resolve to the same
+        # target would otherwise plan the same write twice.
+        if (-not $seenTargets.Add([string]$target.id)) { continue }
         $existing = [string]$target.value
         if (-not [string]::IsNullOrWhiteSpace($existing) -and -not $Overwrite) {
             $act = if ($existing -eq [string]$ans.Value) { 'nochange' } else { 'skip' }
@@ -146,7 +159,10 @@ if ([string]::IsNullOrWhiteSpace($ClientId) -and [string]::IsNullOrWhiteSpace($E
 }
 $cid = $ClientId
 if ([string]::IsNullOrWhiteSpace($cid)) {
-    $cid = Find-WhmcsClientIdByEmail -ApiUrl $api -Creds $creds -AccessKey $accessKey -Email $Email
+    # Find-WhmcsClientIdByEmail takes a prebuilt auth body (-Auth), not -Creds
+    # /-AccessKey: passing those throws "A parameter cannot be found that matches
+    # parameter name 'Creds'" before any WHMCS call is made, so -Email never worked.
+    $cid = Find-WhmcsClientIdByEmail -ApiUrl $api -Auth (New-WhmcsAuthBody -Creds $creds -AccessKey $accessKey) -Email $Email
     if ([string]::IsNullOrWhiteSpace($cid)) { throw "No WHMCS client found for email '$Email'." }
 }
 
@@ -168,7 +184,12 @@ foreach ($p in $products) {
     foreach ($f in $cfs) {
         $val = [string]$f.value
         if ([string]::IsNullOrWhiteSpace($val)) { continue }
-        foreach ($nn in (Get-NormNames ([string]$f.name))) { $answers[$nn] = $val }
+        # One entry per product field, keyed on its own normalised name (last
+        # non-empty answer wins). Get-PopulatePlan expands the pipe variants when
+        # it consults the map, so storing them here as well would report the same
+        # field once per spelling.
+        $key = @(Get-NormNames ([string]$f.name))[0]
+        if ($key) { $answers[$key] = $val }
     }
 }
 

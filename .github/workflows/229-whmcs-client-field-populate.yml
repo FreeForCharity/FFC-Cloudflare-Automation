@@ -1,7 +1,10 @@
 name: '229. WHMCS - Populate Client Fields from Product Answers [WHMCS]'
+# The run-name deliberately carries no email address: it is rendered in the runs
+# list, in notifications and in the API, so an address placed here is the most
+# widely-broadcast copy of it in the whole run.
 run-name:
-  'WHMCS client-field populate (client ${{ inputs.client_id }}${{ inputs.email }}, dry_run=${{
-  inputs.dry_run }})'
+  "WHMCS client-field populate (${{ inputs.client_id != '' && format('client {0}', inputs.client_id)
+  || 'client resolved by email' }}, dry_run=${{ inputs.dry_run }})"
 
 # Copies a client's product custom-field answers (mission, brand color, socials,
 # site content, ...) into their Custom Client Fields, so the data shows on the

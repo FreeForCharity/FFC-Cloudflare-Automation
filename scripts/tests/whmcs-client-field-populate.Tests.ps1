@@ -80,4 +80,97 @@ Describe 'Get-PopulatePlan' {
         $r = Get-PopulatePlan -Answers $ans -ClientFields $cf -MapLookup @{ 'social-x' = 'X (Twitter) URL' }
         $r.staged['198'] | Should -Be 'https://x.com/acme'
     }
+
+    It 'matches a machine|Label ANSWER against a map keyed on the machine-name' {
+        $ans = @{ 'mission|brief mission statement' = 'We rescue dogs.' }
+        $r = Get-PopulatePlan -Answers $ans -ClientFields $script:clientFields -MapLookup $script:map
+        $r.staged['189'] | Should -Be 'We rescue dogs.'
+        $r.unmapped.Count | Should -Be 0
+    }
+
+    It 'reports a pipe-named product field ONCE, not once per spelling' {
+        # The label side is genuinely absent from the map, but it is the same
+        # field as the machine side -- reporting both invites someone to "fix"
+        # the map by adding a key that already matches.
+        $ans = @{ 'not-in-map|Not In The Map' = 'x' }
+        $r = Get-PopulatePlan -Answers $ans -ClientFields $script:clientFields -MapLookup $script:map
+        $r.unmapped.Count | Should -Be 1
+        $r.unmapped | Should -Contain 'not-in-map|Not In The Map'
+    }
+
+    It 'plans one row per client field when two product spellings resolve to the same target' {
+        $ans = @{ 'mission' = 'We rescue dogs.'; 'mission|Brief mission statement' = 'We rescue dogs.' }
+        $r = Get-PopulatePlan -Answers $ans -ClientFields $script:clientFields -MapLookup $script:map
+        @($r.plan | Where-Object { $_.clientFieldId -eq '189' }).Count | Should -Be 1
+        $r.staged.Count | Should -Be 1
+    }
+}
+
+Describe 'whmcs-api-common call sites' {
+    # The script's main body runs below the dot-source guard, so Pester cannot
+    # execute it and no behavioural test in this repo can reach the call that
+    # resolves -Email. It was shipped calling Find-WhmcsClientIdByEmail with
+    # -Creds/-AccessKey against a signature that takes -Auth, which throws
+    # "A parameter cannot be found that matches parameter name 'Creds'" before
+    # any WHMCS call is made -- with the suite green throughout. Bind the
+    # contract statically instead, so the class is caught, not the one instance.
+    BeforeAll {
+        $script:scriptsDir = Split-Path $PSScriptRoot -Parent
+        $script:targetScript = Join-Path $script:scriptsDir 'whmcs-client-field-populate.ps1'
+
+        function Get-FunctionParameterMap {
+            param([Parameter(Mandatory = $true)][string]$Path)
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$null)
+            $map = @{}
+            $fns = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
+            foreach ($fn in $fns) {
+                $names = @()
+                if ($fn.Body.ParamBlock) {
+                    $names = @($fn.Body.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+                }
+                $map[$fn.Name] = $names
+            }
+            return $map
+        }
+
+        $script:commonFns = Get-FunctionParameterMap -Path (Join-Path $script:scriptsDir 'whmcs-api-common.ps1')
+    }
+
+    It 'resolved the helper signatures it is about to check' {
+        # Without this, a rename in whmcs-api-common.ps1 would empty the map and
+        # the assertion below would pass by having nothing left to inspect.
+        $script:commonFns.Keys | Should -Contain 'Find-WhmcsClientIdByEmail'
+        $script:commonFns['Find-WhmcsClientIdByEmail'] | Should -Contain 'Auth'
+    }
+
+    It 'passes only parameter names the helper actually declares' {
+        $commonParams = @(
+            'Verbose', 'Debug', 'ErrorAction', 'WarningAction', 'InformationAction',
+            'ErrorVariable', 'WarningVariable', 'InformationVariable', 'OutVariable',
+            'OutBuffer', 'PipelineVariable', 'WhatIf', 'Confirm'
+        )
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:targetScript, [ref]$null, [ref]$null)
+        $commands = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)
+
+        $checked = 0
+        $bad = [System.Collections.Generic.List[string]]::new()
+        foreach ($cmd in $commands) {
+            $name = $cmd.GetCommandName()
+            if (-not $name -or -not $script:commonFns.ContainsKey($name)) { continue }
+            $valid = @($script:commonFns[$name]) + $commonParams
+            foreach ($el in $cmd.CommandElements) {
+                if ($el -isnot [System.Management.Automation.Language.CommandParameterAst]) { continue }
+                $checked++
+                $p = $el.ParameterName
+                # PowerShell accepts unambiguous prefixes, so match on prefix.
+                if (-not ($valid | Where-Object { $_ -like "$p*" })) {
+                    [void]$bad.Add("$name -$p (line $($el.Extent.StartLineNumber))")
+                }
+            }
+        }
+
+        # Guards against the check passing because it inspected nothing.
+        $checked | Should -BeGreaterThan 0
+        ($bad -join '; ') | Should -BeNullOrEmpty
+    }
 }

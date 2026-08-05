@@ -313,6 +313,145 @@ def test_fetch_behind_reads_the_number():
     check("behind_by is read", M.fetch_behind({"head": "b"}, "tok", request=good) == 9)
 
 
+class _FakeResponse:
+    """Minimal `urlopen` stand-in: a context manager with `.read()`."""
+
+    def __init__(self, body):
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _with_urlopen(fake):
+    """Swap the module's `urllib.request.urlopen`, returning a restore thunk.
+
+    `_graphql` is the one transport the injection points do not cover -- every
+    other test hands `fetch_open_prs` a callable -- so exercising its failure
+    handling means stubbing the socket layer. Nothing leaves the process.
+    """
+    original = M.urllib.request.urlopen
+    M.urllib.request.urlopen = fake
+    return lambda: setattr(M.urllib.request, "urlopen", original)
+
+
+def _graphql_raising(exc):
+    def fake(req):
+        raise exc
+
+    return fake
+
+
+def test_graphql_http_error_is_a_stated_incomplete_not_a_traceback():
+    """A 401/403/rate-limit on the PR read must print, not crash.
+
+    `fetch_behind` catches `URLError` and degrades to `None`, which `classify`
+    reports as a finding; this path caught nothing, so the enumeration the
+    entire report is built from was the one thing that could not report its own
+    failure. Found by a cloud worker on 2026-08-05.
+    """
+    restore = _with_urlopen(
+        _graphql_raising(
+            M.urllib.error.HTTPError("u", 401, "Unauthorized", {}, None)
+        )
+    )
+    try:
+        M._graphql("query{x}", {}, "tok")
+        check("a 401 raises Incomplete", False, "no exception raised")
+    except M.Incomplete as exc:
+        check("a 401 raises Incomplete", True)
+        check("the message names the failure", "401" in str(exc), str(exc))
+    except Exception as exc:  # noqa: BLE001 -- the bug being fixed
+        check("a 401 raises Incomplete", False, "%s escaped" % type(exc).__name__)
+    finally:
+        restore()
+
+
+def test_graphql_connection_failure_is_a_stated_incomplete():
+    restore = _with_urlopen(_graphql_raising(M.urllib.error.URLError("no route")))
+    try:
+        M._graphql("query{x}", {}, "tok")
+        check("a transport failure raises Incomplete", False, "no exception")
+    except M.Incomplete:
+        check("a transport failure raises Incomplete", True)
+    except Exception as exc:  # noqa: BLE001
+        check(
+            "a transport failure raises Incomplete",
+            False,
+            "%s escaped" % type(exc).__name__,
+        )
+    finally:
+        restore()
+
+
+def test_graphql_non_json_body_is_a_stated_incomplete():
+    """A proxy or an error page can answer 200 with HTML."""
+    restore = _with_urlopen(lambda req: _FakeResponse(b"<html>502</html>"))
+    try:
+        M._graphql("query{x}", {}, "tok")
+        check("a non-JSON body raises Incomplete", False, "no exception")
+    except M.Incomplete:
+        check("a non-JSON body raises Incomplete", True)
+    except Exception as exc:  # noqa: BLE001
+        check(
+            "a non-JSON body raises Incomplete",
+            False,
+            "%s escaped" % type(exc).__name__,
+        )
+    finally:
+        restore()
+
+
+def test_graphql_response_without_data_or_errors_is_incomplete():
+    """`payload["data"]` used to KeyError on a shape with neither key."""
+    restore = _with_urlopen(lambda req: _FakeResponse(b'{"extensions":{}}'))
+    try:
+        M._graphql("query{x}", {}, "tok")
+        check("a dataless response raises Incomplete", False, "no exception")
+    except M.Incomplete:
+        check("a dataless response raises Incomplete", True)
+    except Exception as exc:  # noqa: BLE001
+        check(
+            "a dataless response raises Incomplete",
+            False,
+            "%s escaped" % type(exc).__name__,
+        )
+    finally:
+        restore()
+
+
+def test_graphql_still_returns_data_on_the_success_path():
+    """The guard must not swallow the good case -- otherwise the four tests
+    above would pass against a `_graphql` that raised unconditionally."""
+    restore = _with_urlopen(lambda req: _FakeResponse(b'{"data":{"ok":1}}'))
+    try:
+        check(
+            "a good response still returns data",
+            M._graphql("query{x}", {}, "tok") == {"ok": 1},
+        )
+    finally:
+        restore()
+
+
+def test_graphql_errors_block_still_wins_over_data():
+    restore = _with_urlopen(
+        lambda req: _FakeResponse(b'{"data":null,"errors":[{"message":"boom"}]}')
+    )
+    try:
+        M._graphql("query{x}", {}, "tok")
+        check("an errors block raises Incomplete", False, "no exception")
+    except M.Incomplete as exc:
+        check("an errors block raises Incomplete", "boom" in str(exc), str(exc))
+    finally:
+        restore()
+
+
 def test_the_script_performs_no_writes():
     """A read-only audit must issue no mutating call.
 

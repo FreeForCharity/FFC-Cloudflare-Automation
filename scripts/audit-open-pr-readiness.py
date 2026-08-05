@@ -207,17 +207,40 @@ def _request(url, token, accept="application/vnd.github+json"):
 
 
 def _graphql(query, variables, token):
+    """The PR enumeration's transport. Every failure is a *stated* Incomplete.
+
+    `fetch_behind` already degrades a transport failure into `None`, which
+    `classify` reports as a finding. This path had no equivalent: a 401, a 403
+    or a rate-limit on the PR read escaped as a raw traceback, so the one
+    enumeration the whole report is built from was the one that could not say
+    it had failed. The contract survived by luck -- an uncaught exception still
+    exits non-zero, so an unreadable input could never be reported clean -- but
+    "exits 1 with a stack trace" and "prints `INCOMPLETE: ...`" are different
+    promises, and `main()` exists to make the second one.
+
+    Note `urllib.error.HTTPError` subclasses `URLError`, so the auth and
+    rate-limit cases that motivated this are covered by the one clause.
+    """
     body = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     req = urllib.request.Request(API + "/graphql", data=body)
     req.add_header("Authorization", "Bearer %s" % token)
     req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        raise Incomplete("GraphQL request failed: %s" % exc)
+    except ValueError as exc:
+        raise Incomplete("GraphQL response was not JSON: %s" % exc)
+    if not isinstance(payload, dict):
+        raise Incomplete("GraphQL response was not an object")
     if payload.get("errors"):
         raise Incomplete(
             "GraphQL errors: %s"
             % "; ".join(e.get("message", "?") for e in payload["errors"])
         )
+    if "data" not in payload:
+        raise Incomplete("GraphQL response carried neither data nor errors")
     return payload["data"]
 
 

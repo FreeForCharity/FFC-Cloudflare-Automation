@@ -493,6 +493,44 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
   bytes written; a round-trip check would pass on `ubuntu-latest` with or without the fix.
   - Verifying the staged blob (`git cat-file -p :<path> | tr -cd '\r' | wc -c` → `0`) is still the
     right habit for any hand-delivered feed — it just no longer has anything to catch here.
+  - **But `FFC-IN-ffcadmin.org` rewrites staged JSON in a pre-commit hook, so verify `HEAD:<path>` —
+    and only ever _after_ the commit.** That repo runs `lint-staged` → `prettier --write` over
+    `*.{json,md,css}`, which fires **after** the staged-blob check and re-stages whatever it
+    changes. So the staged check is measuring a blob the commit may not keep, and the two copies
+    plus the generated source can all still agree while the delivered bytes differ from every one of
+    them.
+
+    **`HEAD:` has its own trap, and it fails in the reassuring direction: run it before committing
+    and it reads the _previous_ commit's blob and reports a confident pass.** So this is a
+    post-commit step, not a substitute for the staged one. Hash **both** copies against the
+    generated file — CR-counting one of them is not enough, because a `prettier` reformat that
+    preserves LF changes the bytes without adding a single `\r`:
+
+    ```bash
+    GEN=/path/to/generated/agentic-os-status.json
+    git rev-parse --verify HEAD >/dev/null          # you are AFTER the commit, not before it
+    sha256sum "$GEN"
+    git cat-file -p HEAD:src/data/agentic-os-status.json    | sha256sum
+    git cat-file -p HEAD:public/data/agentic-os-status.json | sha256sum
+    # all three must print the same digest; then, separately, the CR check:
+    git cat-file -p HEAD:public/data/agentic-os-status.json | tr -cd '\r' | wc -c   # → 0
+    ```
+
+    Three equal digests subsume the CR check (identical bytes cannot differ in `\r`); it is kept
+    because it names the specific failure this repo has actually had, and because it still applies
+    to a delivery where the copies legitimately differ from the source.
+
+    On 2026-08-05 (run 98, delivery 38) prettier left both blobs byte-identical to the generator's
+    output — it already emits compatible formatting — so nothing was wrong and the pre-commit check
+    was not misleading. It was simply **not evidence**: it described a state that a later step was
+    free to change, which is the same shape as L62/#924 (an absence proves nothing about a step that
+    had no input).
+
+    The first draft of this very note repeated the mistake it describes — it hashed `src/` and only
+    CR-checked `public/`, which a LF-preserving reformat passes. Caught in review on #1076. A
+    procedure that checks two artifacts by two different standards is only as strong as the weaker
+    one, and it reads as thorough precisely because it is two commands.
+
   - **And do not run that check in Python text mode - it reports `0` whether or not the CRs are
     there.** `io.open(p, encoding='utf-8').read().count('\r')` applies universal-newline
     translation, so CRLF is silently rewritten on the way IN. On 2026-08-02 (run 72) that returned a

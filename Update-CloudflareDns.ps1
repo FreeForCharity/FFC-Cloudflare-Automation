@@ -540,7 +540,49 @@ function Test-DnsContentMatch {
     # MX is multi-value on content AND preference: the same host at a different
     # priority is a different record, not a match. Matching on content alone
     # would leave a stale preference in place forever.
-    return $contentMatches -and ($Type -ne 'MX' -or $Record.priority -eq $Priority)
+    #
+    # Priority is only compared when the caller supplied one. The SET path
+    # always does. The REMOVE path deliberately does not -- deletion is by
+    # name+type+content, and folding in $Priority's default of 10 there would
+    # refuse to delete an MX at any other preference.
+    if ($Type -eq 'MX' -and $PSBoundParameters.ContainsKey('Priority')) {
+        return $contentMatches -and ($Record.priority -eq $Priority)
+    }
+    return $contentMatches
+}
+
+function Test-DnsRecordShouldRemove {
+    # Should this existing record be deleted for the requested removal?
+    #
+    # Named, like the other two, so a test can reach it. Left inline in the
+    # -Remove loop this decision was invisible: reverting it to a raw -ne left
+    # the whole suite green, because tests that call Test-DnsContentMatch
+    # directly exercise the comparison without exercising the CALL SITE that
+    # was wrong. Found by mutation, not by review.
+    #
+    # An empty DesiredContent means "delete every record of this type at this
+    # name" -- the script's documented behaviour, and why 105 refuses to
+    # dispatch a contentless remove rather than passing a blank through.
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        [AllowNull()][AllowEmptyString()][string]$DesiredContent
+    )
+
+    if ([string]::IsNullOrEmpty($DesiredContent)) { return $true }
+
+    # Logical-value comparison, for the same reason the SET path uses one:
+    # Cloudflare returns a >255-byte TXT record as several quoted
+    # character-strings, so a raw comparison against the value a human can see
+    # never matches. This failed CLOSED -- it skipped every record and deleted
+    # nothing while reporting a mismatch between two strings that look
+    # identical. The dangerous part is the workaround that invites: dropping
+    # the content filter to force the delete takes out EVERY record of that
+    # type at the name.
+    #
+    # No -Priority on purpose: deletion is by name+type+content, and
+    # $Priority's default of 10 would refuse to delete an MX at any other
+    # preference.
+    return Test-DnsContentMatch -Type $Record.type -Record $Record -DesiredContent $DesiredContent
 }
 
 function Get-DnsRecordPayload {
@@ -1983,8 +2025,10 @@ try {
             return
         }
         foreach ($rec in $existing) {
-            # Safety: If Content is specified, only delete matching records
-            if ($Content -and $rec.content -ne $Content) {
+            # Safety: if Content is specified, only delete matching records.
+            # The decision lives in Test-DnsRecordShouldRemove so it is
+            # reachable by the tests -- see the note on that function.
+            if (-not (Test-DnsRecordShouldRemove -Record $rec -DesiredContent $Content)) {
                 Write-Verbose "Skipping record $($rec.id) (Content mismatch: '$($rec.content)' != '$Content')"
                 continue
             }

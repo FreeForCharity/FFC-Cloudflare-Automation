@@ -35,7 +35,7 @@ BeforeAll {
     # this suite at 19 passed / 0 failed. Green testified about the helpers and
     # nothing about the bug.
     foreach ($n in @('Normalize-TxtContent', 'Is-TxtQuoted', 'Quote-TxtContent',
-            'Test-DnsContentMatch', 'Get-DnsRecordPayload')) {
+            'Test-DnsContentMatch', 'Get-DnsRecordPayload', 'Test-DnsRecordShouldRemove')) {
         . ([scriptblock]::Create((Get-FunctionFromFile -Path $script:SourcePath -Name $n).Extent.Text))
     }
 
@@ -188,6 +188,62 @@ Describe 'Test-DnsContentMatch — the SET path comparison' {
             Should -BeFalse
         Test-DnsContentMatch -Type 'MX' -Record $rec -DesiredContent 'smtp.google.com' -Priority 10 |
             Should -BeTrue
+    }
+
+    It 'ignores priority entirely when the caller supplies none' {
+        # The REMOVE path deletes by name+type+content. If it forwarded
+        # $Priority's default of 10, an MX at any other preference would be
+        # skipped and the delete would silently do nothing.
+        $rec = [pscustomobject]@{ content = 'smtp.google.com'; priority = 1 }
+        Test-DnsContentMatch -Type 'MX' -Record $rec -DesiredContent 'smtp.google.com' |
+            Should -BeTrue
+    }
+}
+
+Describe 'Test-DnsRecordShouldRemove — the DELETE path decision' {
+    # The same defect as the SET path, in the DELETE path, found while wiring
+    # cleanup for the live probe. It failed CLOSED: a raw -ne against a stored
+    # multi-segment record matched nothing, so the delete silently removed
+    # nothing and reported a content mismatch between two strings that look
+    # identical. The dangerous part is the workaround that invites -- dropping
+    # -Content to force it deletes EVERY record of that type at the name.
+    #
+    # These assert on Test-DnsRecordShouldRemove, NOT on Test-DnsContentMatch.
+    # The first version of this block called the latter, and reverting the
+    # remove path to a raw -ne left it 33/0 green: the comparison was exercised
+    # while the CALL SITE that was wrong was not. Same trap as the SET path,
+    # one level down.
+
+    It 'finds a stored multi-segment record from its logical value' {
+        $rec = [pscustomobject]@{ type = 'TXT'; content = $script:DkimStored }
+        Test-DnsRecordShouldRemove -Record $rec -DesiredContent $script:DkimPasted |
+            Should -BeTrue -Because 'otherwise the record can never be deleted by the value you can see'
+    }
+
+    It 'still declines to delete a record whose value genuinely differs' {
+        $rec = [pscustomobject]@{ type = 'TXT'; content = $script:DkimStored }
+        $other = $script:DkimPasted -replace 'IDAQAB$', 'IDAQAC'
+        Test-DnsRecordShouldRemove -Record $rec -DesiredContent $other | Should -BeFalse
+    }
+
+    It 'deletes an MX regardless of its preference' {
+        # Deletion is by name+type+content. Folding in $Priority's default of
+        # 10 would silently refuse to delete an MX at any other preference.
+        $rec = [pscustomobject]@{ type = 'MX'; content = 'smtp.google.com'; priority = 1 }
+        Test-DnsRecordShouldRemove -Record $rec -DesiredContent 'smtp.google.com' | Should -BeTrue
+    }
+
+    It 'deletes everything of the type when no content filter is given' {
+        # The documented behaviour, and exactly why 105 refuses to dispatch a
+        # contentless remove rather than passing a blank through.
+        $rec = [pscustomobject]@{ type = 'TXT'; content = 'anything at all' }
+        Test-DnsRecordShouldRemove -Record $rec -DesiredContent '' | Should -BeTrue
+        Test-DnsRecordShouldRemove -Record $rec -DesiredContent $null | Should -BeTrue
+    }
+
+    It 'does not treat a non-matching record as deletable just because TXT normalizes' {
+        $rec = [pscustomobject]@{ type = 'CNAME'; content = 'freeforcharity.github.io' }
+        Test-DnsRecordShouldRemove -Record $rec -DesiredContent 'elsewhere.example.com' | Should -BeFalse
     }
 }
 

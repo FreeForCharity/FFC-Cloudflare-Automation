@@ -6,9 +6,10 @@ between minor releases. On 2026-08-05 (conductor run 101) the repo was handing o
 exactly that failure in its own contributor documentation:
 
     .github/workflows/README.md, "Local usage"
-      - Prettier (check): `npx --yes prettier@3.3.3 --check . --ignore-unknown`
-      - Prettier (write): `npx --yes prettier@3.3.3 --write . --ignore-unknown`
+      - Prettier (check): `npx --yes prettier@<3.3.3> --check . --ignore-unknown`
+      - Prettier (write): `npx --yes prettier@<3.3.3> --write . --ignore-unknown`
 
+(the angle brackets are this module's, not the README's — see the last paragraph)
 while `722-ci.yml` checked with 3.8.1. Measured on that tree, the difference is
 not latent: the CI-pinned version reported the tracked tree clean, and the version
 the README prescribes wanted to reformat **10 tracked files** — including
@@ -38,9 +39,19 @@ already paid for:
   * **It names no version literal of its own.** The expected value is parsed from
     722-ci.yml at run time, so bumping the pin needs no edit here — and because
     this module carries no `prettier@x.y.z` token, it is itself inside the scan's
-    denominator rather than exempted from it. (The 3.3.3 above is deliberately
-    written without the `prettier@` prefix so that recording the history does not
-    trip the guard describing it.)
+    denominator rather than exempted from it.
+
+    That second property was learned the hard way, and it is why the quote at the
+    top carries angle brackets. The first draft reproduced the README's two bad
+    lines **verbatim**, prefix included. It passed locally and failed in CI,
+    because `_tracked_files()` reads `git ls-files`: when it was tested the module
+    was still untracked, so the scan could not see the file introducing the defect.
+    Committing put it inside its own denominator and the guard caught its own
+    docstring. The local green was not a weak signal, it was a **false** one, and
+    the mutation runs inherited the same blind spot. Two consequences worth
+    keeping: a guard whose denominator is the tracked tree must be re-run **after**
+    `git add`, and a module that quotes the pattern it forbids has to break the
+    spelling in order to say so.
 """
 
 from __future__ import annotations

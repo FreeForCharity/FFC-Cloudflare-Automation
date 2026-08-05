@@ -9,20 +9,87 @@ Two modes:
   * <paths...>   -> scan those files' working-tree contents (manual / tests)
 
 Exit 1 if a secret or sensitive file is found, else 0. Fails open (exit 0) if
-anything unexpected happens, so a scanner bug never wedges commits.
+anything unexpected happens, so a scanner bug never wedges commits -- but it
+SAYS SO on stderr, because a crash that prints nothing is indistinguishable
+from a clean scan (#996).
 """
 
 import os
 import subprocess
 import sys
+import traceback
+
+# Printed whenever the scan aborts. Grep-able, and worded so nobody reads a
+# successful commit as a passing scan.
+DID_NOT_RUN = "pre-commit: SECRET SCAN DID NOT RUN"
 
 
-def _git(args):
-    return subprocess.run(["git", *args], capture_output=True, text=True).stdout
+class GitFailed(Exception):
+    """A git command exited non-zero, so its output cannot be trusted.
+
+    Not "its output was never read" -- `_git()` captures stdout and stderr
+    unconditionally, and a failing git often still writes to stdout. The defect
+    this guards is narrower and worse: on a non-zero exit that output is
+    *partial or meaningless*, and the caller treating it as a complete file list
+    is what turns a broken git into an empty scan. Raising here is what stops
+    that; the captured text survives only inside the message, as evidence.
+
+    Named rather than a bare RuntimeError so the traceback in the fail-open
+    notice says what happened at a glance. Adopted from #1002, which found
+    this independently.
+    """
+
+
+def _git(args, check=True):
+    # Decode git's output as UTF-8 explicitly. Git emits UTF-8 regardless of
+    # the console codepage, so this is correct everywhere -- whereas bare
+    # text=True decodes with the LOCALE codec, which is cp1252 on the Windows
+    # Conductor host. cp1252 leaves five byte values undefined
+    # (0x81/0x8D/0x8F/0x90/0x9D), so a staged line carrying a character whose
+    # UTF-8 encoding contains one of them -- U+201D, the RIGHT curly double
+    # quote, and U+274C, the cross mark, both via 0x9D -- aborted the read
+    # before find_secrets() ever ran. The fail-open below then turned that
+    # total failure into a successful commit (#996; same root cause as ledger
+    # L35 / #945).
+    #
+    # NOT the em dash, despite what #996 and L07 both said: e2 80 94 is fully
+    # defined in cp1252, so it decoded to mojibake and the scan completed.
+    # tests/workflow-logic/test_githooks_scan_staged.py pins the real set.
+    # errors="replace" degrades a genuinely undecodable byte to one character
+    # instead of losing the whole file.
+    proc = subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    # A git command that FAILS must not look like a git command that found
+    # nothing. Returning "" here let `git diff --cached` exit 128 ("index file
+    # corrupt") and still produce exit 0 with an empty stderr -- the same silent
+    # fail-open #996 is about, reached through the non-exception path, so the
+    # handler at the bottom of this file never saw it. Raising routes it there,
+    # which is where the DID_NOT_RUN notice already lives.
+    #
+    # stdout is None when the reader thread died mid-decode; that is a failed
+    # read too, even though the return code is 0. UNTESTED AND CURRENTLY
+    # UNREACHABLE: with the codec pinned above, the decode cannot raise, so
+    # nothing can kill that thread. It is kept as defence in depth for whoever
+    # removes `encoding=` again -- do not read it as a covered path.
+    if check and (proc.returncode != 0 or proc.stdout is None):
+        raise GitFailed(
+            "git " + " ".join(args) + f" exited {proc.returncode}"
+            + (" and produced no readable output" if proc.stdout is None else "")
+            + ": " + ((proc.stderr or "").strip()[:500] or "<no stderr>")
+        )
+    return proc.stdout or ""
 
 
 def repo_root():
-    root = _git(["rev-parse", "--show-toplevel"]).strip()
+    # check=False deliberately: this one call has a legitimate failure mode
+    # (invoked outside a work tree, e.g. manual path mode) and its own fallback.
+    # Every other caller wants a failed git command to be loud.
+    root = _git(["rev-parse", "--show-toplevel"], check=False).strip()
     return root or os.getcwd()
 
 
@@ -31,7 +98,20 @@ sys.path.insert(0, os.path.join(ROOT, ".claude", "hooks"))
 try:
     import common  # shared detection logic
 except Exception:
-    sys.exit(0)  # shared module unavailable -> don't block commits
+    # Shared module unavailable -> don't block commits, but don't let the
+    # commit look scanned either. Wrapped for the same reason as the handler at
+    # the bottom of this file: anything raised while reporting a fail-open
+    # would escape it and wedge the commit.
+    try:
+        sys.stderr.write(
+            "\n" + DID_NOT_RUN + ": .claude/hooks/common.py could not be imported,\n"
+            "so this commit was NOT checked for secrets. This is not a passing scan.\n\n"
+            + traceback.format_exc()
+            + "\n"
+        )
+    except Exception:
+        pass
+    sys.exit(0)
 
 
 def staged_files():
@@ -91,4 +171,18 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception:
+        # Fail open -- the docstring's reasoning stands: a scanner bug must not
+        # wedge commits. But never silently. Before #996 this bare exit 0 made
+        # a total scan failure look exactly like a clean scan, and that is how
+        # a cp1252 decode crash went unnoticed for as long as the file existed.
+        try:
+            sys.stderr.write(
+                "\n" + DID_NOT_RUN + ": the scanner crashed, so this commit was\n"
+                "NOT checked for secrets. This is not a passing scan -- please\n"
+                "report it.\n\n" + traceback.format_exc() + "\n"
+            )
+        except Exception:
+            # Anything raised in here would escape the fail-open and wedge the
+            # commit, which is the one outcome this handler exists to prevent.
+            pass
         sys.exit(0)

@@ -1,5 +1,7 @@
 name: '229. WHMCS - Populate Client Fields from Product Answers [WHMCS]'
-run-name: 'WHMCS client-field populate (client ${{ inputs.client_id }}${{ inputs.email }}, dry_run=${{ inputs.dry_run }})'
+run-name:
+  'WHMCS client-field populate (client ${{ inputs.client_id }}${{ inputs.email }}, dry_run=${{
+  inputs.dry_run }})'
 
 # Copies a client's product custom-field answers (mission, brand color, socials,
 # site content, ...) into their Custom Client Fields, so the data shows on the

@@ -8,8 +8,10 @@ run-name: 'WHMCS Application Search: ${{ inputs.query }}'
 # masked triage tables cannot do. Posts the matches to the job summary and
 # optionally back to a GitHub issue. No writes.
 #
-# NOTE: uses the gated `whmcs-prod` so it runs today with a single approval;
-# once `whmcs-prod-read` is set up it can move there (read-only workflow).
+# Runs on the ungated `whmcs-prod-read` lane with the READ-scoped credential
+# (`read-all-ffc-whmcs-*`, via the ffc-admin-kv-reader identity) — matching what
+# the job actually does. 104 is the precedent for this lane. WHMCS is a single
+# credential, so read/write scope selects the identity, not the access.
 
 on:
   workflow_dispatch:
@@ -45,15 +47,18 @@ concurrency:
 jobs:
   application_search:
     runs-on: windows-latest
-    environment: whmcs-prod
+    environment: whmcs-prod-read
     steps:
       - uses: actions/checkout@v7.0.1
 
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      # `scope: read` AND the READ_ALL_* identity must both be set: scope alone would
+      # still authenticate as ffc-admin-kv-writer, which is the privilege this reduces.
       - uses: ./.github/actions/whmcs-secrets-from-kv
         with:
-          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
-          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
 
       - name: Search applications (read-only)
         shell: pwsh
@@ -75,6 +80,12 @@ jobs:
           $out = 'artifacts/whmcs/whmcs_application_search.json'
           $json = & pwsh -NoProfile -File .\scripts\whmcs-application-search.ps1 -ApiUrl $env:WHMCS_API_URL -Query $env:QUERY -MaxMatches $max -OutputFile $out
           if ($LASTEXITCODE -ne 0) { throw "Application search failed (exit $LASTEXITCODE)." }
+
+          # Also print to the job log. The payload is already masked, and a result
+          # that lives only in the step summary + artifact is unreadable to any
+          # caller working from logs (the API exposes neither).
+          Write-Host "## WHMCS application search - '$($env:QUERY)'"
+          Write-Host (($json | Out-String).TrimEnd())
 
           $fence = [string][char]0x60 * 3
           $lines = @("## WHMCS application search - '$($env:QUERY)'", '', ($fence + 'json'), (($json | Out-String).TrimEnd()), $fence)

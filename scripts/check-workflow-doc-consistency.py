@@ -7,7 +7,16 @@ Fails when:
   2. an operator-facing workflow (display name starts with `NN.`) has no row in
      docs/workflow-safety-and-approvals.md;
   3. the safety table references a display number that no workflow declares
-     (a stale / wrong-number row).
+     (a stale / wrong-number row);
+  4. two workflow files declare the SAME display number. This one is a
+     detection gap as much as a numbering rule: the number→file map below used
+     to be a plain dict assignment, so the second file for a number silently
+     overwrote the first and the loser became invisible to checks 2 and 3 *and*
+     to the EXCLUDE/gated-environment assertion. The count stayed right (98
+     numbers for 99 files), which is why nothing looked wrong. Two open PRs
+     both claiming display number 229 — #904 (domain order add) and #825
+     (client field populate) — is what surfaced it; because their filenames
+     differ, git merges both cleanly and no conflict ever appears.
 
 Repo-internal / CI workflows are intentionally excluded from the operator table.
 Run from the repo root: `python3 scripts/check-workflow-doc-consistency.py`.
@@ -32,6 +41,7 @@ GATED_ENVS = {
     "cloudflare-prod",
     "cloudflare-prod-write",
     "github-prod",
+    "google-prod-write",
     "m365-prod",
     "whmcs-prod",
     "wpmudev-prod",
@@ -64,12 +74,29 @@ def main():
                 errors.append(f"{f}: starts with a UTF-8 BOM; strip it.")
 
     # 2) Display numbers declared by workflow name: fields (BOM-tolerant).
-    wf_nums = {}
+    # Collect every file per number — NOT `wf_nums[num] = f`, which drops all
+    # but the last file for a duplicated number (see failure mode 4 above).
+    wf_files = {}
     for f in sorted(glob.glob(WF_GLOB)):
         txt = open(f, encoding="utf-8-sig").read()
         m = re.search(r"^name:\s*['\"]?(\d{2,3})\.", txt, re.M)
         if m:
-            wf_nums[two(m.group(1))] = f
+            wf_files.setdefault(two(m.group(1)), []).append(f)
+
+    # 2a) Display numbers must be unique. Reported before the coverage checks
+    # because a duplicate makes their verdict unreliable, not merely incomplete.
+    for num, files in sorted(wf_files.items()):
+        if len(files) > 1:
+            errors.append(
+                f"display number {num} is declared by {len(files)} workflows: "
+                f"{', '.join(files)} — renumber all but one. Distinct filenames "
+                "mean git merges both without a conflict, and every check keyed "
+                "on the display number can only see one of them."
+            )
+
+    # One representative file per number for the checks below. Safe because a
+    # duplicate has already been recorded as an error above.
+    wf_nums = {num: files[0] for num, files in wf_files.items()}
 
     # 3) Display numbers covered by the safety table (expand A-B / A-B en-dash ranges).
     covered = set()
@@ -90,14 +117,17 @@ def main():
 
     # Excluded workflows must not sit behind an approval gate — a gated run needs
     # a safety-table row for the approver to judge it against.
-    for num in sorted(EXCLUDE & set(wf_nums)):
-        f = wf_nums[num]
-        gated = declared_environments(open(f, encoding="utf-8-sig").read()) & GATED_ENVS
-        if gated:
-            errors.append(
-                f"workflow {num} ({f}) is in EXCLUDE but declares gated "
-                f"environment(s) {sorted(gated)}; add a row to {DOC} instead"
-            )
+    # Every file for the number, not just a representative: with a duplicate,
+    # checking only one file can clear an excluded-but-gated workflow because
+    # its twin happened to sort first.
+    for num in sorted(EXCLUDE & set(wf_files)):
+        for f in wf_files[num]:
+            gated = declared_environments(open(f, encoding="utf-8-sig").read()) & GATED_ENVS
+            if gated:
+                errors.append(
+                    f"workflow {num} ({f}) is in EXCLUDE but declares gated "
+                    f"environment(s) {sorted(gated)}; add a row to {DOC} instead"
+                )
 
     # Phantom rows: every table number must map to a real workflow.
     for num in sorted(covered):

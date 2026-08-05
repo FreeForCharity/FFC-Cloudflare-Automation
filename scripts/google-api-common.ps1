@@ -133,12 +133,37 @@ function Invoke-GoogleApi {
 
 function Get-GoogleRows {
     <#
-    Safely return a report response's rows as an array. The GA Data API omits the 'rows' field
-    entirely when a property/date range has no data, so $response.rows throws under Set-StrictMode.
+    Safely return a report response's rows as an ARRAY, always — including when there are none.
+    The GA Data API omits the 'rows' field entirely when a property/date range has no data, so
+    $response.rows throws under Set-StrictMode.
+
+    Two StrictMode traps live in this one function, and both were live defects (#875):
+
+    1. `return @()` DOES NOT RETURN AN EMPTY ARRAY. PowerShell unrolls a collection on output, and
+       unrolling an empty one emits nothing — so the caller receives $null. `$rows.Count` then
+       throws PropertyNotFoundException under StrictMode, which is exactly how 506 failed for every
+       GA4 property with no traffic in the window (and how 502's `if ($respRows.Count)` would fail
+       on the same shape). The unary comma wraps the array in a one-element array so the unroll
+       yields the array itself. It is required on EVERY return path here, not just the empty one:
+       without it a single-row response returns a bare PSCustomObject, and the `$rows[0]` that
+       follows only works by PowerShell's scalar-indexing courtesy.
+
+    2. `.PSObject.Properties.Name -contains` enumerates, and enumerating an EMPTY
+       PSMemberInfoCollection throws "The property 'Name' cannot be found on this object" — so the
+       guard written to make property access safe was itself the thing that threw, for the empty
+       `{}` body it existed to handle. The indexer never enumerates and returns $null for a missing
+       name. Same finding, same remedy as Test-HasProperty in google-telemetry-reachability.ps1;
+       this copy simply never got it.
+
+    -Response is Mandatory and so rejects $null, and that is deliberate: a 200 with an EMPTY body
+    deserializes to $null, which is an unexpected response rather than evidence of zero traffic.
+    Returning an empty array there would fabricate a measurement — reporting "0 sessions" for a
+    property nobody successfully queried. It surfaces as a probe error instead. Pinned by a test,
+    because the natural "be forgiving" edit is to add an [AllowNull()] and a $null branch.
   #>
     param([Parameter(Mandatory)]$Response)
-    if (($Response.PSObject.Properties.Name -contains 'rows') -and $Response.rows) { return @($Response.rows) }
-    return @()
+    if ($null -eq $Response.PSObject.Properties['rows'] -or -not $Response.rows) { return , @() }
+    return , @($Response.rows)
 }
 
 function Get-GoogleDwdAccessToken {

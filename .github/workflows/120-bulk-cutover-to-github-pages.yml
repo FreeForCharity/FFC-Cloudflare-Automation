@@ -54,20 +54,33 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     environment: github-prod
-    env:
-      GH_TOKEN: ${{ secrets.CBM_TOKEN }}
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Validate CBM_TOKEN
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844).
+      - name: Load the GitHub PAT from Key Vault
         shell: bash
         run: |
-          if [ -z "${{ secrets.CBM_TOKEN }}" ]; then
-            echo "::error::CBM_TOKEN secret is not set in environment github-prod."
-            echo "::error::Add a PAT with repo:contents:write scope to that env, or re-run with skip_cname=true."
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-ffc-copilot-mcp-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault."
             exit 1
           fi
-
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
       - name: Flip public/CNAME (skip DNS in this job)
         shell: pwsh
         run: |
@@ -143,25 +156,53 @@ jobs:
     if: ${{ always() && inputs.dry_run != true && needs.dns-flip.result == 'success' }}
     runs-on: ubuntu-latest
     environment: github-prod
-    env:
-      GH_TOKEN: ${{ secrets.CBM_TOKEN }}
     steps:
       # Needed to read config/ffc-ex-cutover-domains.json (the fleet default list).
       - uses: actions/checkout@v7.0.1
 
-      - name: Validate CBM_TOKEN
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844).
+      - name: Load the GitHub PAT from Key Vault
         shell: bash
         run: |
-          if [ -z "${{ secrets.CBM_TOKEN }}" ]; then
-            echo "::error::CBM_TOKEN secret is not set in environment github-prod."
-            echo "::error::Required to dispatch Post-Deploy Smoke Test in each FFC-EX repo."
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-ffc-copilot-mcp-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault."
             exit 1
           fi
-
+          echo "::add-mask::$token"
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
       - name: Bind Pages custom domain + cert kick (post-DNS)
         shell: bash
         run: |
           set -uo pipefail
+          # `gh` writes its error body to STDOUT, so `gh … 2>/dev/null || echo <default>`
+          # never produces <default> — it produces the error text with the default
+          # appended, and every downstream comparison then takes the wrong branch
+          # (ledger L02 / #854 / #889). gh_get keeps stdout to successful responses
+          # only: on failure it returns non-zero and puts the error on stderr, so a
+          # caller can never mistake "could not read" for data.
+          gh_get() {
+            local out rc
+            out=$(gh "$@" 2>&1); rc=$?
+            if [ "$rc" -ne 0 ]; then
+              printf '%s\n' "$out" >&2
+              return "$rc"
+            fi
+            printf '%s' "$out"
+          }
           # #774: the Pages custom-domain binding is set AFTER the DNS flip.
           # Binding while stale records still resolve stalls Let's Encrypt in
           # state 'none' (seen live on the first cutover). Idempotent: a
@@ -185,7 +226,13 @@ jobs:
               continue
             fi
             sleep 10
-            state=$(gh api "repos/$repo/pages" --jq '.https_certificate.state // "none"' 2>/dev/null || echo unknown)
+            # 'unknown' must mean "could not read", never "read an error". A cert that
+            # is genuinely stalled reports none/errored and gets re-bound below; an
+            # unreadable API must not trigger a re-bind on a guess.
+            if ! state=$(gh_get api "repos/$repo/pages" --jq '.https_certificate.state // "none"'); then
+              state=unknown
+              echo "::warning::Could not read the Pages cert state for $repo — no re-bind attempted."
+            fi
             echo "cert state after bind: $state"
             case "$state" in
               none|errored)
@@ -194,7 +241,10 @@ jobs:
                 sleep 5
                 gh api -X PUT "repos/$repo/pages" -f cname="$d" >/dev/null
                 sleep 10
-                state=$(gh api "repos/$repo/pages" --jq '.https_certificate.state // "none"' 2>/dev/null || echo unknown)
+                if ! state=$(gh_get api "repos/$repo/pages" --jq '.https_certificate.state // "none"'); then
+                  state=unknown
+                  echo "::warning::Could not read the Pages cert state for $repo after re-bind."
+                fi
                 echo "cert state after re-bind: $state"
                 ;;
             esac
@@ -215,6 +265,18 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+
+          # See the bind step above: `gh` puts its error body on stdout, so an
+          # error must be detected by exit code, never by a `||` default (L02/#889).
+          gh_get() {
+            local out rc
+            out=$(gh "$@" 2>&1); rc=$?
+            if [ "$rc" -ne 0 ]; then
+              printf '%s\n' "$out" >&2
+              return "$rc"
+            fi
+            printf '%s' "$out"
+          }
 
           # Same default list as the cname-flip and dns-flip jobs above —
           # single source of truth shared with workflow 121.
@@ -242,7 +304,14 @@ jobs:
             fi
             # Settle a few seconds so the run is registered before we grab its id.
             sleep 5
-            run_id=$(gh run list --repo "$repo" --workflow "Post-Deploy Smoke Test" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || echo "")
+            # An unreadable run list must land in the NO_RUN_ID branch below. The old
+            # form captured the error body instead, which is non-empty and not "null",
+            # so it was carried forward as if it were a run id — the poll step then
+            # failed on every request and reported a smoke FAILURE for a run that was
+            # very likely fine.
+            if ! run_id=$(gh_get run list --repo "$repo" --workflow "Post-Deploy Smoke Test" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId'); then
+              run_id=""
+            fi
             if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
               echo "::warning::Could not locate dispatched smoke run for $repo"
               printf '%s\tNO_RUN_ID\n' "$d" >> /tmp/smoke-dispatched.tsv
@@ -260,6 +329,18 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+
+          # See the bind step above: `gh` puts its error body on stdout, so an
+          # error must be detected by exit code, never by a `||` default (L02/#889).
+          gh_get() {
+            local out rc
+            out=$(gh "$@" 2>&1); rc=$?
+            if [ "$rc" -ne 0 ]; then
+              printf '%s\n' "$out" >&2
+              return "$rc"
+            fi
+            printf '%s' "$out"
+          }
 
           # Per-repo deadline matches the smoke'\''s internal cert-retry budget
           # (20 min) plus Playwright install + screenshot (~3 min) plus slack.
@@ -282,7 +363,13 @@ jobs:
             deadline=$(( $(date +%s) + per_repo_deadline_seconds ))
             status="unknown"
             while [ "$(date +%s)" -lt "$deadline" ]; do
-              status=$(gh run view "$run_id" --repo "$repo" --json status,conclusion --jq '.status + ":" + (.conclusion // "null")' 2>/dev/null || echo "error:null")
+              # "error:null" has to be reached by exit code: the swallowed form
+              # captured the error body, which matches none of the in-flight patterns
+              # below, so it broke the loop and was printed verbatim as the "final
+              # state" — the same outcome, reported unintelligibly.
+              if ! status=$(gh_get run view "$run_id" --repo "$repo" --json status,conclusion --jq '.status + ":" + (.conclusion // "null")'); then
+                status="error:null"
+              fi
               case "$status" in
                 in_progress:*|queued:*|waiting:*) ;;
                 *) break ;;

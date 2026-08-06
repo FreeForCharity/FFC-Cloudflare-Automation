@@ -29,6 +29,16 @@ on:
         description: 'Record Content'
         type: string
         default: 'v=spf1 include:spf.protection.outlook.com -all'
+      record_action:
+        description:
+          "'set' creates or updates the record. 'remove' DELETES it - and needs record_content,
+          which is matched on the record's logical value so a multi-segment TXT is found; without it
+          the script would delete EVERY record of that type at that name."
+        type: choice
+        options:
+          - set
+          - remove
+        default: set
   issues:
     types: [labeled]
 
@@ -182,6 +192,7 @@ jobs:
           REC_TYPE: ${{ github.event.inputs.record_type }}
           REC_NAME: ${{ github.event.inputs.record_name }}
           REC_CONTENT: ${{ github.event.inputs.record_content }}
+          REC_ACTION: ${{ github.event.inputs.record_action }}
         run: |
           # Defaults applied here (not in the env expression) so each env line stays short and is
           # never folded across lines by the YAML formatter.
@@ -189,14 +200,51 @@ jobs:
           $Type    = if ([string]::IsNullOrWhiteSpace($env:REC_TYPE)) { 'TXT' } else { $env:REC_TYPE }
           $Name    = if ([string]::IsNullOrWhiteSpace($env:REC_NAME)) { '@' } else { $env:REC_NAME }
           $Content = if ([string]::IsNullOrWhiteSpace($env:REC_CONTENT)) { 'v=spf1 include:spf.protection.outlook.com -all' } else { $env:REC_CONTENT }
+          $Action  = if ([string]::IsNullOrWhiteSpace($env:REC_ACTION)) { 'set' } else { $env:REC_ACTION }
 
-          Write-Host "Managing $Type record for $Name in zone $Domain..."
-
-          .\Update-CloudflareDns.ps1 -Zone $Domain `
-            -Name $Name `
-            -Type $Type `
-            -Content $Content `
-            -Ttl 1
+          # Each branch builds a COMPLETE parameter set under its OWN variable
+          # name and makes its own call. Accumulating into one shared $params
+          # would leave a union of -Ttl (Set set) and -Remove (Remove set) that
+          # binds to neither, and scripts/check-pwsh-workflow-invocations.py
+          # correctly refuses it: that guard merges a variable's shape across
+          # every assignment in the body, so it cannot know a switch made the
+          # branches exclusive. Distinct names give it one shape per call.
+          #
+          # Hashtable, not an array: splatting an array into an in-process
+          # script call binds POSITIONALLY, so '-Zone' would arrive as a value.
+          # That shipped once in 106 and is pinned by tests there and here.
+          switch ($Action) {
+            'set' {
+              Write-Host "Managing $Type record for $Name in zone $Domain..."
+              $setParams = @{
+                Zone    = $Domain
+                Name    = $Name
+                Type    = $Type
+                Content = $Content
+                Ttl     = 1
+              }
+              & .\Update-CloudflareDns.ps1 @setParams
+            }
+            'remove' {
+              # Content is REQUIRED to delete. Without it the script deletes
+              # every record of this type at this name, which for a multi-value
+              # type like TXT means taking out unrelated records -- SPF and
+              # DMARC live at names that also carry other TXT.
+              if ([string]::IsNullOrWhiteSpace($env:REC_CONTENT)) {
+                throw "record_action=remove requires an explicit record_content. Refusing to delete every $Type record at '$Name'."
+              }
+              Write-Host "REMOVING $Type record for $Name in zone $Domain..."
+              $removeParams = @{
+                Zone    = $Domain
+                Name    = $Name
+                Type    = $Type
+                Content = $Content
+                Remove  = $true
+              }
+              & .\Update-CloudflareDns.ps1 @removeParams
+            }
+            default { throw "Unsupported record_action '$Action'" }
+          }
 
           # #777: do NOT check $LASTEXITCODE here. An in-process .ps1 call only
           # sets it if the script itself runs a native command or calls exit —

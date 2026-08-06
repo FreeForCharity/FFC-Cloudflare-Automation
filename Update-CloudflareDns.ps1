@@ -435,13 +435,27 @@ function Get-AllDnsRecords {
 }
 
 function Normalize-TxtContent {
+    # The LOGICAL value of a TXT record, independent of how DNS chopped it up.
+    #
+    # A character-string maxes out at 255 bytes (RFC 1035 3.3.14), so anything
+    # longer is stored as several of them and joined with NO separator. That is
+    # why a 2048-bit DKIM key comes back split mid-base64 as
+    # "v=DKIM1; ...MIIBIjANBg" "kqhkiG9w0...IDAQAB" and why the join must be
+    # empty rather than a space — a space would corrupt the key.
+    #
+    # Comparisons must run on this value. The raw text Cloudflare returns for a
+    # long record never equals the text that was sent, so a raw -eq reports the
+    # record as absent forever.
     param([AllowNull()][string]$Value)
     if ($null -eq $Value) { return '' }
     $trimmed = $Value.Trim()
-    if ($trimmed.Length -ge 2 -and $trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) {
-        return $trimmed.Substring(1, $trimmed.Length - 2)
+    if ($trimmed.Length -lt 2 -or -not $trimmed.StartsWith('"') -or -not $trimmed.EndsWith('"')) {
+        return $trimmed
     }
-    return $trimmed
+    $inner = $trimmed.Substring(1, $trimmed.Length - 2)
+    # Unescaped quote-space-quote is a segment boundary; a literal quote inside a
+    # character-string arrives escaped as \" and is left alone.
+    return ($inner -replace '(?<!\\)"\s*"', '')
 }
 
 function Is-TxtQuoted {
@@ -452,9 +466,161 @@ function Is-TxtQuoted {
 }
 
 function Quote-TxtContent {
+    # Emit a TXT value in the quoted form Cloudflare returns and the UI expects,
+    # splitting it into character-strings when it is too long for one. A single
+    # over-length string is not a legal TXT record.
+    #
+    # The limit is 255 BYTES, not characters (RFC 1035 3.3.14). Everything this
+    # repo writes -- SPF, DMARC, DKIM, verification tokens -- is ASCII, where the
+    # two coincide; but chunking on .Length would silently emit an illegal record
+    # the first time a non-ASCII value appeared, so the split measures UTF-8
+    # bytes and never lands inside a surrogate pair.
     param([AllowNull()][string]$Value)
     $normalized = Normalize-TxtContent -Value $Value
-    return '"' + $normalized + '"'
+    if ([System.Text.Encoding]::UTF8.GetByteCount($normalized) -le 255) {
+        return '"' + $normalized + '"'
+    }
+
+    $chunks = @()
+    $current = [System.Text.StringBuilder]::new()
+    $currentBytes = 0
+    $i = 0
+    while ($i -lt $normalized.Length) {
+        # Advance a whole code point so a surrogate pair is never split.
+        $step = if ([char]::IsHighSurrogate($normalized[$i]) -and ($i + 1) -lt $normalized.Length) { 2 } else { 1 }
+        $piece = $normalized.Substring($i, $step)
+        $pieceBytes = [System.Text.Encoding]::UTF8.GetByteCount($piece)
+
+        if ($currentBytes -gt 0 -and ($currentBytes + $pieceBytes) -gt 255) {
+            $chunks += '"' + $current.ToString() + '"'
+            $null = $current.Clear()
+            $currentBytes = 0
+        }
+
+        $null = $current.Append($piece)
+        $currentBytes += $pieceBytes
+        $i += $step
+    }
+    if ($current.Length -gt 0) { $chunks += '"' + $current.ToString() + '"' }
+
+    return ($chunks -join ' ')
+}
+
+function Test-DnsContentMatch {
+    # Does an existing record already hold the value we are about to write?
+    #
+    # This is a named function rather than an expression inside the SET path's
+    # Where-Object, and that is deliberate: tests/cloudflare-txt-records.Tests.ps1
+    # reaches code by extracting FUNCTIONS from the AST, so anything left inline
+    # in the SET path is unreachable by every test in this repo. Verified by
+    # mutation -- reverting the inline comparison to a raw -eq left the suite at
+    # 19 passed / 0 failed, while the same suite reddens for the helpers it does
+    # load. The comparison below IS the bug that file exists to pin, so it has
+    # to live somewhere a test can call.
+    #
+    # TXT compares on the LOGICAL value. Cloudflare returns a >255-byte record
+    # as several quoted character-strings joined with no separator, so a raw -eq
+    # never matches the text that was sent: a 2048-bit DKIM key reads as ABSENT
+    # on every re-run and gets appended again. Two TXT records at one selector
+    # does not degrade gracefully -- verifiers see an ambiguous key and
+    # signatures fail, so the second write breaks mail authentication rather
+    # than merely duplicating a record.
+    param(
+        [Parameter(Mandatory = $true)][string]$Type,
+        [Parameter(Mandatory = $true)]$Record,
+        [AllowNull()][AllowEmptyString()][string]$DesiredContent,
+        $Priority
+    )
+
+    $contentMatches = if ($Type -eq 'TXT') {
+        (Normalize-TxtContent -Value $Record.content) -eq (Normalize-TxtContent -Value $DesiredContent)
+    }
+    else { $Record.content -eq $DesiredContent }
+
+    # MX is multi-value on content AND preference: the same host at a different
+    # priority is a different record, not a match. Matching on content alone
+    # would leave a stale preference in place forever.
+    #
+    # Priority is only compared when the caller supplied one. The SET path
+    # always does. The REMOVE path deliberately does not -- deletion is by
+    # name+type+content, and folding in $Priority's default of 10 there would
+    # refuse to delete an MX at any other preference.
+    if ($Type -eq 'MX' -and $PSBoundParameters.ContainsKey('Priority')) {
+        return $contentMatches -and ($Record.priority -eq $Priority)
+    }
+    return $contentMatches
+}
+
+function Test-DnsRecordShouldRemove {
+    # Should this existing record be deleted for the requested removal?
+    #
+    # Named, like the other two, so a test can reach it. Left inline in the
+    # -Remove loop this decision was invisible: reverting it to a raw -ne left
+    # the whole suite green, because tests that call Test-DnsContentMatch
+    # directly exercise the comparison without exercising the CALL SITE that
+    # was wrong. Found by mutation, not by review.
+    #
+    # An empty DesiredContent means "delete every record of this type at this
+    # name" -- the script's documented behaviour, and why 105 refuses to
+    # dispatch a contentless remove rather than passing a blank through.
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        [AllowNull()][AllowEmptyString()][string]$DesiredContent
+    )
+
+    if ([string]::IsNullOrEmpty($DesiredContent)) { return $true }
+
+    # Logical-value comparison, for the same reason the SET path uses one:
+    # Cloudflare returns a >255-byte TXT record as several quoted
+    # character-strings, so a raw comparison against the value a human can see
+    # never matches. This failed CLOSED -- it skipped every record and deleted
+    # nothing while reporting a mismatch between two strings that look
+    # identical. The dangerous part is the workaround that invites: dropping
+    # the content filter to force the delete takes out EVERY record of that
+    # type at the name.
+    #
+    # No -Priority on purpose: deletion is by name+type+content, and
+    # $Priority's default of 10 would refuse to delete an MX at any other
+    # preference.
+    return Test-DnsContentMatch -Type $Record.type -Record $Record -DesiredContent $DesiredContent
+}
+
+function Get-DnsRecordPayload {
+    # The request body for a create or update on the SET path.
+    #
+    # Named for the same reason as Test-DnsContentMatch: built inline, the TXT
+    # quoting below was reachable by no test in the repo -- reverting it to raw
+    # $Content left the suite fully green.
+    #
+    # TXT goes out through Quote-TxtContent. The enforce path already does this
+    # at both its update and create calls, and that is how every SPF and DMARC
+    # record in the fleet was written; this path simply never did, so it would
+    # push a single over-length character-string for anything past 255 bytes (a
+    # 2048-bit DKIM key). That is not a legal record whatever Cloudflare then
+    # chooses to do with it.
+    param(
+        [Parameter(Mandatory = $true)][string]$Type,
+        [Parameter(Mandatory = $true)][string]$RecordName,
+        [AllowNull()][AllowEmptyString()][string]$Content,
+        $Ttl,
+        [bool]$Proxied,
+        $Priority
+    )
+
+    $payload = @{
+        type    = $Type
+        name    = $RecordName
+        content = if ($Type -eq 'TXT') { Quote-TxtContent -Value $Content } else { $Content }
+        ttl     = $Ttl
+    }
+
+    # Only record types that support it carry 'proxied'; sending it for MX or
+    # TXT is rejected by the API.
+    if ($Type -notin @('MX', 'TXT')) { $payload['proxied'] = $Proxied }
+
+    if ($Type -eq 'MX') { $payload['priority'] = $Priority }
+
+    return $payload
 }
 
 function Enable-DmarcManagement {
@@ -1859,8 +2025,10 @@ try {
             return
         }
         foreach ($rec in $existing) {
-            # Safety: If Content is specified, only delete matching records
-            if ($Content -and $rec.content -ne $Content) {
+            # Safety: if Content is specified, only delete matching records.
+            # The decision lives in Test-DnsRecordShouldRemove so it is
+            # reachable by the tests -- see the note on that function.
+            if (-not (Test-DnsRecordShouldRemove -Record $rec -DesiredContent $Content)) {
                 Write-Verbose "Skipping record $($rec.id) (Content mismatch: '$($rec.content)' != '$Content')"
                 continue
             }
@@ -1879,23 +2047,9 @@ try {
 
     # --- SET (Create/Update) Operation ---
     
-    # Prepare payload
-    $payload = @{
-        type    = $Type
-        name    = $RecordName
-        content = $Content
-        ttl     = $Ttl
-    }
-
-    # Only add proxied for record types that support it
-    if ($Type -notin @('MX', 'TXT')) {
-        $payload['proxied'] = $Proxied.IsPresent
-    }
-
-    # Add priority for MX records
-    if ($Type -eq 'MX') {
-        $payload['priority'] = $Priority
-    }
+    # Prepare payload — see Get-DnsRecordPayload for the TXT quoting rule.
+    $payload = Get-DnsRecordPayload -Type $Type -RecordName $RecordName -Content $Content `
+        -Ttl $Ttl -Proxied $Proxied.IsPresent -Priority $Priority
 
     # Check for matches (Same Type)
     $existingSameType = $existing | Where-Object { $_.type -eq $Type }
@@ -1904,9 +2058,11 @@ try {
     # These types allow multiple records with the same name.
     # Logic: Ensure ONE record exists with this content. Do not overwrite others.
     if ($Type -in @('MX', 'TXT')) {
-        $exactMatch = $existingSameType | Where-Object { 
-            $_.content -eq $Content -and 
-            ($Type -ne 'MX' -or $_.priority -eq $Priority)
+        # The comparison itself lives in Test-DnsContentMatch so it is reachable
+        # by the tests -- see the note on that function. TXT matches on the
+        # logical value, not the raw stored text.
+        $exactMatch = $existingSameType | Where-Object {
+            Test-DnsContentMatch -Type $Type -Record $_ -DesiredContent $Content -Priority $Priority
         }
 
         if ($exactMatch) {

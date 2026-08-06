@@ -759,3 +759,44 @@ Describe 'Resolve-MultiValueRecordMatch — the A/AAAA proxy flip (#1053)' {
         }
     }
 }
+
+Describe 'Resolve-MultiValueRecordMatch — zones with nothing to match' {
+    # The caller builds $candidates from an unwrapped pipeline, so it is $null
+    # when the zone has no record of this type at this name. That is the
+    # PROVISIONING path: a brand new zone, or any zone whose GitHub Pages
+    # records do not exist yet.
+    #
+    # A Mandatory [object[]] parameter rejects that with "Cannot bind argument
+    # ... because it is null" and aborts enforcement outright. Every existing
+    # test supplied a populated zone, so the whole suite stayed green.
+
+    It 'creates rather than throwing when the zone has no records of this type' {
+        # @($null) is what `@($candidates)` produces at the call site when the
+        # pipeline matched nothing — a 1-element array holding $null.
+        $m = $null
+        { $m = Resolve-MultiValueRecordMatch -Candidates @($null) -DesiredContent '185.199.108.153' -DesiredProxied $false } |
+            Should -Not -Throw
+        $m.Found | Should -BeNullOrEmpty
+        $m.UpdateCandidate | Should -BeNullOrEmpty
+    }
+
+    It 'accepts a bare $null just as readily' {
+        $m = $null
+        { $m = Resolve-MultiValueRecordMatch -Candidates $null -DesiredContent '185.199.108.153' -DesiredProxied $false } |
+            Should -Not -Throw
+        $m.Found | Should -BeNullOrEmpty
+    }
+
+    It 'accepts a single record that is not wrapped in an array' {
+        # A one-match pipeline yields a scalar, not an array.
+        $one = [pscustomobject]@{ type = 'A'; content = '185.199.108.153'; proxied = $true }
+        $m = Resolve-MultiValueRecordMatch -Candidates $one -DesiredContent '185.199.108.153' -DesiredProxied $false
+        $m.UpdateCandidate | Should -Not -BeNullOrEmpty -Because 'a lone proxied record must still be flipped, not duplicated'
+    }
+
+    It 'ignores stray nulls mixed into a populated set' {
+        $recs = @($null, [pscustomobject]@{ type = 'A'; content = '185.199.108.153'; proxied = $false }, $null)
+        $m = Resolve-MultiValueRecordMatch -Candidates $recs -DesiredContent '185.199.108.153' -DesiredProxied $false
+        $m.Found | Should -Not -BeNullOrEmpty
+    }
+}

@@ -1259,11 +1259,21 @@ function Resolve-MultiValueRecordMatch {
     # A named function because the enforce loop is inline script that no test in
     # this repo can reach; see the note on Resolve-ApexSpfAction.
     param(
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Candidates,
+        # Deliberately untyped and nullable. The caller builds this from an
+        # unwrapped pipeline (`$allRecords | Where-Object ...`), which yields
+        # $null when the zone has NO record of this type at this name -- a brand
+        # new zone, or any zone whose GitHub Pages records do not exist yet.
+        # A [Parameter(Mandatory)][object[]] here rejects that outright with
+        # "Cannot bind argument to parameter 'Candidates' because it is null",
+        # aborting enforcement on exactly the provisioning path. Normalizing
+        # inside is what makes $null, a bare scalar and an array behave alike.
+        [AllowNull()][AllowEmptyCollection()]$Candidates,
         [Parameter(Mandatory = $true)][string]$DesiredContent,
         # $null means "any proxy state is acceptable".
         $DesiredProxied
     )
+
+    $Candidates = @($Candidates | Where-Object { $null -ne $_ })
 
     $found = @($Candidates | Where-Object {
             $_.content -eq $DesiredContent -and

@@ -315,6 +315,28 @@ def _ps_implicit_secret_output(chunk):
     return None
 
 
+def _safe_name(name):
+    """A variable name fit to appear in a refusal, or None if it is not.
+
+    THE single place a user-derived name becomes message text. It exists as a
+    function rather than two inline copies because the copies diverged: the
+    cap-and-re-scan was written for `_secret_label()` in one round and the
+    PowerShell branch was added in the next with only the cap, reintroducing
+    the identical leak one message over (Copilot, #1062). A new refusal must
+    call this rather than slice a name itself.
+
+    The re-scan is not belt-and-braces, it is load-bearing, and the cap is why:
+    `ghp_` + 36 chars is exactly 40, so a variable named `<token>_KEY`
+    truncates onto the token's end and RESTORES the word boundary the `_KEY`
+    suffix had suppressed -- turning a harmless name into a well-formed
+    credential at the moment it is printed.
+    """
+    name = name[:40]
+    if not name or common.find_secrets(name):
+        return None
+    return name
+
+
 def _secret_label(chunk):
     """Name WHAT armed the rule, never the text that did it.
 
@@ -338,10 +360,10 @@ def _secret_label(chunk):
         name = match.group(0).lstrip("$").lstrip("{")
         if name.lower().startswith("env:"):
             name = name[4:]
-        name = name[:40]
-        if not name or common.find_secrets(name):
+        safe = _safe_name(name)
+        if safe is None:
             break
-        return f"`{name}`"
+        return f"`{safe}`"
     if "${{ secrets." in chunk:
         return "a `${{ secrets.* }}` expression"
     return "a secret-named variable"
@@ -380,10 +402,11 @@ def echo_secret_violation(cmd):
         # the run-92 patch failing `powershell env var assignment allowed`.)
         implicit = _ps_implicit_secret_output(command_part)
         if implicit:
+            safe = _safe_name(implicit)
+            named = f"`{safe}`" if safe else "a secret-named variable"
             return (
                 "Refusing to echo/print a secret value to logs.\n"
-                f"  statement {index}: a bare PowerShell expansion of "
-                f"`{implicit[:40]}`\n"
+                f"  statement {index}: a bare PowerShell expansion of {named}\n"
                 "In PowerShell a bare expression statement IS output, so this "
                 "writes the value to the log with no print verb involved.\n"
                 "Assign it, pass it as an argument, or let the command read the "

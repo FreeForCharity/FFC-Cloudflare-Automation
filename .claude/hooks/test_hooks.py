@@ -252,6 +252,12 @@ def main():
     pat = "ghp_" + "b" * 36
     check_stderr_omits("block message does not echo a token-shaped var name", "guard_bash.py",
                        bash(f"echo ${pat}_KEY"), pat)
+    # The SAME assertion against the PowerShell implicit-output message, which
+    # is a second refusal site and reintroduced the identical leak by slicing
+    # the name itself instead of routing through `_safe_name()`. One case per
+    # message, or the next refusal added repeats it a third time.
+    check_stderr_omits("powershell block message does not echo a token-shaped var name",
+                       "guard_bash.py", bash(f"$env:{pat}_KEY"), pat)
     # Two discriminators, each the only case that reaches one clause. Without
     # them the WHMCS_* list and the `${{ secrets. }}` test are dead code that
     # every other case passes through the suffix pattern, and deleting either

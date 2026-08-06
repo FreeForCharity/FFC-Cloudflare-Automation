@@ -1178,6 +1178,60 @@ function Get-SpfWithInclude {
     return ($kept -join ' ')
 }
 
+function Resolve-ApexSpfAction {
+    # What should happen to a zone's apex SPF record: nothing, rewrite it, or
+    # create one.
+    #
+    # A named function because the enforce loop that used to hold this logic is
+    # inline script, which no test in this repo can reach -- the suites load
+    # code by extracting FUNCTIONS from the AST. #1064 shipped three fixes into
+    # exactly that blind spot and each one could be reverted with the suite
+    # still green. This is the same shape, so it gets the same treatment.
+    #
+    # THE BUG THIS REPLACES: the old logic asked only "does the record carry OUR
+    # include?" and treated yes as done. A zone carrying BOTH providers'
+    # includes answers yes, so the branch that strips the foreign one -- which
+    # only ran when ours was ABSENT -- could never fire. slopestohope.org was
+    # left in precisely that state by its Google cutover, and it is the normal
+    # state for any domain whose SPF was hand-edited before enforcement.
+    #
+    # Deciding by comparing against the fully-resolved desired record collapses
+    # both conditions ("has ours" and "has no foreign") into one test, so
+    # neither can be checked without the other.
+    #
+    # A stale foreign include is not cosmetic: it authorises a tenant that no
+    # longer sends for the domain, and it consumes one of the 10 DNS lookups
+    # RFC 7208 4.6.4 permits before the record hard-fails as a permerror.
+    param(
+        # The live apex SPF record, or $null when the zone has none.
+        $ExistingSpf,
+        [Parameter(Mandatory = $true)][string]$DesiredInclude,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$RemoveIncludes,
+        # Whether this run is authorised to rewrite the record in place.
+        [bool]$Cutover
+    )
+
+    if (-not $ExistingSpf) {
+        # No SPF at all. The caller creates the provider's standard record.
+        return [pscustomobject]@{ Action = 'create'; Content = $null }
+    }
+
+    $current = Normalize-TxtContent -Value $ExistingSpf.content
+    $desired = Get-SpfWithInclude -SpfContent $ExistingSpf.content -DesiredInclude $DesiredInclude -RemoveIncludes $RemoveIncludes
+
+    if ($current -eq $desired) {
+        return [pscustomobject]@{ Action = 'none'; Content = $current }
+    }
+
+    if (-not $Cutover) {
+        # Without a cutover mandate we have no authority to rewrite someone
+        # else's SPF. Report it present rather than adding a second v=spf1.
+        return [pscustomobject]@{ Action = 'none'; Content = $current }
+    }
+
+    return [pscustomobject]@{ Action = 'update'; Content = $desired }
+}
+
 
 # --- Main Logic ---
 
@@ -1738,25 +1792,46 @@ try {
                 }
                 'TXT' {
                     if ($std.ContainsKey('MatchContains') -and $std.MatchContains) {
-                        # SPF: present if it already carries this provider's include;
-                        # do not overwrite other mechanisms.
-                        $foundRecord = $candidates | Where-Object { (Normalize-TxtContent -Value $_.content) -like ("*" + $std.MatchContains + "*") }
-                        if ($foundRecord) {
-                            $spfCandidate = $foundRecord | Select-Object -First 1
-                            $stdContent = $spfCandidate.content
-                        }
-                        elseif ($std.ContainsKey('SpfCutover') -and $std.SpfCutover) {
-                            # Provider cutover: an SPF record exists but points at the
-                            # other provider. Rewrite THAT record — adding a second
-                            # v=spf1 TXT is a permerror and would break all outbound
-                            # mail authentication, not just the new provider's.
-                            $existingSpf = $candidates | Where-Object { (Normalize-TxtContent -Value $_.content) -like 'v=spf1*' } | Select-Object -First 1
-                            if ($existingSpf) {
-                                $removeIncludes = @()
-                                if ($std.ContainsKey('SpfRemoveIncludes') -and $std.SpfRemoveIncludes) { $removeIncludes = @($std.SpfRemoveIncludes) }
-                                $updateCandidate = $existingSpf
-                                $stdContent = Quote-TxtContent -Value (Get-SpfWithInclude -SpfContent $existingSpf.content -DesiredInclude $std.MatchContains -RemoveIncludes $removeIncludes)
+                        # SPF. The apex SPF is edited IN PLACE, never duplicated:
+                        # two v=spf1 records at one name is a permerror (RFC 7208
+                        # 4.5) that breaks authentication for EVERY sender, not
+                        # just this provider's.
+                        #
+                        # The desired record is computed once, from the live one,
+                        # and compared against it. That single comparison decides
+                        # everything -- which matters because the old shape asked
+                        # only "does it carry OUR include?" and treated a yes as
+                        # done. A zone carrying BOTH providers' includes answered
+                        # yes, so the foreign one could never be removed: the
+                        # branch that strips it only ran when ours was absent.
+                        # That is the state slopestohope.org was left in after
+                        # its Google cutover, and it is the normal state for any
+                        # domain whose SPF was hand-edited before enforcement.
+                        #
+                        # A stale foreign include is not cosmetic. It authorises a
+                        # tenant that no longer sends for the domain, and it burns
+                        # one of the 10 DNS lookups RFC 7208 4.6.4 allows before
+                        # the record hard-fails as a permerror.
+                        # The decision lives in Resolve-ApexSpfAction so it is
+                        # reachable by the tests -- see the note on that function.
+                        $removeIncludes = @()
+                        if ($std.ContainsKey('SpfRemoveIncludes') -and $std.SpfRemoveIncludes) { $removeIncludes = @($std.SpfRemoveIncludes) }
+                        $spfCutover = [bool]($std.ContainsKey('SpfCutover') -and $std.SpfCutover)
+
+                        $existingSpf = $candidates | Where-Object { (Normalize-TxtContent -Value $_.content) -like 'v=spf1*' } | Select-Object -First 1
+                        $spfAction = Resolve-ApexSpfAction -ExistingSpf $existingSpf -DesiredInclude $std.MatchContains -RemoveIncludes $removeIncludes -Cutover $spfCutover
+
+                        switch ($spfAction.Action) {
+                            'none' {
+                                $foundRecord = $existingSpf
+                                $stdContent = $existingSpf.content
                             }
+                            'update' {
+                                $updateCandidate = $existingSpf
+                                $stdContent = Quote-TxtContent -Value $spfAction.Content
+                            }
+                            # 'create' leaves both unset, so the caller falls
+                            # through to creating the provider's standard record.
                         }
                     }
                     elseif ($std.Name -eq '_dmarc') {

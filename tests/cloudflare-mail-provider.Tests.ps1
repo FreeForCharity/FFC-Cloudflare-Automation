@@ -35,7 +35,7 @@ BeforeAll {
 
     $script:RegistryPath = (Resolve-Path (Join-Path $PSScriptRoot '..' 'data' 'mail-providers.json')).Path
 
-    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord', 'Get-ProviderMxRecord', 'ConvertTo-MailProviderName', 'Get-MailProviderRegistry', 'Resolve-MailProviderForZone', 'Test-MailProviderChangeConfirmed')) {
+    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord', 'Get-ProviderMxRecord', 'ConvertTo-MailProviderName', 'Get-MailProviderRegistry', 'Resolve-MailProviderForZone', 'Test-MailProviderChangeConfirmed', 'Resolve-ApexSpfAction')) {
         . ([scriptblock]::Create((Get-FunctionFromFile -Path $script:SourcePath -Name $name).Extent.Text))
     }
 }
@@ -579,5 +579,104 @@ Describe 'Registry reflects the surveyed fleet' {
 
     It 'keeps slopestohope.org recorded as the pending Google move' {
         $script:Reg2.Domains['slopestohope.org'] | Should -Be 'Google'
+    }
+}
+
+
+Describe 'Resolve-ApexSpfAction — removing a stale foreign include' {
+    # THE BUG. The old enforce logic asked only "does the record carry OUR
+    # include?" and treated a yes as done. A zone carrying BOTH providers'
+    # includes answers yes, so the branch that strips the foreign one — which
+    # only ran when ours was ABSENT — could never fire.
+    #
+    # slopestohope.org was left in exactly that state by its Google cutover:
+    #   v=spf1 include:spf.protection.outlook.com include:_spf.google.com ~all
+    # and no number of enforcement runs would ever have cleaned it up.
+
+    BeforeAll {
+        # Pester 5 runs discovery and execution in separate passes, so helpers
+        # defined at Describe scope are gone by the time It bodies run.
+        $script:Google = 'include:_spf.google.com'
+        $script:Outlook = 'include:spf.protection.outlook.com'
+        function New-SpfRecord { param([string]$Content) [pscustomobject]@{ content = $Content } }
+    }
+
+    It 'rewrites a record that carries BOTH includes' {
+        $rec = New-SpfRecord 'v=spf1 include:spf.protection.outlook.com include:_spf.google.com ~all'
+        $r = Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $r.Action | Should -Be 'update' -Because 'the stale foreign include must be removable'
+        $r.Content | Should -Be 'v=spf1 include:_spf.google.com ~all'
+    }
+
+    It 'leaves a record that is already exactly right' {
+        # Must not rewrite on every run — that would be endless churn.
+        $rec = New-SpfRecord 'v=spf1 include:_spf.google.com ~all'
+        $r = Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $r.Action | Should -Be 'none'
+    }
+
+    It 'still adds a missing include (the original cutover case)' {
+        $rec = New-SpfRecord 'v=spf1 include:spf.protection.outlook.com ~all'
+        $r = Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $r.Action | Should -Be 'update'
+        $r.Content | Should -Be 'v=spf1 include:_spf.google.com ~all'
+    }
+
+    It 'preserves unrelated mechanisms while stripping the foreign include' {
+        # A charity's own sender (Mailgun, an ip4, whatever) must survive.
+        $rec = New-SpfRecord 'v=spf1 include:spf.protection.outlook.com include:mailgun.org ip4:203.0.113.9 include:_spf.google.com ~all'
+        $r = Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $r.Action | Should -Be 'update'
+        $r.Content | Should -Be 'v=spf1 include:mailgun.org ip4:203.0.113.9 include:_spf.google.com ~all'
+    }
+
+    It 'refuses to rewrite without a cutover mandate' {
+        # No authority to edit someone else's SPF — and creating a second
+        # v=spf1 is a permerror, so 'none' is the only safe answer.
+        $rec = New-SpfRecord 'v=spf1 include:spf.protection.outlook.com include:_spf.google.com ~all'
+        $r = Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $false
+        $r.Action | Should -Be 'none'
+    }
+
+    It 'asks the caller to create when the zone has no SPF at all' {
+        $r = Resolve-ApexSpfAction -ExistingSpf $null -DesiredInclude 'include:_spf.google.com' `
+            -RemoveIncludes @('include:spf.protection.outlook.com') -Cutover $true
+        $r.Action | Should -Be 'create'
+    }
+
+    It 'is idempotent — rewriting its own output is a no-op' {
+        $rec = New-SpfRecord 'v=spf1 include:spf.protection.outlook.com include:_spf.google.com ~all'
+        $once = (Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+                -RemoveIncludes @($script:Outlook) -Cutover $true).Content
+        $again = Resolve-ApexSpfAction -ExistingSpf (New-SpfRecord $once) -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $again.Action | Should -Be 'none'
+    }
+
+    It 'handles a multi-segment stored SPF record' {
+        # Long SPF records come back from Cloudflare as several quoted
+        # character-strings; the comparison must run on the LOGICAL value or
+        # every run would rewrite the record forever.
+        $dq = [char]34
+        $stored = "$dq" + 'v=spf1 include:spf.protection.outlook.com inc' + "$dq $dq" + 'lude:_spf.google.com ~all' + "$dq"
+        $r = Resolve-ApexSpfAction -ExistingSpf (New-SpfRecord $stored) -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $r.Action | Should -Be 'update'
+        $r.Content | Should -Be 'v=spf1 include:_spf.google.com ~all'
+    }
+
+    It 'removes the foreign include even when it is the ONLY difference' {
+        # Distinct from the "both includes" case: here ours is already present
+        # and first, so a naive "is our include there?" check passes outright.
+        $rec = New-SpfRecord 'v=spf1 include:_spf.google.com include:spf.protection.outlook.com -all'
+        $r = Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $r.Action | Should -Be 'update'
+        $r.Content | Should -Be 'v=spf1 include:_spf.google.com -all'
     }
 }

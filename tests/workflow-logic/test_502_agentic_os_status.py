@@ -474,6 +474,30 @@ def main():
     check(_KW not in secret_entry["body"], "PEM not in feed")
     check("1234567890abcdef" in secret_entry["body"], "SHA preserved in log body")
 
+    # The ordering is load-bearing and was previously stated only in a docstring
+    # the artifact's readers never see. A Conductor run read element 0 as the
+    # newest, measured it 8.5h older than `generated_at`, and nearly filed a
+    # staleness finding against a healthy generator (L154). Assert the ORDER
+    # itself, then assert the published rule says which end is which — a rule
+    # that merely exists is the failure mode this feed already had once (#909).
+    stamps = [e["created_at"] for e in log]
+    check(stamps == sorted(stamps), "conductor_log is oldest-first")
+    check(log[0]["created_at"] < log[-1]["created_at"],
+          "element 0 is the oldest entry, the last element is the newest")
+    rule = feed["conductor_log_rule"]
+    check(isinstance(rule, str) and rule, "the ordering rule ships with the data it describes")
+    # Both ends named. "oldest" alone would pass against a rule that says the
+    # list is oldest-first without ever telling a reader where to find the
+    # latest entry, which is the exact question that went wrong.
+    check("OLDEST FIRST" in rule, "the rule states the ordering in words")
+    check("element 0" in rule and "LAST element" in rule,
+          "the rule names both ends, not just the direction")
+    check(str(m.CONDUCTOR_LOG_LIMIT) in rule, "the rule states the window size")
+    check(str(m.CONDUCTOR_LOG_ISSUE) in rule, "the rule names the issue it tails")
+    # The tail semantics: an absent entry means "off the window", not "never
+    # written" -- the other reading a shortened list invites.
+    check("tail" in rule, "the rule says this is a tail, not the whole thread")
+
     # cost: only page1 + last + prev were fetched, never a middle/all-pages walk.
     comment_calls = [u for u in call_log if COMMENTS in u]
     check(len(comment_calls) == 3, f"expected 3 comment fetches, got {len(comment_calls)}: {comment_calls}")

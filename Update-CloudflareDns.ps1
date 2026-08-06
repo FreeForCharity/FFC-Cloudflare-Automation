@@ -1232,6 +1232,59 @@ function Resolve-ApexSpfAction {
     return [pscustomobject]@{ Action = 'update'; Content = $desired }
 }
 
+function Resolve-MultiValueRecordMatch {
+    # For a multi-value type (A/AAAA at the apex), decide whether a desired
+    # value is already present, or which existing record should be UPDATED to
+    # reach it.
+    #
+    # #1053. The enforce path required content AND the proxy flag to match, and
+    # set no update candidate when only the flag differed -- so it fell through
+    # to CREATE a record with a name+type+content that already existed.
+    # Cloudflare rejects that as a duplicate, the catch calls Write-Error, and
+    # $ErrorActionPreference = 'Stop' makes it terminating, so the standards
+    # loop ABORTS partway.
+    #
+    # That ordering is what makes it dangerous rather than noisy: mail records
+    # are applied before the Pages records, and the provider cutover's deletes
+    # run after the whole loop. Aborting at the A record leaves BOTH providers'
+    # MX in place and an SPF authorising only the new one -- worse than either
+    # endpoint.
+    #
+    # The update candidate is deliberately restricted to a record whose content
+    # ALREADY equals the desired value. Updating an arbitrary A record would
+    # "swap" values and silently drop one of the four IPs GitHub Pages needs --
+    # which is what the original create-only comment was guarding against, and
+    # that guard is preserved here.
+    #
+    # A named function because the enforce loop is inline script that no test in
+    # this repo can reach; see the note on Resolve-ApexSpfAction.
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Candidates,
+        [Parameter(Mandatory = $true)][string]$DesiredContent,
+        # $null means "any proxy state is acceptable".
+        $DesiredProxied
+    )
+
+    $found = @($Candidates | Where-Object {
+            $_.content -eq $DesiredContent -and
+            ($null -eq $DesiredProxied -or [bool]$_.proxied -eq [bool]$DesiredProxied)
+        })
+
+    if ($found.Count -gt 0) {
+        return [pscustomobject]@{ Found = $found[0]; UpdateCandidate = $null }
+    }
+
+    # Same content, wrong proxy flag: UPDATE that record rather than creating a
+    # duplicate of it.
+    $sameContent = @($Candidates | Where-Object { $_.content -eq $DesiredContent })
+    if ($sameContent.Count -gt 0) {
+        return [pscustomobject]@{ Found = $null; UpdateCandidate = $sameContent[0] }
+    }
+
+    # Genuinely absent. The caller creates it.
+    return [pscustomobject]@{ Found = $null; UpdateCandidate = $null }
+}
+
 
 # --- Main Logic ---
 
@@ -1883,15 +1936,19 @@ try {
                     }
                 }
                 'A' {
-                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }
-                    # A records are multi-value in our standard (GitHub Pages needs multiple A records at the apex).
-                    # If a required value is missing, CREATE it rather than updating an arbitrary existing A record,
-                    # which can "swap" values and leave one required IP missing.
+                    # A/AAAA are multi-value in our standard (GitHub Pages needs
+                    # four of each at the apex). A genuinely missing value is
+                    # CREATED rather than swapped into an arbitrary existing
+                    # record; only a proxy-flag difference on the SAME content
+                    # becomes an update. See Resolve-MultiValueRecordMatch (#1053).
+                    $m = Resolve-MultiValueRecordMatch -Candidates @($candidates) -DesiredContent $stdContent -DesiredProxied $desiredProxied
+                    $foundRecord = $m.Found
+                    if ($m.UpdateCandidate) { $updateCandidate = $m.UpdateCandidate }
                 }
                 'AAAA' {
-                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }
-                    # AAAA records are multi-value in our standard (GitHub Pages needs multiple AAAA records at the apex).
-                    # If a required value is missing, CREATE it rather than updating an arbitrary existing AAAA record.
+                    $m = Resolve-MultiValueRecordMatch -Candidates @($candidates) -DesiredContent $stdContent -DesiredProxied $desiredProxied
+                    $foundRecord = $m.Found
+                    if ($m.UpdateCandidate) { $updateCandidate = $m.UpdateCandidate }
                 }
                 'CNAME' {
                     $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }

@@ -35,7 +35,7 @@ BeforeAll {
 
     $script:RegistryPath = (Resolve-Path (Join-Path $PSScriptRoot '..' 'data' 'mail-providers.json')).Path
 
-    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord', 'Get-ProviderMxRecord', 'ConvertTo-MailProviderName', 'Get-MailProviderRegistry', 'Resolve-MailProviderForZone', 'Test-MailProviderChangeConfirmed', 'Resolve-ApexSpfAction')) {
+    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord', 'Get-ProviderMxRecord', 'ConvertTo-MailProviderName', 'Get-MailProviderRegistry', 'Resolve-MailProviderForZone', 'Test-MailProviderChangeConfirmed', 'Resolve-ApexSpfAction', 'Resolve-MultiValueRecordMatch')) {
         . ([scriptblock]::Create((Get-FunctionFromFile -Path $script:SourcePath -Name $name).Extent.Text))
     }
 }
@@ -678,5 +678,84 @@ Describe 'Resolve-ApexSpfAction — removing a stale foreign include' {
             -RemoveIncludes @($script:Outlook) -Cutover $true
         $r.Action | Should -Be 'update'
         $r.Content | Should -Be 'v=spf1 include:_spf.google.com -all'
+    }
+}
+
+Describe 'Resolve-MultiValueRecordMatch — the A/AAAA proxy flip (#1053)' {
+    # The enforce path required content AND proxy flag to match, and set no
+    # update candidate when only the flag differed — so it fell through to
+    # CREATE a record whose name+type+content already existed. Cloudflare
+    # rejects that as a duplicate; $ErrorActionPreference='Stop' turns the
+    # resulting Write-Error into a terminating one, and the standards loop
+    # ABORTS partway.
+    #
+    # Ordering is what makes that dangerous. Mail records are applied before
+    # the Pages records and the cutover deletes run after the loop, so aborting
+    # at the A record leaves BOTH providers' MX in place and an SPF authorising
+    # only the new one — worse than either endpoint.
+
+    BeforeAll {
+        function New-ARecord {
+            param([string]$Content, [bool]$Proxied)
+            [pscustomobject]@{ type = 'A'; content = $Content; proxied = $Proxied; id = "id-$Content-$Proxied" }
+        }
+        $script:Pages = @('185.199.108.153', '185.199.109.153', '185.199.110.153', '185.199.111.153')
+    }
+
+    It 'UPDATES rather than creates when only the proxy flag differs' {
+        # THE bug. Pre-fix this returned no match and no update candidate, so
+        # the caller POSTed a duplicate and the run aborted.
+        $existing = @($script:Pages | ForEach-Object { New-ARecord -Content $_ -Proxied $true })
+        $m = Resolve-MultiValueRecordMatch -Candidates $existing -DesiredContent '185.199.108.153' -DesiredProxied $false
+        $m.Found | Should -BeNullOrEmpty
+        $m.UpdateCandidate | Should -Not -BeNullOrEmpty
+        $m.UpdateCandidate.content | Should -Be '185.199.108.153'
+    }
+
+    It 'reports a match when content and proxy flag both agree' {
+        $existing = @(New-ARecord -Content '185.199.108.153' -Proxied $false)
+        $m = Resolve-MultiValueRecordMatch -Candidates $existing -DesiredContent '185.199.108.153' -DesiredProxied $false
+        $m.Found | Should -Not -BeNullOrEmpty
+        $m.UpdateCandidate | Should -BeNullOrEmpty
+    }
+
+    It 'never swaps an arbitrary record when the value is genuinely absent' {
+        # This is what the original create-only branch was guarding, and the
+        # guard has to survive the fix: updating some other A record to the
+        # missing IP would silently drop one of the four Pages addresses.
+        $existing = @(New-ARecord -Content '203.0.113.1' -Proxied $false)
+        $m = Resolve-MultiValueRecordMatch -Candidates $existing -DesiredContent '185.199.108.153' -DesiredProxied $false
+        $m.Found | Should -BeNullOrEmpty
+        $m.UpdateCandidate | Should -BeNullOrEmpty -Because 'a missing value must be CREATED, not swapped in'
+    }
+
+    It 'flips in the other direction too' {
+        $existing = @(New-ARecord -Content '185.199.108.153' -Proxied $false)
+        $m = Resolve-MultiValueRecordMatch -Candidates $existing -DesiredContent '185.199.108.153' -DesiredProxied $true
+        $m.UpdateCandidate | Should -Not -BeNullOrEmpty
+    }
+
+    It 'accepts any proxy state when none is required' {
+        $existing = @(New-ARecord -Content '185.199.108.153' -Proxied $true)
+        $m = Resolve-MultiValueRecordMatch -Candidates $existing -DesiredContent '185.199.108.153' -DesiredProxied $null
+        $m.Found | Should -Not -BeNullOrEmpty
+        $m.UpdateCandidate | Should -BeNullOrEmpty
+    }
+
+    It 'handles an empty zone' {
+        $m = Resolve-MultiValueRecordMatch -Candidates @() -DesiredContent '185.199.108.153' -DesiredProxied $false
+        $m.Found | Should -BeNullOrEmpty
+        $m.UpdateCandidate | Should -BeNullOrEmpty
+    }
+
+    It 'resolves the whole slopestohope.org case without a single create' {
+        # All four IPs present and proxied, desired DNS-only. Every one must
+        # become an UPDATE; a create anywhere is the abort.
+        $existing = @($script:Pages | ForEach-Object { New-ARecord -Content $_ -Proxied $true })
+        foreach ($ip in $script:Pages) {
+            $m = Resolve-MultiValueRecordMatch -Candidates $existing -DesiredContent $ip -DesiredProxied $false
+            $m.UpdateCandidate | Should -Not -BeNullOrEmpty -Because "$ip must be updated, not created"
+            $m.UpdateCandidate.content | Should -Be $ip -Because 'the update must target the record that already holds this value'
+        }
     }
 }

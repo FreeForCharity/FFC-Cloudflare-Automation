@@ -230,8 +230,8 @@ This workflow ensures that:
 
 ### Local usage
 
-- Prettier (check): `npx --yes prettier@3.3.3 --check . --ignore-unknown`
-- Prettier (write): `npx --yes prettier@3.3.3 --write . --ignore-unknown`
+- Prettier (check): `npx --yes prettier@3.8.1 --check . --ignore-unknown`
+- Prettier (write): `npx --yes prettier@3.8.1 --write . --ignore-unknown`
 - actionlint (requires Go):
   - Install: `go install github.com/rhysd/actionlint/cmd/actionlint@latest`
   - Run: `actionlint`

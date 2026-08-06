@@ -372,7 +372,79 @@ def _literal_fragments(node):
             if isinstance(n, ast.Constant) and isinstance(n.value, str)]
 
 
-def _reason_sinks(tree, funcs, loop_sources):
+def _owners(tree):
+    """node id -> the innermost FunctionDef containing it (None at module level)."""
+    owner = {}
+
+    def descend(node, current):
+        for child in ast.iter_child_nodes(node):
+            owner[id(child)] = current
+            descend(child, child if isinstance(child, ast.FunctionDef) else current)
+
+    descend(tree, None)
+    return owner
+
+
+def _call_names(node):
+    """Names of direct (non-attribute) function calls inside an expression."""
+    return [c.func.id for c in ast.walk(node)
+            if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)]
+
+
+def _reason_bindings(tree, owner):
+    """Every local binding of a name to something that produces reasons.
+
+    Keyed by **(enclosing function, name)**, not by bare name, and recording
+    every binding's line so the nearest preceding one wins.
+
+    The flat name-keyed version of this was a latent defect, found in review of
+    #1039. It made `block(<Name>)` resolve by SPELLING: any site whose argument
+    happened to be called `reason` took the branch and expanded to whichever
+    functions some other `for reason in (...)` loop mentioned -- confidently,
+    and with the wrong functions, instead of falling through to the loud
+    unresolved path. `main` has exactly one `block(<Name>)` today so nothing
+    misresolves; #1062 adds a second (`reason = echo_secret_violation(cmd)`, an
+    ast.Assign beside the existing ast.For) and the resolver then reports the
+    loop's two functions TWICE and echo_secret's messages not at all -- with
+    zero empty-fragment sites, so the "fails loudly" promise in block_sites()
+    never fires. Both binding forms are modelled here for that reason.
+    """
+    bindings = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            name, value = node.target.id, node.iter
+        elif (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            name, value = node.targets[0].id, node.value
+        else:
+            continue
+        called = _call_names(value)
+        if not called:
+            continue
+        fn = owner.get(id(node))
+        key = (fn.name if fn else None, name)
+        bindings.setdefault(key, []).append((node.lineno, called))
+    return bindings
+
+
+def _resolve_reason(bindings, owner, call):
+    """Which functions could have produced this `sink(<Name>)` argument.
+
+    The nearest binding of that name, in the same function, at or above the
+    call. None when there is none -- the caller then reports an unreadable
+    site rather than guessing, which is the whole point.
+    """
+    if not (call.args and isinstance(call.args[0], ast.Name)):
+        return None
+    fn = owner.get(id(call))
+    key = (fn.name if fn else None, call.args[0].id)
+    prior = [(ln, names) for ln, names in bindings.get(key, []) if ln <= call.lineno]
+    if not prior:
+        return None
+    return max(prior, key=lambda pair: pair[0])[1]
+
+
+def _reason_sinks(tree, funcs, bindings, owner):
     """The functions guard_bash.py uses to report a reason to the agent.
 
     DISCOVERED, never hard-coded. `block` is not special -- it is simply the
@@ -400,10 +472,24 @@ def _reason_sinks(tree, funcs, loop_sources):
             continue
         if node.func.id not in funcs or not node.args:
             continue
-        arg = node.args[0]
-        if _literal_fragments(arg) or (isinstance(arg, ast.Name) and arg.id in loop_sources):
+        if _literal_fragments(node.args[0]):
+            sinks.add(node.func.id)
+            continue
+        # A name argument counts only when it resolves to a function that
+        # really does return message literals -- otherwise any helper taking a
+        # local variable would be mistaken for a reporting channel.
+        resolved = _resolve_reason(bindings, owner, node) or []
+        if any(_returns_literals(funcs.get(name)) for name in resolved):
             sinks.add(node.func.id)
     return sinks
+
+
+def _returns_literals(fn):
+    """Does this function return string literals (i.e. produce messages)?"""
+    if fn is None:
+        return False
+    return any(_literal_fragments(n.value)
+               for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None)
 
 
 def block_sites(path=GUARD_BASH):
@@ -423,15 +509,9 @@ def block_sites(path=GUARD_BASH):
     # `for reason in (f(cmd), g(cmd)): ... block(reason)` -- the message is
     # produced by f and g, so the block() call site is not where the rule
     # lives. Two distinct rules funnel through that one call.
-    loop_sources = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
-            called = [c.func.id for c in ast.walk(node.iter)
-                      if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)]
-            if called:
-                loop_sources[node.target.id] = called
-
-    sinks = _reason_sinks(tree, funcs, loop_sources)
+    owner = _owners(tree)
+    bindings = _reason_bindings(tree, owner)
+    sinks = _reason_sinks(tree, funcs, bindings, owner)
     if not sinks:
         # No channel found at all means this resolver no longer understands the
         # file. Reporting "0 sites, all covered" would be a green that means
@@ -449,8 +529,9 @@ def block_sites(path=GUARD_BASH):
         if frags:
             sites.append((f"guard_bash.py:{node.lineno} {node.func.id}(...)", frags))
             continue
-        if isinstance(arg, ast.Name) and arg.id in loop_sources:
-            for fname in loop_sources[arg.id]:
+        resolved = _resolve_reason(bindings, owner, node)
+        if resolved:
+            for fname in resolved:
                 fn = funcs.get(fname)
                 if fn is None:
                     sites.append((f"guard_bash.py:{node.lineno} -> {fname}() not found", []))
@@ -541,9 +622,15 @@ def test_block_site_coverage():
 
     for rule in RULES:
         if not any(rule.signature in f for _, frags in sites for f in frags):
-            problems.append(f"rule '{rule.id}' signature {rule.signature!r} matches no "
-                            f"refusal site in guard_bash.py -- the rule was removed or "
-                            f"its message was reworded")
+            problems.append(
+                f"rule '{rule.id}' signature {rule.signature!r} matches no refusal site "
+                f"in guard_bash.py. Three ways this happens, and they need OPPOSITE fixes:\n"
+                f"    (a) the rule was removed          -> delete the Rule\n"
+                f"    (b) its message was reworded      -> update the signature\n"
+                f"    (c) the rule MOVED to a shape block_sites() cannot follow\n"
+                f"        -> fix the resolver. Check the message really changed before\n"
+                f"           touching the signature: editing it to chase this error\n"
+                f"           produces a green that has stopped checking anything.")
 
     record(f"every refusal site in guard_bash.py is covered ({len(sites)} sites derived)",
            not problems, "\n".join(problems))

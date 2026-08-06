@@ -28,6 +28,10 @@ The feed contains:
     partial-panel defect is visible on the page rather than only in the code.
   * ``conductor_log`` — the last 10 comments on the pinned Conductor log issue
     (#719), each body truncated to 500 chars. Hub-only: there is one log.
+    **Ordered oldest first**, so the last element is the most recent;
+    ``conductor_log_rule`` ships that alongside the data, because the ordering
+    of a list whose elements carry timestamps is the one thing a reader will
+    check against ``generated_at`` and guess wrong about (L154).
   * ``pending_gates`` — workflow runs sitting at an environment approval gate
     (``status=waiting``): workflow name, environment, created-at. **Hub-only by
     design** — FFC environments exist only on the automation repo — and
@@ -81,6 +85,24 @@ READY_RULE = (
 CONDUCTOR_LOG_ISSUE = 719
 CONDUCTOR_LOG_LIMIT = 10
 COMMENT_TRUNCATE = 500
+# Every other panel states its own semantics in the feed (READY_RULE,
+# IN_FLIGHT_RULE, PENDING_GATES_SCOPE); conductor_log was the one list shipping
+# without one, so its ordering lived only in collect_conductor_log's docstring —
+# where a reader of the *artifact* never looks. On 2026-08-06 a Conductor run
+# read element 0 as the newest entry, found it 8.5h older than `generated_at`,
+# and had a "the log panel is silently stale" finding half-written against a
+# generator that was behaving exactly as designed. The list is the one field
+# here whose elements carry their own timestamps, so it is the one field a
+# reader can and will cross-check against `generated_at` — say which end is
+# which. Ledger L154.
+CONDUCTOR_LOG_RULE = (
+    "The last {limit} comments on the Conductor log issue #{issue}, ordered "
+    "OLDEST FIRST — element 0 is the oldest of the {limit}, and the LAST element is the most "
+    "recent. Each body is redacted and truncated to {truncate} characters. Hub-only: there is one "
+    "log. This is a tail, not the whole thread, so an entry's absence means it fell off the end of "
+    "the window, not that it was never written; and the newest entry here is at most as recent as "
+    "`generated_at`, never fresher."
+)
 API_ROOT = "https://api.github.com"
 USER_AGENT = "ffc-agentic-os-status-generator"
 HTTP_TIMEOUT = 30  # seconds; fail closed rather than hang the daily sync.
@@ -644,6 +666,11 @@ def build_feed(repo, token, org=DEFAULT_ORG):
         "in_flight_prs_rule": IN_FLIGHT_RULE,
         "open_prs_total": open_prs_total,
         "conductor_log": collect_conductor_log(repo, token),
+        "conductor_log_rule": CONDUCTOR_LOG_RULE.format(
+            limit=CONDUCTOR_LOG_LIMIT,
+            issue=CONDUCTOR_LOG_ISSUE,
+            truncate=COMMENT_TRUNCATE,
+        ),
         "pending_gates": collect_pending_gates(repo, token),
         "pending_gates_scope": PENDING_GATES_SCOPE.format(repo=repo),
     }

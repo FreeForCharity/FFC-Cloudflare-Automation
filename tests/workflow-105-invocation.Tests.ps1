@@ -201,12 +201,20 @@ Describe '105 validate-zone step reports the truth' {
 
     BeforeAll {
         function Invoke-ValidateStep {
-            param([Parameter(Mandatory)][string]$StubBody)
+            param(
+                [Parameter(Mandatory)][string]$StubBody,
+                # Leave a zone-records.csv behind before the step runs, to prove
+                # the step clears it and cannot pass on a previous run's file.
+                [switch]$PreSeedExport
+            )
 
             $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("ffc105v-" + [guid]::NewGuid().ToString('N'))
             New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
             try {
                 $StubBody | Set-Content -Path (Join-Path $sandbox 'Update-CloudflareDns.ps1') -Encoding utf8
+                if ($PreSeedExport) {
+                    'stale,from,a,previous,run' | Set-Content -Path (Join-Path $sandbox 'zone-records.csv') -Encoding utf8
+                }
                 $prevDomain = $env:REC_DOMAIN
                 $prevTemp = $env:RUNNER_TEMP
                 $env:REC_DOMAIN = 'ffcworkingsite1.org'
@@ -238,7 +246,7 @@ Describe '105 validate-zone step reports the truth' {
         # `$null -eq 0` sent every run down the failure branch.
         $stub = @'
 param([string]$Zone, [switch]$ExportAll, [string]$OutputFile, [string]$Name, [string]$Type, [switch]$List)
-Write-Host "stub: exported zone $Zone"
+'id,type,name' | Set-Content -Path $OutputFile -Encoding utf8
 '@
         $out = Invoke-ValidateStep -StubBody $stub
         $out | Should -Match 'SUCCESS'
@@ -272,9 +280,49 @@ throw "API token lacks Zone:Read"
 param([string]$Zone, [switch]$ExportAll, [string]$OutputFile, [string]$Name, [string]$Type, [switch]$List)
 if ($PSBoundParameters.ContainsKey('Name')) { throw "must not pass -Name" }
 if (-not $ExportAll) { throw "expected -ExportAll" }
-Write-Host "stub ok"
+'id,type,name' | Set-Content -Path $OutputFile -Encoding utf8
 '@
         $out = Invoke-ValidateStep -StubBody $stub
         $out | Should -Match 'SUCCESS'
+    }
+
+    # --- Success requires POSITIVE EVIDENCE, not just the absence of a throw ---
+    #
+    # Review of #1094 found that a catch-only check couples this step to
+    # Update-CloudflareDns.ps1:194 ($ErrorActionPreference = 'Stop'), two
+    # thousand lines away in another file. That line is the only reason the
+    # script's own `catch { Write-Error $_ }` propagates here as an exception.
+    # Measured both directions with the real shapes:
+    #
+    #   child preference   parent catch fires?   step prints
+    #   Stop (today)       yes                   FAILURE ...
+    #   Continue           NO                    SUCCESS ...
+    #
+    # The second row is the hazard: the step would flip from always-FAILURE to
+    # always-SUCCESS — a false green above the approve button for a live
+    # cloudflare-prod-write gate, strictly worse than the false alarm this PR
+    # fixes. Requiring the export artifact cannot fail that way.
+
+    It 'reports FAILURE when the script returns quietly but exports nothing' {
+        # Nothing throws — exactly what a non-terminating Write-Error in the
+        # child looks like from here.
+        $stub = @'
+param([string]$Zone, [switch]$ExportAll, [string]$OutputFile, [string]$Name, [string]$Type, [switch]$List)
+Write-Host "stub: returning quietly without exporting"
+'@
+        $out = Invoke-ValidateStep -StubBody $stub
+        $out | Should -Match 'FAILURE' -Because 'no export file means the zone was never read'
+        $out | Should -Not -Match 'SUCCESS'
+    }
+
+    It 'does not pass on a stale file from a previous run' {
+        # The step deletes the artifact first; without that, a leftover CSV
+        # from an earlier zone would make any later failure look like success.
+        $stub = @'
+param([string]$Zone, [switch]$ExportAll, [string]$OutputFile, [string]$Name, [string]$Type, [switch]$List)
+Write-Host "stub: writes nothing"
+'@
+        $out = Invoke-ValidateStep -StubBody $stub -PreSeedExport
+        $out | Should -Match 'FAILURE' -Because 'a stale artifact must not be mistaken for this run output'
     }
 }

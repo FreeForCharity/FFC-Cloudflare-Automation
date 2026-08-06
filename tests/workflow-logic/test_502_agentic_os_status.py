@@ -482,6 +482,13 @@ def main():
     # that merely exists is the failure mode this feed already had once (#909).
     stamps = [e["created_at"] for e in log]
     check(stamps == sorted(stamps), "conductor_log is oldest-first")
+    # The strict `<` below is what rules out a REVERSED list: `<=` is satisfied
+    # by any all-equal sequence, in either direction. GitHub stamps at
+    # second granularity, so two real comments can legitimately tie — assert the
+    # fixture's endpoints differ FIRST, so editing the fixture into a tie fails
+    # here with the reason, instead of one line later as a bogus ordering fault.
+    check(stamps[0] != stamps[-1],
+          "fixture precondition: the log's endpoints must differ for the strict check below")
     check(log[0]["created_at"] < log[-1]["created_at"],
           "element 0 is the oldest entry, the last element is the newest")
     rule = feed["conductor_log_rule"]

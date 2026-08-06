@@ -292,7 +292,7 @@ gh api -X POST repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id>/
 Poll runs in a background task with an `until` loop — never foreground-sleep.
 
 **Reviewing a pending gate: resolve the run's own `head_sha` first (L155).** A run executes the code
-at the SHA it was created from, *not* the `main` you just fetched, and the gap is widest for exactly
+at the SHA it was created from, _not_ the `main` you just fetched, and the gap is widest for exactly
 the runs that sit at a gate — a scheduled run parked for days is reviewing a tree from days ago. Any
 statement of the form "this run will/won't do X because the code does/doesn't contain Y" is a claim
 about a specific tree, so name that tree before making it:
@@ -307,8 +307,8 @@ Read the file at that SHA, or diff just the paths your argument depends on — a
 distance does not by itself invalidate an analysis, and a small one does not make it safe. Run 106
 reported that #1064's functions "do not exist" from a `main` fetched 36 seconds before they landed;
 run 107 reviewed the 703 gate whose run is **123 commits** behind `main` and confirmed with one
-`git diff` that `703-sites-list-generate.yml` is byte-identical across all 123 — same check, opposite
-answer, and only the check tells you which case you are in.
+`git diff` that `703-sites-list-generate.yml` is byte-identical across all 123 — same check,
+opposite answer, and only the check tells you which case you are in.
 
 **Find a workflow's runs by FILE NAME, never by matching the run's `.name` (L33).** A run object's
 `.name` is the rendered `run-name:`, not the workflow's `name:`. Workflow 228 titles its runs

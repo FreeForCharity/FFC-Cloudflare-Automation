@@ -720,6 +720,29 @@ that had a hole in it.
   concluding anything failed, and **never let an immediate negative read trigger a retry loop** —
   run 41 burned ~51 attempts that way. Where the write is idempotent (`item-add` is: two calls
   produced one row) a retry is merely wasteful; where it is not, it is destructive.
+  - **For board membership specifically, stop re-polling and change endpoint: the item's own
+    `projectItems` connection is authoritative and does not lag.** On 2026-08-05 (run 99) two
+    `gh project item-add` calls returned exit 0 and **no output**, and
+    `gh project item-list 9 --limit 400` then returned exactly `320` items twice in a row, minutes
+    apart, with neither new card in it. That is the 2026-07-25 instance above repeating — but
+    re-polling the project's item list is the slow way to find out, and on a 320-item board each
+    attempt is an expensive GraphQL page walk (run 71 drained the points budget to 0/5000 doing
+    exactly this as a lookup). Ask the issue instead:
+
+    ```bash
+    # Replace 1077 with the issue you are checking; use pullRequest(number:N) for a PR — the
+    # projectItems connection is on both types and reads the same way.
+    gh api graphql -f query='{repository(owner:"FreeForCharity",name:"FFC-Cloudflare-Automation"){
+      issue(number:1077){ projectItems(first:5){ nodes{ id project{ number title } } } } }}'
+    # → {"id":"PVTI_…","project":{"number":9,"title":"Agentic OS"}}   — immediately, while the
+    #    project's own item-list was still serving a page without it
+    ```
+
+    It answers the question you actually have ("did the card land, and what is its id?"), returns
+    the item id you need for `item-edit` anyway, and costs one small query instead of 320 rows. Same
+    distinction as `.auto_merge` vs `enqueuePullRequest` below: re-polling cures a stale read, but
+    the cheaper move is usually to ask the endpoint that is authoritative for the state.
+
   - **Separately: some fields are not lagging, they simply never carry the state you want.** On
     2026-07-31 (run 60) `gh pr merge --auto` printed nothing for #914/#958/#959 and `.auto_merge`
     read `null` for all three — but `enqueuePullRequest` answered "already in the queue" for every
@@ -730,6 +753,7 @@ that had a hole in it.
     endpoint that is **authoritative for that state** (here, the `enqueuePullRequest` mutation)
     before either retrying or concluding anything — and note that silence from `gh pr merge --auto`
     is success, not a no-op.
+
 - **Push the branch before opening the PR.** On 2026-07-24, `POST /repos/…/pulls` returned **HTTP
   500 with an empty body** for >20 minutes, across **multiple FFC repos**
   (`FFC-IN-freeforcharity.org` and `FFC-Cloudflare-Automation`) and all three clients (`gh`, REST,

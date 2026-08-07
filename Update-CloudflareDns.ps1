@@ -1178,6 +1178,123 @@ function Get-SpfWithInclude {
     return ($kept -join ' ')
 }
 
+function Resolve-ApexSpfAction {
+    # What should happen to a zone's apex SPF record: nothing, rewrite it, or
+    # create one.
+    #
+    # A named function because the enforce loop that used to hold this logic is
+    # inline script, which no test in this repo can reach -- the suites load
+    # code by extracting FUNCTIONS from the AST. #1064 shipped three fixes into
+    # exactly that blind spot and each one could be reverted with the suite
+    # still green. This is the same shape, so it gets the same treatment.
+    #
+    # THE BUG THIS REPLACES: the old logic asked only "does the record carry OUR
+    # include?" and treated yes as done. A zone carrying BOTH providers'
+    # includes answers yes, so the branch that strips the foreign one -- which
+    # only ran when ours was ABSENT -- could never fire. slopestohope.org was
+    # left in precisely that state by its Google cutover, and it is the normal
+    # state for any domain whose SPF was hand-edited before enforcement.
+    #
+    # Deciding by comparing against the fully-resolved desired record collapses
+    # both conditions ("has ours" and "has no foreign") into one test, so
+    # neither can be checked without the other.
+    #
+    # A stale foreign include is not cosmetic: it authorises a tenant that no
+    # longer sends for the domain, and it consumes one of the 10 DNS lookups
+    # RFC 7208 4.6.4 permits before the record hard-fails as a permerror.
+    param(
+        # The live apex SPF record, or $null when the zone has none.
+        $ExistingSpf,
+        [Parameter(Mandatory = $true)][string]$DesiredInclude,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$RemoveIncludes,
+        # Whether this run is authorised to rewrite the record in place.
+        [bool]$Cutover
+    )
+
+    if (-not $ExistingSpf) {
+        # No SPF at all. The caller creates the provider's standard record.
+        return [pscustomobject]@{ Action = 'create'; Content = $null }
+    }
+
+    $current = Normalize-TxtContent -Value $ExistingSpf.content
+    $desired = Get-SpfWithInclude -SpfContent $ExistingSpf.content -DesiredInclude $DesiredInclude -RemoveIncludes $RemoveIncludes
+
+    if ($current -eq $desired) {
+        return [pscustomobject]@{ Action = 'none'; Content = $current }
+    }
+
+    if (-not $Cutover) {
+        # Without a cutover mandate we have no authority to rewrite someone
+        # else's SPF. Report it present rather than adding a second v=spf1.
+        return [pscustomobject]@{ Action = 'none'; Content = $current }
+    }
+
+    return [pscustomobject]@{ Action = 'update'; Content = $desired }
+}
+
+function Resolve-MultiValueRecordMatch {
+    # For a multi-value type (A/AAAA at the apex), decide whether a desired
+    # value is already present, or which existing record should be UPDATED to
+    # reach it.
+    #
+    # #1053. The enforce path required content AND the proxy flag to match, and
+    # set no update candidate when only the flag differed -- so it fell through
+    # to CREATE a record with a name+type+content that already existed.
+    # Cloudflare rejects that as a duplicate, the catch calls Write-Error, and
+    # $ErrorActionPreference = 'Stop' makes it terminating, so the standards
+    # loop ABORTS partway.
+    #
+    # That ordering is what makes it dangerous rather than noisy: mail records
+    # are applied before the Pages records, and the provider cutover's deletes
+    # run after the whole loop. Aborting at the A record leaves BOTH providers'
+    # MX in place and an SPF authorising only the new one -- worse than either
+    # endpoint.
+    #
+    # The update candidate is deliberately restricted to a record whose content
+    # ALREADY equals the desired value. Updating an arbitrary A record would
+    # "swap" values and silently drop one of the four IPs GitHub Pages needs --
+    # which is what the original create-only comment was guarding against, and
+    # that guard is preserved here.
+    #
+    # A named function because the enforce loop is inline script that no test in
+    # this repo can reach; see the note on Resolve-ApexSpfAction.
+    param(
+        # Deliberately untyped and nullable. The caller builds this from an
+        # unwrapped pipeline (`$allRecords | Where-Object ...`), which yields
+        # $null when the zone has NO record of this type at this name -- a brand
+        # new zone, or any zone whose GitHub Pages records do not exist yet.
+        # A [Parameter(Mandatory)][object[]] here rejects that outright with
+        # "Cannot bind argument to parameter 'Candidates' because it is null",
+        # aborting enforcement on exactly the provisioning path. Normalizing
+        # inside is what makes $null, a bare scalar and an array behave alike.
+        [AllowNull()][AllowEmptyCollection()]$Candidates,
+        [Parameter(Mandatory = $true)][string]$DesiredContent,
+        # $null means "any proxy state is acceptable".
+        $DesiredProxied
+    )
+
+    $Candidates = @($Candidates | Where-Object { $null -ne $_ })
+
+    $found = @($Candidates | Where-Object {
+            $_.content -eq $DesiredContent -and
+            ($null -eq $DesiredProxied -or [bool]$_.proxied -eq [bool]$DesiredProxied)
+        })
+
+    if ($found.Count -gt 0) {
+        return [pscustomobject]@{ Found = $found[0]; UpdateCandidate = $null }
+    }
+
+    # Same content, wrong proxy flag: UPDATE that record rather than creating a
+    # duplicate of it.
+    $sameContent = @($Candidates | Where-Object { $_.content -eq $DesiredContent })
+    if ($sameContent.Count -gt 0) {
+        return [pscustomobject]@{ Found = $null; UpdateCandidate = $sameContent[0] }
+    }
+
+    # Genuinely absent. The caller creates it.
+    return [pscustomobject]@{ Found = $null; UpdateCandidate = $null }
+}
+
 
 # --- Main Logic ---
 
@@ -1738,25 +1855,46 @@ try {
                 }
                 'TXT' {
                     if ($std.ContainsKey('MatchContains') -and $std.MatchContains) {
-                        # SPF: present if it already carries this provider's include;
-                        # do not overwrite other mechanisms.
-                        $foundRecord = $candidates | Where-Object { (Normalize-TxtContent -Value $_.content) -like ("*" + $std.MatchContains + "*") }
-                        if ($foundRecord) {
-                            $spfCandidate = $foundRecord | Select-Object -First 1
-                            $stdContent = $spfCandidate.content
-                        }
-                        elseif ($std.ContainsKey('SpfCutover') -and $std.SpfCutover) {
-                            # Provider cutover: an SPF record exists but points at the
-                            # other provider. Rewrite THAT record — adding a second
-                            # v=spf1 TXT is a permerror and would break all outbound
-                            # mail authentication, not just the new provider's.
-                            $existingSpf = $candidates | Where-Object { (Normalize-TxtContent -Value $_.content) -like 'v=spf1*' } | Select-Object -First 1
-                            if ($existingSpf) {
-                                $removeIncludes = @()
-                                if ($std.ContainsKey('SpfRemoveIncludes') -and $std.SpfRemoveIncludes) { $removeIncludes = @($std.SpfRemoveIncludes) }
-                                $updateCandidate = $existingSpf
-                                $stdContent = Quote-TxtContent -Value (Get-SpfWithInclude -SpfContent $existingSpf.content -DesiredInclude $std.MatchContains -RemoveIncludes $removeIncludes)
+                        # SPF. The apex SPF is edited IN PLACE, never duplicated:
+                        # two v=spf1 records at one name is a permerror (RFC 7208
+                        # 4.5) that breaks authentication for EVERY sender, not
+                        # just this provider's.
+                        #
+                        # The desired record is computed once, from the live one,
+                        # and compared against it. That single comparison decides
+                        # everything -- which matters because the old shape asked
+                        # only "does it carry OUR include?" and treated a yes as
+                        # done. A zone carrying BOTH providers' includes answered
+                        # yes, so the foreign one could never be removed: the
+                        # branch that strips it only ran when ours was absent.
+                        # That is the state slopestohope.org was left in after
+                        # its Google cutover, and it is the normal state for any
+                        # domain whose SPF was hand-edited before enforcement.
+                        #
+                        # A stale foreign include is not cosmetic. It authorises a
+                        # tenant that no longer sends for the domain, and it burns
+                        # one of the 10 DNS lookups RFC 7208 4.6.4 allows before
+                        # the record hard-fails as a permerror.
+                        # The decision lives in Resolve-ApexSpfAction so it is
+                        # reachable by the tests -- see the note on that function.
+                        $removeIncludes = @()
+                        if ($std.ContainsKey('SpfRemoveIncludes') -and $std.SpfRemoveIncludes) { $removeIncludes = @($std.SpfRemoveIncludes) }
+                        $spfCutover = [bool]($std.ContainsKey('SpfCutover') -and $std.SpfCutover)
+
+                        $existingSpf = $candidates | Where-Object { (Normalize-TxtContent -Value $_.content) -like 'v=spf1*' } | Select-Object -First 1
+                        $spfAction = Resolve-ApexSpfAction -ExistingSpf $existingSpf -DesiredInclude $std.MatchContains -RemoveIncludes $removeIncludes -Cutover $spfCutover
+
+                        switch ($spfAction.Action) {
+                            'none' {
+                                $foundRecord = $existingSpf
+                                $stdContent = $existingSpf.content
                             }
+                            'update' {
+                                $updateCandidate = $existingSpf
+                                $stdContent = Quote-TxtContent -Value $spfAction.Content
+                            }
+                            # 'create' leaves both unset, so the caller falls
+                            # through to creating the provider's standard record.
                         }
                     }
                     elseif ($std.Name -eq '_dmarc') {
@@ -1808,15 +1946,19 @@ try {
                     }
                 }
                 'A' {
-                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }
-                    # A records are multi-value in our standard (GitHub Pages needs multiple A records at the apex).
-                    # If a required value is missing, CREATE it rather than updating an arbitrary existing A record,
-                    # which can "swap" values and leave one required IP missing.
+                    # A/AAAA are multi-value in our standard (GitHub Pages needs
+                    # four of each at the apex). A genuinely missing value is
+                    # CREATED rather than swapped into an arbitrary existing
+                    # record; only a proxy-flag difference on the SAME content
+                    # becomes an update. See Resolve-MultiValueRecordMatch (#1053).
+                    $m = Resolve-MultiValueRecordMatch -Candidates @($candidates) -DesiredContent $stdContent -DesiredProxied $desiredProxied
+                    $foundRecord = $m.Found
+                    if ($m.UpdateCandidate) { $updateCandidate = $m.UpdateCandidate }
                 }
                 'AAAA' {
-                    $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }
-                    # AAAA records are multi-value in our standard (GitHub Pages needs multiple AAAA records at the apex).
-                    # If a required value is missing, CREATE it rather than updating an arbitrary existing AAAA record.
+                    $m = Resolve-MultiValueRecordMatch -Candidates @($candidates) -DesiredContent $stdContent -DesiredProxied $desiredProxied
+                    $foundRecord = $m.Found
+                    if ($m.UpdateCandidate) { $updateCandidate = $m.UpdateCandidate }
                 }
                 'CNAME' {
                     $foundRecord = $candidates | Where-Object { $_.content -eq $stdContent -and ($null -eq $desiredProxied -or $_.proxied -eq $desiredProxied) }

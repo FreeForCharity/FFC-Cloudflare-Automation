@@ -192,6 +192,20 @@ def main():
           bash("pwsh -c '$env:GH_TOKEN'"), True)
     check("bare powershell expansion piped to a consumer", "guard_bash.py",
           bash("$env:GH_TOKEN | Out-Host"), True)
+    # An embedded pwsh script has its OWN statements: `_echo_segments` splits on
+    # `;` only outside quotes, so everything after the first statement arrived
+    # unjudged. Each of these is a verb-less print that `main` caught by
+    # accident and this rule initially did not (Copilot, #1062).
+    check("bare powershell expansion after a ; inside -c", "guard_bash.py",
+          bash("pwsh -c 'true; $env:GH_TOKEN'"), True)
+    check("bare powershell expansion before a ; inside -c", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN; true'"), True)
+    check("bare powershell expansion inside a block", "guard_bash.py",
+          bash("pwsh -c 'if ($x) { $env:GH_TOKEN }'"), True)
+    # The discriminator for the widened delimiters: same shape, non-secret name.
+    # Without it, the delimiter set could match anything and stay green.
+    check("bare expansion of a non-secret after a ; allowed", "guard_bash.py",
+          bash("pwsh -c 'true; $env:TEMP'"), False)
     check("bare powershell expansion after &&", "guard_bash.py",
           bash("true && $env:CLOUDFLARE_API_TOKEN"), True)
     check("braced bare powershell expansion", "guard_bash.py",

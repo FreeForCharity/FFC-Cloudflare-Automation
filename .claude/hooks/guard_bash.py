@@ -294,8 +294,17 @@ KNOWN_SECRET_VARS_RE = re.compile(
 # keeps every assignment form allowed. The leading `['"]` alternative matters
 # more than the `^` one -- through the Bash tool the realistic spelling is
 # `pwsh -c '$env:GH_TOKEN'`, where the statement starts after the `-c` quote.
+# The delimiters are PowerShell STATEMENT boundaries, not just the chunk edge.
+# `_echo_segments` splits on `;` only OUTSIDE quotes, so an embedded script --
+# `pwsh -c 'true; $env:GH_TOKEN'` -- arrives here as one chunk with its own
+# internal statements. Anchoring on "start, or right after the -c quote" missed
+# every statement but the first, which is a verb-less leak `main` caught by
+# accident (Copilot, #1062). A space is deliberately NOT a delimiter: that is
+# what keeps `./x.ps1 -Token $env:GH_TOKEN` an argument rather than a print.
+# `=` is absent from the terminators for the same reason, so assignments stay
+# allowed.
 PS_IMPLICIT_OUTPUT_RE = re.compile(
-    r"""(?:\A|['"])\s*\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?\s*(?:\||['"]|\Z)""",
+    r"""(?:\A|['";{])\s*\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?\s*(?:\||;|\}|['"]|\Z)""",
     re.IGNORECASE)
 
 

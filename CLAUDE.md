@@ -537,6 +537,29 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
     confident `CR bytes: 0` for a freshly generated feed that in fact carried **1264** CRs, which
     `tr -cd '\r' | wc -c` found immediately. Read `'rb'` (or use `tr`). A check whose failure mode
     is to print the answer you were hoping for is worse than no check.
+  - **And `grep` cannot answer it either — it is wrong in both directions, and which way depends on
+    where you put it.** Reaching for `grep -c $'\r'` instead of the `tr` above is the natural
+    substitution, and on this host it never returns the truth. Measured on run 112 against a file
+    holding exactly **1** CR, with `tr` and `od` agreeing on 1:
+
+    ```bash
+    printf 'a\r\nb\nc\n' > /tmp/crtest.txt
+    grep -c $'\r' /tmp/crtest.txt                    # → 0   direct: false NEGATIVE
+    echo "n=$(grep -c $'\r' /tmp/crtest.txt)"        # → 3   in command substitution: every line, false POSITIVE
+    tr -cd '\r' < /tmp/crtest.txt | wc -c            # → 1   correct
+    ```
+
+    The pattern really is byte `0d` (`printf '%s' $'\r' | od -An -tx1` → `0d`), and `-a` does not
+    rescue the **direct** form — `grep -ac $'\r'` is still `0`. That is not "grep always returns 0":
+    the two forms above disagree with each other, which is the whole point. The result tracks the
+    probe's **syntactic position** rather than the file's contents, and that is a property no one
+    checks a one-liner for. The false-negative form is the dangerous one, because it is the form a
+    delivery check is written in and it prints the `0` the author is hoping to see — the same
+    failure shape as the Python text-mode bullet above, one tool over, and easier to trust because
+    `grep` reads as a byte-level instrument. Use `tr -cd '\r' | wc -c`, which is what the recipe
+    already prescribes; in this environment nothing else has been shown to be trustworthy for
+    counting CRs.
+
   - **The same translation runs on the way OUT, which breaks restore-after-mutation.**
     `pathlib.write_text()` uses text mode, so writing a file back converts every `\n` to `\r\n` on
     this host. Reviewing #1015 (run 76) the Conductor mutated `run_all.py` in place six times and

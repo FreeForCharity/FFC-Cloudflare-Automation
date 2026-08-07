@@ -310,6 +310,63 @@ run 107 reviewed the 703 gate whose run is **123 commits** behind `main` and con
 `git diff` that `703-sites-list-generate.yml` is byte-identical across all 123 — same check,
 opposite answer, and only the check tells you which case you are in.
 
+**Triaging a CI anomaly: ask upstream first, then ask _which step_ failed (L159).** The check that
+separates "our defect" from "their outage" is cheaper than every check that presupposes ours, so run
+it before inspecting concurrency groups, `uses:` refs or the diff:
+
+```bash
+# Unauthenticated, no token, costs nothing against the GitHub rate budget.
+curl -s https://www.githubstatus.com/api/v2/summary.json |
+  grep -oE '"(name|status|description)": *"[^"]*"' | head -40
+```
+
+Read it in two parts, because they disagree and the disagreement is the point: `components[]` can
+say `operational` while an `incident` is still `investigating`/`monitoring`. Neither is proof on its
+own — settle it by finding a **real run that took a runner and finished** in the window you care
+about. Then:
+
+- **If `Set up job` is the failing step, no repository code ran**, so the break cannot be yours no
+  matter how incriminating the diff looks (`Failed to resolve action download info` is the usual
+  text).
+- **A stalled run is not self-healing.** Runs cancelled with zero steps executed are recorded as
+  `failure`, so a required check can go from a self-resolving `queued` to a terminal `cancelled` and
+  auto-merge alone will no longer land the PR.
+- **Before blaming an identity** (app vs user, signed vs unsigned) for a suppressed event, check
+  whether that same identity **succeeded in this repo a few hours earlier**. One call, and it
+  usually kills the attribution hypothesis outright.
+
+**"No green checks" is two different states — get the jobs count before choosing a remedy (L160).**
+
+```bash
+gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id>/jobs --jq '.total_count'
+```
+
+| signature                                          | mode                  | do this                       |
+| -------------------------------------------------- | --------------------- | ----------------------------- |
+| **no run object** for the head sha                 | A — event never fired | act: close+reopen, or re-push |
+| run exists, `queued`, **`total_count = 0`**        | B — no runner took it | wait; acting costs a head     |
+| run exists, `queued`, 0 jobs, **platform healthy** | B, parked             | now close+reopen              |
+
+Close+reopen re-fires `pull_request` checks on the **same sha** with no new commit (`reopened` is in
+722's default types and 727's explicit list), which on this behind-count-gated queue is strictly
+cheaper than the empty commit (L156).
+
+**Signing off on a PR: quote the sha you checked, and re-read it before acting on someone's sign-off
+— including your own (L161).** A review is bound to `headRefOid` and does not travel; a commit
+landing between the review and the merge silently voids it while every surface still reads green.
+
+```bash
+gh pr view <n> --json headRefOid,mergeStateStatus --jq '"\(.headRefOid[0:7]) \(.mergeStateStatus)"'
+```
+
+**Verifying a publish: read the data artifact, never the rendered page (L162).** `mergedAt` says
+nothing about what the CDN serves, and a status page that republishes its own log will hand back a
+_previous_ run's claim about itself when you grep the HTML.
+
+```bash
+curl -s https://ffcadmin.org/data/agentic-os-status.json | grep -oE '"generated_at": *"[^"]*"'
+```
+
 **Find a workflow's runs by FILE NAME, never by matching the run's `.name` (L33).** A run object's
 `.name` is the rendered `run-name:`, not the workflow's `name:`. Workflow 228 titles its runs
 `WHMCS Fraud Review (FraudLabs Pro)`, so filtering `actions/runs` for a name starting with `228`

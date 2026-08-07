@@ -154,13 +154,59 @@ jobs:
           $Domain = [string]$env:REC_DOMAIN
           Write-Host "Checking if zone '$Domain' exists in Cloudflare..."
 
-          .\Update-CloudflareDns.ps1 -Zone $Domain -List -ErrorAction SilentlyContinue
-
-          if ($LASTEXITCODE -eq 0) {
+          # This step reported FAILURE on every run it has ever made, including
+          # runs whose writes then succeeded. Two independent causes, both fixed
+          # here:
+          #
+          # 1. It called -List with no -Name. -Name is optional in the Get
+          #    parameter set, so it was '', and the resolver built the record
+          #    name as "$Name.$Zone" -- literally ".example.org". Cloudflare was
+          #    queried with a valid zone id and answered "no record by that
+          #    name", which is not the question being asked. -ExportAll takes no
+          #    name and dumps the whole zone, so it actually tests reachability.
+          #
+          # 2. It branched on $LASTEXITCODE after an IN-PROCESS .ps1 call.
+          #    $LASTEXITCODE is only ever set by a NATIVE command, and
+          #    Update-CloudflareDns.ps1 runs none -- it is Invoke-RestMethod
+          #    throughout. So the variable was never assigned in this step's
+          #    fresh pwsh process, $null -eq 0 is false, and the FAILURE branch
+          #    was unconditional. (It is NOT stale state from the Key Vault
+          #    step: each run: block is a separate process.) The 'Manage DNS
+          #    Record' step in the add-test-record job states the same rule,
+          #    citing #777.
+          #
+          # SUCCESS requires POSITIVE EVIDENCE -- the export file exists and is
+          # non-empty -- not merely the absence of a thrown error.
+          #
+          # That distinction is load-bearing. Relying on the catch alone would
+          # couple this step to a line 2,000 lines away in another file:
+          # Update-CloudflareDns.ps1 sets $ErrorActionPreference = 'Stop' at
+          # :194, which is the ONLY reason its own `catch { Write-Error $_ }`
+          # propagates here as an exception. Measured both ways with the real
+          # shapes:
+          #
+          #   child preference     parent catch fires?   step prints
+          #   Stop (today)         yes                   FAILURE ...
+          #   Continue             NO                    SUCCESS ...
+          #
+          # So if :194 is ever relaxed, a catch-only check flips from
+          # always-FAILURE to always-SUCCESS: a false green directly above the
+          # approve button for a live cloudflare-prod-write gate, which is
+          # strictly worse than the false alarm being fixed here. Checking for
+          # the artifact cannot fail that way -- no export, no success.
+          $zoneDump = Join-Path $env:RUNNER_TEMP 'zone-records.csv'
+          Remove-Item -LiteralPath $zoneDump -ErrorAction SilentlyContinue
+          try {
+            .\Update-CloudflareDns.ps1 -Zone $Domain -ExportAll -OutputFile $zoneDump | Out-Null
+            if (-not (Test-Path -LiteralPath $zoneDump)) {
+              throw "the zone export produced no file, so the zone was not read"
+            }
             Write-Host "SUCCESS: Zone '$Domain' found and accessible." -ForegroundColor Green
-          } else {
-            Write-Warning "FAILURE: Zone '$Domain' not found or token lacks permission."
-            # We don't exit 1 here yet because 'Purchase New Domain' workflow might *expect* it to be missing.
+          } catch {
+            # Advisory, not fatal: 'Purchase New Domain' may legitimately expect
+            # the zone to be missing. Report the real reason rather than a
+            # guess at one.
+            Write-Warning "FAILURE: Zone '$Domain' not reachable: $($_.Exception.Message)"
           }
 
   add-test-record:
@@ -246,12 +292,28 @@ jobs:
             default { throw "Unsupported record_action '$Action'" }
           }
 
-          # #777: do NOT check $LASTEXITCODE here. An in-process .ps1 call only
-          # sets it if the script itself runs a native command or calls exit —
-          # after a successful run it is stale (from az in the KV action) and
-          # falsely reported FAILURE on verified-successful writes. On failure
-          # the script's own `exit 1` (in its catch) already fails this step,
-          # so reaching this line means the operation succeeded.
+          # #777: do NOT check $LASTEXITCODE here. The conclusion is right; both
+          # reasons this comment used to give were wrong, and they are corrected
+          # here because a wrong stated mechanism sends the next person to fix
+          # the wrong thing.
+          #
+          # WRONG: "after a successful run it is stale (from az in the KV
+          # action)". Nothing carries: each run: block is its own pwsh process,
+          # so $LASTEXITCODE starts UNSET here. It is only ever set by a NATIVE
+          # command, and Update-CloudflareDns.ps1 runs none -- it is
+          # Invoke-RestMethod throughout. So `$LASTEXITCODE -eq 0` is
+          # `$null -eq 0`, false, ALWAYS. That is why the validate-zone job's
+          # copy of this test reported FAILURE on every run it ever made.
+          #
+          # WRONG: "the script's own `exit 1` (in its catch) already fails this
+          # step". That exit is never reached. The script sets
+          # $ErrorActionPreference = 'Stop' at :194, so the `Write-Error $_`
+          # preceding it is TERMINATING and propagates out as an exception --
+          # which is what actually fails the step. Measured, both directions.
+          #
+          # The conclusion stands on the corrected reason: an unhandled
+          # terminating error fails this step before this line, so reaching it
+          # means the operation succeeded.
           Write-Host "SUCCESS: DNS operation completed." -ForegroundColor Green
 
       - name: Post-Change Compliance Audit

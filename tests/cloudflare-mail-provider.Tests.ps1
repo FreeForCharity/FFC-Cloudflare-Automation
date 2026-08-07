@@ -35,7 +35,7 @@ BeforeAll {
 
     $script:RegistryPath = (Resolve-Path (Join-Path $PSScriptRoot '..' 'data' 'mail-providers.json')).Path
 
-    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord', 'Get-ProviderMxRecord', 'ConvertTo-MailProviderName', 'Get-MailProviderRegistry', 'Resolve-MailProviderForZone', 'Test-MailProviderChangeConfirmed')) {
+    foreach ($name in @('Normalize-TxtContent', 'Get-MailProviderProfile', 'Resolve-MailProvider', 'Get-SpfWithInclude', 'Get-ForeignMailRecord', 'Get-ProviderMxRecord', 'ConvertTo-MailProviderName', 'Get-MailProviderRegistry', 'Resolve-MailProviderForZone', 'Test-MailProviderChangeConfirmed', 'Resolve-ApexSpfAction', 'Resolve-MultiValueRecordMatch')) {
         . ([scriptblock]::Create((Get-FunctionFromFile -Path $script:SourcePath -Name $name).Extent.Text))
     }
 }
@@ -579,5 +579,224 @@ Describe 'Registry reflects the surveyed fleet' {
 
     It 'keeps slopestohope.org recorded as the pending Google move' {
         $script:Reg2.Domains['slopestohope.org'] | Should -Be 'Google'
+    }
+}
+
+
+Describe 'Resolve-ApexSpfAction — removing a stale foreign include' {
+    # THE BUG. The old enforce logic asked only "does the record carry OUR
+    # include?" and treated a yes as done. A zone carrying BOTH providers'
+    # includes answers yes, so the branch that strips the foreign one — which
+    # only ran when ours was ABSENT — could never fire.
+    #
+    # slopestohope.org was left in exactly that state by its Google cutover:
+    #   v=spf1 include:spf.protection.outlook.com include:_spf.google.com ~all
+    # and no number of enforcement runs would ever have cleaned it up.
+
+    BeforeAll {
+        # Pester 5 runs discovery and execution in separate passes, so helpers
+        # defined at Describe scope are gone by the time It bodies run.
+        $script:Google = 'include:_spf.google.com'
+        $script:Outlook = 'include:spf.protection.outlook.com'
+        function New-SpfRecord { param([string]$Content) [pscustomobject]@{ content = $Content } }
+    }
+
+    It 'rewrites a record that carries BOTH includes' {
+        $rec = New-SpfRecord 'v=spf1 include:spf.protection.outlook.com include:_spf.google.com ~all'
+        $r = Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $r.Action | Should -Be 'update' -Because 'the stale foreign include must be removable'
+        $r.Content | Should -Be 'v=spf1 include:_spf.google.com ~all'
+    }
+
+    It 'leaves a record that is already exactly right' {
+        # Must not rewrite on every run — that would be endless churn.
+        $rec = New-SpfRecord 'v=spf1 include:_spf.google.com ~all'
+        $r = Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $r.Action | Should -Be 'none'
+    }
+
+    It 'still adds a missing include (the original cutover case)' {
+        $rec = New-SpfRecord 'v=spf1 include:spf.protection.outlook.com ~all'
+        $r = Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $r.Action | Should -Be 'update'
+        $r.Content | Should -Be 'v=spf1 include:_spf.google.com ~all'
+    }
+
+    It 'preserves unrelated mechanisms while stripping the foreign include' {
+        # A charity's own sender (Mailgun, an ip4, whatever) must survive.
+        $rec = New-SpfRecord 'v=spf1 include:spf.protection.outlook.com include:mailgun.org ip4:203.0.113.9 include:_spf.google.com ~all'
+        $r = Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $r.Action | Should -Be 'update'
+        $r.Content | Should -Be 'v=spf1 include:mailgun.org ip4:203.0.113.9 include:_spf.google.com ~all'
+    }
+
+    It 'refuses to rewrite without a cutover mandate' {
+        # No authority to edit someone else's SPF — and creating a second
+        # v=spf1 is a permerror, so 'none' is the only safe answer.
+        $rec = New-SpfRecord 'v=spf1 include:spf.protection.outlook.com include:_spf.google.com ~all'
+        $r = Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $false
+        $r.Action | Should -Be 'none'
+    }
+
+    It 'asks the caller to create when the zone has no SPF at all' {
+        $r = Resolve-ApexSpfAction -ExistingSpf $null -DesiredInclude 'include:_spf.google.com' `
+            -RemoveIncludes @('include:spf.protection.outlook.com') -Cutover $true
+        $r.Action | Should -Be 'create'
+    }
+
+    It 'is idempotent — rewriting its own output is a no-op' {
+        $rec = New-SpfRecord 'v=spf1 include:spf.protection.outlook.com include:_spf.google.com ~all'
+        $once = (Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+                -RemoveIncludes @($script:Outlook) -Cutover $true).Content
+        $again = Resolve-ApexSpfAction -ExistingSpf (New-SpfRecord $once) -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $again.Action | Should -Be 'none'
+    }
+
+    It 'handles a multi-segment stored SPF record' {
+        # Long SPF records come back from Cloudflare as several quoted
+        # character-strings; the comparison must run on the LOGICAL value or
+        # every run would rewrite the record forever.
+        $dq = [char]34
+        $stored = "$dq" + 'v=spf1 include:spf.protection.outlook.com inc' + "$dq $dq" + 'lude:_spf.google.com ~all' + "$dq"
+        $r = Resolve-ApexSpfAction -ExistingSpf (New-SpfRecord $stored) -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $r.Action | Should -Be 'update'
+        $r.Content | Should -Be 'v=spf1 include:_spf.google.com ~all'
+    }
+
+    It 'removes the foreign include even when it is the ONLY difference' {
+        # Distinct from the "both includes" case: here ours is already present
+        # and first, so a naive "is our include there?" check passes outright.
+        $rec = New-SpfRecord 'v=spf1 include:_spf.google.com include:spf.protection.outlook.com -all'
+        $r = Resolve-ApexSpfAction -ExistingSpf $rec -DesiredInclude $script:Google `
+            -RemoveIncludes @($script:Outlook) -Cutover $true
+        $r.Action | Should -Be 'update'
+        $r.Content | Should -Be 'v=spf1 include:_spf.google.com -all'
+    }
+}
+
+Describe 'Resolve-MultiValueRecordMatch — the A/AAAA proxy flip (#1053)' {
+    # The enforce path required content AND proxy flag to match, and set no
+    # update candidate when only the flag differed — so it fell through to
+    # CREATE a record whose name+type+content already existed. Cloudflare
+    # rejects that as a duplicate; $ErrorActionPreference='Stop' turns the
+    # resulting Write-Error into a terminating one, and the standards loop
+    # ABORTS partway.
+    #
+    # Ordering is what makes that dangerous. Mail records are applied before
+    # the Pages records and the cutover deletes run after the loop, so aborting
+    # at the A record leaves BOTH providers' MX in place and an SPF authorising
+    # only the new one — worse than either endpoint.
+
+    BeforeAll {
+        function New-ARecord {
+            param([string]$Content, [bool]$Proxied)
+            [pscustomobject]@{ type = 'A'; content = $Content; proxied = $Proxied; id = "id-$Content-$Proxied" }
+        }
+        $script:Pages = @('185.199.108.153', '185.199.109.153', '185.199.110.153', '185.199.111.153')
+    }
+
+    It 'UPDATES rather than creates when only the proxy flag differs' {
+        # THE bug. Pre-fix this returned no match and no update candidate, so
+        # the caller POSTed a duplicate and the run aborted.
+        $existing = @($script:Pages | ForEach-Object { New-ARecord -Content $_ -Proxied $true })
+        $m = Resolve-MultiValueRecordMatch -Candidates $existing -DesiredContent '185.199.108.153' -DesiredProxied $false
+        $m.Found | Should -BeNullOrEmpty
+        $m.UpdateCandidate | Should -Not -BeNullOrEmpty
+        $m.UpdateCandidate.content | Should -Be '185.199.108.153'
+    }
+
+    It 'reports a match when content and proxy flag both agree' {
+        $existing = @(New-ARecord -Content '185.199.108.153' -Proxied $false)
+        $m = Resolve-MultiValueRecordMatch -Candidates $existing -DesiredContent '185.199.108.153' -DesiredProxied $false
+        $m.Found | Should -Not -BeNullOrEmpty
+        $m.UpdateCandidate | Should -BeNullOrEmpty
+    }
+
+    It 'never swaps an arbitrary record when the value is genuinely absent' {
+        # This is what the original create-only branch was guarding, and the
+        # guard has to survive the fix: updating some other A record to the
+        # missing IP would silently drop one of the four Pages addresses.
+        $existing = @(New-ARecord -Content '203.0.113.1' -Proxied $false)
+        $m = Resolve-MultiValueRecordMatch -Candidates $existing -DesiredContent '185.199.108.153' -DesiredProxied $false
+        $m.Found | Should -BeNullOrEmpty
+        $m.UpdateCandidate | Should -BeNullOrEmpty -Because 'a missing value must be CREATED, not swapped in'
+    }
+
+    It 'flips in the other direction too' {
+        $existing = @(New-ARecord -Content '185.199.108.153' -Proxied $false)
+        $m = Resolve-MultiValueRecordMatch -Candidates $existing -DesiredContent '185.199.108.153' -DesiredProxied $true
+        $m.UpdateCandidate | Should -Not -BeNullOrEmpty
+    }
+
+    It 'accepts any proxy state when none is required' {
+        $existing = @(New-ARecord -Content '185.199.108.153' -Proxied $true)
+        $m = Resolve-MultiValueRecordMatch -Candidates $existing -DesiredContent '185.199.108.153' -DesiredProxied $null
+        $m.Found | Should -Not -BeNullOrEmpty
+        $m.UpdateCandidate | Should -BeNullOrEmpty
+    }
+
+    It 'handles an empty zone' {
+        $m = Resolve-MultiValueRecordMatch -Candidates @() -DesiredContent '185.199.108.153' -DesiredProxied $false
+        $m.Found | Should -BeNullOrEmpty
+        $m.UpdateCandidate | Should -BeNullOrEmpty
+    }
+
+    It 'resolves the whole slopestohope.org case without a single create' {
+        # All four IPs present and proxied, desired DNS-only. Every one must
+        # become an UPDATE; a create anywhere is the abort.
+        $existing = @($script:Pages | ForEach-Object { New-ARecord -Content $_ -Proxied $true })
+        foreach ($ip in $script:Pages) {
+            $m = Resolve-MultiValueRecordMatch -Candidates $existing -DesiredContent $ip -DesiredProxied $false
+            $m.UpdateCandidate | Should -Not -BeNullOrEmpty -Because "$ip must be updated, not created"
+            $m.UpdateCandidate.content | Should -Be $ip -Because 'the update must target the record that already holds this value'
+        }
+    }
+}
+
+Describe 'Resolve-MultiValueRecordMatch — zones with nothing to match' {
+    # The caller builds $candidates from an unwrapped pipeline, so it is $null
+    # when the zone has no record of this type at this name. That is the
+    # PROVISIONING path: a brand new zone, or any zone whose GitHub Pages
+    # records do not exist yet.
+    #
+    # A Mandatory [object[]] parameter rejects that with "Cannot bind argument
+    # ... because it is null" and aborts enforcement outright. Every existing
+    # test supplied a populated zone, so the whole suite stayed green.
+
+    It 'creates rather than throwing when the zone has no records of this type' {
+        # @($null) is what `@($candidates)` produces at the call site when the
+        # pipeline matched nothing — a 1-element array holding $null.
+        $m = $null
+        { $m = Resolve-MultiValueRecordMatch -Candidates @($null) -DesiredContent '185.199.108.153' -DesiredProxied $false } |
+            Should -Not -Throw
+        $m.Found | Should -BeNullOrEmpty
+        $m.UpdateCandidate | Should -BeNullOrEmpty
+    }
+
+    It 'accepts a bare $null just as readily' {
+        $m = $null
+        { $m = Resolve-MultiValueRecordMatch -Candidates $null -DesiredContent '185.199.108.153' -DesiredProxied $false } |
+            Should -Not -Throw
+        $m.Found | Should -BeNullOrEmpty
+    }
+
+    It 'accepts a single record that is not wrapped in an array' {
+        # A one-match pipeline yields a scalar, not an array.
+        $one = [pscustomobject]@{ type = 'A'; content = '185.199.108.153'; proxied = $true }
+        $m = Resolve-MultiValueRecordMatch -Candidates $one -DesiredContent '185.199.108.153' -DesiredProxied $false
+        $m.UpdateCandidate | Should -Not -BeNullOrEmpty -Because 'a lone proxied record must still be flipped, not duplicated'
+    }
+
+    It 'ignores stray nulls mixed into a populated set' {
+        $recs = @($null, [pscustomobject]@{ type = 'A'; content = '185.199.108.153'; proxied = $false }, $null)
+        $m = Resolve-MultiValueRecordMatch -Candidates $recs -DesiredContent '185.199.108.153' -DesiredProxied $false
+        $m.Found | Should -Not -BeNullOrEmpty
     }
 }

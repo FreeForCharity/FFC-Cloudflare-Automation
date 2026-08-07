@@ -168,6 +168,13 @@ KNOWN_UNGUARDED = {
     ("222-whmcs-product-alignment.yml", "align"),
     ("223-whmcs-import-cloudflare-domains.yml", "import"),
     ("224-whmcs-github-pages-product-alignment.yml", "align"),
+    # Mechanical, and the same shape as its sibling 230 immediately below: the
+    # dry run reads (GetClientsProducts + GetClientsDetails) to build the
+    # preview, so the rehearsal needs a WHMCS credential — just a read-scoped
+    # one. Splitting a `preview` job onto the ungated `whmcs-prod-read` lane and
+    # leaving only `UpdateClient` behind the gate is the 701 `dns`/`dns_preview`
+    # relocation, and is follow-up work rather than #825's scope.
+    ("229-whmcs-client-field-populate.yml", "populate"),
     ("230-whmcs-record-field-set.yml", "record_field_set"),
     ("503-google-gtm-provision.yml", "provision"),
     ("505-google-ga-property-provision.yml", "provision"),

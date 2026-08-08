@@ -195,21 +195,29 @@ az ad app federated-credential create \
 ```
 
 Then confirm kv-reader can `Get` the lane's KV secret (`read-all-ffc-fraudlabspro-api-key`;
-`read-all-ffc-candid-charity-check-key` / `read-all-ffc-candid-essentials-key`) and add both
-environments to `config/federated-credentials.json` so the subject audit covers them.
+`read-all-ffc-candid-charity-check-key` / `read-all-ffc-candid-essentials-key`). Both environments
+are already in `config/federated-credentials.json` (#1081), so the subject audit covers them today —
+`--live` reports them MISSING until the credentials above exist, which is the intended reading, not
+drift.
 
 **Until then the failure mode changes but does not disappear** — 228 will fail at `AADSTS700213`
 (Entra reached, no matching credential) rather than at the preflight. That is a strictly better
 failure: it names the missing credential instead of an empty string, and `AADSTS700213` is the error
 this document exists to explain.
 
-> **`config/federated-credentials.json` is incomplete, and this is not the only gap.** Its `apps[]`
-> lists 3 reader environments and 5 writer ones, while the tree runs OIDC jobs against **12**
-> environments — `github-prod`, `github-prod-read`, `candid-prod-read` and `fraudlabspro-prod-read`
-> are all absent. Three of those four demonstrably work in production, so the map understates
-> reality, and the subject audit (`--live`) therefore cannot catch a typo in a credential it does
-> not know to expect. Reconciling it needs a live `az ad app federated-credential list` per
-> identity, which is a read an operator can do from an authenticated shell; tracked on #912.
+> **`config/federated-credentials.json` was incomplete, and is now guarded (#1081).** Its `apps[]`
+> listed 3 reader environments and 5 writer ones while the tree ran OIDC jobs against **12** —
+> `github-prod`, `github-prod-read`, `candid-prod-read` and `fraudlabspro-prod-read` were all
+> absent, so the subject audit could not catch a typo in a credential it did not know to expect. All
+> four are now mapped and the stale `cloudflare-prod` entry is gone. Reconciling it by hand is no
+> longer the mechanism that keeps it honest: `check-federated-credential-subjects.py` asserts **set
+> equality** between the map and the environments the workflows actually perform an Azure OIDC
+> exchange under, offline, on every PR. Adding a lane and forgetting this file is now a CI failure.
+>
+> Note what that does and does not claim. It makes every OIDC lane **expected**; whether the
+> credential exists in Entra is still only answerable by `--live`. For `candid-prod-read` and
+> `fraudlabspro-prod-read` it demonstrably does not yet — that is #1006 Part A and #912 Part A, and
+> the map now says so out loud instead of omitting the question.
 
 ## Auditing federated-credential subjects
 
@@ -220,7 +228,8 @@ catch that class, the expected credentials this repo's workflows rely on are dec
 the environments it must carry). Subjects are **generated** from `repo` + `environment`, so the map
 itself can't carry a subject typo.
 
-`scripts/check-federated-credential-subjects.py` uses it three ways:
+`scripts/check-federated-credential-subjects.py` uses it three ways (every mode first checks the
+map's **coverage** — see below):
 
 ```bash
 python3 scripts/check-federated-credential-subjects.py            # self-check the map (runs in CI)
@@ -233,6 +242,25 @@ canonical `subject`, `issuer`, and `audiences`, and flags any this-repo credenti
 expected. CI runs the self-check on every PR; the live audit is operator-run (and folds naturally
 into the #589 drift-audit workflow when that lands). Cross-repo credentials on these shared
 identities (`FFC-IN-*`) are intentionally out of scope.
+
+### The map's denominator is checked too (#1081)
+
+Every mode — including the default offline one CI runs — first asserts that the environments the map
+lists are **exactly** the environments this repo's workflows perform an Azure OIDC exchange under. A
+lane in one set and not the other is an error naming the environment and the workflows that use it.
+
+This exists because the audit above can only ever be as complete as the map, and the map was
+hand-maintained: it printed `config OK: 3 apps, 9 expected env credentials` on every run while four
+OIDC lanes sat outside its denominator — and those four held **every failing workflow in the repo**
+(#949, #921, #1033, 801/802). A control whose input set is hand-maintained cannot detect an omitted
+input (L133); the input set is therefore derived from the tree rather than trusted.
+
+A job counts as performing an exchange if it has an `azure/login` step, uses a local composite
+action that itself logs in (resolved by **reading** the action, not by matching `*-from-kv` on its
+name), or references an Azure OIDC identifier. A job that declares an `environment:` and does none
+of those is not a finding — `github-pages` (721) and `wpmudev-prod` (601) are real environments with
+no Azure lane, and this is not a blanket environment audit. It fails closed: a workflow or composite
+action that cannot be parsed is a finding, never a silent skip.
 
 ## Inspecting / repairing from the Claude sandbox
 

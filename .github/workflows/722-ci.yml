@@ -119,9 +119,13 @@ jobs:
         shell: bash
         run: |
           # Self-check config/federated-credentials.json is well-formed (GUIDs,
-          # env slugs, no dupes). The live subject audit (--live) runs against
-          # Azure via the operator/#589 workflow; this CI step just keeps the
-          # declarative expected map honest. Guards the #625 subject-typo class.
+          # env slugs, no dupes), AND that its environment list is exactly the
+          # set of environments this repo's workflows perform an Azure OIDC
+          # exchange under (#1081) — a lane nobody added to the map is invisible
+          # to the audit, which is how all four broken OIDC lanes went
+          # unreported. Both checks are offline: no Azure, no credential. The
+          # live subject audit (--live) runs against Azure via the operator/#589
+          # workflow. Guards the #625 subject-typo class.
           python3 scripts/check-federated-credential-subjects.py
 
       - name: Validate GitHub Pages IP sets are in sync

@@ -1055,8 +1055,8 @@ def test_this_guard_covers_the_module_that_reads_every_workflow():
 # covered the one id in that range that had NOT merged.
 #
 # L38 was on the branch at `7b3733d`, and the merge `28a4b8b` ("Merge main into
-# conductor/lessons-r54 (ledger table conflict)") re-emitted all 26 rows of the
-# table and brought 25 of them back. The diff is a wall of near-identical +/-
+# conductor/lessons-r54 (ledger table conflict)") re-emitted all 27 rows of the
+# table and brought 26 of them back. The diff is a wall of near-identical +/-
 # lines with one row removed in the middle of it, which is why review did not
 # see it and why nothing else did either: deletion is the mirror image of the
 # duplicate L43 already guards, and only one of the two directions was held.

@@ -175,6 +175,27 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/check-pwsh-workflow-invocations.py
 
+      - name: Validate no free-text dispatch input reaches a script body
+        shell: bash
+        run: |
+          # GitHub substitutes an expression into the script TEXT before
+          # bash/pwsh/JS parses it, so a workflow_dispatch input is source code,
+          # not data. 720 had both halves live: the pwsh one assigned an
+          # interpolated Description into a double-quoted literal and a $( ) in
+          # the value ran; the bash half did the same (#1080). The usual
+          # "you need write access to dispatch anyway" dismissal fails on a GATED
+          # workflow: environment approval is a trust boundary between the
+          # dispatcher and the approver, and interpolated input is code that runs
+          # AFTER the approval holding a production credential the dispatcher
+          # never had — invisible in the diff the approver reads, because it is
+          # not in the repository at all. This freezes the 36 existing call sites
+          # (21 on write lanes) and fails on a new one, on a stale freeze entry,
+          # or on a workflow it cannot parse. Complements the untrusted-event
+          # rule in tests/workflow-logic/test_no_untrusted_expression_in_run.py,
+          # which deliberately scopes dispatch-only workflows out.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 scripts/check-workflow-input-interpolation.py
+
       - name: Validate text-mode subprocess calls pin an encoding
         shell: bash
         run: |

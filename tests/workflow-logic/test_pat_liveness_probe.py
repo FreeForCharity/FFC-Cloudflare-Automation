@@ -175,7 +175,11 @@ def test_probe_error_names_the_secret_and_the_status_code():
         assert errors, f"{name}/{job}: the probe fails the step without emitting ::error::"
         for line in errors:
             assert secret in line, f"{name}/{job}: error does not name the secret: {line.strip()}"
-            assert "$code" in line, f"{name}/{job}: error does not report the status code: {line.strip()}"
+            # Either the variable, or the literal status of a branch that can
+            # only be reached on one code -- the rate-limit verdict is 403 by
+            # construction, and interpolating `$code` there would say less.
+            reports_status = "$code" in line or re.search(r"returned \d{3} from", line)
+            assert reports_status, f"{name}/{job}: error does not report the status code: {line.strip()}"
 
 
 def test_probe_states_that_200_is_not_a_scope_guarantee():
@@ -185,6 +189,28 @@ def test_probe_states_that_200_is_not_a_scope_guarantee():
     for name, job, _secret, body in STEPS:
         block = probe_block(body).upper()
         assert "SCOPE" in block, f"{name}/{job}: the probe does not say what a 200 fails to prove"
+
+
+def test_every_step_separates_a_rate_limit_from_a_rejection():
+    """Structural half of the same finding, over all 16: reading only the status
+    cannot tell a throttled token from a revoked one, so both headers must be
+    read and the throttled branch must not prescribe a remint."""
+    for name, job, _secret, body in STEPS:
+        block = probe_block(body)
+        where = f"{name}/{job}"
+        assert "-D " in block, f"{where}: the probe discards the response headers"
+        assert "x-ratelimit-remaining" in block, f"{where}: primary rate limits read as rejections"
+        assert "retry-after" in block, f"{where}: secondary rate limits read as rejections"
+        throttled = [ln for ln in block.splitlines() if "rate limit, not a credential fault" in ln]
+        assert len(throttled) == 1, f"{where}: no single rate-limit verdict"
+        assert "Remedy is a new version" not in throttled[0], f"{where}: prescribes a remint for a live token"
+
+
+def test_the_header_dump_is_removed_after_the_probe():
+    for name, job, _secret, body in STEPS:
+        block = probe_block(body)
+        assert 'hdrs="$(mktemp)"' in block, f"{name}/{job}: header dump lands on a fixed path"
+        assert 'rm -f "$hdrs"' in block, f"{name}/{job}: the header dump is left behind"
 
 
 def test_probe_never_routes_the_token_into_output():
@@ -226,11 +252,17 @@ def _shims(root: pathlib.Path) -> pathlib.Path:
     curl = bin_dir / "curl"
     curl.write_text(
         "#!/usr/bin/env bash\n"
-        "# Fake `curl`: records argv, prints the status code the test asks for,\n"
-        "# and exits with the rc real curl would use. `000` + rc 7 is what real\n"
-        "# curl produces when the request never completes -- asserted against the\n"
-        "# real binary in test_real_curl_prints_000_on_a_refused_connection.\n"
+        "# Fake `curl`: records argv, writes the response headers the test wants\n"
+        "# to the -D path, prints the status code, and exits with the rc real curl\n"
+        "# would use. `000` + rc 7 is what real curl produces when the request\n"
+        "# never completes -- asserted against the real binary in\n"
+        "# test_real_curl_prints_000_on_a_refused_connection.\n"
         'printf "%s\\n" "$*" >> "$TEST_CURL_LOG"\n'
+        "prev=\"\"\n"
+        'for arg in "$@"; do\n'
+        '  if [ "$prev" = "-D" ]; then printf "%b" "${TEST_RESP_HEADERS-}" > "$arg"; fi\n'
+        '  prev="$arg"\n'
+        "done\n"
         'printf "%s" "${TEST_HTTP_CODE-200}"\n'
         'exit "${TEST_CURL_RC-0}"\n',
         encoding="utf-8",
@@ -240,7 +272,19 @@ def _shims(root: pathlib.Path) -> pathlib.Path:
     return bin_dir
 
 
-def run_step(body: str, *, token: str = "ghp_liveTOKEN123", http_code: str = "200", curl_rc: str = "0"):
+HEALTHY_HEADERS = "HTTP/2 200\\r\\nx-ratelimit-remaining: 4931\\r\\n\\r\\n"
+PRIMARY_LIMIT_HEADERS = "HTTP/2 403\\r\\nx-ratelimit-remaining: 0\\r\\nx-ratelimit-reset: 1800000000\\r\\n\\r\\n"
+SECONDARY_LIMIT_HEADERS = "HTTP/2 403\\r\\nx-ratelimit-remaining: 4712\\r\\nretry-after: 60\\r\\n\\r\\n"
+
+
+def run_step(
+    body: str,
+    *,
+    token: str = "ghp_liveTOKEN123",
+    http_code: str = "200",
+    curl_rc: str = "0",
+    headers: str = HEALTHY_HEADERS,
+):
     """Run a real step body under the runner's shell. Returns (proc, github_env, curl_log)."""
     bash = require_bash()
     with tempfile.TemporaryDirectory() as td:
@@ -264,6 +308,7 @@ def run_step(body: str, *, token: str = "ghp_liveTOKEN123", http_code: str = "20
                 TEST_KV_TOKEN=token,
                 TEST_HTTP_CODE=http_code,
                 TEST_CURL_RC=curl_rc,
+                TEST_RESP_HEADERS=headers,
                 TEST_CURL_LOG=str(curl_log),
                 GITHUB_ENV=str(gh_env),
             ),
@@ -298,11 +343,54 @@ def test_revoked_token_fails_with_the_revoked_message():
     assert "GH_TOKEN" not in gh_env, "a rejected token was exported to GITHUB_ENV anyway"
 
 
-def test_forbidden_token_is_treated_as_rejected():
-    proc, gh_env, _ = run_step(_body(DELIVER, "deliver"), http_code="403")
+def test_forbidden_token_with_budget_left_is_treated_as_rejected():
+    """A 403 that is NOT a rate limit is a rejection, and keeps the remint remedy."""
+    proc, gh_env, _ = run_step(_body(DELIVER, "deliver"), http_code="403", headers=HEALTHY_HEADERS)
     assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert "returned 403 from GET /user" in proc.stdout, proc.stdout
+    assert "returned 403 from GET /user: the token is revoked" in proc.stdout, proc.stdout
+    assert "Remedy is a new version of the secret" in proc.stdout, proc.stdout
     assert "GH_TOKEN" not in gh_env, gh_env
+
+
+def test_primary_rate_limit_403_is_not_reported_as_revoked():
+    """The Conductor's #1125 finding. GitHub answers a primary rate limit with 403
+    + `x-ratelimit-remaining: 0`, and that token is LIVE. Telling an operator to
+    remint a healthy credential is the same wrong-subsystem failure #1102 exists
+    to remove -- and it is the failure this guard would otherwise introduce."""
+    proc, gh_env, _ = run_step(
+        _body(DELIVER, "deliver"), http_code="403", headers=PRIMARY_LIMIT_HEADERS
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "that is a rate limit, not a credential fault" in proc.stdout, proc.stdout
+    assert "x-ratelimit-remaining='0'" in proc.stdout, proc.stdout
+    assert "do not remint it" in proc.stdout, proc.stdout
+    assert "revoked" not in proc.stdout, "a throttled token was reported as revoked"
+    assert "Remedy is a new version" not in proc.stdout, "a throttled token was prescribed a remint"
+    assert "GH_TOKEN" not in gh_env, "the run continued on a rate-limited probe"
+
+
+def test_secondary_rate_limit_403_is_not_reported_as_revoked():
+    """A secondary limit sends `retry-after` with the budget still non-zero, so a
+    remaining==0 test alone would call this one revoked."""
+    proc, gh_env, _ = run_step(
+        _body(DELIVER, "deliver"), http_code="403", headers=SECONDARY_LIMIT_HEADERS
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "that is a rate limit, not a credential fault" in proc.stdout, proc.stdout
+    assert "retry-after='60'" in proc.stdout, proc.stdout
+    assert "revoked" not in proc.stdout, "a throttled token was reported as revoked"
+    assert "GH_TOKEN" not in gh_env, gh_env
+
+
+def test_rate_limit_headers_do_not_excuse_a_401():
+    """Rate-limit headers ride on ordinary responses too. Only a 403 may be read
+    as throttling -- a 401 is a rejection whatever the budget says."""
+    proc, _gh_env, _ = run_step(
+        _body(DELIVER, "deliver"), http_code="401", headers=PRIMARY_LIMIT_HEADERS
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "returned 401 from GET /user: the token is revoked" in proc.stdout, proc.stdout
+    assert "rate limit, not a credential fault" not in proc.stdout, proc.stdout
 
 
 def test_server_error_fails_closed_as_unverified():

@@ -165,19 +165,29 @@ step named `Load the GitHub PAT from Key Vault` — 16 of them across 14 workflo
 `GET https://api.github.com/user` with the loaded token and fails the step on any non-200, before
 the value reaches `GITHUB_ENV`:
 
-- **401 / 403** →
+- **401, or a 403 that is not throttling** →
   `<secret> returned 401 from GET /user: the token is revoked, expired, or its access was removed — it is not missing.`
   That is the message 502 should have been printing for nine days. The old emptiness branch is
   unchanged and still says what it says, because "the vault handed back nothing" (a role assignment)
   and "the vault handed back a dead token" (a remint) are different jobs for whoever reads the log.
+- **403 with `x-ratelimit-remaining: 0` (primary) or a `retry-after` header (secondary)** → a rate
+  limit, reported as one. The credential is **live**, so this branch says so and tells the reader
+  not to remint it. Separating the two is why the probe keeps the response headers (`-D`) instead of
+  reading the status alone: a 403 cannot on its own tell a revoked token from a throttled one, and
+  prescribing a remint for a healthy credential would be the same wrong-subsystem failure this guard
+  exists to remove. FreeForCharity is on the `team` plan, so the other two common 403 sources — SAML
+  SSO enforcement and IP allow lists — do not apply here; throttling is the one that does, and the
+  Conductor has driven these pools to zero more than once.
 - **anything else, including `000`** → unverified, and it fails closed. A 502 from GitHub says
   nothing about the credential (321's live/dead/unverified split), so it is never reported as
   revoked and never treated as a pass.
 
-The probe reads a status code only (`curl -sS -o /dev/null -w '%{http_code}'`); the token goes into
-a request header and into no output. **A 200 proves the token authenticates and nothing about its
-scope** — a read-scoped PAT answers 200 here and 403 on the write 502 and 735 go on to perform — so
-a green credential step is not a licence to assume the later write will succeed. Guarded by
+The probe reads a status code and the response headers
+(`curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}'`) and nothing else — `-o /dev/null` discards
+the body, the header dump carries no credential and is deleted straight after, and the token goes
+into a request header and into no output. **A 200 proves the token authenticates and nothing about
+its scope** — a read-scoped PAT answers 200 here and 403 on the write 502 and 735 go on to perform —
+so a green credential step is not a licence to assume the later write will succeed. Guarded by
 `tests/workflow-logic/test_pat_liveness_probe.py`, which runs the shipped step bodies under the
 runner's own shell.
 

@@ -1,6 +1,7 @@
 name: '105. DNS - Manage Record (Manual / Issue Label) [CF]'
 run-name:
-  'Manage Record: ${{ inputs.domain }} (${{ inputs.record_type }} ${{ inputs.record_name }})'
+  'Manage Record: ${{ inputs.domain }} (${{ inputs.record_type }} ${{ inputs.record_name }})
+  (dry_run=${{ inputs.dry_run }})'
 on:
   workflow_dispatch:
     inputs:

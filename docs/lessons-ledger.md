@@ -59,11 +59,6 @@ happened to L38 (restored from `7b3733d` in #1113 after `28a4b8b` dropped it whi
 whole table). `tests/workflow-logic/test_lessons_ledger.py` fails on any undeclared gap.
 
 <!-- reserved-ids
-L118 #1062
-L119 #1062
-L120 #1062
-L121 #1062
-L158 #1062
 -->
 
 ## Verification and monitoring

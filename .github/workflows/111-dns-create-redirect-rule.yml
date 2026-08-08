@@ -1,5 +1,7 @@
 name: '111. DNS - Create Redirect Rule (Admin) [CF]'
-run-name: 'Redirect Rule: ${{ inputs.source_domain }} → ${{ inputs.target_domain }}'
+run-name:
+  'Redirect Rule: ${{ inputs.source_domain }} → ${{ inputs.target_domain }} (dry_run=${{
+  inputs.dry_run }})'
 
 on:
   workflow_dispatch:

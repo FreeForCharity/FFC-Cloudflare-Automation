@@ -1,5 +1,5 @@
 name: '228. WHMCS - Fraud Review (FraudLabs Pro) [FRAUDLABS+WHMCS]'
-run-name: 'WHMCS Fraud Review (FraudLabs Pro)'
+run-name: 'WHMCS Fraud Review (FraudLabs Pro) (dry_run=${{ inputs.dry_run }})'
 
 # Read-only against external systems: for each WHMCS Fraud-status order, reads its stored FraudLabs
 # Pro verdict and emits a triage row with a RECOMMENDED action (clear-recommended / hold-for-human /

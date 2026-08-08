@@ -91,6 +91,18 @@ Both conditions are necessary (#915), and a job may load more than one credentia
   sent to Clarke, and the gate is left pending until he approves in this run. No response is never
   approval.
 
+**Convention — a gated workflow that takes `dry_run` MUST surface it in `run-name` (#1107).** Append
+`(dry_run=${{ inputs.dry_run }})` to the existing `run-name`. Condition 1 above is a question about
+_this dispatch_, and the approver has no way to answer it otherwise: the input's `default:` is not a
+reading of the run, the REST run object exposes **no** `workflow_dispatch` inputs at all, and a
+waiting job has produced no logs — that is what a gate is. Without the marker the rule's answer is
+always "hold", including for pure rehearsals, which is how a `106 / cloudflare-prod-write` approval
+on 2026-08-07 became undecidable (L177). Where the workflow also fires on events that carry no
+`inputs` (701's `issues` / `repository_dispatch`), render the **effective** value the job's own
+condition evaluates — `${{ inputs.dry_run || false }}`, matching its `inputs.dry_run != true` guard
+— rather than an expression that renders empty. Enforced at PR time by
+`tests/workflow-logic/test_dry_run_visible_in_run_name.py`.
+
 **Why credential scope is a necessary condition.** Safety level describes what a job's own steps are
 written to produce. It does not bound what the job _can_ do. Once a broad org-scoped writer token is
 in `GITHUB_ENV`, the blast radius is everything that token can reach — a `Reads` label does not

@@ -49,6 +49,11 @@
     (https://host/path) -- Cloudflare rejects bare paths. Mutually exclusive
     with -All.
 
+    NOTE: `pwsh -File` binds only a SINGLE value to a [string[]] parameter, so
+    repeated -Url flags on a console invocation silently purge just the first
+    one. Use -UrlList from a console; -Url is for in-process callers, where
+    array binding works normally.
+
 .PARAMETER UrlList
     The same list as a single delimited string (newline, comma or space
     separated). This exists so a `workflow_dispatch` input -- which is always a
@@ -75,7 +80,13 @@
 
 .EXAMPLE
     pwsh -File scripts/cloudflare-cache-purge.ps1 -Domain freeforcharity.org `
-        -Url 'https://freeforcharity.org/Svgs/FFC-Consulting.svg' -Verify
+        -UrlList 'https://freeforcharity.org/Svgs/FFC-Consulting.svg' -Verify
+
+.EXAMPLE
+    # Several URLs from a console: comma-separate them into -UrlList. Repeated
+    # -Url flags would bind only the first (see the -Url note above).
+    pwsh -File scripts/cloudflare-cache-purge.ps1 -Domain freeforcharity.org `
+        -UrlList 'https://freeforcharity.org/a.svg,https://freeforcharity.org/b.js' -Verify
 
 .EXAMPLE
     pwsh -File scripts/cloudflare-cache-purge.ps1 -Domain freeforcharity.org -All -DryRun

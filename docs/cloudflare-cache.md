@@ -51,10 +51,15 @@ Targeted purge of the specific URLs, with verification:
 
 ```bash
 pwsh -File scripts/cloudflare-cache-purge.ps1 -Domain freeforcharity.org \
-  -Url 'https://freeforcharity.org/Svgs/FFC-Consulting.svg' \
-  -Url 'https://freeforcharity.org/_next/static/chunks/1gzgy07de-6wt.js' \
+  -UrlList 'https://freeforcharity.org/Svgs/FFC-Consulting.svg,https://freeforcharity.org/_next/static/chunks/1gzgy07de-6wt.js' \
   -Verify
 ```
+
+**Use `-UrlList` for more than one URL, not repeated `-Url`.** `pwsh -File` binds only a single
+value to a `[string[]]` parameter, so three `-Url` flags purge **one** URL — and the verdict then
+truthfully reports success for the one it saw, which is the worst way to lose data during an
+incident. `-Url` is for callers that dot-source or invoke the script in-process, where array binding
+works normally. Pinned by a case in `tests/cloudflare-cache.Tests.ps1`.
 
 Via workflow 124, paste the URLs into the `urls` input (newline or comma separated) and run once
 with `dry_run=true` to see the payload, then again with `dry_run=false`.

@@ -61,13 +61,27 @@ def _gated_environments(doc: dict) -> list[str]:
     nothing on an ungated lane, and an environment that gains reviewers in
     Settings must not silently create a new undecidable gate. This guard is
     about what the approver can read, not about which lanes currently pause.
+
+    `environment:` has two spellings — a bare string, and a mapping carrying
+    `name` and `url`. `721-deploy-pages.yml`'s `deploy` job uses the mapping
+    form today, so returning the raw value would put a dict in a `list[str]`.
+    Only truthiness is read below, and a dict is truthy, so nothing would have
+    failed — which is the reason to normalise now rather than when something
+    does. Mirrors `_job_environment_names` in `test_gated_env_hygiene.py`.
     """
     jobs = doc.get("jobs") or {}
-    return [
-        job["environment"]
-        for job in jobs.values()
-        if isinstance(job, dict) and job.get("environment")
-    ]
+    names = []
+    for job in jobs.values():
+        if not isinstance(job, dict):
+            continue
+        env = job.get("environment")
+        if isinstance(env, dict):
+            name = env.get("name")
+            if isinstance(name, str) and name:
+                names.append(name)
+        elif env:
+            names.append(str(env))
+    return names
 
 
 def _workflows() -> list[tuple[pathlib.Path, dict]]:
@@ -163,6 +177,34 @@ def test_the_guard_reports_a_workflow_that_hides_it():
         "    environment: cloudflare-prod-write\n"
         "    runs-on: ubuntu-latest\n"
     )
+    assert undecidable_gates([(pathlib.Path("fixture.yml"), doc)]) == ["fixture.yml"]
+
+
+def test_the_mapping_form_of_environment_is_a_gate_too():
+    """`environment: {name: …, url: …}` is the other legal spelling.
+
+    `721-deploy-pages.yml` uses it. Reading `job["environment"]` raw put a dict
+    where a name belongs; the only consumer was a truthiness test, so it passed
+    — and a check that is right for a reason it does not state is one refactor
+    from being wrong. Asserts the *name*, not merely that something truthy came
+    back, so a regression to the raw value fails here.
+    """
+    doc = yaml.safe_load(
+        "name: fixture\n"
+        "run-name: 'Deploy ${{ inputs.target }}'\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "    inputs:\n"
+        "      dry_run:\n"
+        "        type: boolean\n"
+        "jobs:\n"
+        "  go:\n"
+        "    environment:\n"
+        "      name: github-prod\n"
+        "      url: https://example.org\n"
+        "    runs-on: ubuntu-latest\n"
+    )
+    assert _gated_environments(doc) == ["github-prod"]
     assert undecidable_gates([(pathlib.Path("fixture.yml"), doc)]) == ["fixture.yml"]
 
 

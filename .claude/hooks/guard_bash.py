@@ -543,10 +543,12 @@ def gh_edit_label_violation(cmd):
                 "label edit made moments earlier -- including your own.\n"
                 "  command: " + stmt.strip()[:140] + "\n"
                 "Use the endpoints that cannot rewrite the set, then verify by "
-                "re-reading the issue:\n"
+                "re-reading the issue or PR:\n"
                 "  add:    gh api --method POST   repos/OWNER/REPO/issues/N/labels "
                 "-f 'labels[]=NAME'\n"
-                "  remove: gh api --method DELETE repos/OWNER/REPO/issues/N/labels/NAME"
+                "  remove: gh api --method DELETE repos/OWNER/REPO/issues/N/labels/NAME\n"
+                "`/issues/N/labels` is correct for a PR too -- a PR IS an issue to the "
+                "labels API, so N is the PR number and no /pulls/ form exists."
             )
     return None
 

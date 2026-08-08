@@ -59,7 +59,6 @@ happened to L38 (restored from `7b3733d` in #1113 after `28a4b8b` dropped it whi
 whole table). `tests/workflow-logic/test_lessons_ledger.py` fails on any undeclared gap.
 
 <!-- reserved-ids
-L188 #1117 (Cloudflare cache purge + cache-rules audit) — row authored, PR open at time of writing
 -->
 
 ## Verification and monitoring

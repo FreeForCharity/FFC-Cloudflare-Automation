@@ -281,6 +281,57 @@ def test_an_unparseable_workflow_is_a_finding_not_a_skip():
         assert _coverage_findings(CFG, usage, problems), "the parse error did not fail the check"
 
 
+def test_a_workflow_that_parses_but_is_not_a_workflow_is_a_finding():
+    """`jobs:` valid YAML, wrong shape — report, never raise (#1120 review).
+
+    Measured before fixing: `jobs: [a, b]` and `jobs: nope` each raised
+    AttributeError out of the coverage check. A traceback is not a finding — CI
+    fails with an opaque stack instead of naming the file — so the shapes are
+    pinned here rather than left to review.
+    """
+    for body in ("jobs:\n  - a\n  - b\n", "jobs: nope\n"):
+        with _synthetic_tree({"993-shape.yml": body}) as root:
+            usage, problems = checker.oidc_environment_usage(root=root)
+            assert problems and "993-shape.yml" in problems[0], (body, problems)
+            assert "not a mapping" in problems[0], problems
+            assert usage == {}, usage
+
+    # `jobs: []` too. The old `or {}` swallowed it because an empty list is
+    # falsy, which is an accident of truthiness rather than a decision: Actions
+    # requires `jobs:` to be a MAP, so an empty list is just as invalid as a
+    # populated one and there is no reason for the two to be judged differently.
+    # One rule, no special case.
+    with _synthetic_tree({"993-shape.yml": "jobs: []\n"}) as root:
+        usage, problems = checker.oidc_environment_usage(root=root)
+        assert problems and "not a mapping" in problems[0], problems
+        assert usage == {}, usage
+
+    # A file with no `jobs:` key at all is left alone — that is absence, not a
+    # malformed value, and the check is not a workflow-schema validator.
+    with _synthetic_tree({"993-shape.yml": "name: no jobs here\n"}) as root:
+        usage, problems = checker.oidc_environment_usage(root=root)
+        assert not problems and usage == {}, (usage, problems)
+
+
+def test_a_malformed_composite_action_fails_closed():
+    """An action.yml that parses but is not an action (#1120 review)."""
+    job = {"environment": "shape-prod", "steps": [{"uses": "./.github/actions/bad"}]}
+    workflows = {"992-bad.yml": {"jobs": {"go": job}}}
+    for action_body, expected in (
+        ({"name": "x", "runs": "nope"}, "`runs:`"),
+        (["a", "b"], "not a mapping"),
+    ):
+        with _synthetic_tree(workflows) as root:
+            path = pathlib.Path(root) / ".github" / "actions" / "bad" / "action.yml"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(yaml.safe_dump(action_body), encoding="utf-8", newline="\n")
+            usage, problems = checker.oidc_environment_usage(root=root)
+            assert problems and expected in problems[0], (action_body, problems)
+            # Fail closed: undecidable counts as an exchange, so the lane stays
+            # visible instead of being silently dropped.
+            assert usage == {"shape-prod": ["992-bad.yml"]}, usage
+
+
 def test_an_unreadable_local_action_fails_closed():
     job = {"environment": "mystery-prod", "steps": [{"uses": "./.github/actions/ghost"}]}
     with _synthetic_tree({"994-ghost.yml": {"jobs": {"go": job}}}) as root:
@@ -333,9 +384,12 @@ def _captured():
 def _coverage_findings(cfg, usage, problems):
     """coverage_check's findings, captured rather than printed.
 
-    The checker prints each finding as `  - <text>`; the leading two spaces are
-    load-bearing here — matching on `- ` alone silently returns [] and every
-    assertion built on it passes for the wrong reason.
+    The checker indents each finding (`  - <text>`), so this strips before
+    matching and is indentation-independent by construction. Stated because the
+    first draft was not: it matched `- ` against the RAW line, returned [], and
+    four assertions of the form "the guard reports X" passed over an empty list.
+    A predicate over captured output needs a positive control — which is what
+    the callers' non-empty and exact-count assertions now are.
     """
     with _captured() as out:
         checker.coverage_check(cfg, usage, problems)

@@ -223,8 +223,21 @@ def _local_action_does_oidc(rel_path, root, cache, problems):
             problems.append(f"{rel_path}/{candidate}: unreadable/unparseable ({exc}) — cannot decide whether it performs an OIDC exchange; fix the file.")
             cache[rel_path] = True  # fail closed: assume it does
             return True
+        # Parsing is not validating. `runs: nope` and a list-valued action.yml
+        # are both valid YAML and neither is an action; reaching into them with
+        # .get() raises AttributeError, which is a traceback rather than the
+        # finding this function promises. Shape-check, then fail closed.
+        if not isinstance(action, dict):
+            problems.append(f"{rel_path}/{candidate}: parses but is not a mapping ({type(action).__name__}) — not a valid action definition; cannot decide whether it performs an OIDC exchange.")
+            cache[rel_path] = True
+            return True
+        runs = action.get("runs")
+        if runs is not None and not isinstance(runs, dict):
+            problems.append(f"{rel_path}/{candidate}: `runs:` is a {type(runs).__name__}, not a mapping — not a valid action definition; cannot decide whether it performs an OIDC exchange.")
+            cache[rel_path] = True
+            return True
         rendered = yaml.safe_dump(action, default_flow_style=False, allow_unicode=True)
-        steps = ((action.get("runs") or {}).get("steps")) or []
+        steps = ((runs or {}).get("steps")) or []
         for step in steps:
             if isinstance(step, dict) and isinstance(step.get("uses"), str):
                 if AZURE_LOGIN_RE.match(step["uses"].strip()):
@@ -306,7 +319,14 @@ def oidc_environment_usage(workflows=None, root="."):
         if not isinstance(workflow, dict):
             problems.append(f"{filename}: top level is not a mapping — cannot be audited.")
             continue
-        for job_id, job in (workflow.get("jobs") or {}).items():
+        jobs = workflow.get("jobs")
+        # `jobs: []` is falsy and harmless, but `jobs: [a, b]` and `jobs: nope`
+        # parse fine and are not mappings — .items() on those raises instead of
+        # reporting, which is the one behaviour this check promises not to have.
+        if jobs is not None and not isinstance(jobs, dict):
+            problems.append(f"{filename}: `jobs:` is a {type(jobs).__name__}, not a mapping — the file parses but is not a valid workflow; its environments cannot be audited.")
+            continue
+        for job_id, job in (jobs or {}).items():
             if not isinstance(job, dict):
                 continue
             env = job_environment(job)

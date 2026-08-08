@@ -113,10 +113,10 @@ def _row_cells(line: str) -> list[str]:
     return [p.strip() for p in parts]
 
 
-def _rows() -> list[tuple[str, list[str]]]:
-    """(id, [lesson, evidence, enforced_by]) for every ledger row."""
+def _rows_from_text(text: str) -> list[tuple[str, list[str]]]:
+    """(id, [lesson, evidence, enforced_by]) for every row in `text`."""
     rows = []
-    for line in LEDGER.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         m = _ROW.match(line.strip())
         if not m:
             continue
@@ -129,6 +129,10 @@ def _rows() -> list[tuple[str, list[str]]]:
     return rows
 
 
+def _rows() -> list[tuple[str, list[str]]]:
+    return _rows_from_text(LEDGER.read_text(encoding="utf-8"))
+
+
 def _claimed_paths(cell: str) -> list[str]:
     out = []
     for token in _PATHISH.findall(cell):
@@ -138,6 +142,52 @@ def _claimed_paths(cell: str) -> list[str]:
         if "/" in token or token.endswith(_PATH_SUFFIXES):
             out.append(token)
     return out
+
+
+# A skill is a repo artifact at `.claude/skills/<name>/SKILL.md`, so naming one
+# in the tier column is as much a claim about the tree as naming a file. But a
+# skill name carries no `/` and no suffix, so `_claimed_paths` cannot see it and
+# the existence check above walked straight past it. L175 shipped naming an
+# `ffc-environment-quirks` skill that has never existed, and every test in this
+# module stayed green (#1108) — the blind spot is the same "prose that reads as
+# coverage while covering nothing" this file was written for, one token shape
+# over. It was caught by a reviewer reading the row, which is the tier this
+# check exists to replace.
+#
+# The trailing word `skill` is what makes the token a claim: `run-checks` on its
+# own is a phrase, `` `run-checks` skill `` is an assertion that the directory is
+# there. Tokens containing `/` are left to `_claimed_paths`, so a row spelling
+# the pointer out in full is checked once, as a path, rather than twice and
+# wrongly.
+_SKILL_CLAIM = re.compile(r"`([^`]+)`\s+skill\b", re.IGNORECASE)
+
+
+def skill_claim_problems(cell: str, lid: str = "row") -> list[str]:
+    """Skills a tier cell names that are not in the tree."""
+    problems = []
+    for name in _SKILL_CLAIM.findall(cell):
+        name = name.strip()
+        if "/" in name:
+            continue
+        try:
+            present = (REPO_ROOT / ".claude" / "skills" / name / "SKILL.md").is_file()
+        except OSError:
+            # A token too long (or otherwise unrepresentable) to be a filename is
+            # not a skill either, so it is a broken claim and must be REPORTED.
+            # Raising here would be worse than useless: a check that dies mid-walk
+            # takes the rest of the module with it, and a harness reading PASS/FAIL
+            # lines scores the crash as "no test noticed" — found while mutating
+            # this very rule, where widening it to every backticked token turned a
+            # prose cell into a 300-character path and the run into an OSError that
+            # read as a SURVIVED mutation.
+            present = False
+        if not present:
+            problems.append(
+                f"{lid}: names the `{name}` skill as its enforcement, and "
+                f".claude/skills/{name}/SKILL.md does not exist — the ledger is "
+                "claiming coverage it does not have"
+            )
+    return problems
 
 
 def test_the_ledger_exists_and_agents_md_points_at_it():
@@ -178,9 +228,18 @@ def test_ids_are_unique():
     assert not dupes, f"duplicate lesson ids: {dupes} — ids are cited and never reused"
 
 
-def test_a_guard_the_ledger_names_actually_exists():
+def enforcement_problems(text: str) -> list[str]:
+    """Every enforcement a row claims that the tree does not back.
+
+    Pure over `text` so the WIRING is testable, not just the two rules it calls.
+    While mutating this guard, deleting the `skill_claim_problems` call from a
+    file-reading version left the whole module green — the real ledger had just
+    been corrected, so the walk had nothing to find and the deletion was
+    invisible. A rule that is only ever run against a clean ledger is enforced
+    by the ledger's current contents, which is not enforcement.
+    """
     missing = []
-    for lid, cells in _rows():
+    for lid, cells in _rows_from_text(text):
         if len(cells) < 3:
             continue
         for claimed in _claimed_paths(cells[2]):
@@ -189,6 +248,12 @@ def test_a_guard_the_ledger_names_actually_exists():
                     f"{lid}: names `{claimed}` as its enforcement, and that path "
                     "does not exist — the ledger is claiming coverage it does not have"
                 )
+        missing.extend(skill_claim_problems(cells[2], lid))
+    return missing
+
+
+def test_a_guard_the_ledger_names_actually_exists():
+    missing = enforcement_problems(LEDGER.read_text(encoding="utf-8"))
     assert not missing, "\n".join(missing)
 
 
@@ -508,6 +573,68 @@ def test_the_id_guard_sees_a_planted_duplicate_and_an_empty_cell():
     assert any("ID column reads ''" in p for p in problems), (
         f"an empty ID cell must be reported: {problems}"
     )
+
+
+def test_the_enforcement_walk_reports_a_bad_path_and_a_bad_skill_together():
+    """Both rules reached from the walk, on one planted row.
+
+    A real skill and a real path in the same cell are the discriminator: without
+    them a walk that reported everything would pass the first half of this.
+    """
+    planted = _FIXTURE_HEADER + (
+        "| L95 | a lesson | #1 | `scripts/no-such-guard.py`; "
+        "`ffc-environment-quirks` skill |\n"
+        "| L96 | a lesson | #2 | `tests/workflow-logic/test_lessons_ledger.py`; "
+        "`run-checks` skill |\n"
+    )
+    problems = enforcement_problems(planted)
+    assert any("L95" in p and "no-such-guard.py" in p for p in problems), (
+        f"the walk must reach the path rule: {problems}"
+    )
+    assert any("L95" in p and "ffc-environment-quirks" in p for p in problems), (
+        f"the walk must reach the skill rule: {problems}"
+    )
+    assert not [p for p in problems if "L96" in p], (
+        f"a row whose path and skill both exist must be silent: {problems}"
+    )
+
+
+def test_the_skill_guard_sees_a_named_skill_that_is_not_in_the_tree():
+    """The #1108 shape: a tier cell naming a skill nobody ever wrote.
+
+    Pinned against a REAL skill in the same assertion, because a check that
+    reports every skill missing would pass the first half on its own.
+    """
+    planted = "`ffc-environment-quirks` skill, CRLF section"
+    problems = skill_claim_problems(planted, "L90")
+    assert problems and "L90" in problems[0], (
+        f"a skill that is not in the tree must be reported: {problems}"
+    )
+    assert ".claude/skills/ffc-environment-quirks/SKILL.md" in problems[0], (
+        f"the failure must name the path it looked for: {problems}"
+    )
+    assert not skill_claim_problems("`run-checks` skill", "L91"), (
+        "a skill that IS in the tree must not be reported"
+    )
+
+
+def test_the_skill_guard_reports_rather_than_raises_on_an_impossible_name():
+    """A claim the filesystem cannot even be asked about is still a broken claim."""
+    absurd = "x" * 300
+    problems = skill_claim_problems(f"`{absurd}` skill", "L94")
+    assert problems and "L94" in problems[0], (
+        "a name too long to be a filename must be reported, not raised"
+    )
+
+
+def test_the_skill_guard_reads_only_tokens_claimed_as_skills():
+    """Its discriminators: without these the rule is `every backticked token`."""
+    assert not skill_claim_problems("`npm ci` and a skilled reviewer", "L92"), (
+        "a backticked token not followed by the word `skill` is not a claim"
+    )
+    assert not skill_claim_problems(
+        "`.claude/skills/run-checks/SKILL.md` skill", "L93"
+    ), "a path-shaped token is `_claimed_paths`' job, and must not be re-resolved"
 
 
 def test_the_orphan_guard_sees_a_row_one_blank_line_adrift():

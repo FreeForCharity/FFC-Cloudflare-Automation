@@ -36,12 +36,41 @@ CHECKER = REPO_ROOT / "scripts" / "check-workflow-input-interpolation.py"
 
 def _load():
     spec = importlib.util.spec_from_file_location("check_wf_input_interp", CHECKER)
+    # Narrower than it looks, and measured rather than assumed: for a merely
+    # MISSING .py file `spec_from_file_location` still returns a usable spec and
+    # `exec_module` raises FileNotFoundError naming the path, which is already a
+    # perfect diagnosis. `spec` is None only when the path is not a recognised
+    # Python source file at all — renamed to another extension, given no
+    # extension, or pointed at a directory. In those cases `module_from_spec(None)`
+    # raises `AttributeError: 'NoneType' object has no attribute '__name__'`,
+    # which names neither the path nor the cause, at module import time — so
+    # run_all.py reports "defines 20 tests and reported an outcome for none of
+    # them" and the reader hunts a broken test instead of a moved file.
+    assert spec is not None and spec.loader is not None, (
+        f"cannot import the checker at {CHECKER} — the path is not an importable "
+        "Python source file (wrong extension, or a directory). If it was renamed, "
+        "update CHECKER above."
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
 guard = _load()
+
+
+def _workflow(name: str) -> dict:
+    """Parse a real workflow by file name.
+
+    `or {}` because `yaml.safe_load` returns None for an empty document, and
+    every consumer here expects a mapping. Factored into one place after review
+    found the fallback applied at one of two identical call sites — which is the
+    shape that makes a later reader think the guarded one knows something the
+    other does not.
+    """
+    return guard.yaml.safe_load(
+        (guard.WORKFLOWS / name).read_text(encoding="utf-8")
+    ) or {}
 
 
 def _scan_text(text: str) -> list:
@@ -286,9 +315,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
         for w in current
         if any(
             guard.is_write_environment(e)
-            for e in guard.environments(guard.yaml.safe_load(
-                (guard.WORKFLOWS / w).read_text(encoding="utf-8")
-            ))
+            for e in guard.environments(_workflow(w))
         )
     }
     assert len(write) == 21, f"expected 21 write-environment ones, got {len(write)}: {sorted(write)}"
@@ -322,9 +349,7 @@ def test_the_scan_sees_real_workflows():
 
 def test_the_free_text_set_is_not_empty_and_excludes_the_constrained_types():
     """Positive control for `free_text_inputs` before anything relies on it."""
-    parsed = guard.yaml.safe_load(
-        (guard.WORKFLOWS / "720-create-repo.yml").read_text(encoding="utf-8")
-    )
+    parsed = _workflow("720-create-repo.yml")
     free = guard.free_text_inputs(parsed)
     assert {"RepoName", "Description"} <= free, (
         f"720's free-text inputs should include RepoName/Description, got {sorted(free)}"

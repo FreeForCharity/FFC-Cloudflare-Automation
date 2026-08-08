@@ -81,6 +81,39 @@ jobs:
             exit 1
           fi
           echo "::add-mask::$token"
+          # Liveness, not just presence (#1102). A revoked-but-present PAT clears the
+          # emptiness check above and fails two to four steps later inside a script,
+          # naming the wrong subsystem -- that is how 502's dead credential was read as
+          # a Key Vault RBAC problem for nine days (#848). The two causes have different
+          # remedies (role assignment vs remint), so both checks stay and their messages
+          # stay distinguishable.
+          #
+          # Probe by status code only: the token goes into a request header and never
+          # into output. `-o /dev/null` discards the body, and nothing here echoes,
+          # interpolates or logs the value the step just masked.
+          #
+          # `|| true` is load-bearing, not defensive habit. The runner invokes this body
+          # under `-e`, and `set -euo pipefail` above keeps it: without it a curl that
+          # cannot reach the network aborts the assignment and the step dies before the
+          # branch below ever runs, with no message of ours (L73). With it, curl's own
+          # `000` reaches the check and fails closed.
+          #
+          # A 200 proves the token AUTHENTICATES. It proves nothing about SCOPE -- a
+          # read-scoped PAT answers 200 here and 403 on a write -- so a green probe is
+          # not a licence to assume the later write will work.
+          code="$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user || true)"
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing. Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
+            exit 1
+          fi
           # Heredoc-delimited write, safe for any value.
           d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
           {

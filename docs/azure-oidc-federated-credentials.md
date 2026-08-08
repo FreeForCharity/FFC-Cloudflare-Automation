@@ -159,6 +159,28 @@ create/archive/collaborator credential) for work classified `Reads`.
 were fixed) — so 502's delivery and 735 cannot work until that secret is reminted under #848. 726
 uses the copilot-mcp PAT, which probes healthy.
 
+**The consuming run now refuses the dead credential itself (#1102).** 321 is a _report_: it tells
+you a secret is dead somewhere else, later. It never stopped a run from proceeding with one. Every
+step named `Load the GitHub PAT from Key Vault` — 16 of them across 14 workflows — now probes
+`GET https://api.github.com/user` with the loaded token and fails the step on any non-200, before
+the value reaches `GITHUB_ENV`:
+
+- **401 / 403** →
+  `<secret> returned 401 from GET /user: the token is revoked, expired, or its access was removed — it is not missing.`
+  That is the message 502 should have been printing for nine days. The old emptiness branch is
+  unchanged and still says what it says, because "the vault handed back nothing" (a role assignment)
+  and "the vault handed back a dead token" (a remint) are different jobs for whoever reads the log.
+- **anything else, including `000`** → unverified, and it fails closed. A 502 from GitHub says
+  nothing about the credential (321's live/dead/unverified split), so it is never reported as
+  revoked and never treated as a pass.
+
+The probe reads a status code only (`curl -sS -o /dev/null -w '%{http_code}'`); the token goes into
+a request header and into no output. **A 200 proves the token authenticates and nothing about its
+scope** — a read-scoped PAT answers 200 here and 403 on the write 502 and 735 go on to perform — so
+a green credential step is not a licence to assume the later write will succeed. Guarded by
+`tests/workflow-logic/test_pat_liveness_probe.py`, which runs the shipped step bodies under the
+runner's own shell.
+
 **Do not reintroduce a GitHub-secret copy.** An earlier revision of #834 proposed a
 `GH_REPORT_TOKEN` environment secret. That predates the Key Vault migration (#844) and would put a
 second copy of a credential where it can drift — the failure that silently broke the Cloudflare

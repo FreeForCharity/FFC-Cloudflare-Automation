@@ -113,10 +113,10 @@ def _row_cells(line: str) -> list[str]:
     return [p.strip() for p in parts]
 
 
-def _rows() -> list[tuple[str, list[str]]]:
-    """(id, [lesson, evidence, enforced_by]) for every ledger row."""
+def _rows_from_text(text: str) -> list[tuple[str, list[str]]]:
+    """(id, [lesson, evidence, enforced_by]) for every row in `text`."""
     rows = []
-    for line in LEDGER.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         m = _ROW.match(line.strip())
         if not m:
             continue
@@ -129,6 +129,10 @@ def _rows() -> list[tuple[str, list[str]]]:
     return rows
 
 
+def _rows() -> list[tuple[str, list[str]]]:
+    return _rows_from_text(LEDGER.read_text(encoding="utf-8"))
+
+
 def _claimed_paths(cell: str) -> list[str]:
     out = []
     for token in _PATHISH.findall(cell):
@@ -138,6 +142,52 @@ def _claimed_paths(cell: str) -> list[str]:
         if "/" in token or token.endswith(_PATH_SUFFIXES):
             out.append(token)
     return out
+
+
+# A skill is a repo artifact at `.claude/skills/<name>/SKILL.md`, so naming one
+# in the tier column is as much a claim about the tree as naming a file. But a
+# skill name carries no `/` and no suffix, so `_claimed_paths` cannot see it and
+# the existence check above walked straight past it. L175 shipped naming an
+# `ffc-environment-quirks` skill that has never existed, and every test in this
+# module stayed green (#1108) — the blind spot is the same "prose that reads as
+# coverage while covering nothing" this file was written for, one token shape
+# over. It was caught by a reviewer reading the row, which is the tier this
+# check exists to replace.
+#
+# The trailing word `skill` is what makes the token a claim: `run-checks` on its
+# own is a phrase, `` `run-checks` skill `` is an assertion that the directory is
+# there. Tokens containing `/` are left to `_claimed_paths`, so a row spelling
+# the pointer out in full is checked once, as a path, rather than twice and
+# wrongly.
+_SKILL_CLAIM = re.compile(r"`([^`]+)`\s+skill\b", re.IGNORECASE)
+
+
+def skill_claim_problems(cell: str, lid: str = "row") -> list[str]:
+    """Skills a tier cell names that are not in the tree."""
+    problems = []
+    for name in _SKILL_CLAIM.findall(cell):
+        name = name.strip()
+        if "/" in name:
+            continue
+        try:
+            present = (REPO_ROOT / ".claude" / "skills" / name / "SKILL.md").is_file()
+        except OSError:
+            # A token too long (or otherwise unrepresentable) to be a filename is
+            # not a skill either, so it is a broken claim and must be REPORTED.
+            # Raising here would be worse than useless: a check that dies mid-walk
+            # takes the rest of the module with it, and a harness reading PASS/FAIL
+            # lines scores the crash as "no test noticed" — found while mutating
+            # this very rule, where widening it to every backticked token turned a
+            # prose cell into a 300-character path and the run into an OSError that
+            # read as a SURVIVED mutation.
+            present = False
+        if not present:
+            problems.append(
+                f"{lid}: names the `{name}` skill as its enforcement, and "
+                f".claude/skills/{name}/SKILL.md does not exist — the ledger is "
+                "claiming coverage it does not have"
+            )
+    return problems
 
 
 def test_the_ledger_exists_and_agents_md_points_at_it():
@@ -178,9 +228,18 @@ def test_ids_are_unique():
     assert not dupes, f"duplicate lesson ids: {dupes} — ids are cited and never reused"
 
 
-def test_a_guard_the_ledger_names_actually_exists():
+def enforcement_problems(text: str) -> list[str]:
+    """Every enforcement a row claims that the tree does not back.
+
+    Pure over `text` so the WIRING is testable, not just the two rules it calls.
+    While mutating this guard, deleting the `skill_claim_problems` call from a
+    file-reading version left the whole module green — the real ledger had just
+    been corrected, so the walk had nothing to find and the deletion was
+    invisible. A rule that is only ever run against a clean ledger is enforced
+    by the ledger's current contents, which is not enforcement.
+    """
     missing = []
-    for lid, cells in _rows():
+    for lid, cells in _rows_from_text(text):
         if len(cells) < 3:
             continue
         for claimed in _claimed_paths(cells[2]):
@@ -189,6 +248,12 @@ def test_a_guard_the_ledger_names_actually_exists():
                     f"{lid}: names `{claimed}` as its enforcement, and that path "
                     "does not exist — the ledger is claiming coverage it does not have"
                 )
+        missing.extend(skill_claim_problems(cells[2], lid))
+    return missing
+
+
+def test_a_guard_the_ledger_names_actually_exists():
+    missing = enforcement_problems(LEDGER.read_text(encoding="utf-8"))
     assert not missing, "\n".join(missing)
 
 
@@ -309,10 +374,13 @@ def column_count_problems(
 
 
 def id_problems(text: str, label: str = "docs/lessons-ledger.md") -> list[str]:
-    """Lesson IDs that are missing, malformed, or reused.
+    """Lesson IDs that are malformed or reused.
 
-    Gaps are legal and deliberately unchecked: L37–L41 are reserved by long-lived
-    draft PRs, and an ID in an open PR is only a reservation until it merges.
+    Gaps are `gap_problems`' business, not this function's. This docstring used to
+    read "Gaps are legal and deliberately unchecked: L37–L41 are reserved by
+    long-lived draft PRs" — a statement that was true when written and expired
+    silently when those PRs merged, leaving a blanket exemption over L38, which by
+    then was not a reservation but a row lost in a merge (#1113).
     """
     problems: list[str] = []
     seen: dict[str, list[int]] = {}
@@ -508,6 +576,68 @@ def test_the_id_guard_sees_a_planted_duplicate_and_an_empty_cell():
     assert any("ID column reads ''" in p for p in problems), (
         f"an empty ID cell must be reported: {problems}"
     )
+
+
+def test_the_enforcement_walk_reports_a_bad_path_and_a_bad_skill_together():
+    """Both rules reached from the walk, on one planted row.
+
+    A real skill and a real path in the same cell are the discriminator: without
+    them a walk that reported everything would pass the first half of this.
+    """
+    planted = _FIXTURE_HEADER + (
+        "| L95 | a lesson | #1 | `scripts/no-such-guard.py`; "
+        "`ffc-environment-quirks` skill |\n"
+        "| L96 | a lesson | #2 | `tests/workflow-logic/test_lessons_ledger.py`; "
+        "`run-checks` skill |\n"
+    )
+    problems = enforcement_problems(planted)
+    assert any("L95" in p and "no-such-guard.py" in p for p in problems), (
+        f"the walk must reach the path rule: {problems}"
+    )
+    assert any("L95" in p and "ffc-environment-quirks" in p for p in problems), (
+        f"the walk must reach the skill rule: {problems}"
+    )
+    assert not [p for p in problems if "L96" in p], (
+        f"a row whose path and skill both exist must be silent: {problems}"
+    )
+
+
+def test_the_skill_guard_sees_a_named_skill_that_is_not_in_the_tree():
+    """The #1108 shape: a tier cell naming a skill nobody ever wrote.
+
+    Pinned against a REAL skill in the same assertion, because a check that
+    reports every skill missing would pass the first half on its own.
+    """
+    planted = "`ffc-environment-quirks` skill, CRLF section"
+    problems = skill_claim_problems(planted, "L90")
+    assert problems and "L90" in problems[0], (
+        f"a skill that is not in the tree must be reported: {problems}"
+    )
+    assert ".claude/skills/ffc-environment-quirks/SKILL.md" in problems[0], (
+        f"the failure must name the path it looked for: {problems}"
+    )
+    assert not skill_claim_problems("`run-checks` skill", "L91"), (
+        "a skill that IS in the tree must not be reported"
+    )
+
+
+def test_the_skill_guard_reports_rather_than_raises_on_an_impossible_name():
+    """A claim the filesystem cannot even be asked about is still a broken claim."""
+    absurd = "x" * 300
+    problems = skill_claim_problems(f"`{absurd}` skill", "L94")
+    assert problems and "L94" in problems[0], (
+        "a name too long to be a filename must be reported, not raised"
+    )
+
+
+def test_the_skill_guard_reads_only_tokens_claimed_as_skills():
+    """Its discriminators: without these the rule is `every backticked token`."""
+    assert not skill_claim_problems("`npm ci` and a skilled reviewer", "L92"), (
+        "a backticked token not followed by the word `skill` is not a claim"
+    )
+    assert not skill_claim_problems(
+        "`.claude/skills/run-checks/SKILL.md` skill", "L93"
+    ), "a path-shaped token is `_claimed_paths`' job, and must not be re-resolved"
 
 
 def test_the_orphan_guard_sees_a_row_one_blank_line_adrift():
@@ -912,6 +1042,139 @@ def test_this_guard_covers_the_module_that_reads_every_workflow():
     # wf_extract is the import-time reader every audit module funnels through, so
     # it is the one file where a missing encoding takes the whole suite down.
     assert 'encoding="utf-8"' in (HERE / "wf_extract.py").read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# Undeclared gaps (#1113)
+#
+# `id_problems` above guards the DUPLICATE outcome of a hand-resolved table
+# conflict, and its docstring used to exempt gaps outright: "Gaps are legal and
+# deliberately unchecked: L37-L41 are reserved by long-lived draft PRs." That
+# sentence was true when it was written and stopped being true without anyone
+# touching it — L37, L39, L40 and L41 all merged, and the blanket exemption then
+# covered the one id in that range that had NOT merged.
+#
+# L38 was on the branch at `7b3733d`, and the merge `28a4b8b` ("Merge main into
+# conductor/lessons-r54 (ledger table conflict)") re-emitted all 27 rows of the
+# table and brought 26 of them back. The diff is a wall of near-identical +/-
+# lines with one row removed in the middle of it, which is why review did not
+# see it and why nothing else did either: deletion is the mirror image of the
+# duplicate L43 already guards, and only one of the two directions was held.
+#
+# A gap cannot be judged offline — an id reserved by an open PR is a legitimate
+# hole in `main` until that PR merges, and CI has no way to enumerate open PRs.
+# So the invariant is declarative: a skipped id must be DECLARED, with the PR
+# holding it. An undeclared gap fails, and so does a declaration for an id that
+# has since landed, which is what keeps the block from growing into a second
+# blanket exemption.
+_RESERVED_BLOCK = re.compile(r"<!--\s*reserved-ids\b(.*?)-->", re.DOTALL)
+_RESERVED_ENTRY = re.compile(r"^(L\d+)(?:\s+(\S.*?))?$")
+
+
+def declared_reservations(text: str) -> tuple[dict[str, str], list[str]]:
+    """Ids the ledger declares as reserved, plus complaints about the block itself."""
+    reservations: dict[str, str] = {}
+    problems: list[str] = []
+    for block in _RESERVED_BLOCK.findall(text):
+        for raw in block.splitlines():
+            entry = raw.strip()
+            if not entry:
+                continue
+            matched = _RESERVED_ENTRY.match(entry)
+            if not matched:
+                problems.append(
+                    f"reserved-ids: cannot read {entry!r} — one `L<n> <holder>` per line"
+                )
+                continue
+            lid, holder = matched.group(1), (matched.group(2) or "").strip()
+            if not holder:
+                problems.append(
+                    f"reserved-ids: {lid} names no holder — a reservation with no PR "
+                    "behind it is indistinguishable from a row that fell out of a merge"
+                )
+                continue
+            reservations[lid] = holder
+    return reservations, problems
+
+
+def gap_problems(text: str, label: str = "docs/lessons-ledger.md") -> list[str]:
+    """Skipped ids that nothing accounts for, and declarations that have expired."""
+    present: set[int] = set()
+    for table in _tables(text):
+        _, header = table["header"]
+        if not header or header[0].strip().lower() != "id":
+            continue
+        for _lineno, cells in table["rows"]:
+            got = cells[0].strip() if cells else ""
+            if re.fullmatch(r"L\d+", got):
+                present.add(int(got[1:]))
+    reservations, problems = declared_reservations(text)
+    if len(present) < 2:
+        return problems
+    declared = {int(lid[1:]): holder for lid, holder in reservations.items()}
+    for number in sorted(set(range(min(present), max(present) + 1)) - present):
+        if number in declared:
+            continue
+        problems.append(
+            f"{label}: L{number} is missing and undeclared — every id between "
+            f"L{min(present)} and L{max(present)} is either a row or a declared "
+            "reservation. If an open PR holds it, add it to the `reserved-ids` "
+            "block; otherwise a row was dropped (L38 was, by merge 28a4b8b)"
+        )
+    for number, holder in sorted(declared.items()):
+        if number in present:
+            problems.append(
+                f"{label}: L{number} is declared as reserved by {holder} but is now "
+                "a row — drop it from the `reserved-ids` block, or the block turns "
+                "into the blanket exemption it replaced"
+            )
+    return problems
+
+
+def test_every_gap_in_the_ledger_is_a_declared_reservation():
+    problems = gap_problems(LEDGER.read_text(encoding="utf-8"))
+    assert not problems, "\n".join(problems)
+
+
+# The four self-tests below are what make the one above worth having (L09/L47):
+# neuter `gap_problems` and these flip red, while the real-ledger test stays
+# green vacuously.
+_GAP_FIXTURE = _FIXTURE_HEADER + (
+    "| L10 | a | #1 | `doc — why` |\n"
+    "| L11 | b | #2 | `doc — why` |\n"
+    "| L13 | c | #3 | `doc — why` |\n"
+)
+
+
+def test_the_gap_guard_sees_a_row_deleted_from_the_middle():
+    problems = gap_problems(_GAP_FIXTURE, label="planted.md")
+    assert len(problems) == 1, problems
+    assert "L12 is missing and undeclared" in problems[0], problems
+
+
+def test_the_gap_guard_accepts_a_declared_reservation():
+    declared = _GAP_FIXTURE + "\n<!-- reserved-ids\nL12 #999\n-->\n"
+    assert not gap_problems(declared, label="planted.md")
+
+
+def test_the_gap_guard_reports_a_reservation_that_has_already_landed():
+    landed = (
+        _FIXTURE_HEADER
+        + "| L10 | a | #1 | `doc — why` |\n| L11 | b | #2 | `doc — why` |\n"
+        + "\n<!-- reserved-ids\nL11 #999\n-->\n"
+    )
+    problems = gap_problems(landed, label="planted.md")
+    assert len(problems) == 1, problems
+    assert "declared as reserved by #999 but is now a row" in problems[0], problems
+
+
+def test_a_reservation_must_name_who_holds_it():
+    # A bare id would let anyone silence a dropped row by listing its number.
+    problems = gap_problems(
+        _GAP_FIXTURE + "\n<!-- reserved-ids\nL12\n-->\n", label="planted.md"
+    )
+    assert any("names no holder" in p for p in problems), problems
+    assert any("undeclared" in p for p in problems), problems
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

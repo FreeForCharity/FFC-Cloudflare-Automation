@@ -577,6 +577,18 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
     `tempfile.TemporaryDirectory()` and mutate there, so restore fidelity is never in question. The
     in-place-and-restore pattern is the ad-hoc reviewer's habit, and it is the one that needs the
     binary check.
+  - **If the restore is `git checkout -- <file>`, commit first — otherwise the harness reverts to
+    HEAD, deletes the very work it is testing, and every later mutation reports a clean tree.** Run
+    120 proved a new ledger guard this way. Mutation 1 was detected correctly; `restore()` then ran
+    `git checkout --` over both edited files, which were still **uncommitted**; mutations 2, 3 and 4
+    all came back `rc=0 fails=[]`, and so did the harness's own closing "restored, baseline clean"
+    check. The obvious reading — _these mutations do not discriminate, the guard is weak_ — was
+    wrong, and so was the reassuring one: the guard was gone, and a tree with no guard in it has
+    nothing to fail. Note the asymmetry with the fidelity rule above: CRLF translation makes a
+    restore **inexact**, and this makes it exact against **the wrong baseline**, which is harder to
+    see because `git status` afterwards is genuinely clean. Commit before mutating, or snapshot the
+    bytes and restore from the snapshot — a restore must be defined against the state you started
+    from, not against whatever the tool treats as canonical. Ledger **L182**.
   - **And do not build the mutating script through a Bash-tool command string. The heredoc is not
     the surface — `\\` collapses to `\` everywhere in the command, including inside single quotes.**
     Six instances across runs 73-96 were each recorded as "heredoc mangling"; run 96 measured the

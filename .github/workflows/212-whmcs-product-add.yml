@@ -1,5 +1,5 @@
 name: '212. WHMCS - Product Add (catalog) [WHMCS]'
-run-name: 'WHMCS Product Add (${{ inputs.product_key }})'
+run-name: 'WHMCS Product Add (${{ inputs.product_key }}) (dry_run=${{ inputs.dry_run }})'
 
 # Create a catalog (status-marker) product. Dry-run by default. A live
 # (dry_run=false) create requires the target product group id (gid) and the API

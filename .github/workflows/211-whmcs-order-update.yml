@@ -1,5 +1,6 @@
 name: '211. WHMCS - Order Update (accept/cancel/fraud) [WHMCS]'
-run-name: 'WHMCS Order Update #${{ inputs.order_id }} (${{ inputs.action }})'
+run-name:
+  'WHMCS Order Update #${{ inputs.order_id }} (${{ inputs.action }}) (dry_run=${{ inputs.dry_run }})'
 
 # Change one WHMCS order's state. Dry-run by default. There is intentionally NO
 # bulk / automatic accept-or-cancel: each live state change is a single explicit

@@ -1,5 +1,5 @@
 name: '205. WHMCS - Open Ticket (manual) [WHMCS]'
-run-name: 'WHMCS Open Ticket'
+run-name: 'WHMCS Open Ticket (dry_run=${{ inputs.dry_run }})'
 
 # Manually open a WHMCS support ticket (new request or break/fix logging).
 # Defaults to dry-run (no ticket created).

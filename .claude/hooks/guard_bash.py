@@ -321,7 +321,7 @@ KNOWN_SECRET_VARS_RE = re.compile(
 # statement boundary.
 PS_IMPLICIT_OUTPUT_RE = re.compile(
     r"""(?:\A|['";{&|]|(?<!\$)\()\s*\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?"""
-    r"""\s*(?:\||;|,|\}|\)|['"]|\Z)""",
+    r"""\s*(?:\||&|;|,|\}|\)|['"]|\Z)""",
     re.IGNORECASE)
 
 

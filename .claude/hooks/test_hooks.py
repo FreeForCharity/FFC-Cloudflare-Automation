@@ -206,6 +206,18 @@ def main():
     # Without it, the delimiter set could match anything and stay green.
     check("bare expansion of a non-secret after a ; allowed", "guard_bash.py",
           bash("pwsh -c 'true; $env:TEMP'"), False)
+    # A grouped expression statement still prints (Copilot, #1062) ...
+    check("parenthesised bare powershell expansion", "guard_bash.py",
+          bash("pwsh -c '($env:GH_TOKEN)'"), True)
+    check("parenthesised bare expansion with spaces", "guard_bash.py",
+          bash("pwsh -c '( $env:GH_TOKEN )'"), True)
+    # ... but `$(...)` is a SUBEXPRESSION whose value is substituted, so this is
+    # argument passing and must stay allowed -- the `(` delimiter is excluded
+    # after a `$` for exactly this case, and this is its discriminator.
+    check("secret via a subexpression argument allowed", "guard_bash.py",
+          bash("pwsh -c './x.ps1 -Token $($env:GH_TOKEN)'"), False)
+    check("parenthesised non-secret allowed", "guard_bash.py",
+          bash("pwsh -c '($env:TEMP)'"), False)
     check("bare powershell expansion after &&", "guard_bash.py",
           bash("true && $env:CLOUDFLARE_API_TOKEN"), True)
     check("braced bare powershell expansion", "guard_bash.py",

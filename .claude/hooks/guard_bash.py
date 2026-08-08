@@ -303,8 +303,14 @@ KNOWN_SECRET_VARS_RE = re.compile(
 # what keeps `./x.ps1 -Token $env:GH_TOKEN` an argument rather than a print.
 # `=` is absent from the terminators for the same reason, so assignments stay
 # allowed.
+# A leading `(` is a grouped expression statement -- `pwsh -c '($env:GH_TOKEN)'`
+# still prints -- but ONLY when it is not preceded by `$`. `$(...)` is a
+# subexpression whose value is substituted, so `./x.ps1 -Token $($env:GH_TOKEN)`
+# is argument passing and must stay allowed, exactly like the unparenthesised
+# form (Copilot, #1062).
 PS_IMPLICIT_OUTPUT_RE = re.compile(
-    r"""(?:\A|['";{])\s*\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?\s*(?:\||;|\}|['"]|\Z)""",
+    r"""(?:\A|['";{]|(?<!\$)\()\s*\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?"""
+    r"""\s*(?:\||;|\}|\)|['"]|\Z)""",
     re.IGNORECASE)
 
 

@@ -33,7 +33,7 @@ Wired up in [`../settings.json`](../settings.json):
 - Force-pushing to `main`/`master` (`--force` / `--force-with-lease` / `-f`).
 - Printing secrets to logs (`echo`/`printf`/`printenv`/`env`/`Write-Host`/`Write-Output`/… of
   `*_TOKEN`/`*_SECRET`/`*_KEY`/`CLOUDFLARE_API_TOKEN`/`${{ secrets.* }}`, and the bare
-  `$TOKEN`/`$SECRET`/`$PASSWORD` spellings). Judged **per statement**:
+  `$TOKEN`/`$SECRET`/`$PASSWORD`/`$APIKEY`/`$API_KEY` spellings). Judged **per statement**:
   `GH_TOKEN=$(gh auth token) cmd` next to an unrelated `echo` is not a leak, because that `echo`
   prints something else (#1041). `$env:X` is a PowerShell variable _read_, not the `env` command, so
   it does not arm the rule on its own.

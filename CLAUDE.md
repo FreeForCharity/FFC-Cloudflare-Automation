@@ -261,7 +261,7 @@ Two habits, both cheap:
 
 This is the same class as the `#719` log tail needing `--paginate` to find the true run number.
 
-### …but `--paginate` with an **array-building** `--jq` produces invalid JSON
+### …but `--paginate` concatenates pages, so the result is often not valid JSON
 
 `--paginate` runs the jq expression **once per page** and concatenates the results. Which shape you
 ask for decides whether that is correct:
@@ -273,6 +273,13 @@ ask for decides whether that is correct:
   `[…][…][…]`. That is not valid JSON. `gh` exits 0 and says nothing; the failure surfaces later in
   whatever parses the file, as an error pointing at a byte offset in the middle of page 2, nowhere
   near the command that caused it.
+
+- **No `--jq` at all, on an endpoint that returns an object** —
+  `--paginate "…/actions/workflows?per_page=100"` emits `{…}{…}` and is invalid for the same reason.
+  This is the easiest one to miss, because there is no jq expression to inspect and the call looks
+  like the textbook use of the flag. `json.loads` reports
+  `JSONDecodeError: Extra data: line 1 column 67588`, a byte offset in the middle of page 1's
+  closing brace, which reads as a corrupt response rather than as two concatenated ones.
 
 The fix is not the obvious one: `--slurp` is the right flag but **cannot be combined with `--jq`**
 (`gh` rejects it outright). Fetch raw, then flatten:

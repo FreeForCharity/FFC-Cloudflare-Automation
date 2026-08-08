@@ -218,6 +218,20 @@ def main():
           bash("pwsh -c './x.ps1 -Token $($env:GH_TOKEN)'"), False)
     check("parenthesised non-secret allowed", "guard_bash.py",
           bash("pwsh -c '($env:TEMP)'"), False)
+    # `&&`/`||` are PowerShell 7 chain operators, and inside the quoted -c
+    # script `_split_on_logical` never sees them; `,` continues an expression
+    # into an array literal. Found by sweeping the boundary spellings rather
+    # than waiting for each to arrive as a review round.
+    check("bare powershell expansion after && inside -c", "guard_bash.py",
+          bash("pwsh -c 'true && $env:GH_TOKEN'"), True)
+    check("bare powershell expansion after || inside -c", "guard_bash.py",
+          bash("pwsh -c 'false || $env:GH_TOKEN'"), True)
+    check("bare powershell expansion before a comma", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN,1'"), True)
+    # `,` is a terminator but NOT a leading delimiter, which is what keeps an
+    # array of arguments allowed. This is that asymmetry's discriminator.
+    check("secret in an array argument allowed", "guard_bash.py",
+          bash("pwsh -c './x.ps1 -Args $env:GH_TOKEN,$env:CLOUDFLARE_API_TOKEN'"), False)
     check("bare powershell expansion after &&", "guard_bash.py",
           bash("true && $env:CLOUDFLARE_API_TOKEN"), True)
     check("braced bare powershell expansion", "guard_bash.py",

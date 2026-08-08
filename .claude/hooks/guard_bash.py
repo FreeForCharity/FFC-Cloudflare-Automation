@@ -308,9 +308,20 @@ KNOWN_SECRET_VARS_RE = re.compile(
 # subexpression whose value is substituted, so `./x.ps1 -Token $($env:GH_TOKEN)`
 # is argument passing and must stay allowed, exactly like the unparenthesised
 # form (Copilot, #1062).
+# Swept the remaining statement-boundary spellings rather than waiting for them
+# to arrive one review round at a time: `&&` and `||` are PowerShell 7 pipeline
+# chain operators and, inside the quoted `-c` script, `_split_on_logical` never
+# sees them; `,` terminates an expression that continues into an array literal.
+# A newline needs no entry (`_echo_segments` splits on lines first) and a
+# `foreach (...) { ... }` body is already reached by `{`.
+#
+# `,` is a TERMINATOR only, never a leading delimiter -- that asymmetry is what
+# keeps the array-argument form `./x.ps1 -Args $env:A,$env:B` allowed, since
+# both elements are then preceded by a space or a comma rather than by a
+# statement boundary.
 PS_IMPLICIT_OUTPUT_RE = re.compile(
-    r"""(?:\A|['";{]|(?<!\$)\()\s*\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?"""
-    r"""\s*(?:\||;|\}|\)|['"]|\Z)""",
+    r"""(?:\A|['";{&|]|(?<!\$)\()\s*\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?"""
+    r"""\s*(?:\||;|,|\}|\)|['"]|\Z)""",
     re.IGNORECASE)
 
 

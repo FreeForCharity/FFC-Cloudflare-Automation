@@ -106,6 +106,26 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   workflow (737) labels linked issues from `Refs #N` as well as `Closes #N`, but the `claimed` label
   only tells you a PR exists — it says nothing about what has already landed on `main` — so the grep
   is still the check.
+- **A green check has a timestamp, and so does the tree it was green about — compose against the
+  base you will actually merge into.** `pull_request` checks describe the merge of the head into the
+  base **as the base then stood**, and nothing re-fires them when `main` advances (this repo does
+  not require branches to be up to date; the merge queue is the mechanism instead). So a PR can read
+  `CLEAN` with every required check `SUCCESS`, honestly, and still be red in the merge group. On
+  #1117 the required checks ran at 13:26:25Z; #1121 landed the `reserved-ids` block ten minutes
+  later at 13:36:41Z; #1117 carries the row that block reserves, and the ledger guard fails on
+  exactly that pair. Three hours on, nothing on the PR showed it. Compose and run the guards:
+
+  ```bash
+  WT=$(mktemp -d); git worktree add -q "$WT" origin/main && cd "$WT"
+  git merge --no-edit <pr-head-sha>          # a CONFLICT is not this check's finding — that is DIRTY
+  python3 tests/workflow-logic/test_lessons_ledger.py; echo "exit=$?"
+  ```
+
+  And note the half that is easy to miss: **doing this correctly does not keep it correct.** Run 123
+  composed #1117 properly — against #1120 — and then invalidated its own result by merging #1121 ten
+  minutes later. Re-compose after anything lands, including your own PR. Ledger **L191**; the
+  mechanical form is filed as #1123.
+
 - **Re-check the PR is still open before pushing to its branch.** Merging main into an agent branch
   whose PR merged moments ago silently **re-creates the auto-deleted branch** — the tell is
   `[new branch]` in push output for a push you meant as an update. If you see it, delete the

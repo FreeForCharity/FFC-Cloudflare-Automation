@@ -1,5 +1,5 @@
 name: '207. WHMCS - Ticket Respond (templated) [WHMCS]'
-run-name: 'WHMCS Ticket Respond #${{ inputs.ticket_id }}'
+run-name: 'WHMCS Ticket Respond #${{ inputs.ticket_id }} (dry_run=${{ inputs.dry_run }})'
 
 # Post a templated reply or internal note to one WHMCS ticket. Dry-run by
 # default: a live (dry_run=false) client-visible reply requires a real WHMCS

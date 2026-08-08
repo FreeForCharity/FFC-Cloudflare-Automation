@@ -1,5 +1,5 @@
 name: '106. DNS - Enforce Standard (DNS-only) [CF]'
-run-name: 'Enforce Standard: ${{ inputs.domain }}'
+run-name: 'Enforce Standard: ${{ inputs.domain }} (dry_run=${{ inputs.dry_run }})'
 
 on:
   workflow_dispatch:

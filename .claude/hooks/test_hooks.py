@@ -262,6 +262,20 @@ def main():
     # array of arguments allowed. This is that asymmetry's discriminator.
     check("secret in an array argument allowed", "guard_bash.py",
           bash("pwsh -c './x.ps1 -Args $env:GH_TOKEN,$env:CLOUDFLARE_API_TOKEN'"), False)
+    # `&&` was added as a LEADING delimiter without being added as a terminator,
+    # so a bare expansion that *precedes* a chain operator went unjudged. `||`
+    # kept blocking by accident -- `|` was already a terminator for pipes --
+    # which is precisely what hid the asymmetry.
+    check("bare powershell expansion before && inside -c", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN && true'"), True)
+    check("bare powershell expansion as a middle chain leg", "guard_bash.py",
+          bash("pwsh -c 'true && $env:GH_TOKEN && true'"), True)
+    check("bare powershell expansion before || inside -c", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN || true'"), True)
+    # The discriminator: a secret handed to a script as an argument is not a
+    # print, even when the statement continues into a chain.
+    check("secret argument before && allowed", "guard_bash.py",
+          bash("pwsh -c './x.ps1 -Token $env:GH_TOKEN && true'"), False)
     check("bare powershell expansion after &&", "guard_bash.py",
           bash("true && $env:CLOUDFLARE_API_TOKEN"), True)
     check("braced bare powershell expansion", "guard_bash.py",

@@ -259,6 +259,33 @@ have exhausted the points budget for hours.
   (or request the last page explicitly). This silently breaks "the newest `START` comment is the
   source of truth for the run number" — a conductor run misread its own run number this way
   (2026-07-24).
+  - **The `--jq` above must be a STREAMING filter, and that is load-bearing, not stylistic.**
+    `--paginate` runs the expression **once per page** and concatenates the outputs. A streaming
+    filter (`.[] | …`) emits one line per item, so the pages concatenate cleanly — which is why the
+    form taught here is correct. An **array-building** filter (`--jq '[.[] | …]'`) emits one array
+    **per page**: `[…][…][…]`, which is not valid JSON. `gh` exits 0 and says nothing, and the
+    failure lands much later as a parse error at a byte offset in the middle of page 2, nowhere near
+    the command that caused it (run 70, ~10 minutes and two wrong hypotheses). The fix is not the
+    obvious one — `--slurp` is the right flag but **cannot be combined with `--jq`** — so fetch raw
+    and flatten afterwards:
+
+    ```bash
+    gh api --paginate --slurp repos/OWNER/REPO/issues/719/comments > pages.json
+    # pages.json is an array OF PAGES — flatten it before use
+    ```
+
+    `guard_bash.py` warns about the array-building shape (#989). It warns rather than blocks because
+    reducing each page to a scalar and recombining downstream is legitimate — see
+    `726-repo-rulesets-drift-audit.yml:205`, which does exactly that on purpose.
+
+- **An unpaginated list read cannot support an ABSENCE claim.** `per_page=100` is the maximum, not a
+  guarantee, and the **default is 30**. A truncated list is indistinguishable from a complete one,
+  so "X is missing" / "nothing is pending" / "zero failures" drawn from one may simply be false —
+  run 64 nearly reported two incident-tracked workflows as deleted, and run 73 hit the same thing at
+  the 30 default. Add `--paginate`, or compare `.total_count` against what you actually received.
+  `guard_bash.py` warns (#971); a bounded single-page read is fine when you want the newest N and
+  are claiming nothing about the rest.
+
 - **`gh api graphql --paginate` only advances a variable named exactly `$endCursor`.** `gh`
   substitutes the next page cursor into that name and no other, so a query declaring `$cursor` (or
   anything else) keeps `after:` null and **re-fetches page 1 until the budget stops it**. It fails
@@ -366,6 +393,23 @@ _previous_ run's claim about itself when you grep the HTML.
 ```bash
 curl -s https://ffcadmin.org/data/agentic-os-status.json | grep -oE '"generated_at": *"[^"]*"'
 ```
+
+**Asking what protects a branch: use the rules endpoint, never `branches/*/protection` (L184).**
+Every FFC repo is governed by **rulesets**, and the legacy branch-protection endpoint does not see
+them — it returns `404 {"message": "Branch not protected"}` for a branch that in fact requires a
+pull request, status checks, code scanning, Copilot review and a merge queue. That failure fails
+**open**: the literal reading of the 404 is permission, in the permissive direction, with no error
+to notice.
+
+```bash
+gh api repos/FreeForCharity/<repo>/rules/branches/main --jq '[.[].type] | unique | join(", ")'
+gh api repos/FreeForCharity/<repo>/rulesets --jq '.[] | "\(.name) [\(.enforcement)]"'
+```
+
+The first call gives the **effective** rules for that branch in one request; the second names the
+rulesets producing them. A concrete tell that you asked the wrong one: `gh pr merge --delete-branch`
+refusing with `Cannot use -d or --delete-branch when merge queue enabled` on a branch you had just
+described as unprotected.
 
 **Find a workflow's runs by FILE NAME, never by matching the run's `.name` (L33).** A run object's
 `.name` is the rendered `run-name:`, not the workflow's `name:`. Workflow 228 titles its runs

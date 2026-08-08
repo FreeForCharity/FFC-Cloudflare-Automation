@@ -30,6 +30,28 @@ def block(reason):
     sys.exit(2)
 
 
+# Warnings, unlike blocks, do not stop the command. They accumulate and are
+# flushed once at the end so that a warning never short-circuits a later
+# `block()` -- an advisory rule must not be able to let a security rule through
+# by exiting first.
+WARNINGS = []
+
+WARN_MARKER = "FFC-HOOK-WARNING"
+
+
+def warn(reason):
+    WARNINGS.append(reason)
+
+
+def finish():
+    """Emit any accumulated warnings and allow the command."""
+    if WARNINGS:
+        sys.stderr.write(f"{WARN_MARKER} (.claude/hooks/guard_bash.py):\n")
+        for reason in WARNINGS:
+            sys.stderr.write(f"  {reason}\n")
+    sys.exit(0)
+
+
 def _strip_quoted(text):
     """Blank out single/double-quoted spans, preserving length.
 
@@ -127,6 +149,332 @@ def _statements(cmd):
                 i += 1
             i += 1
     return stmts
+
+
+def _split_on_logical(stmt):
+    """Split one statement on `&&` / `||` outside quotes.
+
+    A pipeline (`|`) is deliberately NOT split: `printenv | grep GH_TOKEN`
+    prints a secret and must stay one unit, whereas
+    `python x.py && echo done` is two independent commands. `&` is left alone
+    too -- splitting it would tear `echo >&2 $TOKEN` into a half holding the
+    verb and a half holding the variable, which is the one direction a guard
+    must never fail in.
+    """
+    bare = _strip_quoted(stmt)
+    parts = []
+    start = 0
+    i = 0
+    while i < len(bare):
+        if bare.startswith("&&", i) or bare.startswith("||", i):
+            parts.append(stmt[start:i])
+            i += 2
+            start = i
+            continue
+        i += 1
+    parts.append(stmt[start:])
+    return parts
+
+
+def _echo_segments(cmd):
+    """Every shell segment of `cmd`, heredoc bodies INCLUDED.
+
+    Deliberately not `_statements()`: that skips heredoc payloads because a
+    Python body is not shell, which is right for the pipeline rule and wrong
+    here -- `bash <<EOF` ... `echo $GH_TOKEN` ... `EOF` prints a secret, and
+    dropping the body would turn a blocked command into an allowed one.
+    """
+    for line in cmd.splitlines():
+        for part in _split_statements(line):
+            for seg in _split_on_logical(part):
+                if seg.strip():
+                    yield seg
+
+
+def _skip_word(text, i):
+    """Index just past the shell word starting at `i`.
+
+    Tracks quotes and `$(`/`(` nesting so a command substitution containing
+    spaces -- `$(gh auth token)` -- is one word rather than three.
+    """
+    quote = None
+    depth = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "'\"`":
+            quote = ch
+            i += 1
+            continue
+        if ch == "\\":
+            i += 2
+            continue
+        if text.startswith("$(", i):
+            depth += 1
+            i += 2
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif ch.isspace() and depth == 0:
+            break
+        i += 1
+    return i
+
+
+def _strip_assignments(segment):
+    """Split a segment into (command part, [assigned values]).
+
+    `VAR=$(...)` -- including the `VAR=$(...) cmd` prefix form that hands a
+    token to one command without exporting it -- is never a leak on its own,
+    so the assignment is removed before the segment is judged. The assigned
+    VALUES are returned rather than discarded, rather than trusting the
+    stripper: `X=$(echo $GH_TOKEN)` still has to be judged, and it is judged
+    as its own chunk.
+    """
+    text = segment
+    i = 0
+    values = []
+    while i < len(text) and text[i].isspace():
+        i += 1
+    while True:
+        kw = re.match(r"(?:export|local|readonly|declare|typeset)\s+", text[i:])
+        if kw:
+            i += kw.end()
+            continue
+        assign = re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", text[i:])
+        if not assign:
+            break
+        i += assign.end()
+        start = i
+        i = _skip_word(text, i)
+        values.append(text[start:i])
+        while i < len(text) and text[i] in " \t":
+            i += 1
+    return text[i:], values
+
+
+# A print verb anywhere in the segment. Kept broad on purpose: narrowing it to
+# "the segment's command word" would miss `foo && echo $TOKEN` shapes that the
+# splitter has not separated.
+#
+# `env` must NOT match after a `$`: PowerShell spells a variable READ
+# `$env:PASSWORD`, and `\benv\b` treats `$` and `:` as word boundaries, so the
+# bare name `$env:PASSWORD` read as "the env command plus a secret" and blocked
+# an assignment that prints nothing (Copilot, #1062).
+#
+# Removing that accident costs real coverage unless it is replaced, because
+# `Write-Host $env:GH_TOKEN` was blocked on `main` ONLY by the same stray match
+# -- `Write-Host` was never a listed verb. This repo is PowerShell-first, so
+# the Write-* stream cmdlets are now named explicitly and the coverage is
+# deliberate rather than incidental.
+# The second lookbehind is the braced spelling: `${env:PASSWORD}` puts a `{`
+# between the `$` and the name, so a `(?<!\$)` alone still sees a word boundary
+# and the accident survives one spelling over -- reinstating the very false
+# positive above for `X=${env:PASSWORD}` (Conductor run 92).
+PRINT_VERB_RE = re.compile(
+    r"\b(?:echo|printf|printenv)\b"
+    r"|(?<!\$)(?<!\$\{)\benv\b"
+    r"|\bWrite-(?:Host|Output|Information|Verbose|Debug|Warning|Error)\b",
+    re.IGNORECASE)
+
+# A conventionally-secret-suffixed identifier (FFC_CLOUDFLARE_API_TOKEN,
+# WHMCS_API_SECRET, ...). Matched with or without a leading `$`, because
+# `printenv GH_TOKEN` and `env | grep GH_TOKEN` name the variable bare.
+SECRET_SUFFIXED_RE = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_]*_(?:TOKEN|SECRET|KEY|PASSWORD|APIKEY|API_KEY)\b",
+    re.IGNORECASE)
+
+# The bare short names -- `$TOKEN`, `${SECRET}`, `$env:PASSWORD`. These are
+# required to appear as an EXPANSION: unlike `GH_TOKEN`, the bare word "token"
+# occurs constantly in ordinary prose (`echo "no token found"`), so matching it
+# unanchored would block correct commands. `KEY` is excluded even here -- `for
+# KEY in ...; do echo $KEY; done` is a normal loop, not a leak.
+BARE_SECRET_NAMES = r"(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY)"
+BARE_SECRET_REF_RE = re.compile(
+    rf"\$\{{?(?:env:)?{BARE_SECRET_NAMES}\b", re.IGNORECASE)
+BARE_SECRET_NAME_RE = re.compile(rf"\A{BARE_SECRET_NAMES}\Z", re.IGNORECASE)
+
+KNOWN_SECRET_VARS_RE = re.compile(
+    r"\b(?:CLOUDFLARE_API_TOKEN|GH_TOKEN|GITHUB_TOKEN|WHMCS_[A-Z_]+)\b", re.IGNORECASE)
+
+
+# PowerShell's implicit output: a bare expression statement IS a print, so
+# `pwsh -c '$env:GH_TOKEN'` writes the token to the log with no verb anywhere.
+# `main` caught this only as collateral of the stray `\benv\b` match, and
+# replacing that accident with a list of Write-* CONSUMERS could not cover it:
+# there is no verb to enumerate (Conductor run 92). Terminators are `|`, a
+# closing quote, or end-of-chunk; `=` is deliberately absent, which is what
+# keeps every assignment form allowed. The leading `['"]` alternative matters
+# more than the `^` one -- through the Bash tool the realistic spelling is
+# `pwsh -c '$env:GH_TOKEN'`, where the statement starts after the `-c` quote.
+# The delimiters are PowerShell STATEMENT boundaries, not just the chunk edge.
+# `_echo_segments` splits on `;` only OUTSIDE quotes, so an embedded script --
+# `pwsh -c 'true; $env:GH_TOKEN'` -- arrives here as one chunk with its own
+# internal statements. Anchoring on "start, or right after the -c quote" missed
+# every statement but the first, which is a verb-less leak `main` caught by
+# accident (Copilot, #1062). A space is deliberately NOT a delimiter: that is
+# what keeps `./x.ps1 -Token $env:GH_TOKEN` an argument rather than a print.
+# `=` is absent from the terminators for the same reason, so assignments stay
+# allowed.
+# A leading `(` is a grouped expression statement -- `pwsh -c '($env:GH_TOKEN)'`
+# still prints -- but ONLY when it is not preceded by `$`. `$(...)` is a
+# subexpression whose value is substituted, so `./x.ps1 -Token $($env:GH_TOKEN)`
+# is argument passing and must stay allowed, exactly like the unparenthesised
+# form (Copilot, #1062).
+# Swept the remaining statement-boundary spellings rather than waiting for them
+# to arrive one review round at a time: `&&` and `||` are PowerShell 7 pipeline
+# chain operators and, inside the quoted `-c` script, `_split_on_logical` never
+# sees them; `,` terminates an expression that continues into an array literal.
+# A newline needs no entry (`_echo_segments` splits on lines first) and a
+# `foreach (...) { ... }` body is already reached by `{`.
+#
+# `,` is a TERMINATOR only, never a leading delimiter -- that asymmetry is what
+# keeps the array-argument form `./x.ps1 -Args $env:A,$env:B` allowed, since
+# both elements are then preceded by a space or a comma rather than by a
+# statement boundary.
+PS_IMPLICIT_OUTPUT_RE = re.compile(
+    r"""(?:\A|['";{&|]|(?<!\$)\()\s*\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?"""
+    r"""\s*(?:\||;|,|\}|\)|['"]|\Z)""",
+    re.IGNORECASE)
+
+
+def _ps_implicit_secret_output(chunk):
+    """The env var a bare PowerShell expansion would print, if it is a secret.
+
+    The name is re-tested against the SAME patterns the rest of the rule uses
+    rather than re-enumerated here -- a third copy of the secret-name list is a
+    place for the three to drift apart, and drift in this direction is silent.
+    """
+    for match in PS_IMPLICIT_OUTPUT_RE.finditer(chunk):
+        name = match.group(1)
+        if (SECRET_SUFFIXED_RE.search(name)
+                or KNOWN_SECRET_VARS_RE.search(name)
+                or BARE_SECRET_NAME_RE.match(name)):
+            return name
+    return None
+
+
+def _safe_name(name):
+    """A variable name fit to appear in a refusal, or None if it is not.
+
+    THE single place a user-derived name becomes message text. It exists as a
+    function rather than two inline copies because the copies diverged: the
+    cap-and-re-scan was written for `_secret_label()` in one round and the
+    PowerShell branch was added in the next with only the cap, reintroducing
+    the identical leak one message over (Copilot, #1062). A new refusal must
+    call this rather than slice a name itself.
+
+    The re-scan is not belt-and-braces, it is load-bearing, and the cap is why:
+    `ghp_` + 36 chars is exactly 40, so a variable named `<token>_KEY`
+    truncates onto the token's end and RESTORES the word boundary the `_KEY`
+    suffix had suppressed -- turning a harmless name into a well-formed
+    credential at the moment it is printed.
+    """
+    name = name[:40]
+    if not name or common.find_secrets(name):
+        return None
+    return name
+
+
+def _secret_label(chunk):
+    """Name WHAT armed the rule, never the text that did it.
+
+    Quoting the offending statement was diagnostic and wrong: rule 3 runs
+    before the secret-literal rule, so `echo "MY_API_KEY=<real value>"` is
+    judged here -- and the message went to this hook's stderr, which lands in
+    the transcript. A guard that exists to keep secrets out of logs must not
+    print one while refusing to (Copilot, #1062).
+
+    A variable NAME is safe to report where its value is not: the whole rule
+    is premised on the value living in the variable. The regexes match
+    identifier characters only, so a name cannot smuggle a quoted payload --
+    but it is still capped and re-scanned with the shared secret detector, so
+    the claim "this message cannot carry a credential" is enforced rather than
+    argued.
+    """
+    for pattern in (KNOWN_SECRET_VARS_RE, SECRET_SUFFIXED_RE, BARE_SECRET_REF_RE):
+        match = pattern.search(chunk)
+        if not match:
+            continue
+        name = match.group(0).lstrip("$").lstrip("{")
+        if name.lower().startswith("env:"):
+            name = name[4:]
+        safe = _safe_name(name)
+        if safe is None:
+            break
+        return f"`{safe}`"
+    if "${{ secrets." in chunk:
+        return "a `${{ secrets.* }}` expression"
+    return "a secret-named variable"
+
+
+def _names_a_secret(chunk):
+    return bool(
+        SECRET_SUFFIXED_RE.search(chunk)
+        or BARE_SECRET_REF_RE.search(chunk)
+        or KNOWN_SECRET_VARS_RE.search(chunk)
+        or "${{ secrets." in chunk
+    )
+
+
+def echo_secret_violation(cmd):
+    """`echo $GH_TOKEN` -- a secret printed into the log.
+
+    The rule decides per STATEMENT. Judging the whole command made
+    `GH_TOKEN=$(gh auth token) python x.py` + a later `echo "done"` a
+    violation, because a secret-named variable appeared somewhere and an
+    `echo` appeared somewhere else -- and that pair is the Conductor's
+    standard idiom, since both `scripts/audit-agentic-os-board.py` and
+    `scripts/generate-agentic-os-status.py` refuse to run without `GH_TOKEN`
+    and are normally invoked next to an `echo` (#1041).
+
+    Nothing in that command can emit the token: `echo "done"` prints a string
+    literal, and a `VAR=$(...)` assignment is not a print. The rule now asks
+    whether THIS statement prints THAT variable.
+    """
+    for index, segment in enumerate(_echo_segments(cmd), start=1):
+        command_part, assigned = _strip_assignments(segment)
+        # Command part ONLY -- never an assignment value. `_strip_assignments`
+        # hands back the value as its own chunk, so `X=$env:PASSWORD` arrives
+        # here as the chunk `$env:PASSWORD`, and testing the values too would
+        # re-block the assignment this rule was just fixed to allow. (Found by
+        # the run-92 patch failing `powershell env var assignment allowed`.)
+        implicit = _ps_implicit_secret_output(command_part)
+        if implicit:
+            safe = _safe_name(implicit)
+            named = f"`{safe}`" if safe else "a secret-named variable"
+            return (
+                "Refusing to echo/print a secret value to logs.\n"
+                f"  statement {index}: a bare PowerShell expansion of {named}\n"
+                "In PowerShell a bare expression statement IS output, so this "
+                "writes the value to the log with no print verb involved.\n"
+                "Assign it, pass it as an argument, or let the command read the "
+                "variable itself."
+            )
+        for chunk in [command_part] + assigned:
+            verb = PRINT_VERB_RE.search(chunk)
+            if verb and _names_a_secret(chunk):
+                return (
+                    "Refusing to echo/print a secret value to logs.\n"
+                    f"  statement {index}: `{verb.group(0)}` together with "
+                    f"{_secret_label(chunk)}\n"
+                    "The offending text is deliberately NOT quoted here -- this "
+                    "hook's own stderr lands in the transcript, so echoing a "
+                    "pasted literal back would be the leak it exists to stop.\n"
+                    "Reference the value through an env var the command reads "
+                    "itself. `VAR=$(...) cmd` is fine -- it is printing it that "
+                    "is not."
+                )
+    return None
 
 
 def pipeline_exit_code_violation(cmd):
@@ -243,6 +591,110 @@ def inline_python_encoding_violation(cmd):
     return None
 
 
+# Path segments that name a COLLECTION on the GitHub REST API. The check is on
+# the LAST segment of the path, which is what distinguishes a list read from a
+# single-object read no matter how deep the route is:
+#
+#   repos/O/R/actions/workflows            -> "workflows"  collection
+#   repos/O/R/actions/workflows/5.yml/runs -> "runs"       collection
+#   repos/O/R/pulls/123                    -> "123"        single object
+#   repos/O/R                              -> "<repo>"     single object
+#
+# Deliberately not exhaustive: it covers the list endpoints this repo's agents
+# actually call. A collection missing from this set is a missed warning, which
+# is the safe direction for an advisory rule.
+COLLECTION_SEGMENTS = {
+    "workflows",
+    "runs",
+    "issues",
+    "pulls",
+    "comments",
+    "commits",
+    "branches",
+    "repos",
+    "jobs",
+}
+
+
+def _blank_quoted(cmd):
+    """`cmd` with the CONTENTS of quoted spans replaced by spaces.
+
+    Length-preserving, so an offset into the result indexes the original
+    string. Used to ask "is this command really invoking `gh api`?" without
+    matching the same words quoted inside `echo '...'` or a heredoc payload --
+    the false-positive class that has now bitten three separate text-scanning
+    guards in this repo. The quote characters themselves are kept so argument
+    parsing can still see where a token began.
+    """
+    out = list(cmd)
+    quote = None
+    for i, ch in enumerate(cmd):
+        if quote is None:
+            if ch in "'\"":
+                quote = ch
+        elif ch == quote:
+            quote = None
+        else:
+            out[i] = " "
+    return "".join(out)
+
+
+def _gh_api_endpoint(cmd):
+    """The API path/URL argument of a `gh api` call, or None.
+
+    Takes the first token after `api` that looks like a route and is not a flag
+    or a flag's value. Returns the path with any scheme/host and query string
+    removed, plus the raw query, so the caller can inspect both.
+    """
+    m = re.search(r"\bgh\s+api\b", _blank_quoted(cmd))
+    if not m:
+        return None, None
+
+    # Flags that consume the following token, so it is never the endpoint.
+    valued = {"-H", "--header", "-F", "--field", "-f", "--raw-field", "-X",
+              "--method", "-q", "--jq", "-t", "--template", "--input",
+              "--cache", "--hostname"}
+
+    tokens = cmd[m.end():].split()
+    skip_next = False
+    for tok in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in valued:
+            skip_next = True
+            continue
+        if tok.startswith("-"):
+            continue
+        if tok.startswith("|") or tok.startswith(">") or tok.startswith("&"):
+            break
+        candidate = tok.strip("'\"")
+        if not candidate or "/" not in candidate.split("?")[0]:
+            # `gh api graphql` and `gh api rate_limit` have no slash and are not
+            # collections; stop rather than scanning into the rest of the line.
+            return None, None
+        path, _, query = candidate.partition("?")
+        path = re.sub(r"^https?://[^/]+/", "", path)
+        return path, query
+    return None, None
+
+
+def _jq_expression(cmd):
+    """The expression passed to `--jq`/`-q`, unquoted, or None.
+
+    The `(?<![\\w-])` guard is what makes the `-q` alternative mean the FLAG.
+    Without it `-q` also matches inside any longer flag ending in those two
+    characters -- `--q` being the one that bit: the test case named for the
+    short spelling was sending `--q`, which `gh` does not accept, and it
+    passed anyway on the substring. A rule that matches a flag nobody can
+    type cannot tell you the real flag is covered.
+    """
+    m = re.search(r"(?<![\w-])(?:--jq|-q)\s+(?:'([^']*)'|\"([^\"]*)\"|(\S+))", cmd)
+    if not m:
+        return None
+    return next((g for g in m.groups() if g is not None), None)
+
+
 def main():
     raw = sys.stdin.read()
     try:
@@ -276,15 +728,12 @@ def main():
         if re.search(r"(?<![\w./-])(main|master)(?![\w/-])", low):
             block("Force-push to a protected branch (main/master) is not allowed.")
 
-    # 3. Printing secrets to logs. Case-insensitive so a lowercase env var
+    # 3. Printing secrets to logs, decided per statement (see
+    #    echo_secret_violation). Case-insensitive so a lowercase env var
     #    (e.g. $cloudflare_api_token) can't slip past.
-    secret_var = r"[A-Za-z_][A-Za-z0-9_]*(?:_TOKEN|_SECRET|_KEY|_PASSWORD|_APIKEY|_API_KEY)\b"
-    known_vars = r"(CLOUDFLARE_API_TOKEN|GH_TOKEN|GITHUB_TOKEN|WHMCS_[A-Z_]+)"
-    if re.search(r"\b(echo|printf|printenv|env)\b", low):
-        if (re.search(secret_var, cmd, re.IGNORECASE)
-                or re.search(known_vars, cmd, re.IGNORECASE)
-                or "${{ secrets." in cmd):
-            block("Refusing to echo/print a secret value to logs.")
+    reason = echo_secret_violation(cmd)
+    if reason:
+        block(reason)
 
     # 4. A real-looking secret literal pasted into the command.
     findings = common.find_secrets(cmd)
@@ -408,7 +857,78 @@ def main():
             "the shell. Drop the leading slash: `gh api markdown`."
         )
 
-    sys.exit(0)
+    # 9. `gh api --paginate` with an ARRAY-BUILDING `--jq` (#989).
+    #
+    #    --paginate runs the jq expression once PER PAGE and concatenates the
+    #    outputs. A streaming filter (`.[] | ...`) concatenates cleanly and is
+    #    the form AGENTS.md teaches. An array-building filter (`[...]`) emits
+    #    one array per page -- `[...][...][...]` -- which is not valid JSON.
+    #    `gh` exits 0 and says nothing; the failure surfaces later as a parse
+    #    error at a byte offset in the middle of page 2, nowhere near the
+    #    command that caused it.
+    #
+    #    WARNS rather than blocks, and the reason is a measurement, not caution.
+    #    #989 (following #927) requires checking false positives against real
+    #    usage before wiring a rule. Doing that found a legitimate committed
+    #    counter-example -- `726-repo-rulesets-drift-audit.yml:205`:
+    #
+    #      gh api --paginate ".../teams?per_page=100" --jq '[.[] | .slug] | join(",")'
+    #      team_grants=$(printf '%s' "$team_grants" | paste -sd, -)
+    #
+    #    That expression reduces each page to a STRING, and the very next line
+    #    re-joins the per-page lines on purpose. The author knew about the
+    #    per-page behaviour and compensated downstream, so the command is
+    #    correct. A block would have called correct, deliberate code an error.
+    #    The defect #989 describes is real, but it is "the output is not valid
+    #    JSON *if you consume it as JSON*" -- which the command string alone
+    #    cannot tell you.
+    bare = _blank_quoted(cmd)
+    if re.search(r"\bgh\s+api\b", bare) and "--paginate" in bare:
+        expr = _jq_expression(cmd)
+        if expr is not None and expr.lstrip().startswith("["):
+            warn(
+                "[#989] `gh api --paginate` with an array-building --jq runs the filter ONCE PER "
+                "PAGE and concatenates the results, so this emits one array per page -- "
+                "`[...][...]` -- which is not valid JSON. gh exits 0 either way, and the "
+                "failure surfaces later as a parse error mid-page-2, far from its cause.\n"
+                "  Streaming filter instead:  --jq '.[] | ...'\n"
+                "  Whole set as one array (--slurp cannot be combined with --jq):\n"
+                "    gh api --paginate --slurp <endpoint> > pages.json   # array OF PAGES, flatten it\n"
+                "  Ignore this if you reduce each page to a scalar and recombine downstream, "
+                "the way 726 does."
+            )
+
+    # 10. Unpaginated `gh api` list read (#971) -- WARN, do not block.
+    #
+    #    `per_page=100` is the maximum, not a guarantee, and the default is 30.
+    #    A truncated list looks exactly like a complete one, so an ABSENCE check
+    #    over it returns a confident, wrong "not found". Run 64 nearly reported
+    #    two incident-tracked workflows as deleted this way; run 73 hit the same
+    #    thing at the 30 default.
+    #
+    #    Advisory, because a bounded single-page read is legitimate when you
+    #    want the newest N and are making no completeness claim. Blocking that
+    #    would be wrong, and a guard people switch off guards nothing.
+    if "--paginate" not in cmd:
+        path, query = _gh_api_endpoint(cmd)
+        if path:
+            method = re.search(r"(?:-X|--method)\s+(\w+)", cmd)
+            is_read = not method or method.group(1).upper() == "GET"
+            explicit_page = bool(re.search(r"(?:^|&)page=", query or ""))
+            last = path.rstrip("/").split("/")[-1].lower()
+            if is_read and not explicit_page and last in COLLECTION_SEGMENTS:
+                warn(
+                    f"[#971] `gh api {path}` is a LIST read without --paginate. per_page=100 is the "
+                    "maximum, not a guarantee (the default is 30), and a truncated list is "
+                    "indistinguishable from a complete one -- so any conclusion of the form "
+                    "\"X is missing\" / \"nothing is pending\" / \"zero failures\" drawn from it "
+                    "may be false.\n"
+                    "  Add --paginate, or compare .total_count against what you actually got.\n"
+                    "  Fine to ignore if you only want the newest N and are claiming nothing "
+                    "about the rest."
+                )
+
+    finish()
 
 
 if __name__ == "__main__":

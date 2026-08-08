@@ -243,6 +243,7 @@ try {
             requested = $targets.Count
             batches   = $preview.Count
             payloads  = $preview
+            unhealthy = 0
             purged    = @()
             failures  = @()
             success   = $true
@@ -330,7 +331,13 @@ try {
         purged       = @($purged)
         failures     = @($failures)
         verification = @($verification)
-        success      = ($failures.Count -eq 0)
+        unhealthy    = $unhealthy.Count
+        # `success` must agree with the exit code. It covers BOTH halves --
+        # the purge calls and the verification probes -- because a caller
+        # consuming stdout as the authoritative verdict would otherwise read
+        # success=true on a run that exited 1 because the edge was still
+        # serving the bad object. `failures` and `unhealthy` say which half.
+        success      = ($failures.Count -eq 0 -and $unhealthy.Count -eq 0)
     }
 
     $verdict | ConvertTo-Json -Depth 8

@@ -587,6 +587,32 @@ def main():
     check("warned list read is still allowed", "guard_bash.py",
           bash("gh api repos/o/r/issues/719/comments"), False)
 
+    print("guard_bash / L193 gh edit label read-modify-write:")
+    # Blocked: both subcommands, both flags. The defect is the whole-set PUT,
+    # so removing is exactly as lossy as adding (#788 lost an add to a remove).
+    check("issue edit --remove-label", "guard_bash.py",
+          bash("gh issue edit 788 --repo FreeForCharity/FFC-Cloudflare-Automation --remove-label claimed"), True)
+    check("issue edit --add-label", "guard_bash.py",
+          bash("gh issue edit 788 --add-label agent-ready"), True)
+    check("pr edit --add-label", "guard_bash.py",
+          bash("gh pr edit 1125 --add-label security"), True)
+    check("label flag anywhere in the statement", "guard_bash.py",
+          bash("gh issue edit 788 --body-file x.md --remove-label blocked --repo O/R"), True)
+    # Allowed: the additive/subtractive endpoints this rule points people at,
+    # and every other reading of the words "edit" and "label".
+    check("additive labels endpoint allowed", "guard_bash.py",
+          bash("gh api --method POST repos/O/R/issues/788/labels -f 'labels[]=agent-ready'"), False)
+    check("subtractive labels endpoint allowed", "guard_bash.py",
+          bash("gh api --method DELETE repos/O/R/issues/788/labels/claimed"), False)
+    check("non-label issue edit allowed", "guard_bash.py",
+          bash("gh issue edit 788 --title 'a new title'"), False)
+    check("issue create --label allowed", "guard_bash.py",
+          bash("gh issue create --label agentic-os --title x --body y"), False)
+    check("issue list --label allowed", "guard_bash.py",
+          bash("gh issue list --label agent-ready --state open"), False)
+    check("the flag name inside a quoted message allowed", "guard_bash.py",
+          bash("gh issue comment 788 --body 'do not use gh issue edit --remove-label here'"), False)
+
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)
     check("write key.pem", "guard_edit.py", write("certs/key.pem", "x"), True)

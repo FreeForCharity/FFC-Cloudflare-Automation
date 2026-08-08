@@ -118,6 +118,54 @@ jobs:
             exit 1
           fi
           echo "::add-mask::$token"
+          # Liveness, not just presence (#1102). A revoked-but-present PAT clears the
+          # emptiness check above and fails two to four steps later inside a script,
+          # naming the wrong subsystem -- that is how 502's dead credential was read as
+          # a Key Vault RBAC problem for nine days (#848). The two causes have different
+          # remedies (role assignment vs remint), so both checks stay and their messages
+          # stay distinguishable.
+          #
+          # Probe by status code only: the token goes into a request header and never
+          # into output. `-o /dev/null` discards the body; `-D` keeps the RESPONSE
+          # headers, which carry no credential and are what separates a throttled token
+          # from a rejected one below.
+          #
+          # `|| true` is load-bearing, not defensive habit. The runner invokes this body
+          # under `-e`, and `set -euo pipefail` above keeps it: without it a curl that
+          # cannot reach the network aborts the assignment and the step dies before the
+          # branch below ever runs, with no message of ours (L73). With it, curl's own
+          # `000` reaches the check and fails closed.
+          #
+          # A 200 proves the token AUTHENTICATES. It proves nothing about SCOPE -- a
+          # read-scoped PAT answers 200 here and 403 on a write -- so a green probe is
+          # not a licence to assume the later write will work.
+          hdrs="$(mktemp)"
+          code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user || true)"
+          # GitHub answers a PRIMARY rate limit with 403 + `x-ratelimit-remaining: 0`
+          # and a SECONDARY one with 403 + `retry-after`. Either way the credential is
+          # LIVE, so it must not be handed the revoked wording below: prescribing a
+          # remint for a throttled token is the same wrong-subsystem failure this guard
+          # exists to remove. 321 draws the same line for Cloudflare, where a 403 on a
+          # resource endpoint is authenticated-but-unauthorized and never "dead".
+          remaining="$(awk 'tolower($1) == "x-ratelimit-remaining:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          retry_after="$(awk 'tolower($1) == "retry-after:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          rm -f "$hdrs"
+          if [ "$code" = "403" ] && { [ "$remaining" = "0" ] || [ -n "$retry_after" ]; }; then
+            echo "::error::wr-all-cbm-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
+            exit 1
+          fi
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::wr-all-cbm-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::wr-all-cbm-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
+            exit 1
+          fi
           d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
           {
             echo "GH_TOKEN<<${d}"

@@ -1,7 +1,7 @@
 name: '702. Domain - Deploy Static Clone to FFC-EX Repo'
 run-name:
   "Clone+deploy ${{ inputs.domain }} -> ${{ inputs.ffc_ex_repo || format('FFC-EX-{0}',
-  inputs.domain) }}"
+  inputs.domain) }} (dry_run=${{ inputs.dry_run }})"
 
 # Regenerates an FFC-EX site as a faithful static clone of the live WordPress
 # site and opens a PR on the target FFC-EX repo. Pipeline (all proven locally):

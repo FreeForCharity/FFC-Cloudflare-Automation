@@ -1,4 +1,7 @@
 name: '701. Website - Provision (Issue Assigned) [CF+Repo]'
+run-name:
+  'Website provision: ${{ inputs.domain || github.event.client_payload.domain ||
+  github.event.issue.title }} (dry_run=${{ inputs.dry_run || false }})'
 
 on:
   issues:

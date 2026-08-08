@@ -1,6 +1,7 @@
 name: '230. WHMCS - Record Field Set (client/contact/service/domain) [WHMCS]'
 run-name:
-  'WHMCS Record Field Set: ${{ inputs.target }} #${{ inputs.record_id }} ${{ inputs.field }}'
+  'WHMCS Record Field Set: ${{ inputs.target }} #${{ inputs.record_id }} ${{ inputs.field }}
+  (dry_run=${{ inputs.dry_run }})'
 
 # Set ONE field on ONE existing WHMCS record. Supersedes 229 (service domain
 # set), which was the same operation for a single field on a single target.

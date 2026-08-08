@@ -1,4 +1,6 @@
 name: '729. Repo - Add Collaborator [Repo]'
+run-name:
+  'Add collaborator ${{ inputs.username }} to ${{ inputs.repo }} (dry_run=${{ inputs.dry_run }})'
 
 # Reusable workflow that adds (or updates) one or more GitHub users as
 # collaborators on a repository at a chosen permission level.

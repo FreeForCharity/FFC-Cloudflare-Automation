@@ -1,5 +1,5 @@
 name: '103. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]'
-run-name: 'Enforce Domain Standard: ${{ inputs.domain }}'
+run-name: 'Enforce Domain Standard: ${{ inputs.domain }} (dry_run=${{ inputs.dry_run }})'
 
 # HYBRID - Cloudflare DNS + FFC-tenant M365. The cloudflare_enforce job writes tenant-agnostic DNS
 # (apex/www, MX/SPF/DMARC) and is safe for any domain. The exo_check/exo_enable jobs act on the

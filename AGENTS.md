@@ -394,6 +394,23 @@ _previous_ run's claim about itself when you grep the HTML.
 curl -s https://ffcadmin.org/data/agentic-os-status.json | grep -oE '"generated_at": *"[^"]*"'
 ```
 
+**Asking what protects a branch: use the rules endpoint, never `branches/*/protection` (L184).**
+Every FFC repo is governed by **rulesets**, and the legacy branch-protection endpoint does not see
+them — it returns `404 {"message": "Branch not protected"}` for a branch that in fact requires a
+pull request, status checks, code scanning, Copilot review and a merge queue. That failure fails
+**open**: the literal reading of the 404 is permission, in the permissive direction, with no error
+to notice.
+
+```bash
+gh api repos/FreeForCharity/<repo>/rules/branches/main --jq '[.[].type] | unique | join(", ")'
+gh api repos/FreeForCharity/<repo>/rulesets --jq '.[] | "\(.name) [\(.enforcement)]"'
+```
+
+The first call gives the **effective** rules for that branch in one request; the second names the
+rulesets producing them. A concrete tell that you asked the wrong one: `gh pr merge --delete-branch`
+refusing with `Cannot use -d or --delete-branch when merge queue enabled` on a branch you had just
+described as unprotected.
+
 **Find a workflow's runs by FILE NAME, never by matching the run's `.name` (L33).** A run object's
 `.name` is the rendered `run-name:`, not the workflow's `name:`. Workflow 228 titles its runs
 `WHMCS Fraud Review (FraudLabs Pro)`, so filtering `actions/runs` for a name starting with `228`

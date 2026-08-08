@@ -80,6 +80,36 @@ def write(path, content=""):
     return {"tool_name": "Write", "tool_input": {"file_path": path, "content": content}}
 
 
+# `run` deliberately returns only (rc, stderr): that is the contract #1018
+# introduced, and holding all the in-flight hook PRs to ONE spelling of it is
+# what lets them merge in any order. `check_stderr_omits` below needs stdout as
+# well, so it reaches for the whole CompletedProcess through `run_full` rather
+# than widening `run`'s return and forking the contract again.
+def run_full(script, payload):
+    return subprocess.run(
+        [sys.executable, os.path.join(HOOKS, script)],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+    )
+
+
+def check_stderr_omits(name, script, payload, needle):
+    """A hook must block WITHOUT quoting the payload back.
+
+    Exit-code-only assertions cannot see this: the command is refused either
+    way, and the leak is in the refusal. rc is asserted too, so a hook that
+    stopped blocking cannot pass by printing nothing.
+    """
+    global PASS, FAIL
+    proc = run_full(script, payload)
+    ok = proc.returncode == 2 and needle not in proc.stderr and needle not in proc.stdout
+    PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
+    detail = "blocked, payload not echoed" if ok else (
+        f"rc={proc.returncode}, payload_echoed={needle in proc.stderr + proc.stdout}")
+    print(f"  [{'ok  ' if ok else 'FAIL'}] {name}: {detail}")
+
+
 # Fabricated, CF-shaped token. Split across concatenated literals so the source
 # never contains a contiguous token -- otherwise this very test file would trip
 # guard_edit.py / external secret scanners (the value at runtime is unchanged).
@@ -109,6 +139,203 @@ def main():
           bash("git push --force origin feature/main"), False)
     check("echo lowercase secret var", "guard_bash.py",
           bash("echo $cloudflare_api_token"), True)
+
+    # echo-secret-var decides per STATEMENT (#1041). Judging the whole command
+    # made "a secret-named variable appears somewhere" AND "an echo appears
+    # somewhere" a violation -- which is the Conductor's standard idiom, since
+    # audit-agentic-os-board.py and generate-agentic-os-status.py both refuse to
+    # run without GH_TOKEN and are normally invoked next to an echo. Cases A and
+    # B are verbatim from the issue; nothing in either can emit the token.
+    check("token prefix then echo literal on next line", "guard_bash.py",
+          bash('GH_TOKEN=$(gh auth token) python x.py\necho "done"'), False)
+    check("token prefix then echo EXIT on next line", "guard_bash.py",
+          bash('GH_TOKEN=$(gh auth token) python x.py\necho "EXIT=$?"'), False)
+    check("export token then echo", "guard_bash.py",
+          bash('export GH_TOKEN=$(gh auth token)\necho "starting"'), False)
+    check("token prefix then echo via &&", "guard_bash.py",
+          bash('GH_TOKEN=$(gh auth token) python x.py && echo "done"'), False)
+    check("token prefix then echo via ;", "guard_bash.py",
+          bash('GH_TOKEN=$(gh auth token) python x.py ; echo "done"'), False)
+    check("real conductor idiom", "guard_bash.py",
+          bash('GH_TOKEN=$(gh auth token) python scripts/audit-agentic-os-board.py > out.txt\n'
+               'echo "audit written"'), False)
+    # Using a secret as an ARGUMENT is not printing it. These two are what make
+    # the statement/`&&` splitting load-bearing: with the whole command judged
+    # as one unit, the token in the curl header arms the unrelated echo. Both
+    # survive every mutation of the assignment stripper, so they test the
+    # splitter and nothing else.
+    check("secret in a curl header then echo on next line", "guard_bash.py",
+          bash('curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" '
+               'https://api.cloudflare.com/zones\necho "done"'), False)
+    check("secret in a curl header then echo via &&", "guard_bash.py",
+          bash('curl -H "Authorization: Bearer $GH_TOKEN" '
+               'https://api.github.com/user && echo "ok"'), False)
+    # AC4 in one line: the prefix form is not a leak even when the SAME
+    # statement also runs a print verb, because the verb prints something else.
+    check("token prefix with a print verb in the same statement", "guard_bash.py",
+          bash("GH_TOKEN=$(gh auth token) printenv HOME"), False)
+    check("token prefix wrapping an echo in a subshell", "guard_bash.py",
+          bash("GH_TOKEN=$(gh auth token) bash -c 'echo start; python x.py'"), False)
+    # The bare short names are only secrets when EXPANDED. "token" is an
+    # ordinary English word and `$KEY` is an ordinary loop variable; matching
+    # either unanchored blocks correct commands, which is how a guard gets
+    # switched off.
+    check("the word token in a message allowed", "guard_bash.py",
+          bash('echo "no token found in the response"'), False)
+    check("loop variable KEY allowed", "guard_bash.py",
+          bash("for KEY in a b; do echo $KEY; done"), False)
+
+    # ... and the genuine forms must all still block. The bare-name spellings
+    # below were ALLOWED before this change: the old pattern required a
+    # `_TOKEN`-style suffix preceded by at least one character, so `$TOKEN`
+    # itself matched nothing.
+    check("echo bare $TOKEN", "guard_bash.py", bash("echo $TOKEN"), True)
+    check("echo quoted $TOKEN", "guard_bash.py", bash('echo "$TOKEN"'), True)
+    check("echo braced ${TOKEN}", "guard_bash.py", bash("echo ${TOKEN}"), True)
+    check("printf a secret", "guard_bash.py", bash("printf '%s' \"$TOKEN\""), True)
+    check("echo bare lowercase $token", "guard_bash.py", bash("echo $token"), True)
+    check("echo $env:SECRET", "guard_bash.py", bash("echo $env:SECRET"), True)
+    # `$env:X` is a PowerShell variable READ, not the `env` command: `\benv\b`
+    # treats `$` and `:` as word boundaries, so the bare name armed the rule on
+    # a statement that prints nothing (Copilot's finding on #1062). The second
+    # case was a false positive on `main` too.
+    check("powershell env var assignment allowed", "guard_bash.py",
+          bash("X=$env:PASSWORD"), False)
+    check("powershell env var set in a subshell allowed", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN = \"x\"; python y.py'"), False)
+    # ... but `main` blocked `Write-Host $env:GH_TOKEN` only via that same stray
+    # `env` match, so these two keep the coverage after the accident is removed.
+    # They are the discriminator for the Write-* branch.
+    check("Write-Host a secret", "guard_bash.py",
+          bash("Write-Host $env:GH_TOKEN"), True)
+    check("Write-Output a secret", "guard_bash.py",
+          bash("Write-Output $env:CLOUDFLARE_API_TOKEN"), True)
+    # PowerShell's implicit output: a bare expression statement IS a print, so
+    # these leak with NO verb anywhere. `main` caught them only as collateral of
+    # the stray `env` match, and a list of Write-* consumers cannot reach them --
+    # there is no verb to enumerate (Conductor run 92). Every other `$env:` case
+    # in this file pairs the expansion with a verb or an `=`; these are the
+    # spelling with neither.
+    check("bare powershell expansion of a secret", "guard_bash.py",
+          bash("$env:GH_TOKEN"), True)
+    check("bare powershell expansion via pwsh -c", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN'"), True)
+    check("bare powershell expansion piped to a consumer", "guard_bash.py",
+          bash("$env:GH_TOKEN | Out-Host"), True)
+    # An embedded pwsh script has its OWN statements: `_echo_segments` splits on
+    # `;` only outside quotes, so everything after the first statement arrived
+    # unjudged. Each of these is a verb-less print that `main` caught by
+    # accident and this rule initially did not (Copilot, #1062).
+    check("bare powershell expansion after a ; inside -c", "guard_bash.py",
+          bash("pwsh -c 'true; $env:GH_TOKEN'"), True)
+    check("bare powershell expansion before a ; inside -c", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN; true'"), True)
+    check("bare powershell expansion inside a block", "guard_bash.py",
+          bash("pwsh -c 'if ($x) { $env:GH_TOKEN }'"), True)
+    # The discriminator for the widened delimiters: same shape, non-secret name.
+    # Without it, the delimiter set could match anything and stay green.
+    check("bare expansion of a non-secret after a ; allowed", "guard_bash.py",
+          bash("pwsh -c 'true; $env:TEMP'"), False)
+    # A grouped expression statement still prints (Copilot, #1062) ...
+    check("parenthesised bare powershell expansion", "guard_bash.py",
+          bash("pwsh -c '($env:GH_TOKEN)'"), True)
+    check("parenthesised bare expansion with spaces", "guard_bash.py",
+          bash("pwsh -c '( $env:GH_TOKEN )'"), True)
+    # ... but `$(...)` is a SUBEXPRESSION whose value is substituted, so this is
+    # argument passing and must stay allowed -- the `(` delimiter is excluded
+    # after a `$` for exactly this case, and this is its discriminator.
+    check("secret via a subexpression argument allowed", "guard_bash.py",
+          bash("pwsh -c './x.ps1 -Token $($env:GH_TOKEN)'"), False)
+    check("parenthesised non-secret allowed", "guard_bash.py",
+          bash("pwsh -c '($env:TEMP)'"), False)
+    # `&&`/`||` are PowerShell 7 chain operators, and inside the quoted -c
+    # script `_split_on_logical` never sees them; `,` continues an expression
+    # into an array literal. Found by sweeping the boundary spellings rather
+    # than waiting for each to arrive as a review round.
+    check("bare powershell expansion after && inside -c", "guard_bash.py",
+          bash("pwsh -c 'true && $env:GH_TOKEN'"), True)
+    check("bare powershell expansion after || inside -c", "guard_bash.py",
+          bash("pwsh -c 'false || $env:GH_TOKEN'"), True)
+    check("bare powershell expansion before a comma", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN,1'"), True)
+    # `,` is a terminator but NOT a leading delimiter, which is what keeps an
+    # array of arguments allowed. This is that asymmetry's discriminator.
+    check("secret in an array argument allowed", "guard_bash.py",
+          bash("pwsh -c './x.ps1 -Args $env:GH_TOKEN,$env:CLOUDFLARE_API_TOKEN'"), False)
+    check("bare powershell expansion after &&", "guard_bash.py",
+          bash("true && $env:CLOUDFLARE_API_TOKEN"), True)
+    check("braced bare powershell expansion", "guard_bash.py",
+          bash("${env:GH_TOKEN}"), True)
+    # The braced spelling puts a `{` between the `$` and the name, so a
+    # `(?<!\$)` lookbehind alone still sees a word boundary and reinstates the
+    # false positive one spelling over.
+    check("braced powershell env assignment allowed", "guard_bash.py",
+          bash("X=${env:PASSWORD}"), False)
+    # A non-secret env var is not a leak however it is spelled, and passing a
+    # token as an ARGUMENT is not printing it -- `main` blocked both by the
+    # same accident.
+    check("bare expansion of a non-secret allowed", "guard_bash.py",
+          bash("$env:TEMP | Out-Host"), False)
+    check("braced non-secret expansion allowed", "guard_bash.py",
+          bash("cat ${env:HOME}/x"), False)
+    check("secret passed as a pwsh argument allowed", "guard_bash.py",
+          bash('pwsh -c "./x.ps1 -Token $env:GH_TOKEN"'), False)
+    check("secret in a curl header, powershell spelling, allowed", "guard_bash.py",
+          bash('curl -H "Authorization: Bearer $env:GH_TOKEN" https://api.github.com'), False)
+    # A suffixed name that is NOT on the known-vars list -- the only case that
+    # reaches the suffix pattern on its own.
+    check("echo a suffixed name outside the known list", "guard_bash.py",
+          bash('echo "$AZURE_CLIENT_SECRET"'), True)
+    # A secret printed on a LATER line is still printed -- per-statement must
+    # not become "only the first statement".
+    check("secret echoed on a later line", "guard_bash.py",
+          bash('python x.py\necho "$WHMCS_API_SECRET"'), True)
+    # The assigned VALUE is judged too, or stripping the assignment would hide
+    # the leak it was meant to excuse.
+    check("secret echoed inside an assignment value", "guard_bash.py",
+          bash("X=$(echo $GH_TOKEN)"), True)
+    # A pipeline is one unit: printenv's output reaches grep.
+    check("printenv piped to grep for a secret", "guard_bash.py",
+          bash("printenv | grep GH_TOKEN"), True)
+    check("env piped to grep for a secret", "guard_bash.py",
+          bash("env | grep CLOUDFLARE_API_TOKEN"), True)
+    # Heredoc bodies are shell here, unlike in the pipeline rule: dropping them
+    # would turn a blocked command into an allowed one.
+    check("secret echoed inside a heredoc body", "guard_bash.py",
+          bash("bash <<EOF\necho $GH_TOKEN\nEOF"), True)
+    check("workflow secrets expression", "guard_bash.py",
+          bash('echo "${{ secrets.CBM_TOKEN }}"'), True)
+    # The refusal must not quote the offending statement back. This rule runs
+    # BEFORE the secret-literal rule, so a pasted value reaches it first, and
+    # the hook's stderr lands in the transcript -- quoting it would be the leak
+    # the rule exists to stop. An exit-code assertion cannot see this: the
+    # command is refused either way.
+    check_stderr_omits("block message does not echo a pasted literal", "guard_bash.py",
+                       bash(f'echo "MY_API_KEY={REAL_CF}"'), REAL_CF)
+    check_stderr_omits("block message does not echo a heredoc literal", "guard_bash.py",
+                       bash(f'bash <<EOF\necho "WHMCS_API_SECRET={REAL_CF}"\nEOF'), REAL_CF)
+    # ... and the reported NAME is re-scanned, not merely capped. A variable
+    # named `<token>_KEY` matches the suffix pattern, and the 40-char cap lands
+    # exactly on the token's end -- restoring the word boundary that the `_KEY`
+    # suffix had suppressed, so the truncated name IS a well-formed credential.
+    # This is the only case that reaches the find_secrets() fallback.
+    pat = "ghp_" + "b" * 36
+    check_stderr_omits("block message does not echo a token-shaped var name", "guard_bash.py",
+                       bash(f"echo ${pat}_KEY"), pat)
+    # The SAME assertion against the PowerShell implicit-output message, which
+    # is a second refusal site and reintroduced the identical leak by slicing
+    # the name itself instead of routing through `_safe_name()`. One case per
+    # message, or the next refusal added repeats it a third time.
+    check_stderr_omits("powershell block message does not echo a token-shaped var name",
+                       "guard_bash.py", bash(f"$env:{pat}_KEY"), pat)
+    # Two discriminators, each the only case that reaches one clause. Without
+    # them the WHMCS_* list and the `${{ secrets. }}` test are dead code that
+    # every other case passes through the suffix pattern, and deleting either
+    # would leave the suite green.
+    check("echo a WHMCS var with no secret suffix", "guard_bash.py",
+          bash("echo $WHMCS_API_IDENTIFIER"), True)
+    check("workflow secrets expression with no secret suffix", "guard_bash.py",
+          bash('echo "${{ secrets.AZURE_CLIENT_ID }}"'), True)
     # `grep -P` is unavailable in this environment's git-bash and fails by
     # matching nothing rather than by erroring visibly (run 60, 2026-07-31).
     check("grep -P", "guard_bash.py", bash("grep -P '^\\| L\\d+' docs/lessons-ledger.md"), True)

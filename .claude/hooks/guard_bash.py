@@ -151,6 +151,332 @@ def _statements(cmd):
     return stmts
 
 
+def _split_on_logical(stmt):
+    """Split one statement on `&&` / `||` outside quotes.
+
+    A pipeline (`|`) is deliberately NOT split: `printenv | grep GH_TOKEN`
+    prints a secret and must stay one unit, whereas
+    `python x.py && echo done` is two independent commands. `&` is left alone
+    too -- splitting it would tear `echo >&2 $TOKEN` into a half holding the
+    verb and a half holding the variable, which is the one direction a guard
+    must never fail in.
+    """
+    bare = _strip_quoted(stmt)
+    parts = []
+    start = 0
+    i = 0
+    while i < len(bare):
+        if bare.startswith("&&", i) or bare.startswith("||", i):
+            parts.append(stmt[start:i])
+            i += 2
+            start = i
+            continue
+        i += 1
+    parts.append(stmt[start:])
+    return parts
+
+
+def _echo_segments(cmd):
+    """Every shell segment of `cmd`, heredoc bodies INCLUDED.
+
+    Deliberately not `_statements()`: that skips heredoc payloads because a
+    Python body is not shell, which is right for the pipeline rule and wrong
+    here -- `bash <<EOF` ... `echo $GH_TOKEN` ... `EOF` prints a secret, and
+    dropping the body would turn a blocked command into an allowed one.
+    """
+    for line in cmd.splitlines():
+        for part in _split_statements(line):
+            for seg in _split_on_logical(part):
+                if seg.strip():
+                    yield seg
+
+
+def _skip_word(text, i):
+    """Index just past the shell word starting at `i`.
+
+    Tracks quotes and `$(`/`(` nesting so a command substitution containing
+    spaces -- `$(gh auth token)` -- is one word rather than three.
+    """
+    quote = None
+    depth = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "'\"`":
+            quote = ch
+            i += 1
+            continue
+        if ch == "\\":
+            i += 2
+            continue
+        if text.startswith("$(", i):
+            depth += 1
+            i += 2
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif ch.isspace() and depth == 0:
+            break
+        i += 1
+    return i
+
+
+def _strip_assignments(segment):
+    """Split a segment into (command part, [assigned values]).
+
+    `VAR=$(...)` -- including the `VAR=$(...) cmd` prefix form that hands a
+    token to one command without exporting it -- is never a leak on its own,
+    so the assignment is removed before the segment is judged. The assigned
+    VALUES are returned rather than discarded, rather than trusting the
+    stripper: `X=$(echo $GH_TOKEN)` still has to be judged, and it is judged
+    as its own chunk.
+    """
+    text = segment
+    i = 0
+    values = []
+    while i < len(text) and text[i].isspace():
+        i += 1
+    while True:
+        kw = re.match(r"(?:export|local|readonly|declare|typeset)\s+", text[i:])
+        if kw:
+            i += kw.end()
+            continue
+        assign = re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", text[i:])
+        if not assign:
+            break
+        i += assign.end()
+        start = i
+        i = _skip_word(text, i)
+        values.append(text[start:i])
+        while i < len(text) and text[i] in " \t":
+            i += 1
+    return text[i:], values
+
+
+# A print verb anywhere in the segment. Kept broad on purpose: narrowing it to
+# "the segment's command word" would miss `foo && echo $TOKEN` shapes that the
+# splitter has not separated.
+#
+# `env` must NOT match after a `$`: PowerShell spells a variable READ
+# `$env:PASSWORD`, and `\benv\b` treats `$` and `:` as word boundaries, so the
+# bare name `$env:PASSWORD` read as "the env command plus a secret" and blocked
+# an assignment that prints nothing (Copilot, #1062).
+#
+# Removing that accident costs real coverage unless it is replaced, because
+# `Write-Host $env:GH_TOKEN` was blocked on `main` ONLY by the same stray match
+# -- `Write-Host` was never a listed verb. This repo is PowerShell-first, so
+# the Write-* stream cmdlets are now named explicitly and the coverage is
+# deliberate rather than incidental.
+# The second lookbehind is the braced spelling: `${env:PASSWORD}` puts a `{`
+# between the `$` and the name, so a `(?<!\$)` alone still sees a word boundary
+# and the accident survives one spelling over -- reinstating the very false
+# positive above for `X=${env:PASSWORD}` (Conductor run 92).
+PRINT_VERB_RE = re.compile(
+    r"\b(?:echo|printf|printenv)\b"
+    r"|(?<!\$)(?<!\$\{)\benv\b"
+    r"|\bWrite-(?:Host|Output|Information|Verbose|Debug|Warning|Error)\b",
+    re.IGNORECASE)
+
+# A conventionally-secret-suffixed identifier (FFC_CLOUDFLARE_API_TOKEN,
+# WHMCS_API_SECRET, ...). Matched with or without a leading `$`, because
+# `printenv GH_TOKEN` and `env | grep GH_TOKEN` name the variable bare.
+SECRET_SUFFIXED_RE = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_]*_(?:TOKEN|SECRET|KEY|PASSWORD|APIKEY|API_KEY)\b",
+    re.IGNORECASE)
+
+# The bare short names -- `$TOKEN`, `${SECRET}`, `$env:PASSWORD`. These are
+# required to appear as an EXPANSION: unlike `GH_TOKEN`, the bare word "token"
+# occurs constantly in ordinary prose (`echo "no token found"`), so matching it
+# unanchored would block correct commands. `KEY` is excluded even here -- `for
+# KEY in ...; do echo $KEY; done` is a normal loop, not a leak.
+BARE_SECRET_NAMES = r"(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY)"
+BARE_SECRET_REF_RE = re.compile(
+    rf"\$\{{?(?:env:)?{BARE_SECRET_NAMES}\b", re.IGNORECASE)
+BARE_SECRET_NAME_RE = re.compile(rf"\A{BARE_SECRET_NAMES}\Z", re.IGNORECASE)
+
+KNOWN_SECRET_VARS_RE = re.compile(
+    r"\b(?:CLOUDFLARE_API_TOKEN|GH_TOKEN|GITHUB_TOKEN|WHMCS_[A-Z_]+)\b", re.IGNORECASE)
+
+
+# PowerShell's implicit output: a bare expression statement IS a print, so
+# `pwsh -c '$env:GH_TOKEN'` writes the token to the log with no verb anywhere.
+# `main` caught this only as collateral of the stray `\benv\b` match, and
+# replacing that accident with a list of Write-* CONSUMERS could not cover it:
+# there is no verb to enumerate (Conductor run 92). Terminators are `|`, a
+# closing quote, or end-of-chunk; `=` is deliberately absent, which is what
+# keeps every assignment form allowed. The leading `['"]` alternative matters
+# more than the `^` one -- through the Bash tool the realistic spelling is
+# `pwsh -c '$env:GH_TOKEN'`, where the statement starts after the `-c` quote.
+# The delimiters are PowerShell STATEMENT boundaries, not just the chunk edge.
+# `_echo_segments` splits on `;` only OUTSIDE quotes, so an embedded script --
+# `pwsh -c 'true; $env:GH_TOKEN'` -- arrives here as one chunk with its own
+# internal statements. Anchoring on "start, or right after the -c quote" missed
+# every statement but the first, which is a verb-less leak `main` caught by
+# accident (Copilot, #1062). A space is deliberately NOT a delimiter: that is
+# what keeps `./x.ps1 -Token $env:GH_TOKEN` an argument rather than a print.
+# `=` is absent from the terminators for the same reason, so assignments stay
+# allowed.
+# A leading `(` is a grouped expression statement -- `pwsh -c '($env:GH_TOKEN)'`
+# still prints -- but ONLY when it is not preceded by `$`. `$(...)` is a
+# subexpression whose value is substituted, so `./x.ps1 -Token $($env:GH_TOKEN)`
+# is argument passing and must stay allowed, exactly like the unparenthesised
+# form (Copilot, #1062).
+# Swept the remaining statement-boundary spellings rather than waiting for them
+# to arrive one review round at a time: `&&` and `||` are PowerShell 7 pipeline
+# chain operators and, inside the quoted `-c` script, `_split_on_logical` never
+# sees them; `,` terminates an expression that continues into an array literal.
+# A newline needs no entry (`_echo_segments` splits on lines first) and a
+# `foreach (...) { ... }` body is already reached by `{`.
+#
+# `,` is a TERMINATOR only, never a leading delimiter -- that asymmetry is what
+# keeps the array-argument form `./x.ps1 -Args $env:A,$env:B` allowed, since
+# both elements are then preceded by a space or a comma rather than by a
+# statement boundary.
+PS_IMPLICIT_OUTPUT_RE = re.compile(
+    r"""(?:\A|['";{&|]|(?<!\$)\()\s*\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?"""
+    r"""\s*(?:\||;|,|\}|\)|['"]|\Z)""",
+    re.IGNORECASE)
+
+
+def _ps_implicit_secret_output(chunk):
+    """The env var a bare PowerShell expansion would print, if it is a secret.
+
+    The name is re-tested against the SAME patterns the rest of the rule uses
+    rather than re-enumerated here -- a third copy of the secret-name list is a
+    place for the three to drift apart, and drift in this direction is silent.
+    """
+    for match in PS_IMPLICIT_OUTPUT_RE.finditer(chunk):
+        name = match.group(1)
+        if (SECRET_SUFFIXED_RE.search(name)
+                or KNOWN_SECRET_VARS_RE.search(name)
+                or BARE_SECRET_NAME_RE.match(name)):
+            return name
+    return None
+
+
+def _safe_name(name):
+    """A variable name fit to appear in a refusal, or None if it is not.
+
+    THE single place a user-derived name becomes message text. It exists as a
+    function rather than two inline copies because the copies diverged: the
+    cap-and-re-scan was written for `_secret_label()` in one round and the
+    PowerShell branch was added in the next with only the cap, reintroducing
+    the identical leak one message over (Copilot, #1062). A new refusal must
+    call this rather than slice a name itself.
+
+    The re-scan is not belt-and-braces, it is load-bearing, and the cap is why:
+    `ghp_` + 36 chars is exactly 40, so a variable named `<token>_KEY`
+    truncates onto the token's end and RESTORES the word boundary the `_KEY`
+    suffix had suppressed -- turning a harmless name into a well-formed
+    credential at the moment it is printed.
+    """
+    name = name[:40]
+    if not name or common.find_secrets(name):
+        return None
+    return name
+
+
+def _secret_label(chunk):
+    """Name WHAT armed the rule, never the text that did it.
+
+    Quoting the offending statement was diagnostic and wrong: rule 3 runs
+    before the secret-literal rule, so `echo "MY_API_KEY=<real value>"` is
+    judged here -- and the message went to this hook's stderr, which lands in
+    the transcript. A guard that exists to keep secrets out of logs must not
+    print one while refusing to (Copilot, #1062).
+
+    A variable NAME is safe to report where its value is not: the whole rule
+    is premised on the value living in the variable. The regexes match
+    identifier characters only, so a name cannot smuggle a quoted payload --
+    but it is still capped and re-scanned with the shared secret detector, so
+    the claim "this message cannot carry a credential" is enforced rather than
+    argued.
+    """
+    for pattern in (KNOWN_SECRET_VARS_RE, SECRET_SUFFIXED_RE, BARE_SECRET_REF_RE):
+        match = pattern.search(chunk)
+        if not match:
+            continue
+        name = match.group(0).lstrip("$").lstrip("{")
+        if name.lower().startswith("env:"):
+            name = name[4:]
+        safe = _safe_name(name)
+        if safe is None:
+            break
+        return f"`{safe}`"
+    if "${{ secrets." in chunk:
+        return "a `${{ secrets.* }}` expression"
+    return "a secret-named variable"
+
+
+def _names_a_secret(chunk):
+    return bool(
+        SECRET_SUFFIXED_RE.search(chunk)
+        or BARE_SECRET_REF_RE.search(chunk)
+        or KNOWN_SECRET_VARS_RE.search(chunk)
+        or "${{ secrets." in chunk
+    )
+
+
+def echo_secret_violation(cmd):
+    """`echo $GH_TOKEN` -- a secret printed into the log.
+
+    The rule decides per STATEMENT. Judging the whole command made
+    `GH_TOKEN=$(gh auth token) python x.py` + a later `echo "done"` a
+    violation, because a secret-named variable appeared somewhere and an
+    `echo` appeared somewhere else -- and that pair is the Conductor's
+    standard idiom, since both `scripts/audit-agentic-os-board.py` and
+    `scripts/generate-agentic-os-status.py` refuse to run without `GH_TOKEN`
+    and are normally invoked next to an `echo` (#1041).
+
+    Nothing in that command can emit the token: `echo "done"` prints a string
+    literal, and a `VAR=$(...)` assignment is not a print. The rule now asks
+    whether THIS statement prints THAT variable.
+    """
+    for index, segment in enumerate(_echo_segments(cmd), start=1):
+        command_part, assigned = _strip_assignments(segment)
+        # Command part ONLY -- never an assignment value. `_strip_assignments`
+        # hands back the value as its own chunk, so `X=$env:PASSWORD` arrives
+        # here as the chunk `$env:PASSWORD`, and testing the values too would
+        # re-block the assignment this rule was just fixed to allow. (Found by
+        # the run-92 patch failing `powershell env var assignment allowed`.)
+        implicit = _ps_implicit_secret_output(command_part)
+        if implicit:
+            safe = _safe_name(implicit)
+            named = f"`{safe}`" if safe else "a secret-named variable"
+            return (
+                "Refusing to echo/print a secret value to logs.\n"
+                f"  statement {index}: a bare PowerShell expansion of {named}\n"
+                "In PowerShell a bare expression statement IS output, so this "
+                "writes the value to the log with no print verb involved.\n"
+                "Assign it, pass it as an argument, or let the command read the "
+                "variable itself."
+            )
+        for chunk in [command_part] + assigned:
+            verb = PRINT_VERB_RE.search(chunk)
+            if verb and _names_a_secret(chunk):
+                return (
+                    "Refusing to echo/print a secret value to logs.\n"
+                    f"  statement {index}: `{verb.group(0)}` together with "
+                    f"{_secret_label(chunk)}\n"
+                    "The offending text is deliberately NOT quoted here -- this "
+                    "hook's own stderr lands in the transcript, so echoing a "
+                    "pasted literal back would be the leak it exists to stop.\n"
+                    "Reference the value through an env var the command reads "
+                    "itself. `VAR=$(...) cmd` is fine -- it is printing it that "
+                    "is not."
+                )
+    return None
+
+
 def pipeline_exit_code_violation(cmd):
     """`cmd | filter; echo $?` reports the FILTER's status, not the command's.
 
@@ -402,15 +728,12 @@ def main():
         if re.search(r"(?<![\w./-])(main|master)(?![\w/-])", low):
             block("Force-push to a protected branch (main/master) is not allowed.")
 
-    # 3. Printing secrets to logs. Case-insensitive so a lowercase env var
+    # 3. Printing secrets to logs, decided per statement (see
+    #    echo_secret_violation). Case-insensitive so a lowercase env var
     #    (e.g. $cloudflare_api_token) can't slip past.
-    secret_var = r"[A-Za-z_][A-Za-z0-9_]*(?:_TOKEN|_SECRET|_KEY|_PASSWORD|_APIKEY|_API_KEY)\b"
-    known_vars = r"(CLOUDFLARE_API_TOKEN|GH_TOKEN|GITHUB_TOKEN|WHMCS_[A-Z_]+)"
-    if re.search(r"\b(echo|printf|printenv|env)\b", low):
-        if (re.search(secret_var, cmd, re.IGNORECASE)
-                or re.search(known_vars, cmd, re.IGNORECASE)
-                or "${{ secrets." in cmd):
-            block("Refusing to echo/print a secret value to logs.")
+    reason = echo_secret_violation(cmd)
+    if reason:
+        block(reason)
 
     # 4. A real-looking secret literal pasted into the command.
     findings = common.find_secrets(cmd)

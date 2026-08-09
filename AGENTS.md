@@ -88,6 +88,20 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
     occurrences fired it on all 4 real rows. Assert the mutation: count the occurrences you meant to
     change and fail loudly if the count is not what you expected, or diff the file, before drawing
     any conclusion from a green run. Same for neutering a rule to mutation-test it.
+  - **And a landed plant can still be the wrong experiment: parse the mutant before you believe its
+    exit code.** The bullet above covers the mutation that does not apply. The opposite failure is a
+    mutation that applies and leaves behind something that is no longer a program — and it fails in
+    the _flattering_ direction, because a guard that cannot start exits non-zero exactly like a
+    guard that caught you. Reviewing #1132 (run 129), re-adding a workflow to
+    `check-workflow-input-interpolation.py`'s `KNOWN_UNGUARDED` put a set element into a dict
+    literal; the guard exited 1 with a `SyntaxError` and scored as a clean detection, and every
+    later mutation of that file would have scored the same way. Compile or parse the mutated
+    artifact first — `py_compile.compile(path, doraise=True)`, `node --check`, `yaml.safe_load` —
+    and refuse to count the result unless it parses. Two corollaries: **match on the guard's own
+    finding text**, never on "any output line mentioning the thing I broke" (a traceback mentions it
+    too, which is exactly how the false positive read as real); and **check the sibling mutations
+    disagree** — a set of mutations that all fire is weaker evidence than a set where each fires a
+    different, correctly-named subset. Ledger **L203**.
 - **If the thing under review is read-only, also run it live.** Mutation-proving establishes that
   the tests discriminate; it cannot establish that the code behaves against real data, because every
   test injects its own fixtures and its own clock. For a script that only reads — the board audit,

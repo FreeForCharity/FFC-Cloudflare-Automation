@@ -527,7 +527,7 @@ PR **by construction**, so the subtraction counts live queue machinery as an aba
 
 ```bash
 gh api --paginate "repos/FreeForCharity/<repo>/branches?per_page=100" \
-  --jq '.[].name' | grep -vE '^(main|gh-readonly-queue/)'
+  --jq '.[].name' | grep -vE '^main$|^gh-readonly-queue/'
 ```
 
 The trap is self-inflicted and order-dependent: a run that enqueues a PR and _then_ counts gets one

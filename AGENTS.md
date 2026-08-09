@@ -237,15 +237,32 @@ and all authenticate as the same user. Before starting ANY issue:
 1. **Available = `is:open -label:claimed`.** The pickup query is
    `org:FreeForCharity label:agentic-os is:open -label:claimed`. If an issue has the `claimed` label
    or an open linked PR, it is TAKEN — pick something else.
-   - **Prefer `agent-ready`.** `org:FreeForCharity label:agent-ready is:open -label:claimed` is the
-     same query narrowed to issues that are _actually pickable_: unclaimed, unblocked, one-PR-scoped
-     and carrying acceptance criteria. `agentic-os` is the programme-wide **topic** label and stays
-     on everything, so it also counts epics, machine-managed rolling issues (740/738 open and close
+   - **Prefer `agent-ready`.**
+     `org:FreeForCharity label:agent-ready is:open -label:claimed -label:blocked` is the same query
+     narrowed to issues that are _actually pickable_: unclaimed, unblocked, one-PR-scoped and
+     carrying acceptance criteria. `agentic-os` is the programme-wide **topic** label and stays on
+     everything, so it also counts epics, machine-managed rolling issues (740/738 open and close
      those themselves), items blocked on a human with credentials, and durable findings kept as
      records — none of which an agent can execute. Counting the topic label is why the Conductor's
      "keep 5–15 open" band read 46 and drifted upward for eight consecutive runs of trimming that
-     could never converge (#922). Add `agent-ready` when you file an issue that meets the bar;
-     remove it when the issue becomes blocked.
+     could never converge (#922). Add `agent-ready` when you file an issue that meets the bar.
+     - **`-label:blocked` is load-bearing, and it is the half this line used to omit.** The sentence
+       that ended _"remove it when the issue becomes blocked"_ made `agent-ready` and `blocked`
+       mutually exclusive by convention only, and convention is not a filter. Groomers have
+       deliberately kept both labels on an issue precisely so it **returns to the pool by itself**
+       the moment `blocked` comes off — #1028 says so in as many words ("Both labels stay on, so it
+       returns to the ready pool the moment the premise is settled"), which is the better design and
+       was silently unsupported: the query as written had no `blocked` term, so #1028 sat in the
+       pickup results for three days as a first-class candidate while being explicitly blocked
+       pending a controlled experiment. Measured on run 130 against `main` `8774a1a`, over REST
+       rather than the lagging search index: the documented query returned **42** issues and #1028
+       was one of them; adding `-label:blocked` returns 41 and removes exactly that one. Picking it
+       up would have been worse than wasted effort — its AC1 tells the implementer to write a
+       diagnosis into `guard_bash.py` that #1028's own later comments show mis-explains the cases,
+       and hook PRs are the class Clarke reviews by hand. **Two labels that contradict each other
+       are a bug in the query, not in the labelling** — the grooming convention was right and the
+       query was wrong, so fix the query and let the labels mean what groomers already use them to
+       mean.
    - **An issue that states why it is blocked is making a claim about a tree that has since moved —
      re-run its probe before inheriting it.** A blocker is prose: it does not re-execute, no check
      fails when it stops being true, and nothing links it to the PRs that quietly fix it. #1042

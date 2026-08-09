@@ -351,7 +351,12 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     "107-audit-compliance.yml": ("domain",),
     "109-dns-export-all-records.yml": ("domain",),
     "110-cloudflare-zone-create.yml": ("domain",),
-    "112-dns-bulk-replace-a-ip.yml": ("new_ip", "old_ip"),
+    # 112-dns-bulk-replace-a-ip.yml burned down: `old_ip` / `new_ip` now reach the
+    # pwsh body through step-level `env:`. It rewrites A records across every zone in
+    # both Cloudflare accounts on cloudflare-prod-write, and the callee's
+    # `[ValidatePattern]` on both parameters could never have stopped a payload — it
+    # runs after the injected expression, so its rejection message reads like a
+    # control working on a run where the code had already executed.
     "115-domain-transfer-preflight.yml": (
         "issue_number",
         "min_days_to_expiry",

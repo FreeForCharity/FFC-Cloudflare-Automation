@@ -925,6 +925,39 @@ Two runs of gate decisions, merges and open threads existed only in the #719 thr
 treat the local file as corroboration. A local file that is _usually_ current is more dangerous than
 one that is obviously absent, because nothing about reading it feels like a risk.
 
+## The Conductor runs with NONE of this repo's hooks loaded (validated 2026-08-09, run 134)
+
+`.claude/hooks/` protects a Claude Code session whose **project root is this repository** — the
+sandboxed agents. The scheduled Conductor's project root is its own workspace
+(`C:\ClaudeCodeDesktop\Claude_AI_OS_Routine`), whose `settings.local.json` carries a `permissions`
+block and **no `hooks` block at all**. It `cd`s into the clone to work; that does not load the
+clone's hooks. So the session with the most write authority in the system — the one that approves
+gates, merges PRs and hand-delivers the public feed — runs with none of the enforcement every other
+agent gets.
+
+This is not theoretical, and the demonstration is worth repeating rather than summarising. Run 134
+ran a board audit as `python3 scripts/audit-agentic-os-board.py 2>&1 | tail -25; echo "AUDIT rc=$?"`
+and read **rc=0** — from `tail`. The audit had refused to run (no `GH_TOKEN`) and said so, in output
+that happened to be visible; had the refusal been quieter it would have scored as a clean board.
+Replaying that exact command string into `guard_bash.py` on stdin **blocks it, exit 2**, naming
+ledger L50 verbatim. The rule was already there, already correct, and already promoted out of prose
+_because_ it kept being violated — and it could not fire.
+
+Two things follow, and they are easy to collapse into one:
+
+1. **"We put a hook on it" does not close a Conductor-side finding.** When triaging a lesson in step
+   7, a hook is the strongest tier _for agents working inside the repo_ and no tier at all for the
+   Conductor. If the mistake is one only the Conductor can make, prose is the real ceiling until the
+   workspace loads hooks — so write it as prose that expects to be re-read, and say in the ledger's
+   tier column why prose is the ceiling.
+2. **Every future hook inherits this hole**, silently. Nothing in the repo can detect it, because
+   the file that would fix it is on the operator's workstation and in no repository.
+
+The fix is a `hooks` block in the Conductor workspace's own settings pointing at a clone's
+`.claude/hooks/`. It is @clarkemoyer's call — it changes how the privileged session behaves, and a
+misconfigured guard there blocks the Conductor mid-run rather than an agent mid-task. Ledger
+**L218**.
+
 ## Review threads are GraphQL-only — `--json reviewThreads` is not a field (validated 2026-07-30)
 
 `gh pr view <n> --json reviewThreads` errors and dumps the full valid-field list. AGENTS.md already

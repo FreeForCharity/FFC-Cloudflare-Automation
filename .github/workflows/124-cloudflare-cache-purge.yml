@@ -1,0 +1,132 @@
+name: '124. Cloudflare - Cache Purge (Admin) [CF]'
+run-name: 'Cache purge: ${{ inputs.domain }} (dry_run=${{ inputs.dry_run }})'
+
+# Purges Cloudflare's edge cache for a zone, by URL or wholesale. Wraps
+# scripts/cloudflare-cache-purge.ps1.
+#
+# Exists because of the 2026-08-07 freeforcharity.org incident: a transient
+# LiteSpeed 429 at the cPanel origin arrived carrying the origin's one-year
+# static-asset Cache-Control, Cloudflare cached the error, and four homepage
+# SVGs plus a Next.js JS chunk served as empty 429s from the edge for ~16 hours
+# while the origin was healthy. Purging was the only remedy and had no
+# automation and no audit trail. See docs/cloudflare-cache.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Zone to purge, e.g. freeforcharity.org'
+        required: true
+        type: string
+      urls:
+        description:
+          'URLs to purge (newline or comma separated, absolute https://...). Leave empty only when
+          using purge_everything.'
+        required: false
+        type: string
+      purge_everything:
+        description:
+          'Purge the WHOLE zone instead of specific URLs (every object refetches from origin)'
+        required: false
+        type: boolean
+        default: false
+      verify:
+        description: 'Re-probe each purged URL afterwards and fail if any is still unhealthy'
+        required: false
+        type: boolean
+        default: true
+      dry_run:
+        description: 'Dry Run (preview the purge payload, nothing is purged)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+# Serialize runs: two concurrent purges on one zone race each other's verify step.
+concurrency:
+  group: 124-cloudflare-cache-purge-${{ inputs.domain }}
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod-read
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Preview purge payload (always runs)
+        shell: pwsh
+        env:
+          INPUT_DOMAIN: ${{ inputs.domain }}
+          INPUT_URLS: ${{ inputs.urls }}
+          INPUT_ALL: ${{ inputs.purge_everything }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptArgs = @('-Domain', $env:INPUT_DOMAIN, '-DryRun')
+          if ($env:INPUT_ALL -eq 'true') {
+            $scriptArgs += '-All'
+          }
+          else {
+            $scriptArgs += @('-UrlList', $env:INPUT_URLS)
+          }
+          pwsh -NoProfile -File scripts/cloudflare-cache-purge.ps1 @scriptArgs
+
+  apply:
+    needs: preview
+    if: inputs.dry_run == false
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod-write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: write
+          azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Purge cache
+        shell: pwsh
+        env:
+          INPUT_DOMAIN: ${{ inputs.domain }}
+          INPUT_URLS: ${{ inputs.urls }}
+          INPUT_ALL: ${{ inputs.purge_everything }}
+          INPUT_VERIFY: ${{ inputs.verify }}
+        run: |
+          # stdout is the JSON verdict, stderr is the human log. Capture stdout
+          # for the step summary; use Continue so native stderr writes cannot
+          # terminate the step before the exit code is read.
+          $ErrorActionPreference = 'Stop'
+          $scriptArgs = @('-Domain', $env:INPUT_DOMAIN)
+          if ($env:INPUT_ALL -eq 'true') {
+            $scriptArgs += '-All'
+          }
+          else {
+            $scriptArgs += @('-UrlList', $env:INPUT_URLS)
+          }
+          if ($env:INPUT_VERIFY -eq 'true') { $scriptArgs += '-Verify' }
+
+          $ErrorActionPreference = 'Continue'
+          $out = & pwsh -NoProfile -File scripts/cloudflare-cache-purge.ps1 @scriptArgs
+          $exit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+
+          $summary = ($out | Out-String)
+          Write-Host $summary
+
+          $fence = [string][char]0x60 * 3
+          $lines = @("### Cloudflare cache purge ($env:INPUT_DOMAIN)", '', ($fence + 'json'), $summary.TrimEnd(), $fence)
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          if ($exit -ne 0) {
+            throw "Cache purge failed (exit $exit)."
+          }

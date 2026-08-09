@@ -81,8 +81,9 @@ Steps, all done once by an admin:
 4. **Add a federated credential** for the reader app (`ffc-admin-kv-reader`) with subject
    `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:fraudlabspro-prod-read` — follow
    `docs/azure-oidc-federated-credentials.md` (mind the trailing-hyphen subject typo documented
-   there). Then extend that doc's expected-credential list so
-   `scripts/check-federated-credential-subjects.py` accounts for it.
+   there). `config/federated-credentials.json` already carries this lane (#1081), so
+   `scripts/check-federated-credential-subjects.py --live` will report the credential as MISSING
+   until this step is done — that report is the point, not a defect.
 
 Once steps 1–4 are done, dispatch 228 (read-only): it prints every current Fraud order with its
 FraudLabs status/score and a recommended action, writing no changes.

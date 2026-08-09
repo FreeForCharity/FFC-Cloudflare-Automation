@@ -159,6 +159,38 @@ create/archive/collaborator credential) for work classified `Reads`.
 were fixed) — so 502's delivery and 735 cannot work until that secret is reminted under #848. 726
 uses the copilot-mcp PAT, which probes healthy.
 
+**The consuming run now refuses the dead credential itself (#1102).** 321 is a _report_: it tells
+you a secret is dead somewhere else, later. It never stopped a run from proceeding with one. Every
+step named `Load the GitHub PAT from Key Vault` — 16 of them across 14 workflows — now probes
+`GET https://api.github.com/user` with the loaded token and fails the step on any non-200, before
+the value reaches `GITHUB_ENV`:
+
+- **401, or a 403 that is not throttling** →
+  `<secret> returned 401 from GET /user: the token is revoked, expired, or its access was removed — it is not missing.`
+  That is the message 502 should have been printing for nine days. The old emptiness branch is
+  unchanged and still says what it says, because "the vault handed back nothing" (a role assignment)
+  and "the vault handed back a dead token" (a remint) are different jobs for whoever reads the log.
+- **403 with `x-ratelimit-remaining: 0` (primary) or a `retry-after` header (secondary)** → a rate
+  limit, reported as one. The credential is **live**, so this branch says so and tells the reader
+  not to remint it. Separating the two is why the probe keeps the response headers (`-D`) instead of
+  reading the status alone: a 403 cannot on its own tell a revoked token from a throttled one, and
+  prescribing a remint for a healthy credential would be the same wrong-subsystem failure this guard
+  exists to remove. FreeForCharity is on the `team` plan, so the other two common 403 sources — SAML
+  SSO enforcement and IP allow lists — do not apply here; throttling is the one that does, and the
+  Conductor has driven these pools to zero more than once.
+- **anything else, including `000`** → unverified, and it fails closed. A 502 from GitHub says
+  nothing about the credential (321's live/dead/unverified split), so it is never reported as
+  revoked and never treated as a pass.
+
+The probe reads a status code and the response headers
+(`curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}'`) and nothing else — `-o /dev/null` discards
+the body, the header dump carries no credential and is deleted straight after, and the token goes
+into a request header and into no output. **A 200 proves the token authenticates and nothing about
+its scope** — a read-scoped PAT answers 200 here and 403 on the write 502 and 735 go on to perform —
+so a green credential step is not a licence to assume the later write will succeed. Guarded by
+`tests/workflow-logic/test_pat_liveness_probe.py`, which runs the shipped step bodies under the
+runner's own shell.
+
 **Do not reintroduce a GitHub-secret copy.** An earlier revision of #834 proposed a
 `GH_REPORT_TOKEN` environment secret. That predates the Key Vault migration (#844) and would put a
 second copy of a credential where it can drift — the failure that silently broke the Cloudflare
@@ -195,21 +227,29 @@ az ad app federated-credential create \
 ```
 
 Then confirm kv-reader can `Get` the lane's KV secret (`read-all-ffc-fraudlabspro-api-key`;
-`read-all-ffc-candid-charity-check-key` / `read-all-ffc-candid-essentials-key`) and add both
-environments to `config/federated-credentials.json` so the subject audit covers them.
+`read-all-ffc-candid-charity-check-key` / `read-all-ffc-candid-essentials-key`). Both environments
+are already in `config/federated-credentials.json` (#1081), so the subject audit covers them today —
+`--live` reports them MISSING until the credentials above exist, which is the intended reading, not
+drift.
 
 **Until then the failure mode changes but does not disappear** — 228 will fail at `AADSTS700213`
 (Entra reached, no matching credential) rather than at the preflight. That is a strictly better
 failure: it names the missing credential instead of an empty string, and `AADSTS700213` is the error
 this document exists to explain.
 
-> **`config/federated-credentials.json` is incomplete, and this is not the only gap.** Its `apps[]`
-> lists 3 reader environments and 5 writer ones, while the tree runs OIDC jobs against **12**
-> environments — `github-prod`, `github-prod-read`, `candid-prod-read` and `fraudlabspro-prod-read`
-> are all absent. Three of those four demonstrably work in production, so the map understates
-> reality, and the subject audit (`--live`) therefore cannot catch a typo in a credential it does
-> not know to expect. Reconciling it needs a live `az ad app federated-credential list` per
-> identity, which is a read an operator can do from an authenticated shell; tracked on #912.
+> **`config/federated-credentials.json` was incomplete, and is now guarded (#1081).** Its `apps[]`
+> listed 3 reader environments and 5 writer ones while the tree ran OIDC jobs against **12** —
+> `github-prod`, `github-prod-read`, `candid-prod-read` and `fraudlabspro-prod-read` were all
+> absent, so the subject audit could not catch a typo in a credential it did not know to expect. All
+> four are now mapped and the stale `cloudflare-prod` entry is gone. Reconciling it by hand is no
+> longer the mechanism that keeps it honest: `check-federated-credential-subjects.py` asserts **set
+> equality** between the map and the environments the workflows actually perform an Azure OIDC
+> exchange under, offline, on every PR. Adding a lane and forgetting this file is now a CI failure.
+>
+> Note what that does and does not claim. It makes every OIDC lane **expected**; whether the
+> credential exists in Entra is still only answerable by `--live`. For `candid-prod-read` and
+> `fraudlabspro-prod-read` it demonstrably does not yet — that is #1006 Part A and #912 Part A, and
+> the map now says so out loud instead of omitting the question.
 
 ## Auditing federated-credential subjects
 
@@ -220,7 +260,8 @@ catch that class, the expected credentials this repo's workflows rely on are dec
 the environments it must carry). Subjects are **generated** from `repo` + `environment`, so the map
 itself can't carry a subject typo.
 
-`scripts/check-federated-credential-subjects.py` uses it three ways:
+`scripts/check-federated-credential-subjects.py` uses it three ways (every mode first checks the
+map's **coverage** — see below):
 
 ```bash
 python3 scripts/check-federated-credential-subjects.py            # self-check the map (runs in CI)
@@ -233,6 +274,25 @@ canonical `subject`, `issuer`, and `audiences`, and flags any this-repo credenti
 expected. CI runs the self-check on every PR; the live audit is operator-run (and folds naturally
 into the #589 drift-audit workflow when that lands). Cross-repo credentials on these shared
 identities (`FFC-IN-*`) are intentionally out of scope.
+
+### The map's denominator is checked too (#1081)
+
+Every mode — including the default offline one CI runs — first asserts that the environments the map
+lists are **exactly** the environments this repo's workflows perform an Azure OIDC exchange under. A
+lane in one set and not the other is an error naming the environment and the workflows that use it.
+
+This exists because the audit above can only ever be as complete as the map, and the map was
+hand-maintained: it printed `config OK: 3 apps, 9 expected env credentials` on every run while four
+OIDC lanes sat outside its denominator — and those four held **every failing workflow in the repo**
+(#949, #921, #1033, 801/802). A control whose input set is hand-maintained cannot detect an omitted
+input (L133); the input set is therefore derived from the tree rather than trusted.
+
+A job counts as performing an exchange if it has an `azure/login` step, uses a local composite
+action that itself logs in (resolved by **reading** the action, not by matching `*-from-kv` on its
+name), or references an Azure OIDC identifier. A job that declares an `environment:` and does none
+of those is not a finding — `github-pages` (721) and `wpmudev-prod` (601) are real environments with
+no Azure lane, and this is not a blanket environment audit. It fails closed: a workflow or composite
+action that cannot be parsed is a finding, never a silent skip.
 
 ## Inspecting / repairing from the Claude sandbox
 

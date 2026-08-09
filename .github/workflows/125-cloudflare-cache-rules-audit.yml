@@ -1,0 +1,71 @@
+name: '125. Cloudflare - Cache Rules Audit (Read-only) [CF]'
+run-name: 'Cache rules audit: ${{ inputs.domain }}'
+
+# READ-ONLY: reads a zone's Cache Rules (the http_request_cache_settings phase
+# entrypoint) plus the zone-level cache settings, and reports whether error
+# responses can be edge-cached. Changes nothing. Wraps
+# scripts/cloudflare-cache-rules-get.ps1.
+#
+# The finding it exists to surface: with no status-code TTL cap, an origin that
+# sends Cache-Control on a 4xx/5xx has that error cached at the edge for the
+# full max-age — which is how a transient 429 became a 16-hour outage on
+# freeforcharity.org on 2026-08-07. See docs/cloudflare-cache.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Zone to audit, e.g. freeforcharity.org'
+        required: true
+        type: string
+      fail_on_finding:
+        description: 'Fail the run when a finding of severity warn or higher is present'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    environment: cloudflare-prod-read
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Audit cache rules
+        shell: pwsh
+        env:
+          INPUT_DOMAIN: ${{ inputs.domain }}
+          INPUT_FAIL_ON_FINDING: ${{ inputs.fail_on_finding }}
+        run: |
+          # stdout is the JSON verdict, stderr is the human log. Capture stdout
+          # for the step summary; use Continue so native stderr writes cannot
+          # terminate the step before the exit code is read.
+          $ErrorActionPreference = 'Stop'
+          $scriptArgs = @('-Domain', $env:INPUT_DOMAIN)
+          if ($env:INPUT_FAIL_ON_FINDING -eq 'true') { $scriptArgs += '-FailOnFinding' }
+
+          $ErrorActionPreference = 'Continue'
+          $out = & pwsh -NoProfile -File scripts/cloudflare-cache-rules-get.ps1 @scriptArgs
+          $exit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+
+          $summary = ($out | Out-String)
+          Write-Host $summary
+
+          $fence = [string][char]0x60 * 3
+          $lines = @("### Cloudflare cache rules ($env:INPUT_DOMAIN)", '', ($fence + 'json'), $summary.TrimEnd(), $fence)
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+          if ($exit -ne 0) {
+            throw "Cache rules audit reported findings or failed (exit $exit)."
+          }

@@ -489,6 +489,47 @@
       "categoryCode": "CF"
     },
     {
+      "number": 124,
+      "title": "Cloudflare - Cache Purge (Admin)",
+      "apis": [
+        "CF"
+      ],
+      "file": "124-cloudflare-cache-purge.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read",
+        "cloudflare-prod-write"
+      ],
+      "description": "Purges Cloudflare's edge cache for a zone, by URL or wholesale. Wraps scripts/cloudflare-cache-purge.ps1.  Exists because of the 2026-08-07 freeforcharity.org incident: a transient LiteSpeed 429 at the cPanel origin arrived carrying the origin's one-year static-asset Cache-Control, Cloudflare cached the error, and four homepage SVGs plus a Next.js JS chunk served as empty 429s from the edge for ~16 hours while the origin was healthy. Purging was the only remedy and had no automation and no audit trail. See docs/cloudflare-cache.md.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "cloudflare-prod-read / \u2705 cloudflare-prod-write",
+      "guard": "`dry_run` (default true); preview job always runs read-only; serialized per zone; `purge_everything` refetches the whole zone from origin \u2014 prefer explicit `urls`",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
+      "number": 125,
+      "title": "Cloudflare - Cache Rules Audit (Read-only)",
+      "apis": [
+        "CF"
+      ],
+      "file": "125-cloudflare-cache-rules-audit.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read"
+      ],
+      "description": "READ-ONLY: reads a zone's Cache Rules (the http_request_cache_settings phase entrypoint) plus the zone-level cache settings, and reports whether error responses can be edge-cached. Changes nothing. Wraps scripts/cloudflare-cache-rules-get.ps1.  The finding it exists to surface: with no status-code TTL cap, an origin that sends Cache-Control on a 4xx/5xx has that error cached at the edge for the full max-age \u2014 which is how a transient 429 became a 16-hour outage on freeforcharity.org on 2026-08-07. See docs/cloudflare-cache.md.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "cloudflare-prod-read",
+      "guard": "read-only; reports whether 4xx/5xx can be edge-cached; `fail_on_finding` (default false) turns warn-level findings into a non-zero exit",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
       "number": 201,
       "title": "WHMCS - Export Domains (Report)",
       "apis": [

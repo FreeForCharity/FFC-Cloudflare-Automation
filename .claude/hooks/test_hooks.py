@@ -910,6 +910,141 @@ def main():
     for name, cmd in GENERAL_ALLOWS:
         check(name, "guard_bash.py", bash(cmd), False)
 
+    # ... and the genuine forms must all still block. The bare-name spellings
+    # below were ALLOWED before this change: the old pattern required a
+    # `_TOKEN`-style suffix preceded by at least one character, so `$TOKEN`
+    # itself matched nothing.
+    check("echo bare $TOKEN", "guard_bash.py", bash("echo $TOKEN"), True)
+    check("echo quoted $TOKEN", "guard_bash.py", bash('echo "$TOKEN"'), True)
+    check("echo braced ${TOKEN}", "guard_bash.py", bash("echo ${TOKEN}"), True)
+    check("printf a secret", "guard_bash.py", bash("printf '%s' \"$TOKEN\""), True)
+    check("echo bare lowercase $token", "guard_bash.py", bash("echo $token"), True)
+    check("echo $env:SECRET", "guard_bash.py", bash("echo $env:SECRET"), True)
+    # `$env:X` is a PowerShell variable READ, not the `env` command: `\benv\b`
+    # treats `$` and `:` as word boundaries, so the bare name armed the rule on
+    # a statement that prints nothing (Copilot's finding on #1062). The second
+    # case was a false positive on `main` too.
+    check("powershell env var assignment allowed", "guard_bash.py",
+          bash("X=$env:PASSWORD"), False)
+    check("powershell env var set in a subshell allowed", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN = \"x\"; python y.py'"), False)
+    # ... but `main` blocked `Write-Host $env:GH_TOKEN` only via that same stray
+    # `env` match, so these two keep the coverage after the accident is removed.
+    # They are the discriminator for the Write-* branch.
+    check("Write-Host a secret", "guard_bash.py",
+          bash("Write-Host $env:GH_TOKEN"), True)
+    check("Write-Output a secret", "guard_bash.py",
+          bash("Write-Output $env:CLOUDFLARE_API_TOKEN"), True)
+    # PowerShell's implicit output: a bare expression statement IS a print, so
+    # these leak with NO verb anywhere. `main` caught them only as collateral of
+    # the stray `env` match, and a list of Write-* consumers cannot reach them --
+    # there is no verb to enumerate (Conductor run 92). Every other `$env:` case
+    # in this file pairs the expansion with a verb or an `=`; these are the
+    # spelling with neither.
+    check("bare powershell expansion of a secret", "guard_bash.py",
+          bash("$env:GH_TOKEN"), True)
+    check("bare powershell expansion via pwsh -c", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN'"), True)
+    check("bare powershell expansion piped to a consumer", "guard_bash.py",
+          bash("$env:GH_TOKEN | Out-Host"), True)
+    # An embedded pwsh script has its OWN statements: `_echo_segments` splits on
+    # `;` only outside quotes, so everything after the first statement arrived
+    # unjudged. Each of these is a verb-less print that `main` caught by
+    # accident and this rule initially did not (Copilot, #1062).
+    check("bare powershell expansion after a ; inside -c", "guard_bash.py",
+          bash("pwsh -c 'true; $env:GH_TOKEN'"), True)
+    check("bare powershell expansion before a ; inside -c", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN; true'"), True)
+    check("bare powershell expansion inside a block", "guard_bash.py",
+          bash("pwsh -c 'if ($x) { $env:GH_TOKEN }'"), True)
+    # The discriminator for the widened delimiters: same shape, non-secret name.
+    # Without it, the delimiter set could match anything and stay green.
+    check("bare expansion of a non-secret after a ; allowed", "guard_bash.py",
+          bash("pwsh -c 'true; $env:TEMP'"), False)
+    # A grouped expression statement still prints (Copilot, #1062) ...
+    check("parenthesised bare powershell expansion", "guard_bash.py",
+          bash("pwsh -c '($env:GH_TOKEN)'"), True)
+    check("parenthesised bare expansion with spaces", "guard_bash.py",
+          bash("pwsh -c '( $env:GH_TOKEN )'"), True)
+    # ... but `$(...)` is a SUBEXPRESSION whose value is substituted, so this is
+    # argument passing and must stay allowed -- the `(` delimiter is excluded
+    # after a `$` for exactly this case, and this is its discriminator.
+    check("secret via a subexpression argument allowed", "guard_bash.py",
+          bash("pwsh -c './x.ps1 -Token $($env:GH_TOKEN)'"), False)
+    check("parenthesised non-secret allowed", "guard_bash.py",
+          bash("pwsh -c '($env:TEMP)'"), False)
+    # `&&`/`||` are PowerShell 7 chain operators, and inside the quoted -c
+    # script `_split_on_logical` never sees them; `,` continues an expression
+    # into an array literal. Found by sweeping the boundary spellings rather
+    # than waiting for each to arrive as a review round.
+    check("bare powershell expansion after && inside -c", "guard_bash.py",
+          bash("pwsh -c 'true && $env:GH_TOKEN'"), True)
+    check("bare powershell expansion after || inside -c", "guard_bash.py",
+          bash("pwsh -c 'false || $env:GH_TOKEN'"), True)
+    check("bare powershell expansion before a comma", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN,1'"), True)
+    # `,` is a terminator but NOT a leading delimiter, which is what keeps an
+    # array of arguments allowed. This is that asymmetry's discriminator.
+    check("secret in an array argument allowed", "guard_bash.py",
+          bash("pwsh -c './x.ps1 -Args $env:GH_TOKEN,$env:CLOUDFLARE_API_TOKEN'"), False)
+    # `&&` was added as a LEADING delimiter without being added as a terminator,
+    # so a bare expansion that *precedes* a chain operator went unjudged. `||`
+    # kept blocking by accident -- `|` was already a terminator for pipes --
+    # which is precisely what hid the asymmetry.
+    check("bare powershell expansion before && inside -c", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN && true'"), True)
+    check("bare powershell expansion as a middle chain leg", "guard_bash.py",
+          bash("pwsh -c 'true && $env:GH_TOKEN && true'"), True)
+    check("bare powershell expansion before || inside -c", "guard_bash.py",
+          bash("pwsh -c '$env:GH_TOKEN || true'"), True)
+    # The discriminator: a secret handed to a script as an argument is not a
+    # print, even when the statement continues into a chain.
+    check("secret argument before && allowed", "guard_bash.py",
+          bash("pwsh -c './x.ps1 -Token $env:GH_TOKEN && true'"), False)
+    check("bare powershell expansion after &&", "guard_bash.py",
+          bash("true && $env:CLOUDFLARE_API_TOKEN"), True)
+    check("braced bare powershell expansion", "guard_bash.py",
+          bash("${env:GH_TOKEN}"), True)
+    # The braced spelling puts a `{` between the `$` and the name, so a
+    # `(?<!\$)` lookbehind alone still sees a word boundary and reinstates the
+    # false positive one spelling over.
+    check("braced powershell env assignment allowed", "guard_bash.py",
+          bash("X=${env:PASSWORD}"), False)
+    # A non-secret env var is not a leak however it is spelled, and passing a
+    # token as an ARGUMENT is not printing it -- `main` blocked both by the
+    # same accident.
+    check("bare expansion of a non-secret allowed", "guard_bash.py",
+          bash("$env:TEMP | Out-Host"), False)
+    check("braced non-secret expansion allowed", "guard_bash.py",
+          bash("cat ${env:HOME}/x"), False)
+    check("secret passed as a pwsh argument allowed", "guard_bash.py",
+          bash('pwsh -c "./x.ps1 -Token $env:GH_TOKEN"'), False)
+    check("secret in a curl header, powershell spelling, allowed", "guard_bash.py",
+          bash('curl -H "Authorization: Bearer $env:GH_TOKEN" https://api.github.com'), False)
+    # A suffixed name that is NOT on the known-vars list -- the only case that
+    # reaches the suffix pattern on its own.
+    check("echo a suffixed name outside the known list", "guard_bash.py",
+          bash('echo "$AZURE_CLIENT_SECRET"'), True)
+    # A secret printed on a LATER line is still printed -- per-statement must
+    # not become "only the first statement".
+    check("secret echoed on a later line", "guard_bash.py",
+          bash('python x.py\necho "$WHMCS_API_SECRET"'), True)
+    # The assigned VALUE is judged too, or stripping the assignment would hide
+    # the leak it was meant to excuse.
+    check("secret echoed inside an assignment value", "guard_bash.py",
+          bash("X=$(echo $GH_TOKEN)"), True)
+    # A pipeline is one unit: printenv's output reaches grep.
+    check("printenv piped to grep for a secret", "guard_bash.py",
+          bash("printenv | grep GH_TOKEN"), True)
+    check("env piped to grep for a secret", "guard_bash.py",
+          bash("env | grep CLOUDFLARE_API_TOKEN"), True)
+    # Heredoc bodies are shell here, unlike in the pipeline rule: dropping them
+    # would turn a blocked command into an allowed one.
+    check("secret echoed inside a heredoc body", "guard_bash.py",
+          bash("bash <<EOF\necho $GH_TOKEN\nEOF"), True)
+    check("workflow secrets expression", "guard_bash.py",
+          bash('echo "${{ secrets.CBM_TOKEN }}"'), True)
+
     print("guard_bash (refusal messages must not echo the payload):")
     # The refusal must not quote the offending statement back. This rule runs
     # BEFORE the secret-literal rule, so a pasted value reaches it first, and

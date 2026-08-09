@@ -25,7 +25,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, step_run
+from wf_extract import child_env, find_step, load_workflow, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -35,9 +35,53 @@ DOMAIN = "example.org"
 SMOKE_TSV = pathlib.Path("/tmp/smoke-dispatched.tsv")
 
 
+# Every step that consumes `domains` and the env var it must read it through.
+# `domains` is free text, so an interpolated `${{ }}` would be the dispatcher's
+# code pasted into the body and run after the approval (#1080). All four sites
+# moved to step-level `env:`; the two pwsh ones have no behavioural module, so
+# this list is the only thing standing between them and a silent regression.
+DOMAINS_ENV = "IN_DOMAINS"
+DOMAIN_CONSUMERS = (
+    ("cname-flip", "Flip public/CNAME"),
+    ("dns-flip", "Flip Cloudflare apex DNS"),
+    (JOB, "Bind Pages custom domain"),
+    (JOB, "Dispatch Post-Deploy Smoke Test"),
+)
+
+
+def _assert_domains_wiring(job_id: str, step_name: str) -> None:
+    """The step reads `domains` from env and does not interpolate it.
+
+    Asserted separately from behaviour, and asserted before every behavioural
+    run below, because the fixture SUPPLIES this value (ledger L199): delete the
+    workflow's `env:` block and the step still sees `IN_DOMAINS` from the test
+    harness, so all six behavioural tests keep passing over plumbing that no
+    longer exists. A real dispatch would run with an empty domain list.
+    """
+    step = find_step(load_workflow(WORKFLOW), job_id, step_name)
+    env = step.get("env") or {}
+    assert env.get(DOMAINS_ENV) == "${{ inputs.domains }}", (
+        f"step {step.get('name')!r} in job {job_id!r} must map "
+        f"{DOMAINS_ENV} to the domains input; its env: block is {env!r}"
+    )
+    body = step.get("run", "")
+    assert DOMAINS_ENV in body, (
+        f"step {step.get('name')!r} in job {job_id!r} maps {DOMAINS_ENV} but "
+        f"never reads it — the env: block is decoration"
+    )
+    assert "inputs.domains" not in body, (
+        f"step {step.get('name')!r} in job {job_id!r} still interpolates the "
+        f"domains input into its script body (#1080)"
+    )
+
+
 def _script(step_name: str) -> str:
-    # The steps interpolate the dispatch input; bash cannot parse `${{ … }}`.
-    return step_run(WORKFLOW, JOB, step_name).replace("${{ inputs.domains }}", DOMAIN)
+    # Re-assert the wiring on every behavioural run of a step that consumes
+    # `domains` — the poll step reads the TSV the dispatch step wrote and takes
+    # no input, so it is deliberately not in DOMAIN_CONSUMERS.
+    if (JOB, step_name) in DOMAIN_CONSUMERS:
+        _assert_domains_wiring(JOB, step_name)
+    return step_run(WORKFLOW, JOB, step_name)
 
 
 def run_step(step_name: str, env_overrides: dict) -> tuple[str, str, str, int]:
@@ -59,6 +103,9 @@ def run_step(step_name: str, env_overrides: dict) -> tuple[str, str, str, int]:
             GITHUB_STEP_SUMMARY=str(summary),
             TEST_GH_LOG=str(gh_log),
             HOME=str(td),
+            # Supplied the way the workflow supplies it — through env, not by
+            # substituting text into the body. See _assert_domains_wiring.
+            **{DOMAINS_ENV: DOMAIN},
         )
         env.update(env_overrides)
         proc = subprocess.run(
@@ -198,6 +245,68 @@ def test_a_failed_smoke_fails_the_step():
 # ---------------------------------------------------------------------------
 # The shape itself
 # ---------------------------------------------------------------------------
+
+
+def test_every_step_reading_domains_takes_it_from_env():
+    """Covers the two pwsh jobs as well, which have no behavioural module here.
+
+    cname-flip holds github-prod and dns-flip holds cloudflare-prod-write, so
+    the same input was code in two different credential contexts.
+    """
+    for job_id, step_name in DOMAIN_CONSUMERS:
+        _assert_domains_wiring(job_id, step_name)
+
+
+def test_the_domains_input_is_not_interpolated_anywhere_in_120():
+    """Whole-file, so a NEW step consuming `domains` is caught as well.
+
+    The per-step check above can only see the steps this module already knows
+    about; this one has no list to fall out of date. The only legal spelling of
+    `inputs.domains` in this file is the env: mapping itself.
+    """
+    text = (REPO_ROOT / ".github" / "workflows" / WORKFLOW).read_text(encoding="utf-8")
+    legal = DOMAINS_ENV + ": ${{ inputs.domains }}"
+    sites = [
+        (n, line.strip())
+        for n, line in enumerate(text.splitlines(), 1)
+        if "inputs.domains" in line and not line.lstrip().startswith("#")
+    ]
+    illegal = [f"{n}: {body}" for n, body in sites if body != legal]
+    assert not illegal, (
+        f"`inputs.domains` may only appear as `{legal}`; found {illegal}"
+    )
+    assert len(sites) == len(DOMAIN_CONSUMERS), (
+        f"expected one env: mapping per consuming step "
+        f"({len(DOMAIN_CONSUMERS)}), found {len(sites)}"
+    )
+
+
+def test_the_bash_reads_are_bare_so_a_deleted_env_block_aborts():
+    """`"$IN_DOMAINS"`, never `"${IN_DOMAINS:-}"` — the remedy has a direction.
+
+    Both bash consumers run under `set -u`, and both fall back to the FLEET-WIDE
+    default list when the value is empty. So a `:-` default would turn a deleted
+    or renamed `env:` mapping into "cut over all 55 sites" instead of an abort:
+    the safe-looking spelling picks the loudest possible wrong behaviour, and it
+    is the spelling a reviewer adds to silence a `set -u` worry. Bare is correct
+    here for the same reason the fixture assertions above exist — the failure has
+    to be visible.
+    """
+    for job_id, step_name in DOMAIN_CONSUMERS:
+        step = find_step(load_workflow(WORKFLOW), job_id, step_name)
+        if step.get("shell") != "bash":
+            continue
+        body = step["run"]
+        assert "set -u" in body, (
+            f"step {step.get('name')!r} must keep `set -u` — it is what makes a "
+            f"missing {DOMAINS_ENV} abort instead of defaulting to the fleet list"
+        )
+        for bad in (f"${{{DOMAINS_ENV}:-", f"${{{DOMAINS_ENV}:="):
+            assert bad not in body, (
+                f"step {step.get('name')!r} reads {DOMAINS_ENV} with a shell "
+                f"default ({bad}…); a deleted env: block would then silently "
+                f"select the fleet-wide default domain list"
+            )
 
 
 def test_no_step_in_120_swallows_a_gh_error_again():

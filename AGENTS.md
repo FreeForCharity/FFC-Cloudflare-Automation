@@ -138,10 +138,19 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
     line naming the failing modules, so require that line in **both** files before comparing:
 
     ```bash
+    # run_all.py:215,217 — exactly one of these is the last line of a finished run.
     for f in pr.txt base.txt; do
-      grep -q '^::error::workflow-logic\|^workflow-logic tests passed' "$f" || { echo "$f INCOMPLETE"; exit 1; }
+      grep -qE '^(::error::workflow-logic tests failed:|All [0-9]+ workflow-logic test modules passed\.)' "$f" \
+        || { echo "$f INCOMPLETE — do not compare"; exit 1; }
     done
     ```
+
+    Quote the strings from `run_all.py` rather than from memory: the first draft of this recipe
+    guessed `^workflow-logic tests passed`, which the script never prints, so the green half of the
+    check could only ever have failed closed. It also used `\|` — a GNU basic-regex extension —
+    where `grep -E` is what makes an alternation portable. Copilot caught the second on #1140; the
+    first was found by reading the source it claims to match, which is the habit that would have
+    caught both.
 
     Do not settle it by watching the line counts stop growing — a slow module is indistinguishable
     from a finished run for as long as you are willing to wait. Ledger **L211**.
@@ -479,9 +488,12 @@ hours. The list of waiting runs shows exactly one entry throughout and looks ord
 **job**, not the run:
 
 ```bash
-gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id>/jobs \
-  --jq '.jobs[] | "\(.name) \(.status) run_created_vs_job_created"'
-gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id> --jq '.created_at'
+run=<id>
+gh api "repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$run" --jq '"run  created \(.created_at)"'
+gh api "repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$run/jobs" \
+  --jq '.jobs[] | "job  created \(.created_at)  started \(.started_at)  \(.name) [\(.status)]"'
+# run  created 2026-08-03T09:12:25Z
+# job  created 2026-08-04T07:25:50Z  started 2026-08-04T07:25:50Z  generate [waiting]
 ```
 
 A job `created_at` later than its run's is the signature. Report the **outcome** a long hold is

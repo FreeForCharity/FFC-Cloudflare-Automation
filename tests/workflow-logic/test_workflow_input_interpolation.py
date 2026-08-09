@@ -322,7 +322,7 @@ def test_the_tree_matches_the_freeze_exactly():
 def test_the_frozen_counts_are_what_1080_reconciles_to():
     """The denominator is pinned, so a silent collapse in either direction fails.
 
-    35 / 20, and every step away from #1080's 34 / 20 is accounted for rather
+    34 / 19, and every step away from #1080's 34 / 20 is accounted for rather
     than adopted:
 
       34 / 20  #1080's table (string-typed inputs, bare `${{ inputs.X }}`)
@@ -333,6 +333,10 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                `env:`. It was the only entry #1080 reproduced live in both
                directions, and it ran on github-prod.
       = 35 / 20
+      -120     burned down: `domains` moved to step-level `env:` in all four
+               bodies. It was the only entry holding two write environments at
+               once (cloudflare-prod-write and github-prod).
+      = 34 / 19
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -342,8 +346,8 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 35, (
-        f"expected 35 interpolating workflows, got {len(current)}: "
+    assert len(current) == 34, (
+        f"expected 34 interpolating workflows, got {len(current)}: "
         f"{sorted(current)}"
     )
     write = {
@@ -354,12 +358,14 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 20, f"expected 20 write-environment ones, got {len(write)}: {sorted(write)}"
+    assert len(write) == 19, f"expected 19 write-environment ones, got {len(write)}: {sorted(write)}"
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
-    assert "720-create-repo.yml" not in current, (
-        "720 was burned down — it must no longer interpolate any free-text input"
-    )
+    for burned in ("720-create-repo.yml", "120-bulk-cutover-to-github-pages.yml"):
+        assert burned not in current, (
+            f"{burned} was burned down — it must no longer interpolate any "
+            "free-text input"
+        )
 
 
 def test_the_scan_sees_real_workflows():

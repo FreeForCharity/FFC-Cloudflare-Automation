@@ -1,18 +1,28 @@
 name: '728. Repo - AI Agent Hooks Validate [Repo]'
 
+# Runs the AI-agent hook self-tests (.claude/hooks/test_hooks.py) and the
+# staged-secret pre-commit scanner. Unfiltered and merge-queue evaluated, so
+# the suite is checked against the MERGED result rather than after the fact.
+
 on:
   pull_request:
     branches: [main]
-    paths:
-      - '.claude/**'
-      - '.githooks/**'
-      - '.github/workflows/728-ai-agent-hooks-validate.yml'
+
+  # `merge_group:` is load-bearing (#1084). This is the only workflow that runs
+  # the hooks suite, and without this trigger the merge queue never evaluated it
+  # at all -- the first run to see a merged result was the post-merge `push`
+  # one, i.e. after the damage. Measured on #1018 + #1039: both individually
+  # green, the merge textually clean, the union 120 passed / 1 FAILED.
+  merge_group:
+
+  # No `paths:` filter on any of these, deliberately (#1084). A path-filtered
+  # workflow produces NO check context on a pull request that does not match,
+  # so `Validate AI agent hooks` could never be added to the ruleset: every
+  # non-hooks PR would block on a check GitHub never creates. The job runs in
+  # ~10s against `Validate Repository`'s ~5m, so running it always is the cheap
+  # half of that trade.
   push:
     branches: [main]
-    paths:
-      - '.claude/**'
-      - '.githooks/**'
-      - '.github/workflows/728-ai-agent-hooks-validate.yml'
 
 jobs:
   validate-hooks:

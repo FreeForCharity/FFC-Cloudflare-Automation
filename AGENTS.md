@@ -124,6 +124,37 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
     entirely because an earlier command silently redefined where it reads from — and `git status` is
     clean afterwards in both cases, so neither is visible by inspection. Ledger **L209**.
 
+  - **And the control has to have FINISHED. A partial run compared against a complete one blames the
+    change under test.** The bullet above is a control measuring the wrong tree; this is the same
+    failure one level out. Reviewing #1139 (run 132) the full suite was started on the composed tree
+    and on clean `origin/main` as two background tasks, and both output files were read while both
+    were still being appended to: **924 PASS / 83 FAIL** against **107 PASS / 0 FAIL**, and the set
+    difference attributed **~80 failures to the PR**. Complete, they read **1086 / 83** and **1076 /
+    83** with a byte-identical list of 16 failing modules — the PR added its own ten tests and broke
+    nothing. Nothing about the early read looks partial: both files are well-formed, every line is a
+    real result, and `grep -c` answers instantly and truthfully about the bytes written so far. The
+    tell is in the **pair**, not in either file — a control whose PASS count is an order of
+    magnitude below the treatment has not finished. `run_all.py` ends by printing a terminal summary
+    line naming the failing modules, so require that line in **both** files before comparing:
+
+    ```bash
+    # run_all.py:215,217 — exactly one of these is the last line of a finished run.
+    for f in pr.txt base.txt; do
+      grep -qE '^(::error::workflow-logic tests failed:|All [0-9]+ workflow-logic test modules passed\.)' "$f" \
+        || { echo "$f INCOMPLETE — do not compare"; exit 1; }
+    done
+    ```
+
+    Quote the strings from `run_all.py` rather than from memory: the first draft of this recipe
+    guessed `^workflow-logic tests passed`, which the script never prints, so the green half of the
+    check could only ever have failed closed. It also used `\|` — a GNU basic-regex extension —
+    where `grep -E` is what makes an alternation portable. Copilot caught the second on #1140; the
+    first was found by reading the source it claims to match, which is the habit that would have
+    caught both.
+
+    Do not settle it by watching the line counts stop growing — a slow module is indistinguishable
+    from a finished run for as long as you are willing to wait. Ledger **L211**.
+
 - **If the thing under review is read-only, also run it live.** Mutation-proving establishes that
   the tests discriminate; it cannot establish that the code behaves against real data, because every
   test injects its own fixtures and its own clock. For a script that only reads — the board audit,
@@ -445,6 +476,29 @@ reported that #1064's functions "do not exist" from a `main` fetched 36 seconds 
 run 107 reviewed the 703 gate whose run is **123 commits** behind `main` and confirmed with one
 `git diff` that `703-sites-list-generate.yml` is byte-identical across all 123 — same check,
 opposite answer, and only the check tells you which case you are in.
+
+**A held gate also stops the schedule behind it, and `status=waiting` will not show you that
+(L212).** A run parked at a gate holds its `concurrency` slot for as long as it waits, so the next
+scheduled run is admitted to the group but gets **no job at all** until the older one is reaped.
+Measured on 703 (`group: sites-list-generate`, `cancel-in-progress: false`), whose gate has now been
+held for 68 consecutive runs: the 2026-08-03 run object was created `09:12:25Z`, and its `generate`
+job carries `created_at == started_at == 2026-08-04T07:25:50Z` — the same second the 2026-07-27 run
+was cancelled by 734. It neither missed its schedule nor reached the gate; it sat jobless for 22
+hours. The list of waiting runs shows exactly one entry throughout and looks orderly, so ask the
+**job**, not the run:
+
+```bash
+run=<id>
+gh api "repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$run" --jq '"run  created \(.created_at)"'
+gh api "repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$run/jobs" \
+  --jq '.jobs[] | "job  created \(.created_at)  started \(.started_at)  \(.name) [\(.status)]"'
+# run  created 2026-08-03T09:12:25Z
+# job  created 2026-08-04T07:25:50Z  started 2026-08-04T07:25:50Z  generate [waiting]
+```
+
+A job `created_at` later than its run's is the signature. Report the **outcome** a long hold is
+costing, not the hold: 703 has not regenerated the sites list since 2026-07-25, because each week's
+run is queued behind the held one and then reaped.
 
 **Triaging a CI anomaly: ask upstream first, then ask _which step_ failed (L159).** The check that
 separates "our defect" from "their outage" is cheaper than every check that presupposes ours, so run

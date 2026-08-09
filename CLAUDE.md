@@ -151,9 +151,24 @@ Related, same file: on `win32`, prefer Git-for-Windows bash explicitly —
 r"C:\Program Files\Git\bin\bash.exe"   # handles C:\... arguments
 ```
 
-A bare `bash` (the WSL shim) strips drive letters out of Windows-style path arguments and exits 127
-with `No such file or directory` naming a path with every separator removed. No effect on
+A bare `bash` strips drive letters out of Windows-style path arguments and exits 127 with
+`No such file or directory` naming a path with every separator removed. No effect on
 `ubuntu-latest`, so this is a local-run fact only.
+
+**Which `bash` that is depends on PATH, and this line used to name only one of them — do not read
+the attribution as a way to rule the rule out.** It said "the WSL shim", and from a git-bash-spawned
+Python on 2026-08-09 (run 132) `shutil.which("bash")` is `C:\Program Files\Git\usr\bin\bash.EXE` —
+the **MSYS** binary, not WSL. The symptom is byte-identical, because both fail the same way on the
+same argument: MSYS eats the backslashes as escapes, so `C:\Users\…\step.sh` arrives as
+`C:UsersclarkAppDataLocalTemptmpXXXXstep.sh`. So the remedy is right and its stated cause was only
+ever one instance of it. Reproduced on #1139, where a new module ran the step from a **file**
+(`["bash", str(script)]`) rather than the repo-wide `bash -c <text>` — which is why that module was
+the only one of 61 affected, and why the fix is per-module rather than global.
+
+The reason this matters beyond a red test: **`assert rc != 0` is satisfied by that 127**, so a
+harness that cannot start is indistinguishable from a step correctly rejecting a payload. That is
+the same rule as the section below, hit from the other direction — and on #1139 it made a security
+test pass for the wrong reason on this host while CI was green.
 
 ## Reading `gh --format json` on the Windows Conductor box (validated 2026-07-25)
 

@@ -322,7 +322,7 @@ def test_the_tree_matches_the_freeze_exactly():
 def test_the_frozen_counts_are_what_1080_reconciles_to():
     """The denominator is pinned, so a silent collapse in either direction fails.
 
-    34 / 19, and every step away from #1080's 34 / 20 is accounted for rather
+    33 / 18, and every step away from #1080's 34 / 20 is accounted for rather
     than adopted:
 
       34 / 20  #1080's table (string-typed inputs, bare `${{ inputs.X }}`)
@@ -337,6 +337,13 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                bodies. It was the only entry holding two write environments at
                once (cloudflare-prod-write and github-prod).
       = 34 / 19
+      -112     burned down: `old_ip` / `new_ip` moved to step-level `env:`. It
+               rewrites A records across every zone in both Cloudflare accounts
+               on cloudflare-prod-write, and the callee's own `[ValidatePattern]`
+               on both parameters was never a defence — it runs after the
+               injected expression, so its rejection message reads like a
+               control working on a run where the payload had already executed.
+      = 33 / 18
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -346,8 +353,8 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 34, (
-        f"expected 34 interpolating workflows, got {len(current)}: "
+    assert len(current) == 33, (
+        f"expected 33 interpolating workflows, got {len(current)}: "
         f"{sorted(current)}"
     )
     write = {
@@ -358,10 +365,14 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 19, f"expected 19 write-environment ones, got {len(write)}: {sorted(write)}"
+    assert len(write) == 18, f"expected 18 write-environment ones, got {len(write)}: {sorted(write)}"
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
-    for burned in ("720-create-repo.yml", "120-bulk-cutover-to-github-pages.yml"):
+    for burned in (
+        "720-create-repo.yml",
+        "120-bulk-cutover-to-github-pages.yml",
+        "112-dns-bulk-replace-a-ip.yml",
+    ):
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "
             "free-text input"

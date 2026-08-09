@@ -44,10 +44,40 @@ jobs:
 
       - name: Run bulk A-record replacement
         shell: pwsh
+        # `old_ip` / `new_ip` are free-text dispatch inputs. Interpolated into this
+        # body they are not arguments — they are source text pasted into the program
+        # GitHub then runs, holding the cloudflare-prod-write token the APPROVER
+        # spent, against A records in every zone of both accounts (#1080).
+        #
+        # The callee's own `[ValidatePattern('^\d{1,3}\....$')]` on both parameters
+        # does not make that safe, and reads as though it does: the injected
+        # expression runs while this hashtable is being BUILT, so the payload has
+        # already executed by the time the script is invoked and its rejection
+        # message describes an argument that was never the point.
+        #
+        # `$env:` is a runtime lookup on a value handed to the process as data; no
+        # quoting inside it can change the program. `dry_run` stays interpolated on
+        # purpose — GitHub generates a `boolean` from the declared options, so it
+        # cannot carry a payload.
+        env:
+          IN_OLD_IP: ${{ inputs.old_ip }}
+          IN_NEW_IP: ${{ inputs.new_ip }}
         run: |
+          $oldIp = [string]$env:IN_OLD_IP
+          $newIp = [string]$env:IN_NEW_IP
+
+          # Both inputs are `required: true`, so empty here does not mean "the
+          # dispatcher left it blank" — it means the `env:` mapping above was
+          # deleted or misspelled. Say so, rather than letting the callee's
+          # ValidatePattern report it as a malformed IP address and send the next
+          # reader looking at the dispatch form.
+          if ([string]::IsNullOrWhiteSpace($oldIp) -or [string]::IsNullOrWhiteSpace($newIp)) {
+            throw 'IN_OLD_IP / IN_NEW_IP is empty: the step-level env: mapping is missing or misnamed (#1080 burn-down), not a bad dispatch input.'
+          }
+
           $params = @{
-            OldIp = '${{ inputs.old_ip }}'
-            NewIp = '${{ inputs.new_ip }}'
+            OldIp = $oldIp
+            NewIp = $newIp
           }
           if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun = $true }
           ./scripts/bulk-replace-a-record-ip.ps1 @params

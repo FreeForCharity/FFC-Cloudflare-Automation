@@ -66,6 +66,19 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
 - **Copilot re-reviews every push and can file fresh threads.** After pushing fixes, re-poll
   `reviewThreads` before promoting or queueing — one resolution pass is not enough (a 2026-07-20 PR
   needed three rounds).
+  - **A fetched ref is a SNAPSHOT and the thread API is LIVE — comparing them dates your conclusion
+    to the older of the two, and it surfaces as a finding against the AUTHOR.** Reviewing #1141
+    (run 133) the Conductor fetched `pull/1141/head` at `aa73211`, worked in a worktree, then
+    queried `reviewThreads`. Both Copilot threads read `isResolved=true, isOutdated=true` while the
+    worktree still showed the dead parameter and the duplicated `secrets.*` — a clean,
+    well-evidenced reading of _threads resolved without being addressed_. It was wrong: `cdc27aa`
+    had landed in the interval and fixed both. The author is an agent actively pushing, so heads
+    move in minutes. What makes this worth a bullet rather than a footnote is the **direction of the
+    error** — every other stale-read rule here costs a retry, and this one costs an accusation,
+    which a reviewer is unlikely to double-check because it already feels uncharitable to make.
+    Re-resolve the head (`git fetch origin <branch>`, compare `rev-parse` against what you fetched)
+    before drawing any conclusion from a thread, and read `isOutdated=true` as **"the hunk moved, go
+    re-read the current file"** — never as evidence in either direction. Ledger **L216**.
 - **Reviewing a guard: reintroduce the defect it claims to catch.** Reading the workflow proves a
   new check is _wired_ (present in the `validate` job, no `continue-on-error`); it proves nothing
   about whether it _detects_. Put the original defect back and watch the guard fail. Do it in a
@@ -417,6 +430,20 @@ have exhausted the points budget for hours.
     `guard_bash.py` warns about the array-building shape (#989). It warns rather than blocks because
     reducing each page to a scalar and recombining downstream is legitimate — see
     `726-repo-rulesets-drift-audit.yml:205`, which does exactly that on purpose.
+
+  - **Once the pagination is right, the FILTER is the next thing that silently dates the answer —
+    and a long log has more than one format in it.** Run 133 derived its own run number from #719
+    with `--jq 'select(.body|test("RUN [0-9]+ START"))'` and got **Run 86** against an actual 132.
+    Every run since ~87 writes `## Run N — START` with an **em dash**, so the pattern matched only
+    the pre-87 era it was written for. Nothing errored, and this is the failure mode to internalise:
+    `--paginate` had correctly returned all 451 comments and the filter honestly reported the newest
+    thing it could see, so the two bugs compose into one well-formed, in-range, 46-runs-stale
+    number. **A wrong answer here is worse than an empty one** — an empty result gets investigated,
+    and this one only surfaced because `state/CONDUCTOR.md` disagreed. The value cannot tell you it
+    is stale, so assert something it cannot fake: that the newest match is **recent** (within a run
+    interval of now), or that the match **count** is a sane fraction of the total the endpoint
+    returned. Applies to any extractor over an append-only log — #719, a changelog, a CI history.
+    Ledger **L215**.
 
 - **An unpaginated list read cannot support an ABSENCE claim.** `per_page=100` is the maximum, not a
   guarantee, and the **default is 30**. A truncated list is indistinguishable from a complete one,

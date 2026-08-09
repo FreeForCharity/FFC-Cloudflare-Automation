@@ -351,6 +351,15 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                payload whose residue is a legal GTM id passes the very check it
                is smuggled through. github-prod, one step before the PAT loads.
       = 32 / 17
+      -304     burned down: `domain` moved to step-level `env:` in all three
+               bodies. It was the only remaining entry interpolating one input
+               into three jobs under two gated environments (m365-prod twice,
+               cloudflare-prod-write once), and the only one whose injection
+               point sat in a step whose OWN `env:` carried the credential —
+               the Exchange Online certificate. Measured: the payload wrote the
+               cert password to a file, the callee was then handed a legal
+               domain, and the step exited 0.
+      = 31 / 16
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -360,8 +369,8 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 32, (
-        f"expected 32 interpolating workflows, got {len(current)}: "
+    assert len(current) == 31, (
+        f"expected 31 interpolating workflows, got {len(current)}: "
         f"{sorted(current)}"
     )
     write = {
@@ -372,7 +381,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 17, f"expected 17 write-environment ones, got {len(write)}: {sorted(write)}"
+    assert len(write) == 16, f"expected 16 write-environment ones, got {len(write)}: {sorted(write)}"
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
     for burned in (
@@ -380,6 +389,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
         "120-bulk-cutover-to-github-pages.yml",
         "112-dns-bulk-replace-a-ip.yml",
         "704-website-analytics-wire.yml",
+        "304-m365-dkim-enable.yml",
     ):
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "

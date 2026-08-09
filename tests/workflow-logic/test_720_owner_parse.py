@@ -19,15 +19,34 @@ HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 
 
 def run_grant_step(repo_name: str) -> tuple[str, str]:
-    """Run the grant step with RepoName substituted. Returns (stdout, gh_log)."""
+    """Run the grant step with RepoName supplied. Returns (stdout, gh_log).
+
+    RepoName reaches the step through `env:` rather than a `${{ }}` interpolated
+    into the body (#1080), so the fixture supplies it the same way the workflow
+    does instead of substituting text.
+
+    The anchor assertions are load-bearing. A fixture that feeds a value the
+    script no longer reads does not fail — it runs the step with an EMPTY repo
+    name, which is a different scenario silently wearing this one's name. So
+    both halves of the contract are pinned: the body must read the variable,
+    and it must not have gone back to interpolating the input.
+    """
     step = find_step(load_workflow("720-create-repo.yml"), "create-repo", "Grant FFC-ORGWIDE")
-    script = step["run"].replace("${{ inputs.RepoName }}", repo_name)
+    script = step["run"]
+    assert step.get("env", {}).get("IN_REPO_NAME") == "${{ inputs.RepoName }}", step.get("env")
+    assert "$env:IN_REPO_NAME" in script, script
+    assert "${{ inputs.RepoName }}" not in script, script
     with tempfile.TemporaryDirectory() as td:
         gh_log = pathlib.Path(td) / "gh.log"
         gh_log.touch()
         proc = subprocess.run(
             ["pwsh", "-NoProfile", "-Command", script],
-            env=child_env(HARNESS_DIR, TEST_GH_LOG=str(gh_log), HOME=td),
+            env=child_env(
+                HARNESS_DIR,
+                TEST_GH_LOG=str(gh_log),
+                HOME=td,
+                IN_REPO_NAME=repo_name,
+            ),
             capture_output=True,
             text=True, encoding="utf-8",
             timeout=120,

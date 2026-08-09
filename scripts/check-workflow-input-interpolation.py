@@ -405,7 +405,9 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # --- GitHub -------------------------------------------------------------
     "702-ffc-ex-clone-deploy.yml": ("depth", "domain", "exclude"),
     "704-website-analytics-wire.yml": ("gtm_id", "measurement_id"),
-    "720-create-repo.yml": ("CNAME", "Description", "RepoName"),
+    # 720-create-repo.yml burned down: its three free-text inputs now reach both the
+    # pwsh and the bash bodies through step-level `env:`. It was the instance #1080
+    # reproduced live in both directions, on github-prod.
 }
 
 

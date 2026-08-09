@@ -1542,7 +1542,9 @@
       ],
       "file": "701-website-provision.yml",
       "triggers": [
-        "issues"
+        "issues",
+        "repository_dispatch",
+        "workflow_dispatch"
       ],
       "environments": [
         "cloudflare-prod-read",
@@ -1784,11 +1786,12 @@
       ],
       "file": "728-ai-agent-hooks-validate.yml",
       "triggers": [
+        "merge_group",
         "pull_request",
         "push"
       ],
       "environments": [],
-      "description": "",
+      "description": "Runs the AI-agent hook self-tests (.claude/hooks/test_hooks.py) and the staged-secret pre-commit scanner. Unfiltered and merge-queue evaluated, so the suite is checked against the MERGED result rather than after the fact.",
       "safetyLevel": "",
       "approvalEnv": "",
       "guard": "",
@@ -1803,6 +1806,7 @@
       ],
       "file": "729-repo-add-collaborator.yml",
       "triggers": [
+        "workflow_call",
         "workflow_dispatch"
       ],
       "environments": [

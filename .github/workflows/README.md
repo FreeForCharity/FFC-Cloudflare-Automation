@@ -608,7 +608,7 @@ No additional setup is required for these workflows to run. However, to get the 
 
 | # | Workflow | File | Triggers | Safety | Approval env |
 | --- | --- | --- | --- | --- | --- |
-| 701 | Website - Provision (Issue Assigned) [CF+Repo] | `701-website-provision.yml` | issues | Writes (gated) | ✅ cloudflare-prod-write / ✅ github-prod |
+| 701 | Website - Provision (Issue Assigned) [CF+Repo] | `701-website-provision.yml` | issues, repository_dispatch, workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write / ✅ github-prod |
 | 702 | Domain - Deploy Static Clone to FFC-EX Repo | `702-ffc-ex-clone-deploy.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
 | 703 | Sites List - Generate (CSV + JSON) [GH] | `703-sites-list-generate.yml` | schedule, workflow_dispatch | Writes (data PR only) | ✅ github-prod |
 | 704 | Website - Analytics Wire [GH] | `704-website-analytics-wire.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod |
@@ -620,8 +620,8 @@ No additional setup is required for these workflows to run. However, to get the 
 | 725 | Repo - Sync Labels [Repo] | `725-sync-labels.yml` | push, workflow_dispatch | (repo plumbing) | — |
 | 726 | Repo - Rulesets + Settings Drift Audit [Org] | `726-repo-rulesets-drift-audit.yml` | schedule, workflow_dispatch | Reads | github-prod-read |
 | 727 | Repo - Phantom Revert Guard [Repo] | `727-phantom-revert-guard.yml` | merge_group, pull_request, workflow_dispatch | (repo plumbing) | — |
-| 728 | Repo - AI Agent Hooks Validate [Repo] | `728-ai-agent-hooks-validate.yml` | pull_request, push | (repo plumbing) | — |
-| 729 | Repo - Add Collaborator [Repo] | `729-repo-add-collaborator.yml` | workflow_dispatch | Writes (**live default**) | ✅ github-prod |
+| 728 | Repo - AI Agent Hooks Validate [Repo] | `728-ai-agent-hooks-validate.yml` | merge_group, pull_request, push | (repo plumbing) | — |
+| 729 | Repo - Add Collaborator [Repo] | `729-repo-add-collaborator.yml` | workflow_call, workflow_dispatch | Writes (**live default**) | ✅ github-prod |
 | 730 | Repo - Audit Environment Approval Gates [Repo] | `730-repo-audit-environment-gates.yml` | push, workflow_dispatch | Reads | — |
 | 731 | Repo - Actions Run Metrics (30d per-workflow stats) [GH] | `731-actions-run-metrics.yml` | schedule, workflow_dispatch | Reads | — |
 | 733 | Repo - Credential Rotation Reminders (quarterly) [GH] | `733-credential-rotation-reminders.yml` | schedule, workflow_dispatch | Writes (issues only) | — |

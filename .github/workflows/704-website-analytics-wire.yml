@@ -47,16 +47,49 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
+      # Untrusted/user-supplied values are passed via env (never interpolated directly
+      # into the script body) so they cannot break out of the string and inject shell
+      # (#1080). This step is where that mattered most in this file: it is the only one
+      # that interpolated, and it is the one whose JOB is to reject a malformed id — it
+      # used to perform that check by pasting the value into the program doing the
+      # checking. Measured against the shipped body, `gtm_id` =
+      # `GTM-ABCDE$(printf ran > f)` ran the substitution, left a legal-looking id
+      # behind, and the step exited **0**: no error, no annotation, arbitrary code
+      # executed on `github-prod` after the approver spent the credential, and one step
+      # before `wr-all-cbm-github-pat` is loaded into the job for the wiring step to use.
       - name: Validate inputs
         shell: bash
+        env:
+          GTM_ID: ${{ inputs.gtm_id }}
+          MEASUREMENT_ID: ${{ inputs.measurement_id }}
         run: |
           set -euo pipefail
-          if [[ ! "${{ inputs.gtm_id }}" =~ ^GTM-[A-Z0-9]{5,9}$ ]]; then
-            echo "::error::gtm_id '${{ inputs.gtm_id }}' is not a valid GTM-XXXXXXX id."
+          # Fail closed on a missing mapping. The interpolated body could not have an
+          # absent source — substitution always produced *something* — but an `env:`
+          # mapping can be deleted or misspelled, and the checker that enforces #1080
+          # is honestly green when it is (ledger L202): nothing is interpolated either
+          # way. Both branches below name the mapping, because the alternative reading
+          # of an empty id sends the next reader to the dispatch form.
+          if [ -z "${GTM_ID:-}" ]; then
+            echo "::error::GTM_ID is empty: gtm_id never reached this step. Either the step-level env: mapping is missing or misnamed, or the dispatch supplied an empty value. Refusing to continue either way."
             exit 1
           fi
-          if [ -n "${{ inputs.measurement_id }}" ] && [[ ! "${{ inputs.measurement_id }}" =~ ^G-[A-Z0-9]{6,12}$ ]]; then
-            echo "::error::measurement_id '${{ inputs.measurement_id }}' is not a valid G-XXXXXXXXXX id."
+          # `declare -p` distinguishes UNSET from SET-BUT-EMPTY, and only that
+          # distinction is useful here: measurement_id is optional, so GitHub maps an
+          # omitted value to an empty string and the check below is meant to be skipped.
+          # A deleted mapping produces the same empty string at the `-n` test, silently
+          # skipping the format check — while 'Wire analytics + open PR' keeps its own
+          # mapping and still hands the unvalidated id to scripts/analytics-wire.ps1.
+          if ! declare -p MEASUREMENT_ID >/dev/null 2>&1; then
+            echo "::error::MEASUREMENT_ID is unset: the step-level env: mapping is missing or misnamed. An omitted measurement_id arrives as an empty string, so this is not that — the format check below would be skipped while the wiring step still passes the unvalidated id to scripts/analytics-wire.ps1."
+            exit 1
+          fi
+          if [[ ! "$GTM_ID" =~ ^GTM-[A-Z0-9]{5,9}$ ]]; then
+            echo "::error::gtm_id '$GTM_ID' is not a valid GTM-XXXXXXX id."
+            exit 1
+          fi
+          if [ -n "$MEASUREMENT_ID" ] && [[ ! "$MEASUREMENT_ID" =~ ^G-[A-Z0-9]{6,12}$ ]]; then
+            echo "::error::measurement_id '$MEASUREMENT_ID' is not a valid G-XXXXXXXXXX id."
             exit 1
           fi
 

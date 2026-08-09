@@ -412,7 +412,12 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     "601-wpmudev-export-sites.yml": ("output_file",),
     # --- GitHub -------------------------------------------------------------
     "702-ffc-ex-clone-deploy.yml": ("depth", "domain", "exclude"),
-    "704-website-analytics-wire.yml": ("gtm_id", "measurement_id"),
+    # 704-website-analytics-wire.yml burned down: `gtm_id` / `measurement_id` now reach
+    # the bash body through step-level `env:`. Its only interpolating step was the one
+    # named `Validate inputs` — the step whose purpose is to reject a malformed id,
+    # performing that check by pasting the value into the program doing the checking,
+    # one step before `wr-all-cbm-github-pat` is loaded on github-prod. The neighbouring
+    # step already used `env:` correctly, so the file read as if the pattern held.
     # 720-create-repo.yml burned down: its three free-text inputs now reach both the
     # pwsh and the bash bodies through step-level `env:`. It was the instance #1080
     # reproduced live in both directions, on github-prod.

@@ -322,7 +322,7 @@ def test_the_tree_matches_the_freeze_exactly():
 def test_the_frozen_counts_are_what_1080_reconciles_to():
     """The denominator is pinned, so a silent collapse in either direction fails.
 
-    33 / 18, and every step away from #1080's 34 / 20 is accounted for rather
+    32 / 17, and every step away from #1080's 34 / 20 is accounted for rather
     than adopted:
 
       34 / 20  #1080's table (string-typed inputs, bare `${{ inputs.X }}`)
@@ -344,6 +344,13 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                injected expression, so its rejection message reads like a
                control working on a run where the payload had already executed.
       = 33 / 18
+      -704     burned down: `gtm_id` / `measurement_id` moved to step-level
+               `env:`. Its only interpolating step was the one named `Validate
+               inputs`, which checked the id by pasting it into the program
+               doing the checking — and the exploited run exits 0, because a
+               payload whose residue is a legal GTM id passes the very check it
+               is smuggled through. github-prod, one step before the PAT loads.
+      = 32 / 17
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -353,8 +360,8 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 33, (
-        f"expected 33 interpolating workflows, got {len(current)}: "
+    assert len(current) == 32, (
+        f"expected 32 interpolating workflows, got {len(current)}: "
         f"{sorted(current)}"
     )
     write = {
@@ -365,13 +372,14 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 18, f"expected 18 write-environment ones, got {len(write)}: {sorted(write)}"
+    assert len(write) == 17, f"expected 17 write-environment ones, got {len(write)}: {sorted(write)}"
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
     for burned in (
         "720-create-repo.yml",
         "120-bulk-cutover-to-github-pages.yml",
         "112-dns-bulk-replace-a-ip.yml",
+        "704-website-analytics-wire.yml",
     ):
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "

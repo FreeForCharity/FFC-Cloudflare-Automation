@@ -308,17 +308,30 @@ def test_prose_only_rows_say_why_prose_is_the_ceiling():
 # just as much as one pointing at whitespace, so the test is "no alphanumeric
 # character on the line" — which fires on both, and on nothing currently in the
 # ledger.
-_CITE_SUFFIXES = (".py", ".ps1", ".yml", ".yaml", ".sh", ".json", ".js", ".ts", ".md")
+# The extension is DERIVED, not enumerated. The first draft of this guard
+# carried a hand-written suffix tuple (`.py .ps1 .yml .yaml .sh .json .js .ts
+# .md`) and Copilot found it missing `.tsx`, `.mjs` and `.htaccess` — four live
+# citations in this very ledger, silently skipped by the check written to stop
+# citations being silently skipped (#1128). That is L133's shape exactly: a
+# control whose input set is hand-maintained cannot detect an omitted input, and
+# reports clean over precisely the gap it exists to close.
 #
-# The line spec is a comma-separated list of lines and ranges, because the
-# ledger writes one: `720-create-repo.yml:193,274` cites the two reproductions
-# in that row in a single token. A pattern accepting only `N` and `N-M` reads
-# that as prose and skips it — and it was stale, both halves of it, when this
-# guard was written.
+# So the rule is structural: a final extension beginning with a LETTER, which is
+# what keeps `12.30:45`-shaped prose out (a numeric "extension" is not a file),
+# and a line spec that is a comma-separated list of lines and ranges, because
+# the ledger writes one — `720-create-repo.yml:193,274` cites two reproductions
+# in a single token, and a pattern accepting only `N` and `N-M` reads it as
+# prose. Both halves of that citation were stale when this guard was written.
 _CITATION = re.compile(
-    r"^(?P<path>[^\s:`]+(?:" + "|".join(re.escape(s) for s in _CITE_SUFFIXES) + r"))"
+    r"^(?P<path>[^\s:`]+\.[A-Za-z][A-Za-z0-9]{0,7})"
     r":(?P<spec>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$"
 )
+
+# Deliberately looser than `_CITATION`: anything with a `/` or a `.` in front of
+# a `:LINE` is citation-SHAPED. Nothing acts on it except the coverage test
+# below, whose whole job is to fail when the two disagree — an extractor that
+# stops matching is how this class of guard goes quietly green.
+_CITATION_SHAPED = re.compile(r"^[^\s:`]*[./][^\s:`]*:\d+(?:[-,]\d+)*$")
 
 # Citations into another FFC repository, which CI here cannot resolve and must
 # not report as broken. Every entry names the repo that holds it, so the escape
@@ -329,8 +342,18 @@ _CITATION = re.compile(
 # for `readJson()` joining `process.cwd()` with `public/data`; verified against
 # a checkout of that repo on 2026-08-09, where `:147` reads
 # `const full = path.join(process.cwd(), 'public', 'data', file)`.
+# `src/app/automation/page.tsx` — same repo. Cited by L89 for the import that
+# makes `workflow-catalog.json` a real consumer of `src/data`; verified the same
+# way, where `:3` reads `import catalog from '@/data/workflow-catalog.json'`.
+#
+# `public/.htaccess` — FreeForCharity/FFC-IN-freeforcharity.org. Cited by L188
+# for the extension-keyed `Cache-Control` that stamped a year's TTL on a 429.
+# NOT verified: that repo is outside this session's scope, so this entry is
+# taken on the row's word where the two above were checked against a checkout.
 CROSS_REPO_CITATIONS = {
     "src/lib/dashboardData.ts": "FreeForCharity/FFC-IN-ffcadmin.org",
+    "src/app/automation/page.tsx": "FreeForCharity/FFC-IN-ffcadmin.org",
+    "public/.htaccess": "FreeForCharity/FFC-IN-freeforcharity.org",
 }
 
 
@@ -480,6 +503,55 @@ def test_the_ledger_actually_contains_citations_to_check():
         f"{len(found)} — if the ledger really has stopped citing sources, lower "
         "this; until then it means the extractor stopped matching"
     )
+
+
+def test_no_citation_shaped_token_escapes_the_extractor():
+    """The coverage check the first draft of this guard needed and lacked.
+
+    Every rule in `citation_problems` runs behind `_CITATION`, so a token that
+    pattern does not match is not reported as anything — it is simply absent,
+    and the guard stays green. That is how the hand-written suffix tuple hid
+    four live citations (`.tsx`, `.mjs`, `.htaccess`) from the check written to
+    stop citations going unchecked, until Copilot read the list (#1128).
+
+    Comparing the strict extractor against a deliberately loose one is what
+    makes the omission loud: a future citation shape this guard cannot parse
+    fails HERE, naming the token, instead of being skipped in silence. Note the
+    two patterns must not share code, or they agree by construction.
+    """
+    skipped = []
+    for lid, cells in _rows():
+        for cell in cells:
+            for token in _PATHISH.findall(cell):
+                token = token.strip()
+                if _CITATION_SHAPED.match(token) and not _CITATION.match(token):
+                    skipped.append(f"{lid}: `{token}`")
+    assert not skipped, (
+        "these tokens look like `path:LINE` citations and the extractor does not "
+        "match them, so nothing checks them:\n  " + "\n  ".join(skipped) + "\n"
+        "Widen `_CITATION` — do not widen `_CITATION_SHAPED`, which exists to "
+        "disagree."
+    )
+
+
+def test_the_extractor_matches_the_extensions_the_ledger_actually_uses():
+    """The #1128 regression, pinned by extension rather than by count.
+
+    `.tsx` and `.mjs` are the two Copilot named; `.htaccess` is the third the
+    sweep found, and it is the interesting one — it is a dotfile, so the
+    "extension" is the whole name and a tuple of suffixes was never going to
+    hold it. `.py`/`.yml` are here as the control: widening must not drop what
+    the enumerated list already covered.
+    """
+    for ext in ("py", "yml", "ps1", "md", "tsx", "mjs", "htaccess", "json"):
+        token = f"some/path.{ext}:12"
+        assert _CITATION.match(token), (
+            f"`{token}` must parse as a citation — the ledger cites .{ext} files"
+        )
+    for prose in ("12.30:45", "npm ci", "docs/notes.md", "L43:5"):
+        assert not _CITATION.match(prose), (
+            f"`{prose}` is not a citation and must not be parsed as one"
+        )
 
 
 def test_every_cross_repo_allowance_names_a_repo():

@@ -102,6 +102,28 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
     too, which is exactly how the false positive read as real); and **check the sibling mutations
     disagree** — a set of mutations that all fire is weaker evidence than a set where each fires a
     different, correctly-named subset. Ledger **L203**.
+  - **A verified mutation is not a verified experiment: assert the CONTROL immediately before each
+    mutation, and restore with an explicit source.** The two bullets above check the plant and check
+    the mutant. Both can pass while the experiment measures the wrong tree, and it fails toward "the
+    guard is weak". Reviewing #1137 (run 131), mutation M2 was applied with
+    `git checkout origin/main -- <workflow>` — which writes the **index** as well as the worktree —
+    and the restore before M1 was the reflexive `git checkout -- <path>`, whose source is that
+    index. M1 therefore ran against the original consistent state, the guard exited **0** correctly,
+    and the first reading was that the stale-entry half did not fire. The mutation script had
+    asserted its anchor, asserted its insertion count and `py_compile`d the result: the plant was
+    perfect and the control was wrong. So run the guard on the untouched tree first and require the
+    exit code you expect, then mutate:
+
+    ```bash
+    git restore --source=HEAD --staged --worktree -- <paths>   # explicit source, not the index
+    python3 <the-guard>; echo "baseline=$?"                    # MUST be 0 before you believe a 1
+    ```
+
+    Note what this is not: **L182** is the opposite direction, a restore that is too aggressive and
+    reverts to `HEAD` over uncommitted work under test. Here the restore went somewhere else
+    entirely because an earlier command silently redefined where it reads from — and `git status` is
+    clean afterwards in both cases, so neither is visible by inspection. Ledger **L209**.
+
 - **If the thing under review is read-only, also run it live.** Mutation-proving establishes that
   the tests discriminate; it cannot establish that the code behaves against real data, because every
   test injects its own fixtures and its own clock. For a script that only reads — the board audit,
@@ -497,6 +519,22 @@ The first call gives the **effective** rules for that branch in one request; the
 rulesets producing them. A concrete tell that you asked the wrong one: `gh pr merge --delete-branch`
 refusing with `Cannot use -d or --delete-branch when merge queue enabled` on a branch you had just
 described as unprotected.
+
+**Counting orphan branches: subtract the merge queue's own heads first (L209's sibling, L208).** The
+usual figure is `remote heads` minus `open PR heads`, and while any PR is in the merge queue that
+overstates it: the queue creates a `gh-readonly-queue/main/pr-<n>-<base-sha>` head which has no open
+PR **by construction**, so the subtraction counts live queue machinery as an abandoned branch.
+
+```bash
+gh api --paginate "repos/FreeForCharity/<repo>/branches?per_page=100" \
+  --jq '.[].name' | grep -vE '^main$|^gh-readonly-queue/'
+```
+
+The trap is self-inflicted and order-dependent: a run that enqueues a PR and _then_ counts gets one
+more than a run that counts first, and neither number looks wrong. Run 131 measured 8 this way
+against #986's inventory of 7, and the discrepancy was a queue head for a PR that same run had
+enqueued twenty minutes earlier. **Name the difference rather than counting it** — a one-branch gap
+against a known inventory is a question about the denominator before it is evidence of drift.
 
 **Find a workflow's runs by FILE NAME, never by matching the run's `.name` (L33).** A run object's
 `.name` is the rendered `run-name:`, not the workflow's `name:`. Workflow 228 titles its runs

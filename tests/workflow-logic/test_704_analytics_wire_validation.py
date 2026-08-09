@@ -74,6 +74,34 @@ WIRING = {
 SENTINEL = "INJECTED-704.txt"
 PAYLOAD = "GTM-ABCDE$(printf ran > " + SENTINEL + ")"
 
+
+def _bash() -> str:
+    """Resolve a bash that can open a script named by a Windows-style path.
+
+    This module runs the step from a FILE rather than `bash -c <text>`, which is
+    what makes it sensitive to the host in a way the other modules are not: a
+    bare `bash` here is `C:\\Program Files\\Git\\usr\\bin\\bash.exe`, the MSYS
+    binary, which eats the backslashes in the `C:\\Users\\…\\step.sh` argument
+    and dies with
+
+        /bin/bash: C:UsersclarkAppDataLocalTemptmpXXXXstep.sh: No such file or directory
+
+    exit **127**. That is indistinguishable from the step under test rejecting a
+    payload if you look only at the exit code, which is precisely why the
+    behavioural tests below assert on `::` output as well (see the module
+    docstring, and CLAUDE.md's rule that a test asserting a non-zero exit must
+    also assert on the output). `test_722_large_blob_guard.py` carries the same
+    resolver for the same reason. On `ubuntu-latest`, `bash` is already correct.
+    """
+    if sys.platform == "win32":
+        for candidate in (
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ):
+            if pathlib.Path(candidate).exists():
+                return candidate
+    return "bash"
+
 # The body as it shipped BEFORE the burn-down, kept verbatim as the positive
 # control for the inertness test below.
 PRE_FIX_BODY = """set -euo pipefail
@@ -139,7 +167,7 @@ def _run(body: str, **env_overrides: str) -> tuple[str, bool, int]:
             if var not in env_overrides:
                 env.pop(var, None)
         proc = subprocess.run(
-            ["bash", str(script)],
+            [_bash(), str(script)],
             cwd=tmp, env=env, capture_output=True,
             text=True, encoding="utf-8", timeout=60,
         )

@@ -85,6 +85,32 @@ def _input_names(findings) -> set[str]:
     return {f.input_name for f in findings}
 
 
+def _a_frozen_subject(current: dict) -> tuple[str, tuple[str, ...]]:
+    """Any workflow that is BOTH frozen and still interpolating, with its inputs.
+
+    The per-input freeze tests need a live subject to perturb. Naming one
+    (`720-create-repo.yml` until it was burned down) makes those tests depend on
+    a call site whose whole purpose is to stop existing: once it is fixed,
+    `current` no longer holds it, both perturbations become no-ops against an
+    absent key, and the tests report a vacuous result rather than a failure —
+    the same silent-zero shape the freeze itself exists to prevent.
+
+    Deriving the subject keeps them meaningful for the rest of the burn-down.
+    The assertion is the positive control: if the intersection is ever empty the
+    burn-down is complete, and these two tests must be deleted rather than left
+    passing over nothing.
+    """
+    for workflow in sorted(guard.KNOWN_UNGUARDED):
+        inputs = tuple(current.get(workflow, ()))
+        if inputs:
+            return workflow, inputs
+    raise AssertionError(
+        "no workflow is both frozen and still interpolating — if the burn-down "
+        "is finished, delete the per-input freeze tests instead of leaving them "
+        "asserting over an empty set"
+    )
+
+
 # --------------------------------------------------------------------------
 # Samples
 # --------------------------------------------------------------------------
@@ -296,18 +322,32 @@ def test_the_tree_matches_the_freeze_exactly():
 def test_the_frozen_counts_are_what_1080_reconciles_to():
     """The denominator is pinned, so a silent collapse in either direction fails.
 
-    36 / 21 rather than #1080's 34 / 20, and the whole delta is accounted for in
-    the checker's own reconciliation comment: +229 (landed after the table was
-    written, which #1080 anticipates in as many words) and +115 (all-`number`
-    inputs, invisible to a string-only count). Pinned here so that if someone
-    narrows the type rule back to string-only, this fails and says which two
-    workflows just went dark rather than quietly reporting a smaller, tidier set.
+    34 / 19, and every step away from #1080's 34 / 20 is accounted for rather
+    than adopted:
+
+      34 / 20  #1080's table (string-typed inputs, bare `${{ inputs.X }}`)
+      +229     landed after the table was written, which #1080 anticipates
+      +115     all-`number` inputs, invisible to a string-only count
+      = 36 / 21 as frozen by #1122
+      -720     burned down: its three free-text inputs moved to step-level
+               `env:`. It was the only entry #1080 reproduced live in both
+               directions, and it ran on github-prod.
+      = 35 / 20
+      -120     burned down: `domains` moved to step-level `env:` in all four
+               bodies. It was the only entry holding two write environments at
+               once (cloudflare-prod-write and github-prod).
+      = 34 / 19
+
+    Pinned so that a silent collapse in either direction fails. If someone
+    narrows the type rule back to string-only, this says which workflows just
+    went dark instead of quietly reporting a smaller, tidier set — and if a
+    burn-down lands without updating this number, it says that too.
     """
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 36, (
-        f"expected 36 interpolating workflows, got {len(current)}: "
+    assert len(current) == 34, (
+        f"expected 34 interpolating workflows, got {len(current)}: "
         f"{sorted(current)}"
     )
     write = {
@@ -318,9 +358,14 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 21, f"expected 21 write-environment ones, got {len(write)}: {sorted(write)}"
+    assert len(write) == 19, f"expected 19 write-environment ones, got {len(write)}: {sorted(write)}"
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
+    for burned in ("720-create-repo.yml", "120-bulk-cutover-to-github-pages.yml"):
+        assert burned not in current, (
+            f"{burned} was burned down — it must no longer interpolate any "
+            "free-text input"
+        )
 
 
 def test_the_scan_sees_real_workflows():
@@ -481,10 +526,12 @@ def test_removing_a_single_input_from_an_entry_is_detected():
     """
     findings, _, _ = guard.scan_all()
     current = guard.current_map(findings)
+    workflow, inputs = _a_frozen_subject(current)
+    dropped = inputs[0]
     known = dict(guard.KNOWN_UNGUARDED)
-    known["720-create-repo.yml"] = ("CNAME", "Description")  # drop RepoName
+    known[workflow] = inputs[1:]
     new, _stale = guard.compare(current, known)
-    assert any("RepoName" in item for item in new), (
+    assert any(dropped in item for item in new), (
         f"an input missing from the freeze must be reported; got {new}"
     )
 
@@ -505,8 +552,9 @@ def test_a_narrowed_call_site_reports_the_leftover_input_as_stale():
     """Half-fixing a workflow must still force the entry to be narrowed."""
     findings, _, _ = guard.scan_all()
     current = guard.current_map(findings)
+    workflow, inputs = _a_frozen_subject(current)
     known = dict(guard.KNOWN_UNGUARDED)
-    known["720-create-repo.yml"] = ("CNAME", "Description", "RepoName", "Extra")
+    known[workflow] = inputs + ("Extra",)
     _new, stale = guard.compare(current, known)
     assert any("Extra" in item for item in stale), (
         f"a frozen input no longer interpolated must be reported; got {stale}"

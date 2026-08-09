@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -273,6 +274,433 @@ def test_prose_only_rows_say_why_prose_is_the_ceiling():
             elif len(reason) < len("doc — ") + 20:
                 problems.append(f"{lid}: `doc —` with no real reason given")
     assert not problems, "\n".join(problems)
+
+
+# ---------------------------------------------------------------------------
+# Source citations — the path is checked, the LINE never was (#1095)
+# ---------------------------------------------------------------------------
+#
+# The ledger cites source locations as `path:LINE` throughout, and until this
+# section nothing validated them. `enforcement_problems` above reads `cells[2]`
+# only and calls `Path.exists()`, so a citation was unchecked whenever it sat in
+# the Lesson or Evidence column, and its line number was discarded even when it
+# did not.
+#
+# Both halves shipped live defects:
+#
+#   * L155 cited `Update-CloudflareDns.ps1:1819` for "106 excludes DKIM
+#     outright". `:1819` is inside the `'AAAA'` branch of a switch and says
+#     nothing about DKIM — wrong by 166 lines, in a row whose conclusion rested
+#     on it. Caught by an LLM reviewer on #1093; the 26-test suite was green
+#     before and after.
+#   * `105-manage-record.yml:178-184` drifted three times in a week as ordinary
+#     churn moved content above it, and landed on an `actions/checkout` block.
+#
+# What is decidable here is narrow, and the narrowness is deliberate: whether
+# the cited line still MEANS what the row says is #1087's undecidable half and
+# is explicitly out of scope. This asks only that the path resolves, the line
+# exists, and it is not contentless.
+#
+# The blank-line rule is the one that catches drift-by-insertion, and it needed
+# widening past "blank" to keep doing so. When #1095 was filed, `105-…:178` was
+# an empty line; by the time it was fixed, further churn had moved a bare `#`
+# onto it. A citation pointing at a lone comment marker is pointing at nothing
+# just as much as one pointing at whitespace, so the test is "no alphanumeric
+# character on the line" — which fires on both, and on nothing currently in the
+# ledger.
+# The extension is DERIVED, not enumerated. The first draft of this guard
+# carried a hand-written suffix tuple (`.py .ps1 .yml .yaml .sh .json .js .ts
+# .md`) and Copilot found it missing `.tsx`, `.mjs` and `.htaccess` — four live
+# citations in this very ledger, silently skipped by the check written to stop
+# citations being silently skipped (#1128). That is L133's shape exactly: a
+# control whose input set is hand-maintained cannot detect an omitted input, and
+# reports clean over precisely the gap it exists to close.
+#
+# So the rule is structural: a final extension beginning with a LETTER, which is
+# what keeps `12.30:45`-shaped prose out (a numeric "extension" is not a file),
+# and a line spec that is a comma-separated list of lines and ranges, because
+# the ledger writes one — `720-create-repo.yml:193,274` cites two reproductions
+# in a single token, and a pattern accepting only `N` and `N-M` reads it as
+# prose. Both halves of that citation were stale when this guard was written.
+_CITATION = re.compile(
+    r"^(?P<path>[^\s:`]+\.[A-Za-z][A-Za-z0-9]{0,7})"
+    r":(?P<spec>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$"
+)
+
+# Deliberately looser than `_CITATION`: anything with a `/` or a `.` in front of
+# a `:LINE` is citation-SHAPED. Nothing acts on it except the coverage test
+# below, whose whole job is to fail when the two disagree — an extractor that
+# stops matching is how this class of guard goes quietly green.
+_CITATION_SHAPED = re.compile(r"^[^\s:`]*[./][^\s:`]*:\d+(?:[-,]\d+)*$")
+
+# Citations into another FFC repository, which CI here cannot resolve and must
+# not report as broken. Every entry names the repo that holds it, so the escape
+# hatch stays a statement about a real file somewhere rather than a silent skip
+# — an unexplained allowlist is the shape this whole module exists to refuse.
+#
+# `src/lib/dashboardData.ts` — FreeForCharity/FFC-IN-ffcadmin.org. Cited by L89
+# for `readJson()` joining `process.cwd()` with `public/data`; verified against
+# a checkout of that repo on 2026-08-09, where `:147` reads
+# `const full = path.join(process.cwd(), 'public', 'data', file)`.
+# `src/app/automation/page.tsx` — same repo. Cited by L89 for the import that
+# makes `workflow-catalog.json` a real consumer of `src/data`; verified the same
+# way, where `:3` reads `import catalog from '@/data/workflow-catalog.json'`.
+#
+# `public/.htaccess` — FreeForCharity/FFC-IN-freeforcharity.org. Cited by L188
+# for the extension-keyed `Cache-Control` that stamped a year's TTL on a 429.
+# NOT verified: that repo is outside this session's scope, so this entry is
+# taken on the row's word where the two above were checked against a checkout.
+CROSS_REPO_CITATIONS = {
+    "src/lib/dashboardData.ts": "FreeForCharity/FFC-IN-ffcadmin.org",
+    "src/app/automation/page.tsx": "FreeForCharity/FFC-IN-ffcadmin.org",
+    "public/.htaccess": "FreeForCharity/FFC-IN-freeforcharity.org",
+}
+
+
+def _tracked_files() -> dict[str, list[str]]:
+    """Every tracked text file, as repo-relative path -> lines.
+
+    `git ls-files` rather than a walk, so build output, virtualenvs and vendored
+    trees cannot make a basename ambiguous — the ambiguity report is only useful
+    if its candidate list is files a human actually wrote. Binary and
+    undecodable files are dropped: a citation into one is not a thing the ledger
+    does, and reading them would cost the walk for nothing.
+    """
+    out: dict[str, list[str]] = {}
+    proc = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    for rel in proc.stdout.split("\0"):
+        if not rel:
+            continue
+        path = REPO_ROOT / rel
+        try:
+            out[rel] = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+    return out
+
+
+def _has_content(line: str) -> bool:
+    """Whether a cited line says anything at all.
+
+    Deliberately not `line.strip()`: see the section note above — a lone `#` is
+    the shape the 105 citation drifted onto, and it is as empty a target as
+    whitespace. Any letter or digit is enough to count as content, so a real
+    comment (`# SUCCESS requires POSITIVE EVIDENCE`) is a legitimate anchor and
+    passes.
+    """
+    return any(ch.isalnum() for ch in line)
+
+
+def citation_problems(
+    text: str,
+    files: dict[str, list[str]] | None = None,
+    label: str = "docs/lessons-ledger.md",
+) -> list[str]:
+    """Every `path:LINE` citation in `text` that the tree does not back.
+
+    Reads EVERY cell of every row, not `cells[2]` — that restriction is what let
+    L155's 166-line-wrong pointer ship green, since it sat in the Lesson column.
+
+    Pure over (`text`, `files`) so both the rules and their WIRING are testable
+    against planted fixtures: a check only ever run against the real ledger is
+    enforced by the ledger's current contents, which is not enforcement.
+    """
+    if files is None:
+        files = _tracked_files()
+    by_basename: dict[str, list[str]] = {}
+    for rel in files:
+        by_basename.setdefault(rel.rsplit("/", 1)[-1], []).append(rel)
+
+    problems: list[str] = []
+    for lid, cells in _rows_from_text(text):
+        for column, cell in enumerate(cells):
+            for token in _PATHISH.findall(cell):
+                m = _CITATION.match(token.strip())
+                if not m:
+                    continue
+                cited = m.group("path")
+                parts = []
+                for piece in m.group("spec").split(","):
+                    first, _, last = piece.partition("-")
+                    parts.append((int(first), int(last or first)))
+                where = f"{label}: {lid} (column {column + 1}) cites `{token.strip()}`"
+
+                if cited in CROSS_REPO_CITATIONS:
+                    continue
+                if cited in files:
+                    resolved = cited
+                else:
+                    candidates = sorted(by_basename.get(cited.rsplit("/", 1)[-1], []))
+                    if not candidates:
+                        problems.append(
+                            f"{where}, and no tracked file matches that path. Correct "
+                            "it, or — if it is deliberately a file in another FFC repo "
+                            "— add it to CROSS_REPO_CITATIONS naming the repo"
+                        )
+                        continue
+                    if len(candidates) > 1:
+                        problems.append(
+                            f"{where}, whose basename is ambiguous: {candidates}. "
+                            "Write the path out from the repo root so the citation "
+                            "names one file"
+                        )
+                        continue
+                    resolved = candidates[0]
+
+                lines = files[resolved]
+                for start, end in parts:
+                    if end < start:
+                        problems.append(
+                            f"{where}, which is a backwards line range ({start}-{end})"
+                        )
+                        continue
+                    if start < 1 or end > len(lines):
+                        problems.append(
+                            f"{where} -> {resolved}, which has {len(lines)} lines — "
+                            f"the cited range {start}-{end} is outside the file"
+                        )
+                        continue
+                    if not _has_content(lines[start - 1]):
+                        problems.append(
+                            f"{where} -> {resolved}:{start}, which is blank or a bare "
+                            "comment marker. Content moved above it and the citation "
+                            "did not follow; re-derive the line from what the row "
+                            "describes"
+                        )
+    return problems
+
+
+def test_every_source_citation_in_the_ledger_resolves_and_points_at_content():
+    problems = citation_problems(LEDGER.read_text(encoding="utf-8"))
+    assert not problems, "\n".join(problems)
+
+
+def test_the_ledger_actually_contains_citations_to_check():
+    """The positive control: without it, the test above passes on zero work.
+
+    Every rule in `citation_problems` is a filter, so a regex that stops
+    matching — a new suffix, a changed cell format, `_rows_from_text` returning
+    nothing — turns the guard silently green. That is the same silent-zero shape
+    as #1055, and this module has been burned by it once already.
+    """
+    text = LEDGER.read_text(encoding="utf-8")
+    found = [
+        token
+        for _, cells in _rows_from_text(text)
+        for cell in cells
+        for token in _PATHISH.findall(cell)
+        if _CITATION.match(token.strip())
+    ]
+    assert len(found) >= 10, (
+        f"expected the ledger's usual population of `path:LINE` citations, saw "
+        f"{len(found)} — if the ledger really has stopped citing sources, lower "
+        "this; until then it means the extractor stopped matching"
+    )
+
+
+def test_no_citation_shaped_token_escapes_the_extractor():
+    """The coverage check the first draft of this guard needed and lacked.
+
+    Every rule in `citation_problems` runs behind `_CITATION`, so a token that
+    pattern does not match is not reported as anything — it is simply absent,
+    and the guard stays green. That is how the hand-written suffix tuple hid
+    four live citations (`.tsx`, `.mjs`, `.htaccess`) from the check written to
+    stop citations going unchecked, until Copilot read the list (#1128).
+
+    Comparing the strict extractor against a deliberately loose one is what
+    makes the omission loud: a future citation shape this guard cannot parse
+    fails HERE, naming the token, instead of being skipped in silence. Note the
+    two patterns must not share code, or they agree by construction.
+    """
+    skipped = []
+    for lid, cells in _rows():
+        for cell in cells:
+            for token in _PATHISH.findall(cell):
+                token = token.strip()
+                if _CITATION_SHAPED.match(token) and not _CITATION.match(token):
+                    skipped.append(f"{lid}: `{token}`")
+    assert not skipped, (
+        "these tokens look like `path:LINE` citations and the extractor does not "
+        "match them, so nothing checks them:\n  " + "\n  ".join(skipped) + "\n"
+        "Widen `_CITATION` — do not widen `_CITATION_SHAPED`, which exists to "
+        "disagree."
+    )
+
+
+def test_the_extractor_matches_the_extensions_the_ledger_actually_uses():
+    """The #1128 regression, pinned by extension rather than by count.
+
+    `.tsx` and `.mjs` are the two Copilot named; `.htaccess` is the third the
+    sweep found, and it is the interesting one — it is a dotfile, so the
+    "extension" is the whole name and a tuple of suffixes was never going to
+    hold it. `.py`/`.yml` are here as the control: widening must not drop what
+    the enumerated list already covered.
+    """
+    for ext in ("py", "yml", "ps1", "md", "tsx", "mjs", "htaccess", "json"):
+        token = f"some/path.{ext}:12"
+        assert _CITATION.match(token), (
+            f"`{token}` must parse as a citation — the ledger cites .{ext} files"
+        )
+    for prose in ("12.30:45", "npm ci", "docs/notes.md", "L43:5"):
+        assert not _CITATION.match(prose), (
+            f"`{prose}` is not a citation and must not be parsed as one"
+        )
+
+
+def test_every_cross_repo_allowance_names_a_repo():
+    """The escape hatch must stay a claim about a real file somewhere."""
+    for path, repo in CROSS_REPO_CITATIONS.items():
+        assert re.fullmatch(r"[\w.-]+/[\w.-]+", repo), (
+            f"{path} is allowed as cross-repo but its value {repo!r} is not an "
+            "owner/repo — an allowlist entry that names no repo is a silent skip"
+        )
+        assert not (REPO_ROOT / path).exists(), (
+            f"{path} is allowlisted as cross-repo but DOES exist here — remove the "
+            "entry so the citation is checked like every other one"
+        )
+
+
+# The self-tests below are what make the two above worth having (L09/L47).
+# Each plants its own tree, so they discriminate whether or not the real ledger
+# happens to be clean at the time.
+_CITE_FILES = {
+    "scripts/thing.py": ["import os", "", "def main():", "    return 1"],
+    "docs/notes.md": ["# Notes", "prose"],
+    "a/dup.yml": ["on: push", "jobs: {}"],
+    "b/dup.yml": ["on: pull_request", "jobs: {}"],
+}
+
+
+def _cite_row(lid: str, lesson: str, evidence: str, enforced: str) -> str:
+    return f"| {lid} | {lesson} | {evidence} | {enforced} |\n"
+
+
+def test_the_citation_guard_sees_a_path_that_does_not_resolve():
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", "a lesson", "`scripts/gone.py:3`", "`doc — why`"
+    )
+    problems = citation_problems(planted, _CITE_FILES, label="planted.md")
+    assert len(problems) == 1 and "L90" in problems[0], problems
+    assert "no tracked file matches" in problems[0], problems
+
+
+def test_the_citation_guard_sees_an_ambiguous_basename_and_lists_the_candidates():
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", "a lesson", "`dup.yml:1`", "`doc — why`"
+    )
+    problems = citation_problems(planted, _CITE_FILES, label="planted.md")
+    assert len(problems) == 1 and "ambiguous" in problems[0], problems
+    assert "a/dup.yml" in problems[0] and "b/dup.yml" in problems[0], (
+        f"the failure must list BOTH candidates, or it cannot be acted on: {problems}"
+    )
+
+
+def test_the_citation_guard_sees_a_line_past_the_end_of_the_file():
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", "a lesson", "`scripts/thing.py:99`", "`doc — why`"
+    )
+    problems = citation_problems(planted, _CITE_FILES, label="planted.md")
+    assert len(problems) == 1 and "outside the file" in problems[0], problems
+    assert "4 lines" in problems[0], f"name the real length: {problems}"
+
+
+def test_the_citation_guard_sees_a_line_that_content_moved_off():
+    """Both shapes of the 105 drift: the empty line, and the bare `#`.
+
+    `105-manage-record.yml:178` was empty when #1095 was filed and a lone `#` by
+    the time it was fixed — the same defect, one week of churn apart. A rule
+    written as `line.strip()` catches the first and passes the second.
+    """
+    blank = _FIXTURE_HEADER + _cite_row(
+        "L90", "a lesson", "`scripts/thing.py:2`", "`doc — why`"
+    )
+    problems = citation_problems(blank, _CITE_FILES, label="planted.md")
+    assert len(problems) == 1 and "blank or a bare comment marker" in problems[0], (
+        f"a citation onto an empty line must fail: {problems}"
+    )
+
+    marker = {"scripts/thing.py": ["import os", "   #", "def main():"]}
+    problems = citation_problems(blank, marker, label="planted.md")
+    assert len(problems) == 1 and "blank or a bare comment marker" in problems[0], (
+        f"a citation onto a lone comment marker must fail too: {problems}"
+    )
+
+    real_comment = {"scripts/thing.py": ["import os", "# a real remark", "x = 1"]}
+    assert not citation_problems(blank, real_comment, label="planted.md"), (
+        "a comment with actual text is a legitimate anchor and must NOT fail — "
+        "the ledger cites several"
+    )
+
+
+def test_the_citation_guard_reads_every_column_not_just_the_tier():
+    """The regression that caused defect 1 (#1095).
+
+    L155's wrong pointer sat in the **Lesson** column, where `_claimed_paths`
+    never looked. This fixture puts a bad citation in each of the three columns
+    with a clean tier cell, so reverting the walk to `cells[2]` leaves it green.
+    """
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90",
+        "a lesson citing `scripts/thing.py:99` in its prose",
+        "reviewed at `scripts/gone.py:1`",
+        "`scripts/thing.py:1`",
+    )
+    problems = citation_problems(planted, _CITE_FILES, label="planted.md")
+    assert len(problems) == 2, f"one finding per bad citation expected: {problems}"
+    assert any("column 1" in p for p in problems), (
+        f"the Lesson column must be read — this is the #1095 bug itself: {problems}"
+    )
+    assert any("column 2" in p for p in problems), (
+        f"the Evidence column must be read: {problems}"
+    )
+    assert not any("column 3" in p for p in problems), (
+        f"the tier cell here is a GOOD citation and must stay silent: {problems}"
+    )
+
+
+def test_the_citation_guard_leaves_good_citations_and_non_citations_alone():
+    """Its discriminators. Without these the rule is `report everything`."""
+    clean = _FIXTURE_HEADER + _cite_row(
+        "L90",
+        "resolved exactly at `scripts/thing.py:1` and by basename at `thing.py:3-4`",
+        "`npm ci`, `--paginate`, and a bare `scripts/thing.py` with no line",
+        "`docs/notes.md:1`",
+    )
+    assert not citation_problems(clean, _CITE_FILES, label="planted.md"), (
+        "exact paths, unique basenames, ranges, and tokens that are not citations "
+        "must all pass"
+    )
+
+
+def test_the_citation_guard_honours_the_cross_repo_allowlist_and_nothing_else():
+    allowed = next(iter(CROSS_REPO_CITATIONS))
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", f"a lesson citing `{allowed}:147`", "#1", "`doc — why`"
+    )
+    assert not citation_problems(planted, _CITE_FILES, label="planted.md"), (
+        f"{allowed} is allowlisted as cross-repo and must not be reported"
+    )
+    sibling = _FIXTURE_HEADER + _cite_row(
+        "L90", "a lesson citing `src/lib/other.ts:9`", "#1", "`doc — why`"
+    )
+    assert citation_problems(sibling, _CITE_FILES, label="planted.md"), (
+        "the allowlist must cover the ONE path it names, not its directory"
+    )
+
+
+def test_the_citation_guard_reports_a_backwards_range():
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", "a lesson", "`scripts/thing.py:4-2`", "`doc — why`"
+    )
+    problems = citation_problems(planted, _CITE_FILES, label="planted.md")
+    assert len(problems) == 1 and "backwards line range" in problems[0], problems
 
 
 # ---------------------------------------------------------------------------

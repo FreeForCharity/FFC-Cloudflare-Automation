@@ -135,19 +135,46 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   so a clean branch falsely appears N commits ahead of main (seen 2026-07-20 on the #748 worker
   run). Fetch `main` on its own before comparing against it.
 - Enter the queue with `gh pr merge <n> --auto` — no strategy flag: the queue sets it, and passing
-  `--merge` is rejected with "The merge strategy for main is set by the merge queue" (confirmed on
-  hub + ffcadmin, 2026-07-20). `.auto_merge != null` confirms the enqueue took, but null does NOT
-  prove a dequeue (it can read null while queued — see below); the authoritative probe is the
-  `enqueuePullRequest` mutation ("already in the queue"). Or enqueue directly:
+  `--merge` or `--squash` prints "The merge strategy for main is set by the merge queue" (confirmed
+  on hub + ffcadmin, 2026-07-20).
+  - **That message is not a rejection, and this line used to say it was.** The flag is ignored; the
+    enqueue happens anyway. On #1128 (run 127) `gh pr merge 1128 --squash --auto` printed that one
+    line and nothing else, and the very next `gh pr merge 1128 --auto` answered
+    `Pull request … is already queued to merge` with no command between them. `CLAUDE.md`'s queue
+    section has always described the same string as an advisory on a **successful** `--auto`, so the
+    two documents contradicted each other on identical bytes. Read the message as neither verdict —
+    it says only which flag was discarded. Reading it as a refusal leaves a verified PR sitting
+    un-enqueued, or sends a second merge command at a PR already in the queue. Ledger **L198**.
+
+  `.auto_merge != null` confirms the enqueue took, but null does NOT prove a dequeue (it can read
+  null while queued — see below); the authoritative probe is the `enqueuePullRequest` mutation
+  ("already in the queue"). Or enqueue directly:
   `gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:"<node_id>"}){mergeQueueEntry{position state}}}'`
-  - **Read that probe's three answers apart, because one of them is a typo wearing a real answer's
-    clothes.** `UNPROCESSABLE: "Pull request is already in the queue"` means queued — the answer you
-    are usually after. A populated `mergeQueueEntry` means you just enqueued it. But
+  - **Read the probe's answers apart, because some of them are failures wearing the wrong clothes —
+    and do not treat the list below as closed.**
+    `UNPROCESSABLE: "Pull request is already in the queue"` means queued — the answer you are
+    usually after. A populated `mergeQueueEntry` means you just enqueued it. But
     `NOT_FOUND: "Could not resolve to a node with the global id"` means **your node id is wrong**,
     and it is indistinguishable at a glance from the legitimate reading "this PR no longer exists" —
     the shape that would make a run conclude a queued PR had vanished. Derive the id in the same
     command rather than pasting a literal: `PRID=$(gh pr view <n> --json id --jq .id)`. Hit on run
     75; cost was small only because the PR was known-good at the time.
+    - And `UNPROCESSABLE: "Pull request is closed"` means it **merged** — the best outcome the probe
+      can report, delivered as a bare `gh` error on stderr with a non-zero exit. Seen on ffcadmin
+      #870 (run 128), where `gh pr merge --auto` on an already-green PR merged it outright and
+      printed nothing, so the probe was the first thing that said so. Settle it on
+      `gh pr view <n> --json state,mergedAt`, not on the error text.
+    - And `UNPROCESSABLE: "Pull request Required status check \"<name>\" is in progress."` is the
+      probe doing its documented job — it names the specific blocker, which is the whole reason the
+      Debugging tip below prefers it over `gh pr merge --auto`. Wait for that check; do not re-fire
+      the mutation in a loop.
+    - **Anything not in this list is unclassified, not a fault.** This enumeration is a claim about
+      the API at the time it was written and it decays like any other measurement; a reading you
+      cannot place here means go and look at `state`/`mergedAt`, not that something broke. The list
+      grew by two while the PR that added this paragraph was open — the closed-PR answer came from
+      ffcadmin #870 and the in-progress-check answer from that PR's own enqueue attempt minutes
+      later. Ledger **L201**.
+
 - **Debugging tip:** `gh pr merge --auto` can mask the real blocker behind a GraphQL "rate limit"
   error. The `enqueuePullRequest` mutation returns the true reason (unresolved conversation, CodeQL
   still running, …).
@@ -205,6 +232,15 @@ and all authenticate as the same user. Before starting ANY issue:
      "keep 5–15 open" band read 46 and drifted upward for eight consecutive runs of trimming that
      could never converge (#922). Add `agent-ready` when you file an issue that meets the bar;
      remove it when the issue becomes blocked.
+   - **An issue that states why it is blocked is making a claim about a tree that has since moved —
+     re-run its probe before inheriting it.** A blocker is prose: it does not re-execute, no check
+     fails when it stops being true, and nothing links it to the PRs that quietly fix it. #1042
+     parked itself behind a `guard_bash.py` false positive it named verbatim; #1062, #1018 and #1115
+     then landed on that file for unrelated reasons and none referenced #1042. Six days later,
+     feeding seven real routine commands to the current guard returned **7 of 7 allow** — the
+     blocker had been gone for at least a day and the issue still read as blocked. Nothing about a
+     stale blocker looks stale, and a precisely-written one reads as more authoritative, not less.
+     When grooming, spend the one command it takes to re-measure. Ledger **L197**.
    - **`-label:claimed` currently under-reports: check for a cross-repo PR before you start.** The
      backlog lives in the hub while much of the code lives in a template or site repo, so the normal
      shape is a hub issue implemented by a PR in another repository — and 737 neither runs in those

@@ -361,7 +361,10 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     "117-domain-transfer-verify.yml": ("domain",),
     "118-whmcs-domain-lock.yml": ("domain",),
     "119-bulk-staging-cname-github-pages.yml": ("domains", "target"),
-    "120-bulk-cutover-to-github-pages.yml": ("domains",),
+    # 120-bulk-cutover-to-github-pages.yml burned down: `domains` now reaches all four
+    # bodies (two pwsh, two bash) through step-level `env:`. It held two write
+    # environments at once — cloudflare-prod-write for the apex flip and github-prod for
+    # the CNAME flip — so an injected payload ran twice, under two credentials.
     # --- WHMCS --------------------------------------------------------------
     "201-whmcs-export-domains.yml": ("output_file",),
     "202-whmcs-export-products.yml": (
@@ -405,7 +408,9 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # --- GitHub -------------------------------------------------------------
     "702-ffc-ex-clone-deploy.yml": ("depth", "domain", "exclude"),
     "704-website-analytics-wire.yml": ("gtm_id", "measurement_id"),
-    "720-create-repo.yml": ("CNAME", "Description", "RepoName"),
+    # 720-create-repo.yml burned down: its three free-text inputs now reach both the
+    # pwsh and the bash bodies through step-level `env:`. It was the instance #1080
+    # reproduced live in both directions, on github-prod.
 }
 
 

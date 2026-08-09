@@ -66,11 +66,7 @@ EXPRESSION = "${{ inputs.domain }}"
 CALL_SITES = {
     "exo_check": (
         "Check DKIM status",
-        {
-            "${{ steps.org.outputs.organization }}": "ffc.onmicrosoft.com",
-            "${{ secrets.FFC_AZURE_CLIENT_ID }}": "APP-ID",
-            "${{ secrets.FFC_AZURE_TENANT_ID }}": "TENANT-ID",
-        },
+        {"${{ steps.org.outputs.organization }}": "ffc.onmicrosoft.com"},
     ),
     "cloudflare_set": (
         "Create/Update DKIM selector CNAMEs",
@@ -81,11 +77,7 @@ CALL_SITES = {
     ),
     "exo_enable": (
         "Enable DKIM signing",
-        {
-            "${{ needs.exo_check.outputs.organization }}": "ffc.onmicrosoft.com",
-            "${{ secrets.FFC_AZURE_CLIENT_ID }}": "APP-ID",
-            "${{ secrets.FFC_AZURE_TENANT_ID }}": "TENANT-ID",
-        },
+        {"${{ needs.exo_check.outputs.organization }}": "ffc.onmicrosoft.com"},
     ),
 }
 
@@ -95,6 +87,16 @@ CALL_SITES = {
 # credential out, the module's central claim stops being true and should be
 # re-read rather than silently kept.
 EXO_SECRET_VARS = ("FFC_EXO_CERT_PFX_BASE64", "FFC_EXO_CERT_PASSWORD")
+
+# Every variable the harness must own outright. Anything inherited from the
+# developer's shell could satisfy an assertion the workflow is supposed to.
+CONTROLLED_VARS = (
+    ENV_VAR,
+    "FFC_AZURE_CLIENT_ID",
+    "FFC_AZURE_TENANT_ID",
+    "FFC_EXO_CERT_PFX_BASE64",
+    "FFC_EXO_CERT_PASSWORD",
+)
 
 SENTINEL = "STOLEN-304.txt"
 # A payload valid in the position it lands in. It does not need to escape the
@@ -147,7 +149,7 @@ param(
     [switch]$CreateIfMissing,
     [switch]$Enable
 )
-Write-Output "CALLED Domain=[$Domain] Organization=[$Organization] Enable=[$Enable]"
+Write-Output "CALLED Domain=[$Domain] Organization=[$Organization] AppId=[$AppId] TenantId=[$TenantId] Enable=[$Enable]"
 """
 
 CF_STUB = """[CmdletBinding()]
@@ -198,7 +200,7 @@ def _assert_wiring(job: str, step: dict) -> None:
     )
 
 
-def _render(job: str, body: str, domain_env_reads_it: bool = True) -> str:
+def _render(job: str, body: str) -> str:
     """Substitute the non-input expressions the way GitHub would.
 
     Each anchor's occurrence count is asserted BEFORE substituting (ledger L47):
@@ -206,8 +208,7 @@ def _render(job: str, body: str, domain_env_reads_it: bool = True) -> str:
     test a string nobody rendered.
     """
     for anchor, value in CALL_SITES[job][1].items():
-        count = body.count(anchor)
-        assert count >= 1, (
+        assert body.count(anchor) >= 1, (
             f"expected {anchor} in job {job!r}'s body and found none — the "
             f"step moved or was rewritten, so this render is testing nothing"
         )
@@ -234,10 +235,13 @@ def _run(body: str, **env_overrides: str) -> tuple[str, bool, int]:
         script = tmp / "step.ps1"
         script.write_text(body, encoding="utf-8")
         env = child_env(**env_overrides)
-        # Only what the test sets may be visible: an inherited IN_DOMAIN would
-        # make the missing-mapping test pass for the wrong reason.
-        if ENV_VAR not in env_overrides:
-            env.pop(ENV_VAR, None)
+        # Only what the test sets may be visible: an inherited IN_DOMAIN would make
+        # the missing-mapping test pass for the wrong reason, and an inherited
+        # FFC_AZURE_* would let the credential assertions pass without the workflow
+        # supplying anything.
+        for var in CONTROLLED_VARS:
+            if var not in env_overrides:
+                env.pop(var, None)
         proc = subprocess.run(
             ["pwsh", "-NoProfile", "-File", str(script)],
             cwd=tmp, env=env, capture_output=True,
@@ -300,9 +304,20 @@ def test_values_reach_the_scripts():
     for job in ("exo_check", "exo_enable"):
         step = _step(job)
         _assert_wiring(job, step)
-        out, _, rc = _run(_render(job, step["run"]), IN_DOMAIN="ffcworkingsite1.org")
+        out, _, rc = _run(
+            _render(job, step["run"]),
+            IN_DOMAIN="ffcworkingsite1.org",
+            FFC_AZURE_CLIENT_ID="APP-ID",
+            FFC_AZURE_TENANT_ID="TENANT-ID",
+        )
         assert rc == 0, f"job {job!r} step exited {rc}: {out}"
         assert "CALLED Domain=[ffcworkingsite1.org]" in out, f"job {job!r}: {out}"
+        # The credential arguments now come from env: too — measured, not assumed,
+        # because the harness pops these vars unless a test supplies them.
+        assert "AppId=[APP-ID] TenantId=[TENANT-ID]" in out, (
+            f"job {job!r}: the AppId/TenantId did not reach the script through "
+            f"env:, so the invocation is reading something else: {out}"
+        )
     step = _step("cloudflare_set")
     _assert_wiring("cloudflare_set", step)
     out, _, rc = _run(
@@ -447,6 +462,105 @@ def test_whitespace_only_domain_is_also_rejected():
         assert rc != 0, f"job {job!r}: a whitespace-only domain was accepted: {out}"
         assert "CALLED" not in out, (
             f"job {job!r}: the script ran with a whitespace-only value: {out}"
+        )
+
+
+def test_an_empty_credential_does_not_shift_the_argument_binding():
+    """An unset `$env:` reference must pass an empty string, not vanish.
+
+    Found while addressing the #1141 review. Replacing `"${{ secrets.X }}"` with a
+    bare `$env:X` reads as a pure substitution and is not one: pwsh renders an
+    empty variable as NO argument, so the next token binds to the parameter and
+    every argument after it shifts. The unquoted form failed here with
+    `Missing an argument for parameter 'AppId'` — a value problem reported as a
+    call-signature problem, one parameter to the left of the real cause.
+
+    The presence check in `exo_check` makes an empty credential unreachable in
+    production today. That is the reason to pin it rather than the reason not to:
+    the property this test defends is invisible on every run where the guard
+    upstream is doing its job, so nothing else would report its loss.
+    """
+    for job in ("exo_check", "exo_enable"):
+        step = _step(job)
+        out, _, rc = _run(
+            _render(job, step["run"]),
+            IN_DOMAIN="ffcworkingsite1.org",
+        )
+        assert rc == 0, f"job {job!r}: an empty credential broke the call: {out}"
+        assert "Missing an argument for parameter" not in out, (
+            f"job {job!r}: the arguments shifted — an empty $env: reference is "
+            f"being rendered as no argument at all. Quote it. Output: {out}"
+        )
+        assert "CALLED Domain=[ffcworkingsite1.org]" in out, (
+            f"job {job!r}: the domain no longer binds correctly: {out}"
+        )
+        assert "AppId=[] TenantId=[]" in out, (
+            f"job {job!r}: expected the empty credentials to bind as empty "
+            f"strings: {out}"
+        )
+
+
+def test_no_secret_is_interpolated_into_any_run_body():
+    """No `${{ secrets.* }}` reaches a `run:` body anywhere in this workflow.
+
+    Raised in review on #1141 as a duplication/drift risk — the DKIM steps mapped
+    the credentials in `env:` and then re-interpolated the same values into the
+    invocation. It is more than tidiness: the runner writes a `run:` body to a
+    SCRIPT FILE in the workspace before executing it, so the interpolated form put
+    the plaintext credential on disk — in the very workspace a payload injected
+    through `domain` would have been running in. The two findings compound, which
+    is why this is asserted here rather than left to a later cleanup.
+
+    Swept over every job and step rather than the three call sites, because the
+    worst instance was neither of them: `Validate required secrets` named all four
+    secrets, the certificate and its password included.
+
+    `uses:`/`with:` and `env:` are untouched by design — an action input and a
+    step-level mapping are not script text, and `env:` is the remedy. A guard that
+    flagged them would have to be switched off to land the fix (ledger L27).
+    """
+    jobs = load_workflow(WORKFLOW)["jobs"]
+    offenders = [
+        (job, step.get("name"))
+        for job, spec in jobs.items()
+        for step in spec.get("steps", [])
+        if "secrets." in str(step.get("run", ""))
+    ]
+    assert not offenders, (
+        f"these steps interpolate a secret into their script body, which writes "
+        f"it to a file in the runner workspace: {offenders}"
+    )
+    # Positive control: the sweep must be looking at real bodies. Without it a
+    # change that made `run` unreadable would report zero offenders and pass.
+    bodies = [
+        step.get("run", "")
+        for spec in jobs.values()
+        for step in spec.get("steps", [])
+    ]
+    assert sum(1 for b in bodies if b.strip()) >= 4, (
+        f"the sweep found almost no run: bodies to check, so its empty result "
+        f"says nothing: {bodies!r}"
+    )
+
+
+def test_the_secret_presence_check_reads_them_from_env():
+    """The step that names every secret must map them, not interpolate them.
+
+    Pinned separately from the sweep above because this step is the reason the
+    sweep exists, and because its check stays correct under a deleted mapping
+    (an absent mapping and an absent secret both arrive empty, and both are what
+    it exits 1 on) — so nothing else would notice if it regressed.
+    """
+    step = find_step(load_workflow(WORKFLOW), "exo_check", "Validate required secrets")
+    env = step.get("env") or {}
+    for var in ("FFC_AZURE_CLIENT_ID", "FFC_AZURE_TENANT_ID") + EXO_SECRET_VARS:
+        assert env.get(var) == "${{ secrets.%s }}" % var, (
+            f"the secret presence check must map {var} at step level — its "
+            f"env: mapping is {env!r}"
+        )
+        assert var in step.get("run", ""), (
+            f"{var} is mapped but the check never reads it, so the presence "
+            f"check silently stopped covering it"
         )
 
 

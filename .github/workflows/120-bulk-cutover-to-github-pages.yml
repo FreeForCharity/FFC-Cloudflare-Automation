@@ -131,12 +131,21 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Flip public/CNAME (skip DNS in this job)
         shell: pwsh
+        # `domains` is free text, and an interpolated expression is substituted into
+        # the script TEXT before pwsh parses it -- so the value is source code, not
+        # data (#1080). Single quotes do not contain it: one apostrophe in the input
+        # closes the literal and the rest is pwsh, running AFTER the github-prod approval
+        # with a credential the dispatcher never held. `$env:` is a runtime lookup and is
+        # never re-parsed. `dry_run` stays interpolated on purpose: GitHub generates a
+        # `boolean` value from the declared options, so it cannot carry a payload.
+        env:
+          IN_DOMAINS: ${{ inputs.domains }}
         run: |
           # Fleet default list — single source of truth shared with workflow 121.
           $defaultDomains = (
             Get-Content -Raw config/ffc-ex-cutover-domains.json | ConvertFrom-Json
           ).domains -join ','
-          $domainsInput = '${{ inputs.domains }}'
+          $domainsInput = [string]$env:IN_DOMAINS
           if ([string]::IsNullOrWhiteSpace($domainsInput)) { $domainsInput = $defaultDomains }
 
           $params = @{
@@ -175,12 +184,17 @@ jobs:
 
       - name: Flip Cloudflare apex DNS (skip CNAME in this job)
         shell: pwsh
+        # `domains` via env, not interpolation -- see the cname-flip job above. This job
+        # holds cloudflare-prod-write, so the injected code would run with the token that
+        # rewrites apex DNS for the whole FFC-EX fleet.
+        env:
+          IN_DOMAINS: ${{ inputs.domains }}
         run: |
           # Fleet default list — single source of truth shared with workflow 121.
           $defaultDomains = (
             Get-Content -Raw config/ffc-ex-cutover-domains.json | ConvertFrom-Json
           ).domains -join ','
-          $domainsInput = '${{ inputs.domains }}'
+          $domainsInput = [string]$env:IN_DOMAINS
           if ([string]::IsNullOrWhiteSpace($domainsInput)) { $domainsInput = $defaultDomains }
 
           $params = @{
@@ -282,6 +296,13 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Bind Pages custom domain + cert kick (post-DNS)
         shell: bash
+        # `domains` via env, not interpolation -- see the cname-flip job above. In a bash
+        # body a double-quoted `$( )` supplied by the dispatcher runs without needing to
+        # break out of the quotes at all. Read bare under `set -u` (no `:-` default) so a
+        # deleted `env:` block aborts the step instead of silently falling through to the
+        # fleet-wide default list below.
+        env:
+          IN_DOMAINS: ${{ inputs.domains }}
         run: |
           set -uo pipefail
           # `gh` writes its error body to STDOUT, so `gh … 2>/dev/null || echo <default>`
@@ -307,7 +328,7 @@ jobs:
           # stalled, re-bind (null -> domain) to restart issuance — the
           # proven remedy from the technologymonastery cutover.
           default_domains=$(jq -r '.domains | join(" ")' config/ffc-ex-cutover-domains.json)
-          domains_input="${{ inputs.domains }}"
+          domains_input="$IN_DOMAINS"
           if [ -z "$domains_input" ]; then
             domains="$default_domains"
           else
@@ -359,6 +380,9 @@ jobs:
       - name: Dispatch Post-Deploy Smoke Test in each FFC-EX repo
         id: dispatch
         shell: bash
+        # `domains` via env, not interpolation -- see the cname-flip job above.
+        env:
+          IN_DOMAINS: ${{ inputs.domains }}
         run: |
           set -uo pipefail
 
@@ -378,7 +402,7 @@ jobs:
           # single source of truth shared with workflow 121.
           default_domains=$(jq -r '.domains | join(" ")' config/ffc-ex-cutover-domains.json)
 
-          domains_input="${{ inputs.domains }}"
+          domains_input="$IN_DOMAINS"
           if [ -z "$domains_input" ]; then
             domains="$default_domains"
           else

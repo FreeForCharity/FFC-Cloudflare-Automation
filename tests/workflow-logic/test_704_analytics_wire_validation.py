@@ -48,7 +48,6 @@ NOT COVERED HERE, DELIBERATELY
 
 from __future__ import annotations
 
-import os
 import pathlib
 import shutil
 import subprocess
@@ -217,6 +216,59 @@ def test_interpolated_body_is_the_positive_control():
         f"expected the exploited pre-fix run to report SUCCESS (the residue is a "
         f"legal GTM id); it exited {rc}, so the payload no longer models the "
         f"silent case this module is about. Output: {out}"
+    )
+
+
+def test_a_rejected_value_cannot_forge_a_second_workflow_command():
+    """The rejection message quotes the value, so the value must be escaped.
+
+    `::error::…` is parsed per line, so a newline in a dispatcher-supplied id ends
+    the message and hands the next line to the runner as a command of its own.
+    Measured against this step before the escaping landed, a `gtm_id` of
+    `nope\\n::add-mask::SOMETHING\\n::notice::spoofed` emitted **three** workflow
+    commands, two of them the dispatcher's — a smaller cousin of the defect this
+    whole module is about, one layer down: the value stopped being code and was
+    still being parsed as something.
+
+    Asserted on the count of command lines rather than on the absence of any one
+    spelling, so a payload using a different `::` verb cannot slip past it.
+    """
+    step = _step()
+    _assert_wiring(step)
+    hostile = "nope\n::add-mask::SOMETHING\n::notice::spoofed-by-the-dispatcher"
+    out, _, rc = _run(step["run"], GTM_ID=hostile, MEASUREMENT_ID="")
+    assert rc != 0, f"the hostile value was accepted as a valid GTM id: {out}"
+    commands = [line for line in out.splitlines() if line.startswith("::")]
+    assert len(commands) == 1, (
+        f"expected exactly one workflow command, got {len(commands)} — the value "
+        f"was emitted unescaped and the dispatcher owns the extras: {commands}"
+    )
+    assert "%0A" in commands[0], (
+        f"the newlines were not escaped to %0A, so the message did not survive "
+        f"intact either: {commands[0]!r}"
+    )
+    # Escaping must not cost the diagnostic: the operator still sees what was rejected.
+    assert "nope" in commands[0] and "add-mask" in commands[0], (
+        f"the rejected value is no longer legible in the message: {commands[0]!r}"
+    )
+
+
+def test_a_percent_in_a_rejected_value_is_escaped_first():
+    """`%` before `\\r`/`\\n`, or the escapes those insert get double-escaped.
+
+    Pins the ORDER, which is the only part of the substitution that can be got
+    wrong silently: swap the two and a literal `%` still escapes, while the `%0A`
+    introduced by the newline rule comes back out as `%250A` and the message is
+    mangled in the one case this check exists for.
+    """
+    step = _step()
+    out, _, rc = _run(step["run"], GTM_ID="100%\nx", MEASUREMENT_ID="")
+    assert rc != 0, out
+    commands = [line for line in out.splitlines() if line.startswith("::")]
+    assert len(commands) == 1, commands
+    assert "100%25%0Ax" in commands[0], (
+        f"expected the literal %% escaped to %%25 and the newline to %%0A, with no "
+        f"double-escaping: {commands[0]!r}"
     )
 
 

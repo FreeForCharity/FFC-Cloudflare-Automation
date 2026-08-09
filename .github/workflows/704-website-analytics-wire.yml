@@ -64,6 +64,21 @@ jobs:
           MEASUREMENT_ID: ${{ inputs.measurement_id }}
         run: |
           set -euo pipefail
+          # Escape a dispatcher-controlled value before it goes into a workflow
+          # command. `::error::…` is parsed per LINE, so a newline in the value ends
+          # the message and every following line starting with `::` is a command the
+          # runner obeys. Measured against the un-escaped version of this step:
+          # `gtm_id` = "nope\n::add-mask::SOMETHING\n::notice::spoofed" emitted THREE
+          # workflow-command lines, two of them entirely the dispatcher's. The value
+          # stays in the message — an operator needs to see what was rejected — so the
+          # remedy is escaping, not omission. `%` is substituted first, because the
+          # replacements after it introduce `%0D` / `%0A` that must not be re-escaped.
+          esc() {
+            local s=${1//'%'/'%25'}
+            s=${s//$'\r'/'%0D'}
+            s=${s//$'\n'/'%0A'}
+            printf '%s' "$s"
+          }
           # Fail closed on a missing mapping. The interpolated body could not have an
           # absent source — substitution always produced *something* — but an `env:`
           # mapping can be deleted or misspelled, and the checker that enforces #1080
@@ -85,11 +100,11 @@ jobs:
             exit 1
           fi
           if [[ ! "$GTM_ID" =~ ^GTM-[A-Z0-9]{5,9}$ ]]; then
-            echo "::error::gtm_id '$GTM_ID' is not a valid GTM-XXXXXXX id."
+            echo "::error::gtm_id '$(esc "$GTM_ID")' is not a valid GTM-XXXXXXX id."
             exit 1
           fi
           if [ -n "$MEASUREMENT_ID" ] && [[ ! "$MEASUREMENT_ID" =~ ^G-[A-Z0-9]{6,12}$ ]]; then
-            echo "::error::measurement_id '$MEASUREMENT_ID' is not a valid G-XXXXXXXXXX id."
+            echo "::error::measurement_id '$(esc "$MEASUREMENT_ID")' is not a valid G-XXXXXXXXXX id."
             exit 1
           fi
 

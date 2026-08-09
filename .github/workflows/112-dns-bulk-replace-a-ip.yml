@@ -72,7 +72,16 @@ jobs:
           # ValidatePattern report it as a malformed IP address and send the next
           # reader looking at the dispatch form.
           if ([string]::IsNullOrWhiteSpace($oldIp) -or [string]::IsNullOrWhiteSpace($newIp)) {
-            throw 'IN_OLD_IP / IN_NEW_IP is empty: the step-level env: mapping is missing or misnamed (#1080 burn-down), not a bad dispatch input.'
+            # The detail goes out as an annotation rather than as the throw's text.
+            # A thrown message reaches the log only through pwsh's error RENDERER,
+            # which echoes the offending source line truncated with an ellipsis and
+            # does not render identically on every host: measured here, the source
+            # line is cut at 79 characters and the full message follows on a separate
+            # line, while on the CI runner the assertion for that message did not
+            # match at all. An annotation is plain stdout and passes through
+            # unmodified, so the operator-facing text does not depend on any of that.
+            Write-Output '::error::IN_OLD_IP / IN_NEW_IP is empty: the step-level env: mapping is missing or misnamed (#1080 burn-down), not a bad dispatch input.'
+            throw 'Bulk replace aborted: input env mapping is empty.'
           }
 
           $params = @{

@@ -213,8 +213,19 @@ def test_missing_env_mapping_aborts_before_the_script_runs():
     step = _step()
     out, _, rc = _run(_render_dry_run(step["run"], "true"))
     assert rc != 0, f"empty env: mapping did not fail the step. Output: {out}"
-    assert "env: mapping is missing or misnamed" in out, (
-        f"step failed but not with the diagnosis that names the cause: {out}"
+    # Matched against the `::error::` ANNOTATION, not against the throw's text.
+    # A thrown message reaches stdout only through pwsh's error renderer, and an
+    # assertion on a render is an assertion about the host that produced it: the
+    # previous version of this test asserted the throw's wording, passed here,
+    # and failed on the CI runner, whose output carried the source line cut at
+    # `… the step-level env: mapping  …` and not the phrase being matched.
+    # `Write-Output` text is passed through unmodified — measured on strings well
+    # past any plausible width — so the annotation is host-independent.
+    assert "::error::IN_OLD_IP / IN_NEW_IP is empty" in out, (
+        f"step failed but did not emit the annotation naming the cause: {out}"
+    )
+    assert "the step-level env: mapping is missing or misnamed" in out, (
+        f"the annotation was emitted but not with the full diagnosis: {out}"
     )
     assert "CALLED" not in out, f"the script ran with empty parameters: {out}"
 

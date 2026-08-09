@@ -150,9 +150,10 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   null while queued — see below); the authoritative probe is the `enqueuePullRequest` mutation
   ("already in the queue"). Or enqueue directly:
   `gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:"<node_id>"}){mergeQueueEntry{position state}}}'`
-  - **Read that probe's four answers apart, because two of them are failures wearing the wrong
-    clothes.** `UNPROCESSABLE: "Pull request is already in the queue"` means queued — the answer you
-    are usually after. A populated `mergeQueueEntry` means you just enqueued it. But
+  - **Read the probe's answers apart, because some of them are failures wearing the wrong clothes —
+    and do not treat the list below as closed.**
+    `UNPROCESSABLE: "Pull request is already in the queue"` means queued — the answer you are
+    usually after. A populated `mergeQueueEntry` means you just enqueued it. But
     `NOT_FOUND: "Could not resolve to a node with the global id"` means **your node id is wrong**,
     and it is indistinguishable at a glance from the legitimate reading "this PR no longer exists" —
     the shape that would make a run conclude a queued PR had vanished. Derive the id in the same
@@ -163,10 +164,16 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
       #870 (run 128), where `gh pr merge --auto` on an already-green PR merged it outright and
       printed nothing, so the probe was the first thing that said so. Settle it on
       `gh pr view <n> --json state,mergedAt`, not on the error text.
+    - And `UNPROCESSABLE: "Pull request Required status check \"<name>\" is in progress."` is the
+      probe doing its documented job — it names the specific blocker, which is the whole reason the
+      Debugging tip below prefers it over `gh pr merge --auto`. Wait for that check; do not re-fire
+      the mutation in a loop.
     - **Anything not in this list is unclassified, not a fault.** This enumeration is a claim about
       the API at the time it was written and it decays like any other measurement; a reading you
-      cannot place here means go and look at `state`/`mergedAt`, not that something broke. Ledger
-      **L201**.
+      cannot place here means go and look at `state`/`mergedAt`, not that something broke. The list
+      grew by two while the PR that added this paragraph was open — the closed-PR answer came from
+      ffcadmin #870 and the in-progress-check answer from that PR's own enqueue attempt minutes
+      later. Ledger **L201**.
 
 - **Debugging tip:** `gh pr merge --auto` can mask the real blocker behind a GraphQL "rate limit"
   error. The `enqueuePullRequest` mutation returns the true reason (unresolved conversation, CodeQL

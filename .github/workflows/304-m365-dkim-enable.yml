@@ -82,16 +82,43 @@ jobs:
           fi
           echo "organization=$org" >> "$GITHUB_OUTPUT"
 
+      # `domain` is dispatcher-controlled free text and reaches the body through
+      # step-level `env:`, never interpolated into it (#1080). This is the call site
+      # that mattered most in this file, for a reason the other burn-downs did not
+      # have: the credential is not in a NEIGHBOURING step, it is in this step's own
+      # `env:` block below. Measured against the shipped body with
+      # `domain = ffcworkingsite1.org$(Set-Content -Path STOLEN.txt -Value
+      # $env:FFC_EXO_CERT_PASSWORD)` — the Exchange Online certificate password was
+      # written to a file, `m365-dkim.ps1` was then called with
+      # `Domain=[ffcworkingsite1.org]`, and the step exited **0**. A pwsh
+      # double-quoted string expands `$( )`, so the payload never had to break out of
+      # the quotes, and the expansion happens while the ARGUMENT is being built —
+      # before the script is invoked, so nothing the callee validates can reach it.
       - name: Check DKIM status + targets (Exchange Online)
         id: dkim
         shell: pwsh
         env:
+          IN_DOMAIN: ${{ inputs.domain }}
           FFC_AZURE_CLIENT_ID: ${{ secrets.FFC_AZURE_CLIENT_ID }}
           FFC_AZURE_TENANT_ID: ${{ secrets.FFC_AZURE_TENANT_ID }}
           FFC_EXO_CERT_PFX_BASE64: ${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}
           FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
         run: |
-          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ steps.org.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing -Confirm:$false
+          # Fail closed on a missing mapping. The interpolated body could not have an
+          # absent source — substitution always produced something — but an `env:`
+          # mapping can be deleted or misspelled, and the #1080 checker is honestly
+          # green when it is (ledger L202): nothing is interpolated either way, while
+          # this step would call m365-dkim.ps1 with an empty -Domain. `domain` is
+          # `required: true`, so unset and empty mean the same thing here and an
+          # emptiness test is the right one. Emitted as `Write-Output '::error::…'`
+          # rather than `throw`, because a thrown message reaches the log only through
+          # pwsh's error renderer and an assertion on a render is an assertion about
+          # the host that produced it (ledger L207).
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-dkim.ps1 with an empty -Domain.'
+            exit 1
+          }
+          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain $env:IN_DOMAIN -Organization "${{ steps.org.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing -Confirm:$false
 
   cloudflare_set:
     runs-on: ubuntu-latest
@@ -109,10 +136,23 @@ jobs:
           azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 
+      # Same reason as the exo_check call site (#1080), one credential over: by the
+      # time this body runs, `cloudflare-tokens-from-kv` above has put the WRITE-scoped
+      # Cloudflare token into the job environment. `domain` arrives through `env:`.
       - name: Create/Update DKIM selector CNAMEs in Cloudflare
         shell: pwsh
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
-          $domain = "${{ inputs.domain }}"
+          # Fail closed on a missing mapping (ledger L202/L207) — see the exo_check
+          # step. An empty $domain here would be passed to Update-CloudflareDns.ps1
+          # as -Zone, so the diagnosis would arrive as a Cloudflare zone lookup
+          # failure and send the next reader to the dispatch form.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to write DKIM selector CNAMEs against an empty -Zone.'
+            exit 1
+          }
+          $domain = $env:IN_DOMAIN
           $s1Name = "selector1._domainkey"
           $s2Name = "selector2._domainkey"
           $s1Target = "${{ needs.exo_check.outputs.selector1_target }}"
@@ -141,12 +181,21 @@ jobs:
           tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
+      # Third and last call site of the same input (#1080). This one carries the EXO
+      # certificate in its own `env:` exactly as exo_check does, and it is the step
+      # that actually flips DKIM signing on.
       - name: Enable DKIM signing (Exchange Online)
         shell: pwsh
         env:
+          IN_DOMAIN: ${{ inputs.domain }}
           FFC_AZURE_CLIENT_ID: ${{ secrets.FFC_AZURE_CLIENT_ID }}
           FFC_AZURE_TENANT_ID: ${{ secrets.FFC_AZURE_TENANT_ID }}
           FFC_EXO_CERT_PFX_BASE64: ${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}
           FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
         run: |
-          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ needs.exo_check.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing -Enable -Confirm:$false
+          # Fail closed on a missing mapping (ledger L202/L207) — see the exo_check step.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-dkim.ps1 with an empty -Domain.'
+            exit 1
+          }
+          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain $env:IN_DOMAIN -Organization "${{ needs.exo_check.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing -Enable -Confirm:$false

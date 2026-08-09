@@ -406,7 +406,17 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # --- Microsoft 365 ------------------------------------------------------
     "301-m365-domain-preflight.yml": ("domain",),
     "303-m365-domain-and-dkim.yml": ("domain",),
-    "304-m365-dkim-enable.yml": ("domain",),
+    # 304-m365-dkim-enable.yml burned down: `domain` now reaches all three bodies
+    # through step-level `env:`. It was the only remaining entry interpolating one
+    # input into three jobs under two gated environments — m365-prod twice and
+    # cloudflare-prod-write once — so a payload ran three times, under two credentials,
+    # on one approval. Sharper than the neighbouring entries in WHERE the credential
+    # sat: both m365-prod steps carry FFC_EXO_CERT_PFX_BASE64 / FFC_EXO_CERT_PASSWORD
+    # in the SAME step's `env:` as the injection point, so the Exchange Online
+    # certificate was already in the process environment of the body being injected
+    # into. Measured against the shipped body: the cert password was written to a file,
+    # m365-dkim.ps1 was then called with a legal `Domain=[ffcworkingsite1.org]`, and the
+    # step exited 0.
     "306-discover-uncaptured-comms.yml": ("mailboxes", "since_days"),
     # --- WPMUDEV ------------------------------------------------------------
     "601-wpmudev-export-sites.yml": ("output_file",),

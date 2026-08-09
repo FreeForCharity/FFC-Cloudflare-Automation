@@ -281,6 +281,34 @@ def test_the_domains_input_is_not_interpolated_anywhere_in_120():
     )
 
 
+def test_the_bash_reads_are_bare_so_a_deleted_env_block_aborts():
+    """`"$IN_DOMAINS"`, never `"${IN_DOMAINS:-}"` — the remedy has a direction.
+
+    Both bash consumers run under `set -u`, and both fall back to the FLEET-WIDE
+    default list when the value is empty. So a `:-` default would turn a deleted
+    or renamed `env:` mapping into "cut over all 55 sites" instead of an abort:
+    the safe-looking spelling picks the loudest possible wrong behaviour, and it
+    is the spelling a reviewer adds to silence a `set -u` worry. Bare is correct
+    here for the same reason the fixture assertions above exist — the failure has
+    to be visible.
+    """
+    for job_id, step_name in DOMAIN_CONSUMERS:
+        step = find_step(load_workflow(WORKFLOW), job_id, step_name)
+        if step.get("shell") != "bash":
+            continue
+        body = step["run"]
+        assert "set -u" in body, (
+            f"step {step.get('name')!r} must keep `set -u` — it is what makes a "
+            f"missing {DOMAINS_ENV} abort instead of defaulting to the fleet list"
+        )
+        for bad in (f"${{{DOMAINS_ENV}:-", f"${{{DOMAINS_ENV}:="):
+            assert bad not in body, (
+                f"step {step.get('name')!r} reads {DOMAINS_ENV} with a shell "
+                f"default ({bad}…); a deleted env: block would then silently "
+                f"select the fleet-wide default domain list"
+            )
+
+
 def test_no_step_in_120_swallows_a_gh_error_again():
     """Local to this workflow, so a reintroduction fails here as well as in the
     ledger's fleet-wide scan — the module that owns these steps should be the

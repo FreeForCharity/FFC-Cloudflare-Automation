@@ -137,6 +137,19 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
     entirely because an earlier command silently redefined where it reads from — and `git status` is
     clean afterwards in both cases, so neither is visible by inspection. Ledger **L209**.
 
+  - **A relational defect needs a post-condition on the mutated text, not just a landed
+    substitution.** The three bullets above check the plant, the mutant and the control. All three
+    can pass while the mutated tree holds **no defect at all**, whenever the thing under test is a
+    _relation_ between two pieces of code — ordering, precedence, scope, nesting — rather than the
+    presence of one. Reviewing #1148 (run 136), `801`'s emptiness guard was moved from above its
+    call to immediately before the `& pwsh …` line to test an ordering assertion; anchor asserted,
+    substitution verified, control green, `rc=0`, nothing failed. `801` spells the entire call on
+    **one** line (`… -Ein $env:INPUT_EIN -OutputFile $out`), so "before the call line" is still
+    _above_ the parameter use. Moving the guard **below** that line, the ordering test fires alone,
+    as its author documented. Assert the relation you meant to break —
+    `guard_index > first_use_index` — and refuse to read the exit code until it holds. Note the
+    direction this fails in: an uncaught mutation reads as "the tests are weaker than claimed",
+    which is a finding against the author. Ledger **L221**.
   - **And the control has to have FINISHED. A partial run compared against a complete one blames the
     change under test.** The bullet above is a control measuring the wrong tree; this is the same
     failure one level out. Reviewing #1139 (run 132) the full suite was started on the composed tree

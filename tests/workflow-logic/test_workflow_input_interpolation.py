@@ -360,6 +360,17 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                cert password to a file, the callee was then handed a legal
                domain, and the step exited 0.
       = 31 / 16
+      -303     burned down: `domain` moved to step-level `env:` in both pwsh
+               bodies. Its two call sites sit in ONE m365-prod job, and the
+               credential exposure is broader than 304's rather than narrower:
+               the JOB-level `env:` maps EXO_CERT_PFX_BASE64 and
+               EXO_CERT_PFX_PASSWORD, so the certificate was in the process
+               environment of both injection points — including the `status`
+               step, which maps no secret of its own and reads as the harmless
+               half of the workflow. Measured from that step: the payload wrote
+               the cert password to a file, the callee was handed a legal
+               domain, and the step exited 0.
+      = 30 / 15
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -369,8 +380,8 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 31, (
-        f"expected 31 interpolating workflows, got {len(current)}: "
+    assert len(current) == 30, (
+        f"expected 30 interpolating workflows, got {len(current)}: "
         f"{sorted(current)}"
     )
     write = {
@@ -381,7 +392,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 16, f"expected 16 write-environment ones, got {len(write)}: {sorted(write)}"
+    assert len(write) == 15, f"expected 15 write-environment ones, got {len(write)}: {sorted(write)}"
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
     for burned in (
@@ -390,6 +401,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
         "112-dns-bulk-replace-a-ip.yml",
         "704-website-analytics-wire.yml",
         "304-m365-dkim-enable.yml",
+        "303-m365-domain-and-dkim.yml",
     ):
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "

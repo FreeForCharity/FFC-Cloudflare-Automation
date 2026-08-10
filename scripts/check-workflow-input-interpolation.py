@@ -405,7 +405,17 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     "229-whmcs-client-field-populate.yml": ("client_id", "email"),
     # --- Microsoft 365 ------------------------------------------------------
     "301-m365-domain-preflight.yml": ("domain",),
-    "303-m365-domain-and-dkim.yml": ("domain",),
+    # 303-m365-domain-and-dkim.yml burned down: `domain` now reaches both pwsh
+    # bodies through step-level `env:`. Its two call sites sit in ONE job on
+    # m365-prod, and the credential exposure is broader than 304's rather than
+    # narrower: the JOB-level `env:` maps EXO_CERT_PFX_BASE64 and
+    # EXO_CERT_PFX_PASSWORD, so the Exchange Online certificate and its password
+    # were in the process environment of BOTH injection points — including the
+    # `status` step, which reads as the harmless half of the workflow. The DKIM
+    # step adds EXO_APP_ID / EXO_TENANT / EXO_ORGANIZATION in its own `env:`
+    # (ledger L213). `action` and `create_if_missing` are still interpolated and
+    # are NOT findings: GitHub constrains a `choice` and a `boolean` to a value it
+    # generated, so neither can carry a payload.
     # 304-m365-dkim-enable.yml burned down: `domain` now reaches all three bodies
     # through step-level `env:`. It was the only remaining entry interpolating one
     # input into three jobs under two gated environments — m365-prod twice and

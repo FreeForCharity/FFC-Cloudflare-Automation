@@ -646,12 +646,12 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
 
 - **The full workflow-logic suite takes ~8 minutes once it actually runs.** It used to finish in
   seconds only because the modules were aborting; any short command timeout now reads as a hang.
-  Measured run 142 (2026-08-10) on clean `main` at `7183417`: **480s wall, `rc=1`, 1177 PASS /
-  83 FAIL across 16 failing modules** — that failure count is the *expected* local baseline, not a
+  Measured run 142 (2026-08-10) on clean `main` at `7183417`: **480s wall, `rc=1`, 1177 PASS / 83
+  FAIL across 16 failing modules** — that failure count is the _expected_ local baseline, not a
   regression (these modules need credentials or a Linux runner). Run 141 had to background it
-  against a 10-minute foreground cap. **The figure this line carried until run 142 was ">2
-  minutes", which was true and four times too small** — it was written when the suite was a quarter
-  its current size, and a bound that is merely *not false* stops being a budget you can plan with.
+  against a 10-minute foreground cap. **The figure this line carried until run 142 was ">2 minutes",
+  which was true and four times too small** — it was written when the suite was a quarter its
+  current size, and a bound that is merely _not false_ stops being a budget you can plan with.
   Re-measure it, do not re-copy it.
 - **One module — `test_729_add_collaborator.py` — leaves a zero-byte `U+F022 U+F022` file in the
   repo root.** Reproducible, untracked; it is suite output, not a checkout artifact. `ls -b` renders
@@ -724,9 +724,9 @@ from the same mistake.
   `739-process-health-metrics.yml`. List `.github/workflows/` and match the numeric prefix rather
   than guessing the slug.
 
-**Run 142 recurrence — this exact trap, with these exact workflows, caught the Conductor again.**
-A 60-run sweep returned zero failures and would have been published as a clean fleet; those 60 runs
-spanned **2h13m** (19:53→22:06Z), and all three standing outages are *daily*, so every one of them
+**Run 142 recurrence — this exact trap, with these exact workflows, caught the Conductor again.** A
+60-run sweep returned zero failures and would have been published as a clean fleet; those 60 runs
+spanned **2h13m** (19:53→22:06Z), and all three standing outages are _daily_, so every one of them
 sat outside the window. The per-workflow remedy above works but costs one call per workflow, which
 is why it keeps getting skipped under budget pressure. **The one-call form that does not have the
 defect** — the filter is applied server-side, before the page is cut, so the page spans days:
@@ -738,11 +738,11 @@ gh api 'repos/OWNER/REPO/actions/runs?status=failure&per_page=30' \
 
 ⚠️ **…and that output is NOT searchable by FFC workflow number, which is what turned the recurrence
 into a near-miss.** The runs API returns the **run's** display title, not the workflow's name: 502
-renders as `Google Analytics Report` and 735 as `Dependabot Affected Repos`, with the `502. ` / `735. `
-prefix — the key the entire FFC taxonomy is organised around — absent. Grepping that list for `502`
-finds nothing while 502 is failing, and the natural reading of "not in the failure list" is
-**recovered**. Run 142 drew exactly that conclusion, and additionally flagged 502 as a *new,
-unreported* outage under its display name. Both errors point the flattering way.
+renders as `Google Analytics Report` and 735 as `Dependabot Affected Repos`, with the `502. ` /
+`735. ` prefix — the key the entire FFC taxonomy is organised around — absent. Grepping that list
+for `502` finds nothing while 502 is failing, and the natural reading of "not in the failure list"
+is **recovered**. Run 142 drew exactly that conclusion, and additionally flagged 502 as a _new,
+unreported_ outage under its display name. Both errors point the flattering way.
 
 Resolve `workflow_id` against the workflow list; never match on `.name`:
 

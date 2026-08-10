@@ -157,7 +157,39 @@ def roster_finding(
     return None
 
 
+def _survive_unencodable_output() -> None:
+    """Stop a child's non-ASCII byte from killing the harness mid-suite.
+
+    #962 pinned two encoding settings -- the child's encode and the parent's
+    decode. There is a THIRD, and it is the one that bites: after decoding a
+    module's output cleanly, this process RE-ENCODES it on `sys.stdout.write`,
+    using whatever encoding the parent's stdout happens to have. Redirect a run
+    on Windows and that is cp1252, so a module printing `->` as U+2192 raises
+    UnicodeEncodeError inside the loop. The harness dies at whichever module
+    got there first, prints no summary, and exits non-zero.
+
+    That failure is dangerous rather than merely annoying, because it is
+    SILENT in the direction that matters: the run stops early, so every module
+    after it never runs, and the "workflow-logic tests failed:" line never
+    prints. Anything reading the output for that line -- a reviewer, a script,
+    a later step -- finds no failures and concludes there were none. A crashed
+    suite and a clean suite are indistinguishable to a reader who greps for
+    failures instead of for the summary's PRESENCE.
+
+    `errors="replace"` and not `encoding="utf-8"`: re-encoding is only ever a
+    display concern here (every comparison this file makes is on the decoded
+    `str`), and forcing utf-8 bytes at a genuinely cp1252 console trades a
+    crash for mojibake on every box that has one. Replacement degrades one
+    character and keeps the roster and the summary readable.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        # Absent if stdout has been swapped for a plain object; nothing to pin.
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _survive_unencodable_output()
     args = list(sys.argv[1:] if argv is None else argv)
     directory = pathlib.Path(args[0]).resolve() if args else HERE
     modules = sorted(directory.glob("test_*.py"))

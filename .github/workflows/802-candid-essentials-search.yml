@@ -75,6 +75,21 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          # Fail closed on a missing mapping (ledger L202/L207/L214). `search_terms` is
+          # `required: true`, so a real dispatch cannot produce an empty value here — a
+          # deleted or misspelled `env:` mapping can, and `check-workflow-input-
+          # interpolation.py` is honestly green when it does (nothing is interpolated
+          # either way). A bare `$env:INPUT_SEARCH_TERMS` renders empty as NO ARGUMENT AT ALL, so
+          # `-SearchTerms $env:INPUT_SEARCH_TERMS` would bind the next token instead and the step would
+          # report a call-signature error — or, worse, exit 0 having run nothing, since
+          # `$ErrorActionPreference = 'Stop'` does not propagate a native command's
+          # failure. Emitted as `Write-Output '::error::…'` rather than `throw` so the
+          # assertion is on the text, not on pwsh's error renderer (ledger L207).
+          if ([string]::IsNullOrWhiteSpace($env:INPUT_SEARCH_TERMS)) {
+            Write-Output '::error::INPUT_SEARCH_TERMS is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank value. Refusing to call candid-essentials-search.ps1 with an empty -SearchTerms.'
+            exit 1
+          }
+
           $size = 10
           if (-not [int]::TryParse($env:INPUT_SIZE, [ref]$size) -or $size -lt 1 -or $size -gt 25) {
             throw "Invalid size '$($env:INPUT_SIZE)': expected an integer 1-25."

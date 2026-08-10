@@ -509,7 +509,7 @@ def test_every_module_in_the_suite_either_reports_a_roster_or_declares_why_not()
 # --------------------------------------------------------------------------
 
 # U+2192 RIGHTWARDS ARROW: absent from cp1252, and already used in real module
-# output. `test_the_arrow_is_genuinely_unencodable` keeps this honest.
+# output. `test_the_arrow_is_genuinely_unencodable_in_cp1252` keeps this honest.
 ARROW = "→"
 
 PRINTS_UNENCODABLE = (

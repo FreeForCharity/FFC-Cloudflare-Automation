@@ -164,9 +164,10 @@ def _survive_unencodable_output() -> None:
     decode. There is a THIRD, and it is the one that bites: after decoding a
     module's output cleanly, this process RE-ENCODES it on `sys.stdout.write`,
     using whatever encoding the parent's stdout happens to have. Redirect a run
-    on Windows and that is cp1252, so a module printing `->` as U+2192 raises
-    UnicodeEncodeError inside the loop. The harness dies at whichever module
-    got there first, prints no summary, and exits non-zero.
+    on Windows and that is cp1252, so a module printing an arrow as U+2192
+    (RIGHTWARDS ARROW, not the ASCII `->`) raises UnicodeEncodeError inside
+    the loop. The harness dies at whichever module got there first, prints no
+    summary, and exits non-zero.
 
     That failure is dangerous rather than merely annoying, because it is
     SILENT in the direction that matters: the run stops early, so every module

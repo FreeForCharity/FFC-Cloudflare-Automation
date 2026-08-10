@@ -25,17 +25,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
+      # The runner writes a `run:` body to a script FILE in the workspace before
+      # executing it, so an interpolated secret is a credential on disk - in the
+      # same workspace an injected `domain` payload would be running in. Mapped
+      # and looped instead, the pattern 304 uses.
       - name: Validate required secrets
         shell: bash
+        env:
+          FFC_AZURE_CLIENT_ID: ${{ secrets.FFC_AZURE_CLIENT_ID }}
+          FFC_AZURE_TENANT_ID: ${{ secrets.FFC_AZURE_TENANT_ID }}
         run: |
-          if [ -z "${{ secrets.FFC_AZURE_CLIENT_ID }}" ]; then
-            echo "::error::FFC_AZURE_CLIENT_ID secret is not set (environment: m365-prod)";
-            exit 1;
-          fi
-          if [ -z "${{ secrets.FFC_AZURE_TENANT_ID }}" ]; then
-            echo "::error::FFC_AZURE_TENANT_ID secret is not set (environment: m365-prod)";
-            exit 1;
-          fi
+          for name in FFC_AZURE_CLIENT_ID FFC_AZURE_TENANT_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name secret is not set (environment: m365-prod)";
+              exit 1;
+            fi
+          done
 
       - name: Azure login (OIDC)
         uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
@@ -53,14 +58,40 @@ jobs:
             echo "::error::Failed to acquire Microsoft Graph token";
             exit 1;
           fi
+          # Runtime-derived, so the runner does not mask it the way it masks a
+          # value from the secrets store - this one never passed through it. Mask
+          # it before it becomes a step output, or anything that echoes the
+          # variable downstream prints a live Graph bearer token into the log.
+          # (Deliberately not naming the expression form here: this body is swept
+          # for that literal by test_301_preflight_wiring.py, which reads a
+          # comment as a reference - see #1019.)
+          echo "::add-mask::$token"
           echo "access_token=$token" >> "$GITHUB_OUTPUT"
 
+      # `domain` is a free-text dispatch input, so it reaches the body through
+      # step-level `env:`, never interpolated into it (#1080). What sits beside it
+      # here is a live Microsoft Graph bearer token, mapped from a step OUTPUT
+      # rather than from the secrets store - so a sweep of this file for `secrets.`
+      # in a `run:` body finds nothing, and ledger L213's "read the step's env:"
+      # ranks this site by a mapping whose right-hand side names no secret at all.
       - name: Run domain preflight
         shell: pwsh
         env:
           GRAPH_ACCESS_TOKEN: ${{ steps.graph.outputs.access_token }}
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
-          pwsh -NoProfile -File scripts/m365-domain-preflight.ps1 -Domain "${{ inputs.domain }}" -AccessToken $env:GRAPH_ACCESS_TOKEN -SkipCloudflare
+          $ErrorActionPreference = 'Stop'
+          # Fail closed on a missing mapping (ledger L202/L214). Interpolation had
+          # no absent source - substitution always produced something - but an
+          # `env:` var that is unmapped or misnamed is silently empty, and pwsh
+          # renders an empty variable as NO ARGUMENT AT ALL, so `-AccessToken`
+          # would bind to `-Domain` and the diagnosis would arrive as a
+          # call-signature error one parameter to the left of the cause.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-domain-preflight.ps1 with an empty -Domain.'
+            exit 1
+          }
+          pwsh -NoProfile -File scripts/m365-domain-preflight.ps1 -Domain $env:IN_DOMAIN -AccessToken $env:GRAPH_ACCESS_TOKEN -SkipCloudflare
 
   cloudflare:
     runs-on: ubuntu-latest
@@ -79,9 +110,22 @@ jobs:
           azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
 
+      # Second `domain` call site, in a second job under a second environment. The
+      # composite action above has already put the Key Vault Cloudflare tokens in
+      # this process environment, so an injected body here needs no lateral
+      # movement either - and this job `needs: [graph]`, so one dispatch runs the
+      # payload in both jobs.
       - name: Run Cloudflare audit portion
         shell: pwsh
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          # Fail closed on a missing mapping - see the preflight step in `graph`.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-domain-preflight.ps1 with an empty -Domain.'
+            exit 1
+          }
           # The composite action populates BOTH CLOUDFLARE_API_TOKEN_FFC and
           # CLOUDFLARE_API_TOKEN_CM. scripts/m365-domain-preflight.ps1's
           # Get-CfToken returns null when it finds multiple distinct candidates,
@@ -92,4 +136,4 @@ jobs:
           } else {
             $env:CLOUDFLARE_API_TOKEN_CM
           }
-          pwsh -NoProfile -File scripts/m365-domain-preflight.ps1 -Domain "${{ inputs.domain }}" -SkipGraph -CloudflareToken $cfToken
+          pwsh -NoProfile -File scripts/m365-domain-preflight.ps1 -Domain $env:IN_DOMAIN -SkipGraph -CloudflareToken $cfToken

@@ -404,7 +404,17 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     "224-whmcs-github-pages-product-alignment.yml": ("product_id",),
     "229-whmcs-client-field-populate.yml": ("client_id", "email"),
     # --- Microsoft 365 ------------------------------------------------------
-    "301-m365-domain-preflight.yml": ("domain",),
+    # 301-m365-domain-preflight.yml burned down: `domain` now reaches both pwsh
+    # bodies through step-level `env:`. Its two call sites sit in TWO jobs under
+    # TWO environments — `graph` on m365-prod and `cloudflare` on
+    # cloudflare-prod-read, the second `needs:` the first — so one payload in one
+    # dispatch ran in both. What distinguishes it from 303/304 is what sat in the
+    # first injection point's own `env:`: not a `secrets.*` value but
+    # GRAPH_ACCESS_TOKEN, a live Microsoft Graph bearer token mapped from a step
+    # OUTPUT. A sweep of the file for `secrets.` in a `run:` body — the scope test
+    # #1141's review recommended for the remaining lanes — finds nothing there.
+    # The second site inherits the Key Vault Cloudflare tokens the composite
+    # action loads, which are not in any `env:` block at all.
     # 303-m365-domain-and-dkim.yml burned down: `domain` now reaches both pwsh
     # bodies through step-level `env:`. Its two call sites sit in ONE job on
     # m365-prod, and the credential exposure is broader than 304's rather than

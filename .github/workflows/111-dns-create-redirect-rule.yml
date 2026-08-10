@@ -67,6 +67,21 @@ jobs:
           INPUT_INCLUDE_WWW: ${{ inputs.include_www }}
           INPUT_PRESERVE_QS: ${{ inputs.preserve_query_string }}
         run: |
+          # Fail closed on an empty mapping (#1150, ledger L214). The inputs below are
+          # `required: true`, so a real dispatch cannot blank them -- a deleted or
+          # misspelled `env:` mapping can. `pwsh -File ... @args` is a NATIVE command, so an
+          # empty value is not an empty argument -- it is no argument at all:
+          # `-SourceDomain` binds the NEXT token and every later parameter shifts one
+          # position left. The interpolation guard stays green either way, because nothing
+          # is interpolated.
+          if ([string]::IsNullOrWhiteSpace($env:INPUT_SOURCE)) {
+            Write-Output '::error::INPUT_SOURCE is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank source_domain. Refusing to call Set-CloudflareRedirectRule.ps1 with an empty -SourceDomain.'
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($env:INPUT_TARGET)) {
+            Write-Output '::error::INPUT_TARGET is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank target_domain. Refusing to call Set-CloudflareRedirectRule.ps1 with an empty -TargetDomain.'
+            exit 1
+          }
           $args = @(
             '-SourceDomain', $env:INPUT_SOURCE,
             '-TargetDomain', $env:INPUT_TARGET,
@@ -100,6 +115,21 @@ jobs:
           INPUT_INCLUDE_WWW: ${{ inputs.include_www }}
           INPUT_PRESERVE_QS: ${{ inputs.preserve_query_string }}
         run: |
+          # Fail closed on an empty mapping (#1150, ledger L214). The inputs below are
+          # `required: true`, so a real dispatch cannot blank them -- a deleted or
+          # misspelled `env:` mapping can. `pwsh -File ... @args` is a NATIVE command, so an
+          # empty value is not an empty argument -- it is no argument at all:
+          # `-SourceDomain` binds the NEXT token and every later parameter shifts one
+          # position left. The interpolation guard stays green either way, because nothing
+          # is interpolated.
+          if ([string]::IsNullOrWhiteSpace($env:INPUT_SOURCE)) {
+            Write-Output '::error::INPUT_SOURCE is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank source_domain. Refusing to call Set-CloudflareRedirectRule.ps1 with an empty -SourceDomain.'
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($env:INPUT_TARGET)) {
+            Write-Output '::error::INPUT_TARGET is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank target_domain. Refusing to call Set-CloudflareRedirectRule.ps1 with an empty -TargetDomain.'
+            exit 1
+          }
           $args = @(
             '-SourceDomain', $env:INPUT_SOURCE,
             '-TargetDomain', $env:INPUT_TARGET,

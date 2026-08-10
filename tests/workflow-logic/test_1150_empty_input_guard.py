@@ -170,16 +170,33 @@ def test_the_tree_matches_the_freeze():
     )
 
 
-def test_the_freeze_is_not_empty_and_names_the_write_lanes():
-    assert guard.KNOWN_UNGUARDED, (
-        "an empty freeze makes `compare()` vacuous in the stale direction and "
-        "hides that 24 live sites are unguarded"
+def test_the_freeze_is_empty_because_the_burn_down_landed():
+    """The 24 frozen sites are fixed, so the freeze describes nothing.
+
+    An empty freeze makes `compare()` vacuous in the stale direction, which is
+    exactly the shape that lets a sweep pass by inspecting nothing. So this
+    asserts the three things that would otherwise be indistinguishable from a
+    checker that stopped working: the population is non-empty, none of it is
+    unguarded, and the write lanes are still recognised as write lanes. If
+    `job_environments` silently returned nothing, the middle assertion would
+    still pass and the last would not.
+    """
+    assert guard.KNOWN_UNGUARDED == {}, (
+        f"KNOWN_UNGUARDED is not empty: {sorted(guard.KNOWN_UNGUARDED)}. Every "
+        f"entry is a live hazard, so a re-populated freeze is a burn-down that "
+        f"regressed, not a new baseline"
     )
     sites, *_ = guard.scan()
     unguarded = [site for site in sites if not site.guarded]
-    assert any(site.is_write for site in unguarded), (
-        "no unguarded site is on a write lane, which contradicts #1150's "
-        "measurement — check `job_environments`, not the workflows"
+    assert not unguarded, (
+        f"{len(unguarded)} site(s) are unguarded with an empty freeze, so the "
+        f"checker must be exiting 1: {sorted(str(site) for site in unguarded)}"
+    )
+    write = [site for site in sites if site.is_write]
+    assert len(write) > 10, (
+        f"only {len(write)} of {len(sites)} sites classify as a write lane — "
+        f"#1150 measured 17 unguarded ones alone, so a collapse here means "
+        f"`job_environments` stopped resolving, not that the lanes changed"
     )
 
 

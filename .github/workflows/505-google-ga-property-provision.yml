@@ -89,6 +89,21 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
+
+          # Fail closed on an empty mapping (#1150, ledger L214). `domain` is `required:
+          # true` and Mandatory on the script's param block. The other four references are
+          # gated appends and already correct. `& pwsh -File ... @scriptArgs` is a NATIVE
+          # command, so an empty value is not an empty argument -- it is no argument at all:
+          # `-Domain` binds the NEXT token and every later parameter shifts one position
+          # left. The interpolation guard stays green either way, because nothing is
+          # interpolated.
+          if ([string]::IsNullOrWhiteSpace($env:DOMAIN)) {
+            Write-Output '::error::DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call google-ga-property-provision.ps1 with an empty -Domain.'
+            exit 1
+          }
+
+          # Guarded BEFORE the Key Vault fetch: a dispatch that cannot succeed must not
+          # mint a write-scoped credential first (#983 is the same principle, per-job).
           $keyFile = Join-Path $env:RUNNER_TEMP 'ffc-workspace-sa.json'
           az keyvault secret download --vault-name kv-ffc-admin-prod-cbm --name wr-all-cbm-google-workspace-service-account-key --file $keyFile
           if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch the Workspace SA key from Key Vault.' }

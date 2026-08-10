@@ -605,65 +605,20 @@ def current_map(sites: list[Site]) -> dict:
 #     therefore cannot lose an argument. They are correct code; a freeze entry
 #     would record a defect that does not exist (criterion 3).
 #
-# 24 references across 10 workflows, 17 of them on a write lane. Larger than
-# the 16 #1146 counted from the direct form alone and smaller than the 32 the
-# array-aware regex reported, and the difference in both directions is the
-# point: the array-splat form adds sites a `-Param $env:VAR` adjacency cannot
-# see, and modelling the guard removes the ones that are correct code
-# (`if ($env:ACCOUNT_ID) { $a += @('-AccountId', $env:ACCOUNT_ID) }` is 11 of
-# 503's and 505's references between them).
-KNOWN_UNGUARDED: dict = {
-    # [W] cloudflare-prod-read + cloudflare-prod-write. `preview` and `apply`
-    # run the same body on the two lanes, so each variable is frozen twice.
-    "111-dns-create-redirect-rule.yml": (
-        "apply::INPUT_SOURCE",
-        "apply::INPUT_TARGET",
-        "preview::INPUT_SOURCE",
-        "preview::INPUT_TARGET",
-    ),
-    # [W] cloudflare-prod-read + cloudflare-prod-write — invites a zone member.
-    "122-cloudflare-zone-member-add.yml": (
-        "apply::INPUT_DOMAIN",
-        "apply::INPUT_EMAIL",
-        "preview::INPUT_DOMAIN",
-        "preview::INPUT_EMAIL",
-    ),
-    # [W] cloudflare-prod-read + cloudflare-prod-write.
-    "124-cloudflare-cache-purge.yml": (
-        "apply::INPUT_DOMAIN",
-        "apply::INPUT_URLS",
-        "preview::INPUT_DOMAIN",
-        "preview::INPUT_URLS",
-    ),
-    # cloudflare-prod-read — the only read-lane entry in the freeze.
-    "125-cloudflare-cache-rules-audit.yml": ("audit::INPUT_DOMAIN",),
-    # [W] whmcs-prod. `client_email` IS guarded here (`elseif ($env:TICKET_EMAIL
-    # -ne '')`), which is why only two of the three appear.
-    "205-whmcs-ticket-open.yml": (
-        "open_ticket::TICKET_MESSAGE",
-        "open_ticket::TICKET_SUBJECT",
-    ),
-    # [W] whmcs-prod. `REASON` is guarded; `ACTION` is not.
-    "211-whmcs-order-update.yml": ("order_update::ACTION",),
-    # [W] whmcs-prod — sets a field on a WHMCS record.
-    "230-whmcs-record-field-set.yml": (
-        "record_field_set::FIELD",
-        "record_field_set::TARGET",
-        "record_field_set::VALUE",
-    ),
-    # [W] m365-prod.
-    "305-m365-add-tenant-domain.yml": ("add-tenant-domain::INPUT_DOMAIN",),
-    # [W] google-prod-write — provisions a GTM container. The three optional ids
-    # (CLARITY_ID, META_PIXEL_ID, GRANTEE_EMAIL) are gated appends and correct.
-    "503-google-gtm-provision.yml": (
-        "provision::ACCOUNT_ID",
-        "provision::DOMAIN",
-        "provision::MEASUREMENT_ID",
-    ),
-    # [W] google-prod-write — provisions a GA4 property. Four of its five
-    # references are gated appends; `DOMAIN` is the unconditional one.
-    "505-google-ga-property-provision.yml": ("provision::DOMAIN",),
-}
+# EMPTY, and that is the finished state rather than an un-started one. The 24
+# references this froze on 2026-08-10 -- across 111, 122, 124, 125, 205, 211,
+# 230, 305, 503 and 505, 17 of them on a write lane -- were burnt down in the
+# follow-up PR to #1155, so the freeze has nothing left to describe. An entry
+# here is a defect awaiting a fix, so the list belongs empty; a NEW instance is
+# a finding to be fixed, not appended.
+#
+# Do not read the emptiness as "this guard has nothing to say". `compare()` is
+# vacuous in the stale direction when the freeze is empty, so the tests carry
+# the non-vacuity instead: `test_the_scan_sees_real_bodies` pins the
+# denominator, `test_the_freeze_is_empty_because_the_burn_down_landed` pins
+# that zero sites are unguarded AND that write-lane sites are still classified
+# as such, and `test_every_1148_site_is_seen_and_guarded` pins 17 by name.
+KNOWN_UNGUARDED: dict = {}
 
 
 def compare(current: dict, known: dict | None = None) -> tuple[list[str], list[str]]:
@@ -770,15 +725,30 @@ def main() -> int:
 
     guarded = [site for site in sites if site.guarded]
     write = [site for site in unguarded if site.is_write]
+    # Which sentence is true depends on whether anything is still frozen. Saying
+    # "this is a freeze, not an endorsement" over an EMPTY freeze trains the
+    # reader to discount a green run that has actually earned its green.
+    if unguarded:
+        posture = (
+            "This is a FREEZE on new instances, not an endorsement: every entry is a "
+            "place where an empty dispatch input does not arrive empty — it does not "
+            "arrive at all, and every later argument binds one position to the left "
+            "(#1150, ledger L214).\n"
+        )
+    else:
+        posture = (
+            "The freeze is EMPTY and every reference above is guarded, so this green "
+            "is an endorsement rather than a hold. A new instance is a finding to fix, "
+            "not an entry to append: an empty dispatch input does not arrive empty — "
+            "it does not arrive at all, and every later argument binds one position to "
+            "the left (#1150, ledger L214).\n"
+        )
     print(
         f"empty-input guard OK: {scanned} workflow files scanned, {bodies} PowerShell "
         f"run: bodies map a dispatch input; {len(sites)} parameter-position references "
         f"reach a native PowerShell host ({len(guarded)} guarded, {len(unguarded)} "
         f"unguarded and frozen, {len(write)} of those on a write lane).\n"
-        f"This is a FREEZE on new instances, not an endorsement: every entry is a "
-        f"place where an empty dispatch input does not arrive empty — it does not "
-        f"arrive at all, and every later argument binds one position to the left "
-        f"(#1150, ledger L214).\n"
+        f"{posture}"
         f"Not judged: {unjudged} parameter-position reference(s) inside native "
         f"commands that are not a PowerShell host (gh, git, az), which drop an empty "
         f"argument the same way but whose binding is not this rule; "

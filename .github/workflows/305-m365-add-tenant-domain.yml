@@ -70,6 +70,17 @@ jobs:
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
+
+          # Fail closed on an empty mapping (#1150, ledger L214). The inputs below are
+          # `required: true`, so a real dispatch cannot blank them -- a deleted or
+          # misspelled `env:` mapping can. `& pwsh @scriptArgs` is a NATIVE command, so an
+          # empty value is not an empty argument -- it is no argument at all: `-Domain`
+          # binds the NEXT token and every later parameter shifts one position left. The
+          # interpolation guard stays green either way, because nothing is interpolated.
+          if ([string]::IsNullOrWhiteSpace($env:INPUT_DOMAIN)) {
+            Write-Output '::error::INPUT_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-add-tenant-domain.ps1 with an empty -Domain.'
+            exit 1
+          }
           $scriptArgs = @('-NoProfile', '-File', 'scripts/m365-add-tenant-domain.ps1', '-Domain', $env:INPUT_DOMAIN, '-AccessToken', $env:GRAPH_ACCESS_TOKEN)
           # Fail safe: preview unless dry_run is explicitly 'false'.
           if ($env:INPUT_DRY_RUN -ne 'false') { $scriptArgs += '-DryRun' }

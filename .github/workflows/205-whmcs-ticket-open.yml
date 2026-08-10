@@ -72,6 +72,22 @@ jobs:
           TICKET_EMAIL: ${{ inputs.client_email }}
         run: |
           $ErrorActionPreference = 'Stop'
+
+          # Fail closed on an empty mapping (#1150, ledger L214). The inputs below are
+          # `required: true`, so a real dispatch cannot blank them -- a deleted or
+          # misspelled `env:` mapping can. `& pwsh -File ... @cliArgs` is a NATIVE command,
+          # so an empty value is not an empty argument -- it is no argument at all:
+          # `-Subject` binds the NEXT token and every later parameter shifts one position
+          # left. The interpolation guard stays green either way, because nothing is
+          # interpolated.
+          if ([string]::IsNullOrWhiteSpace($env:TICKET_SUBJECT)) {
+            Write-Output '::error::TICKET_SUBJECT is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank subject. Refusing to call whmcs-ticket-open.ps1 with an empty -Subject.'
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TICKET_MESSAGE)) {
+            Write-Output '::error::TICKET_MESSAGE is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank message. Refusing to call whmcs-ticket-open.ps1 with an empty -Message.'
+            exit 1
+          }
           $cliArgs = @(
             '-DeptId', '${{ inputs.deptid }}',
             '-Subject', $env:TICKET_SUBJECT,

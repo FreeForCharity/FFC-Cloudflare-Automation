@@ -204,6 +204,26 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/check-workflow-input-interpolation.py
 
+      - name: Validate an env-mapped dispatch input fails closed when empty
+        shell: bash
+        run: |
+          # The second half of the same remedy. Moving the input into `env:`
+          # stops it being source code; it does NOT stop it being empty, and in
+          # a NATIVE command an empty $env:X is not an empty argument — it is no
+          # argument, so `-Domain $env:DOMAIN -KeyPath $k` becomes
+          # `-Domain -KeyPath $k` and every later argument binds one position to
+          # the left (ledger L214). #1146/#1148 fixed 17 call sites by hand;
+          # nothing stopped the 18th, and every remaining #1080 burn-down
+          # manufactures a fresh instance the moment it converts an
+          # interpolation. This models the invocation form rather than matching
+          # a spelling: `& .\x.ps1 -P $env:X` binds empty and shifts nothing, so
+          # 225/226 are correct code and are not findings. Freezes the 24
+          # existing references (17 on write lanes) and fails on a new one, on a
+          # stale freeze entry, or on anything it cannot parse. Needs a
+          # PowerShell host, like the guards above, and fails closed without one.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 scripts/check-workflow-empty-input-guard.py
+
       - name: Validate text-mode subprocess calls pin an encoding
         shell: bash
         run: |

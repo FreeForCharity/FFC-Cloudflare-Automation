@@ -62,9 +62,13 @@ jobs:
           # value from the secrets store - this one never passed through it. Mask
           # it before it becomes a step output, or anything that echoes the
           # variable downstream prints a live Graph bearer token into the log.
-          # (Deliberately not naming the expression form here: this body is swept
-          # for that literal by test_301_preflight_wiring.py, which reads a
-          # comment as a reference - see #1019.)
+          # (Deliberately not naming the expression form in words here. This
+          # body - comments included, since a YAML block scalar is one string -
+          # is swept by test_no_step_interpolates_a_secret_into_its_body in
+          # tests/workflow-logic/test_301_preflight_wiring.py, which matches a
+          # substring and so reads a mention inside a comment as a reference.
+          # Measured: an earlier draft of this comment failed that test. See
+          # #1019 for the general case.)
           echo "::add-mask::$token"
           echo "access_token=$token" >> "$GITHUB_OUTPUT"
 

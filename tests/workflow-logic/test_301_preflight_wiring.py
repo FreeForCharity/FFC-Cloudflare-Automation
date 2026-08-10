@@ -91,8 +91,15 @@ GRAPH_TOKEN_VAR = "GRAPH_ACCESS_TOKEN"
 GRAPH_TOKEN_EXPRESSION = "${{ steps.graph.outputs.access_token }}"
 CF_TOKEN_VAR = "CLOUDFLARE_API_TOKEN_FFC"
 
-FAKE_GRAPH_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.FAKE-GRAPH-BEARER"
-FAKE_CF_TOKEN = "cf-read-token-from-key-vault-FAKE"
+# Deliberately NOT shaped like the credentials they stand in for. A JWT-shaped
+# literal (`eyJ...`) is treated as a token by secret scanners and by the tooling
+# that renders CI output, so it comes back REDACTED — and the one place these
+# values are ever printed is an assertion message on a failing run, which is the
+# moment the reader needs to see whether the sentinel holds the credential or an
+# empty string. A placeholder that cannot be mistaken for a token keeps the
+# failure legible; the tests only ever compare it for equality.
+FAKE_GRAPH_TOKEN = "graph-bearer-placeholder-not-a-real-token"
+FAKE_CF_TOKEN = "cf-read-placeholder-not-a-real-token"
 
 # Every place `domain` reaches a script body: the job, the step-name substring,
 # the credential in reach, and the extra environment the body needs to run at
@@ -426,7 +433,7 @@ def test_injected_payload_arrives_as_data_at_both_call_sites():
         )
 
 
-def test_prefix_bodies_are_the_positive_control():
+def test_pre_fix_bodies_are_the_positive_control():
     """The same payload against each PRE-FIX body executes and steals a credential.
 
     Without this, the inertness test above proves nothing: a payload that never

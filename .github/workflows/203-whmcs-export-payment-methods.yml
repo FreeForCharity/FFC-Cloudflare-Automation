@@ -42,6 +42,18 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          # `api_url` is `required: false`, so a dispatch that omits or blanks it leaves
+          # this empty; default to the APIM gateway so the call stays on the static-IP
+          # path (not the IP-restricted origin), matching 209/210/219/221/225/226/228.
+          # That default is also what keeps the bare `$env:WHMCS_API_URL` below from
+          # vanishing as an ARGUMENT and shifting every later parameter one position
+          # left (ledger L214) — an empty value is no argument at all, so `-ApiUrl`
+          # would bind the next `-Switch` and the failure would read as a call-signature
+          # problem for what is really a missing value.
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+
           $out = "${{ inputs.output_file }}"
           $dir = Split-Path -Parent $out
           if (-not [string]::IsNullOrWhiteSpace($dir)) {

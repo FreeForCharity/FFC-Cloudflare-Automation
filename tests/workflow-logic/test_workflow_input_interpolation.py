@@ -322,7 +322,7 @@ def test_the_tree_matches_the_freeze_exactly():
 def test_the_frozen_counts_are_what_1080_reconciles_to():
     """The denominator is pinned, so a silent collapse in either direction fails.
 
-    34 / 19, and every step away from #1080's 34 / 20 is accounted for rather
+    32 / 17, and every step away from #1080's 34 / 20 is accounted for rather
     than adopted:
 
       34 / 20  #1080's table (string-typed inputs, bare `${{ inputs.X }}`)
@@ -337,6 +337,40 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                bodies. It was the only entry holding two write environments at
                once (cloudflare-prod-write and github-prod).
       = 34 / 19
+      -112     burned down: `old_ip` / `new_ip` moved to step-level `env:`. It
+               rewrites A records across every zone in both Cloudflare accounts
+               on cloudflare-prod-write, and the callee's own `[ValidatePattern]`
+               on both parameters was never a defence — it runs after the
+               injected expression, so its rejection message reads like a
+               control working on a run where the payload had already executed.
+      = 33 / 18
+      -704     burned down: `gtm_id` / `measurement_id` moved to step-level
+               `env:`. Its only interpolating step was the one named `Validate
+               inputs`, which checked the id by pasting it into the program
+               doing the checking — and the exploited run exits 0, because a
+               payload whose residue is a legal GTM id passes the very check it
+               is smuggled through. github-prod, one step before the PAT loads.
+      = 32 / 17
+      -304     burned down: `domain` moved to step-level `env:` in all three
+               bodies. It was the only remaining entry interpolating one input
+               into three jobs under two gated environments (m365-prod twice,
+               cloudflare-prod-write once), and the only one whose injection
+               point sat in a step whose OWN `env:` carried the credential —
+               the Exchange Online certificate. Measured: the payload wrote the
+               cert password to a file, the callee was then handed a legal
+               domain, and the step exited 0.
+      = 31 / 16
+      -303     burned down: `domain` moved to step-level `env:` in both pwsh
+               bodies. Its two call sites sit in ONE m365-prod job, and the
+               credential exposure is broader than 304's rather than narrower:
+               the JOB-level `env:` maps EXO_CERT_PFX_BASE64 and
+               EXO_CERT_PFX_PASSWORD, so the certificate was in the process
+               environment of both injection points — including the `status`
+               step, which maps no secret of its own and reads as the harmless
+               half of the workflow. Measured from that step: the payload wrote
+               the cert password to a file, the callee was handed a legal
+               domain, and the step exited 0.
+      = 30 / 15
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -346,8 +380,8 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 34, (
-        f"expected 34 interpolating workflows, got {len(current)}: "
+    assert len(current) == 30, (
+        f"expected 30 interpolating workflows, got {len(current)}: "
         f"{sorted(current)}"
     )
     write = {
@@ -358,10 +392,17 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 19, f"expected 19 write-environment ones, got {len(write)}: {sorted(write)}"
+    assert len(write) == 15, f"expected 15 write-environment ones, got {len(write)}: {sorted(write)}"
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
-    for burned in ("720-create-repo.yml", "120-bulk-cutover-to-github-pages.yml"):
+    for burned in (
+        "720-create-repo.yml",
+        "120-bulk-cutover-to-github-pages.yml",
+        "112-dns-bulk-replace-a-ip.yml",
+        "704-website-analytics-wire.yml",
+        "304-m365-dkim-enable.yml",
+        "303-m365-domain-and-dkim.yml",
+    ):
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "
             "free-text input"

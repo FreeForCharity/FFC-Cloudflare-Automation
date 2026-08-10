@@ -66,6 +66,19 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
 - **Copilot re-reviews every push and can file fresh threads.** After pushing fixes, re-poll
   `reviewThreads` before promoting or queueing — one resolution pass is not enough (a 2026-07-20 PR
   needed three rounds).
+  - **A fetched ref is a SNAPSHOT and the thread API is LIVE — comparing them dates your conclusion
+    to the older of the two, and it surfaces as a finding against the AUTHOR.** Reviewing #1141
+    (run 133) the Conductor fetched `pull/1141/head` at `aa73211`, worked in a worktree, then
+    queried `reviewThreads`. Both Copilot threads read `isResolved=true, isOutdated=true` while the
+    worktree still showed the dead parameter and the duplicated `secrets.*` — a clean,
+    well-evidenced reading of _threads resolved without being addressed_. It was wrong: `cdc27aa`
+    had landed in the interval and fixed both. The author is an agent actively pushing, so heads
+    move in minutes. What makes this worth a bullet rather than a footnote is the **direction of the
+    error** — every other stale-read rule here costs a retry, and this one costs an accusation,
+    which a reviewer is unlikely to double-check because it already feels uncharitable to make.
+    Re-resolve the head (`git fetch origin <branch>`, compare `rev-parse` against what you fetched)
+    before drawing any conclusion from a thread, and read `isOutdated=true` as **"the hunk moved, go
+    re-read the current file"** — never as evidence in either direction. Ledger **L216**.
 - **Reviewing a guard: reintroduce the defect it claims to catch.** Reading the workflow proves a
   new check is _wired_ (present in the `validate` job, no `continue-on-error`); it proves nothing
   about whether it _detects_. Put the original defect back and watch the guard fail. Do it in a
@@ -88,6 +101,73 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
     occurrences fired it on all 4 real rows. Assert the mutation: count the occurrences you meant to
     change and fail loudly if the count is not what you expected, or diff the file, before drawing
     any conclusion from a green run. Same for neutering a rule to mutation-test it.
+  - **And a landed plant can still be the wrong experiment: parse the mutant before you believe its
+    exit code.** The bullet above covers the mutation that does not apply. The opposite failure is a
+    mutation that applies and leaves behind something that is no longer a program — and it fails in
+    the _flattering_ direction, because a guard that cannot start exits non-zero exactly like a
+    guard that caught you. Reviewing #1132 (run 129), re-adding a workflow to
+    `check-workflow-input-interpolation.py`'s `KNOWN_UNGUARDED` put a set element into a dict
+    literal; the guard exited 1 with a `SyntaxError` and scored as a clean detection, and every
+    later mutation of that file would have scored the same way. Compile or parse the mutated
+    artifact first — `py_compile.compile(path, doraise=True)`, `node --check`, `yaml.safe_load` —
+    and refuse to count the result unless it parses. Two corollaries: **match on the guard's own
+    finding text**, never on "any output line mentioning the thing I broke" (a traceback mentions it
+    too, which is exactly how the false positive read as real); and **check the sibling mutations
+    disagree** — a set of mutations that all fire is weaker evidence than a set where each fires a
+    different, correctly-named subset. Ledger **L203**.
+  - **A verified mutation is not a verified experiment: assert the CONTROL immediately before each
+    mutation, and restore with an explicit source.** The two bullets above check the plant and check
+    the mutant. Both can pass while the experiment measures the wrong tree, and it fails toward "the
+    guard is weak". Reviewing #1137 (run 131), mutation M2 was applied with
+    `git checkout origin/main -- <workflow>` — which writes the **index** as well as the worktree —
+    and the restore before M1 was the reflexive `git checkout -- <path>`, whose source is that
+    index. M1 therefore ran against the original consistent state, the guard exited **0** correctly,
+    and the first reading was that the stale-entry half did not fire. The mutation script had
+    asserted its anchor, asserted its insertion count and `py_compile`d the result: the plant was
+    perfect and the control was wrong. So run the guard on the untouched tree first and require the
+    exit code you expect, then mutate:
+
+    ```bash
+    git restore --source=HEAD --staged --worktree -- <paths>   # explicit source, not the index
+    python3 <the-guard>; echo "baseline=$?"                    # MUST be 0 before you believe a 1
+    ```
+
+    Note what this is not: **L182** is the opposite direction, a restore that is too aggressive and
+    reverts to `HEAD` over uncommitted work under test. Here the restore went somewhere else
+    entirely because an earlier command silently redefined where it reads from — and `git status` is
+    clean afterwards in both cases, so neither is visible by inspection. Ledger **L209**.
+
+  - **And the control has to have FINISHED. A partial run compared against a complete one blames the
+    change under test.** The bullet above is a control measuring the wrong tree; this is the same
+    failure one level out. Reviewing #1139 (run 132) the full suite was started on the composed tree
+    and on clean `origin/main` as two background tasks, and both output files were read while both
+    were still being appended to: **924 PASS / 83 FAIL** against **107 PASS / 0 FAIL**, and the set
+    difference attributed **~80 failures to the PR**. Complete, they read **1086 / 83** and **1076 /
+    83** with a byte-identical list of 16 failing modules — the PR added its own ten tests and broke
+    nothing. Nothing about the early read looks partial: both files are well-formed, every line is a
+    real result, and `grep -c` answers instantly and truthfully about the bytes written so far. The
+    tell is in the **pair**, not in either file — a control whose PASS count is an order of
+    magnitude below the treatment has not finished. `run_all.py` ends by printing a terminal summary
+    line naming the failing modules, so require that line in **both** files before comparing:
+
+    ```bash
+    # run_all.py:215,217 — exactly one of these is the last line of a finished run.
+    for f in pr.txt base.txt; do
+      grep -qE '^(::error::workflow-logic tests failed:|All [0-9]+ workflow-logic test modules passed\.)' "$f" \
+        || { echo "$f INCOMPLETE — do not compare"; exit 1; }
+    done
+    ```
+
+    Quote the strings from `run_all.py` rather than from memory: the first draft of this recipe
+    guessed `^workflow-logic tests passed`, which the script never prints, so the green half of the
+    check could only ever have failed closed. It also used `\|` — a GNU basic-regex extension —
+    where `grep -E` is what makes an alternation portable. Copilot caught the second on #1140; the
+    first was found by reading the source it claims to match, which is the habit that would have
+    caught both.
+
+    Do not settle it by watching the line counts stop growing — a slow module is indistinguishable
+    from a finished run for as long as you are willing to wait. Ledger **L211**.
+
 - **If the thing under review is read-only, also run it live.** Mutation-proving establishes that
   the tests discriminate; it cannot establish that the code behaves against real data, because every
   test injects its own fixtures and its own clock. For a script that only reads — the board audit,
@@ -223,15 +303,32 @@ and all authenticate as the same user. Before starting ANY issue:
 1. **Available = `is:open -label:claimed`.** The pickup query is
    `org:FreeForCharity label:agentic-os is:open -label:claimed`. If an issue has the `claimed` label
    or an open linked PR, it is TAKEN — pick something else.
-   - **Prefer `agent-ready`.** `org:FreeForCharity label:agent-ready is:open -label:claimed` is the
-     same query narrowed to issues that are _actually pickable_: unclaimed, unblocked, one-PR-scoped
-     and carrying acceptance criteria. `agentic-os` is the programme-wide **topic** label and stays
-     on everything, so it also counts epics, machine-managed rolling issues (740/738 open and close
+   - **Prefer `agent-ready`.**
+     `org:FreeForCharity label:agent-ready is:open -label:claimed -label:blocked` is the same query
+     narrowed to issues that are _actually pickable_: unclaimed, unblocked, one-PR-scoped and
+     carrying acceptance criteria. `agentic-os` is the programme-wide **topic** label and stays on
+     everything, so it also counts epics, machine-managed rolling issues (740/738 open and close
      those themselves), items blocked on a human with credentials, and durable findings kept as
      records — none of which an agent can execute. Counting the topic label is why the Conductor's
      "keep 5–15 open" band read 46 and drifted upward for eight consecutive runs of trimming that
-     could never converge (#922). Add `agent-ready` when you file an issue that meets the bar;
-     remove it when the issue becomes blocked.
+     could never converge (#922). Add `agent-ready` when you file an issue that meets the bar.
+     - **`-label:blocked` is load-bearing, and it is the half this line used to omit.** The sentence
+       that ended _"remove it when the issue becomes blocked"_ made `agent-ready` and `blocked`
+       mutually exclusive by convention only, and convention is not a filter. Groomers have
+       deliberately kept both labels on an issue precisely so it **returns to the pool by itself**
+       the moment `blocked` comes off — #1028 says so in as many words ("Both labels stay on, so it
+       returns to the ready pool the moment the premise is settled"), which is the better design and
+       was silently unsupported: the query as written had no `blocked` term, so #1028 sat in the
+       pickup results for three days as a first-class candidate while being explicitly blocked
+       pending a controlled experiment. Measured on run 130 against `main` `8774a1a`, over REST
+       rather than the lagging search index: the documented query returned **42** issues and #1028
+       was one of them; adding `-label:blocked` returns 41 and removes exactly that one. Picking it
+       up would have been worse than wasted effort — its AC1 tells the implementer to write a
+       diagnosis into `guard_bash.py` that #1028's own later comments show mis-explains the cases,
+       and hook PRs are the class Clarke reviews by hand. **Two labels that contradict each other
+       are a bug in the query, not in the labelling** — the grooming convention was right and the
+       query was wrong, so fix the query and let the labels mean what groomers already use them to
+       mean.
    - **An issue that states why it is blocked is making a claim about a tree that has since moved —
      re-run its probe before inheriting it.** A blocker is prose: it does not re-execute, no check
      fails when it stops being true, and nothing links it to the PRs that quietly fix it. #1042
@@ -334,6 +431,20 @@ have exhausted the points budget for hours.
     reducing each page to a scalar and recombining downstream is legitimate — see
     `726-repo-rulesets-drift-audit.yml:205`, which does exactly that on purpose.
 
+  - **Once the pagination is right, the FILTER is the next thing that silently dates the answer —
+    and a long log has more than one format in it.** Run 133 derived its own run number from #719
+    with `--jq 'select(.body|test("RUN [0-9]+ START"))'` and got **Run 86** against an actual 132.
+    Every run since ~87 writes `## Run N — START` with an **em dash**, so the pattern matched only
+    the pre-87 era it was written for. Nothing errored, and this is the failure mode to internalise:
+    `--paginate` had correctly returned all 451 comments and the filter honestly reported the newest
+    thing it could see, so the two bugs compose into one well-formed, in-range, 46-runs-stale
+    number. **A wrong answer here is worse than an empty one** — an empty result gets investigated,
+    and this one only surfaced because `state/CONDUCTOR.md` disagreed. The value cannot tell you it
+    is stale, so assert something it cannot fake: that the newest match is **recent** (within a run
+    interval of now), or that the match **count** is a sane fraction of the total the endpoint
+    returned. Applies to any extractor over an append-only log — #719, a changelog, a CI history.
+    Ledger **L215**.
+
 - **An unpaginated list read cannot support an ABSENCE claim.** `per_page=100` is the maximum, not a
   guarantee, and the **default is 30**. A truncated list is indistinguishable from a complete one,
   so "X is missing" / "nothing is pending" / "zero failures" drawn from one may simply be false —
@@ -392,6 +503,29 @@ reported that #1064's functions "do not exist" from a `main` fetched 36 seconds 
 run 107 reviewed the 703 gate whose run is **123 commits** behind `main` and confirmed with one
 `git diff` that `703-sites-list-generate.yml` is byte-identical across all 123 — same check,
 opposite answer, and only the check tells you which case you are in.
+
+**A held gate also stops the schedule behind it, and `status=waiting` will not show you that
+(L212).** A run parked at a gate holds its `concurrency` slot for as long as it waits, so the next
+scheduled run is admitted to the group but gets **no job at all** until the older one is reaped.
+Measured on 703 (`group: sites-list-generate`, `cancel-in-progress: false`), whose gate has now been
+held for 68 consecutive runs: the 2026-08-03 run object was created `09:12:25Z`, and its `generate`
+job carries `created_at == started_at == 2026-08-04T07:25:50Z` — the same second the 2026-07-27 run
+was cancelled by 734. It neither missed its schedule nor reached the gate; it sat jobless for 22
+hours. The list of waiting runs shows exactly one entry throughout and looks orderly, so ask the
+**job**, not the run:
+
+```bash
+run=<id>
+gh api "repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$run" --jq '"run  created \(.created_at)"'
+gh api "repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/$run/jobs" \
+  --jq '.jobs[] | "job  created \(.created_at)  started \(.started_at)  \(.name) [\(.status)]"'
+# run  created 2026-08-03T09:12:25Z
+# job  created 2026-08-04T07:25:50Z  started 2026-08-04T07:25:50Z  generate [waiting]
+```
+
+A job `created_at` later than its run's is the signature. Report the **outcome** a long hold is
+costing, not the hold: 703 has not regenerated the sites list since 2026-07-25, because each week's
+run is queued behind the held one and then reaped.
 
 **Triaging a CI anomaly: ask upstream first, then ask _which step_ failed (L159).** The check that
 separates "our defect" from "their outage" is cheaper than every check that presupposes ours, so run
@@ -466,6 +600,22 @@ The first call gives the **effective** rules for that branch in one request; the
 rulesets producing them. A concrete tell that you asked the wrong one: `gh pr merge --delete-branch`
 refusing with `Cannot use -d or --delete-branch when merge queue enabled` on a branch you had just
 described as unprotected.
+
+**Counting orphan branches: subtract the merge queue's own heads first (L209's sibling, L208).** The
+usual figure is `remote heads` minus `open PR heads`, and while any PR is in the merge queue that
+overstates it: the queue creates a `gh-readonly-queue/main/pr-<n>-<base-sha>` head which has no open
+PR **by construction**, so the subtraction counts live queue machinery as an abandoned branch.
+
+```bash
+gh api --paginate "repos/FreeForCharity/<repo>/branches?per_page=100" \
+  --jq '.[].name' | grep -vE '^main$|^gh-readonly-queue/'
+```
+
+The trap is self-inflicted and order-dependent: a run that enqueues a PR and _then_ counts gets one
+more than a run that counts first, and neither number looks wrong. Run 131 measured 8 this way
+against #986's inventory of 7, and the discrepancy was a queue head for a PR that same run had
+enqueued twenty minutes earlier. **Name the difference rather than counting it** — a one-branch gap
+against a known inventory is a question about the denominator before it is evidence of drift.
 
 **Find a workflow's runs by FILE NAME, never by matching the run's `.name` (L33).** A run object's
 `.name` is the rendered `run-name:`, not the workflow's `name:`. Workflow 228 titles its runs

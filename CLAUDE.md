@@ -644,8 +644,15 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
     that prettier called unchanged and `git status` called clean; run 96's was caught only because
     the mutation harness asserts its anchor is present before substituting, and the assert fired.
 
-- **The full workflow-logic suite takes over 2 minutes once it actually runs.** It used to finish in
-  seconds only because the modules were aborting; a 2-minute command timeout now reads as a hang.
+- **The full workflow-logic suite takes ~8 minutes once it actually runs.** It used to finish in
+  seconds only because the modules were aborting; any short command timeout now reads as a hang.
+  Measured run 142 (2026-08-10) on clean `main` at `7183417`: **480s wall, `rc=1`, 1177 PASS /
+  83 FAIL across 16 failing modules** — that failure count is the *expected* local baseline, not a
+  regression (these modules need credentials or a Linux runner). Run 141 had to background it
+  against a 10-minute foreground cap. **The figure this line carried until run 142 was ">2
+  minutes", which was true and four times too small** — it was written when the suite was a quarter
+  its current size, and a bound that is merely *not false* stops being a budget you can plan with.
+  Re-measure it, do not re-copy it.
 - **One module — `test_729_add_collaborator.py` — leaves a zero-byte `U+F022 U+F022` file in the
   repo root.** Reproducible, untracked; it is suite output, not a checkout artifact. `ls -b` renders
   the name `""`, which is what Windows maps `"` to. Bisected in run 77 by running all 50 modules in
@@ -716,6 +723,37 @@ from the same mistake.
   bare `404` that reads like "this workflow does not exist"; the real file is
   `739-process-health-metrics.yml`. List `.github/workflows/` and match the numeric prefix rather
   than guessing the slug.
+
+**Run 142 recurrence — this exact trap, with these exact workflows, caught the Conductor again.**
+A 60-run sweep returned zero failures and would have been published as a clean fleet; those 60 runs
+spanned **2h13m** (19:53→22:06Z), and all three standing outages are *daily*, so every one of them
+sat outside the window. The per-workflow remedy above works but costs one call per workflow, which
+is why it keeps getting skipped under budget pressure. **The one-call form that does not have the
+defect** — the filter is applied server-side, before the page is cut, so the page spans days:
+
+```bash
+gh api 'repos/OWNER/REPO/actions/runs?status=failure&per_page=30' \
+  --jq '.workflow_runs[] | "wf\(.workflow_id) | \(.created_at) | \(.name) | run \(.id)"'
+```
+
+⚠️ **…and that output is NOT searchable by FFC workflow number, which is what turned the recurrence
+into a near-miss.** The runs API returns the **run's** display title, not the workflow's name: 502
+renders as `Google Analytics Report` and 735 as `Dependabot Affected Repos`, with the `502. ` / `735. `
+prefix — the key the entire FFC taxonomy is organised around — absent. Grepping that list for `502`
+finds nothing while 502 is failing, and the natural reading of "not in the failure list" is
+**recovered**. Run 142 drew exactly that conclusion, and additionally flagged 502 as a *new,
+unreported* outage under its display name. Both errors point the flattering way.
+
+Resolve `workflow_id` against the workflow list; never match on `.name`:
+
+```bash
+gh api 'repos/OWNER/REPO/actions/workflows?per_page=100' \
+  --jq '.workflows[] | "\(.id) | \(.path) | \(.name)"'
+```
+
+`740-scheduled-workflow-failure-alert.yml:185` already carries this rule for the alert marker, with
+the reason spelled out — the gap was never in the automation, only in what an operator reading a
+failure list by hand had in front of them.
 
 ## `gh search` is index-backed and lags — never audit completeness with it (run 62, 2026-07-31)
 
@@ -867,8 +905,10 @@ These are the ways that difference has actually bitten, each found the expensive
   explicit `encoding=`. `scripts/generate-agentic-os-status.py` is a production script that dies on
   an emoji in an issue title without it, and the public status feed now routinely contains 🚨 alert
   titles. Enumerated and tracked in #945.
-- **The full `tests/workflow-logic/` suite takes >2 minutes here** once it actually runs. A 2-minute
-  command timeout reads as a hang. (Crashes used to make it finish fast — see ledger L35.)
+- **The full `tests/workflow-logic/` suite takes ~8 minutes here** once it actually runs (480s
+  measured run 142; see the fuller note above for the pass/fail baseline). Budget for it rather than
+  treating it as a quick check, and background it — run 141 hit a 10-minute foreground cap. (Crashes
+  used to make it finish fast — see ledger L35.)
 - **You cannot approve your own PR, and every agent authenticates as `clarkemoyer`.**
   `gh pr review --approve` returns `Can not approve your own pull request`. A conductor review is
   therefore a **comment**, and the merge queue's required checks — not an approval — are the gate.

@@ -51,8 +51,14 @@ WHY THIS MODULE EXISTS AT ALL, GIVEN THE CHECKER
     It is a detector defined over the defect's spelling, so it goes quiet the
     moment the spelling is gone — including when the REMEDY is gone too (ledger
     L202). Delete an `env:` mapping and nothing is interpolated, so the checker
-    is honestly green while the step runs with an empty `-Domain`. Only a
-    per-step assertion on the wiring can see that, which is `_assert_wiring`.
+    is honestly green over a step that can no longer receive its input at all.
+    Measured, not argued: mutations M1 and M2 of this PR's review delete the
+    mapping from each step in turn, and
+    `scripts/check-workflow-input-interpolation.py` exits **0** for both while
+    this module fails. The emptiness check downgrades the consequence from a
+    silent success to a stated failure; it does not make the regression
+    visible. Only a per-step assertion on the wiring does, which is
+    `_assert_wiring`.
 """
 
 from __future__ import annotations
@@ -134,13 +140,26 @@ PRE_FIX_BODIES = {
 # ParserError, so any substring predicate matches the payload text on a run that
 # executed nothing.
 #
-# `-Domain` is deliberately NOT Mandatory in the stubs even though the real
-# m365-domain-status.ps1 declares it so. A Mandatory parameter with no value
-# makes pwsh PROMPT, which under a non-interactive harness hangs until the
-# timeout and reports as a crash rather than as a result — so the fail-closed
-# test below could not tell "the guard stopped the call" from "the callee
-# blocked on a prompt". The guard is what this module tests; the callee's own
-# Mandatory is the second line and is not.
+# `-Domain` is deliberately NOT Mandatory in these stubs even though the real
+# m365-domain-status.ps1 declares it so, because the stub is here to measure the
+# WORKFLOW's guard and a Mandatory parameter would measure the callee's binder
+# instead. What the real Mandatory actually does with an empty value is worth
+# stating, because the intuitive answer is wrong in the reassuring direction and
+# it is the reason the emptiness guard is load-bearing rather than tidy —
+# measured, with stdin non-interactive as it is on a runner:
+#
+#     $ErrorActionPreference = 'Stop'
+#     pwsh -File scripts/m365-domain-status.ps1 -Domain $env:IN_DOMAIN -ShowDnsRecords
+#     # -> m365-domain-status.ps1: Missing an argument for parameter 'Domain'.
+#     # -> the step CONTINUES and exits 0
+#
+# It does not prompt and it does not stop. An empty `$env:X` vanishes as an
+# argument entirely (ledger L214), the inner pwsh reports a *call-signature*
+# problem for a *value* problem, and `$ErrorActionPreference = 'Stop'` does not
+# propagate a native command's exit code — so the step goes GREEN having never
+# run the script. `test_without_the_guard_a_missing_mapping_is_a_silent_success`
+# is the positive control for that, and it is what makes the fail-closed test
+# below a statement about the guard rather than about the stub.
 STATUS_STUB = """[CmdletBinding()]
 param(
     [string]$Domain,
@@ -150,6 +169,18 @@ param(
     [switch]$ShowDnsRecords
 )
 Write-Output "CALLED Domain=[$Domain] ShowDnsRecords=[$ShowDnsRecords]"
+"""
+
+# The real script's parameter block, reproduced only for the positive control
+# below. Kept separate from STATUS_STUB so the discriminating tests are never
+# measuring pwsh's binder by accident.
+MANDATORY_STATUS_STUB = """[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$Domain,
+    [switch]$ShowDnsRecords
+)
+Write-Output "CALLED Domain=[$Domain]"
 """
 
 # `SupportsShouldProcess` is required, not decoration: the real m365-dkim.ps1
@@ -479,6 +510,77 @@ def test_both_steps_fail_closed_when_the_mapping_is_missing():
             f"mapping: {out}"
         )
         assert not injected, f"site {site!r} wrote the sentinel: {out}"
+
+
+def test_without_the_guard_a_missing_mapping_is_a_silent_success():
+    """Positive control for the fail-closed test: prove the guard is load-bearing.
+
+    Without it, the assertions above prove only that a step which exits 1 exits
+    1. This runs the SAME body with the emptiness check stripped out and the
+    callee's real `Mandatory` attribute in place — the configuration a reader
+    would assume is already safe — and measures what actually happens:
+
+        * `-Domain` receives nothing, so the argument vanishes rather than
+          arriving empty (ledger L214);
+        * pwsh reports `Missing an argument for parameter 'Domain'`, a
+          call-signature error for a value problem;
+        * the step CONTINUES and exits **0**, because
+          `$ErrorActionPreference = 'Stop'` does not propagate a native
+          command's exit code.
+
+    A green step that never ran the script is the silent-success shape, and it
+    is exactly what the guard converts into a stated cause.
+    """
+    step = _step("status")
+    body = step["run"]
+    # YAML strips the block scalar's common indentation, so the guard is not
+    # found by its indented spelling — asserted rather than assumed (ledger L47).
+    marker = "if ([string]::IsNullOrWhiteSpace"
+    assert body.count(marker) == 1, (
+        f"expected exactly one emptiness guard in the status body, found "
+        f"{body.count(marker)} — this control would strip the wrong thing: {body!r}"
+    )
+    guard_start = body.index(marker)
+    guard_end = body.index("}\n", guard_start) + 2
+    stripped = body[:guard_start] + body[guard_end:]
+    assert "IsNullOrWhiteSpace" not in stripped, (
+        f"the emptiness guard was not removed, so this control is measuring "
+        f"the guarded body: {stripped!r}"
+    )
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        (tmp / "scripts").mkdir()
+        (tmp / "scripts" / "m365-domain-status.ps1").write_text(
+            MANDATORY_STATUS_STUB, encoding="utf-8"
+        )
+        script = tmp / "step.ps1"
+        script.write_text(stripped, encoding="utf-8")
+        env = child_env()
+        env.pop(ENV_VAR, None)
+        proc = subprocess.run(
+            ["pwsh", "-NoProfile", "-File", str(script)],
+            cwd=tmp,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=120,
+        )
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, (
+        f"the unguarded body exited {proc.returncode}; if the callee's own "
+        f"Mandatory now stops the step, the fail-closed guard is no longer the "
+        f"only thing holding this and the docstring should be re-read: {out}"
+    )
+    assert "Missing an argument for parameter 'Domain'" in out, (
+        f"expected the vanished-argument diagnosis from the callee's binder, "
+        f"so this control is measuring the case it claims to: {out}"
+    )
+    assert "CALLED Domain=" not in out, (
+        f"the script ran despite the missing mapping, so the empty value did "
+        f"not vanish and L214 does not apply here as stated: {out}"
+    )
 
 
 def test_no_step_interpolates_a_secret_into_its_body():

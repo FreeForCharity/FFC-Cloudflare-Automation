@@ -65,25 +65,40 @@ guard = _load()
 
 HAVE_PWSH = guard.find_powershell() is not None
 
-# The 17 call sites #1148 converted, as (workflow, variable). Every one must be
-# SEEN by the scan and classified GUARDED. Absence from the freeze is not
-# evidence on its own — a checker that never looked produces the same absence.
+# The 17 call sites #1148 converted, keyed the way `test_1146`'s own SITES table
+# keys them: (workflow, job, step-name substring, variable).
+#
+# Keyed by STEP and not by (workflow, variable), because `213` converted FOUR
+# distinct steps that all map `WHMCS_API_URL`. Collapsing them to one key
+# asserts one of the four and silently drops the rest, so a regression in
+# "Export invoices" would pass as long as "Export clients" still held — the
+# exact vacuous-green shape this list exists to prevent, one level down.
+# Caught in review on #1155.
 CONVERTED_1148 = [
-    ("201-whmcs-export-domains.yml", "WHMCS_API_URL"),
-    ("202-whmcs-export-products.yml", "WHMCS_API_URL"),
-    ("203-whmcs-export-payment-methods.yml", "WHMCS_API_URL"),
-    ("212-whmcs-product-add.yml", "WHMCS_API_URL"),
-    ("213-whmcs-zeffy-payments-import-draft.yml", "WHMCS_API_URL"),
-    ("214-whmcs-clients-metrics.yml", "WHMCS_API_URL"),
-    ("215-whmcs-nonprofit-clients-metrics.yml", "WHMCS_API_URL"),
-    ("216-whmcs-activity-metrics.yml", "WHMCS_API_URL"),
-    ("217-whmcs-client-fields-survey.yml", "WHMCS_API_URL"),
-    ("218-whmcs-siteslist-reconciliation.yml", "WHMCS_API_URL"),
-    ("220-whmcs-served-metrics.yml", "WHMCS_API_URL"),
-    ("221-whmcs-application-search.yml", "QUERY"),
-    ("801-candid-charity-check.yml", "INPUT_EIN"),
-    ("802-candid-essentials-search.yml", "INPUT_SEARCH_TERMS"),
+    ("201-whmcs-export-domains.yml", "export_domains", "Export domains", "WHMCS_API_URL"),
+    ("202-whmcs-export-products.yml", "export_products", "Export products", "WHMCS_API_URL"),
+    ("203-whmcs-export-payment-methods.yml", "export_payment_methods", "Export payment method", "WHMCS_API_URL"),
+    ("212-whmcs-product-add.yml", "product_add", "Add catalog product", "WHMCS_API_URL"),
+    ("213-whmcs-zeffy-payments-import-draft.yml", "whmcs_to_zeffy_draft", "Export clients", "WHMCS_API_URL"),
+    ("213-whmcs-zeffy-payments-import-draft.yml", "whmcs_to_zeffy_draft", "Export transactions", "WHMCS_API_URL"),
+    ("213-whmcs-zeffy-payments-import-draft.yml", "whmcs_to_zeffy_draft", "Export invoices", "WHMCS_API_URL"),
+    ("213-whmcs-zeffy-payments-import-draft.yml", "whmcs_to_zeffy_draft", "Lookup invoices", "WHMCS_API_URL"),
+    ("214-whmcs-clients-metrics.yml", "clients_metrics", "Aggregate client metrics", "WHMCS_API_URL"),
+    ("215-whmcs-nonprofit-clients-metrics.yml", "nonprofit_clients_metrics", "Aggregate nonprofit", "WHMCS_API_URL"),
+    ("216-whmcs-activity-metrics.yml", "activity_metrics", "Build activity matrix", "WHMCS_API_URL"),
+    ("217-whmcs-client-fields-survey.yml", "client_fields_survey", "Survey client classification", "WHMCS_API_URL"),
+    ("218-whmcs-siteslist-reconciliation.yml", "siteslist_reconciliation", "Reconcile WHMCS", "WHMCS_API_URL"),
+    ("220-whmcs-served-metrics.yml", "served_metrics", "Build served-per-year", "WHMCS_API_URL"),
+    ("221-whmcs-application-search.yml", "application_search", "Search applications", "QUERY"),
+    ("801-candid-charity-check.yml", "charity_check", "Charity Check lookup", "INPUT_EIN"),
+    ("802-candid-essentials-search.yml", "essentials_search", "Essentials search", "INPUT_SEARCH_TERMS"),
 ]
+
+# 221's step also references WHMCS_API_URL, guarded, and is deliberately NOT in
+# the list above: #1146's table covers that step under `QUERY`. So the scan sees
+# 18 references across these 14 workflows and 17 of them are #1148's — the
+# difference is accounted for rather than absorbed by a >= assertion.
+EXTRA_GUARDED_IN_THE_SAME_STEPS = 1
 
 # The two sites a form-blind matcher flags and this guard must not (#1150
 # criterion 3): both invoke through the PowerShell binder, so an empty value
@@ -175,22 +190,61 @@ def test_the_freeze_is_not_empty_and_names_the_write_lanes():
 
 
 def test_every_1148_site_is_seen_and_guarded():
+    """All 17, each located by its own step — not 14 keys with 3 sites dropped."""
+    assert len(CONVERTED_1148) == 17, (
+        f"the table lists {len(CONVERTED_1148)} sites; #1148 converted 17, and a "
+        f"short table is a criterion-2 assertion that silently covers less than "
+        f"it claims"
+    )
     sites, *_ = guard.scan()
-    seen = {(site.workflow, site.variable): site for site in sites}
-    for workflow, variable in CONVERTED_1148:
-        site = seen.get((workflow, variable))
-        assert site is not None, (
-            f"{workflow}:{variable} — one of the 17 sites #1148 converted is not "
-            f"seen at all. Its absence from the freeze then proves nothing, which "
-            f"is exactly the vacuous-green shape criterion 2 exists to catch"
+    for workflow, job, step_substring, variable in CONVERTED_1148:
+        matches = [
+            site
+            for site in sites
+            if site.workflow == workflow
+            and site.job == job
+            and step_substring in site.step
+            and site.variable == variable
+        ]
+        where = f"{workflow} :: {job} :: …{step_substring}… :: {variable}"
+        assert len(matches) == 1, (
+            f"{where} — expected exactly one reference, found {len(matches)}. Zero "
+            f"means one of the 17 sites #1148 converted is not seen at all, so its "
+            f"absence from the freeze proves nothing; more than one means the step "
+            f"substring stopped identifying a single call site and this row is no "
+            f"longer asserting what it names"
         )
+        site = matches[0]
         assert site.guarded, (
-            f"{workflow}:{variable} is reported UNGUARDED although #1148 guarded "
-            f"it. Per criterion 2 the guard-detection is wrong, not the workflow"
+            f"{where} is reported UNGUARDED although #1148 guarded it. Per "
+            f"criterion 2 the guard-detection is wrong, not the workflow"
         )
-        assert workflow not in guard.KNOWN_UNGUARDED or site.key not in guard.KNOWN_UNGUARDED[workflow], (
-            f"{workflow}:{variable} is frozen although it is guarded"
+        assert site.key not in guard.KNOWN_UNGUARDED.get(workflow, ()), (
+            f"{where} is frozen although it is guarded (criterion 2)"
         )
+
+
+def test_the_1148_workflows_hold_no_references_the_table_does_not_account_for():
+    """The other half of criterion 2: nothing in those steps is silently extra.
+
+    Asserted as an exact count rather than a floor. A `>=` here would let a new
+    unguarded reference appear inside an already-converted workflow and still
+    read as "all 17 present and guarded", which is the reassuring direction.
+    """
+    sites, *_ = guard.scan()
+    prefixes = {workflow[:3] for workflow, _job, _step, _var in CONVERTED_1148}
+    found = [site for site in sites if site.workflow[:3] in prefixes]
+    expected = len(CONVERTED_1148) + EXTRA_GUARDED_IN_THE_SAME_STEPS
+    assert len(found) == expected, (
+        f"expected {expected} references across the #1148 workflows "
+        f"({len(CONVERTED_1148)} converted + {EXTRA_GUARDED_IN_THE_SAME_STEPS} "
+        f"accounted-for extra), found {len(found)}: "
+        f"{sorted((s.workflow, s.step, s.variable) for s in found)}"
+    )
+    unguarded = [site for site in found if not site.guarded]
+    assert not unguarded, (
+        f"a reference inside an already-converted workflow is unguarded: {unguarded}"
+    )
 
 
 def test_the_binder_form_produces_no_site_at_all():
@@ -595,6 +649,7 @@ NEEDS_PWSH = {
     "test_the_tree_matches_the_freeze",
     "test_the_freeze_is_not_empty_and_names_the_write_lanes",
     "test_every_1148_site_is_seen_and_guarded",
+    "test_the_1148_workflows_hold_no_references_the_table_does_not_account_for",
     "test_the_binder_form_produces_no_site_at_all",
     "test_a_binder_invocation_is_not_a_finding",
     "test_the_direct_form_is_detected",

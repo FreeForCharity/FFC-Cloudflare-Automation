@@ -71,6 +71,17 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $orderId = [int]$env:ORDER_ID
+
+          # Fail closed on an empty mapping (#1150, ledger L214). `action` is a `required:
+          # true` choice, so a real dispatch cannot blank it -- a deleted or misspelled
+          # `env:` mapping can. `& pwsh @whatArgs` is a NATIVE command, so an empty value is
+          # not an empty argument -- it is no argument at all: `-Action` binds the NEXT
+          # token and every later parameter shifts one position left. The interpolation
+          # guard stays green either way, because nothing is interpolated.
+          if ([string]::IsNullOrWhiteSpace($env:ACTION)) {
+            Write-Output '::error::ACTION is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank action. Refusing to call whmcs-order-update.ps1 with an empty -Action.'
+            exit 1
+          }
           $whatArgs = @('-NoProfile', '-File', '.\scripts\whmcs-order-update.ps1', '-OrderId', $orderId, '-Action', $env:ACTION)
           if (-not [string]::IsNullOrWhiteSpace($env:REASON)) { $whatArgs += @('-Reason', $env:REASON) }
           if ('${{ inputs.dry_run }}' -ne 'false') { $whatArgs += '-DryRun' }

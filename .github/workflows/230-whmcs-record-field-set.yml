@@ -96,6 +96,24 @@ jobs:
             throw "record_id must be a positive integer (got '$($env:RECORD_ID)')."
           }
 
+          # Fail closed on an empty mapping (#1150, ledger L214). The inputs below are
+          # `required: true`, so a real dispatch cannot blank them -- a deleted or
+          # misspelled `env:` mapping can. `& pwsh @psArgs` is a NATIVE command, so an empty
+          # value is not an empty argument -- it is no argument at all: `-Target` binds the
+          # NEXT token and every later parameter shifts one position left. The interpolation
+          # guard stays green either way, because nothing is interpolated.
+          if ([string]::IsNullOrWhiteSpace($env:TARGET)) {
+            Write-Output '::error::TARGET is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank target. Refusing to call whmcs-record-field-set.ps1 with an empty -Target.'
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($env:FIELD)) {
+            Write-Output '::error::FIELD is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank field. Refusing to call whmcs-record-field-set.ps1 with an empty -Field.'
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($env:VALUE)) {
+            Write-Output '::error::VALUE is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank value. Refusing to call whmcs-record-field-set.ps1 with an empty -Value.'
+            exit 1
+          }
           $psArgs = @(
             '-NoProfile', '-File', '.\scripts\whmcs-record-field-set.ps1',
             '-ApiUrl', $env:WHMCS_API_URL,

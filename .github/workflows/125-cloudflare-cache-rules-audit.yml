@@ -51,6 +51,18 @@ jobs:
           # for the step summary; use Continue so native stderr writes cannot
           # terminate the step before the exit code is read.
           $ErrorActionPreference = 'Stop'
+
+          # Fail closed on an empty mapping (#1150, ledger L214). The inputs below are
+          # `required: true`, so a real dispatch cannot blank them -- a deleted or
+          # misspelled `env:` mapping can. `& pwsh -File ... @scriptArgs` is a NATIVE
+          # command, so an empty value is not an empty argument -- it is no argument at all:
+          # `-Domain` binds the NEXT token and every later parameter shifts one position
+          # left. The interpolation guard stays green either way, because nothing is
+          # interpolated.
+          if ([string]::IsNullOrWhiteSpace($env:INPUT_DOMAIN)) {
+            Write-Output '::error::INPUT_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call cloudflare-cache-rules-get.ps1 with an empty -Domain.'
+            exit 1
+          }
           $scriptArgs = @('-Domain', $env:INPUT_DOMAIN)
           if ($env:INPUT_FAIL_ON_FINDING -eq 'true') { $scriptArgs += '-FailOnFinding' }
 

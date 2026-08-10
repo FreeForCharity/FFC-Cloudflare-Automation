@@ -655,6 +655,28 @@ def test_the_guarded_form_states_the_cause_and_does_not_call(  # noqa: D401
     )
 
 
+def test_the_pwsh_skip_list_names_only_real_tests():
+    """A skip list keyed by string name does not move when a test is renamed.
+
+    Nothing notices, either: the renamed test just stops being skipped, and on
+    a host with no PowerShell it stops being a SKIP and becomes an uncaught
+    `RuntimeError` that takes the whole module down — reported by `run_all.py`
+    as "defines N tests and reported an outcome for none of them", which reads
+    like a crashed module rather than a stale string. Exactly that happened on
+    #1157, where this list still named `test_the_freeze_is_not_empty_and_
+    names_the_write_lanes` after the test had been renamed.
+
+    Costs one set difference; turns a silent rot into a red test.
+    """
+    declared = {test.__name__ for test in TESTS}
+    unknown = sorted(NEEDS_PWSH - declared)
+    assert not unknown, (
+        f"NEEDS_PWSH names {unknown}, which are not tests in this module. A "
+        f"renamed or deleted test leaves its old name here, so the real test "
+        f"runs unskipped on a host with no PowerShell host and crashes"
+    )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 # Everything that reaches the checker's `scan()` needs a PowerShell host — it
@@ -664,7 +686,7 @@ TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 NEEDS_PWSH = {
     "test_the_scan_sees_real_bodies",
     "test_the_tree_matches_the_freeze",
-    "test_the_freeze_is_not_empty_and_names_the_write_lanes",
+    "test_the_freeze_is_empty_because_the_burn_down_landed",
     "test_every_1148_site_is_seen_and_guarded",
     "test_the_1148_workflows_hold_no_references_the_table_does_not_account_for",
     "test_the_binder_form_produces_no_site_at_all",

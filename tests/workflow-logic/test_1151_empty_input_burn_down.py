@@ -366,6 +366,20 @@ def test_a_removed_variable_is_not_the_same_as_an_assigned_empty_string():
     )
 
 
+def test_the_pwsh_skip_list_names_only_real_tests():
+    """Same rot, one module over — see #1157.
+
+    `PWSH_REQUIRED` is keyed by string, so a rename silently drops a test out
+    of the skip set. On a host with no PowerShell that test then runs for real
+    and dies with an uncaught error instead of reporting SKIP.
+    """
+    declared = {test.__name__ for test in TESTS}
+    unknown = sorted(PWSH_REQUIRED - declared)
+    assert not unknown, (
+        f"PWSH_REQUIRED names {unknown}, which are not tests in this module"
+    )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 # Everything that runs a payload needs a PowerShell host. Refusing to report a

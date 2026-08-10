@@ -69,6 +69,21 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          # Fail closed on a missing mapping (ledger L202/L207/L214). `ein` is
+          # `required: true`, so a real dispatch cannot produce an empty value here — a
+          # deleted or misspelled `env:` mapping can, and `check-workflow-input-
+          # interpolation.py` is honestly green when it does (nothing is interpolated
+          # either way). A bare `$env:INPUT_EIN` renders empty as NO ARGUMENT AT ALL, so
+          # `-Ein $env:INPUT_EIN` would bind the next token instead and the step would
+          # report a call-signature error — or, worse, exit 0 having run nothing, since
+          # `$ErrorActionPreference = 'Stop'` does not propagate a native command's
+          # failure. Emitted as `Write-Output '::error::…'` rather than `throw` so the
+          # assertion is on the text, not on pwsh's error renderer (ledger L207).
+          if ([string]::IsNullOrWhiteSpace($env:INPUT_EIN)) {
+            Write-Output '::error::INPUT_EIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank value. Refusing to call candid-charity-check.ps1 with an empty -Ein.'
+            exit 1
+          }
+
           # The output path is uploaded as an artifact, so keep it inside the workspace: no
           # absolute/rooted paths and no '..' traversal (which could exfiltrate runner files).
           $out = $env:INPUT_OUTPUT_FILE

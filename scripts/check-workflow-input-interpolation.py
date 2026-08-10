@@ -351,7 +351,12 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     "107-audit-compliance.yml": ("domain",),
     "109-dns-export-all-records.yml": ("domain",),
     "110-cloudflare-zone-create.yml": ("domain",),
-    "112-dns-bulk-replace-a-ip.yml": ("new_ip", "old_ip"),
+    # 112-dns-bulk-replace-a-ip.yml burned down: `old_ip` / `new_ip` now reach the
+    # pwsh body through step-level `env:`. It rewrites A records across every zone in
+    # both Cloudflare accounts on cloudflare-prod-write, and the callee's
+    # `[ValidatePattern]` on both parameters could never have stopped a payload — it
+    # runs after the injected expression, so its rejection message reads like a
+    # control working on a run where the code had already executed.
     "115-domain-transfer-preflight.yml": (
         "issue_number",
         "min_days_to_expiry",
@@ -400,14 +405,39 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     "229-whmcs-client-field-populate.yml": ("client_id", "email"),
     # --- Microsoft 365 ------------------------------------------------------
     "301-m365-domain-preflight.yml": ("domain",),
-    "303-m365-domain-and-dkim.yml": ("domain",),
-    "304-m365-dkim-enable.yml": ("domain",),
+    # 303-m365-domain-and-dkim.yml burned down: `domain` now reaches both pwsh
+    # bodies through step-level `env:`. Its two call sites sit in ONE job on
+    # m365-prod, and the credential exposure is broader than 304's rather than
+    # narrower: the JOB-level `env:` maps EXO_CERT_PFX_BASE64 and
+    # EXO_CERT_PFX_PASSWORD, so the Exchange Online certificate and its password
+    # were in the process environment of BOTH injection points — including the
+    # `status` step, which reads as the harmless half of the workflow. The DKIM
+    # step adds EXO_APP_ID / EXO_TENANT / EXO_ORGANIZATION in its own `env:`
+    # (ledger L213). `action` and `create_if_missing` are still interpolated and
+    # are NOT findings: GitHub constrains a `choice` and a `boolean` to a value it
+    # generated, so neither can carry a payload.
+    # 304-m365-dkim-enable.yml burned down: `domain` now reaches all three bodies
+    # through step-level `env:`. It was the only remaining entry interpolating one
+    # input into three jobs under two gated environments — m365-prod twice and
+    # cloudflare-prod-write once — so a payload ran three times, under two credentials,
+    # on one approval. Sharper than the neighbouring entries in WHERE the credential
+    # sat: both m365-prod steps carry FFC_EXO_CERT_PFX_BASE64 / FFC_EXO_CERT_PASSWORD
+    # in the SAME step's `env:` as the injection point, so the Exchange Online
+    # certificate was already in the process environment of the body being injected
+    # into. Measured against the shipped body: the cert password was written to a file,
+    # m365-dkim.ps1 was then called with a legal `Domain=[ffcworkingsite1.org]`, and the
+    # step exited 0.
     "306-discover-uncaptured-comms.yml": ("mailboxes", "since_days"),
     # --- WPMUDEV ------------------------------------------------------------
     "601-wpmudev-export-sites.yml": ("output_file",),
     # --- GitHub -------------------------------------------------------------
     "702-ffc-ex-clone-deploy.yml": ("depth", "domain", "exclude"),
-    "704-website-analytics-wire.yml": ("gtm_id", "measurement_id"),
+    # 704-website-analytics-wire.yml burned down: `gtm_id` / `measurement_id` now reach
+    # the bash body through step-level `env:`. Its only interpolating step was the one
+    # named `Validate inputs` — the step whose purpose is to reject a malformed id,
+    # performing that check by pasting the value into the program doing the checking,
+    # one step before `wr-all-cbm-github-pat` is loaded on github-prod. The neighbouring
+    # step already used `env:` correctly, so the file read as if the pattern held.
     # 720-create-repo.yml burned down: its three free-text inputs now reach both the
     # pwsh and the bash bodies through step-level `env:`. It was the instance #1080
     # reproduced live in both directions, on github-prod.

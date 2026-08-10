@@ -15,6 +15,8 @@ import json
 import re
 import sys
 
+import yaml
+
 WF_GLOB = ".github/workflows/*.yml"
 SAFETY_DOC = "docs/workflow-safety-and-approvals.md"
 OUT_JSON = "docs/workflow-catalog.json"
@@ -31,6 +33,29 @@ CATEGORIES = {
     "8": ("Candid (GuideStar)", "CANDID"),
     "9": ("Reserved", "-"),
 }
+
+
+def trigger_names(doc) -> list[str]:
+    """Top-level trigger names from a parsed workflow document.
+
+    `on:` is the boolean True in YAML 1.1, so both keys have to be tried -- a
+    reader that checks only the string sees a workflow with no triggers at all.
+    The three legal shapes (`on: push`, `on: [a, b]`, `on: {a: {...}}`) all
+    normalise here; anything else yields [] rather than raising, because a
+    catalog row is not the right place to fail a whole regeneration.
+    """
+    block = None
+    for key in ("on", True):
+        if isinstance(doc, dict) and key in doc:
+            block = doc[key]
+            break
+    if isinstance(block, str):
+        return [block]
+    if isinstance(block, list):
+        return [str(x) for x in block]
+    if isinstance(block, dict):
+        return [str(k) for k in block]
+    return []
 
 
 def parse_safety_table():
@@ -61,17 +86,27 @@ def parse_workflow(path):
     m = re.search(r"^name:\s*['\"]?(\d{3})\.\s*(.*?)['\"]?\s*$", txt, re.M)
     if not m:
         return None
+    # Fail closed. A workflow that will not parse is a broken workflow, and
+    # emitting a catalog row for it from the regexes below would publish a
+    # confident half-description of a file GitHub cannot run.
+    doc = yaml.safe_load(txt)
     number = int(m.group(1))
     display = m.group(2)
     # tag like [CF+M365] at the end of the display name
     tm = re.search(r"\[([A-Za-z0-9+\-]+)\]\s*$", display)
     apis = tm.group(1).split("+") if tm else []
     title = re.sub(r"\s*\[[A-Za-z0-9+\-]+\]\s*$", "", display).strip()
-    # triggers = top-level keys of the on: block
-    triggers = []
-    om = re.search(r"^on:\s*\n((?:[ \t]+.*\n?)+)", txt, re.M)
-    if om:
-        triggers = re.findall(r"^  ([a-z_]+):", om.group(1), re.M)
+    # triggers = top-level keys of the on: block, read from the PARSED document.
+    #
+    # This used to be a regex over the raw text and it under-reported, silently
+    # and in the reassuring direction: `^on:\s*\n((?:[ \t]+.*\n?)+)` stops at
+    # the first BLANK LINE, so everything below one was invisible. 701 published
+    # `issues` while also carrying `repository_dispatch` + `workflow_dispatch`,
+    # and 729 published `workflow_dispatch` while also being a `workflow_call`
+    # target -- on a catalog whose whole job is to tell an agent how a workflow
+    # is invoked, and which is served publicly at ffcadmin.org/automation/.
+    # Found while adding a commented `merge_group:` to 728 (#1084).
+    triggers = trigger_names(doc)
     # environments used — both the scalar form (environment: name) and the
     # mapping form (environment:\n  name: <name>, used e.g. by the Pages deploy)
     envs = set(re.findall(r"^\s+environment:\s*([A-Za-z0-9_\-]+)\s*$", txt, re.M))

@@ -61,12 +61,28 @@ jobs:
           if (-not $token) { throw 'Failed to acquire Graph access token via Azure CLI.' }
           "GRAPH_ACCESS_TOKEN=$token" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      # `domain` is a free-text dispatch input, so it reaches the body through
+      # step-level `env:`, never interpolated into it (#1080). The job-level `env:`
+      # above puts the Exchange Online certificate AND its password in this step's
+      # process environment, so an interpolated payload here needed no lateral
+      # movement to reach a credential (ledger L213).
       - name: Domain status (Graph)
         if: ${{ inputs.action == 'status' }}
         shell: pwsh
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          pwsh -File scripts/m365-domain-status.ps1 -Domain "${{ inputs.domain }}" -ShowDnsRecords
+          # Fail closed on a missing mapping (ledger L202/L207). Interpolation had no
+          # absent source — substitution always produced something — but an `env:` var
+          # that is unmapped or misnamed is silently empty, and `-Domain` is Mandatory,
+          # so the failure would arrive as a PowerShell parameter prompt hanging the
+          # runner rather than as a stated cause.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-domain-status.ps1 with an empty -Domain.'
+            exit 1
+          }
+          pwsh -File scripts/m365-domain-status.ps1 -Domain $env:IN_DOMAIN -ShowDnsRecords
 
       - name: Import certificate for Exchange Online (optional)
         if: ${{ inputs.action != 'status' && env.EXO_CERT_PFX_BASE64 != '' }}
@@ -91,13 +107,23 @@ jobs:
         if: ${{ inputs.action != 'status' }}
         shell: pwsh
         env:
+          IN_DOMAIN: ${{ inputs.domain }}
           EXO_APP_ID: ${{ secrets.FFC_AZURE_CLIENT_ID }}
           EXO_TENANT: ${{ secrets.EXO_TENANT }}
           EXO_ORGANIZATION: ${{ secrets.EXO_ORGANIZATION }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $domain = "${{ inputs.domain }}"
+          # Fail closed on a missing mapping (ledger L202/L207) — see the status step.
+          # This step holds the Exchange Online app id, tenant and organization in its
+          # OWN `env:`, on top of the certificate the job supplies, which is what made
+          # this the call site worth taking (ledger L213).
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-dkim.ps1 with an empty -Domain.'
+            exit 1
+          }
+
+          $domain = $env:IN_DOMAIN
           $create = [System.Convert]::ToBoolean("${{ inputs.create_if_missing }}")
 
           if ("${{ inputs.action }}" -eq 'dkim-enable') {

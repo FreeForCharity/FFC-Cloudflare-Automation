@@ -105,6 +105,14 @@ jobs:
           # docs/workflow-catalog.json + the README catalog section are generated
           # from the workflow files; fail if a workflow change wasn't accompanied
           # by a regeneration (python3 scripts/generate-workflow-catalog.py).
+          #
+          # The generator reads each workflow's `on:` block from the PARSED
+          # document (#1084), so it needs PyYAML. Installed defensively for the
+          # reason the working-directories step below states: the runner image
+          # only happens to preinstall it, and an image that drops it would turn
+          # this guard into an ImportError -- a red build that says nothing
+          # about the catalog. This is now the first step in the job to need it.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/generate-workflow-catalog.py --check
 
       - name: Validate workflow cross-references resolve

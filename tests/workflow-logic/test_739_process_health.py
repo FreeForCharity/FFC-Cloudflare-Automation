@@ -463,17 +463,29 @@ def _drive_resolver(responses: list) -> dict:
     Returns {calls, warnings, result} — `calls` is what proves a single sample
     was replaced by a resolution, and `warnings` is what proves an unresolvable
     PR is reported rather than dropped in silence.
+
+    A response of `null` in the sequence makes `pulls.get` REJECT, which is how
+    the shipped `.catch(() => ({ data: null }))` path gets exercised.
+
+    `setTimeout` is stubbed to fire immediately: these tests assert call counts
+    and warnings, never elapsed time, so paying the real
+    `MERGEABILITY_DELAY_MS` per retry only made the module slower. The shipped
+    delay constant is still inside the slice under test, and
+    `test_the_resolver_waits_between_attempts` pins it in the source.
     """
     harness = (
         "const responses=JSON.parse(process.argv[1]);"
         "const owner='FreeForCharity', repo='FFC-Cloudflare-Automation';"
         "let calls=0; const warnings=[];"
+        "const setTimeout=(fn)=>fn();"
         "const core={warning:(m)=>warnings.push(m)};"
         "const github={rest:{pulls:{get:async()=>{"
-        "  const r=responses[Math.min(calls,responses.length-1)]; calls++; return {data:r};"
+        "  const r=responses[Math.min(calls,responses.length-1)]; calls++;"
+        "  if (r===null) throw new Error('simulated transient pulls.get failure');"
+        "  return {data:r};"
         "}}}};"
         "(async()=>{"
-        + _resolver_source().replace("\n", "\n")
+        + _resolver_source()
         + "const result=await getPrWithMergeability(1);"
         "process.stdout.write(JSON.stringify({calls,warnings,result}));"
         "})();"
@@ -522,6 +534,59 @@ def test_a_false_mergeable_is_resolved_too_and_is_not_retried():
     out = _drive_resolver([dirty])
     assert out["calls"] == 1, f"a false mergeable is resolved; made {out['calls']} calls"
     assert out["result"]["mergeable_state"] == "dirty"
+
+
+def test_a_transient_get_failure_is_retried_not_returned_as_a_negative():
+    """A failed GET is not an answer, and returning it is this PR's own defect.
+
+    `pulls.get` rejects on an API hiccup or a secondary rate limit, and the
+    shipped `.catch` turns that into `data: null`. Handing that back to the
+    caller skips the PR with no warning at all — the same unread-looks-landed
+    shape the helper exists to close, in the same flattering direction, and
+    reached by a path that has nothing to do with `mergeable` being uncomputed.
+    """
+    out = _drive_resolver([None, _CLEAN])
+    assert out["result"] is not None, (
+        "a transient failure must be retried, not returned as a definite negative"
+    )
+    assert out["result"]["mergeable_state"] == "clean", (
+        f"the retry must carry the real answer through, got {out['result']}"
+    )
+    assert out["calls"] >= 2, f"a rejected GET must cost a retry, made {out['calls']} call(s)"
+    assert out["warnings"] == [], "a PR that resolved on retry needs no warning"
+
+
+def test_every_attempt_failing_is_warned_about_rather_than_dropped():
+    """The floor warning must cover the no-response case, not only 'unknown'.
+
+    With no successful body there is no `mergeable_state` to quote, so the
+    message has to stay honest without one — an `undefined` in the text would
+    read as a bug in the monitor rather than as an understated count.
+    """
+    out = _drive_resolver([None])
+    assert len(out["warnings"]) == 1, (
+        f"a PR that never answered must still be reported, got {out['warnings']}"
+    )
+    msg = out["warnings"][0]
+    assert "floor" in msg, f"the warning must say the count is understated: {msg!r}"
+    assert "undefined" not in msg and "null" not in msg, (
+        f"the message must not leak an unset field into the report: {msg!r}"
+    )
+    assert out["calls"] > 1, "it must exhaust its attempts before giving up"
+
+
+def test_the_resolver_waits_between_attempts():
+    """The harness stubs `setTimeout`, so the delay is pinned here instead.
+
+    Without this, dropping the wait would keep every behavioural test green and
+    turn the retry into four back-to-back GETs — which cannot outrun an
+    asynchronous computation and would restore the original zero.
+    """
+    src = _resolver_source()
+    assert "MERGEABILITY_DELAY_MS" in src, "the retry must wait between attempts"
+    assert "await sleep(MERGEABILITY_DELAY_MS)" in src, (
+        "the delay constant must actually be awaited between attempts"
+    )
 
 
 def test_a_pr_that_never_resolves_is_warned_about_not_silently_dropped():

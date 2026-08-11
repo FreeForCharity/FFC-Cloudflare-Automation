@@ -155,17 +155,24 @@ jobs:
                 const { data } = await github.rest.pulls
                   .get({ owner, repo, pull_number: number })
                   .catch(() => ({ data: null }));
-                last = data;
-                // `mergeable` is the resolution flag; `mergeable_state` still
-                // reads 'unknown' alongside a null `mergeable`. Either a true
-                // or a false decides it — only null means "not computed yet".
-                if (!data || data.mergeable !== null) return data;
+                // A transient GET failure is the SAME defect class this helper
+                // exists to close: returning here would drop the PR with no
+                // warning, and the drop lands in the flattering direction. It is
+                // also the case most worth retrying — unlike `mergeable: false`,
+                // nothing was answered. Keep the last body we actually got.
+                if (data) {
+                  last = data;
+                  // `mergeable` is the resolution flag; `mergeable_state` still
+                  // reads 'unknown' alongside a null `mergeable`. Either a true
+                  // or a false decides it — only null means "not computed yet".
+                  if (data.mergeable !== null) return data;
+                }
                 if (attempt < MERGEABILITY_ATTEMPTS) await sleep(MERGEABILITY_DELAY_MS);
               }
               core.warning(
                 `#${number}: mergeability still unresolved after ${MERGEABILITY_ATTEMPTS} attempts ` +
-                  `(mergeable_state='${last && last.mergeable_state}'). Excluded from the ` +
-                  `ready-but-unlanded count — that count is a floor, not a total.`,
+                  `(mergeable_state='${last ? last.mergeable_state : 'no response'}'). Excluded ` +
+                  `from the ready-but-unlanded count — that count is a floor, not a total.`,
               );
               return last;
             }

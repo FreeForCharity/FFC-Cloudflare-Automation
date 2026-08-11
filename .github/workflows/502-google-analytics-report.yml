@@ -241,10 +241,13 @@ jobs:
           cp ../ga-out/*.json public/data/google-analytics/
           cp ../docs/workflow-catalog.json src/data/workflow-catalog.json
           cp ../docs/workflow-catalog.json public/data/workflow-catalog.json
-          # Agentic OS status feed for the /agentic-os page (src render + stable /data URL).
-          cp ../agentic-os-status.json src/data/agentic-os-status.json
+          # Agentic OS status feed for the /agentic-os page. ONE copy: the page
+          # fetches assetPath('/data/agentic-os-status.json'), i.e. public/.
+          # The src/ copy this used to write was dead and was deleted by
+          # FFC-IN-ffcadmin.org#904; writing it here would resurrect it on the
+          # first run after #848 is fixed, months after anyone remembered why.
           cp ../agentic-os-status.json public/data/agentic-os-status.json
-          git add public/data src/data/workflow-catalog.json src/data/agentic-os-status.json
+          git add public/data src/data/workflow-catalog.json
           if git diff --cached --quiet; then echo 'No data changes vs the sync branch; skipping.'; exit 0; fi
           git commit -m "chore(data): daily sync — GA metrics + time-series + workflow catalog + agentic-os status ($(date -u +%F))"
           git push origin chore/ga-data-sync

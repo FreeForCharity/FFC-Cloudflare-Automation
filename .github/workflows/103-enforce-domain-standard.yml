@@ -65,14 +65,42 @@ jobs:
           azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 
+      # `domain` is a free-text dispatch input, so it reaches the body through
+      # step-level `env:`, never interpolated into it (#1080). What sits beside it
+      # here is the pair of WRITE-scoped Cloudflare API tokens: the composite
+      # action above resolved the `wr-all-*` Key Vault secrets and exported them
+      # through GITHUB_ENV, so they are in this step's process environment without
+      # appearing in any `env:` block a reviewer can read - and an injected body
+      # would hold DNS write across both Cloudflare accounts.
+      #
+      # `dry_run` and `github_pages_only` stay interpolated on purpose: both are
+      # `type: boolean`, so GitHub constrains the value to one it generated and it
+      # cannot carry a payload. That is the only thing making them safe, which is
+      # why test_103_enforce_standard_wiring.py pins their declared types rather
+      # than leaving it as a reading of this comment.
       - name: Enforce Cloudflare standard
         id: enforce
         shell: pwsh
         env:
           FFC_CF_DMARCMGMT_DEBUG: ${{ inputs.dmarc_mgmt_debug && '1' || '0' }}
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ inputs.domain }}"
+          # Fail closed on a missing mapping (ledger L202/L214/L220). Interpolation
+          # had no absent source - substitution always produced something - but an
+          # `env:` var that is unmapped or misnamed arrives UNSET, and this body
+          # splats $domain into a NATIVE command (`& pwsh -File ...`), where an
+          # empty element is dropped ENTIRELY: `@('-Zone', $domain, '-EnforceStandard')`
+          # becomes `-Zone -EnforceStandard`, `-Zone` binds the string
+          # '-EnforceStandard', and the enforce runs against a zone named after a
+          # flag. A mapping that is present but EMPTY does not collapse in the
+          # array, so it binds and the enforce runs against an empty -Zone.
+          # IsNullOrWhiteSpace is the check because it is the only one catching both.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to run Update-CloudflareDns.ps1 with an empty -Zone.'
+            exit 1
+          }
+          $domain = $env:IN_DOMAIN
           $dryRun = "${{ inputs.dry_run }}"
           $pagesOnly = "${{ inputs.github_pages_only }}"
 
@@ -147,14 +175,31 @@ jobs:
           fi
           echo "organization=$org" >> "$GITHUB_OUTPUT"
 
+      # `domain` reaches this body through step-level `env:` (#1080). Unlike the
+      # Cloudflare job, the credential here is named in this step's OWN `env:`
+      # block, directly beside the injection point: the Exchange Online
+      # certificate and its password were in the process environment of the body
+      # a dispatcher could supply code to (ledger L213).
       - name: Check DKIM selector targets (Exchange Online)
         id: dkim
         shell: pwsh
         env:
           FFC_EXO_CERT_PFX_BASE64: ${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}
           FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
-          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ steps.org.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing -Confirm:$false
+          # Fail closed on a missing mapping (ledger L202/L214/L220). `pwsh` here is
+          # a NATIVE command, so an unset $env:IN_DOMAIN renders as NO ARGUMENT AT
+          # ALL: `-Domain -Organization <org>` binds the string '-Organization' to
+          # -Domain and shifts every later argument one position left, surfacing as
+          # a call-signature error one parameter away from the cause. An EMPTY
+          # mapping binds instead and would run the DKIM check against an empty
+          # -Domain. IsNullOrWhiteSpace catches both.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-dkim.ps1 with an empty -Domain.'
+            exit 1
+          }
+          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain $env:IN_DOMAIN -Organization "${{ steps.org.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing -Confirm:$false
 
   cloudflare_set_dkim:
     runs-on: ubuntu-latest
@@ -172,10 +217,26 @@ jobs:
           azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 
+      # `domain` reaches this body through step-level `env:` (#1080). This is the
+      # SECOND cloudflare-prod-write job in the workflow, so one dispatched
+      # payload ran here as well as in `cloudflare_enforce` - twice under
+      # write-scoped Cloudflare tokens, on a single approval.
       - name: Create/Update DKIM selector CNAMEs in Cloudflare
         shell: pwsh
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
-          $domain = "${{ inputs.domain }}"
+          # Fail closed on a missing mapping (ledger L202/L214/L220), for the same
+          # reason the selector targets below are already checked: `pwsh -File` is a
+          # NATIVE command, so an unset value is dropped and `-Zone` would bind the
+          # string '-Name', while an empty one binds and writes DKIM CNAMEs into an
+          # empty zone. The existing throw covers the selector targets only - it
+          # never looked at the domain.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to run Update-CloudflareDns.ps1 with an empty -Zone.'
+            exit 1
+          }
+          $domain = $env:IN_DOMAIN
           $s1Target = "${{ needs.exo_check.outputs.selector1_target }}"
           $s2Target = "${{ needs.exo_check.outputs.selector2_target }}"
 
@@ -202,13 +263,26 @@ jobs:
           tenant-id: ${{ secrets.FFC_AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
+      # `domain` reaches this body through step-level `env:` (#1080). Second
+      # m365-prod job, and the Exchange Online certificate is again in this step's
+      # own `env:` - so the same dispatched payload reached the EXO credential
+      # twice and the Cloudflare write credential twice, across four jobs, on one
+      # approval.
       - name: Enable DKIM signing (Exchange Online)
         shell: pwsh
         env:
           FFC_EXO_CERT_PFX_BASE64: ${{ secrets.FFC_EXO_CERT_PFX_BASE64 }}
           FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
-          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain "${{ inputs.domain }}" -Organization "${{ needs.exo_check.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing -Enable -Confirm:$false
+          # Fail closed on a missing mapping (ledger L202/L214/L220). Native `pwsh`
+          # call: unset drops the argument and shifts '-Organization' onto -Domain,
+          # empty binds and enables DKIM signing against an empty -Domain.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-dkim.ps1 with an empty -Domain.'
+            exit 1
+          }
+          pwsh -NoProfile -File scripts/m365-dkim.ps1 -Domain $env:IN_DOMAIN -Organization "${{ needs.exo_check.outputs.organization }}" -AppId "${{ secrets.FFC_AZURE_CLIENT_ID }}" -TenantId "${{ secrets.FFC_AZURE_TENANT_ID }}" -CreateIfMissing -Enable -Confirm:$false
 
   post_back:
     runs-on: ubuntu-latest
@@ -224,14 +298,46 @@ jobs:
           name: cloudflare-domain-enforce
           path: artifacts/cloudflare
 
+      # BOTH free-text inputs reach this script through step-level `env:` (#1080).
+      # A `github-script` `script:` block is substituted exactly like a `run:`
+      # body - GitHub renders `${{ }}` into the JS SOURCE before node parses it -
+      # so `'${{ inputs.domain }}'` is a string literal only for as long as the
+      # value contains no apostrophe. It is the same defect in a different
+      # language, and the runtime it lands in is not a lesser one: the payload
+      # would run inside the `github` client already authenticated with a token
+      # carrying `issues: write`.
+      #
+      # `issue_number` is `type: number`, and that is NOT a constrained type.
+      # GitHub validates `boolean` and `choice` only; a `number` input is a free
+      # text box whose value is substituted verbatim, so it is exactly as
+      # injectable as `domain` and is moved for the same reason. `dry_run` stays
+      # interpolated because it IS constrained.
       - name: Comment results back to issue
         uses: actions/github-script@v9
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
+          IN_ISSUE_NUMBER: ${{ inputs.issue_number }}
         with:
           script: |
             const fs = require('fs');
 
-            const issueNumber = Number('${{ inputs.issue_number }}');
-            const domain = '${{ inputs.domain }}';
+            // Fail closed on a missing mapping (ledger L202/L214/L220). JS has no
+            // argument-shifting hazard, but it has a quieter one: an unmapped
+            // env var is `undefined`, `Number(undefined)` is NaN, and
+            // createComment would post to a nonsense issue number - or, with a
+            // blank domain, post a report naming no domain at all.
+            const domain = process.env.IN_DOMAIN;
+            if (!domain || !domain.trim()) {
+              core.setFailed('IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain.');
+              return;
+            }
+
+            const issueNumber = Number(process.env.IN_ISSUE_NUMBER);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed(`IN_ISSUE_NUMBER is not a positive integer (got ${JSON.stringify(process.env.IN_ISSUE_NUMBER)}): the step-level env: mapping is missing or misnamed, or the dispatch supplied a non-numeric issue number.`);
+              return;
+            }
+
             const dryRun = String('${{ inputs.dry_run }}');
 
             const cfIssues = Number('${{ needs.cloudflare_enforce.outputs.issues_count }}');

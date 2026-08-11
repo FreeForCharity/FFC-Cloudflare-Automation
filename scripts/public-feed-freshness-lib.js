@@ -41,11 +41,20 @@
 const FEED_OWNER = 'FreeForCharity';
 const FEED_REPO = 'FFC-IN-ffcadmin.org';
 
-// Both copies are published, and #771 exists because they are written
-// separately and can disagree. Checking each by path means "the site build is
-// fresh but the public/ copy is stale" is reported as the one stale path it is,
-// rather than averaged away.
-const FEED_PATHS = ['public/data/agentic-os-status.json', 'src/data/agentic-os-status.json'];
+// One copy is published. There were two until FFC-IN-ffcadmin.org#904 deleted
+// the `src/data/` one as dead — `src/app/agentic-os/page.tsx` fetches
+// `assetPath('/data/agentic-os-status.json')`, i.e. the `public/` copy, and
+// nothing imported the other. That PR grepped its own repository, which is
+// where the file was, and missed this list, which is where it was *registered*;
+// 744 then reported the deletion as a permanent "missing from the published
+// repository" finding (#1179).
+//
+// The per-path reporting this list feeds is still the point and is unchanged:
+// a registered path with no observation is a finding, never a pass, so the
+// entry below cannot be dropped silently the way the file itself was. If a
+// second copy is ever published again, add it here in the SAME PR that starts
+// writing it.
+const FEED_PATHS = ['public/data/agentic-os-status.json'];
 
 const TIMESTAMP_FIELD = 'generated_at';
 

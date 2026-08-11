@@ -51,12 +51,44 @@ jobs:
 
       - name: Discover uncaptured comms (PII masked)
         shell: pwsh
+        # #1080: both dispatch inputs arrive as DATA through env:, never as text
+        # substituted into this body. GitHub pastes `${{ }}` into the script
+        # source before pwsh parses it, so the previous
+        # `-Mailboxes '${{ github.event.inputs.mailboxes }}'` was dispatcher-supplied
+        # CODE running after the m365-prod approval, in a process holding the
+        # Graph bearer token the preceding step exported through GITHUB_ENV.
+        env:
+          IN_MAILBOXES: ${{ github.event.inputs.mailboxes }}
+          IN_SINCE_DAYS: ${{ github.event.inputs.since_days }}
         run: |
           $ErrorActionPreference = 'Stop'
+          # Fail closed on an empty mapping (#1150). Interpolation had no absent
+          # source — substitution always produced something — but an `env:` var
+          # that is unmapped or misnamed arrives UNSET, and in a NATIVE call an
+          # unset variable renders as no argument at all. Measured on pwsh 7.4.6
+          # against this body with the guard removed, and the two cases are NOT
+          # symmetric:
+          #   unset  -> `Missing an argument for parameter 'Mailboxes'`, rc 1,
+          #             callee never reached. The binder REFUSES the next `-`
+          #             token rather than shifting onto it (the correction to
+          #             ledger L214 recorded on #1080 / #1172).
+          #   empty  -> binds, rc 0, and the scan runs against an empty
+          #             -Mailboxes. This is the silent one.
+          # So the guard is not what stops the unset case — that already fails
+          # loudly. It is what stops the EMPTY case, and what makes the unset
+          # case legible here instead of one frame further in.
+          if ([string]::IsNullOrWhiteSpace($env:IN_MAILBOXES)) {
+            Write-Output '::error::IN_MAILBOXES is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank value. Refusing to call discover-uncaptured-comms.ps1 with an empty -Mailboxes.'
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($env:IN_SINCE_DAYS)) {
+            Write-Output '::error::IN_SINCE_DAYS is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank value. Refusing to call discover-uncaptured-comms.ps1 with an empty -SinceDays.'
+            exit 1
+          }
           New-Item -ItemType Directory -Force -Path artifacts/discovery | Out-Null
           pwsh -NoProfile -File scripts/discover-uncaptured-comms.ps1 `
-            -Mailboxes '${{ github.event.inputs.mailboxes }}' `
-            -SinceDays '${{ github.event.inputs.since_days }}' `
+            -Mailboxes $env:IN_MAILBOXES `
+            -SinceDays $env:IN_SINCE_DAYS `
             -SitesListPath 'sites-list/sites_list.json' `
             -OutputFile 'artifacts/discovery/pipeline.csv'
           if ($LASTEXITCODE -ne 0) { throw "Discovery failed (exit $LASTEXITCODE)." }

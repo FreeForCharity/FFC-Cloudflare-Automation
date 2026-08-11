@@ -98,12 +98,12 @@ jobs:
           #   EMPTY or WHITESPACE -> the element survives, binds, and the enforce runs
           #     against an empty -Zone.
           #
-          # Measured: the STEP exits 0 in BOTH cases. The refusal kills the callee,
-          # not the step - and this body captures the callee's streams with `*>&1`
-          # into a file it then uploads, so an unset mapping ships the binder error
-          # inside a green run's artifact. Neither case is loud without this guard;
-          # they differ only in whether the DNS write ran. That is what the guard
-          # converts into an ::error:: and a non-zero exit.
+          # Only the EMPTY case is silent. `shell: pwsh` wraps every step with
+          # `exit $LASTEXITCODE`, so the binder's refusal DOES fail the step: unset
+          # exits 1 and CI goes red, just with a call-signature error rather than a
+          # diagnosis. Empty exits 0 having written to the real zone. The guard turns
+          # the first into a message naming the mapping and the second into a refusal
+          # - and the second is the one nothing else would have caught.
           if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
             Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to run Update-CloudflareDns.ps1 with an empty -Zone.'
             exit 1
@@ -204,10 +204,11 @@ jobs:
           # its own. An EMPTY or whitespace mapping binds instead, and the DKIM check
           # runs against an empty -Domain.
           #
-          # The STEP exits 0 either way - the refusal lands on the callee, and this
-          # body does not adopt it - so neither case reports itself. They differ only
-          # in whether the check ran. IsNullOrWhiteSpace covers both and is what makes
-          # the failure visible.
+          # Only EMPTY is silent. The runner wraps `shell: pwsh` steps with
+          # `exit $LASTEXITCODE`, so the refusal fails the step (rc 1, CI red) - the
+          # unset case was already failing closed, just diagnosed as a call-signature
+          # error. Empty exits 0 having run the check against nothing.
+          # IsNullOrWhiteSpace covers both; the second is why it is load-bearing.
           if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
             Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-dkim.ps1 with an empty -Domain.'
             exit 1
@@ -242,10 +243,11 @@ jobs:
           # Fail closed on a missing mapping (ledger L202/L220), for the same reason the
           # selector targets below are already checked. An UNSET mapping drops the
           # argument and the binder refuses by name so nothing runs - it does not
-          # shift '-Name' onto -Zone; an EMPTY one binds and writes DKIM CNAMEs into
-          # an empty zone. Measured: the step exits 0 in both cases, so neither is
-          # loud on its own. The existing throw covers the selector targets only - it
-          # never looked at the domain.
+          # shift '-Name' onto -Zone, and the runner's `exit $LASTEXITCODE` wrapper
+          # turns that refusal into a red step. An EMPTY one binds, writes DKIM CNAMEs
+          # into an empty zone, and exits 0 - the silent case, and the reason this
+          # guard is not redundant. The existing throw covers the selector targets
+          # only; it never looked at the domain.
           if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
             Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to run Update-CloudflareDns.ps1 with an empty -Zone.'
             exit 1
@@ -291,9 +293,10 @@ jobs:
         run: |
           # Fail closed on a missing mapping (ledger L202/L220). Native `pwsh` call:
           # UNSET drops the argument and the binder refuses by name so nothing runs -
-          # it does not shift '-Organization' onto -Domain; EMPTY binds and enables
-          # DKIM signing against an empty -Domain. Measured: the step exits 0 in both
-          # cases, so the difference is whether the write ran, not whether CI noticed.
+          # it does not shift '-Organization' onto -Domain, and the runner's
+          # `exit $LASTEXITCODE` wrapper makes that refusal red the step. EMPTY binds,
+          # enables DKIM signing against an empty -Domain, and exits 0 - silent, which
+          # is the case this guard exists for.
           if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
             Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-dkim.ps1 with an empty -Domain.'
             exit 1

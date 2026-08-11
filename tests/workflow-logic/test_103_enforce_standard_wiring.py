@@ -161,6 +161,15 @@ Write-Output "CALLED Domain=[$Domain] Organization=[$Organization] AppId=[$AppId
 """
 
 
+# GitHub's `shell: pwsh` wrapper, verbatim from
+# Runner.Worker/Handlers/ScriptHandlerHelpers.cs. Every step in this workflow
+# runs inside it, so every measurement in this module has to.
+RUNNER_PREAMBLE = "$ErrorActionPreference = 'stop'\n"
+RUNNER_EPILOGUE = (
+    "\nif ((Test-Path -LiteralPath variable:\\LASTEXITCODE)) { exit $LASTEXITCODE }\n"
+)
+
+
 @dataclasses.dataclass(frozen=True)
 class PwshSite:
     """One pwsh call site, and everything needed to run it in isolation."""
@@ -471,12 +480,40 @@ def _payload(site: PwshSite) -> str:
 
 
 def _run_pwsh(site: PwshSite, body: str, **env_overrides: str):
-    """Run a pwsh body in a temp cwd holding the stub callee.
+    """Run a pwsh body the way the RUNNER runs it, in a temp cwd holding the stub.
 
     Returns (observed_output, sentinel_contents_or_None, rc). The sentinel's
     CONTENTS, not merely its existence: a file written from an unset variable
     would score the same as one written from the live credential, and the claim
     under test is which credential the payload reached.
+
+    THE WRAPPER IS NOT OPTIONAL, AND OMITTING IT INVERTS AN EXIT CODE
+        `shell: pwsh` does not hand the body to `pwsh -File`. The runner wraps
+        every such step (Runner.Worker/Handlers/ScriptHandlerHelpers.cs):
+
+            $ErrorActionPreference = 'stop'          # prepended
+            <the step body>
+            if ((Test-Path -LiteralPath variable:\LASTEXITCODE)) {
+                exit $LASTEXITCODE                   # appended
+            }
+
+        The appended line is what makes a failed NATIVE call fail the step. A
+        bare `pwsh -File body.ps1` does not adopt it, so the step reports 0 while
+        `$LASTEXITCODE` is 1. Measured on pwsh 7.4.6, body calling a stub with
+        `-Domain $env:IN_DOMAIN -Organization "lit"`, IN_DOMAIN unset:
+
+            pwsh -NoProfile -File body.ps1                      rc 0
+            pwsh -NoProfile -command ". './body.ps1'"           rc 0
+            ...dot-source + the runner's suffix                 rc 1
+            pwsh -NoProfile -File body.ps1 + the suffix         rc 1
+
+        So the discriminator is the SUFFIX, not `-File` vs `-command`. This
+        module ran without it for one round and pinned `rc == 0` on a case that
+        exits 1 in production — a green assertion certifying the wrong model,
+        which is worse than the stale comment it replaced (#1170 review, run
+        145). `$ErrorActionPreference = 'stop'` is prepended for the same
+        reason: it is in the same wrapper and changes which CMDLET failures
+        abort a body.
     """
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
@@ -484,7 +521,7 @@ def _run_pwsh(site: PwshSite, body: str, **env_overrides: str):
         stub.parent.mkdir(parents=True, exist_ok=True)
         stub.write_text(site.stub, encoding="utf-8")
         script = tmp / "step.ps1"
-        script.write_text(body, encoding="utf-8")
+        script.write_text(RUNNER_PREAMBLE + body + RUNNER_EPILOGUE, encoding="utf-8")
 
         overrides = dict(env_overrides)
         for name, rel in site.extra_env.items():
@@ -499,7 +536,10 @@ def _run_pwsh(site: PwshSite, body: str, **env_overrides: str):
                 env.pop(var, None)
 
         proc = subprocess.run(
-            ["pwsh", "-NoProfile", "-File", str(script)],
+            # `-command ". '<path>'"` is the runner's own invocation. With the
+            # epilogue present both forms agree, but matching it costs nothing
+            # and removes a second way for this harness to diverge.
+            ["pwsh", "-NoProfile", "-command", f". '{script}'"],
             cwd=tmp,
             env=env,
             capture_output=True,
@@ -1039,7 +1079,7 @@ def test_the_unguarded_pwsh_bodies_would_have_run_with_no_domain():
        axis that actually separates them:
 
            empty -> callee REACHED,     no binder complaint,  step rc 0
-           unset -> callee NOT reached, binder refuses by name, step rc 0
+           unset -> callee NOT reached, binder refuses by name, step rc 1
 
        A single-case control (this test ran only `empty` until the #1170 review)
        cannot see a two-case claim, so the module was free to describe the unset
@@ -1050,21 +1090,29 @@ def test_the_unguarded_pwsh_bodies_would_have_run_with_no_domain():
        branch below fails, because a shifted binding would have REACHED the
        callee with a wrong value rather than being refused.
 
-    NOTE THE COLUMN THAT DOES NOT DISCRIMINATE, because it is the one a reader
-    expects to. **The step exit code is 0 in BOTH cases, at all four sites.** The
-    binder's refusal kills the CALLEE, not the step: three of these bodies end on
-    a native `pwsh -File` call whose failure the step does not adopt, and
-    `cloudflare_enforce` additionally captures its callee's streams with `*>&1`
-    into a file it then uploads as an artifact. So "unset already fails closed"
-    is true only in the sense that the destructive call does not run — it is NOT
-    loud, and a run with a missing `env:` mapping would go green with the error
-    text sitting inside an uploaded artifact.
+    ONLY THE EMPTY CASE IS SILENT, and getting that right needed the harness to
+    run the body the way the RUNNER does. `shell: pwsh` steps are wrapped with
+    `exit $LASTEXITCODE` (see `_run_pwsh`), so the binder's refusal propagates
+    and the unset case exits **1** — CI goes red, just with a call-signature
+    error instead of a diagnosis. The empty case exits **0** having run the real
+    action against an empty target, and nothing anywhere reports it.
 
-    That is the strongest available argument for the guard covering the unset
-    case too, and it is the opposite of the reason the module gave before this
-    review. Pinning rc here rather than describing it is deliberate: the claim
-    that a case is silent is exactly the kind that decays into a comment nobody
-    re-measures.
+    An earlier revision of this module pinned `rc == 0` on the unset branch and
+    built a paragraph on it, because `_run_pwsh` then used a bare `pwsh -File`,
+    which does not adopt a failed native call's status. That is worth keeping in
+    view: a harness that differs from production in one line produced a **green
+    assertion certifying the wrong model**, which is strictly worse than the
+    stale comment it had just replaced — a wrong comment decays quietly, a wrong
+    assertion actively vouches. Measured across the forms, unset:
+
+        pwsh -File body.ps1                          rc 0   <- the old harness
+        pwsh -command ". './body.ps1'"               rc 0
+        ...either form + the runner's epilogue       rc 1   <- production
+
+    So the guard's value is not symmetric, and the module no longer pretends it
+    is: on unset it upgrades an obscure red into a message naming the mapping; on
+    empty it is the only thing standing between a blank `-Zone` / `-Domain` and a
+    production write.
     """
     for site in PWSH_SITES:
         body = _render(_step(site)["run"], site.render, site.job)
@@ -1121,13 +1169,13 @@ def test_the_unguarded_pwsh_bodies_would_have_run_with_no_domain():
             f"{site.job} (unset): expected the binder to refuse by name "
             f"('Missing an argument for parameter ...'). Output: {observed!r}"
         )
-        assert rc == 0, (
-            f"{site.job} (unset): expected the STEP to exit 0 even though the "
-            f"binder refused — the failure lands on the callee, not the step, "
-            f"which is why the unset case is silent too and why the guard "
-            f"covers it. Got rc={rc}; if this is now non-zero the body's error "
-            f"handling changed and the docstring needs re-measuring. "
-            f"Output: {observed!r}"
+        assert rc == 1, (
+            f"{site.job} (unset): expected the step to exit 1 — the runner wraps "
+            f"`shell: pwsh` with `exit $LASTEXITCODE`, so the binder's refusal "
+            f"propagates and this case fails closed on its own. Got rc={rc}. A 0 "
+            f"here almost certainly means _run_pwsh stopped applying "
+            f"RUNNER_EPILOGUE, which would make this whole differential measure "
+            f"an invocation form no step uses. Output: {observed!r}"
         )
 
 

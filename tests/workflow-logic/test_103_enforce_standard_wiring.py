@@ -480,7 +480,7 @@ def _payload(site: PwshSite) -> str:
 
 
 def _run_pwsh(site: PwshSite, body: str, **env_overrides: str):
-    """Run a pwsh body the way the RUNNER runs it, in a temp cwd holding the stub.
+    r"""Run a pwsh body the way the RUNNER runs it, in a temp cwd holding the stub.
 
     Returns (observed_output, sentinel_contents_or_None, rc). The sentinel's
     CONTENTS, not merely its existence: a file written from an unset variable

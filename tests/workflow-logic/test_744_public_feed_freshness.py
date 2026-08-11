@@ -326,9 +326,21 @@ def test_exactly_the_published_copy_is_registered():
 
 
 def test_the_registered_copy_being_fresh_is_the_clean_state():
+    a = analyze(observations=[_feed("2026-08-01T10:24:42Z", PUBLIC)])
+    assert not a["hasFinding"], a
+    assert [r["path"] for r in a["fresh"]] == [PUBLIC], a
+
+
+def test_a_fresh_unregistered_extra_does_not_disturb_the_clean_state():
+    """Asserted by path, not by count.
+
+    A count here would be satisfied by the registered copy going unobserved and
+    two extras arriving instead — the exact substitution this file's own
+    `unreadable` cases exist to catch.
+    """
     a = analyze(observations=_both("2026-08-01T10:24:42Z"))
     assert not a["hasFinding"], a
-    assert len(a["fresh"]) == 2, a
+    assert [r["path"] for r in a["fresh"]] == [PUBLIC, SRC], a
 
 
 def test_one_stale_copy_is_reported_by_path_not_averaged_away():

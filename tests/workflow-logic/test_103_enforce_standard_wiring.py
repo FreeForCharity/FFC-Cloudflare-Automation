@@ -623,8 +623,9 @@ def _assert_pwsh_wiring(site: PwshSite) -> None:
     )
     assert f"IsNullOrWhiteSpace($env:{ENV_DOMAIN})" in body, (
         f"{site.job}: body has no fail-closed emptiness check on "
-        f"$env:{ENV_DOMAIN} — an unset mapping is dropped by the native call "
-        f"and shifts every later argument one position left (ledger L214). "
+        f"$env:{ENV_DOMAIN} — an EMPTY or whitespace mapping binds and would "
+        f"run the real action against an empty target at rc=0, with nothing "
+        f"reported (ledger L202/L220). "
         f"Body: {body!r}"
     )
 
@@ -949,13 +950,30 @@ def test_the_pre_fix_github_script_executed_both_payloads():
 
 
 def test_an_empty_mapping_fails_closed_at_every_pwsh_site():
-    """Empty and UNSET are different failures, and both must be refused.
+    """Empty and UNSET are different failures, and only one of them was silent.
 
-    An unset variable is dropped by a native call and shifts every later
-    argument one position left (ledger L214); an empty one binds and runs the
-    real action against an empty target. `IsNullOrWhiteSpace` is the only check
-    covering both, which is why both are exercised here rather than one standing
-    in for the other.
+    Measured on pwsh 7.4.6, at both call forms this workflow uses (direct
+    `-Domain $env:X -Organization <lit>`, and the splat
+    `@('-Zone', $env:X, '-EnforceStandard')`):
+
+        unset      -> argument DROPPED, binder REFUSES: `Missing an argument for
+                      parameter 'Domain'` / `'Zone'`, rc=1, callee NOT reached
+        empty      -> binds, callee reached, rc=0
+        whitespace -> binds, callee reached, rc=0
+
+    The argument is dropped, but it does NOT shift: nothing binds to the
+    parameter, the following parameter keeps its own value, and the binder names
+    the right one. So the unset case ALREADY failed closed before this lane
+    touched the file — loudly, as a call-signature error. The case that was
+    genuinely silent is **empty/whitespace**: it binds, and the real action runs
+    against an empty target at rc=0 with nothing reported. That is the case this
+    guard exists for.
+
+    Covering unset as well costs nothing and upgrades a binder error into a
+    diagnosis naming the mapping, so `IsNullOrWhiteSpace` remains the right
+    check — but the two halves are not the same defect and this module does not
+    claim they are. `test_the_unguarded_pwsh_bodies_would_have_run_with_no_domain`
+    is the differential that holds this to the measurement.
 
     Asserting on the MESSAGE as well as the code, because rc != 0 is also what a
     harness that cannot start produces (CLAUDE.md) — and on this workflow a
@@ -1008,12 +1026,45 @@ def test_an_empty_mapping_fails_closed_in_the_github_script():
 
 
 def test_the_unguarded_pwsh_bodies_would_have_run_with_no_domain():
-    """The silent-success control: strip the guard and the call goes through.
+    """The silent-success control — as a DIFFERENTIAL over both failure modes.
 
-    Without this, the fail-closed tests above are satisfied by a body that
-    cannot run at all. Stripping the guard must leave a body that DOES reach the
-    callee — that is what makes the guard's refusal a measurement rather than a
-    coincidence.
+    Two jobs, and the second is why this is not just a control:
+
+    1. Without it the fail-closed tests above are satisfied by a body that
+       cannot run at all. Stripping the guard must leave a body that DOES reach
+       the callee, or the guard's refusal is a coincidence rather than a
+       measurement.
+    2. It is what holds the docstrings to the measurement. The unguarded body is
+       run TWICE — empty and unset — and the two are asserted to differ, on the
+       axis that actually separates them:
+
+           empty -> callee REACHED,     no binder complaint,  step rc 0
+           unset -> callee NOT reached, binder refuses by name, step rc 0
+
+       A single-case control (this test ran only `empty` until the #1170 review)
+       cannot see a two-case claim, so the module was free to describe the unset
+       case incorrectly — and did, asserting an argument SHIFT that pwsh does not
+       perform. That is L231 one level out: there a mutation could not reach the
+       author's stated reason, here a control could not reach half of it. If the
+       comments ever drift back toward "unset shifts the binding", the `unset`
+       branch below fails, because a shifted binding would have REACHED the
+       callee with a wrong value rather than being refused.
+
+    NOTE THE COLUMN THAT DOES NOT DISCRIMINATE, because it is the one a reader
+    expects to. **The step exit code is 0 in BOTH cases, at all four sites.** The
+    binder's refusal kills the CALLEE, not the step: three of these bodies end on
+    a native `pwsh -File` call whose failure the step does not adopt, and
+    `cloudflare_enforce` additionally captures its callee's streams with `*>&1`
+    into a file it then uploads as an artifact. So "unset already fails closed"
+    is true only in the sense that the destructive call does not run — it is NOT
+    loud, and a run with a missing `env:` mapping would go green with the error
+    text sitting inside an uploaded artifact.
+
+    That is the strongest available argument for the guard covering the unset
+    case too, and it is the opposite of the reason the module gave before this
+    review. Pinning rc here rather than describing it is deliberate: the claim
+    that a case is silent is exactly the kind that decays into a comment nobody
+    re-measures.
     """
     for site in PWSH_SITES:
         body = _render(_step(site)["run"], site.render, site.job)
@@ -1031,12 +1082,51 @@ def test_the_unguarded_pwsh_bodies_would_have_run_with_no_domain():
             f"{site.job}: the guard survived the strip, so this control is "
             f"measuring the guarded body. Stripped: {stripped!r}"
         )
-        observed, _, _ = _run_pwsh(
+        # EMPTY: binds, reaches the callee, exits 0. This is the case the guard
+        # exists for — nothing anywhere reports it.
+        observed, _, rc = _run_pwsh(
             site, stripped, **{ENV_DOMAIN: "", site.credential_var: site.fake_credential}
         )
         assert "CALLED" in observed, (
-            f"{site.job}: with the guard stripped the callee was still never "
-            f"reached, so the fail-closed test proves nothing. "
+            f"{site.job} (empty): with the guard stripped the callee was still "
+            f"never reached, so the fail-closed test proves nothing. "
+            f"Output: {observed!r}"
+        )
+        assert rc == 0, (
+            f"{site.job} (empty): expected the unguarded empty run to look "
+            f"SUCCESSFUL (rc 0) — that silence is the whole reason the guard "
+            f"exists. Got rc={rc}. Output: {observed!r}"
+        )
+        assert "Missing an argument" not in observed, (
+            f"{site.job} (empty): the binder complained on the EMPTY case, so "
+            f"this run is not the silent-success it is asserted to be — the "
+            f"two branches of this differential would be measuring the same "
+            f"thing. Output: {observed!r}"
+        )
+
+        # UNSET: dropped, and the binder refuses. Asserted on the message as
+        # well as the code, because rc != 0 is also what a harness that cannot
+        # start produces (CLAUDE.md) — and the claim under test is specifically
+        # that the BINDER rejected it, by name.
+        observed, _, rc = _run_pwsh(
+            site, stripped, **{site.credential_var: site.fake_credential}
+        )
+        assert "CALLED" not in observed, (
+            f"{site.job} (unset): the callee was REACHED with the guard "
+            f"stripped and no mapping at all. That would mean the argument "
+            f"shifted rather than being refused — the mechanism this module's "
+            f"comments used to claim and no longer do. Output: {observed!r}"
+        )
+        assert "Missing an argument" in observed, (
+            f"{site.job} (unset): expected the binder to refuse by name "
+            f"('Missing an argument for parameter ...'). Output: {observed!r}"
+        )
+        assert rc == 0, (
+            f"{site.job} (unset): expected the STEP to exit 0 even though the "
+            f"binder refused — the failure lands on the callee, not the step, "
+            f"which is why the unset case is silent too and why the guard "
+            f"covers it. Got rc={rc}; if this is now non-zero the body's error "
+            f"handling changed and the docstring needs re-measuring. "
             f"Output: {observed!r}"
         )
 

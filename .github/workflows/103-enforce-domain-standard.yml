@@ -86,16 +86,24 @@ jobs:
           IN_DOMAIN: ${{ inputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          # Fail closed on a missing mapping (ledger L202/L214/L220). Interpolation
-          # had no absent source - substitution always produced something - but an
-          # `env:` var that is unmapped or misnamed arrives UNSET, and this body
-          # splats $domain into a NATIVE command (`& pwsh -File ...`), where an
-          # empty element is dropped ENTIRELY: `@('-Zone', $domain, '-EnforceStandard')`
-          # becomes `-Zone -EnforceStandard`, `-Zone` binds the string
-          # '-EnforceStandard', and the enforce runs against a zone named after a
-          # flag. A mapping that is present but EMPTY does not collapse in the
-          # array, so it binds and the enforce runs against an empty -Zone.
-          # IsNullOrWhiteSpace is the check because it is the only one catching both.
+          # Fail closed on a missing mapping (ledger L202/L220). The two ways this can
+          # go wrong are NOT symmetric, and only one of them is silent - measured on
+          # pwsh 7.4.6 against this body's own splat form,
+          # `@('-Zone', $domain, '-EnforceStandard')`:
+          #
+          #   UNSET (mapping missing or misnamed) -> the element is dropped from the
+          #     array and the binder REFUSES: `Missing an argument for parameter
+          #     'Zone'`, so Update-CloudflareDns.ps1 never runs. It does NOT shift -
+          #     nothing binds to -Zone and -EnforceStandard keeps its own position.
+          #   EMPTY or WHITESPACE -> the element survives, binds, and the enforce runs
+          #     against an empty -Zone.
+          #
+          # Measured: the STEP exits 0 in BOTH cases. The refusal kills the callee,
+          # not the step - and this body captures the callee's streams with `*>&1`
+          # into a file it then uploads, so an unset mapping ships the binder error
+          # inside a green run's artifact. Neither case is loud without this guard;
+          # they differ only in whether the DNS write ran. That is what the guard
+          # converts into an ::error:: and a non-zero exit.
           if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
             Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to run Update-CloudflareDns.ps1 with an empty -Zone.'
             exit 1
@@ -188,13 +196,18 @@ jobs:
           FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
           IN_DOMAIN: ${{ inputs.domain }}
         run: |
-          # Fail closed on a missing mapping (ledger L202/L214/L220). `pwsh` here is
-          # a NATIVE command, so an unset $env:IN_DOMAIN renders as NO ARGUMENT AT
-          # ALL: `-Domain -Organization <org>` binds the string '-Organization' to
-          # -Domain and shifts every later argument one position left, surfacing as
-          # a call-signature error one parameter away from the cause. An EMPTY
-          # mapping binds instead and would run the DKIM check against an empty
-          # -Domain. IsNullOrWhiteSpace catches both.
+          # Fail closed on a missing mapping (ledger L202/L220). Measured on pwsh 7.4.6
+          # at this call's own shape (`-Domain $env:IN_DOMAIN -Organization <org>`):
+          # an UNSET mapping drops the argument and the binder REFUSES - `Missing an
+          # argument for parameter 'Domain'`, so m365-dkim.ps1 never runs. It does
+          # NOT shift: '-Organization' is not consumed as -Domain's value and keeps
+          # its own. An EMPTY or whitespace mapping binds instead, and the DKIM check
+          # runs against an empty -Domain.
+          #
+          # The STEP exits 0 either way - the refusal lands on the callee, and this
+          # body does not adopt it - so neither case reports itself. They differ only
+          # in whether the check ran. IsNullOrWhiteSpace covers both and is what makes
+          # the failure visible.
           if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
             Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-dkim.ps1 with an empty -Domain.'
             exit 1
@@ -226,11 +239,12 @@ jobs:
         env:
           IN_DOMAIN: ${{ inputs.domain }}
         run: |
-          # Fail closed on a missing mapping (ledger L202/L214/L220), for the same
-          # reason the selector targets below are already checked: `pwsh -File` is a
-          # NATIVE command, so an unset value is dropped and `-Zone` would bind the
-          # string '-Name', while an empty one binds and writes DKIM CNAMEs into an
-          # empty zone. The existing throw covers the selector targets only - it
+          # Fail closed on a missing mapping (ledger L202/L220), for the same reason the
+          # selector targets below are already checked. An UNSET mapping drops the
+          # argument and the binder refuses by name so nothing runs - it does not
+          # shift '-Name' onto -Zone; an EMPTY one binds and writes DKIM CNAMEs into
+          # an empty zone. Measured: the step exits 0 in both cases, so neither is
+          # loud on its own. The existing throw covers the selector targets only - it
           # never looked at the domain.
           if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
             Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to run Update-CloudflareDns.ps1 with an empty -Zone.'
@@ -275,9 +289,11 @@ jobs:
           FFC_EXO_CERT_PASSWORD: ${{ secrets.FFC_EXO_CERT_PASSWORD }}
           IN_DOMAIN: ${{ inputs.domain }}
         run: |
-          # Fail closed on a missing mapping (ledger L202/L214/L220). Native `pwsh`
-          # call: unset drops the argument and shifts '-Organization' onto -Domain,
-          # empty binds and enables DKIM signing against an empty -Domain.
+          # Fail closed on a missing mapping (ledger L202/L220). Native `pwsh` call:
+          # UNSET drops the argument and the binder refuses by name so nothing runs -
+          # it does not shift '-Organization' onto -Domain; EMPTY binds and enables
+          # DKIM signing against an empty -Domain. Measured: the step exits 0 in both
+          # cases, so the difference is whether the write ran, not whether CI noticed.
           if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
             Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-dkim.ps1 with an empty -Domain.'
             exit 1
@@ -321,11 +337,13 @@ jobs:
           script: |
             const fs = require('fs');
 
-            // Fail closed on a missing mapping (ledger L202/L214/L220). JS has no
-            // argument-shifting hazard, but it has a quieter one: an unmapped
-            // env var is `undefined`, `Number(undefined)` is NaN, and
-            // createComment would post to a nonsense issue number - or, with a
-            // blank domain, post a report naming no domain at all.
+            // Fail closed on a missing mapping (ledger L202/L220). The pwsh sites
+            // above get one refusal for free - an unset mapping is dropped and the
+            // binder rejects the call by name. JS refuses nothing, which makes this
+            // the quieter site: an unmapped env var is `undefined`,
+            // `Number(undefined)` is NaN, and createComment would post to a nonsense
+            // issue number - or, with a blank domain, post a report naming no domain
+            // at all. Every case here has to be caught in the body.
             const domain = process.env.IN_DOMAIN;
             if (!domain || !domain.trim()) {
               core.setFailed('IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain.');

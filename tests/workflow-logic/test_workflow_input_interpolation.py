@@ -371,6 +371,34 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                the cert password to a file, the callee was handed a legal
                domain, and the step exited 0.
       = 30 / 15
+      -301     burned down: `domain` moved to step-level `env:` in both pwsh
+               bodies. Its two call sites sit in TWO jobs under TWO environments
+               — `graph` on m365-prod and `cloudflare` on cloudflare-prod-read,
+               the second `needs:` the first — so one payload in one dispatch
+               ran in both. What distinguishes it from 303/304 is what sat in
+               the first injection point's own `env:`: not a value from the
+               secrets store but GRAPH_ACCESS_TOKEN, a live Microsoft Graph
+               bearer token mapped from a step OUTPUT, which a sweep of the
+               file for secret references does not see. The second site
+               inherits the Key Vault Cloudflare tokens the composite action
+               exports through GITHUB_ENV, which appear in no `env:` block at
+               all. Measured at both: the payload wrote the credential to a
+               file, the callee was handed a legal domain, and the step exited
+               0.
+      = 29 / 14
+      -110     burned down: `domain` moved to step-level `env:` at BOTH branches
+               of the step's `jump_start` conditional — two call sites in one
+               step, not two steps. The first lane whose injection point sat in
+               a process holding WRITE-scoped Cloudflare tokens for both
+               accounts: the job is cloudflare-prod-write and calls
+               cloudflare-tokens-from-kv with `scope: write`, which exports
+               CLOUDFLARE_API_TOKEN_FFC and _CM through GITHUB_ENV, so the
+               credential in reach appears in no `env:` block in the file.
+               Measured in both branches: the payload wrote the write-scoped
+               token to a file, the callee was handed a legal domain, and the
+               step exited 0. Its `account` / `zone_type` stay interpolated and
+               are not findings — both are `type: choice`.
+      = 28 / 13
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -380,8 +408,8 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 30, (
-        f"expected 30 interpolating workflows, got {len(current)}: "
+    assert len(current) == 28, (
+        f"expected 28 interpolating workflows, got {len(current)}: "
         f"{sorted(current)}"
     )
     write = {
@@ -392,7 +420,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 15, f"expected 15 write-environment ones, got {len(write)}: {sorted(write)}"
+    assert len(write) == 13, f"expected 13 write-environment ones, got {len(write)}: {sorted(write)}"
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
     for burned in (
@@ -402,6 +430,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
         "704-website-analytics-wire.yml",
         "304-m365-dkim-enable.yml",
         "303-m365-domain-and-dkim.yml",
+        "301-m365-domain-preflight.yml",
     ):
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "

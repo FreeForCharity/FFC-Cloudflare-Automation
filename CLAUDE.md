@@ -524,23 +524,29 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
 
     **`HEAD:` has its own trap, and it fails in the reassuring direction: run it before committing
     and it reads the _previous_ commit's blob and reports a confident pass.** So this is a
-    post-commit step, not a substitute for the staged one. Hash **both** copies against the
-    generated file — CR-counting one of them is not enough, because a `prettier` reformat that
+    post-commit step, not a substitute for the staged one. Hash **every delivered copy** against the
+    generated file — CR-counting is not enough on its own, because a `prettier` reformat that
     preserves LF changes the bytes without adding a single `\r`:
 
     ```bash
     GEN=/path/to/generated/agentic-os-status.json
     git rev-parse --verify HEAD >/dev/null          # you are AFTER the commit, not before it
     sha256sum "$GEN"
-    git cat-file -p HEAD:src/data/agentic-os-status.json    | sha256sum
     git cat-file -p HEAD:public/data/agentic-os-status.json | sha256sum
-    # all three must print the same digest; then, separately, the CR check:
+    # both must print the same digest; then, separately, the CR check:
     git cat-file -p HEAD:public/data/agentic-os-status.json | tr -cd '\r' | wc -c   # → 0
     ```
 
-    Three equal digests subsume the CR check (identical bytes cannot differ in `\r`); it is kept
-    because it names the specific failure this repo has actually had, and because it still applies
-    to a delivery where the copies legitimately differ from the source.
+    Equal digests subsume the CR check (identical bytes cannot differ in `\r`); it is kept because
+    it names the specific failure this repo has actually had, and because it still applies to a
+    delivery where a copy legitimately differs from the source.
+
+    **There is one delivered copy as of 2026-08-11.** This recipe hashed two until
+    FFC-IN-ffcadmin.org#904 deleted the dead `src/data/agentic-os-status.json` — the page fetches
+    `assetPath('/data/agentic-os-status.json')` and nothing imported the other. That PR grepped its
+    own repository and so missed both this recipe and `scripts/public-feed-freshness-lib.js`'s
+    `FEED_PATHS`, which is what #1179 reported. If a second copy is published again, add it to the
+    hash list and to `FEED_PATHS` **in the same PR that starts writing it**.
 
     On 2026-08-05 (run 98, delivery 38) prettier left both blobs byte-identical to the generator's
     output — it already emits compatible formatting — so nothing was wrong and the pre-commit check

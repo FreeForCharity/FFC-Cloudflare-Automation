@@ -39,6 +39,11 @@ WF_RAW = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf
 
 NOW = "2026-08-01T12:00:00Z"
 PUBLIC = "public/data/agentic-os-status.json"
+# Deliberately NOT in FEED_PATHS. It was, until FFC-IN-ffcadmin.org#904 deleted
+# the file and 744 began reporting the deletion as a permanent finding (#1179).
+# Keeping it here as the canonical *unregistered* path is not sentiment: several
+# cases below assert it lands in the extra-path bucket, so re-registering it
+# without re-publishing the file fails them rather than going quiet.
 SRC = "src/data/agentic-os-status.json"
 
 
@@ -287,28 +292,40 @@ def test_a_stale_path_raises_a_finding_not_only_a_verdict():
 
 def test_a_registered_path_with_no_observation_is_a_finding():
     """The one-level-up version of the same defect: a step that silently skips a
-    path must not produce a green run."""
-    a = analyze(observations=[_feed("2026-08-01T10:00:00Z", PUBLIC)])
+    path must not produce a green run.
+
+    Observing only the unregistered path is the sharpest form of it — the
+    workflow handed back a result, so a count-based check would be satisfied,
+    and the one path that was supposed to be checked still was not.
+    """
+    a = analyze(observations=[_feed("2026-08-01T10:00:00Z", SRC)])
     assert a["hasFinding"], a
-    assert [r["path"] for r in a["unreadable"]] == [SRC], a
+    assert [r["path"] for r in a["unreadable"]] == [PUBLIC], a
     assert a["checked"] == 2, a
 
 
 def test_no_observations_at_all_is_a_finding():
     a = analyze(observations=[])
     assert a["hasFinding"], a
-    assert len(a["unreadable"]) == 2, a
+    assert [r["path"] for r in a["unreadable"]] == [PUBLIC], a
     assert not a["fresh"], a
 
 
-# --- both copies, reported by path ----------------------------------------
+# --- the registry, and paths reported individually -------------------------
 
 
-def test_both_registered_copies_are_checked():
-    assert const("FEED_PATHS") == [PUBLIC, SRC]
+def test_exactly_the_published_copy_is_registered():
+    """One copy is published, so one is registered.
+
+    The `src/` copy was removed by FFC-IN-ffcadmin.org#904 and this list was not
+    updated in the same change, which is what #1179 reported. Asserting the list
+    exactly — rather than `PUBLIC in FEED_PATHS` — is what makes a re-added path
+    a test failure instead of a silent extra API call per run.
+    """
+    assert const("FEED_PATHS") == [PUBLIC]
 
 
-def test_both_fresh_is_the_only_clean_state():
+def test_the_registered_copy_being_fresh_is_the_clean_state():
     a = analyze(observations=_both("2026-08-01T10:24:42Z"))
     assert not a["hasFinding"], a
     assert len(a["fresh"]) == 2, a
@@ -362,15 +379,31 @@ def test_every_finding_bucket_renders_a_section():
         assert heading in body, (heading, body)
 
 
-def test_the_summary_reports_checked_against_registered():
-    a = analyze(observations=[_feed("2026-08-01T10:00:00Z", PUBLIC)])
-    line = _node(
+def _summary(a) -> str:
+    return _node(
         "process.stdout.write(JSON.stringify(l.summary(JSON.parse(process.argv[1]))));",
         json.dumps(a),
     )
-    # A short denominator must be visible rather than invisible (#966's lesson).
-    assert "checked=2 of 2" in line, line
+
+
+def test_the_summary_reports_checked_against_registered():
+    """Both halves of the fraction are printed, so a mismatch is visible rather
+    than invisible (#966's lesson).
+
+    Observing only an unregistered path is the case that needs it: something was
+    fetched, so a bare `checked=` would read as work done, while the one path
+    that is registered went unobserved and shows up as `unreadable`.
+    """
+    line = _summary(analyze(observations=[_feed("2026-08-01T10:00:00Z", SRC)]))
+    assert "checked=2 of 1" in line, line
     assert "unreadable=1" in line, line
+
+
+def test_the_summary_reports_an_unobserved_registered_path_as_unreadable():
+    line = _summary(analyze(observations=[]))
+    assert "checked=1 of 1" in line, line
+    assert "unreadable=1" in line, line
+    assert "fresh=0" in line, line
 
 
 # --- rolling-issue lookup (the close path decides what this returns) -------

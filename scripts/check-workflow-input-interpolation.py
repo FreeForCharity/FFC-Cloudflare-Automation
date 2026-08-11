@@ -350,7 +350,14 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     "103-enforce-domain-standard.yml": ("domain", "issue_number"),
     "107-audit-compliance.yml": ("domain",),
     "109-dns-export-all-records.yml": ("domain",),
-    "110-cloudflare-zone-create.yml": ("domain",),
+    # 110-cloudflare-zone-create.yml burned down: `domain` now reaches the pwsh body
+    # through step-level `env:`, at both of the step's invocation branches. It is the
+    # first lane whose injection point sat in a process holding WRITE-scoped
+    # Cloudflare tokens for BOTH accounts — `cloudflare-tokens-from-kv` with
+    # `scope: write` exports `CLOUDFLARE_API_TOKEN_FFC` / `_CM` through GITHUB_ENV, so
+    # the credential in reach appears in no `env:` block in the file. Its `account`
+    # and `zone_type` remain interpolated and are NOT a finding: both are
+    # `type: choice`, so GitHub constrains the value.
     # 112-dns-bulk-replace-a-ip.yml burned down: `old_ip` / `new_ip` now reach the
     # pwsh body through step-level `env:`. It rewrites A records across every zone in
     # both Cloudflare accounts on cloudflare-prod-write, and the callee's

@@ -54,20 +54,48 @@ jobs:
           azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 
+      # `domain` is a free-text dispatch input, so it reaches the body through
+      # step-level `env:`, never interpolated into it (#1080). What sits beside
+      # it here is the pair of WRITE-scoped Cloudflare API tokens: the composite
+      # action above resolved the `wr-all-*` Key Vault secrets and exported them
+      # through GITHUB_ENV, so they are in this step's process environment
+      # without appearing in any `env:` block a reviewer can read - and an
+      # injected body would hold DNS write across both Cloudflare accounts.
+      #
+      # `account` and `zone_type` stay interpolated on purpose: both are
+      # `type: choice`, so GitHub constrains the value to the declared options
+      # and it cannot carry a payload. That is the only thing making them safe,
+      # which is why test_110_zone_create_wiring.py pins their declared types
+      # rather than leaving it as a reading of this comment.
       - name: Create zone
         shell: pwsh
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
+          # Fail closed on a missing mapping (ledger L202/L214/L220). Interpolation
+          # had no absent source - substitution always produced something - but an
+          # `env:` var that is unmapped or misnamed arrives UNSET, and pwsh renders
+          # an unset variable as NO ARGUMENT AT ALL, so `-Account` would bind to
+          # `-Domain` and the diagnosis would arrive as a call-signature error one
+          # parameter to the left of the cause. A mapping that is present but EMPTY
+          # does not collapse: it binds, and the zone create would run against an
+          # empty -Domain. IsNullOrWhiteSpace is the check because it is the only
+          # one that catches both.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call cloudflare-zone-create.ps1 with an empty -Domain.'
+            exit 1
+          }
           if ('${{ inputs.jump_start }}' -eq 'true') {
             pwsh -NoProfile -File scripts/cloudflare-zone-create.ps1 `
-              -Domain "${{ inputs.domain }}" `
+              -Domain $env:IN_DOMAIN `
               -Account "${{ inputs.account }}" `
               -ZoneType "${{ inputs.zone_type }}" `
               -JumpStart
           }
           else {
             pwsh -NoProfile -File scripts/cloudflare-zone-create.ps1 `
-              -Domain "${{ inputs.domain }}" `
+              -Domain $env:IN_DOMAIN `
               -Account "${{ inputs.account }}" `
               -ZoneType "${{ inputs.zone_type }}"
           }

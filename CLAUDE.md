@@ -31,6 +31,16 @@
 - **Format with the CI-pinned prettier.** `722-ci.yml` checks with `npx --yes prettier@3.8.1`; plain
   `npx prettier` fetches the latest version, whose Markdown reflow differs — producing
   local-pass/CI-fail loops. Always run `npx --yes prettier@3.8.1 --write <files>`.
+  - **Pass `--ignore-unknown`, and copy CI's whole invocation rather than just its version.** CI
+    runs `npx --yes prettier@3.8.1 --check . --ignore-unknown`. Without that flag, prettier **aborts
+    the entire invocation** on the first file it has no parser for — so
+    `--check <file>.yml <file>.py <file>.md` dies on the Python file with
+    `No parser could be inferred` and never examines the Markdown. On 2026-08-11 (run 149) that
+    checked a one-character ledger edit, reported clean, and #1184 then failed CI at
+    `Check formatting (Prettier)` naming the very file that had never been read. The exit code is
+    non-zero, which is what makes it easy to misread: it looks like "the check ran and flagged the
+    `.py`", not like "nothing you cared about was checked". A batched verification couples its
+    inputs — one unparseable file voids the rest. Ledger **L240**.
 
 ## Verifying tests: CI is authoritative, local runs may be false-red
 

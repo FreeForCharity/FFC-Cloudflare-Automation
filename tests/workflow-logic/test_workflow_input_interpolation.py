@@ -399,6 +399,22 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                step exited 0. Its `account` / `zone_type` stay interpolated and
                are not findings — both are `type: choice`.
       = 28 / 13
+      -103     burned down: `domain` moved to step-level `env:` in all four pwsh
+               bodies, and `domain` + `issue_number` in the `github-script` one.
+               The widest entry in the freeze by blast radius — SIX call sites,
+               FIVE jobs, TWO distinct gated write environments
+               (cloudflare-prod-write twice, m365-prod twice) — so one payload
+               ran four times under two production credentials on one approval.
+               The first lane with a `github-script` site, and the first where
+               the credential is reachable BOTH ways: the Cloudflare jobs hide
+               their tokens in GITHUB_ENV while both m365-prod steps name the
+               Exchange Online certificate in the SAME step's `env:` as the
+               injection point. `issue_number` is `type: number`, which is NOT a
+               constrained type — GitHub validates `boolean` and `choice` only —
+               so it was moved for the same reason as `domain`, not as a
+               courtesy. Its four `boolean` inputs stay interpolated and are not
+               findings.
+      = 27 / 12
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -408,8 +424,8 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 28, (
-        f"expected 28 interpolating workflows, got {len(current)}: "
+    assert len(current) == 27, (
+        f"expected 27 interpolating workflows, got {len(current)}: "
         f"{sorted(current)}"
     )
     write = {
@@ -420,7 +436,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 13, f"expected 13 write-environment ones, got {len(write)}: {sorted(write)}"
+    assert len(write) == 12, f"expected 12 write-environment ones, got {len(write)}: {sorted(write)}"
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
     for burned in (
@@ -431,6 +447,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
         "304-m365-dkim-enable.yml",
         "303-m365-domain-and-dkim.yml",
         "301-m365-domain-preflight.yml",
+        "103-enforce-domain-standard.yml",
     ):
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "

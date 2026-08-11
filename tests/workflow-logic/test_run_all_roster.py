@@ -499,6 +499,107 @@ def test_every_module_in_the_suite_either_reports_a_roster_or_declares_why_not()
     )
 
 
+# --------------------------------------------------------------------------
+# The parent's own stdout encoding -- a third setting beyond #962's two.
+#
+# Note these cannot use `_run_all_on`: that helper pins PYTHONIOENCODING=utf-8
+# on the child it launches, which IS run_all.py here. Every existing test in
+# this file therefore runs the harness with a utf-8 stdout, which is exactly
+# why this class of failure survived undetected.
+# --------------------------------------------------------------------------
+
+# U+2192 RIGHTWARDS ARROW: absent from cp1252, and already used in real module
+# output. `test_the_arrow_is_genuinely_unencodable_in_cp1252` keeps this honest.
+ARROW = "→"
+
+PRINTS_UNENCODABLE = (
+    "import sys\n\n"
+    'def test_a():\n    print("  note: before " + "\\u2192" + " after")\n    assert True\n\n'
+    "def test_b():\n    assert True\n" + RUNNER
+)
+
+RUNS_AFTER = "import sys\n\n" "def test_z():\n    assert True\n" + RUNNER
+
+
+def _run_all_with_parent_encoding(dirpath: pathlib.Path, encoding: str) -> tuple[int, str]:
+    """Run run_all.py with a NARROW stdout, the way a redirected Windows run has."""
+    proc = subprocess.run(
+        [sys.executable, str(RUN_ALL), str(dirpath)],
+        cwd=HERE.parents[1],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        # Read the bytes back as utf-8 regardless, so what we assert on is what
+        # the harness MANAGED to emit, not a second encoding problem of our own.
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": encoding},
+        timeout=120,
+    )
+    return proc.returncode, proc.stdout
+
+
+def test_the_arrow_is_genuinely_unencodable_in_cp1252():
+    """The positive control: without this, the test below could pass vacuously.
+
+    If U+2192 ever became encodable in cp1252 -- or if the fixture stopped
+    emitting it -- the survival test would go green while measuring nothing.
+    """
+    try:
+        ARROW.encode("cp1252")
+    except UnicodeEncodeError:
+        return
+    raise AssertionError(
+        "U+2192 encoded cleanly as cp1252, so the survival test below is no "
+        "longer exercising the failure it exists for"
+    )
+
+
+def test_a_module_printing_an_unencodable_character_does_not_kill_the_suite():
+    """The whole suite must still run, and must still say so.
+
+    Two modules, ordered by the harness's own sorted() glob: the first prints
+    U+2192, the second must still run afterwards. Asserting only "no traceback"
+    would miss the real damage, which is the modules that never execute.
+    """
+    with tempfile.TemporaryDirectory(prefix="encoding-") as tmp:
+        d = pathlib.Path(tmp)
+        _write(d, "test_aaa_prints_unencodable.py", PRINTS_UNENCODABLE)
+        _write(d, "test_zzz_runs_after.py", RUNS_AFTER)
+        code, out = _run_all_with_parent_encoding(d, "cp1252")
+    assert "UnicodeEncodeError" not in out, (
+        "the harness died re-encoding a module's output to the parent's stdout "
+        f"instead of degrading the character:\n{out}"
+    )
+    assert "  PASS test_z" in out, (
+        "the module AFTER the offending one never ran, so the suite stopped "
+        f"early -- that is the actual damage, not the traceback:\n{out}"
+    )
+    assert "All 2 workflow-logic test modules passed." in out, (
+        "the summary line is missing, so a reader grepping for failures sees "
+        f"none and concludes the suite was clean:\n{out}"
+    )
+    assert code == 0, out
+
+
+def test_a_real_failure_is_still_reported_under_a_narrow_stdout():
+    """Degrading a character must not degrade the verdict.
+
+    The fix replaces unencodable characters; if it were ever loosened into
+    swallowing write errors, a red suite would go quiet under cp1252 -- the
+    same silent-clean outcome by a different route.
+    """
+    with tempfile.TemporaryDirectory(prefix="encoding-") as tmp:
+        d = pathlib.Path(tmp)
+        _write(d, "test_aaa_prints_unencodable.py", PRINTS_UNENCODABLE)
+        _write(d, "test_mmm_red.py", ORDINARY_FAILURE)
+        code, out = _run_all_with_parent_encoding(d, "cp1252")
+    assert code == 1, out
+    assert "workflow-logic tests failed: test_mmm_red.py" in out, (
+        f"the failing module must still be named under a narrow stdout:\n{out}"
+    )
+
+
 def test_the_runner_is_the_one_ci_invokes():
     """A guard nobody runs is the failure mode this whole class is about."""
     ci = (HERE.parents[1] / ".github" / "workflows" / "722-ci.yml").read_text(encoding="utf-8")

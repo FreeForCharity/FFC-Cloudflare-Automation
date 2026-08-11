@@ -199,6 +199,25 @@ def _subexpression_payload() -> str:
     )
 
 
+def _interpolated_inputs(body: str) -> set:
+    """Every dispatch input this body reaches through a `${{ }}` expression.
+
+    Deliberately the CHECKER's own two patterns rather than a substring test of
+    this module's own devising. `306` spells its inputs `github.event.inputs.*`,
+    and a plain `"inputs.mailboxes" in body` does catch that — but only because
+    one spelling happens to contain the other, which is a coincidence a later
+    edit can remove without noticing. It does NOT catch the spellings the
+    expression language also allows and the checker also matches, e.g.
+    `${{ inputs . mailboxes }}`. Reusing `_INPUT_REF` means a spelling the
+    checker recognises cannot slip past the step-level assertion, and the two
+    cannot drift apart the way a restated rule does.
+    """
+    found = set()
+    for match in guard._EXPRESSION.finditer(body):
+        found.update(guard._INPUT_REF.findall(match.group(1)))
+    return found
+
+
 def _step() -> dict:
     return find_step(load_workflow(WORKFLOW), JOB, STEP)
 
@@ -224,12 +243,12 @@ def _assert_wiring(step: dict) -> None:
             f"the env: block is decoration and the value reaches nothing. "
             f"Body: {body!r}"
         )
-    for name in INPUT_NAMES:
-        assert f"inputs.{name}" not in body, (
-            f"step {step.get('name')!r} interpolates inputs.{name} into its "
-            f"script body again (#1080): under {ENVIRONMENT} that is "
-            f"dispatcher text executed after the approval. Body: {body!r}"
-        )
+    reintroduced = _interpolated_inputs(body) & set(INPUT_NAMES)
+    assert not reintroduced, (
+        f"step {step.get('name')!r} interpolates {sorted(reintroduced)} into its "
+        f"script body again (#1080): under {ENVIRONMENT} that is dispatcher text "
+        f"executed after the approval. Body: {body!r}"
+    )
 
 
 def _run(body: str, wrap: bool = True, **env_overrides: str):

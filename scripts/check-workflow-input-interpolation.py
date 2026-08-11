@@ -347,7 +347,28 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # [W] --- Cloudflare / domain -------------------------------------------
     "101-domain-status.yml": ("domain", "issue_number"),
     "102-domain-add-ffc-cloudflare-and-whmcs.yml": ("domain", "issue_number"),
-    "103-enforce-domain-standard.yml": ("domain", "issue_number"),
+    # 103-enforce-domain-standard.yml burned down: `domain` now reaches all four
+    # pwsh bodies through step-level `env:`, and `domain` + `issue_number` reach
+    # the `github-script` body through it too. It is the WIDEST entry in the
+    # freeze by blast radius: one input, SIX call sites, FIVE jobs, and TWO
+    # distinct gated write environments — cloudflare-prod-write twice
+    # (`cloudflare_enforce`, `cloudflare_set_dkim`) and m365-prod twice
+    # (`exo_check`, `exo_enable`) — so one payload in one dispatch ran four times
+    # under two production credentials, on a single approval.
+    #
+    # It is also the first lane in the burn-down with a `github-script` site, and
+    # the first where the credential is reachable BOTH ways: the Cloudflare jobs
+    # hide their tokens in GITHUB_ENV (the #1161 blindness, invisible to a
+    # `secrets.`-sweep of the file), while both m365-prod steps name
+    # FFC_EXO_CERT_PFX_BASE64 / FFC_EXO_CERT_PASSWORD in the SAME step's `env:`
+    # as the injection point (ledger L213).
+    #
+    # `issue_number` is `type: number` and was moved for the same reason as
+    # `domain`, not as a courtesy: `number` is NOT in CONSTRAINED_TYPES because
+    # GitHub does not validate it — the dispatch form renders a free text box and
+    # substitutes the value verbatim. `dry_run`, `github_pages_only`,
+    # `skip_m365` and `dmarc_mgmt_debug` remain interpolated and are NOT findings:
+    # all four are `type: boolean`.
     "107-audit-compliance.yml": ("domain",),
     "109-dns-export-all-records.yml": ("domain",),
     # 110-cloudflare-zone-create.yml burned down: `domain` now reaches the pwsh body

@@ -109,6 +109,35 @@ in `GITHUB_ENV`, the blast radius is everything that token can reach — a `Read
 constrain it. This is the same failure shape as #834 / L45-4: a workflow's declared purpose diverged
 from the credential it actually rides on, and nobody noticed until the two were compared directly.
 
+**Read it, do not remember it (#1188).** The paragraph above had stated that principle since #834
+and nothing implemented it, so answering "which credential is in reach at this step" stayed a
+per-workflow act of memory — and the #1080 burn-down got it wrong three times in three lanes (`301`,
+`103`, `306`). The two sweeps normally used both read the workflow's declarative surface only: the
+injecting step's own `env:` (L213) and a `secrets.` grep of the file (the sweep used on #1141).
+Neither can see a credential an **earlier step in the same job** exported through `$GITHUB_ENV`,
+which is how the Cloudflare tokens, the WHMCS credential and the Graph bearer token all arrive. On
+`306` that token is the workflow's _only_ credential, so both sweeps answer "this workflow holds
+nothing" — and they agree because they read the same surface.
+
+`scripts/check-workflow-input-interpolation.py` now resolves it mechanically. Its report gained a
+per-call-site reachability section, and any workflow can be asked directly:
+
+```bash
+python3 scripts/check-workflow-input-interpolation.py --reachability 306-discover-uncaptured-comms.yml
+#   job 'discover' step 'Discover uncaptured comms (PII masked)' (run)
+#       GRAPH_ACCESS_TOKEN (GITHUB_ENV from step 'Acquire Microsoft Graph token')
+```
+
+Three things about how to read it. The **arrival path is the point** — `step env:` is visible to
+anyone who opens the file and a `GITHUB_ENV` arrival is the one nobody sees, so a bare list of names
+would rebuild the same blind spot one layer up. The classifier is deliberately **pessimistic**, on
+the same reasoning as the write-environment rule below: a name that looks like a credential counts,
+and any value referencing `secrets.` counts whatever it is called. And a **third-party `uses:` is
+not resolved** — its source is not in this tree, so a credential it exports is absent from the
+output rather than known to be absent. Covered by
+`tests/workflow-logic/test_workflow_credential_reachability.py`, including the mutation that deletes
+`306`'s export and requires the token to stop being reported.
+
 **This was a tightening — three workflows came off the ✅ list (#916, 2026-07-23).** All three were
 labelled `Reads` and all three loaded write-scoped credentials, so under condition 2 none was
 auto-approvable. The table is the record of that decision; **221 has since been remediated (#920) —

@@ -513,7 +513,40 @@ def pipeline_exit_code_violation(cmd):
 
 
 LABEL_FLAG_RE = re.compile(r"--(?:add|remove)-label\b")
-GH_EDIT_RE = re.compile(r"\bgh\s+(?:issue|pr)\s+edit\b")
+GH_TOKEN_RE = re.compile(r"^(?:\S*/)?gh$")
+
+
+def _invokes_gh_edit(bare):
+    """True if a statement invokes `gh issue edit` / `gh pr edit`.
+
+    Token-based rather than the adjacent `gh\\s+(?:issue|pr)\\s+edit` this
+    replaced, because `gh` strips leading global flags before it resolves the
+    subcommand -- so `gh --repo O/R issue edit --add-label x` is a working
+    command that the adjacent form never matches. A guard whose bypass is a
+    flag the caller was already likely to pass is not a guard.
+
+    Skipping flag tokens is NOT enough, and that near-miss is the reason this
+    is a function: `--repo` takes a separated value, so its argument (`O/R`)
+    stands between `gh` and `issue` as a bare word. A "first non-flag token
+    must be issue|pr" test reproduces the hole it was written to close.
+
+    So the subject and the verb are matched as *ordered tokens* anywhere after
+    a `gh`. That is permissive alone, and safe only in combination: the caller
+    also requires `--add-label`/`--remove-label` in the same statement, and no
+    other `gh` subcommand carries those flags (`issue|pr create` and `list`
+    spell it `--label`, which is why they stay allowed). Quoted spans are
+    already blanked by the caller, so the flag named inside a `--body` message
+    is not a match.
+    """
+    toks = bare.split()
+    for i, tok in enumerate(toks):
+        if not GH_TOKEN_RE.match(tok):
+            continue
+        rest = toks[i + 1 :]
+        for j, sub in enumerate(rest):
+            if sub in ("issue", "pr") and "edit" in rest[j + 1 :]:
+                return True
+    return False
 
 
 def gh_edit_label_violation(cmd):
@@ -536,7 +569,7 @@ def gh_edit_label_violation(cmd):
     """
     for stmt in _statements(cmd):
         bare = _strip_quoted(stmt)
-        if GH_EDIT_RE.search(bare) and LABEL_FLAG_RE.search(bare):
+        if _invokes_gh_edit(bare) and LABEL_FLAG_RE.search(bare):
             return (
                 "`gh issue/pr edit --add-label/--remove-label` is a read-modify-write "
                 "of the ENTIRE label set (ledger L193), so it silently discards a "

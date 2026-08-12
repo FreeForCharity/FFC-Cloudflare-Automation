@@ -598,8 +598,24 @@ def main():
           bash("gh pr edit 1125 --add-label security"), True)
     check("label flag anywhere in the statement", "guard_bash.py",
           bash("gh issue edit 788 --body-file x.md --remove-label blocked --repo O/R"), True)
+    # Blocked through the bypass the first pattern had: `gh` resolves its
+    # subcommand only AFTER stripping leading global flags, so an adjacent
+    # `gh (issue|pr) edit` match is defeated by `--repo` -- a flag the Conductor
+    # passes as a matter of course, which made the hole the DEFAULT path.
+    check("global --repo before the subcommand", "guard_bash.py",
+          bash("gh --repo O/R issue edit 788 --add-label agent-ready"), True)
+    check("global -R before the subcommand", "guard_bash.py",
+          bash("gh -R O/R pr edit 1125 --remove-label claimed"), True)
+    # And the near-miss inside the fix: `--repo` takes a SEPARATED value, so
+    # `O/R` sits between `gh` and `issue` as a bare word. A rule that merely
+    # skipped flag tokens would read `O/R` as the subcommand and let this pass.
+    check("gh by path, behind an env prefix", "guard_bash.py",
+          bash("MSYS_NO_PATHCONV=1 /usr/bin/gh --repo O/R issue edit 788 --add-label x"), True)
     # Allowed: the additive/subtractive endpoints this rule points people at,
-    # and every other reading of the words "edit" and "label".
+    # and every other reading of the words "edit" and "label". The last of
+    # these bounds the ordered-token match -- it is the blocked case above with
+    # only the label flag removed, so it fails if the rule ever widens to any
+    # `gh issue edit`.
     check("additive labels endpoint allowed", "guard_bash.py",
           bash("gh api --method POST repos/O/R/issues/788/labels -f 'labels[]=agent-ready'"), False)
     check("subtractive labels endpoint allowed", "guard_bash.py",
@@ -612,6 +628,8 @@ def main():
           bash("gh issue list --label agent-ready --state open"), False)
     check("the flag name inside a quoted message allowed", "guard_bash.py",
           bash("gh issue comment 788 --body 'do not use gh issue edit --remove-label here'"), False)
+    check("global flag + issue edit without a label flag allowed", "guard_bash.py",
+          bash("gh --repo O/R issue edit 788 --title 'a new title'"), False)
 
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)

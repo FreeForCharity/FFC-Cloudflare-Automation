@@ -81,6 +81,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -310,9 +311,10 @@ def scan(directory: pathlib.Path) -> tuple[dict[str, list[str]], list[str]]:
     """
     gated: dict[str, list[str]] = {}
     errors: list[str] = []
+    # This module is NOT excluded from its own scan. An unexplained exemption is
+    # the thing this file is about, and a guard that declines to police itself
+    # has one by construction.
     for path in sorted(directory.glob("test_*.py")):
-        if path.name == pathlib.Path(__file__).name:
-            continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (SyntaxError, ValueError, OSError) as exc:
@@ -630,10 +632,25 @@ def test_103_runs_its_static_cases_with_no_pwsh_on_path():
     path = HERE / "test_103_enforce_standard_wiring.py"
     import os
 
+    # `shutil.which(..., path=entry)` rather than testing for a literal `pwsh`
+    # file: on Windows the host is `pwsh.exe`, and a bare-name existence check
+    # leaves its directory on PATH. `which` honours PATHEXT, so the same
+    # expression scrubs both platforms.
     scrubbed = os.pathsep.join(
         entry
         for entry in os.environ.get("PATH", "").split(os.pathsep)
-        if entry and not (pathlib.Path(entry) / "pwsh").exists()
+        if entry and shutil.which("pwsh", path=entry) is None
+    )
+    # The control, asserted before the measurement rather than inferred from
+    # it. If the scrub does not actually hide pwsh, the child runs all 14 cases
+    # and this test fails below on an empty skip list -- a failure that reads as
+    # "the rescope is broken" when the truth is "the harness never removed the
+    # tool". Naming it here is the difference between a diagnosis and a hunt.
+    assert shutil.which("pwsh", path=scrubbed) is None, (
+        f"PATH scrub failed: pwsh is still reachable at "
+        f"{shutil.which('pwsh', path=scrubbed)!r} after removing every entry "
+        f"that carries it. This test cannot measure the no-pwsh behaviour it "
+        f"exists to measure -- fix the scrub, do not weaken the assertions."
     )
     # Inherit the environment and override only PATH: a scrubbed env dict is
     # what #943 spent a fortnight on (CLAUDE.md, "never pass a scrubbed env=").

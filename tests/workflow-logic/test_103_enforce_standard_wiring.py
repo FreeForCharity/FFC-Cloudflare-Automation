@@ -1179,15 +1179,64 @@ def test_the_unguarded_pwsh_bodies_would_have_run_with_no_domain():
         )
 
 
+# Which cases actually need an external tool. Everything absent from both sets
+# is a static assertion over the workflow YAML and must run everywhere --
+# including on a host with no PowerShell, which is the whole of #1182: this
+# module used to require BOTH tools and `sys.exit(0)` if either was missing, so
+# on such a host all 14 cases printed one `SKIP all` line and the module exited
+# clean having asserted nothing. The seven static cases below are the ones
+# pinning this module's actual security claim (#1080's `env:` wiring), and they
+# were the ones being skipped.
+NEEDS_PWSH = {
+    "test_an_empty_mapping_fails_closed_at_every_pwsh_site",
+    "test_the_pre_fix_pwsh_bodies_executed_the_payload",
+    "test_the_shipped_pwsh_bodies_bind_a_payload_as_data",
+    "test_the_unguarded_pwsh_bodies_would_have_run_with_no_domain",
+}
+NEEDS_NODE = {
+    "test_an_empty_mapping_fails_closed_in_the_github_script",
+    "test_the_pre_fix_github_script_executed_both_payloads",
+    "test_the_shipped_github_script_binds_both_payloads_as_data",
+}
+TOOL_CASES = {"pwsh": NEEDS_PWSH, "node": NEEDS_NODE}
+
+
+def test_the_tool_case_lists_name_tests_that_exist():
+    """A stale name in NEEDS_PWSH / NEEDS_NODE silently changes what runs.
+
+    Rename a case and its entry here stops matching: the case then runs on a
+    host with no pwsh and reports a confusing FAIL, or -- the direction that
+    actually costs something -- a case that DOES need the tool is no longer
+    listed and fails for want of it rather than being skipped. Either way the
+    roster stops meaning what it says, which is the failure mode this whole
+    module is now guarding against one level down.
+    """
+    declared = {k for k in globals() if k.startswith("test_")}
+    for tool, names in sorted(TOOL_CASES.items()):
+        unknown = sorted(names - declared)
+        assert not unknown, (
+            f"{tool} case list names tests that do not exist: {unknown}. "
+            f"Update the set beside the rename."
+        )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":
-    missing = [t for t in ("pwsh", "node") if shutil.which(t) is None]
-    if missing:
-        print(f"  SKIP all ({', '.join(missing)} not installed in this environment; runs in CI)")
-        sys.exit(0)
+    absent = {tool for tool in TOOL_CASES if shutil.which(tool) is None}
     failures = 0
     for t in TESTS:
+        wanted = sorted(
+            tool
+            for tool, names in TOOL_CASES.items()
+            if t.__name__ in names and tool in absent
+        )
+        if wanted:
+            print(
+                f"  SKIP {t.__name__} ({', '.join(wanted)} not installed in "
+                f"this environment; runs in CI)"
+            )
+            continue
         try:
             t()
             print(f"  PASS {t.__name__}")

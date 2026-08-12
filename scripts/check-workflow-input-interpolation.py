@@ -465,7 +465,21 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # into. Measured against the shipped body: the cert password was written to a file,
     # m365-dkim.ps1 was then called with a legal `Domain=[ffcworkingsite1.org]`, and the
     # step exited 0.
-    "306-discover-uncaptured-comms.yml": ("mailboxes", "since_days"),
+    # 306-discover-uncaptured-comms.yml burned down: `mailboxes` / `since_days` now
+    # reach the pwsh body through step-level `env:`. Two things distinguish it from
+    # the other m365-prod lanes. First, the credential in reach appears NOWHERE in
+    # the file: the preceding step mints a Graph bearer token from the OIDC login and
+    # exports it through GITHUB_ENV, so both recommended sweeps — read the step's own
+    # `env:` (L213), grep the body for `secrets.` (#1141) — score this workflow as
+    # holding nothing, and it is the workflow's ONLY credential. Second, it is the
+    # first lane whose injection point sat in SINGLE quotes, where `$( )` does not
+    # expand: the payload every earlier lane used is inert here and reports the
+    # pre-fix body as harmless, so the control had to close the quote, steal, and
+    # re-issue the legitimate call. Measured against the shipped body that way: the
+    # bearer token was written to a file, the scanner was then invoked with a legal
+    # mailbox list, and the step exited 0. Both inputs carry a `default:` and neither
+    # declares a `type:`, so both are plain strings — a pre-filled box is not a
+    # constraint.
     # --- WPMUDEV ------------------------------------------------------------
     "601-wpmudev-export-sites.yml": ("output_file",),
     # --- GitHub -------------------------------------------------------------

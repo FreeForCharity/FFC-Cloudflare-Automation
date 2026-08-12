@@ -17,8 +17,12 @@ run-name: 'Public Agentic OS feed freshness'
 # page is actually serving. That catches all three causes above plus the next
 # unknown one, and it is cheap.
 #
-# Both published copies are checked and reported by path, because they are
-# written separately and can disagree (#771).
+# Every published copy is checked and reported BY PATH rather than averaged,
+# because copies are written separately and can disagree (#771). There is one
+# copy as of 2026-08-11: FFC-IN-ffcadmin.org#904 deleted the dead `src/` render
+# and #1180 deregistered it here. The by-path reporting stays regardless of the
+# count — it is what makes a single unobserved path a finding instead of a
+# smaller average.
 #
 # A path that is missing, unreadable, or carries an absent, empty, non-ISO or
 # future `generated_at` is reported as a FINDING, never as fresh. "Could not

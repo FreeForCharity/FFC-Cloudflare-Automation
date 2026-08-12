@@ -128,10 +128,57 @@ jobs:
             const agenticPrs = (await listIssuesBounded({
               owner, repo, state: 'open', labels: 'agentic-os',
             })).filter((i) => i.pull_request);
+            // `mergeable` / `mergeable_state` are computed ASYNCHRONOUSLY. The
+            // first GET on a PR nothing has polled recently returns
+            // `mergeable: null` / `mergeable_state: 'unknown'` and only kicks
+            // off the background job; a second GET seconds later carries the
+            // real value. A weekly workflow reads every PR cold, so `unknown`
+            // is the NORMAL first answer here, not an edge case.
+            //
+            // Sampling it once and treating `!== 'clean'` as "not landable"
+            // therefore drops exactly the PRs this metric exists to find, and
+            // drops them into the healthy-looking direction: the count falls to
+            // 0 and the trend column renders the disappearance as an
+            // improvement. Measured 2026-08-11 against #1127 and #1039 — both
+            // green, clean, waiting on a human for days — first GET `unknown`,
+            // second GET `clean`, same objects, seconds apart.
+            //
+            // So resolve it rather than sample it, and when it will not resolve
+            // say so: an unread PR must not be silently indistinguishable from
+            // a landed one (the denominator rule, ledger L173).
+            const MERGEABILITY_ATTEMPTS = 4;
+            const MERGEABILITY_DELAY_MS = 3000;
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+            async function getPrWithMergeability(number) {
+              let last = null;
+              for (let attempt = 1; attempt <= MERGEABILITY_ATTEMPTS; attempt++) {
+                const { data } = await github.rest.pulls
+                  .get({ owner, repo, pull_number: number })
+                  .catch(() => ({ data: null }));
+                // A transient GET failure is the SAME defect class this helper
+                // exists to close: returning here would drop the PR with no
+                // warning, and the drop lands in the flattering direction. It is
+                // also the case most worth retrying — unlike `mergeable: false`,
+                // nothing was answered. Keep the last body we actually got.
+                if (data) {
+                  last = data;
+                  // `mergeable` is the resolution flag; `mergeable_state` still
+                  // reads 'unknown' alongside a null `mergeable`. Either a true
+                  // or a false decides it — only null means "not computed yet".
+                  if (data.mergeable !== null) return data;
+                }
+                if (attempt < MERGEABILITY_ATTEMPTS) await sleep(MERGEABILITY_DELAY_MS);
+              }
+              core.warning(
+                `#${number}: mergeability still unresolved after ${MERGEABILITY_ATTEMPTS} attempts ` +
+                  `(mergeable_state='${last ? last.mergeable_state : 'no response'}'). Excluded ` +
+                  `from the ready-but-unlanded count — that count is a floor, not a total.`,
+              );
+              return last;
+            }
+
             for (const item of agenticPrs) {
-              const { data: pr } = await github.rest.pulls
-                .get({ owner, repo, pull_number: item.number })
-                .catch(() => ({ data: null }));
+              const pr = await getPrWithMergeability(item.number);
               if (!pr || !pr.draft || pr.mergeable_state !== 'clean') continue;
               const { data: checks } = await github.rest.checks
                 .listForRef({ owner, repo, ref: pr.head.sha, per_page: 100 })

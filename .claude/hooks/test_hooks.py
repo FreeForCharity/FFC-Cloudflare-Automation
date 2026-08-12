@@ -8,6 +8,7 @@ Runs each hook as a subprocess with crafted stdin and asserts the exit code
 import ast
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -28,11 +29,22 @@ def run(script, payload):
     return proc.returncode, proc.stderr
 
 
+# A hook's contract is rc 2 (blocked) or 0 (allowed). Anything else -- a
+# syntax error, a failed import, a 127 -- is a BROKEN HOOK, and `blocked =
+# rc == 2` alone reads every one of those as "allowed", so an ALLOW case goes
+# green against a hook that cannot run at all. That is the same shape as the
+# repo's standing rule that a test asserting a non-zero exit code must also
+# assert on the output: a harness that cannot start is otherwise
+# indistinguishable from a rule correctly staying silent. Raised repeatedly by
+# Copilot review on this PR, and correct.
+VALID_RC = (0, 2)
+
+
 def check(name, script, payload, expect_block):
     global PASS, FAIL
     rc, _ = run(script, payload)
     blocked = rc == 2
-    ok = blocked == expect_block
+    ok = blocked == expect_block and rc in VALID_RC
     PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
     status = "ok  " if ok else "FAIL"
     want = "block" if expect_block else "allow"
@@ -44,6 +56,14 @@ def check(name, script, payload, expect_block):
 # tell "warned" from "said nothing" -- and a warning nobody can assert on is a
 # warning that can rot without any test noticing. Assert on the marker instead.
 WARN_MARKER = "FFC-HOOK-WARNING"
+
+# Every warn reason opens with its rule's `[#NNN]` tag, so the set of tags in
+# stderr is the set of warn rules that fired.
+WARN_TAG_RE = re.compile(r"\[#\d+\]")
+
+
+def warn_tags(err):
+    return set(WARN_TAG_RE.findall(err))
 
 
 def check_warn(name, script, payload, expect_warn, tag=None):
@@ -183,7 +203,7 @@ def check_emitting(name, script, payload, expect_block):
     blocked = rc == 2
     want = "block" if expect_block else "allow"
     got = "block" if blocked else f"allow(rc={rc})"
-    record(f"{name}: want={want} got={got}", blocked == expect_block)
+    record(f"{name}: want={want} got={got}", blocked == expect_block and rc in VALID_RC)
     return rc, err
 
 
@@ -371,115 +391,20 @@ RULES = [
         ("echo a WHMCS var with no secret suffix", "echo $WHMCS_API_IDENTIFIER", BLOCK),
         ("workflow secrets expression with no secret suffix",
          'echo "${{ secrets.AZURE_CLIENT_ID }}"', BLOCK),
-        # Re-homed from the flat block the union merge left in main():
-        # these exercise this rule and belong with it.
-        # ... and the genuine forms must all still block. The bare-name spellings
-        # below were ALLOWED before this change: the old pattern required a
-        # `_TOKEN`-style suffix preceded by at least one character, so `$TOKEN`
-        # itself matched nothing.
-        ("echo bare $TOKEN", "echo $TOKEN", BLOCK),
-        ("echo quoted $TOKEN", 'echo "$TOKEN"', BLOCK),
-        ("echo braced ${TOKEN}", "echo ${TOKEN}", BLOCK),
-        ("printf a secret", "printf '%s' \"$TOKEN\"", BLOCK),
-        ("echo bare lowercase $token", "echo $token", BLOCK),
-        ("echo $env:SECRET", "echo $env:SECRET", BLOCK),
-        # `$env:X` is a PowerShell variable READ, not the `env` command: `\benv\b`
-        # treats `$` and `:` as word boundaries, so the bare name armed the rule on
-        # a statement that prints nothing (Copilot's finding on #1062). The second
-        # case was a false positive on `main` too.
-        ("powershell env var assignment allowed", "X=$env:PASSWORD", ALLOW),
-        ("powershell env var set in a subshell allowed",
-         "pwsh -c '$env:GH_TOKEN = \"x\"; python y.py'", ALLOW),
-        # ... but `main` blocked `Write-Host $env:GH_TOKEN` only via that same stray
-        # `env` match, so these two keep the coverage after the accident is removed.
-        # They are the discriminator for the Write-* branch.
-        ("Write-Host a secret", "Write-Host $env:GH_TOKEN", BLOCK),
-        ("Write-Output a secret", "Write-Output $env:CLOUDFLARE_API_TOKEN", BLOCK),
-        # PowerShell's implicit output: a bare expression statement IS a print, so
-        # these leak with NO verb anywhere. `main` caught them only as collateral of
-        # the stray `env` match, and a list of Write-* consumers cannot reach them --
-        # there is no verb to enumerate (Conductor run 92). Every other `$env:` case
-        # in this file pairs the expansion with a verb or an `=`; these are the
-        # spelling with neither.
-        ("bare powershell expansion of a secret", "$env:GH_TOKEN", BLOCK),
-        ("bare powershell expansion via pwsh -c", "pwsh -c '$env:GH_TOKEN'", BLOCK),
-        ("bare powershell expansion piped to a consumer", "$env:GH_TOKEN | Out-Host", BLOCK),
-        # An embedded pwsh script has its OWN statements: `_echo_segments` splits on
-        # `;` only outside quotes, so everything after the first statement arrived
-        # unjudged. Each of these is a verb-less print that `main` caught by
-        # accident and this rule initially did not (Copilot, #1062).
-        ("bare powershell expansion after a ; inside -c", "pwsh -c 'true; $env:GH_TOKEN'", BLOCK),
-        ("bare powershell expansion before a ; inside -c", "pwsh -c '$env:GH_TOKEN; true'", BLOCK),
-        ("bare powershell expansion inside a block", "pwsh -c 'if ($x) { $env:GH_TOKEN }'", BLOCK),
-        # The discriminator for the widened delimiters: same shape, non-secret name.
-        # Without it, the delimiter set could match anything and stay green.
-        ("bare expansion of a non-secret after a ; allowed", "pwsh -c 'true; $env:TEMP'", ALLOW),
-        # A grouped expression statement still prints (Copilot, #1062) ...
-        ("parenthesised bare powershell expansion", "pwsh -c '($env:GH_TOKEN)'", BLOCK),
-        ("parenthesised bare expansion with spaces", "pwsh -c '( $env:GH_TOKEN )'", BLOCK),
-        # ... but `$(...)` is a SUBEXPRESSION whose value is substituted, so this is
-        # argument passing and must stay allowed -- the `(` delimiter is excluded
-        # after a `$` for exactly this case, and this is its discriminator.
-        ("secret via a subexpression argument allowed",
-         "pwsh -c './x.ps1 -Token $($env:GH_TOKEN)'", ALLOW),
-        ("parenthesised non-secret allowed", "pwsh -c '($env:TEMP)'", ALLOW),
-        # `&&`/`||` are PowerShell 7 chain operators, and inside the quoted -c
-        # script `_split_on_logical` never sees them; `,` continues an expression
-        # into an array literal. Found by sweeping the boundary spellings rather
-        # than waiting for each to arrive as a review round.
-        ("bare powershell expansion after && inside -c", "pwsh -c 'true && $env:GH_TOKEN'", BLOCK),
-        ("bare powershell expansion after || inside -c",
-         "pwsh -c 'false || $env:GH_TOKEN'", BLOCK),
-        ("bare powershell expansion before a comma", "pwsh -c '$env:GH_TOKEN,1'", BLOCK),
-        # `,` is a terminator but NOT a leading delimiter, which is what keeps an
-        # array of arguments allowed. This is that asymmetry's discriminator.
-        ("secret in an array argument allowed",
-         "pwsh -c './x.ps1 -Args $env:GH_TOKEN,$env:CLOUDFLARE_API_TOKEN'", ALLOW),
-        # `&&` was added as a LEADING delimiter without being added as a terminator,
-        # so a bare expansion that *precedes* a chain operator went unjudged. `||`
-        # kept blocking by accident -- `|` was already a terminator for pipes --
-        # which is precisely what hid the asymmetry.
+        # From the flat block the union merge left in main(): these four
+        # were the only cases there that the rule did not already hold.
+        # The other 39 were verbatim duplicates of cases above and were
+        # dropped rather than re-homed -- two copies of one case is waste
+        # and an edit hazard, and no guard here can see it (the corpus
+        # check compares SETS, and both copies passed).
         ("bare powershell expansion before && inside -c",
          "pwsh -c '$env:GH_TOKEN && true'", BLOCK),
         ("bare powershell expansion as a middle chain leg",
          "pwsh -c 'true && $env:GH_TOKEN && true'", BLOCK),
         ("bare powershell expansion before || inside -c",
          "pwsh -c '$env:GH_TOKEN || true'", BLOCK),
-        # The discriminator: a secret handed to a script as an argument is not a
-        # print, even when the statement continues into a chain.
         ("secret argument before && allowed",
          "pwsh -c './x.ps1 -Token $env:GH_TOKEN && true'", ALLOW),
-        ("bare powershell expansion after &&", "true && $env:CLOUDFLARE_API_TOKEN", BLOCK),
-        ("braced bare powershell expansion", "${env:GH_TOKEN}", BLOCK),
-        # The braced spelling puts a `{` between the `$` and the name, so a
-        # `(?<!\$)` lookbehind alone still sees a word boundary and reinstates the
-        # false positive one spelling over.
-        ("braced powershell env assignment allowed", "X=${env:PASSWORD}", ALLOW),
-        # A non-secret env var is not a leak however it is spelled, and passing a
-        # token as an ARGUMENT is not printing it -- `main` blocked both by the
-        # same accident.
-        ("bare expansion of a non-secret allowed", "$env:TEMP | Out-Host", ALLOW),
-        ("braced non-secret expansion allowed", "cat ${env:HOME}/x", ALLOW),
-        ("secret passed as a pwsh argument allowed",
-         'pwsh -c "./x.ps1 -Token $env:GH_TOKEN"', ALLOW),
-        ("secret in a curl header, powershell spelling, allowed",
-         'curl -H "Authorization: Bearer $env:GH_TOKEN" https://api.github.com', ALLOW),
-        # A suffixed name that is NOT on the known-vars list -- the only case that
-        # reaches the suffix pattern on its own.
-        ("echo a suffixed name outside the known list", 'echo "$AZURE_CLIENT_SECRET"', BLOCK),
-        # A secret printed on a LATER line is still printed -- per-statement must
-        # not become "only the first statement".
-        ("secret echoed on a later line", 'python x.py\necho "$WHMCS_API_SECRET"', BLOCK),
-        # The assigned VALUE is judged too, or stripping the assignment would hide
-        # the leak it was meant to excuse.
-        ("secret echoed inside an assignment value", "X=$(echo $GH_TOKEN)", BLOCK),
-        # A pipeline is one unit: printenv's output reaches grep.
-        ("printenv piped to grep for a secret", "printenv | grep GH_TOKEN", BLOCK),
-        ("env piped to grep for a secret", "env | grep CLOUDFLARE_API_TOKEN", BLOCK),
-        # Heredoc bodies are shell here, unlike in the pipeline rule: dropping them
-        # would turn a blocked command into an allowed one.
-        ("secret echoed inside a heredoc body", "bash <<EOF\necho $GH_TOKEN\nEOF", BLOCK),
-        ("workflow secrets expression", 'echo "${{ secrets.CBM_TOKEN }}"', BLOCK),
     ]),
 
     Rule("secret-literal", 'appears to contain a secret literal', BLOCK_TIER, [
@@ -706,8 +631,14 @@ RULES = [
         # The documented-correct forms must all stay silent.
         ("paginate + STREAMING jq silent",
          "gh api --paginate repos/o/r/issues/719/comments --jq '.[] | .number'", SILENT),
+        # The one DELIBERATE overlap, declared rather than tolerated: this is an
+        # unpaginated list read, so #971 fires and is right to; it is not a
+        # paginated array-jq, so #989 must stay quiet. check_warn's own
+        # docstring names this exact command as the reason `tag` exists. The
+        # fourth element is what keeps "no unexpected warning" strict for the
+        # other silent cases while letting this one warn under #971.
         ("array jq WITHOUT paginate silent",
-         "gh api repos/o/r/issues --jq '[.[]|.number]'", SILENT),
+         "gh api repos/o/r/issues --jq '[.[]|.number]'", SILENT, ("[#971]",)),
         ("paginate + slurp, no jq, silent",
          "gh api --paginate --slurp repos/o/r/issues/719/comments", SILENT),
         ("gh pr list array jq is not gh api",
@@ -998,7 +929,8 @@ def run_rule_cases():
     for rule in RULES:
         if rule.label:
             print(rule.label)
-        for name, cmd, verdict in rule.cases:
+        for name, cmd, verdict, *rest in rule.cases:
+            expected_tags = rest[0] if rest else ()
             if verdict in (BLOCK, ALLOW):
                 rc, err = check_emitting(f"{rule.id} / {name}", "guard_bash.py",
                                          bash(cmd), verdict == BLOCK)
@@ -1009,6 +941,25 @@ def run_rule_cases():
                                      verdict == WARN, tag=rule.signature)
                 if verdict == WARN and rule.signature in err:
                     rule.emitted.append((name, err))
+                if verdict == SILENT:
+                    # `tag` makes check_warn's negative mean "THIS rule stayed
+                    # quiet", which cannot see a DIFFERENT warn rule that has
+                    # started firing here (Copilot's finding on #1039, and it
+                    # is real). Asserting no warning AT ALL is the obvious fix
+                    # and is wrong: the two rules deliberately overlap, and
+                    # `gh api repos/o/r/issues --jq '[...]'` IS an unpaginated
+                    # list read while NOT being a paginated array-jq -- so the
+                    # blunt form reds a case that is correct by design (it did,
+                    # when measured). Each case therefore declares the OTHER
+                    # tags it legitimately provokes, and anything beyond that
+                    # set is an unexpected leak.
+                    unexpected = warn_tags(err) - set(expected_tags)
+                    record(f"{rule.id} / {name}: no unexpected warning"
+                           + (f" (expected {' '.join(expected_tags)})" if expected_tags else ""),
+                           not unexpected,
+                           f"also warned under {' '.join(sorted(unexpected))} -- either a rule "
+                           f"has started leaking onto this command, or the overlap is legitimate "
+                           f"and belongs in the case's expected-tag list")
 
 
 def main():

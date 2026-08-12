@@ -199,7 +199,12 @@ def is_write_environment(name: str) -> bool:
 
 
 def script_bodies(workflow: dict):
-    """Yield (job_id, step_label, kind, body) for every embedded script.
+    """Yield (job_id, step_index, step_label, kind, body) for every script.
+
+    The INDEX is what makes credential reachability answerable: "which
+    credential is in this process" is a question about the steps BEFORE this one
+    in the same job, and a label cannot be counted back from (two steps may
+    share a name, and an unnamed one is labelled by its own position).
 
     Two kinds carry substituted text into a parser: a `run:` block, and the
     `script:` input of `actions/github-script`, whose body is JS. #1080's
@@ -214,11 +219,11 @@ def script_bodies(workflow: dict):
                 continue
             label = str(step.get("name") or f"step {index}")
             if isinstance(step.get("run"), str):
-                yield job_id, label, "run", step["run"]
+                yield job_id, index, label, "run", step["run"]
             if "github-script" in str(step.get("uses") or ""):
                 script = (step.get("with") or {}).get("script")
                 if isinstance(script, str):
-                    yield job_id, label, "github-script", script
+                    yield job_id, index, label, "github-script", script
 
 
 def _line_of(raw: str, needle: str) -> int | None:
@@ -235,10 +240,15 @@ def _line_of(raw: str, needle: str) -> int | None:
 
 class Finding:
     def __init__(self, workflow: str, job: str, step: str, kind: str,
-                 input_name: str, expression: str, line: int | None) -> None:
+                 input_name: str, expression: str, line: int | None,
+                 step_index: int | None = None) -> None:
         self.workflow = workflow
         self.job = job
         self.step = step
+        # Position of the step within its job, for credential reachability
+        # (#1188). Optional so a hand-built Finding in a test stays cheap to
+        # write; a Finding without it simply reports no reachability.
+        self.step_index = step_index
         self.kind = kind
         self.input_name = input_name
         self.expression = expression
@@ -273,7 +283,7 @@ def scan_workflow(path: pathlib.Path) -> list[Finding]:
         return []
 
     findings: list[Finding] = []
-    for job_id, step, kind, body in script_bodies(workflow):
+    for job_id, step_index, step, kind, body in script_bodies(workflow):
         for match in _EXPRESSION.finditer(body):
             expression = match.group(1)
             for name in _INPUT_REF.findall(expression):
@@ -282,7 +292,7 @@ def scan_workflow(path: pathlib.Path) -> list[Finding]:
                 anchor = match.group(0).splitlines()[0]
                 findings.append(
                     Finding(path.name, job_id, step, kind, name, expression,
-                            _line_of(raw, anchor))
+                            _line_of(raw, anchor), step_index)
                 )
     return findings
 
@@ -312,6 +322,319 @@ def current_map(findings: list[Finding]) -> dict[str, tuple[str, ...]]:
     for finding in findings:
         grouped.setdefault(finding.workflow, set()).add(finding.input_name)
     return {name: tuple(sorted(v)) for name, v in sorted(grouped.items())}
+
+
+# --- credential reachability (#1188) ----------------------------------------
+#
+# WHY THIS EXISTS
+#     Judging a call site means knowing WHICH CREDENTIAL the injected code would
+#     hold. The two sweeps this repo recommends for that both read the workflow's
+#     DECLARATIVE surface and nothing else:
+#
+#         1. read the injecting step's own `env:`   — ledger L213
+#         2. grep the body for `secrets.`           — the sweep used on #1141
+#
+#     Neither can see a credential that an EARLIER STEP IN THE SAME JOB exported
+#     through `$GITHUB_ENV`. That is not a hypothesis: the #1080 burn-down hit it
+#     three times, each as a fresh per-lane surprise — lane 7 (`301`, the Graph
+#     token), lane 9 (`103`, the Cloudflare tokens), lane 10 (`306`, #1187).
+#
+#     `306` is the shape that makes this worth mechanising: the Graph bearer
+#     token it mints into `GITHUB_ENV` is the workflow's ONLY credential, so both
+#     sweeps answer "this workflow holds nothing" rather than "part of it". Two
+#     independent-looking checks agree on a clean answer, and they agree because
+#     they read the same surface.
+#
+#     `docs/workflow-safety-and-approvals.md` has stated the principle since #834
+#     / L45-4 — "once a broad org-scoped writer token is in GITHUB_ENV, the blast
+#     radius is everything that token can reach". This is its implementation.
+#
+# WHAT IT DELIBERATELY DOES NOT DO
+#     It adds INFORMATION to an existing finding. It never creates one, never
+#     clears one, and never touches the exit code: a tree whose reachability is
+#     empty exits exactly as it did before this landed (#1188 criterion 4).
+
+# A name-based classifier, applied to env var names. Pessimistic on purpose, and
+# for the same reason `is_write_environment` is: the cost of over-reporting is a
+# reviewer reading one extra name, and the cost of under-reporting is the blind
+# spot this exists to close. `IDENTIFIER` is in the list because the WHMCS API
+# identifier is half of a credential PAIR — on its own it reads like metadata.
+_CREDENTIAL_NAME = re.compile(
+    r"(?:^|_)(?:PAT|TOKEN|SECRET|SECRETS|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS"
+    r"|KEY|APIKEY|IDENTIFIER|CERT|PFX|BEARER|AUTH)(?:_|$)",
+    re.IGNORECASE,
+)
+
+# A literal env-var assignment inside a quoted string: `"NAME=…"` (plain) or
+# `"NAME<<delim"` (GitHub's heredoc-delimited form, which every `*-from-kv`
+# composite action uses so a value carrying a newline cannot inject a second
+# variable). The opening quote is REQUIRED, which is what keeps a dynamic write
+# out: `Add-Content -Value "$Name<<$delim"` starts with `$` and is not a name
+# this can know — it is recovered from the helper's CALL SITE instead, below.
+_ENV_ASSIGN = re.compile(r"""["']([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|<<)""")
+
+# `{ echo "NAME<<$d"; …; } >> "$GITHUB_ENV"` — the bash form used by 120, 701,
+# 720 and friends. The closing brace must be followed by the redirect, which is
+# what stops the non-greedy match from ending early on a `${d}` inside the block.
+_BRACE_TO_GITHUB_ENV = re.compile(
+    r"\{(.*?)\}\s*>>\s*[\"']?\$\{?GITHUB_ENV\}?[\"']?", re.DOTALL
+)
+
+# `- uses: ./.github/actions/<name>` — a composite action in THIS repo, whose
+# steps run in the caller's job and whose `GITHUB_ENV` writes therefore land in
+# the caller's later steps. A third-party `uses:` is not judged (see the report's
+# closing "Not judged" line): its source is not in the tree.
+_LOCAL_ACTION = re.compile(r"^\.{1,2}/(?:\./)?(\.github/actions/[A-Za-z0-9._-]+)/?$")
+
+# A pwsh helper that writes to GITHUB_ENV, e.g. `Add-EnvVar`. Matched loosely on
+# purpose: what matters is the brace-balanced body, extracted separately.
+_PS_FUNCTION = re.compile(r"\bfunction\s+([A-Za-z][A-Za-z0-9_-]*)\s*\{")
+
+
+def looks_like_credential(name: str, value: str | None = None) -> bool:
+    """Would code running with this variable in its environment hold a secret?
+
+    Two independent signals, either sufficient:
+
+    * the VALUE references `secrets.` — definitive, and name-blind, so a
+      credential mapped under an innocuous name is still caught;
+    * the NAME matches `_CREDENTIAL_NAME` — the only signal available for a
+      `GITHUB_ENV` export, whose value was computed at run time and is not in
+      the file at all.
+    """
+    if value is not None and "secrets." in "".join(str(value).split()):
+        return True
+    return bool(_CREDENTIAL_NAME.search(name))
+
+
+def _heredoc_bodies_to_github_env(body: str) -> list[str]:
+    """Bodies of `cat <<EOF >> "$GITHUB_ENV"` blocks.
+
+    Only entered for a line that mentions GITHUB_ENV and `<<` but carries NO
+    literal assignment of its own. Without that second condition the pwsh line
+    `"FRAUD_REVIEW_JSON<<FRAUD_EOF" | Out-File … $env:GITHUB_ENV` — a complete
+    write, already handled — would be read as OPENING a heredoc and would then
+    swallow the rest of the step.
+    """
+    lines = body.splitlines()
+    bodies: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if "GITHUB_ENV" in line and "<<" in line and not _ENV_ASSIGN.search(line):
+            opener = re.search(r"<<-?\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?", line)
+            if opener:
+                delimiter = opener.group(1)
+                collected: list[str] = []
+                index += 1
+                while index < len(lines) and lines[index].strip() != delimiter:
+                    collected.append(lines[index])
+                    index += 1
+                bodies.append("\n".join(collected))
+        index += 1
+    return bodies
+
+
+def _brace_balanced_body(text: str, open_at: int) -> str:
+    """The `{ … }` body starting at `open_at`, or the tail if it never closes."""
+    depth = 0
+    for position in range(open_at, len(text)):
+        if text[position] == "{":
+            depth += 1
+        elif text[position] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_at + 1:position]
+    return text[open_at:]
+
+
+def _helper_exported_names(body: str) -> set[str]:
+    """Names passed as `-Name 'X'` to a pwsh helper that writes to GITHUB_ENV.
+
+    The `*-from-kv` composite actions all funnel their writes through one
+    `Add-EnvVar` whose `$Name` is a parameter, so the literal name exists only at
+    the CALL SITE. Resolved per-function rather than by sweeping every `-Name` in
+    the body, so a helper that does NOT touch GITHUB_ENV contributes nothing.
+    """
+    names: set[str] = set()
+    for match in _PS_FUNCTION.finditer(body):
+        function = match.group(1)
+        definition = _brace_balanced_body(body, match.end() - 1)
+        if "GITHUB_ENV" not in definition:
+            continue
+        for call in re.finditer(
+            rf"\b{re.escape(function)}\b[^\r\n]*?-Name\s+[\"']([A-Za-z_][A-Za-z0-9_]*)[\"']",
+            body,
+        ):
+            names.add(call.group(1))
+    return names
+
+
+def exported_env_names(body: str) -> set[str]:
+    """Every env var name a script body writes to `$GITHUB_ENV`.
+
+    Four shapes, all live in this repo:
+
+      pwsh direct    `"GRAPH_ACCESS_TOKEN=$token" | Out-File … $env:GITHUB_ENV`
+      pwsh heredoc   `"FRAUD_REVIEW_JSON<<EOF"    | Out-File … $env:GITHUB_ENV`
+      bash group     `{ echo "GH_TOKEN<<$d"; … } >> "$GITHUB_ENV"`
+      pwsh helper    `Add-EnvVar -Name 'WHMCS_API_SECRET' -Value $secret`
+    """
+    if "GITHUB_ENV" not in body:
+        return set()
+    names: set[str] = set()
+    for line in body.splitlines():
+        if "GITHUB_ENV" in line:
+            names |= {m.group(1) for m in _ENV_ASSIGN.finditer(line)}
+    for block in _BRACE_TO_GITHUB_ENV.findall(body):
+        names |= {m.group(1) for m in _ENV_ASSIGN.finditer(block)}
+    for block in _heredoc_bodies_to_github_env(body):
+        for line in block.splitlines():
+            assignment = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", line)
+            if assignment:
+                names.add(assignment.group(1))
+    names |= _helper_exported_names(body)
+    return names
+
+
+def action_exported_env_names(uses: str, depth: int = 0) -> set[str]:
+    """Env names a LOCAL composite action exports into the caller's job.
+
+    A composite action's steps run in the calling job, so its `GITHUB_ENV` writes
+    are in reach of every later step of the CALLER — which is exactly how the
+    Cloudflare and WHMCS credentials arrive in workflows whose files contain no
+    `secrets.` reference at all.
+    """
+    if depth > 2:
+        return set()
+    match = _LOCAL_ACTION.match(str(uses).strip())
+    if not match:
+        return set()
+    directory = REPO_ROOT / match.group(1)
+    for candidate in ("action.yml", "action.yaml"):
+        path = directory / candidate
+        if not path.exists():
+            continue
+        try:
+            action = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            return set()
+        if not isinstance(action, dict):
+            return set()
+        names: set[str] = set()
+        for step in ((action.get("runs") or {}).get("steps") or []):
+            if isinstance(step, dict):
+                names |= step_exported_env_names(step, depth + 1)
+        return names
+    return set()
+
+
+def step_exported_env_names(step: dict, depth: int = 0) -> set[str]:
+    """Env names one step exports, whether it is a `run:` or a local action."""
+    names: set[str] = set()
+    if isinstance(step.get("run"), str):
+        names |= exported_env_names(step["run"])
+    if isinstance(step.get("uses"), str):
+        names |= action_exported_env_names(step["uses"], depth)
+    return names
+
+
+class Reach:
+    """One credential in reach at a step, and HOW it got there.
+
+    The arrival path is the point, not a decoration. A bare list of names
+    rebuilds the same blind spot one layer up: `GH_TOKEN` in the injecting step's
+    own `env:` is visible to anyone who opens the file, and `GH_TOKEN` exported
+    by an earlier step is precisely what nobody sees.
+    """
+
+    STEP_ENV = "step env:"
+    JOB_ENV = "job env:"
+    GITHUB_ENV = "GITHUB_ENV"
+
+    def __init__(self, name: str, arrival: str, source: str | None = None) -> None:
+        self.name = name
+        self.arrival = arrival
+        self.source = source
+
+    @property
+    def hidden(self) -> bool:
+        """True when neither recommended sweep can see it (#1188)."""
+        return self.arrival == self.GITHUB_ENV
+
+    def _key(self):
+        return (self.name, self.arrival, self.source)
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Reach) and self._key() == other._key()
+
+    def __hash__(self) -> int:
+        return hash(self._key())
+
+    def __str__(self) -> str:
+        if self.arrival == self.GITHUB_ENV:
+            return f"{self.name} (GITHUB_ENV from step '{self.source}')"
+        return f"{self.name} ({self.arrival})"
+
+
+def _exporter_label(step: dict, index: int) -> str:
+    """How to NAME the step a credential arrived from.
+
+    `script_bodies` labels an unnamed step `step N`, which is fine for pointing
+    at a finding and useless as an attribution: the steps that export
+    credentials here are overwhelmingly the unnamed
+    `- uses: ./.github/actions/cloudflare-tokens-from-kv` one-liners, and
+    "GITHUB_ENV from step 'step 1'" tells a reader to go count steps. Prefer the
+    action path, which is the thing they would then have to look up anyway.
+    """
+    name = step.get("name")
+    if isinstance(name, str) and name.strip():
+        return name
+    uses = step.get("uses")
+    if isinstance(uses, str) and uses.strip():
+        return f"uses: {uses.strip()}"
+    return f"step {index}"
+
+
+def credentials_in_reach(workflow: dict, job_id: str, step_index: int) -> list[Reach]:
+    """Credentials in the process environment of `steps[step_index]` of `job_id`.
+
+    Three arrival paths, resolved in the order a runner applies them:
+
+      job env:     a `env:` on the job — in reach of every step in it
+      GITHUB_ENV   written by an EARLIER step (or a local composite action it
+                   calls); the step's own writes are not in reach of itself
+      step env:    the step's own `env:` — ledger L213's surface
+
+    Deliberately conservative about `if:`: a step guarded by a condition still
+    counts as an exporter, because whether it ran is a run-time fact and this is
+    a static reading. Over-reporting here costs a reviewer one line; the opposite
+    error is the one that has been made three times.
+    """
+    job = ((workflow.get("jobs") or {}).get(job_id)) or {}
+    if not isinstance(job, dict):
+        return []
+    reached: list[Reach] = []
+
+    for name, value in (job.get("env") or {}).items():
+        if looks_like_credential(str(name), value):
+            reached.append(Reach(str(name), Reach.JOB_ENV))
+
+    steps = job.get("steps") or []
+    for index, step in enumerate(steps[:step_index]):
+        if not isinstance(step, dict):
+            continue
+        label = _exporter_label(step, index)
+        for name in sorted(step_exported_env_names(step)):
+            if looks_like_credential(name):
+                reached.append(Reach(name, Reach.GITHUB_ENV, label))
+
+    if 0 <= step_index < len(steps) and isinstance(steps[step_index], dict):
+        for name, value in (steps[step_index].get("env") or {}).items():
+            if looks_like_credential(str(name), value):
+                reached.append(Reach(str(name), Reach.STEP_ENV))
+
+    return sorted(reached, key=lambda r: (r.name, r.arrival, r.source or ""))
 
 
 # --- the freeze -------------------------------------------------------------
@@ -358,10 +681,14 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     #
     # It is also the first lane in the burn-down with a `github-script` site, and
     # the first where the credential is reachable BOTH ways: the Cloudflare jobs
-    # hide their tokens in GITHUB_ENV (the #1161 blindness, invisible to a
-    # `secrets.`-sweep of the file), while both m365-prod steps name
+    # hide their tokens in GITHUB_ENV, while both m365-prod steps name
     # FFC_EXO_CERT_PFX_BASE64 / FFC_EXO_CERT_PASSWORD in the SAME step's `env:`
     # as the injection point (ledger L213).
+    #
+    # That contrast is no longer carried by this comment: it is what
+    # `--reachability 103-enforce-domain-standard.yml` prints, per step, with the
+    # exporting step named (#1188). The MEASURED detail above stays because it is
+    # evidence — which token, which account, which environment, on one approval.
     #
     # `issue_number` is `type: number` and was moved for the same reason as
     # `domain`, not as a courtesy: `number` is NOT in CONSTRAINED_TYPES because
@@ -376,7 +703,10 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # first lane whose injection point sat in a process holding WRITE-scoped
     # Cloudflare tokens for BOTH accounts — `cloudflare-tokens-from-kv` with
     # `scope: write` exports `CLOUDFLARE_API_TOKEN_FFC` / `_CM` through GITHUB_ENV, so
-    # the credential in reach appears in no `env:` block in the file. Its `account`
+    # the credential in reach appears in no `env:` block in the file. That last
+    # sentence is now mechanical rather than remembered:
+    # `--reachability 110-cloudflare-zone-create.yml` names both tokens and the
+    # composite-action step they arrive from (#1188). Its `account`
     # and `zone_type` remain interpolated and are NOT a finding: both are
     # `type: choice`, so GitHub constrains the value.
     # 112-dns-bulk-replace-a-ip.yml burned down: `old_ip` / `new_ip` now reach the
@@ -471,7 +801,9 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # the file: the preceding step mints a Graph bearer token from the OIDC login and
     # exports it through GITHUB_ENV, so both recommended sweeps — read the step's own
     # `env:` (L213), grep the body for `secrets.` (#1141) — score this workflow as
-    # holding nothing, and it is the workflow's ONLY credential. Second, it is the
+    # holding nothing, and it is the workflow's ONLY credential. This lane is why
+    # #1188 exists: `--reachability 306-discover-uncaptured-comms.yml` answers it
+    # in one call instead of a third per-lane rediscovery. Second, it is the
     # first lane whose injection point sat in SINGLE quotes, where `$( )` does not
     # expand: the payload every earlier lane used is inert here and reports the
     # pre-fix body as harmless, so the control had to close the quote, steal, and
@@ -553,7 +885,148 @@ REMEDY = (
 )
 
 
-def main() -> int:
+def _parse_workflow(name: str) -> dict | None:
+    """Parsed workflow by file name, or None if it cannot be read.
+
+    Reachability is reporting, never a verdict: a file this cannot parse is
+    already a hard finding from `scan_all`, which runs first and returns 1. So
+    swallowing the error here cannot hide anything — it only keeps the report
+    from crashing on a tree that has already failed.
+    """
+    try:
+        parsed = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def reachability_by_site(findings: list[Finding]) -> dict[tuple[str, str, str], list[Reach]]:
+    """(workflow, job, step) -> credentials in reach, for sites that reach one.
+
+    Keyed by SITE and not by workflow: 103 puts Cloudflare tokens in reach of
+    three of its steps through `GITHUB_ENV` and the Exchange Online certificate
+    in reach of two others through their own `env:`, and a per-workflow union
+    would report one blurred set that is true of no single step.
+    """
+    sites: dict[tuple[str, str, str], list[Reach]] = {}
+    for finding in findings:
+        if finding.step_index is None:
+            continue
+        key = (finding.workflow, finding.job, finding.step)
+        if key in sites:
+            continue
+        workflow = _parse_workflow(finding.workflow)
+        if workflow is None:
+            continue
+        reached = credentials_in_reach(workflow, finding.job, finding.step_index)
+        if reached:
+            sites[key] = reached
+    return sites
+
+
+def reachability_paragraph(findings: list[Finding], write_workflows: list[str]) -> str:
+    """The report section this guard gained for #1188.
+
+    Additive by construction: it reads the findings that already exist and
+    returns text. It cannot change `current_map`, `compare`, or the exit code.
+    """
+    sites = reachability_by_site(findings)
+    if not sites:
+        return (
+            "credential reachability (#1188): no frozen call site has a credential in "
+            "reach. That is a claim about THIS tree, not a property of the guard — if "
+            "it appears after a burn-down, the lanes that held credentials were fixed."
+        )
+
+    hidden_sites = {k: v for k, v in sites.items() if any(r.hidden for r in v)}
+    workflows = {k[0] for k in sites}
+    lines = [
+        f"credential reachability (#1188): {len(sites)} of {len(findings)} frozen call "
+        f"sites run with a credential in reach, across {len(workflows)} workflow(s); "
+        f"{len(hidden_sites)} of those reach one ONLY through GITHUB_ENV, where the "
+        f"injecting step's own `env:` (L213) and a `secrets.` grep of the file (#1141) "
+        f"both read clean. That is the surface #1080 lanes 7, 9 and 10 each rediscovered "
+        f"by hand.",
+        "",
+    ]
+    for workflow, job, step in sorted(sites, key=lambda k: (k[0] not in write_workflows, k)):
+        marker = "[W]" if workflow in write_workflows else "   "
+        lines.append(f"  {marker} {workflow} job '{job}' step '{step}'")
+        for reach in sites[(workflow, job, step)]:
+            lines.append(f"        {reach}")
+    lines.append("")
+    lines.append(
+        "  [W] = the workflow enters an environment not suffixed `-read`. Arrival path is "
+        "the point: a name in the step's own `env:` is visible to anyone who opens the "
+        "file, and a GITHUB_ENV arrival is the one nobody sees. A third-party `uses:` is "
+        "NOT resolved — its source is not in this tree — so a credential it exports is "
+        "absent from these lines rather than known to be absent."
+    )
+    return "\n".join(lines)
+
+
+def reachability_listing(names: list[str]) -> int:
+    """`--reachability [FILE …]`: every script step and what it can reach.
+
+    The report above can only speak about FROZEN call sites, which by design
+    shrink to nothing as #1080 burns down — 103, 110, 301 and 306 had all been
+    fixed before #1188 was filed, and they are the four workflows the issue names
+    as the motivating cases. So the mechanism is also exposed directly: a
+    reviewer about to move an input into `env:` can ask what the step they are
+    editing actually holds, whether or not it is still a finding.
+    """
+    if names:
+        paths = []
+        for name in names:
+            path = WORKFLOWS / name
+            if not path.exists():
+                print(f"no such workflow: {name}")
+                return 1
+            paths.append(path)
+    else:
+        paths = workflow_paths()
+
+    shown = 0
+    for path in sorted(paths):
+        workflow = _parse_workflow(path.name)
+        if workflow is None:
+            print(f"{path.name}: cannot be parsed")
+            return 1
+        rows = []
+        for job_id, index, label, kind, _body in script_bodies(workflow):
+            reached = credentials_in_reach(workflow, job_id, index)
+            if reached:
+                rows.append(f"  job '{job_id}' step '{label}' ({kind})")
+                rows.extend(f"      {reach}" for reach in reached)
+        if rows:
+            shown += 1
+            print(path.name)
+            print("\n".join(rows))
+    print(
+        f"\n{shown} of {len(paths)} workflow file(s) run a script step with a credential "
+        f"in reach. This is a READING, not a finding: a credential in reach is normal and "
+        f"necessary — it matters only when free text is interpolated into that same body "
+        f"(#1080), and what it answers is 'how bad is this one'."
+    )
+    return 0
+
+
+USAGE = (
+    "usage: check-workflow-input-interpolation.py [--reachability [WORKFLOW …]]\n"
+    "  (no arguments)  run the guard: exit 1 on a new instance, a stale freeze "
+    "entry, or an unreadable file\n"
+    "  --reachability  report the credentials in reach at every script step, for "
+    "the named workflow files (default: all)"
+)
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args:
+        if args[0] == "--reachability":
+            return reachability_listing(args[1:])
+        print(USAGE)
+        return 2
+
     findings, unreadable, scanned = scan_all()
 
     if unreadable:
@@ -619,6 +1092,8 @@ def main() -> int:
         f"Not judged: composite actions under .github/actions/ (an action's `inputs.*` "
         f"is a different context), and reusable-workflow `workflow_call` inputs."
     )
+    print()
+    print(reachability_paragraph(findings, write_workflows))
     return 0
 
 

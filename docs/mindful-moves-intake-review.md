@@ -5,12 +5,15 @@ applicant following up by SMS on the status of a 2026-07-07 submission.
 
 **Status: not approved — four decisions are open, and one of them is a hard blocker.** Nothing has
 been provisioned. No domain was registered, no zone created, no repo provisioned, no WHMCS record
-written. This document is the decision package; the actionable tracker is the linked issue.
+written. This document is the decision package; the actionable tracker is
+[issue #1203](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/1203).
 
 Personal details follow [`pii-classification.md`](./pii-classification.md): the applicant is a
-natural person who filed an application, so their name is rendered as an initial and their phone
-number is withheld. Organization name, mission, legal status and EIN are `public` by that policy and
-are printed in full.
+natural person who filed an application, so their name is rendered as an initial, and their phone
+number and preferred contact hours are withheld — the policy's line is that a record may say who
+someone is, not how to reach them privately, and a contact-availability window is a route, not an
+identity. Organization name, mission, legal status and EIN are `public` by that policy and are
+printed in full.
 
 ## The application (verified, not guessed)
 
@@ -20,23 +23,22 @@ Located with **221. WHMCS - Application Search** (`query=Mindful`,
 show the applicant's personal first name and will match the wrong charity. **583 client-products
 scanned, exactly 1 match**, so the identification is unambiguous.
 
-| Field              | Value                                        |
-| ------------------ | -------------------------------------------- |
-| WHMCS client id    | **432**                                      |
-| Service id         | **583**                                      |
-| Product            | FFC Pre-501c3 Nonprofit / Charity Onboarding |
-| Order status       | **Pending**                                  |
-| Registered         | **2026-07-07**                               |
-| Domain on record   | _(empty)_                                    |
-| Legal status       | pre-501c(3) Nonprofit                        |
-| EIN                | 42-3645005 _(unverified — see decision 4)_   |
-| Desired domain     | `https://MindfulMoves.org`                   |
-| Has a domain?      | No                                           |
-| Has web hosting?   | No                                           |
-| Current host       | `https://none.com` _(placeholder)_           |
-| GuideStar URL      | `https://none.org` _(placeholder)_           |
-| TechSoup approved? | No                                           |
-| Best time to call  | M–F after 4 PM EST                           |
+| Field              | Value                                           |
+| ------------------ | ----------------------------------------------- |
+| WHMCS client id    | **432**                                         |
+| Service id         | **583**                                         |
+| Product            | FFC Pre-501c3 Nonprofit / Charity Onboarding    |
+| Order status       | **Pending**                                     |
+| Registered         | **2026-07-07**                                  |
+| Domain on record   | _(empty)_                                       |
+| Legal status       | pre-501c(3) Nonprofit                           |
+| EIN                | 42-3645005 _(unverified — see decision 4)_      |
+| Desired domain     | `https://MindfulMoves.org`                      |
+| Has a domain?      | No                                              |
+| Has web hosting?   | No                                              |
+| Current host       | none — form holds the literal string `none.com` |
+| GuideStar URL      | none — form holds the literal string `none.org` |
+| TechSoup approved? | No                                              |
 
 **Mission (as submitted):** _"Mindful Moves' mission is to address teenagers' unhealthy
 relationships with and lack of education concerning drugs and alcohol. Our website will host
@@ -148,7 +150,7 @@ this applicant.
 These three facts sit awkwardly together and should be resolved by a person, not by automation:
 
 - The application asserts **pre-501(c)(3)** status and supplies **EIN 42-3645005**.
-- The GuideStar field is the placeholder `https://none.org`, so there is no Candid profile to check
+- The GuideStar field holds the literal string `none.org`, so there is no Candid profile to check
   against. (EIN verification via **801. Candid - Charity Check** is not available — the Candid
   scaffolding is inert pending the one-time key/environment setup in `candid-api-and-mcp.md`, and
   the Candid MCP server is unauthenticated in this session.) **The EIN is therefore unverified.**
@@ -172,8 +174,9 @@ Nothing here is safe to automate past the point of asking. In order:
 
 1. **Reply to the applicant** (they have waited five weeks; they follow up politely and deserve a
    real answer). Tell them: `mindfulmoves.org` is taken by a third party and FFC cannot get it for
-   free; offer the available alternatives; ask which they want. Best time to reach them is M–F after
-   4 PM EST — SMS is already a working channel.
+   free; offer the available alternatives; ask which they want. SMS is already a working channel,
+   and the application records preferred contact hours — read them from the WHMCS record for client
+   432 rather than from this document.
 2. **Ask the builder question directly** — "do you want to build on a free platform of your choice
    with our domain pointed at it, or learn the GitHub-based site we normally provision?" Their
    answer picks the path in decision 2.

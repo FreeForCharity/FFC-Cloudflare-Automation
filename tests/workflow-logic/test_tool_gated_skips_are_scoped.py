@@ -204,8 +204,8 @@ def _references_which(node: ast.AST) -> bool:
 def _exits_zero(body: list[ast.stmt]) -> bool:
     """True if this block unconditionally exits with status 0.
 
-    `sys.exit(0)`, a bare `sys.exit()`, `sys.exit(None)` and
-    `raise SystemExit(0)` all qualify. `sys.exit(1 if failures else 0)` does
+    `sys.exit(0)`, a bare `sys.exit()`, `sys.exit(None)`, `raise SystemExit(0)`
+    and `os._exit(0)` all qualify. `sys.exit(1 if failures else 0)` does
     NOT -- that is the normal end of a runner, and matching it would flag every
     module in the directory.
     """
@@ -219,7 +219,7 @@ def _exits_zero(body: list[ast.stmt]) -> bool:
             continue
         func = call.func
         name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
-        if name not in ("exit", "SystemExit"):
+        if name not in ("exit", "SystemExit", "_exit"):
             continue
         if not call.args:
             return True
@@ -232,39 +232,103 @@ def _exits_zero(body: list[ast.stmt]) -> bool:
 def whole_module_tool_gate(tree: ast.Module) -> ast.If | None:
     """The `if <tool missing>: sys.exit(0)` that skips the module, or None.
 
-    Only gates placed before the first loop in the main block count: that is
-    what makes the gate cover the WHOLE module rather than one case. A
-    `shutil.which` consulted inside the loop -- `test_1146`'s `NEEDS_PWSH`
-    set, `test_741`'s per-case `if not shutil.which("npm")` -- is the correct
-    pattern and must never be flagged.
+    What makes a gate whole-module is that it EXITS THE PROCESS, not where it
+    sits. A per-case gate -- `test_1146`'s `NEEDS_PWSH` set, `test_741`'s
+    `if not shutil.which("npm")` -- bails with `continue` or `return` so the
+    rest of the module still runs, and so is never flagged.
+
+    Position is deliberately not used. An earlier form of this function only
+    looked at top-level `ast.If` nodes in the main block appearing before the
+    first loop, which five rewrites of the same gate walked straight through:
+    a `missing` list built by an explicit `for` instead of a comprehension
+    (the loop moved the window), a gate in a helper, a gate at module top
+    level, a gate wrapped in `try:`, and `os._exit(0)`. Each still skipped
+    every case; only the spelling differed. Matching on the exit is what makes
+    the check about the behaviour rather than about one idiom.
     """
-    for node in tree.body:
-        if not _is_dunder_main(node):
-            continue
-        body = node.body
-        first_loop = next(
-            (i for i, s in enumerate(body) if isinstance(s, (ast.For, ast.While))),
-            len(body),
-        )
+    funcs = {
+        n.name: n
+        for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def gate_in(nodes: list[ast.stmt], seen: frozenset[str]) -> ast.If | None:
+        """A tool-conditioned exit-zero anywhere in these statements."""
         # Names bound from an expression that consults `shutil.which` -- 103's
         # `missing = [t for t in (...) if shutil.which(t) is None]`, whose `if`
-        # then tests the NAME and never mentions `which` at all.
+        # then tests the NAME and never mentions `which` at all. Collected at
+        # any depth, so a name bound inside a `for` or `try` still counts.
         tool_names: set[str] = set()
-        for stmt in body[:first_loop]:
-            if isinstance(stmt, (ast.Assign, ast.AnnAssign)) and stmt.value is not None:
-                if _references_which(stmt.value):
-                    targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+        for stmt in nodes:
+            for node in ast.walk(stmt):
+                if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+                    if not _references_which(node.value):
+                        continue
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                     for target in targets:
                         if isinstance(target, ast.Name):
                             tool_names.add(target.id)
-            if not isinstance(stmt, ast.If):
-                continue
-            mentions_tool = _references_which(stmt.test) or any(
-                isinstance(n, ast.Name) and n.id in tool_names
-                for n in ast.walk(stmt.test)
-            )
-            if mentions_tool and _exits_zero(stmt.body):
-                return stmt
+                elif isinstance(node, ast.AugAssign) and _references_which(node.value):
+                    if isinstance(node.target, ast.Name):
+                        tool_names.add(node.target.id)
+            # 103's comprehension written as an explicit loop:
+            # `for t in (...): if shutil.which(t) is None: missing.append(t)`.
+            # The name is never the target of an assignment, so the pass above
+            # cannot see it -- it is MUTATED inside a block that consults
+            # `which`. Which of the two an author types is a coin flip, and
+            # the gate that follows is identical.
+            if _references_which(stmt):
+                for node in ast.walk(stmt):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    func = node.func
+                    if not isinstance(func, ast.Attribute):
+                        continue
+                    if func.attr not in ("append", "add", "extend", "update"):
+                        continue
+                    if isinstance(func.value, ast.Name):
+                        tool_names.add(func.value.id)
+
+        for stmt in nodes:
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.If):
+                    mentions_tool = _references_which(node.test) or any(
+                        isinstance(n, ast.Name) and n.id in tool_names
+                        for n in ast.walk(node.test)
+                    )
+                    if mentions_tool and _exits_zero(node.body):
+                        return node
+                # The gate may live in a helper the main block calls --
+                # `_require_tools()`. Resolve through the module's own
+                # top-level functions, as `toolless_cases` already does for
+                # spawning.
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    name = node.func.id
+                    if name in funcs and name not in seen:
+                        found = gate_in(funcs[name].body, seen | {name})
+                        if found is not None:
+                            return found
+        return None
+
+    # Module top level, excluding function bodies (whose `which` calls are the
+    # correct per-case pattern) -- a gate placed here skips the module just as
+    # thoroughly as one inside `if __name__ == "__main__":`.
+    top_level = [
+        n
+        for n in tree.body
+        if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and not _is_dunder_main(n)
+    ]
+    found = gate_in(top_level, frozenset())
+    if found is not None:
+        return found
+
+    for node in tree.body:
+        if not _is_dunder_main(node):
+            continue
+        found = gate_in(node.body, frozenset())
+        if found is not None:
+            return found
     return None
 
 
@@ -465,6 +529,120 @@ if __name__ == "__main__":
         t()
 '''
 
+# Five rewrites of the SAME gate. Each still exits 0 before any case runs, so
+# each masks `test_static` exactly as `_BAD_MODULE` does; only the spelling
+# differs. They are here because a detector justified as "a detector rather
+# than a list" is only worth more than the list if it survives the next
+# author's idiom.
+
+_BAD_MODULE_LOOP_BUILT_NAME = '''
+import shutil
+import sys
+
+
+def test_static():
+    assert True
+
+
+TESTS = [test_static]
+
+if __name__ == "__main__":
+    missing = []
+    for tool in ("pwsh", "node"):
+        if shutil.which(tool) is None:
+            missing.append(tool)
+    if missing:
+        print("  SKIP all")
+        sys.exit(0)
+    for t in TESTS:
+        t()
+'''
+
+_BAD_MODULE_GATE_IN_HELPER = '''
+import shutil
+import sys
+
+
+def _require_tools():
+    if shutil.which("pwsh") is None:
+        print("  SKIP all")
+        sys.exit(0)
+
+
+def test_static():
+    assert True
+
+
+TESTS = [test_static]
+
+if __name__ == "__main__":
+    _require_tools()
+    for t in TESTS:
+        t()
+'''
+
+_BAD_MODULE_GATE_AT_TOP_LEVEL = '''
+import shutil
+import sys
+
+if shutil.which("pwsh") is None:
+    print("  SKIP all")
+    sys.exit(0)
+
+
+def test_static():
+    assert True
+
+
+TESTS = [test_static]
+
+if __name__ == "__main__":
+    for t in TESTS:
+        t()
+'''
+
+_BAD_MODULE_GATE_IN_TRY = '''
+import shutil
+import sys
+
+
+def test_static():
+    assert True
+
+
+TESTS = [test_static]
+
+if __name__ == "__main__":
+    try:
+        if shutil.which("pwsh") is None:
+            print("  SKIP all")
+            sys.exit(0)
+    except OSError:
+        pass
+    for t in TESTS:
+        t()
+'''
+
+_BAD_MODULE_OS_EXIT = '''
+import os
+import shutil
+
+
+def test_static():
+    assert True
+
+
+TESTS = [test_static]
+
+if __name__ == "__main__":
+    if shutil.which("pwsh") is None:
+        print("  SKIP all")
+        os._exit(0)
+    for t in TESTS:
+        t()
+'''
+
+
 _GOOD_PER_CASE = '''
 import shutil
 import subprocess
@@ -553,6 +731,42 @@ def test_the_detector_fires_when_the_gate_tests_a_name():
         "over shutil.which and never mentions `which` itself, was not detected"
     )
 
+
+def test_the_detector_fires_when_the_name_is_built_by_a_loop():
+    assert _detect(_BAD_MODULE_LOOP_BUILT_NAME), (
+        "103's `missing` list written as an explicit `for` instead of a "
+        "comprehension went undetected. This is the strongest of the five: it "
+        "is the same logic as the form directly above, and which one an author "
+        "types is a coin flip"
+    )
+
+
+def test_the_detector_fires_when_the_gate_lives_in_a_helper():
+    assert _detect(_BAD_MODULE_GATE_IN_HELPER), (
+        "a gate moved into `_require_tools()` went undetected -- the module "
+        "still exits 0 before any case runs"
+    )
+
+
+def test_the_detector_fires_on_a_gate_at_module_top_level():
+    assert _detect(_BAD_MODULE_GATE_AT_TOP_LEVEL), (
+        "a gate outside the `__main__` block went undetected; it skips the "
+        "module just as thoroughly, and on import as well"
+    )
+
+
+def test_the_detector_fires_on_a_gate_wrapped_in_try():
+    assert _detect(_BAD_MODULE_GATE_IN_TRY), (
+        "wrapping the gate in `try:` moved it out of the main block's "
+        "top-level statements and hid it"
+    )
+
+
+def test_the_detector_fires_on_os_exit():
+    assert _detect(_BAD_MODULE_OS_EXIT), (
+        "`os._exit(0)` ends the process exactly as `sys.exit(0)` does, and was "
+        "not in the recognised name set"
+    )
 
 def test_the_detector_ignores_a_per_case_gate():
     assert not _detect(_GOOD_PER_CASE), (

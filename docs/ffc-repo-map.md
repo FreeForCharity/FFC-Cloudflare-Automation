@@ -39,8 +39,14 @@ Clone it read-only — it is public, so no attachment is needed:
 
 ```bash
 GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 \
-  https://github.com/FreeForCharity/ffc-in-ffcadmin.org /workspace/freeforcharity/ffc-in-ffcadmin.org
+  https://github.com/FreeForCharity/ffc-in-ffcadmin.org
 ```
+
+Clone it wherever your environment puts scratch checkouts — the path is yours to choose, and a
+sandboxed agent should use whatever workspace root it was given rather than a path copied from here.
+`GIT_LFS_SKIP_SMUDGE=1` is the load-bearing part: an anonymous read lane may not serve Git LFS
+objects, and without the prefix the clone aborts at the smudge filter instead of landing LFS-tracked
+files as pointer stubs.
 
 | If you are about to…                                  | Read first                                                                         |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------- |

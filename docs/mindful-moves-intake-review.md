@@ -175,11 +175,17 @@ distinguishes it from the Movement/Movements cluster. The cost is the X-handle m
 | **A — most differentiated** | `mindfulmovesproject.org` | `mindfulmovesorg` or `mindfulmoveshq` | `mindfulmovesproject` | `mindfulmovesproject` | Best name separation; domain ≠ X handle         |
 | **B — most consistent**     | `mindfulmoveshq.org`      | `mindfulmoveshq`                      | `mindfulmoveshq`      | `mindfulmoveshq`      | One string everywhere; "HQ" is less descriptive |
 
-`mindfulmovesorg.org` and `mindfulmoveshq.org` were both confirmed available, so package B is live
-if consistency is worth more than the descriptive suffix. **Package A is the recommendation** — a
-charity is found through search and links far more than through an X handle, and the differentiation
-problem is the one that actually costs reach. Whichever is chosen, claim the handles at the same
-time as the domain; handles are free and the good ones are visibly going.
+If package A is chosen with `mindfulmovesorg` as the X handle, **`mindfulmovesorg.org` is also
+available** and is worth registering defensively so the handle and a matching domain can't be split
+by someone else. That is a real domain, not a typo for `mindfulmoves.org` — it is the word "org"
+inside the label, under the `.org` TLD, checked because it is one of the few 15-character strings
+that both fits X and still reads as the brand.
+
+`mindfulmoveshq.org` was confirmed available, so package B is live if consistency is worth more than
+the descriptive suffix. **Package A is the recommendation** — a charity is found through search and
+links far more than through an X handle, and the differentiation problem is the one that actually
+costs reach. Whichever is chosen, claim the handles at the same time as the domain; handles are free
+and the good ones are visibly going.
 
 ## Decision 2 — "access to a website builder" does not map onto the current FFC stack
 

@@ -4,10 +4,16 @@ Hand-off document for the Mindful Moves Gold Award builder. It is written **to b
 builder**, not about them, so it can be pasted into the site repo as `START-HERE.md` or linked from
 the first issue. It addresses the reader as "you" throughout — deliberately, since this repo is
 public and the applicant is a named private individual whose identifying details are withheld under
-[`pii-classification.md`](./pii-classification.md).
+[`pii-classification.md`](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/blob/main/docs/pii-classification.md).
 
-Companion to [`mindful-moves-intake-review.md`](./mindful-moves-intake-review.md) (client 432) and
-tracker [issue #1203](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/1203).
+Companion to
+[`mindful-moves-intake-review.md`](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/blob/main/docs/mindful-moves-intake-review.md)
+(client 432) and tracker
+[issue #1203](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/1203).
+
+> **Links in this document are deliberately absolute.** It is meant to be copied out of
+> `FFC-Cloudflare-Automation` and into the charity's own repo, and relative links would break the
+> moment it moved. Every link points back to the source doc in the automation repo.
 
 **Why this exists:** the Gold Award project is explicitly a technical-learning exercise, and
 building with AI is how this work is actually done now. So the goal is not to hand over a finished
@@ -21,7 +27,7 @@ domain, the hosting, and the tooling.
 > already documents better. **Your repo ships its own onboarding material and a preconfigured
 > `.claude/` agent set**, and `FFC-IN-ffcadmin.org` is authoritative for FFC's development process.
 > So what follows now _points_ at those and adds only what they don't cover. See
-> [`ffc-repo-map.md`](./ffc-repo-map.md).
+> [`ffc-repo-map.md`](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/blob/main/docs/ffc-repo-map.md).
 
 ---
 

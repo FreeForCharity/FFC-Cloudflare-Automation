@@ -15,13 +15,13 @@ but "the docs exist in a repo this one never names."
 
 ## The constellation
 
-| Repo                                 | What it is                                                     | Authoritative for                                                                                                           |
-| ------------------------------------ | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **FFC-Cloudflare-Automation** (here) | ~105 Actions workflows driving CF, WHMCS, M365, Google, GitHub | Infrastructure automation, workflow catalog + numbering, the gate/approval model, the lessons ledger                        |
-| **FFC-IN-ffcadmin.org**              | The admin portal (Next.js → Pages, live at `ffcadmin.org`)     | **Org development process and standards**, the agent issue→PR workflow, the four-gate intake journey, agentic-OS governance |
-| **FFC-IN-FFC_Single_Page_Template**  | The charity site template                                      | What a charity site **is** — structure, `site.config.ts`, CI guards, and its own onboarding docs                            |
-| **FFC-EX-`<domain>`**                | One per charity, created from the template by workflow 701     | That charity's content and config                                                                                           |
-| **FFC-IN-`<name>`**                  | FFC's own internal sites                                       | Their own content                                                                                                           |
+| Repo                                 | What it is                                                    | Authoritative for                                                                                                           |
+| ------------------------------------ | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **FFC-Cloudflare-Automation** (here) | 105 Actions workflows driving CF, WHMCS, M365, Google, GitHub | Infrastructure automation, workflow catalog + numbering, the gate/approval model, the lessons ledger                        |
+| **FFC-IN-ffcadmin.org**              | The admin portal (Next.js → Pages, live at `ffcadmin.org`)    | **Org development process and standards**, the agent issue→PR workflow, the four-gate intake journey, agentic-OS governance |
+| **FFC-IN-FFC_Single_Page_Template**  | The charity site template                                     | What a charity site **is** — structure, `site.config.ts`, CI guards, and its own onboarding docs                            |
+| **FFC-EX-`<domain>`**                | One per charity, created from the template by workflow 701    | That charity's content and config                                                                                           |
+| **FFC-IN-`<name>`**                  | FFC's own internal sites                                      | Their own content                                                                                                           |
 
 Note the naming convention it encodes: **`-IN-` is internal to FFC, `-EX-` is an external charity.**
 
@@ -63,9 +63,9 @@ wins and this repo should be corrected.
 
 ## Charity-facing guidance lives in the charity's own repo
 
-Every `FFC-EX-<domain>` repo is created from `FFC_Single_Page_Template`, which already ships the
-onboarding material — so **do not hand-write a getting-started guide for a charity.** Point at what
-provisioning already gave them:
+Every `FFC-EX-<domain>` repo is created from `FFC-IN-FFC_Single_Page_Template`, which already ships
+the onboarding material — so **do not hand-write a getting-started guide for a charity.** Point at
+what provisioning already gave them:
 
 - `TEMPLATE_CUSTOMIZATION.md` — the map of what to change and where
 - `TEMPLATE_SETUP_CHECKLIST.md` — the ordered checklist for a fresh site
@@ -90,13 +90,13 @@ Two specifics that a guide written from this repo alone will get wrong:
 These are live couplings, verified in the workflow sources. Changing either side can break the
 other.
 
-| Direction           | Mechanism                                                                                                                                                                                                                                                                        |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| FFCadmin → **here** | FFCadmin's `trigger-provisioning.yml` sends a `repository_dispatch` of type **`ffcadmin-website-provision`**, which is a documented trigger on **701**. Its `client_payload` carries `charity_title`, `ffcadmin_issue`, `issue_url`, `sponsor`, `domain`.                        |
-| **here** → FFCadmin | **502** generates the GA4 report and delivers it to FFCadmin **as a reviewable PR, never a direct push**; it also seeds time-series history by fetching `public/data/google-analytics/<site>.timeseries.json` from FFCadmin `main` over raw.githubusercontent (public, no auth). |
-| **here** → FFCadmin | The **agentic-OS status feed** is generated here (`scripts/generate-agentic-os-status.py`) and delivered into FFCadmin's `public/data/`, rendered at `ffcadmin.org/agentic-os/`. **744** checks its freshness.                                                                   |
-| **here** → FFCadmin | **703** generates the sites list here; FFCadmin **pulls** the published files. Workflow docs render publicly at `ffcadmin.org/automation/`.                                                                                                                                      |
-| Fleet-wide          | **731**, **737**, **739**, **741**, **742** treat FFCadmin as one repo in the managed fleet.                                                                                                                                                                                     |
+| Direction           | Mechanism                                                                                                                                                                                                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FFCadmin → **here** | FFCadmin's `trigger-provisioning.yml` sends a `repository_dispatch` of type **`ffcadmin-website-provision`**, which is a documented trigger on **701**. Its `client_payload` carries `charity_title`, `ffcadmin_issue`, `issue_url`, `sponsor`, `domain`.                              |
+| **here** → FFCadmin | **502** generates the GA4 report and delivers it to FFCadmin **as a reviewable PR, never a direct push**; it also seeds time-series history by fetching `public/data/google-analytics/<site>.timeseries.json` from FFCadmin `main` over `raw.githubusercontent.com` (public, no auth). |
+| **here** → FFCadmin | The **agentic-OS status feed** is generated here (`scripts/generate-agentic-os-status.py`) and delivered into FFCadmin's `public/data/`, rendered at `ffcadmin.org/agentic-os/`. **744** checks its freshness.                                                                         |
+| **here** → FFCadmin | **703** generates the sites list here; FFCadmin **pulls** the published files. Workflow docs render publicly at `ffcadmin.org/automation/`.                                                                                                                                            |
+| Fleet-wide          | **731**, **737**, **739**, **741**, **742** treat FFCadmin as one repo in the managed fleet.                                                                                                                                                                                           |
 
 A trap already recorded in `CLAUDE.md` and worth repeating here because it is a cross-repo one:
 FFCadmin runs `lint-staged` → `prettier --write` in a **pre-commit hook** over `*.{json,md,css}`, so

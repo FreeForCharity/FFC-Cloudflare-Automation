@@ -19,11 +19,19 @@ but "the docs exist in a repo this one never names."
 | ------------------------------------ | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | **FFC-Cloudflare-Automation** (here) | ~105 Actions workflows driving CF, WHMCS, M365, Google, GitHub | Infrastructure automation, workflow catalog + numbering, the gate/approval model, the lessons ledger                        |
 | **FFC-IN-ffcadmin.org**              | The admin portal (Next.js → Pages, live at `ffcadmin.org`)     | **Org development process and standards**, the agent issue→PR workflow, the four-gate intake journey, agentic-OS governance |
-| **FFC_Single_Page_Template**         | The charity site template                                      | What a charity site **is** — structure, `site.config.ts`, CI guards, and its own onboarding docs                            |
+| **FFC-IN-FFC_Single_Page_Template**  | The charity site template                                      | What a charity site **is** — structure, `site.config.ts`, CI guards, and its own onboarding docs                            |
 | **FFC-EX-`<domain>`**                | One per charity, created from the template by workflow 701     | That charity's content and config                                                                                           |
 | **FFC-IN-`<name>`**                  | FFC's own internal sites                                       | Their own content                                                                                                           |
 
 Note the naming convention it encodes: **`-IN-` is internal to FFC, `-EX-` is an external charity.**
+
+> **The template was renamed and 701 still uses the old name.** `701-website-provision.yml` sets
+> `WEBSITE_TEMPLATE_REPO: FreeForCharity/FFC_Single_Page_Template`, but the repo's canonical name is
+> now **`FFC-IN-FFC_Single_Page_Template`** — it picked up the `-IN-` prefix to match the convention
+> above. This is **not currently broken**: GitHub's rename redirect resolves it, and a provisioning
+> run on 2026-08-15 created a charity repo through the old name successfully. It is recorded because
+> a redirect is a dependency nobody declared — it survives until someone creates a new repo under
+> the freed-up old name, at which point 701 would silently provision from the wrong template.
 
 ## Go read FFCadmin when the task is…
 

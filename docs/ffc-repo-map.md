@@ -8,7 +8,7 @@ existed nothing here said so.
 **Why this page exists.** On 2026-08-15, a session onboarding a new charity wrote a from-scratch
 "how to build your site" guide out of the FFC-EX conventions described in this repo's own docs. That
 guide was reasonable and partly wrong: it named the wrong package manager, told the builder to merge
-her own PRs (FFC's canonical workflow says maintainers merge), and duplicated onboarding material
+their own PRs (FFC's canonical workflow says maintainers merge), and duplicated onboarding material
 that the site template already ships. The information needed to get it right was one clone away and
 nothing pointed at it. That is the failure mode this page is meant to prevent — not "we lack docs",
 but "the docs exist in a repo this one never names."

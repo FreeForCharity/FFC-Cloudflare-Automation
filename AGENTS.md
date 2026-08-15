@@ -6,7 +6,7 @@ global policy (never expose secrets; Conventional Commits; PRs, never direct pus
 
 ## What this repo is
 
-The automation hub for Free For Charity infrastructure: ~60 GitHub Actions workflows that drive
+The automation hub for Free For Charity infrastructure: **105** GitHub Actions workflows that drive
 Cloudflare (DNS/registrar), WHMCS (billing/support), Microsoft 365, Zeffy, Google (Analytics/GTM),
 WPMUDEV, and the FFC GitHub org itself. PowerShell-first scripts in `scripts/`, credentials from
 Azure Key Vault via OIDC (never GitHub secrets).

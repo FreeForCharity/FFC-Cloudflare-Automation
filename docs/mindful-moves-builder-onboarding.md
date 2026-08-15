@@ -177,8 +177,11 @@ can help. Issues are enabled on your repo by default.
 
 ## What we still need from you
 
-- **Your GitHub username** — so we can add you as a maintainer on the repo. Without it you can't
-  merge your own pull requests. This is the one thing blocking you from full control.
+- **Your GitHub username** — so we can grant you maintainer access on the repo. Right now you have
+  no access to it at all, which is the one thing standing between you and working on your own site.
+  (This is about _access_, not about merging: per the convention above, an FFC maintainer reviews
+  and merges your pull requests, and will keep doing so. Maintainer access is what lets you open
+  branches and PRs in the first place, and see the repo's settings.)
 - **Which domain you want** — see the intake review; `mindfulmovesproject.org` is the working
   assumption but the choice is yours.
 - **The Terms of Service acceptance**, from whoever is the right person to give it.

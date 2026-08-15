@@ -265,7 +265,11 @@ Steps 1–3 are conversations, not workflows. Step 4 is the standard chain and n
 
 ## What was run to produce this
 
-All read-only. No gated environment was approved and no write was made.
+**The review itself was read-only. The provisioning that followed was not** — the two are separated
+below because conflating them is how a document ends up asserting "no write was made" on a page that
+also reports a repo being created.
+
+**Evidence-gathering for this review — read-only, no gate approved, no write:**
 
 | Check                         | How                                                                           |
 | ----------------------------- | ----------------------------------------------------------------------------- |
@@ -273,6 +277,17 @@ All read-only. No gated environment was approved and no write was made.
 | Requested-domain availability | Public Interest Registry RDAP, `rdap.publicinterestregistry.org`              |
 | Alternative-domain sweep      | RDAP, 404 = available                                                         |
 | Attestation-gap explanation   | Issue #670 close date vs. application date                                    |
+
+**Provisioning that followed the review — one gated write:**
+
+| Action            | How                                                                                                                                    |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Site repo + Pages | **701. Website - Provision**, `dry_run=false`, run 31883480655 — `github-prod` gate **approved by @clarkemoyer**, `repo` job succeeded |
+| Cloudflare / DNS  | none — `dns_preview`, `dns` and `announce` **skipped** (no zone for an unregistered domain)                                            |
+| WHMCS             | none — client 432's order remains `Pending`                                                                                            |
+
+No registrar purchase, no zone, no DNS record, no WHMCS write. The only gate approved in this whole
+workstream was `github-prod`, and it created the repo.
 
 One caveat on the search, recorded because it bounds the claim: 221 reported `unreadableCount: 14` —
 fourteen client records could not be JSON-encoded by WHMCS because of malformed UTF-8 in stored

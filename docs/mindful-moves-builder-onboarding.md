@@ -1,24 +1,27 @@
 # Mindful Moves — builder onboarding (AI-assisted)
 
-Hand-off document for the Mindful Moves Gold Award builder. It is written **to be given to her**,
-not about her, so it can be pasted into her repo as `START-HERE.md` or linked from the first issue.
+Hand-off document for the Mindful Moves Gold Award builder. It is written **to be given to the
+builder**, not about them, so it can be pasted into the site repo as `START-HERE.md` or linked from
+the first issue. It addresses the reader as "you" throughout — deliberately, since this repo is
+public and the applicant is a named private individual whose identifying details are withheld under
+[`pii-classification.md`](./pii-classification.md).
 
 Companion to [`mindful-moves-intake-review.md`](./mindful-moves-intake-review.md) (client 432) and
 tracker [issue #1203](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/1203).
 
 **Why this exists:** the Gold Award project is explicitly a technical-learning exercise, and
 building with AI is how this work is actually done now. So the goal is not to hand over a finished
-site — it is to hand over a live site plus the skill to change it. She builds; FFC supplies the
+site — it is to hand over a live site plus the skill to change it. You build; FFC supplies the
 domain, the hosting, and the tooling.
 
 > **This document is deliberately thin, and that is the correction.** Its first draft was a
 > from-scratch guide written out of this repo's docs alone. It named the wrong package manager
-> (`pnpm`, which is FFCadmin's — the site template uses `npm`), told her to merge her own pull
-> requests when FFC's canonical workflow reserves merges for maintainers, and re-explained things
-> her repo already documents better. **Her repo ships its own onboarding material and a
-> preconfigured `.claude/` agent set**, and `FFC-IN-ffcadmin.org` is authoritative for FFC's
-> development process. So what follows now _points_ at those and adds only what they don't cover.
-> See [`ffc-repo-map.md`](./ffc-repo-map.md).
+> (`pnpm`, which is FFCadmin's — the site template uses `npm`), said to merge your own pull requests
+> when FFC's canonical workflow reserves merges for maintainers, and re-explained things your repo
+> already documents better. **Your repo ships its own onboarding material and a preconfigured
+> `.claude/` agent set**, and `FFC-IN-ffcadmin.org` is authoritative for FFC's development process.
+> So what follows now _points_ at those and adds only what they don't cover. See
+> [`ffc-repo-map.md`](./ffc-repo-map.md).
 
 ---
 
@@ -43,11 +46,18 @@ too. You do not need to install or configure anything to start working with AI o
 
 ## What you have
 
-| Thing              | Where                                                              |
-| ------------------ | ------------------------------------------------------------------ |
-| Your code          | `github.com/FreeForCharity/FFC-EX-mindfulmovesproject.org`         |
-| Your live site     | `https://freeforcharity.github.io/FFC-EX-mindfulmovesproject.org/` |
-| Your custom domain | `mindfulmovesproject.org` — not connected yet, see "Later" below   |
+| Thing          | Where                                                              |
+| -------------- | ------------------------------------------------------------------ |
+| Your code      | `github.com/FreeForCharity/FFC-EX-mindfulmovesproject.org`         |
+| Your live site | `https://freeforcharity.github.io/FFC-EX-mindfulmovesproject.org/` |
+| Custom domain  | **not chosen yet** — see below                                     |
+
+> **The repo name is provisional.** `mindfulmovesproject.org` is a working assumption, not a
+> decision: the domain you originally asked for (`mindfulmoves.org`) turned out to be registered to
+> someone else, and the replacement is still yours to pick. The repo and the live URL above are real
+> and working today regardless — the site was deliberately stood up on GitHub's own URL so you could
+> start building without waiting on that choice. When the domain is settled, FFC connects it and the
+> repo can be renamed; none of your work is affected either way.
 
 The live URL works the moment the repo is created. Every time you merge a change, the site rebuilds
 and redeploys itself in a couple of minutes. Nothing to install, nothing to pay for.

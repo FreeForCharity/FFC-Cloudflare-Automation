@@ -3,10 +3,27 @@
 Pre-approval review of the **Mindful Moves** pre-501(c)(3) onboarding application, triggered by the
 applicant following up by SMS on the status of a 2026-07-07 submission.
 
-**Status: not approved — four decisions are open, and one of them is a hard blocker.** Nothing has
-been provisioned. No domain was registered, no zone created, no repo provisioned, no WHMCS record
-written. This document is the decision package; the actionable tracker is
+**Status: partially provisioned — four decisions remain open, and one is a hard blocker.** This
+document is the decision package; the actionable tracker is
 [issue #1203](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/1203).
+
+> **Updated 2026-08-15.** This review was written before anything was provisioned and said so. That
+> is no longer true, and the correction is recorded here rather than by quietly editing the past
+> tense out of it. After the review, **701 was dispatched and approved**, so:
+>
+> |                 |                                                                                   |
+> | --------------- | --------------------------------------------------------------------------------- |
+> | Site repo       | `FreeForCharity/FFC-EX-mindfulmovesproject.org` — **created**                     |
+> | Live site       | `https://freeforcharity.github.io/FFC-EX-mindfulmovesproject.org/` — **HTTP 200** |
+> | Domain          | **not registered**, and **not yet decided** — see decision 1                      |
+> | Cloudflare zone | none                                                                              |
+> | WHMCS           | untouched; client 432's order is still `Pending`                                  |
+>
+> The repo was created on the **no-custom-domain** path (`PagesDomainType = github-default`), which
+> is exactly why it could go live before the domain question is settled — the DNS jobs skipped for
+> want of a zone. Nothing here commits FFC to `mindfulmovesproject.org`: the repo can be renamed and
+> the Pages custom domain set once the choice is made. **Treat every appearance of
+> `mindfulmovesproject.org` in this document and in the builder onboarding as provisional.**
 
 Personal details follow [`pii-classification.md`](./pii-classification.md): the applicant is a
 natural person who filed an application, so their name is rendered as an initial, and their phone

@@ -11,7 +11,35 @@ building with AI is how this work is actually done now. So the goal is not to ha
 site — it is to hand over a live site plus the skill to change it. She builds; FFC supplies the
 domain, the hosting, and the tooling.
 
+> **This document is deliberately thin, and that is the correction.** Its first draft was a
+> from-scratch guide written out of this repo's docs alone. It named the wrong package manager
+> (`pnpm`, which is FFCadmin's — the site template uses `npm`), told her to merge her own pull
+> requests when FFC's canonical workflow reserves merges for maintainers, and re-explained things
+> her repo already documents better. **Her repo ships its own onboarding material and a
+> preconfigured `.claude/` agent set**, and `FFC-IN-ffcadmin.org` is authoritative for FFC's
+> development process. So what follows now _points_ at those and adds only what they don't cover.
+> See [`ffc-repo-map.md`](./ffc-repo-map.md).
+
 ---
+
+## Read these first — they are already in your repo
+
+Provisioning gave you a fully documented repository. Start here, not with this page:
+
+| Document                              | What it gives you                                             |
+| ------------------------------------- | ------------------------------------------------------------- |
+| `TEMPLATE_SETUP_CHECKLIST.md`         | The ordered checklist for standing up a fresh site            |
+| `TEMPLATE_CUSTOMIZATION.md`           | The map — what to change, where, and why                      |
+| `CONTENT_REPLACEMENT_GUIDE.md`        | A worksheet for gathering your own content section by section |
+| `QUICK_START.md`                      | Getting running                                               |
+| `CONTRIBUTING.md` · `CODE_QUALITY.md` | House style and quality bar                                   |
+| `DEPLOYMENT.md`                       | How the site gets published                                   |
+
+**And the shortcut worth knowing about:** your repo contains `.claude/agents/onboarding.md` — a
+Claude agent that will walk you through the entire customization interview (site identity, content
+swap, legal pages, deploy settings) and make the edits with you. AI tooling is already configured
+here: `.claude/` carries agents, skills, rules and hooks, and `.copilot/mcp-config.json` is set up
+too. You do not need to install or configure anything to start working with AI on this repo.
 
 ## What you have
 
@@ -47,12 +75,21 @@ The whole loop runs in a browser. You never have to install anything.
 3. In the left sidebar, click the source-control icon, write a short message describing what you
    did, and choose **Create a new branch and commit**. Name the branch something like
    `update-tagline`.
-4. Back on github.com, GitHub will offer to open a **pull request**. Open it.
-5. The checks run automatically. When they pass, merge it.
-6. Wait ~2 minutes, reload your live URL, and your change is there.
+4. Back on github.com, GitHub will offer to open a **pull request**. Open it, and link it to an
+   issue describing what you're doing (`Refs #12`, or `Closes #12` if it finishes the job).
+5. The checks run automatically — including FFC's own `check:drift`, `check:site-config` and
+   `check:rebrand` guards, which exist to stop a site drifting from FFC best practice.
+6. Once it's merged, wait ~2 minutes, reload your live URL, and your change is there.
 
 That is the entire workflow, and it is the same one professional teams use. A pull request is just
 "here is a change, please look at it before it goes live."
+
+**FFC's house convention**, from `docs/agent-issue-pr-workflow.md` in the FFC admin repo, is issue →
+branch → pull request, with branches named for the issue (`agent/12-update-tagline`,
+`fix/12-broken-link`), the smallest change that satisfies the issue, and **validation evidence in
+the PR** — the actual commands you ran and what they said, never invented results. On FFC repos,
+**maintainers merge, contributors don't merge their own PRs.** Your own site repo is the place you
+learn that rhythm; it is worth following even where you technically could click the button.
 
 **Work on a branch, not on `main`.** `main` is what the public sees. Branches are free and
 disposable — make one per change, and if you make a mess, delete the branch and start again. Nothing

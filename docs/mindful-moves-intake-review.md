@@ -107,6 +107,63 @@ both are `.org` (which matches the nonprofit framing and FFC's standard), and ei
 the teen focus in the name. Confirm the choice with the applicant before registering — the domain is
 the public identity of their graded project, so this is their call, not ours.
 
+### Availability is not just the domain — check the handles, and mind the 15-character wall
+
+A charity's name has to survive on the platforms too, and the binding constraint is **X, which caps
+usernames at 15 characters** (4–15, letters/numbers/underscore). That single limit decides more here
+than the domain registry does:
+
+| Candidate handle      | Length | X          |
+| --------------------- | ------ | ---------- |
+| `mindfulmoves`        | 12     | **taken**  |
+| `themindfulmoves`     | 15     | free       |
+| `mindfulmovesorg`     | 15     | free       |
+| `mindfulmoveshq`      | 14     | free       |
+| `mindfulmovesteens`   | 17     | impossible |
+| `mindfulmovesproject` | 19     | impossible |
+
+**`mindfulmovesproject` can never be an X handle.** It is four characters over the cap, so the 404
+it returns means "unregisterable", not "available" — a distinction worth stating because the probe
+looks identical either way. Choosing `mindfulmovesproject.org` therefore guarantees the domain and
+the X handle will not match.
+
+Probed the same way (validated first against controls — a known-live account returns 200 and a
+garbage string returns 404 on both platforms, so the probe discriminates):
+
+- **X:** `mindfulmoves` **taken**; `themindfulmoves`, `mindfulmovesorg`, `mindfulmoveshq` free.
+- **LinkedIn:** `mindfulmoves` **taken**; `mindfulmovesproject` and `themindfulmoves` free.
+- **YouTube:** `themindfulmoves` **taken**; `mindfulmoves` and `mindfulmovesproject` free.
+- **Instagram / Facebook:** results were inconsistent across identical probes (login walls and
+  redirects), so **nothing is claimed for them** — verify by hand.
+
+The bare `mindfulmoves` is gone on X and LinkedIn, which fits the parked `.org` and the crowded name
+space below. It is not an option on any platform that matters.
+
+### The name space is crowded, which is the real differentiation risk
+
+Searching turns up several established organizations in almost exactly this space: **Mindful
+Movements** (two separate nonprofits — `mindful-movements.org` and `mmindfulmovements.com`), **The
+Mindful Movement Initiative** (`mindfulmovement.org`), a Red Cross **Mindful Movement** program, and
+a published book titled **_Mindful Moves_**. None is a blocker and none appears to be a trademark
+conflict on its face, but "Mindful Mo…" is a busy shelf, and a teen substance-use charity will be
+competing for search results against yoga and fitness programs.
+
+That cuts **in favour of** `mindfulmovesproject.org`: the "Project" suffix is the thing that
+distinguishes it from the Movement/Movements cluster. The cost is the X-handle mismatch above.
+
+**Two coherent packages, and the choice is a genuine trade:**
+
+|                             | Domain                    | X                                     | LinkedIn              | YouTube               | Trade                                           |
+| --------------------------- | ------------------------- | ------------------------------------- | --------------------- | --------------------- | ----------------------------------------------- |
+| **A — most differentiated** | `mindfulmovesproject.org` | `mindfulmovesorg` or `mindfulmoveshq` | `mindfulmovesproject` | `mindfulmovesproject` | Best name separation; domain ≠ X handle         |
+| **B — most consistent**     | `mindfulmoveshq.org`      | `mindfulmoveshq`                      | `mindfulmoveshq`      | `mindfulmoveshq`      | One string everywhere; "HQ" is less descriptive |
+
+`mindfulmovesorg.org` and `mindfulmoveshq.org` were both confirmed available, so package B is live
+if consistency is worth more than the descriptive suffix. **Package A is the recommendation** — a
+charity is found through search and links far more than through an X handle, and the differentiation
+problem is the one that actually costs reach. Whichever is chosen, claim the handles at the same
+time as the domain; handles are free and the good ones are visibly going.
+
 ## Decision 2 — "access to a website builder" does not map onto the current FFC stack
 
 The applicant asked for a builder they can use themselves. FFC's standard website offering is an

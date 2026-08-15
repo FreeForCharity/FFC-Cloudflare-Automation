@@ -511,6 +511,80 @@ def pipeline_exit_code_violation(cmd):
     return None
 
 
+
+LABEL_FLAG_RE = re.compile(r"--(?:add|remove)-label\b")
+GH_TOKEN_RE = re.compile(r"^(?:\S*/)?gh$")
+
+
+def _invokes_gh_edit(bare):
+    """True if a statement invokes `gh issue edit` / `gh pr edit`.
+
+    Token-based rather than the adjacent `gh\\s+(?:issue|pr)\\s+edit` this
+    replaced, because `gh` strips leading global flags before it resolves the
+    subcommand -- so `gh --repo O/R issue edit --add-label x` is a working
+    command that the adjacent form never matches. A guard whose bypass is a
+    flag the caller was already likely to pass is not a guard.
+
+    Skipping flag tokens is NOT enough, and that near-miss is the reason this
+    is a function: `--repo` takes a separated value, so its argument (`O/R`)
+    stands between `gh` and `issue` as a bare word. A "first non-flag token
+    must be issue|pr" test reproduces the hole it was written to close.
+
+    So the subject and the verb are matched as *ordered tokens* anywhere after
+    a `gh`. That is permissive alone, and safe only in combination: the caller
+    also requires `--add-label`/`--remove-label` in the same statement, and no
+    other `gh` subcommand carries those flags (`issue|pr create` and `list`
+    spell it `--label`, which is why they stay allowed). Quoted spans are
+    already blanked by the caller, so the flag named inside a `--body` message
+    is not a match.
+    """
+    toks = bare.split()
+    for i, tok in enumerate(toks):
+        if not GH_TOKEN_RE.match(tok):
+            continue
+        rest = toks[i + 1 :]
+        for j, sub in enumerate(rest):
+            if sub in ("issue", "pr") and "edit" in rest[j + 1 :]:
+                return True
+    return False
+
+
+def gh_edit_label_violation(cmd):
+    """`gh issue|pr edit --add-label/--remove-label` rewrites the WHOLE label set.
+
+    Ledger L193. The flags read the item's current labels, compute a new set and
+    PUT it back, so two label edits seconds apart silently undo one another. On
+    #788 the Conductor added `agent-ready` at 19:37:09Z and removed `claimed` at
+    19:37:34Z; the second command read a label set that predated the first and
+    wrote it back minus `claimed`, taking `agent-ready` with it. The timeline
+    records BOTH removals at the same instant, from a command whose only argument
+    was `--remove-label claimed`. Each command reported success, so the loss is
+    invisible from either one -- it was caught only because a downstream feed's
+    count failed to move.
+
+    The additive/subtractive endpoints cannot rewrite the set, so they cannot
+    lose a concurrent edit. Other `gh ... edit` flags (--title, --body,
+    --add-assignee, ...) are deliberately NOT matched: this rule is about the
+    label set specifically, because that is the field a run mutates twice.
+    """
+    for stmt in _statements(cmd):
+        bare = _strip_quoted(stmt)
+        if _invokes_gh_edit(bare) and LABEL_FLAG_RE.search(bare):
+            return (
+                "`gh issue/pr edit --add-label/--remove-label` is a read-modify-write "
+                "of the ENTIRE label set (ledger L193), so it silently discards a "
+                "label edit made moments earlier -- including your own.\n"
+                "  command: " + stmt.strip()[:140] + "\n"
+                "Use the endpoints that cannot rewrite the set, then verify by "
+                "re-reading the issue or PR:\n"
+                "  add:    gh api --method POST   repos/OWNER/REPO/issues/N/labels "
+                "-f 'labels[]=NAME'\n"
+                "  remove: gh api --method DELETE repos/OWNER/REPO/issues/N/labels/NAME\n"
+                "`/issues/N/labels` is correct for a PR too -- a PR IS an issue to the "
+                "labels API, so N is the PR number and no /pulls/ form exists."
+            )
+    return None
+
 CALL_SPAN = 240
 
 
@@ -748,7 +822,8 @@ def main():
     #     documented -- twice each in run 73 alone. A rule that costs a run every
     #     time it is rediscovered belongs in a hook, not in a file someone is
     #     expected to have remembered.
-    for reason in (pipeline_exit_code_violation(cmd), inline_python_encoding_violation(cmd)):
+    for reason in (pipeline_exit_code_violation(cmd), inline_python_encoding_violation(cmd),
+                   gh_edit_label_violation(cmd)):
         if reason:
             block(reason)
 

@@ -650,6 +650,56 @@ RULES = [
         ("726's real usage warns but is NOT blocked",
          "gh api --paginate \"repos/$org/$repo/teams?per_page=100\" --jq '[.[] | .slug] | join(\",\")'", ALLOW),
     ]),
+
+    # #1127 / ledger L193. Registered as a Rule rather than as flat check()
+    # calls: test_refusal_site_coverage() derives every refusal from
+    # guard_bash.py's AST and requires a registered signature to claim it, so
+    # cases written outside the table leave gh_edit_label_violation() uncovered
+    # and the suite red. The signature is a slice of the readable literal in
+    # that refusal -- the message is concatenated around the offending
+    # statement, so only the constant fragments are matchable.
+    Rule("gh-edit-label", 'read-modify-write of the ENTIRE label set', BLOCK_TIER, [
+        # Both subcommands, both flags. The defect is the whole-set PUT, so
+        # removing is exactly as lossy as adding (#788 lost an add to a remove).
+        ("issue edit --remove-label",
+         "gh issue edit 788 --repo FreeForCharity/FFC-Cloudflare-Automation "
+         "--remove-label claimed", BLOCK),
+        ("issue edit --add-label", "gh issue edit 788 --add-label agent-ready", BLOCK),
+        ("pr edit --add-label", "gh pr edit 1125 --add-label security", BLOCK),
+        ("label flag anywhere in the statement",
+         "gh issue edit 788 --body-file x.md --remove-label blocked --repo O/R", BLOCK),
+        # Blocked through the bypass the first pattern had: `gh` resolves its
+        # subcommand only AFTER stripping leading global flags, so an adjacent
+        # `gh (issue|pr) edit` match is defeated by `--repo` -- a flag the
+        # Conductor passes as a matter of course, which made the hole the
+        # DEFAULT path.
+        ("global --repo before the subcommand",
+         "gh --repo O/R issue edit 788 --add-label agent-ready", BLOCK),
+        ("global -R before the subcommand",
+         "gh -R O/R pr edit 1125 --remove-label claimed", BLOCK),
+        # And the near-miss inside the fix: `--repo` takes a SEPARATED value, so
+        # `O/R` sits between `gh` and `issue` as a bare word. A rule that merely
+        # skipped flag tokens would read `O/R` as the subcommand and let this pass.
+        ("gh by path, behind an env prefix",
+         "MSYS_NO_PATHCONV=1 /usr/bin/gh --repo O/R issue edit 788 --add-label x", BLOCK),
+        # Allowed: the additive/subtractive endpoints this rule points people at,
+        # and every other reading of the words "edit" and "label". The last two
+        # bound the ordered-token match -- they are blocked cases above with only
+        # the label flag removed, so they fail if the rule ever widens to any
+        # `gh issue edit`.
+        ("additive labels endpoint allowed",
+         "gh api --method POST repos/O/R/issues/788/labels -f 'labels[]=agent-ready'", ALLOW),
+        ("subtractive labels endpoint allowed",
+         "gh api --method DELETE repos/O/R/issues/788/labels/claimed", ALLOW),
+        ("non-label issue edit allowed", "gh issue edit 788 --title 'a new title'", ALLOW),
+        ("issue create --label allowed",
+         "gh issue create --label agentic-os --title x --body y", ALLOW),
+        ("issue list --label allowed", "gh issue list --label agent-ready --state open", ALLOW),
+        ("the flag name inside a quoted message allowed",
+         "gh issue comment 788 --body 'do not use gh issue edit --remove-label here'", ALLOW),
+        ("global flag + issue edit without a label flag allowed",
+         "gh --repo O/R issue edit 788 --title 'a new title'", ALLOW),
+    ], label="guard_bash / L193 gh edit label read-modify-write:"),
 ]
 
 

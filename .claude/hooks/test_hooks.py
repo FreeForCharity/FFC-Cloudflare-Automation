@@ -5,13 +5,16 @@ Runs each hook as a subprocess with crafted stdin and asserts the exit code
 (2 = blocked, 0 = allowed). Run locally or in CI:  python3 .claude/hooks/test_hooks.py
 """
 
+import ast
 import json
 import os
+import re
 import subprocess
 import sys
 
 HOOKS = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HOOKS, "..", ".."))
+GUARD_BASH = os.path.join(HOOKS, "guard_bash.py")
 
 PASS, FAIL = 0, 0
 
@@ -26,11 +29,22 @@ def run(script, payload):
     return proc.returncode, proc.stderr
 
 
+# A hook's contract is rc 2 (blocked) or 0 (allowed). Anything else -- a
+# syntax error, a failed import, a 127 -- is a BROKEN HOOK, and `blocked =
+# rc == 2` alone reads every one of those as "allowed", so an ALLOW case goes
+# green against a hook that cannot run at all. That is the same shape as the
+# repo's standing rule that a test asserting a non-zero exit code must also
+# assert on the output: a harness that cannot start is otherwise
+# indistinguishable from a rule correctly staying silent. Raised repeatedly by
+# Copilot review on this PR, and correct.
+VALID_RC = (0, 2)
+
+
 def check(name, script, payload, expect_block):
     global PASS, FAIL
     rc, _ = run(script, payload)
     blocked = rc == 2
-    ok = blocked == expect_block
+    ok = blocked == expect_block and rc in VALID_RC
     PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
     status = "ok  " if ok else "FAIL"
     want = "block" if expect_block else "allow"
@@ -42,6 +56,14 @@ def check(name, script, payload, expect_block):
 # tell "warned" from "said nothing" -- and a warning nobody can assert on is a
 # warning that can rot without any test noticing. Assert on the marker instead.
 WARN_MARKER = "FFC-HOOK-WARNING"
+
+# Every warn reason opens with its rule's `[#NNN]` tag, so the set of tags in
+# stderr is the set of warn rules that fired.
+WARN_TAG_RE = re.compile(r"\[#\d+\]")
+
+
+def warn_tags(err):
+    return set(WARN_TAG_RE.findall(err))
 
 
 def check_warn(name, script, payload, expect_warn, tag=None):
@@ -66,6 +88,10 @@ def check_warn(name, script, payload, expect_warn, tag=None):
     want = f"{label}warn" if expect_warn else f"{label}silent"
     got = ("warn" if warned else "silent") + (f", rc={rc}" if rc != 0 else "")
     print(f"  [{status}] {name}: want={want} got={got}")
+    # Returned so the registry can attribute a warning to its rule from the
+    # emitted text, the same way check_emitting does for a block. Purely
+    # additive -- #1018's spelling and behaviour above are untouched.
+    return rc, err
 
 
 def bash(cmd):
@@ -116,209 +142,886 @@ def check_stderr_omits(name, script, payload, needle):
 REAL_CF = "em7XiooYdKI4T3d3" + "Oo1j31-ekEV2Fi" + "UfZxwQvzT9"
 
 
+# --- the guard_bash rule registry -------------------------------------------
+#
+# Cases used to be a flat list of check() calls, which cannot hold the property
+# that actually matters. "Does the file contain both a blocking and an allowing
+# case?" is trivially true across 149 cases and will stay true forever, while a
+# SINGLE rule tested only in the direction it already passes is invisible.
+#
+# #940 shipped the $endCursor rule with three cases -- block / block / allow --
+# all three green against `"$endcursor" not in low`, a substring test that got
+# the rule wrong and allowed `$endCursorX` and `$endCursor_2`: real GraphQL
+# variable names that `--paginate` substitutes into neither, i.e. the exact
+# infinite-page-1 loop the rule exists to stop. The case that would have failed
+# was a near-miss that must BLOCK, and nobody wrote it. That is the fourth time
+# in this repo a test passed against the mutation it existed to catch (L48).
+#
+# So rule identity is data here, not inference from a case name:
+#
+#   * `signature` is a verbatim slice of the reason the rule emits -- the
+#     block message, or the `[#NNN]` tag for a warn-tier rule. The EMITTED
+#     REASON, not the case's name, is what attributes a firing to a rule.
+#   * test_rule_polarity() demands both directions PER RULE.
+#   * test_refusal_site_coverage() derives the refusal sites from
+#     guard_bash.py's own AST -- across every reporting channel, block() and
+#     warn() alike -- so a rule added with no case turns it red without anyone
+#     maintaining a count.
+#
+# Every case below was lifted from the flat list by source span rather than
+# retyped, and each blocking case was assigned to its rule by the reason
+# guard_bash actually emitted when the case was run.
+BLOCK, ALLOW, WARN, SILENT = "block", "allow", "warn", "silent"
+BLOCK_TIER, WARN_TIER = "block", "warn"
+
+# Which verdict means "the rule fired", per tier. A warn-tier rule may also
+# hold ALLOW cases: #1018's "a warned command must still be allowed to run" is
+# an assertion about the tier itself, not about the rule staying silent.
+FIRED = {BLOCK_TIER: BLOCK, WARN_TIER: WARN}
+SINK_TIER = {"block": BLOCK_TIER, "warn": WARN_TIER}
+
+
+def record(name, ok, detail=""):
+    """Count one assertion and print it in the same shape as check()."""
+    global PASS, FAIL
+    PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
+    print(f"  [{'ok  ' if ok else 'FAIL'}] {name}{'' if ok else ':'}")
+    if not ok and detail:
+        for line in detail.splitlines():
+            print(f"         {line}")
+
+
+def check_emitting(name, script, payload, expect_block):
+    """`check`, plus the stderr the hook produced.
+
+    A separate function rather than a return value bolted onto `check`, so
+    `run`/`check` above stay byte-identical to the spelling #1018 introduced.
+    Counting and printing stay in `record` so there is still exactly one place
+    that can miscount.
+    """
+    rc, err = run(script, payload)
+    blocked = rc == 2
+    want = "block" if expect_block else "allow"
+    got = "block" if blocked else f"allow(rc={rc})"
+    record(f"{name}: want={want} got={got}", blocked == expect_block and rc in VALID_RC)
+    return rc, err
+
+
+class Rule:
+    """One guard_bash refusal rule and every case that exercises it.
+
+    no_allow_case is an escape hatch for a rule with no sensible quiet command;
+    it takes a one-line reason so the exemption is stated rather than silently
+    skipped.
+    """
+
+    def __init__(self, rule_id, signature, tier, cases, no_allow_case=None, label=None):
+        self.id = rule_id
+        self.signature = signature
+        self.tier = tier
+        self.cases = cases
+        self.no_allow_case = no_allow_case
+        # The group header this rule's cases printed under in the flat list.
+        # Kept verbatim so the re-derivation loses no string main had.
+        self.label = label
+        self.emitted = []  # (case name, stderr) for each case that fired
+
+    def firing_cases(self):
+        return [c for c in self.cases if c[2] == FIRED[self.tier]]
+
+    def quiet_cases(self):
+        return [c for c in self.cases if c[2] != FIRED[self.tier]]
+
+
+RULES = [
+    Rule("tls-proxy", 'Refusing to disable TLS/proxy security', BLOCK_TIER, [
+        ("curl -k", "curl -k https://example.com", BLOCK),
+        ("disable node tls", "NODE_TLS_REJECT_UNAUTHORIZED=0 node x.js", BLOCK),
+        ("curl normal", "curl -sS https://api.cloudflare.com/x", ALLOW),
+    ]),
+
+    Rule("force-push-protected", 'Force-push to a protected branch', BLOCK_TIER, [
+        ("force-push main", "git push --force origin main", BLOCK),
+        ("force-with-lease main", "git push --force-with-lease origin main", BLOCK),
+        ("normal push feature", "git push -u origin claude/ai-agent-hooks-security-bchbh8", ALLOW),
+        ("force-push feature/main allowed", "git push --force origin feature/main", ALLOW),
+    ]),
+
+    Rule("echo-secret-var", 'Refusing to echo/print a secret value', BLOCK_TIER, [
+        ("echo secret var", "echo $CLOUDFLARE_API_TOKEN", BLOCK),
+        ("echo lowercase secret var", "echo $cloudflare_api_token", BLOCK),
+        # echo-secret-var decides per STATEMENT (#1041). Judging the whole command
+        # made "a secret-named variable appears somewhere" AND "an echo appears
+        # somewhere" a violation -- which is the Conductor's standard idiom, since
+        # audit-agentic-os-board.py and generate-agentic-os-status.py both refuse to
+        # run without GH_TOKEN and are normally invoked next to an echo. Cases A and
+        # B are verbatim from the issue; nothing in either can emit the token.
+        ("token prefix then echo literal on next line",
+         'GH_TOKEN=$(gh auth token) python x.py\necho "done"', ALLOW),
+        ("token prefix then echo EXIT on next line",
+         'GH_TOKEN=$(gh auth token) python x.py\necho "EXIT=$?"', ALLOW),
+        ("export token then echo", 'export GH_TOKEN=$(gh auth token)\necho "starting"', ALLOW),
+        ("token prefix then echo via &&",
+         'GH_TOKEN=$(gh auth token) python x.py && echo "done"', ALLOW),
+        ("token prefix then echo via ;",
+         'GH_TOKEN=$(gh auth token) python x.py ; echo "done"', ALLOW),
+        ("real conductor idiom",
+         'GH_TOKEN=$(gh auth token) python scripts/audit-agentic-os-board.py > out.txt\n'
+         'echo "audit written"', ALLOW),
+        # Using a secret as an ARGUMENT is not printing it. These two are what make
+        # the statement/`&&` splitting load-bearing: with the whole command judged
+        # as one unit, the token in the curl header arms the unrelated echo. Both
+        # survive every mutation of the assignment stripper, so they test the
+        # splitter and nothing else.
+        ("secret in a curl header then echo on next line",
+         'curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" '
+         'https://api.cloudflare.com/zones\necho "done"', ALLOW),
+        ("secret in a curl header then echo via &&",
+         'curl -H "Authorization: Bearer $GH_TOKEN" '
+         'https://api.github.com/user && echo "ok"', ALLOW),
+        # AC4 in one line: the prefix form is not a leak even when the SAME
+        # statement also runs a print verb, because the verb prints something else.
+        ("token prefix with a print verb in the same statement",
+         "GH_TOKEN=$(gh auth token) printenv HOME", ALLOW),
+        ("token prefix wrapping an echo in a subshell",
+         "GH_TOKEN=$(gh auth token) bash -c 'echo start; python x.py'", ALLOW),
+        # The bare short names are only secrets when EXPANDED. "token" is an
+        # ordinary English word and `$KEY` is an ordinary loop variable; matching
+        # either unanchored blocks correct commands, which is how a guard gets
+        # switched off.
+        ("the word token in a message allowed", 'echo "no token found in the response"', ALLOW),
+        ("loop variable KEY allowed", "for KEY in a b; do echo $KEY; done", ALLOW),
+        # ... and the genuine forms must all still block. The bare-name spellings
+        # below were ALLOWED before this change: the old pattern required a
+        # `_TOKEN`-style suffix preceded by at least one character, so `$TOKEN`
+        # itself matched nothing.
+        ("echo bare $TOKEN", "echo $TOKEN", BLOCK),
+        ("echo quoted $TOKEN", 'echo "$TOKEN"', BLOCK),
+        ("echo braced ${TOKEN}", "echo ${TOKEN}", BLOCK),
+        ("printf a secret", "printf '%s' \"$TOKEN\"", BLOCK),
+        ("echo bare lowercase $token", "echo $token", BLOCK),
+        ("echo $env:SECRET", "echo $env:SECRET", BLOCK),
+        # `$env:X` is a PowerShell variable READ, not the `env` command: `\benv\b`
+        # treats `$` and `:` as word boundaries, so the bare name armed the rule on
+        # a statement that prints nothing (Copilot's finding on #1062). The second
+        # case was a false positive on `main` too.
+        ("powershell env var assignment allowed", "X=$env:PASSWORD", ALLOW),
+        ("powershell env var set in a subshell allowed",
+         "pwsh -c '$env:GH_TOKEN = \"x\"; python y.py'", ALLOW),
+        # ... but `main` blocked `Write-Host $env:GH_TOKEN` only via that same stray
+        # `env` match, so these two keep the coverage after the accident is removed.
+        # They are the discriminator for the Write-* branch.
+        ("Write-Host a secret", "Write-Host $env:GH_TOKEN", BLOCK),
+        ("Write-Output a secret", "Write-Output $env:CLOUDFLARE_API_TOKEN", BLOCK),
+        # PowerShell's implicit output: a bare expression statement IS a print, so
+        # these leak with NO verb anywhere. `main` caught them only as collateral of
+        # the stray `env` match, and a list of Write-* consumers cannot reach them --
+        # there is no verb to enumerate (Conductor run 92). Every other `$env:` case
+        # in this file pairs the expansion with a verb or an `=`; these are the
+        # spelling with neither.
+        ("bare powershell expansion of a secret", "$env:GH_TOKEN", BLOCK),
+        ("bare powershell expansion via pwsh -c", "pwsh -c '$env:GH_TOKEN'", BLOCK),
+        ("bare powershell expansion piped to a consumer", "$env:GH_TOKEN | Out-Host", BLOCK),
+        # An embedded pwsh script has its OWN statements: `_echo_segments` splits on
+        # `;` only outside quotes, so everything after the first statement arrived
+        # unjudged. Each of these is a verb-less print that `main` caught by
+        # accident and this rule initially did not (Copilot, #1062).
+        ("bare powershell expansion after a ; inside -c", "pwsh -c 'true; $env:GH_TOKEN'", BLOCK),
+        ("bare powershell expansion before a ; inside -c", "pwsh -c '$env:GH_TOKEN; true'", BLOCK),
+        ("bare powershell expansion inside a block", "pwsh -c 'if ($x) { $env:GH_TOKEN }'", BLOCK),
+        # The discriminator for the widened delimiters: same shape, non-secret name.
+        # Without it, the delimiter set could match anything and stay green.
+        ("bare expansion of a non-secret after a ; allowed", "pwsh -c 'true; $env:TEMP'", ALLOW),
+        # A grouped expression statement still prints (Copilot, #1062) ...
+        ("parenthesised bare powershell expansion", "pwsh -c '($env:GH_TOKEN)'", BLOCK),
+        ("parenthesised bare expansion with spaces", "pwsh -c '( $env:GH_TOKEN )'", BLOCK),
+        # ... but `$(...)` is a SUBEXPRESSION whose value is substituted, so this is
+        # argument passing and must stay allowed -- the `(` delimiter is excluded
+        # after a `$` for exactly this case, and this is its discriminator.
+        ("secret via a subexpression argument allowed",
+         "pwsh -c './x.ps1 -Token $($env:GH_TOKEN)'", ALLOW),
+        ("parenthesised non-secret allowed", "pwsh -c '($env:TEMP)'", ALLOW),
+        # `&&`/`||` are PowerShell 7 chain operators, and inside the quoted -c
+        # script `_split_on_logical` never sees them; `,` continues an expression
+        # into an array literal. Found by sweeping the boundary spellings rather
+        # than waiting for each to arrive as a review round.
+        ("bare powershell expansion after && inside -c", "pwsh -c 'true && $env:GH_TOKEN'", BLOCK),
+        ("bare powershell expansion after || inside -c",
+         "pwsh -c 'false || $env:GH_TOKEN'", BLOCK),
+        ("bare powershell expansion before a comma", "pwsh -c '$env:GH_TOKEN,1'", BLOCK),
+        # `,` is a terminator but NOT a leading delimiter, which is what keeps an
+        # array of arguments allowed. This is that asymmetry's discriminator.
+        ("secret in an array argument allowed",
+         "pwsh -c './x.ps1 -Args $env:GH_TOKEN,$env:CLOUDFLARE_API_TOKEN'", ALLOW),
+        ("bare powershell expansion after &&", "true && $env:CLOUDFLARE_API_TOKEN", BLOCK),
+        ("braced bare powershell expansion", "${env:GH_TOKEN}", BLOCK),
+        # The braced spelling puts a `{` between the `$` and the name, so a
+        # `(?<!\$)` lookbehind alone still sees a word boundary and reinstates the
+        # false positive one spelling over.
+        ("braced powershell env assignment allowed", "X=${env:PASSWORD}", ALLOW),
+        # A non-secret env var is not a leak however it is spelled, and passing a
+        # token as an ARGUMENT is not printing it -- `main` blocked both by the
+        # same accident.
+        ("bare expansion of a non-secret allowed", "$env:TEMP | Out-Host", ALLOW),
+        ("braced non-secret expansion allowed", "cat ${env:HOME}/x", ALLOW),
+        ("secret passed as a pwsh argument allowed",
+         'pwsh -c "./x.ps1 -Token $env:GH_TOKEN"', ALLOW),
+        ("secret in a curl header, powershell spelling, allowed",
+         'curl -H "Authorization: Bearer $env:GH_TOKEN" https://api.github.com', ALLOW),
+        # A suffixed name that is NOT on the known-vars list -- the only case that
+        # reaches the suffix pattern on its own.
+        ("echo a suffixed name outside the known list", 'echo "$AZURE_CLIENT_SECRET"', BLOCK),
+        # A secret printed on a LATER line is still printed -- per-statement must
+        # not become "only the first statement".
+        ("secret echoed on a later line", 'python x.py\necho "$WHMCS_API_SECRET"', BLOCK),
+        # The assigned VALUE is judged too, or stripping the assignment would hide
+        # the leak it was meant to excuse.
+        ("secret echoed inside an assignment value", "X=$(echo $GH_TOKEN)", BLOCK),
+        # A pipeline is one unit: printenv's output reaches grep.
+        ("printenv piped to grep for a secret", "printenv | grep GH_TOKEN", BLOCK),
+        ("env piped to grep for a secret", "env | grep CLOUDFLARE_API_TOKEN", BLOCK),
+        # Heredoc bodies are shell here, unlike in the pipeline rule: dropping them
+        # would turn a blocked command into an allowed one.
+        ("secret echoed inside a heredoc body", "bash <<EOF\necho $GH_TOKEN\nEOF", BLOCK),
+        ("workflow secrets expression", 'echo "${{ secrets.CBM_TOKEN }}"', BLOCK),
+        # Two discriminators, each the only case that reaches one clause. Without
+        # them the WHMCS_* list and the `${{ secrets. }}` test are dead code that
+        # every other case passes through the suffix pattern, and deleting either
+        # would leave the suite green.
+        ("echo a WHMCS var with no secret suffix", "echo $WHMCS_API_IDENTIFIER", BLOCK),
+        ("workflow secrets expression with no secret suffix",
+         'echo "${{ secrets.AZURE_CLIENT_ID }}"', BLOCK),
+        # From the flat block the union merge left in main(): these four
+        # were the only cases there that the rule did not already hold.
+        # The other 39 were verbatim duplicates of cases above and were
+        # dropped rather than re-homed -- two copies of one case is waste
+        # and an edit hazard, and no guard here can see it (the corpus
+        # check compares SETS, and both copies passed).
+        ("bare powershell expansion before && inside -c",
+         "pwsh -c '$env:GH_TOKEN && true'", BLOCK),
+        ("bare powershell expansion as a middle chain leg",
+         "pwsh -c 'true && $env:GH_TOKEN && true'", BLOCK),
+        ("bare powershell expansion before || inside -c",
+         "pwsh -c '$env:GH_TOKEN || true'", BLOCK),
+        ("secret argument before && allowed",
+         "pwsh -c './x.ps1 -Token $env:GH_TOKEN && true'", ALLOW),
+    ]),
+
+    Rule("secret-literal", 'appears to contain a secret literal', BLOCK_TIER, [
+        ("secret literal in cmd", f"curl -H 'Authorization: Bearer {REAL_CF}' x", BLOCK),
+        # Added with the registry: this rule had NO quiet case, so nothing
+        # distinguished "matches a credential-shaped literal" from "matches
+        # every curl -H". Referencing the credential through an env var is the
+        # correct spelling of the blocked command above, and must not be caught
+        # with it.
+        ("secret referenced via env var allowed",
+         'curl -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/user', ALLOW),
+    ]),
+
+    Rule("rm-rf-root", "destructive 'rm -rf'", BLOCK_TIER, [
+        ("rm -rf .git", "rm -rf .git", BLOCK),
+        ("rm -rf build dir", "rm -rf ./node_modules", ALLOW),
+        # Regressions from PR #448 review:
+        ("rm -rf root", "rm -rf /", BLOCK),
+        ("rm -rf bare star", "rm -rf *", BLOCK),
+        ("rm -rf abs path allowed", "rm -rf /tmp/foo", ALLOW),
+        ("rm -rf .git slash", "rm -rf .git/", BLOCK),
+    ]),
+
+    Rule("grep-perl-regexp", '`grep -P` (PCRE) is unavailable', BLOCK_TIER, [
+        # `grep -P` is unavailable in this environment's git-bash and fails by
+        # matching nothing rather than by erroring visibly (run 60, 2026-07-31).
+        ("grep -P", "grep -P '^\\| L\\d+' docs/lessons-ledger.md", BLOCK),
+        ("grep -qP in a conditional",
+         'if grep -qP "\\t$N\\t" /tmp/items.txt; then echo ON; else echo MISSING; fi', BLOCK),
+        ("grep -oP", "gh api x | grep -oP 'runs/\\K[0-9]+'", BLOCK),
+        ("grep --perl-regexp", "grep --perl-regexp 'x' f", BLOCK),
+        ("grep -rP recursive", "grep -rP 'stripCode' scripts/", BLOCK),
+        # Must NOT fire on the POSIX forms that do work here, nor on a capital P
+        # that is part of the *pattern* rather than a flag.
+        ("grep -E allowed", "grep -E '^\\| L[0-9]+' docs/lessons-ledger.md", ALLOW),
+        ("grep -i with P-word pattern allowed", "gh pr list | grep -i PASS", ALLOW),
+        ("grep -n literal P allowed", "grep -n 'P' notes.txt", ALLOW),
+        ("pgrep not matched", "pgrep -f node", ALLOW),
+        ("grep --include allowed", "grep -r --include=*.py PATTERN scripts/", ALLOW),
+        ("curl -X POST then grep allowed", "curl -sS https://api.example.com | grep foo", ALLOW),
+    ]),
+
+    Rule("gh-api-leading-slash", 'leading-slash endpoint is mangled', BLOCK_TIER, [
+        # A leading-slash `gh api` endpoint is rewritten by MSYS path conversion
+        # into a Windows filesystem path (run 61, 2026-07-31).
+        ("gh api leading slash", "gh api /markdown -X POST", BLOCK),
+        ("gh api leading slash with flags first", "gh api --paginate /repos/o/r/issues", BLOCK),
+        ("gh api leading slash after -X", "gh api -X POST /repos/o/r/issues/1/comments", BLOCK),
+        # Must NOT fire on the slash-less form, on a slash later in the path, on a
+        # graphql call, or on an unrelated command that merely contains a path.
+        ("gh api slash-less allowed", "gh api markdown -X POST", ALLOW),
+        ("gh api nested path allowed",
+         "gh api repos/FreeForCharity/FFC-Cloudflare-Automation/pulls/963", ALLOW),
+        ("gh api graphql allowed", "gh api graphql -f query='query{viewer{login}}'", ALLOW),
+        ("gh api rate_limit allowed", "gh api rate_limit", ALLOW),
+        ("gh pr view with slash path allowed",
+         "gh pr view 963 --repo FreeForCharity/FFC-Cloudflare-Automation", ALLOW),
+        # A slash inside a flag VALUE is data, not the endpoint -- must not fire.
+        ("gh api field value with slash allowed",
+         "gh api repos/o/r/issues -f body=/tmp/note.md", ALLOW),
+    ]),
+
+    Rule("pipeline-exit-code", 'ledger L50', BLOCK_TIER, [
+        # Rule 9: `$?` after a pipeline reads the LAST stage, not the command meant.
+        # The exact shape that misreported a fail-closed probe on #965 (run 62).
+        ("pipeline then $? on same line", 'python3 check.py | tail -3; echo "EXIT=$?"', BLOCK),
+        ("pipeline then $? on next line", 'python3 check.py | grep FAIL\necho "EXIT=$?"', BLOCK),
+        ("pipeline then $? into a variable", 'make build | tee log.txt\nrc=$?', BLOCK),
+        # The two CORRECT spellings must stay silent, or the rule just trains people
+        # to ignore it.
+        ("PIPESTATUS allowed", 'python3 check.py | tail -3; echo "EXIT=${PIPESTATUS[0]}"', ALLOW),
+        ("pipefail allowed", 'set -o pipefail\npython3 check.py | tail -3\necho "EXIT=$?"', ALLOW),
+        # `$?` with no pipeline at all is the normal, correct idiom.
+        ("bare command then $? allowed", 'python3 check.py\necho "EXIT=$?"', ALLOW),
+        # `||` is not a pipeline -- it must not be mistaken for one.
+        ("logical or then $? allowed", 'python3 check.py || echo failed\necho "EXIT=$?"', ALLOW),
+        # A pipeline with no `$?` anywhere is the overwhelmingly common case.
+        ("pipeline without $? allowed", 'git log --oneline | head -5', ALLOW),
+        # Ledger L50 -- $? read through a pipe. The first two are verbatim the
+        # commands that misreported this run and in run 72; both printed a confident
+        # zero for a script that had exited 1.
+        ("exit code through a pipe",
+         'python scripts/audit-agentic-os-board.py | tail -30; echo "EXIT=$?"', BLOCK),
+        ("exit code through a pipe, rc= form", "check.py --strict | head -3\nrc=$?", BLOCK),
+        ("pipefail clears the rule",
+         'set -o pipefail\npython audit.py | tail -30; echo "EXIT=$?"', ALLOW),
+        ("$? with no pipeline allowed", 'python audit.py > out.txt; echo "EXIT=$?"', ALLOW),
+        ("|| is not a pipeline", 'python audit.py || echo failed; echo "EXIT=$?"', ALLOW),
+        ("pipe in a quoted string is not a pipeline",
+         'grep -E "a|b" f.txt; echo "EXIT=$?"', ALLOW),
+        ("pipeline with no $? after it allowed", "gh pr list --json number | head -5", ALLOW),
+        # A pipeline written on a heredoc HEADER is still a pipeline. Skipping the
+        # whole line made the rule miss its own target shape -- a false negative,
+        # which for a guard is the expensive direction.
+        ("pipeline on a heredoc header line still caught",
+         'python3 - <<PY | tail -3\nprint(1)\nPY\necho "EXIT=$?"', BLOCK),
+        # `$?` in SINGLE quotes is a literal and reads nothing; in double quotes the
+        # shell expands it. Only the second is the L50 shape.
+        ("single-quoted literal $? after a pipe allowed",
+         "ls | wc -l; echo '$? is a literal'", ALLOW),
+        ("double-quoted $? after a pipe still caught", 'ls | wc -l; echo "EXIT=$?"', BLOCK),
+        # `;` inside quotes is not a statement separator -- splitting there invents
+        # a boundary the shell never sees.
+        ("semicolon inside quotes is not a statement break",
+         'ls | grep -m1 x --label "a; echo $?"', ALLOW),
+    ]),
+
+    Rule("inline-python-encoding", 'decodes as cp1252', BLOCK_TIER, [
+        # cp1252: inline Python reading FFC data without encoding=. Both forms below
+        # crashed this run on a U+274C in a board card title.
+        ("inline python open() without encoding",
+         'python -c "import json;d=json.load(open(\'items.json\'))"', BLOCK),
+        ("python heredoc open() without encoding",
+         'python - <<PY\nimport json\nd=json.load(open("items.json"))\nPY', BLOCK),
+        ("inline python with encoding= allowed",
+         'python -c "import json;d=json.load(open(\'items.json\', encoding=\'utf-8\'))"', ALLOW),
+        ("inline python binary mode allowed",
+         'python -c "d=open(\'feed.json\', \'rb\').read()"', ALLOW),
+        ("open() in a non-python command allowed", "grep -n 'open(' scripts/*.py", ALLOW),
+        ("os.open is not the builtin",
+         'python -c "import os;fd=os.open(\'f\', os.O_RDONLY)"', ALLOW),
+        # A nested call in the first argument is the ordinary way to write this.
+        # Truncating at the first `)` hid the `encoding=` and blocked a correct
+        # command -- the failure mode that gets a guard switched off.
+        ("nested call before encoding= allowed",
+         'python -c "import os,json;d=json.load('
+         'open(os.path.join(a, b), encoding=\'utf-8\'))"', ALLOW),
+        ("nested call, still missing encoding=, blocked",
+         'python -c "import os,json;d=json.load(open(os.path.join(a, b)))"', BLOCK),
+    ]),
+
+    Rule("graphql-paginate-endcursor", 'requires the cursor variable to be named', BLOCK_TIER, [
+        # `gh api graphql --paginate` must declare $endCursor -- gh substitutes the
+        # page cursor into that exact name, so any other name silently re-fetches
+        # page 1 forever. The wrong-name case is the one that actually happened.
+        ("graphql paginate with $cursor",
+         'gh api graphql --paginate -f query='
+         "'query($cursor:String){organization(login:\"x\"){"
+         "projectV2(number:9){items(first:100,after:$cursor){"
+         "pageInfo{hasNextPage endCursor} nodes{id}}}}}'", BLOCK),
+        ("graphql paginate with no cursor var",
+         "gh api graphql --paginate -f query='query{viewer{login}}'", BLOCK),
+        ("graphql paginate with $endCursor allowed",
+         'gh api graphql --paginate -f query='
+         "'query($endCursor:String){organization(login:\"x\"){"
+         "projectV2(number:9){items(first:100,after:$endCursor){"
+         "pageInfo{hasNextPage endCursor} nodes{id}}}}}'", ALLOW),
+        # A name that merely STARTS with endCursor is a different variable and gh
+        # substitutes into neither -- so these must block, not ride the substring.
+        # They are also the discriminators for the exact-match case above: without
+        # them a bare `$endcursor in low` test passes every case in this block.
+        ("graphql paginate with $endCursorX",
+         'gh api graphql --paginate -f query='
+         "'query($endCursorX:String){organization(login:\"x\"){"
+         "projectV2(number:9){items(first:100,after:$endCursorX){"
+         "pageInfo{hasNextPage endCursor} nodes{id}}}}}'", BLOCK),
+        ("graphql paginate with $endCursor_2",
+         'gh api graphql --paginate -f query='
+         "'query($endCursor_2:String){organization(login:\"x\"){"
+         "projectV2(number:9){items(first:100,after:$endCursor_2){"
+         "pageInfo{hasNextPage endCursor} nodes{id}}}}}'", BLOCK),
+        # Only --paginate needs the cursor: a single-shot graphql call is fine, and
+        # REST --paginate has no query variables at all.
+        ("graphql single-shot allowed", "gh api graphql -f query='query{viewer{login}}'", ALLOW),
+        ("REST paginate allowed",
+         "gh api --paginate repos/FreeForCharity/FFC-Cloudflare-Automation/issues/719/comments", ALLOW),
+        # The name must be DECLARED by the operation, not merely present on the
+        # command line. This is the false negative a whole-command scan allows: the
+        # query still paginates on $cursor and would re-fetch page 1 forever, while
+        # an unrelated mention downstream satisfies a substring test.
+        ("$endCursor outside the query does not count",
+         'gh api graphql --paginate -f query='
+         "'query($cursor:String){organization(login:\"x\"){"
+         "projectV2(number:9){items(first:100,after:$cursor){"
+         "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"
+         " ; echo $endCursor", BLOCK),
+        # ... and the named-operation form is a real declaration, so it must pass.
+        # Without this, tightening the regex to `query(` would silently start
+        # blocking a correct command.
+        ("named operation declaring $endCursor allowed",
+         'gh api graphql --paginate -f query='
+         "'query Board($endCursor:String){organization(login:\"x\"){"
+         "projectV2(number:9){items(first:100,after:$endCursor){"
+         "pageInfo{hasNextPage endCursor} nodes{id}}}}}'", ALLOW),
+    ]),
+
+    Rule("gh-api-unpaginated-list", '[#971]', WARN_TIER, label='guard_bash / #971 unpaginated list read:', cases=[
+        ("the run-64 command warns",
+         "gh api 'repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows?per_page=100'", WARN),
+        ("nested collection warns", "gh api repos/o/r/issues/719/comments", WARN),
+        ("deep route ending in a collection warns",
+         "gh api repos/o/r/actions/workflows/502-x.yml/runs", WARN),
+        ("org repos listing warns", "gh api orgs/FreeForCharity/repos", WARN),
+        # Allows.
+        ("--paginate is silent", "gh api --paginate repos/o/r/actions/workflows", SILENT),
+        ("explicit page= is silent",
+         "gh api 'repos/o/r/actions/workflows?per_page=100&page=2'", SILENT),
+        ("single-object read is silent", "gh api repos/o/r/pulls/123", SILENT),
+        ("repo root is not a collection",
+         "gh api repos/FreeForCharity/FFC-Cloudflare-Automation", SILENT),
+        ("graphql is not a collection", "gh api graphql -f query='{viewer{login}}'", SILENT),
+        ("a write is not a list read", "gh api -X DELETE repos/o/r/git/refs/heads/x", SILENT),
+        ("non-gh command with the same words is silent",
+         "echo 'gh api repos/o/r/issues is a list read'", SILENT),
+        # The tier itself: a warned command must still be ALLOWED to run.
+        ("warned list read is still allowed", "gh api repos/o/r/issues/719/comments", ALLOW),
+    ]),
+
+    Rule("gh-api-paginate-array-jq", '[#989]', WARN_TIER, label='guard_bash / #989 paginate + array-jq:', cases=[
+        ("paginate + array jq",
+         "gh api --paginate repos/o/r/issues/719/comments --jq '[.[]|{body}]'", WARN),
+        ("paginate + array jq, -q spelling",
+         "gh api --paginate repos/o/r/issues -q '[.[]|.number]'", WARN),
+        # This case is the discriminator for the one above. `--q` is not a gh flag,
+        # and it is what that case used to send -- passing on the `-q` SUBSTRING
+        # while the real short flag went untested. Pinning silence here means the
+        # `-q` case can only stay green by matching the flag itself.
+        ("paginate + array jq, --q is not the -q flag",
+         "gh api --paginate repos/o/r/issues --q '[.[]|.number]'", SILENT),
+        ("paginate + array jq, double quotes",
+         'gh api --paginate repos/o/r/pulls --jq "[.[]|.number]"', WARN),
+        ("paginate + array jq, jq before endpoint",
+         "gh api --paginate --jq '[.[]|.id]' repos/o/r/commits", WARN),
+        # The documented-correct forms must all stay silent.
+        ("paginate + STREAMING jq silent",
+         "gh api --paginate repos/o/r/issues/719/comments --jq '.[] | .number'", SILENT),
+        # The one DELIBERATE overlap, declared rather than tolerated: this is an
+        # unpaginated list read, so #971 fires and is right to; it is not a
+        # paginated array-jq, so #989 must stay quiet. check_warn's own
+        # docstring names this exact command as the reason `tag` exists. The
+        # fourth element is what keeps "no unexpected warning" strict for the
+        # other silent cases while letting this one warn under #971.
+        ("array jq WITHOUT paginate silent",
+         "gh api repos/o/r/issues --jq '[.[]|.number]'", SILENT, ("[#971]",)),
+        ("paginate + slurp, no jq, silent",
+         "gh api --paginate --slurp repos/o/r/issues/719/comments", SILENT),
+        ("gh pr list array jq is not gh api",
+         "gh pr list --json number --jq '[.[]|.number]'", SILENT),
+        # The measured counter-example that decided this rule's tier: 726 reduces
+        # each page to a scalar and re-joins downstream, so it is CORRECT. It still
+        # warns -- an advisory tier is allowed to be noticed on correct code -- but
+        # it must never be blocked, which is what this case pins.
+        ("726's real usage warns but is NOT blocked",
+         "gh api --paginate \"repos/$org/$repo/teams?per_page=100\" --jq '[.[] | .slug] | join(\",\")'", ALLOW),
+    ]),
+
+    # #1127 / ledger L193. Registered as a Rule rather than as flat check()
+    # calls: test_refusal_site_coverage() derives every refusal from
+    # guard_bash.py's AST and requires a registered signature to claim it, so
+    # cases written outside the table leave gh_edit_label_violation() uncovered
+    # and the suite red. The signature is a slice of the readable literal in
+    # that refusal -- the message is concatenated around the offending
+    # statement, so only the constant fragments are matchable.
+    Rule("gh-edit-label", 'read-modify-write of the ENTIRE label set', BLOCK_TIER, [
+        # Both subcommands, both flags. The defect is the whole-set PUT, so
+        # removing is exactly as lossy as adding (#788 lost an add to a remove).
+        ("issue edit --remove-label",
+         "gh issue edit 788 --repo FreeForCharity/FFC-Cloudflare-Automation "
+         "--remove-label claimed", BLOCK),
+        ("issue edit --add-label", "gh issue edit 788 --add-label agent-ready", BLOCK),
+        ("pr edit --add-label", "gh pr edit 1125 --add-label security", BLOCK),
+        ("label flag anywhere in the statement",
+         "gh issue edit 788 --body-file x.md --remove-label blocked --repo O/R", BLOCK),
+        # Blocked through the bypass the first pattern had: `gh` resolves its
+        # subcommand only AFTER stripping leading global flags, so an adjacent
+        # `gh (issue|pr) edit` match is defeated by `--repo` -- a flag the
+        # Conductor passes as a matter of course, which made the hole the
+        # DEFAULT path.
+        ("global --repo before the subcommand",
+         "gh --repo O/R issue edit 788 --add-label agent-ready", BLOCK),
+        ("global -R before the subcommand",
+         "gh -R O/R pr edit 1125 --remove-label claimed", BLOCK),
+        # And the near-miss inside the fix: `--repo` takes a SEPARATED value, so
+        # `O/R` sits between `gh` and `issue` as a bare word. A rule that merely
+        # skipped flag tokens would read `O/R` as the subcommand and let this pass.
+        ("gh by path, behind an env prefix",
+         "MSYS_NO_PATHCONV=1 /usr/bin/gh --repo O/R issue edit 788 --add-label x", BLOCK),
+        # Allowed: the additive/subtractive endpoints this rule points people at,
+        # and every other reading of the words "edit" and "label". The last two
+        # bound the ordered-token match -- they are blocked cases above with only
+        # the label flag removed, so they fail if the rule ever widens to any
+        # `gh issue edit`.
+        ("additive labels endpoint allowed",
+         "gh api --method POST repos/O/R/issues/788/labels -f 'labels[]=agent-ready'", ALLOW),
+        ("subtractive labels endpoint allowed",
+         "gh api --method DELETE repos/O/R/issues/788/labels/claimed", ALLOW),
+        ("non-label issue edit allowed", "gh issue edit 788 --title 'a new title'", ALLOW),
+        ("issue create --label allowed",
+         "gh issue create --label agentic-os --title x --body y", ALLOW),
+        ("issue list --label allowed", "gh issue list --label agent-ready --state open", ALLOW),
+        ("the flag name inside a quoted message allowed",
+         "gh issue comment 788 --body 'do not use gh issue edit --remove-label here'", ALLOW),
+        ("global flag + issue edit without a label flag allowed",
+         "gh --repo O/R issue edit 788 --title 'a new title'", ALLOW),
+    ], label="guard_bash / L193 gh edit label read-modify-write:"),
+]
+
+
+GENERAL_ALLOWS = [
+    ("normal git status", "git status"),
+    ("normal gh run", "gh workflow run 8-whmcs-export-products.yml --ref main"),
+]
+
+
+# --- deriving the refusal sites from guard_bash.py's own source -------------
+#
+# This must NOT be a count. Hard-coding "there are N block() sites", or
+# asserting len(RULES), goes red the moment a rule is added and teaches the
+# next author to bump a constant instead of writing a case. So the sites come
+# from the AST, and every one has to be claimed by a registered signature.
+
+
+def _literal_fragments(node):
+    """Every string literal that contributes to `node`'s value."""
+    if node is None:
+        return []
+    return [n.value for n in ast.walk(node)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+
+
+def _owners(tree):
+    """node id -> the innermost FunctionDef containing it (None at module level)."""
+    owner = {}
+
+    def descend(node, current):
+        for child in ast.iter_child_nodes(node):
+            owner[id(child)] = current
+            descend(child, child if isinstance(child, ast.FunctionDef) else current)
+
+    descend(tree, None)
+    return owner
+
+
+def _call_names(node):
+    """Names of direct (non-attribute) function calls inside an expression."""
+    return [c.func.id for c in ast.walk(node)
+            if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)]
+
+
+def _reason_bindings(tree, owner):
+    """Every local binding of a name to something that produces reasons.
+
+    Keyed by **(enclosing function, name)**, not by bare name, and recording
+    every binding's line so the nearest preceding one wins.
+
+    A flat name-keyed map resolves `sink(<Name>)` by SPELLING: any site whose
+    argument happens to be called `reason` takes the branch and expands to
+    whichever functions some other `for reason in (...)` loop mentioned --
+    confidently, with the wrong functions, instead of falling through to the
+    loud unresolved path. That was measured on a tree carrying an ast.Assign
+    binding beside the existing ast.For one: the loop's helpers were derived
+    TWICE each, the assigned helper's messages not at all, and zero sites came
+    back empty, so the "fails loudly" promise never fired. Both binding forms
+    are modelled here for that reason.
+    """
+    bindings = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            name, value = node.target.id, node.iter
+        elif (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            name, value = node.targets[0].id, node.value
+        else:
+            continue
+        called = _call_names(value)
+        if not called:
+            continue
+        fn = owner.get(id(node))
+        bindings.setdefault((fn.name if fn else None, name), []).append((node.lineno, called))
+    return bindings
+
+
+def _resolve_reason(bindings, owner, call):
+    """Which functions could have produced this `sink(<Name>)` argument.
+
+    The nearest binding of that name, in the same function, at or above the
+    call. None when there is none -- the caller then reports an unreadable
+    site rather than guessing, which is the whole point.
+    """
+    if not (call.args and isinstance(call.args[0], ast.Name)):
+        return None
+    fn = owner.get(id(call))
+    key = (fn.name if fn else None, call.args[0].id)
+    prior = [(ln, names) for ln, names in bindings.get(key, []) if ln <= call.lineno]
+    if not prior:
+        return None
+    return max(prior, key=lambda pair: pair[0])[1]
+
+
+def _returns_literals(fn):
+    """Does this function return string literals (i.e. produce messages)?"""
+    if fn is None:
+        return False
+    return any(_literal_fragments(n.value)
+               for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None)
+
+
+def _reason_sinks(tree, funcs, bindings, owner):
+    """The functions guard_bash.py uses to report a reason to the agent.
+
+    DISCOVERED, never hard-coded. `block` is not special -- the rule is "any
+    module-level function that main() hands a human-readable message to is
+    reporting that message to the agent", which is a property of the call, not
+    of the name. Anchoring on the literal name `block` was a real blind
+    channel, not a hypothetical one: #1018 added `warn(reason)` for the #971
+    and #989 rules, and a name-anchored walker derived the same sites, all
+    claimed, and reported green while two rules had no case at all.
+    """
+    main_fn = funcs.get("main")
+    if main_fn is None:
+        return set()
+    sinks = set()
+    for node in ast.walk(main_fn):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id not in funcs or not node.args:
+            continue
+        if _literal_fragments(node.args[0]):
+            sinks.add(node.func.id)
+            continue
+        # A name argument counts only when it resolves to a function that
+        # really does return message literals -- otherwise any helper taking a
+        # local variable would be mistaken for a reporting channel.
+        resolved = _resolve_reason(bindings, owner, node) or []
+        if any(_returns_literals(funcs.get(n)) for n in resolved):
+            sinks.add(node.func.id)
+    return sinks
+
+
+def refusal_sites(path=GUARD_BASH):
+    """Every distinct refusal message guard_bash.py can emit, on every channel.
+
+    Returns [(label, [literal fragments], sink name)]. A site whose fragments
+    are EMPTY is one this function could not follow; it is returned rather than
+    dropped so the caller fails loudly. Silently skipping an unreadable site
+    would make the coverage check pass by not looking, which is the failure
+    mode this whole file is about.
+    """
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+
+    funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    owner = _owners(tree)
+    bindings = _reason_bindings(tree, owner)
+    sinks = _reason_sinks(tree, funcs, bindings, owner)
+    if not sinks:
+        # No channel found at all means this resolver no longer understands the
+        # file. Reporting "0 sites, all covered" would be a green that means
+        # nothing, so hand back one unresolvable site instead.
+        return [("guard_bash.py: no reason-reporting function found at all", [], None)]
+
+    sites = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in sinks):
+            continue
+        sink = node.func.id
+        arg = node.args[0] if node.args else None
+        frags = _literal_fragments(arg)
+        if frags:
+            sites.append((f"guard_bash.py:{node.lineno} {sink}(...)", frags, sink))
+            continue
+        resolved = _resolve_reason(bindings, owner, node)
+        if resolved:
+            for fname in resolved:
+                fn = funcs.get(fname)
+                if fn is None:
+                    sites.append((f"guard_bash.py:{node.lineno} -> {fname}() not found", [], sink))
+                    continue
+                for ret in [n for n in ast.walk(fn) if isinstance(n, ast.Return)]:
+                    if ret.value is None or (isinstance(ret.value, ast.Constant)
+                                             and ret.value.value is None):
+                        continue  # `return None` is "rule did not fire", not a message
+                    sites.append((f"guard_bash.py:{ret.lineno} return in {fname}()",
+                                  _literal_fragments(ret.value), sink))
+            continue
+        sites.append((f"guard_bash.py:{node.lineno} "
+                      f"{sink}({ast.dump(arg)[:40] if arg else ''}...)", [], sink))
+    return sites
+
+
+# --- meta-tests over the registry -------------------------------------------
+
+
+def test_rule_polarity():
+    """Every rule needs a case in BOTH directions.
+
+    A rule exercised only where it already passes is green and worthless --
+    #940's $endCursor rule was block/block/allow and all three passed against
+    an implementation that got the rule wrong.
+    """
+    problems = []
+    for rule in RULES:
+        if not rule.firing_cases():
+            problems.append(f"rule '{rule.id}' has NO case that must {FIRED[rule.tier].upper()} "
+                            f"-- add a command this rule is supposed to catch")
+        if not rule.quiet_cases() and not rule.no_allow_case:
+            problems.append(f"rule '{rule.id}' has NO case that must stay QUIET "
+                            f"-- add a near-miss that must pass, or set "
+                            f"no_allow_case='<why>' on the Rule")
+    record("every rule has both a firing and a quiet case", not problems, "\n".join(problems))
+
+
+def test_rule_attribution():
+    """A case must fire for ITS OWN rule's reason.
+
+    Matched on the reason guard_bash emits, never on the case's name -- a name
+    is a claim about which rule fired, and it is exactly the claim that goes
+    stale. Without this, a case can quietly start being caught by an unrelated
+    rule and stay green while its own rule rots.
+    """
+    problems = []
+    for rule in RULES:
+        for name, err in rule.emitted:
+            if rule.signature not in err:
+                problems.append(
+                    f"rule '{rule.id}' case '{name}' fired, but not for this rule: "
+                    f"expected reason containing {rule.signature!r}\n"
+                    f"  emitted: {' '.join(err.split())[:160]}")
+    record("every firing case fires for its own rule's reason", not problems, "\n".join(problems))
+
+
+def test_refusal_site_coverage():
+    """Every refusal guard_bash.py can emit has a case.
+
+    Derived from the AST, not from a count: adding a rule to guard_bash.py with
+    no registered case turns this red and names the line. The reporting
+    channels are discovered too, so this holds for a rule added on a NEW
+    channel and not only for block().
+    """
+    sites = refusal_sites()
+    problems = []
+
+    for label, frags, _sink in sites:
+        if not frags:
+            problems.append(f"{label}: cannot read this refusal's message, so it cannot be "
+                            f"shown to be tested -- teach refusal_sites() this shape")
+
+    for label, frags, sink in sites:
+        if not frags:
+            continue
+        claimants = [r for r in RULES if any(r.signature in f for f in frags)]
+        if not claimants:
+            problems.append(f"{label}: no registered rule claims this refusal\n"
+                            f"  emits: {frags[0][:110]!r}\n"
+                            f"  add a Rule to RULES whose signature is a slice of that text")
+            continue
+        want = SINK_TIER.get(sink)
+        for r in claimants:
+            if want and r.tier != want:
+                problems.append(f"{label}: claimed by rule '{r.id}', which is a {r.tier}-tier "
+                                f"rule, but this site reports through {sink}() -- its cases "
+                                f"would assert the wrong verdict")
+
+    for rule in RULES:
+        if not any(rule.signature in f for _, frags, _ in sites for f in frags):
+            problems.append(
+                f"rule '{rule.id}' signature {rule.signature!r} matches no refusal site "
+                f"in guard_bash.py. Three ways this happens, and they need OPPOSITE fixes:\n"
+                f"    (a) the rule was removed          -> delete the Rule\n"
+                f"    (b) its message was reworded      -> update the signature\n"
+                f"    (c) the rule MOVED to a shape refusal_sites() cannot follow\n"
+                f"        -> fix the resolver. Check the message really changed before\n"
+                f"           touching the signature: editing it to chase this error\n"
+                f"           produces a green that has stopped checking anything.")
+
+    record(f"every refusal site in guard_bash.py is covered ({len(sites)} sites derived)",
+           not problems, "\n".join(problems))
+
+
+def run_rule_cases():
+    for rule in RULES:
+        if rule.label:
+            print(rule.label)
+        for name, cmd, verdict, *rest in rule.cases:
+            expected_tags = rest[0] if rest else ()
+            if verdict in (BLOCK, ALLOW):
+                rc, err = check_emitting(f"{rule.id} / {name}", "guard_bash.py",
+                                         bash(cmd), verdict == BLOCK)
+                if rc == 2:
+                    rule.emitted.append((name, err))
+            else:
+                rc, err = check_warn(f"{rule.id} / {name}", "guard_bash.py", bash(cmd),
+                                     verdict == WARN, tag=rule.signature)
+                if verdict == WARN and rule.signature in err:
+                    rule.emitted.append((name, err))
+                if verdict == SILENT:
+                    # `tag` makes check_warn's negative mean "THIS rule stayed
+                    # quiet", which cannot see a DIFFERENT warn rule that has
+                    # started firing here (Copilot's finding on #1039, and it
+                    # is real). Asserting no warning AT ALL is the obvious fix
+                    # and is wrong: the two rules deliberately overlap, and
+                    # `gh api repos/o/r/issues --jq '[...]'` IS an unpaginated
+                    # list read while NOT being a paginated array-jq -- so the
+                    # blunt form reds a case that is correct by design (it did,
+                    # when measured). Each case therefore declares the OTHER
+                    # tags it legitimately provokes, and anything beyond that
+                    # set is an unexpected leak.
+                    unexpected = warn_tags(err) - set(expected_tags)
+                    record(f"{rule.id} / {name}: no unexpected warning"
+                           + (f" (expected {' '.join(expected_tags)})" if expected_tags else ""),
+                           not unexpected,
+                           f"also warned under {' '.join(sorted(unexpected))} -- either a rule "
+                           f"has started leaking onto this command, or the overlap is legitimate "
+                           f"and belongs in the case's expected-tag list")
+
+
 def main():
-    print("guard_bash:")
-    check("force-push main", "guard_bash.py", bash("git push --force origin main"), True)
-    check("force-with-lease main", "guard_bash.py", bash("git push --force-with-lease origin main"), True)
-    check("curl -k", "guard_bash.py", bash("curl -k https://example.com"), True)
-    check("disable node tls", "guard_bash.py", bash("NODE_TLS_REJECT_UNAUTHORIZED=0 node x.js"), True)
-    check("echo secret var", "guard_bash.py", bash("echo $CLOUDFLARE_API_TOKEN"), True)
-    check("rm -rf .git", "guard_bash.py", bash("rm -rf .git"), True)
-    check("secret literal in cmd", "guard_bash.py", bash(f"curl -H 'Authorization: Bearer {REAL_CF}' x"), True)
-    check("normal push feature", "guard_bash.py", bash("git push -u origin claude/ai-agent-hooks-security-bchbh8"), False)
-    check("normal git status", "guard_bash.py", bash("git status"), False)
-    check("normal gh run", "guard_bash.py", bash("gh workflow run 8-whmcs-export-products.yml --ref main"), False)
-    check("rm -rf build dir", "guard_bash.py", bash("rm -rf ./node_modules"), False)
-    check("curl normal", "guard_bash.py", bash("curl -sS https://api.cloudflare.com/x"), False)
-    # Regressions from PR #448 review:
-    check("rm -rf root", "guard_bash.py", bash("rm -rf /"), True)
-    check("rm -rf bare star", "guard_bash.py", bash("rm -rf *"), True)
-    check("rm -rf abs path allowed", "guard_bash.py", bash("rm -rf /tmp/foo"), False)
-    check("rm -rf .git slash", "guard_bash.py", bash("rm -rf .git/"), True)
-    check("force-push feature/main allowed", "guard_bash.py",
-          bash("git push --force origin feature/main"), False)
-    check("echo lowercase secret var", "guard_bash.py",
-          bash("echo $cloudflare_api_token"), True)
+    print("guard_bash (by rule):")
+    run_rule_cases()
 
-    # echo-secret-var decides per STATEMENT (#1041). Judging the whole command
-    # made "a secret-named variable appears somewhere" AND "an echo appears
-    # somewhere" a violation -- which is the Conductor's standard idiom, since
-    # audit-agentic-os-board.py and generate-agentic-os-status.py both refuse to
-    # run without GH_TOKEN and are normally invoked next to an echo. Cases A and
-    # B are verbatim from the issue; nothing in either can emit the token.
-    check("token prefix then echo literal on next line", "guard_bash.py",
-          bash('GH_TOKEN=$(gh auth token) python x.py\necho "done"'), False)
-    check("token prefix then echo EXIT on next line", "guard_bash.py",
-          bash('GH_TOKEN=$(gh auth token) python x.py\necho "EXIT=$?"'), False)
-    check("export token then echo", "guard_bash.py",
-          bash('export GH_TOKEN=$(gh auth token)\necho "starting"'), False)
-    check("token prefix then echo via &&", "guard_bash.py",
-          bash('GH_TOKEN=$(gh auth token) python x.py && echo "done"'), False)
-    check("token prefix then echo via ;", "guard_bash.py",
-          bash('GH_TOKEN=$(gh auth token) python x.py ; echo "done"'), False)
-    check("real conductor idiom", "guard_bash.py",
-          bash('GH_TOKEN=$(gh auth token) python scripts/audit-agentic-os-board.py > out.txt\n'
-               'echo "audit written"'), False)
-    # Using a secret as an ARGUMENT is not printing it. These two are what make
-    # the statement/`&&` splitting load-bearing: with the whole command judged
-    # as one unit, the token in the curl header arms the unrelated echo. Both
-    # survive every mutation of the assignment stripper, so they test the
-    # splitter and nothing else.
-    check("secret in a curl header then echo on next line", "guard_bash.py",
-          bash('curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" '
-               'https://api.cloudflare.com/zones\necho "done"'), False)
-    check("secret in a curl header then echo via &&", "guard_bash.py",
-          bash('curl -H "Authorization: Bearer $GH_TOKEN" '
-               'https://api.github.com/user && echo "ok"'), False)
-    # AC4 in one line: the prefix form is not a leak even when the SAME
-    # statement also runs a print verb, because the verb prints something else.
-    check("token prefix with a print verb in the same statement", "guard_bash.py",
-          bash("GH_TOKEN=$(gh auth token) printenv HOME"), False)
-    check("token prefix wrapping an echo in a subshell", "guard_bash.py",
-          bash("GH_TOKEN=$(gh auth token) bash -c 'echo start; python x.py'"), False)
-    # The bare short names are only secrets when EXPANDED. "token" is an
-    # ordinary English word and `$KEY` is an ordinary loop variable; matching
-    # either unanchored blocks correct commands, which is how a guard gets
-    # switched off.
-    check("the word token in a message allowed", "guard_bash.py",
-          bash('echo "no token found in the response"'), False)
-    check("loop variable KEY allowed", "guard_bash.py",
-          bash("for KEY in a b; do echo $KEY; done"), False)
+    print("guard_bash (general, rule-independent):")
+    for name, cmd in GENERAL_ALLOWS:
+        check(name, "guard_bash.py", bash(cmd), False)
 
-    # ... and the genuine forms must all still block. The bare-name spellings
-    # below were ALLOWED before this change: the old pattern required a
-    # `_TOKEN`-style suffix preceded by at least one character, so `$TOKEN`
-    # itself matched nothing.
-    check("echo bare $TOKEN", "guard_bash.py", bash("echo $TOKEN"), True)
-    check("echo quoted $TOKEN", "guard_bash.py", bash('echo "$TOKEN"'), True)
-    check("echo braced ${TOKEN}", "guard_bash.py", bash("echo ${TOKEN}"), True)
-    check("printf a secret", "guard_bash.py", bash("printf '%s' \"$TOKEN\""), True)
-    check("echo bare lowercase $token", "guard_bash.py", bash("echo $token"), True)
-    check("echo $env:SECRET", "guard_bash.py", bash("echo $env:SECRET"), True)
-    # `$env:X` is a PowerShell variable READ, not the `env` command: `\benv\b`
-    # treats `$` and `:` as word boundaries, so the bare name armed the rule on
-    # a statement that prints nothing (Copilot's finding on #1062). The second
-    # case was a false positive on `main` too.
-    check("powershell env var assignment allowed", "guard_bash.py",
-          bash("X=$env:PASSWORD"), False)
-    check("powershell env var set in a subshell allowed", "guard_bash.py",
-          bash("pwsh -c '$env:GH_TOKEN = \"x\"; python y.py'"), False)
-    # ... but `main` blocked `Write-Host $env:GH_TOKEN` only via that same stray
-    # `env` match, so these two keep the coverage after the accident is removed.
-    # They are the discriminator for the Write-* branch.
-    check("Write-Host a secret", "guard_bash.py",
-          bash("Write-Host $env:GH_TOKEN"), True)
-    check("Write-Output a secret", "guard_bash.py",
-          bash("Write-Output $env:CLOUDFLARE_API_TOKEN"), True)
-    # PowerShell's implicit output: a bare expression statement IS a print, so
-    # these leak with NO verb anywhere. `main` caught them only as collateral of
-    # the stray `env` match, and a list of Write-* consumers cannot reach them --
-    # there is no verb to enumerate (Conductor run 92). Every other `$env:` case
-    # in this file pairs the expansion with a verb or an `=`; these are the
-    # spelling with neither.
-    check("bare powershell expansion of a secret", "guard_bash.py",
-          bash("$env:GH_TOKEN"), True)
-    check("bare powershell expansion via pwsh -c", "guard_bash.py",
-          bash("pwsh -c '$env:GH_TOKEN'"), True)
-    check("bare powershell expansion piped to a consumer", "guard_bash.py",
-          bash("$env:GH_TOKEN | Out-Host"), True)
-    # An embedded pwsh script has its OWN statements: `_echo_segments` splits on
-    # `;` only outside quotes, so everything after the first statement arrived
-    # unjudged. Each of these is a verb-less print that `main` caught by
-    # accident and this rule initially did not (Copilot, #1062).
-    check("bare powershell expansion after a ; inside -c", "guard_bash.py",
-          bash("pwsh -c 'true; $env:GH_TOKEN'"), True)
-    check("bare powershell expansion before a ; inside -c", "guard_bash.py",
-          bash("pwsh -c '$env:GH_TOKEN; true'"), True)
-    check("bare powershell expansion inside a block", "guard_bash.py",
-          bash("pwsh -c 'if ($x) { $env:GH_TOKEN }'"), True)
-    # The discriminator for the widened delimiters: same shape, non-secret name.
-    # Without it, the delimiter set could match anything and stay green.
-    check("bare expansion of a non-secret after a ; allowed", "guard_bash.py",
-          bash("pwsh -c 'true; $env:TEMP'"), False)
-    # A grouped expression statement still prints (Copilot, #1062) ...
-    check("parenthesised bare powershell expansion", "guard_bash.py",
-          bash("pwsh -c '($env:GH_TOKEN)'"), True)
-    check("parenthesised bare expansion with spaces", "guard_bash.py",
-          bash("pwsh -c '( $env:GH_TOKEN )'"), True)
-    # ... but `$(...)` is a SUBEXPRESSION whose value is substituted, so this is
-    # argument passing and must stay allowed -- the `(` delimiter is excluded
-    # after a `$` for exactly this case, and this is its discriminator.
-    check("secret via a subexpression argument allowed", "guard_bash.py",
-          bash("pwsh -c './x.ps1 -Token $($env:GH_TOKEN)'"), False)
-    check("parenthesised non-secret allowed", "guard_bash.py",
-          bash("pwsh -c '($env:TEMP)'"), False)
-    # `&&`/`||` are PowerShell 7 chain operators, and inside the quoted -c
-    # script `_split_on_logical` never sees them; `,` continues an expression
-    # into an array literal. Found by sweeping the boundary spellings rather
-    # than waiting for each to arrive as a review round.
-    check("bare powershell expansion after && inside -c", "guard_bash.py",
-          bash("pwsh -c 'true && $env:GH_TOKEN'"), True)
-    check("bare powershell expansion after || inside -c", "guard_bash.py",
-          bash("pwsh -c 'false || $env:GH_TOKEN'"), True)
-    check("bare powershell expansion before a comma", "guard_bash.py",
-          bash("pwsh -c '$env:GH_TOKEN,1'"), True)
-    # `,` is a terminator but NOT a leading delimiter, which is what keeps an
-    # array of arguments allowed. This is that asymmetry's discriminator.
-    check("secret in an array argument allowed", "guard_bash.py",
-          bash("pwsh -c './x.ps1 -Args $env:GH_TOKEN,$env:CLOUDFLARE_API_TOKEN'"), False)
-    # `&&` was added as a LEADING delimiter without being added as a terminator,
-    # so a bare expansion that *precedes* a chain operator went unjudged. `||`
-    # kept blocking by accident -- `|` was already a terminator for pipes --
-    # which is precisely what hid the asymmetry.
-    check("bare powershell expansion before && inside -c", "guard_bash.py",
-          bash("pwsh -c '$env:GH_TOKEN && true'"), True)
-    check("bare powershell expansion as a middle chain leg", "guard_bash.py",
-          bash("pwsh -c 'true && $env:GH_TOKEN && true'"), True)
-    check("bare powershell expansion before || inside -c", "guard_bash.py",
-          bash("pwsh -c '$env:GH_TOKEN || true'"), True)
-    # The discriminator: a secret handed to a script as an argument is not a
-    # print, even when the statement continues into a chain.
-    check("secret argument before && allowed", "guard_bash.py",
-          bash("pwsh -c './x.ps1 -Token $env:GH_TOKEN && true'"), False)
-    check("bare powershell expansion after &&", "guard_bash.py",
-          bash("true && $env:CLOUDFLARE_API_TOKEN"), True)
-    check("braced bare powershell expansion", "guard_bash.py",
-          bash("${env:GH_TOKEN}"), True)
-    # The braced spelling puts a `{` between the `$` and the name, so a
-    # `(?<!\$)` lookbehind alone still sees a word boundary and reinstates the
-    # false positive one spelling over.
-    check("braced powershell env assignment allowed", "guard_bash.py",
-          bash("X=${env:PASSWORD}"), False)
-    # A non-secret env var is not a leak however it is spelled, and passing a
-    # token as an ARGUMENT is not printing it -- `main` blocked both by the
-    # same accident.
-    check("bare expansion of a non-secret allowed", "guard_bash.py",
-          bash("$env:TEMP | Out-Host"), False)
-    check("braced non-secret expansion allowed", "guard_bash.py",
-          bash("cat ${env:HOME}/x"), False)
-    check("secret passed as a pwsh argument allowed", "guard_bash.py",
-          bash('pwsh -c "./x.ps1 -Token $env:GH_TOKEN"'), False)
-    check("secret in a curl header, powershell spelling, allowed", "guard_bash.py",
-          bash('curl -H "Authorization: Bearer $env:GH_TOKEN" https://api.github.com'), False)
-    # A suffixed name that is NOT on the known-vars list -- the only case that
-    # reaches the suffix pattern on its own.
-    check("echo a suffixed name outside the known list", "guard_bash.py",
-          bash('echo "$AZURE_CLIENT_SECRET"'), True)
-    # A secret printed on a LATER line is still printed -- per-statement must
-    # not become "only the first statement".
-    check("secret echoed on a later line", "guard_bash.py",
-          bash('python x.py\necho "$WHMCS_API_SECRET"'), True)
-    # The assigned VALUE is judged too, or stripping the assignment would hide
-    # the leak it was meant to excuse.
-    check("secret echoed inside an assignment value", "guard_bash.py",
-          bash("X=$(echo $GH_TOKEN)"), True)
-    # A pipeline is one unit: printenv's output reaches grep.
-    check("printenv piped to grep for a secret", "guard_bash.py",
-          bash("printenv | grep GH_TOKEN"), True)
-    check("env piped to grep for a secret", "guard_bash.py",
-          bash("env | grep CLOUDFLARE_API_TOKEN"), True)
-    # Heredoc bodies are shell here, unlike in the pipeline rule: dropping them
-    # would turn a blocked command into an allowed one.
-    check("secret echoed inside a heredoc body", "guard_bash.py",
-          bash("bash <<EOF\necho $GH_TOKEN\nEOF"), True)
-    check("workflow secrets expression", "guard_bash.py",
-          bash('echo "${{ secrets.CBM_TOKEN }}"'), True)
+
+    print("guard_bash (refusal messages must not echo the payload):")
     # The refusal must not quote the offending statement back. This rule runs
     # BEFORE the secret-literal rule, so a pasted value reaches it first, and
     # the hook's stderr lands in the transcript -- quoting it would be the leak
@@ -342,250 +1045,11 @@ def main():
     # message, or the next refusal added repeats it a third time.
     check_stderr_omits("powershell block message does not echo a token-shaped var name",
                        "guard_bash.py", bash(f"$env:{pat}_KEY"), pat)
-    # Two discriminators, each the only case that reaches one clause. Without
-    # them the WHMCS_* list and the `${{ secrets. }}` test are dead code that
-    # every other case passes through the suffix pattern, and deleting either
-    # would leave the suite green.
-    check("echo a WHMCS var with no secret suffix", "guard_bash.py",
-          bash("echo $WHMCS_API_IDENTIFIER"), True)
-    check("workflow secrets expression with no secret suffix", "guard_bash.py",
-          bash('echo "${{ secrets.AZURE_CLIENT_ID }}"'), True)
-    # `grep -P` is unavailable in this environment's git-bash and fails by
-    # matching nothing rather than by erroring visibly (run 60, 2026-07-31).
-    check("grep -P", "guard_bash.py", bash("grep -P '^\\| L\\d+' docs/lessons-ledger.md"), True)
-    check("grep -qP in a conditional", "guard_bash.py",
-          bash('if grep -qP "\\t$N\\t" /tmp/items.txt; then echo ON; else echo MISSING; fi'), True)
-    check("grep -oP", "guard_bash.py", bash("gh api x | grep -oP 'runs/\\K[0-9]+'"), True)
-    check("grep --perl-regexp", "guard_bash.py", bash("grep --perl-regexp 'x' f"), True)
-    check("grep -rP recursive", "guard_bash.py", bash("grep -rP 'stripCode' scripts/"), True)
-    # Must NOT fire on the POSIX forms that do work here, nor on a capital P
-    # that is part of the *pattern* rather than a flag.
-    check("grep -E allowed", "guard_bash.py", bash("grep -E '^\\| L[0-9]+' docs/lessons-ledger.md"), False)
-    check("grep -i with P-word pattern allowed", "guard_bash.py",
-          bash("gh pr list | grep -i PASS"), False)
-    check("grep -n literal P allowed", "guard_bash.py", bash("grep -n 'P' notes.txt"), False)
-    check("pgrep not matched", "guard_bash.py", bash("pgrep -f node"), False)
-    check("grep --include allowed", "guard_bash.py",
-          bash("grep -r --include=*.py PATTERN scripts/"), False)
-    check("curl -X POST then grep allowed", "guard_bash.py",
-          bash("curl -sS https://api.example.com | grep foo"), False)
-    # A leading-slash `gh api` endpoint is rewritten by MSYS path conversion
-    # into a Windows filesystem path (run 61, 2026-07-31).
-    check("gh api leading slash", "guard_bash.py", bash("gh api /markdown -X POST"), True)
-    check("gh api leading slash with flags first", "guard_bash.py",
-          bash("gh api --paginate /repos/o/r/issues"), True)
-    check("gh api leading slash after -X", "guard_bash.py",
-          bash("gh api -X POST /repos/o/r/issues/1/comments"), True)
-    # Must NOT fire on the slash-less form, on a slash later in the path, on a
-    # graphql call, or on an unrelated command that merely contains a path.
-    check("gh api slash-less allowed", "guard_bash.py", bash("gh api markdown -X POST"), False)
-    check("gh api nested path allowed", "guard_bash.py",
-          bash("gh api repos/FreeForCharity/FFC-Cloudflare-Automation/pulls/963"), False)
-    check("gh api graphql allowed", "guard_bash.py",
-          bash("gh api graphql -f query='query{viewer{login}}'"), False)
-    check("gh api rate_limit allowed", "guard_bash.py", bash("gh api rate_limit"), False)
-    check("gh pr view with slash path allowed", "guard_bash.py",
-          bash("gh pr view 963 --repo FreeForCharity/FFC-Cloudflare-Automation"), False)
-    # A slash inside a flag VALUE is data, not the endpoint -- must not fire.
-    check("gh api field value with slash allowed", "guard_bash.py",
-          bash("gh api repos/o/r/issues -f body=/tmp/note.md"), False)
 
-    # Rule 9: `$?` after a pipeline reads the LAST stage, not the command meant.
-    # The exact shape that misreported a fail-closed probe on #965 (run 62).
-    check("pipeline then $? on same line", "guard_bash.py",
-          bash('python3 check.py | tail -3; echo "EXIT=$?"'), True)
-    check("pipeline then $? on next line", "guard_bash.py",
-          bash('python3 check.py | grep FAIL\necho "EXIT=$?"'), True)
-    check("pipeline then $? into a variable", "guard_bash.py",
-          bash('make build | tee log.txt\nrc=$?'), True)
-    # The two CORRECT spellings must stay silent, or the rule just trains people
-    # to ignore it.
-    check("PIPESTATUS allowed", "guard_bash.py",
-          bash('python3 check.py | tail -3; echo "EXIT=${PIPESTATUS[0]}"'), False)
-    check("pipefail allowed", "guard_bash.py",
-          bash('set -o pipefail\npython3 check.py | tail -3\necho "EXIT=$?"'), False)
-    # `$?` with no pipeline at all is the normal, correct idiom.
-    check("bare command then $? allowed", "guard_bash.py",
-          bash('python3 check.py\necho "EXIT=$?"'), False)
-    # `||` is not a pipeline -- it must not be mistaken for one.
-    check("logical or then $? allowed", "guard_bash.py",
-          bash('python3 check.py || echo failed\necho "EXIT=$?"'), False)
-    # A pipeline with no `$?` anywhere is the overwhelmingly common case.
-    check("pipeline without $? allowed", "guard_bash.py",
-          bash('git log --oneline | head -5'), False)
-
-    # Ledger L50 -- $? read through a pipe. The first two are verbatim the
-    # commands that misreported this run and in run 72; both printed a confident
-    # zero for a script that had exited 1.
-    check("exit code through a pipe", "guard_bash.py",
-          bash('python scripts/audit-agentic-os-board.py | tail -30; echo "EXIT=$?"'), True)
-    check("exit code through a pipe, rc= form", "guard_bash.py",
-          bash("check.py --strict | head -3\nrc=$?"), True)
-    check("pipefail clears the rule", "guard_bash.py",
-          bash('set -o pipefail\npython audit.py | tail -30; echo "EXIT=$?"'), False)
-    check("$? with no pipeline allowed", "guard_bash.py",
-          bash('python audit.py > out.txt; echo "EXIT=$?"'), False)
-    check("|| is not a pipeline", "guard_bash.py",
-          bash('python audit.py || echo failed; echo "EXIT=$?"'), False)
-    check("pipe in a quoted string is not a pipeline", "guard_bash.py",
-          bash('grep -E "a|b" f.txt; echo "EXIT=$?"'), False)
-    check("pipeline with no $? after it allowed", "guard_bash.py",
-          bash("gh pr list --json number | head -5"), False)
-    # A pipeline written on a heredoc HEADER is still a pipeline. Skipping the
-    # whole line made the rule miss its own target shape -- a false negative,
-    # which for a guard is the expensive direction.
-    check("pipeline on a heredoc header line still caught", "guard_bash.py",
-          bash('python3 - <<PY | tail -3\nprint(1)\nPY\necho "EXIT=$?"'), True)
-    # `$?` in SINGLE quotes is a literal and reads nothing; in double quotes the
-    # shell expands it. Only the second is the L50 shape.
-    check("single-quoted literal $? after a pipe allowed", "guard_bash.py",
-          bash("ls | wc -l; echo '$? is a literal'"), False)
-    check("double-quoted $? after a pipe still caught", "guard_bash.py",
-          bash('ls | wc -l; echo "EXIT=$?"'), True)
-    # `;` inside quotes is not a statement separator -- splitting there invents
-    # a boundary the shell never sees.
-    check("semicolon inside quotes is not a statement break", "guard_bash.py",
-          bash('ls | grep -m1 x --label "a; echo $?"'), False)
-
-    # cp1252: inline Python reading FFC data without encoding=. Both forms below
-    # crashed this run on a U+274C in a board card title.
-    check("inline python open() without encoding", "guard_bash.py",
-          bash('python -c "import json;d=json.load(open(\'items.json\'))"'), True)
-    check("python heredoc open() without encoding", "guard_bash.py",
-          bash('python - <<PY\nimport json\nd=json.load(open("items.json"))\nPY'), True)
-    check("inline python with encoding= allowed", "guard_bash.py",
-          bash('python -c "import json;d=json.load(open(\'items.json\', encoding=\'utf-8\'))"'), False)
-    check("inline python binary mode allowed", "guard_bash.py",
-          bash('python -c "d=open(\'feed.json\', \'rb\').read()"'), False)
-    check("open() in a non-python command allowed", "guard_bash.py",
-          bash("grep -n 'open(' scripts/*.py"), False)
-    check("os.open is not the builtin", "guard_bash.py",
-          bash('python -c "import os;fd=os.open(\'f\', os.O_RDONLY)"'), False)
-    # A nested call in the first argument is the ordinary way to write this.
-    # Truncating at the first `)` hid the `encoding=` and blocked a correct
-    # command -- the failure mode that gets a guard switched off.
-    check("nested call before encoding= allowed", "guard_bash.py",
-          bash('python -c "import os,json;d=json.load('
-               'open(os.path.join(a, b), encoding=\'utf-8\'))"'), False)
-    check("nested call, still missing encoding=, blocked", "guard_bash.py",
-          bash('python -c "import os,json;d=json.load(open(os.path.join(a, b)))"'), True)
-    # `gh api graphql --paginate` must declare $endCursor -- gh substitutes the
-    # page cursor into that exact name, so any other name silently re-fetches
-    # page 1 forever. The wrong-name case is the one that actually happened.
-    check("graphql paginate with $cursor", "guard_bash.py",
-          bash('gh api graphql --paginate -f query='
-               "'query($cursor:String){organization(login:\"x\"){"
-               "projectV2(number:9){items(first:100,after:$cursor){"
-               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), True)
-    check("graphql paginate with no cursor var", "guard_bash.py",
-          bash("gh api graphql --paginate -f query='query{viewer{login}}'"), True)
-    check("graphql paginate with $endCursor allowed", "guard_bash.py",
-          bash('gh api graphql --paginate -f query='
-               "'query($endCursor:String){organization(login:\"x\"){"
-               "projectV2(number:9){items(first:100,after:$endCursor){"
-               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), False)
-    # A name that merely STARTS with endCursor is a different variable and gh
-    # substitutes into neither -- so these must block, not ride the substring.
-    # They are also the discriminators for the exact-match case above: without
-    # them a bare `$endcursor in low` test passes every case in this block.
-    check("graphql paginate with $endCursorX", "guard_bash.py",
-          bash('gh api graphql --paginate -f query='
-               "'query($endCursorX:String){organization(login:\"x\"){"
-               "projectV2(number:9){items(first:100,after:$endCursorX){"
-               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), True)
-    check("graphql paginate with $endCursor_2", "guard_bash.py",
-          bash('gh api graphql --paginate -f query='
-               "'query($endCursor_2:String){organization(login:\"x\"){"
-               "projectV2(number:9){items(first:100,after:$endCursor_2){"
-               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), True)
-    # Only --paginate needs the cursor: a single-shot graphql call is fine, and
-    # REST --paginate has no query variables at all.
-    check("graphql single-shot allowed", "guard_bash.py",
-          bash("gh api graphql -f query='query{viewer{login}}'"), False)
-    check("REST paginate allowed", "guard_bash.py",
-          bash("gh api --paginate repos/FreeForCharity/FFC-Cloudflare-Automation/issues/719/comments"),
-          False)
-    # The name must be DECLARED by the operation, not merely present on the
-    # command line. This is the false negative a whole-command scan allows: the
-    # query still paginates on $cursor and would re-fetch page 1 forever, while
-    # an unrelated mention downstream satisfies a substring test.
-    check("$endCursor outside the query does not count", "guard_bash.py",
-          bash('gh api graphql --paginate -f query='
-               "'query($cursor:String){organization(login:\"x\"){"
-               "projectV2(number:9){items(first:100,after:$cursor){"
-               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"
-               " ; echo $endCursor"), True)
-    # ... and the named-operation form is a real declaration, so it must pass.
-    # Without this, tightening the regex to `query(` would silently start
-    # blocking a correct command.
-    check("named operation declaring $endCursor allowed", "guard_bash.py",
-          bash('gh api graphql --paginate -f query='
-               "'query Board($endCursor:String){organization(login:\"x\"){"
-               "projectV2(number:9){items(first:100,after:$endCursor){"
-               "pageInfo{hasNextPage endCursor} nodes{id}}}}}'"), False)
-
-    # --- #989: gh api --paginate with an array-building --jq (WARN) ---
-    print("guard_bash / #989 paginate + array-jq:")
-    check_warn("paginate + array jq", "guard_bash.py",
-               bash("gh api --paginate repos/o/r/issues/719/comments --jq '[.[]|{body}]'"), True, tag="[#989]")
-    check_warn("paginate + array jq, -q spelling", "guard_bash.py",
-               bash("gh api --paginate repos/o/r/issues -q '[.[]|.number]'"), True, tag="[#989]")
-    # This case is the discriminator for the one above. `--q` is not a gh flag,
-    # and it is what that case used to send -- passing on the `-q` SUBSTRING
-    # while the real short flag went untested. Pinning silence here means the
-    # `-q` case can only stay green by matching the flag itself.
-    check_warn("paginate + array jq, --q is not the -q flag", "guard_bash.py",
-               bash("gh api --paginate repos/o/r/issues --q '[.[]|.number]'"), False, tag="[#989]")
-    check_warn("paginate + array jq, double quotes", "guard_bash.py",
-               bash('gh api --paginate repos/o/r/pulls --jq "[.[]|.number]"'), True, tag="[#989]")
-    check_warn("paginate + array jq, jq before endpoint", "guard_bash.py",
-               bash("gh api --paginate --jq '[.[]|.id]' repos/o/r/commits"), True, tag="[#989]")
-    # The documented-correct forms must all stay silent.
-    check_warn("paginate + STREAMING jq silent", "guard_bash.py",
-               bash("gh api --paginate repos/o/r/issues/719/comments --jq '.[] | .number'"), False, tag="[#989]")
-    check_warn("array jq WITHOUT paginate silent", "guard_bash.py",
-               bash("gh api repos/o/r/issues --jq '[.[]|.number]'"), False, tag="[#989]")
-    check_warn("paginate + slurp, no jq, silent", "guard_bash.py",
-               bash("gh api --paginate --slurp repos/o/r/issues/719/comments"), False, tag="[#989]")
-    check_warn("gh pr list array jq is not gh api", "guard_bash.py",
-               bash("gh pr list --json number --jq '[.[]|.number]'"), False, tag="[#989]")
-    # The measured counter-example that decided this rule's tier: 726 reduces
-    # each page to a scalar and re-joins downstream, so it is CORRECT. It still
-    # warns -- an advisory tier is allowed to be noticed on correct code -- but
-    # it must never be blocked, which is what this case pins.
-    check("726's real usage warns but is NOT blocked", "guard_bash.py",
-          bash("gh api --paginate \"repos/$org/$repo/teams?per_page=100\" --jq '[.[] | .slug] | join(\",\")'"),
-          False)
-
-    # --- #971: unpaginated gh api LIST read (WARN, never block) ---
-    print("guard_bash / #971 unpaginated list read:")
-    check_warn("the run-64 command warns", "guard_bash.py",
-               bash("gh api 'repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows?per_page=100'"),
-               True, tag="[#971]")
-    check_warn("nested collection warns", "guard_bash.py",
-               bash("gh api repos/o/r/issues/719/comments"), True, tag="[#971]")
-    check_warn("deep route ending in a collection warns", "guard_bash.py",
-               bash("gh api repos/o/r/actions/workflows/502-x.yml/runs"), True, tag="[#971]")
-    check_warn("org repos listing warns", "guard_bash.py",
-               bash("gh api orgs/FreeForCharity/repos"), True, tag="[#971]")
-    # Allows.
-    check_warn("--paginate is silent", "guard_bash.py",
-               bash("gh api --paginate repos/o/r/actions/workflows"), False, tag="[#971]")
-    check_warn("explicit page= is silent", "guard_bash.py",
-               bash("gh api 'repos/o/r/actions/workflows?per_page=100&page=2'"), False, tag="[#971]")
-    check_warn("single-object read is silent", "guard_bash.py",
-               bash("gh api repos/o/r/pulls/123"), False, tag="[#971]")
-    check_warn("repo root is not a collection", "guard_bash.py",
-               bash("gh api repos/FreeForCharity/FFC-Cloudflare-Automation"), False, tag="[#971]")
-    check_warn("graphql is not a collection", "guard_bash.py",
-               bash("gh api graphql -f query='{viewer{login}}'"), False, tag="[#971]")
-    check_warn("a write is not a list read", "guard_bash.py",
-               bash("gh api -X DELETE repos/o/r/git/refs/heads/x"), False, tag="[#971]")
-    check_warn("non-gh command with the same words is silent", "guard_bash.py",
-               bash("echo 'gh api repos/o/r/issues is a list read'"), False, tag="[#971]")
-    # The tier itself: a warned command must still be ALLOWED to run.
-    check("warned list read is still allowed", "guard_bash.py",
-          bash("gh api repos/o/r/issues/719/comments"), False)
+    print("guard_bash meta-tests (over the rule registry):")
+    test_rule_polarity()
+    test_rule_attribution()
+    test_refusal_site_coverage()
 
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)

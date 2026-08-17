@@ -584,7 +584,7 @@ SCRIPT_BODY_HERE
 """
 
 
-def _run_js(script_body: str, comment_path: str, **env_overrides: str) -> dict:
+def _run_js(script_body: str, **env_overrides: str) -> dict:
     """Run a github-script body under node with `core`/`github`/`context` stubs.
 
     Returns the recorded outcome. `createComment` is stubbed rather than
@@ -593,7 +593,6 @@ def _run_js(script_body: str, comment_path: str, **env_overrides: str) -> dict:
     """
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
-        pathlib.Path(comment_path).write_text  # noqa: B018  (documented below)
         body_path = tmp / "comment.md"
         body_path.write_text("rendered comment body", encoding="utf-8")
         source = JS_HARNESS.replace(
@@ -1039,7 +1038,7 @@ def test_the_pre_fix_script_executed_injected_javascript():
     assert "require('fs').writeFileSync" in pre, (
         f"the pre-fix substitution did not land: {pre[:400]!r}"
     )
-    result = _run_js(pre, JS_SENTINEL)
+    result = _run_js(pre)
     assert result["sentinel"] == "INJECTED-JS", (
         f"the pre-fix script did not execute the injected JS, so this control "
         f"proves nothing: {result['stderr'][:600]} / rc={result['rc']}"
@@ -1048,7 +1047,7 @@ def test_the_pre_fix_script_executed_injected_javascript():
 
 def test_the_shipped_script_treats_the_issue_number_as_data():
     body = _js_step()["with"]["script"]
-    result = _run_js(body, JS_SENTINEL, **{ISSUE_VAR: JS_PAYLOAD})
+    result = _run_js(body, **{ISSUE_VAR: JS_PAYLOAD})
     assert result["sentinel"] is None, (
         f"the payload EXECUTED through the env: mapping: "
         f"{result['sentinel']!r} / {result['stderr'][:600]}"
@@ -1069,7 +1068,7 @@ def test_the_shipped_script_treats_the_issue_number_as_data():
 
 def test_the_shipped_script_still_comments_on_an_ordinary_issue_number():
     body = _js_step()["with"]["script"]
-    result = _run_js(body, JS_SENTINEL, **{ISSUE_VAR: "719"})
+    result = _run_js(body, **{ISSUE_VAR: "719"})
     outcome = result["outcome"]
     assert outcome.get("setFailed") is None, (
         f"a legitimate issue number was refused: {outcome!r}"
@@ -1090,7 +1089,7 @@ def test_the_shipped_script_refuses_an_unset_mapping():
     carrying `issues: write`.
     """
     body = _js_step()["with"]["script"]
-    result = _run_js(body, JS_SENTINEL)
+    result = _run_js(body)
     outcome = result["outcome"]
     assert outcome.get("commented") is None, (
         f"an unset {ISSUE_VAR} still reached createComment: {outcome!r}"

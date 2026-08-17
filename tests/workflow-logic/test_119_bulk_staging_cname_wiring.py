@@ -159,13 +159,19 @@ if ('true' -eq 'true') { $params.DryRun = $true }
 # is not one — pwsh echoes the offending source line back in a ParserError, so
 # any substring predicate matches the payload text on a run that executed
 # nothing.
+# It reports whether -Target was BOUND, not only what it holds. Those are two
+# different states that render identically: a `Target = ''` passed in the splat
+# and a `Target` omitted altogether both arrive as an empty string, so a stub
+# printing the value alone cannot tell the gated append from the unconditional
+# assignment it replaced — and the mutation that removes the gate would pass.
 STUB = """[CmdletBinding()]
 param(
     [string]$Domains,
     [string]$Target,
     [switch]$DryRun
 )
-Write-Output "CALLED Domains=[$Domains] Target=[$Target] DryRun=[$DryRun]"
+$bound = $PSBoundParameters.ContainsKey('Target')
+Write-Output "CALLED Domains=[$Domains] Target=[$Target] TargetBound=[$bound] DryRun=[$DryRun]"
 """
 
 # GitHub's `shell: pwsh` wrapper, from Runner.Worker/Handlers/ScriptHandlerHelpers.cs.
@@ -657,8 +663,8 @@ def test_the_shipped_body_still_passes_ordinary_inputs_through():
         IN_TARGET=LEGAL_TARGET,
         **{TOKEN_VARS[0]: FAKE_TOKEN},
     )
-    assert f"CALLED Domains=[{LEGAL_DOMAINS}] Target=[{LEGAL_TARGET}]" in out, (
-        f"the ordinary path no longer reaches the script with its inputs: {out}"
+    assert f"CALLED Domains=[{LEGAL_DOMAINS}] Target=[{LEGAL_TARGET}] TargetBound=[True]" in out, (
+        f"the ordinary path no longer reaches the script with both inputs bound: {out}"
     )
     assert rc == 0, f"the ordinary path exited {rc}: {out}"
 
@@ -708,9 +714,14 @@ def test_an_empty_target_mapping_omits_the_argument_entirely():
         **{TOKEN_VARS[0]: FAKE_TOKEN},
     )
     assert rc == 0, f"an empty `target` input exited {rc}: {out}"
-    assert f"CALLED Domains=[{LEGAL_DOMAINS}] Target=[]" in out, (
-        f"expected the step to omit -Target so the callee binds its own default "
-        f"(rendered as an empty string by the stub): {out}"
+    assert "TargetBound=[False]" in out, (
+        f"-Target was BOUND despite an empty input, so the callee is relying on "
+        f"its own IsNullOrWhiteSpace branch to repair an argument the workflow "
+        f"should not have passed. Asserted on boundness rather than on the value, "
+        f"because an omitted -Target and a `Target = ''` render identically: {out}"
+    )
+    assert f"CALLED Domains=[{LEGAL_DOMAINS}]" in out, (
+        f"the domain list did not reach the callee on the empty-target path: {out}"
     )
 
 

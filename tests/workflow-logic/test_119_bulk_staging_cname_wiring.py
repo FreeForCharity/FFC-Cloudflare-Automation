@@ -458,8 +458,17 @@ def test_the_target_default_is_not_duplicated_in_the_workflow():
     in this module.
     """
     body = _step()["run"]
-    assert "$params.Target = $target" in body, (
-        f"the gated append is gone: `Target` is no longer conditionally added, "
+    # The whole conditional, not just the assignment inside it. Anchored on the
+    # assignment alone this assertion survives the mutation it exists to catch:
+    # dropping the gate leaves `$params.Target = $target` in the body verbatim,
+    # so the predicate still matched while the behaviour had changed. Measured —
+    # mutation M5 flipped one test instead of the two predicted, which is what
+    # exposed it.
+    gated = (
+        "if (-not [string]::IsNullOrWhiteSpace($target)) { $params.Target = $target }"
+    )
+    assert gated in body, (
+        f"the gated append is gone: `Target` is no longer CONDITIONALLY added, "
         f"so an empty input may now reach the callee as an empty argument. "
         f"Body: {body!r}"
     )

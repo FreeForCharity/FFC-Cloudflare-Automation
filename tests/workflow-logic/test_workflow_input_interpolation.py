@@ -429,6 +429,24 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                Measured: the bearer token was written to a file, the scanner
                was then handed a legal mailbox list, and the step exited 0.
       = 26 / 11
+      -101     burned down: `domain` moved to step-level `env:` in all FIVE pwsh
+               bodies and `issue_number` in the `github-script` body — six call
+               sites in four jobs off one dispatch, the widest entry left after
+               103. It is the lane where the #1188 reachability index gave the
+               MISLEADING answer rather than merely a partial one: asked about
+               101 it named two `cloudflare` steps and reported nothing at the
+               two `m365` sites, which are the sites carrying `m365-prod` and
+               so the only reason 101 was a `[W]` entry at all. An L213 read and
+               a `secrets.` grep agree with it, and all three are wrong the same
+               way — the preceding step is `azure/login@v3` and both bodies then
+               run `az account get-access-token`, so the credential is a CLI
+               SESSION rather than a value in a variable, and every sweep the
+               burn-down has built is defined over variables. Measured with
+               every credential variable removed from the environment: the
+               payload ran `az` itself, wrote a Graph bearer token to a file,
+               the callee was then handed a legal domain, and the step exited 0.
+               Filed as #1208; ledger L248.
+      = 25 / 10
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -438,8 +456,8 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 26, (
-        f"expected 26 interpolating workflows, got {len(current)}: "
+    assert len(current) == 25, (
+        f"expected 25 interpolating workflows, got {len(current)}: "
         f"{sorted(current)}"
     )
     write = {
@@ -450,10 +468,11 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 11, f"expected 11 write-environment ones, got {len(write)}: {sorted(write)}"
+    assert len(write) == 10, f"expected 10 write-environment ones, got {len(write)}: {sorted(write)}"
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
     for burned in (
+        "101-domain-status.yml",
         "720-create-repo.yml",
         "120-bulk-cutover-to-github-pages.yml",
         "112-dns-bulk-replace-a-ip.yml",

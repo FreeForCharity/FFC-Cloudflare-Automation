@@ -61,9 +61,18 @@ jobs:
         shell: pwsh
         env:
           FFC_CF_DMARCMGMT_DEBUG: ${{ inputs.dmarc_mgmt_debug && '1' || '0' }}
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ inputs.domain }}"
+          # Fail closed on a missing mapping (ledger L202/L220). UNSET and EMPTY are
+          # not symmetric here and only one of them is silent: `-Zone $domain` with
+          # $domain unset drops the argument and the binder refuses, while an EMPTY
+          # $domain binds and audits nothing under a name that is not a zone.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to run Update-CloudflareDns.ps1 with an empty -Zone.'
+            exit 1
+          }
+          $domain = $env:IN_DOMAIN
 
           $outDir = Join-Path $env:RUNNER_TEMP 'domain-status-cloudflare'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -144,9 +153,20 @@ jobs:
       - name: M365 domain status (Graph summary)
         id: graph
         shell: pwsh
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ inputs.domain }}"
+          # Fail closed on a missing mapping (ledger L202/L220). Nothing downstream
+          # would refuse for us: an empty domain URL-encodes to the empty string and
+          # `GET /v1.0/domains/` is a legal Graph call that returns the tenant's whole
+          # domain list, so `$d.isVerified` reads off an unrelated object and the job
+          # publishes a verdict about a domain nobody named.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to query Microsoft Graph with an empty domain.'
+            exit 1
+          }
+          $domain = $env:IN_DOMAIN
 
           $token = (az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
           if ([string]::IsNullOrWhiteSpace($token)) { throw 'Failed to acquire Microsoft Graph access token' }
@@ -180,9 +200,18 @@ jobs:
       - name: Run repo M365 preflight (read-only)
         id: preflight
         shell: pwsh
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ inputs.domain }}"
+          # Fail closed on a missing mapping (ledger L202/L220). This step is the one
+          # that ends `exit 0` unconditionally and downgrades both callee exit codes to
+          # Write-Warning, so a bad -Domain here cannot turn the job red by itself.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call m365-domain-preflight.ps1 with an empty -Domain.'
+            exit 1
+          }
+          $domain = $env:IN_DOMAIN
 
           $token = (az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
           if ([string]::IsNullOrWhiteSpace($token)) { throw 'Failed to acquire Microsoft Graph access token' }
@@ -237,10 +266,20 @@ jobs:
 
       - name: Build deterministic summary
         shell: pwsh
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $domain = "${{ inputs.domain }}"
+          # Fail closed on a missing mapping (ledger L202/L220). $domain is rendered
+          # into the step summary rather than passed to a callee, so there is no binder
+          # to refuse an unset value: both the unset and the empty case publish a PASS
+          # or FAIL headline naming no domain at all.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to publish a status summary naming no domain.'
+            exit 1
+          }
+          $domain = $env:IN_DOMAIN
 
           $cfIssues = [int]"${{ needs.cloudflare.outputs.issues_count }}"
           $cfSevere = [int]"${{ needs.cloudflare.outputs.severe_issues_count }}"
@@ -460,10 +499,20 @@ jobs:
       - name: Build comment markdown (includes checks table)
         id: comment
         shell: pwsh
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $domain = "${{ inputs.domain }}"
+          # Fail closed on a missing mapping (ledger L202/L220). Same shape as the
+          # summary step and with a wider blast radius: what this body renders is not a
+          # job summary but the comment the next step POSTS to an issue, so an empty
+          # domain is published to a human-readable thread under FFC's name.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to build an issue comment naming no domain.'
+            exit 1
+          }
+          $domain = $env:IN_DOMAIN
 
           $cfIssues = [int]"${{ needs.cloudflare.outputs.issues_count }}"
           $cfSevere = [int]"${{ needs.cloudflare.outputs.severe_issues_count }}"
@@ -676,12 +725,23 @@ jobs:
 
       - name: Comment results back to issue
         uses: actions/github-script@v9
+        env:
+          IN_ISSUE_NUMBER: ${{ inputs.issue_number }}
         with:
           github-token: ${{ github.token }}
           script: |
             const fs = require('fs');
 
-            const issueNumber = Number('${{ inputs.issue_number }}');
+            // Fail closed on a missing mapping (ledger L202/L220). The pwsh sites above
+            // get one refusal for free when a mapping is unset - the binder rejects the
+            // call by name. JS refuses nothing: an unmapped env var is `undefined`,
+            // `Number(undefined)` is NaN, and createComment would be called with a
+            // nonsense issue_number under a token carrying `issues: write`.
+            const issueNumber = Number(process.env.IN_ISSUE_NUMBER);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed(`IN_ISSUE_NUMBER is not a positive integer (got ${JSON.stringify(process.env.IN_ISSUE_NUMBER)}): the step-level env: mapping is missing or misnamed, or the dispatch supplied a non-numeric issue number.`);
+              return;
+            }
             const commentPath = '${{ steps.comment.outputs.comment_path }}';
             const body = fs.readFileSync(commentPath, 'utf8');
 

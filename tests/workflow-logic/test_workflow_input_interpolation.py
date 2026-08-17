@@ -429,6 +429,18 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                Measured: the bearer token was written to a file, the scanner
                was then handed a legal mailbox list, and the step exited 0.
       = 26 / 11
+      -119     burned down: `domains` / `target` moved to step-level `env:`. It
+               writes `staging.<domain>` in every FFC-EX zone across BOTH
+               Cloudflare accounts on cloudflare-prod-write, with the
+               write-scoped tokens arriving through GITHUB_ENV. The first lane
+               where the remedy every earlier one used would have been WRONG:
+               `domains` is `required: false` with an empty default and a
+               documented fallback to a 13-domain list, so a fail-closed guard
+               on empty breaks the common path. It keeps the fallback and omits
+               `Target` from the splat when blank rather than passing an empty
+               string, because the callee already resolves the canonical Pages
+               host (#778). `dry_run` stays interpolated: `type: boolean`.
+      = 25 / 10
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -438,8 +450,8 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 26, (
-        f"expected 26 interpolating workflows, got {len(current)}: "
+    assert len(current) == 25, (
+        f"expected 25 interpolating workflows, got {len(current)}: "
         f"{sorted(current)}"
     )
     write = {
@@ -450,7 +462,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 11, f"expected 11 write-environment ones, got {len(write)}: {sorted(write)}"
+    assert len(write) == 10, f"expected 10 write-environment ones, got {len(write)}: {sorted(write)}"
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
     for burned in (
@@ -464,6 +476,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
         "110-cloudflare-zone-create.yml",
         "103-enforce-domain-standard.yml",
         "306-discover-uncaptured-comms.yml",
+        "119-bulk-staging-cname-github-pages.yml",
     ):
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "

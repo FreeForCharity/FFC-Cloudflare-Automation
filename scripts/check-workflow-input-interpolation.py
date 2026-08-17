@@ -735,7 +735,18 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
         "products_output_file",
     ),
     "203-whmcs-export-payment-methods.yml": ("output_file",),
-    "205-whmcs-ticket-open.yml": ("client_id", "deptid"),
+    # 205-whmcs-ticket-open.yml burned down: `deptid` and `client_id` now reach
+    # the pwsh body through step-level `env:` (TICKET_DEPTID / TICKET_CLIENT_ID).
+    # It runs on `whmcs-prod` (write), and its injection point sits beside the
+    # WHMCS API credential that `whmcs-secrets-from-kv` exports through GITHUB_ENV
+    # (WHMCS_API_IDENTIFIER / WHMCS_API_SECRET / WHMCS_APIM_SUBSCRIPTION_KEY) --
+    # so a reviewer reading the step's own `env:` (L213) or grepping the body for
+    # `secrets.` (#1141) scores the file as holding nothing. `deptid` was the
+    # simpler of the two live sites: it interpolated inside a SINGLE-quoted array
+    # element, and single quotes stop `$( )` but not a `'); <payload>; $x = @('`
+    # break-out, so the WHMCS secret exfiltrated and the legitimate call still ran
+    # at exit 0. `priority` (choice) and `dry_run` (boolean) stay interpolated:
+    # GitHub constrains both, so neither can carry a payload.
     "208-whmcs-tickets-export.yml": ("output_file", "status"),
     "213-whmcs-zeffy-payments-import-draft.yml": (
         "clients_output",

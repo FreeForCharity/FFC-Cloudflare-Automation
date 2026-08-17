@@ -429,6 +429,18 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                Measured: the bearer token was written to a file, the scanner
                was then handed a legal mailbox list, and the step exited 0.
       = 26 / 11
+      -205     burned down: `deptid` / `client_id` moved to step-level `env:`
+               (TICKET_DEPTID / TICKET_CLIENT_ID). It runs on whmcs-prod, and
+               the WHMCS API credential the preceding `whmcs-secrets-from-kv`
+               action exports through GITHUB_ENV is the workflow's ONLY
+               credential — invisible to both the L213 `env:` read and the
+               #1141 `secrets.` grep. Its injection point sat in SINGLE quotes
+               like 306, so the `$( )` payload is inert and the control had to
+               close the quote and re-open the array. Measured: the WHMCS secret
+               was written to a file, the callee was handed a legal deptid, and
+               the step exited 0. `priority` (choice) and `dry_run` (boolean)
+               stay interpolated and are not findings.
+      = 25 / 10
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -438,8 +450,8 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 26, (
-        f"expected 26 interpolating workflows, got {len(current)}: "
+    assert len(current) == 25, (
+        f"expected 25 interpolating workflows, got {len(current)}: "
         f"{sorted(current)}"
     )
     write = {
@@ -450,7 +462,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 11, f"expected 11 write-environment ones, got {len(write)}: {sorted(write)}"
+    assert len(write) == 10, f"expected 10 write-environment ones, got {len(write)}: {sorted(write)}"
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
     for burned in (
@@ -464,6 +476,7 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
         "110-cloudflare-zone-create.yml",
         "103-enforce-domain-standard.yml",
         "306-discover-uncaptured-comms.yml",
+        "205-whmcs-ticket-open.yml",
     ):
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "

@@ -2,6 +2,12 @@
 
 > Agent-generic onboarding (catalog, numbering, safety model, add-a-workflow checklist) lives in
 > **AGENTS.md** — read that first. This file covers Claude-specific environment notes.
+>
+> **Cross-repo context lives in `docs/ffc-repo-map.md`.** Read it before writing anything about FFC
+> _process_, _standards_, or _how a charity works on their site_ — those are authoritative in
+> `FreeForCharity/FFC-IN-ffcadmin.org` and in each `FFC-EX-<domain>` repo, not here. It is public,
+> so a read-only clone needs no attachment:
+> `GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 https://github.com/FreeForCharity/ffc-in-ffcadmin.org`
 
 ## Merging: queue etiquette (validated 2026-07-01, PRs #534–#538)
 

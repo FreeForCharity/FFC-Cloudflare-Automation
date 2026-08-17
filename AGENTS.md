@@ -6,7 +6,7 @@ global policy (never expose secrets; Conventional Commits; PRs, never direct pus
 
 ## What this repo is
 
-The automation hub for Free For Charity infrastructure: ~60 GitHub Actions workflows that drive
+The automation hub for Free For Charity infrastructure: **105** GitHub Actions workflows that drive
 Cloudflare (DNS/registrar), WHMCS (billing/support), Microsoft 365, Zeffy, Google (Analytics/GTM),
 WPMUDEV, and the FFC GitHub org itself. PowerShell-first scripts in `scripts/`, credentials from
 Azure Key Vault via OIDC (never GitHub secrets).
@@ -15,6 +15,16 @@ Azure Key Vault via OIDC (never GitHub secrets).
 durable record of findings that cost previous sessions hours — dead triggers, swallowed 403s,
 presence mistaken for validity — each with its evidence link and the guard (if any) now holding it.
 Add a row there in the same PR as the fix whenever something surprises you.
+
+**This repo is not all of FFC — read `docs/ffc-repo-map.md` before writing anything about _process_,
+_standards_, or _how a charity works on their site_.** This repo is authoritative for how the
+automation runs; **`FreeForCharity/FFC-IN-ffcadmin.org`** is authoritative for how FFC develops (the
+agent issue→PR workflow, code quality standards, the four-gate intake journey, agentic-OS
+governance), and each `FFC-EX-<domain>` repo ships its own charity-facing onboarding docs plus a
+preconfigured `.claude/` agent set. The map names what to read for which task and where the two
+repos are coupled. It exists because a session once wrote a from-scratch builder guide out of this
+repo alone and got the package manager and the merge policy wrong, with the correct source one
+public clone away.
 
 ## Onboarding a charity (start here for the full chain)
 

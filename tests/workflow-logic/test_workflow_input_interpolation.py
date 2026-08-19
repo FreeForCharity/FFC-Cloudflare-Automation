@@ -304,6 +304,41 @@ jobs:
 
 
 # --------------------------------------------------------------------------
+# The burn-down ledger
+#
+# `BURNED_DOWN` is the ONE place a #1080 lane records itself, and both counts
+# below are derived from it rather than written down again.
+#
+# They used to be two literals inside the test, which made this file a mutex on
+# the burn-down: every lane rewrote the same two integers to the same value, so
+# two lanes branched off one `main` merged them SILENTLY at the first lander's
+# number — outside any conflict marker — and the follower went red on a line
+# the resolver was never shown (#1210).
+#
+# The counts are not independent facts. Every burn-down so far removed exactly
+# one interpolating workflow, and each carried exactly one write environment,
+# so both baselines decrement together with `len(BURNED_DOWN)`. A lane appends
+# ONE line here and the arithmetic follows in any landing order.
+# --------------------------------------------------------------------------
+
+FROZEN_BASELINE_CURRENT = 36  # the #1122 freeze, before any #1080 burn-down
+FROZEN_BASELINE_WRITE = 21
+
+BURNED_DOWN = (
+    "720-create-repo.yml",
+    "120-bulk-cutover-to-github-pages.yml",
+    "112-dns-bulk-replace-a-ip.yml",
+    "704-website-analytics-wire.yml",
+    "304-m365-dkim-enable.yml",
+    "303-m365-domain-and-dkim.yml",
+    "301-m365-domain-preflight.yml",
+    "110-cloudflare-zone-create.yml",
+    "103-enforce-domain-standard.yml",
+    "306-discover-uncaptured-comms.yml",
+)
+
+
+# --------------------------------------------------------------------------
 # The rule
 # --------------------------------------------------------------------------
 
@@ -438,9 +473,16 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 26, (
-        f"expected 26 interpolating workflows, got {len(current)}: "
-        f"{sorted(current)}"
+    assert len(BURNED_DOWN) == len(set(BURNED_DOWN)), (
+        "BURNED_DOWN holds a duplicate entry: "
+        f"{sorted({w for w in BURNED_DOWN if BURNED_DOWN.count(w) > 1})}. "
+        "Both counts are derived from its length, so a line union-resolved in "
+        "twice would move the expected numbers rather than the tree."
+    )
+    expected_current = FROZEN_BASELINE_CURRENT - len(BURNED_DOWN)
+    assert len(current) == expected_current, (
+        f"expected {expected_current} interpolating workflows, got "
+        f"{len(current)}: {sorted(current)}"
     )
     write = {
         w
@@ -450,21 +492,14 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
             for e in guard.environments(_workflow(w))
         )
     }
-    assert len(write) == 11, f"expected 11 write-environment ones, got {len(write)}: {sorted(write)}"
+    expected_write = FROZEN_BASELINE_WRITE - len(BURNED_DOWN)
+    assert len(write) == expected_write, (
+        f"expected {expected_write} write-environment ones, got {len(write)}: "
+        f"{sorted(write)}"
+    )
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
-    for burned in (
-        "720-create-repo.yml",
-        "120-bulk-cutover-to-github-pages.yml",
-        "112-dns-bulk-replace-a-ip.yml",
-        "704-website-analytics-wire.yml",
-        "304-m365-dkim-enable.yml",
-        "303-m365-domain-and-dkim.yml",
-        "301-m365-domain-preflight.yml",
-        "110-cloudflare-zone-create.yml",
-        "103-enforce-domain-standard.yml",
-        "306-discover-uncaptured-comms.yml",
-    ):
+    for burned in BURNED_DOWN:
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "
             "free-text input"

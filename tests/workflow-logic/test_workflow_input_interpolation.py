@@ -304,8 +304,66 @@ jobs:
 
 
 # --------------------------------------------------------------------------
+# The burn-down ledger
+#
+# `BURNED_DOWN` is the ONE place a #1080 lane records itself, and both counts
+# below are derived from it rather than written down again.
+#
+# They used to be two literals inside the test, which made this file a mutex on
+# the burn-down: every lane rewrote the same two integers to the same value, so
+# two lanes branched off one `main` merged them SILENTLY at the first lander's
+# number — outside any conflict marker — and the follower went red on a line
+# the resolver was never shown (#1210).
+#
+# The counts are not independent facts. A burn-down removes exactly one
+# interpolating workflow, so the first baseline decrements with
+# `len(BURNED_DOWN)`. The write baseline does NOT: it decrements only for the
+# burned entries that actually enter a write environment, which is re-derived
+# from the tree rather than assumed. Every entry so far happens to be one, so
+# the two move together today and would silently keep doing so if this were
+# written as `- len(BURNED_DOWN)` — and the first read-only burn-down would
+# then fail a correct tree, which reads as "the ledger is wrong" rather than
+# "the arithmetic is". A lane appends ONE line here and both follow, in any
+# landing order.
+# --------------------------------------------------------------------------
+
+FROZEN_BASELINE_CURRENT = 36  # the #1122 freeze, before any #1080 burn-down
+FROZEN_BASELINE_WRITE = 21
+
+BURNED_DOWN = (
+    "720-create-repo.yml",
+    "120-bulk-cutover-to-github-pages.yml",
+    "112-dns-bulk-replace-a-ip.yml",
+    "704-website-analytics-wire.yml",
+    "304-m365-dkim-enable.yml",
+    "303-m365-domain-and-dkim.yml",
+    "301-m365-domain-preflight.yml",
+    "110-cloudflare-zone-create.yml",
+    "103-enforce-domain-standard.yml",
+    "306-discover-uncaptured-comms.yml",
+)
+
+
+# --------------------------------------------------------------------------
 # The rule
 # --------------------------------------------------------------------------
+
+
+def _expected_write(burned) -> int:
+    """The write baseline decrements only for burned entries that enter a write
+    environment — NOT for every entry. Both the assertion and its polarity
+    control call this, so a revert to `len(burned)` is caught by the control
+    rather than waiting for the first read-only burn-down to false-red."""
+    return FROZEN_BASELINE_WRITE - len({w for w in burned if _is_write(w)})
+
+
+def _is_write(workflow: str) -> bool:
+    """Does this workflow enter a write environment? Read from the tree, never
+    assumed — a burned-down entry keeps its environments, which is what lets the
+    write baseline decrement for the right entries and only those."""
+    return any(
+        guard.is_write_environment(e) for e in guard.environments(_workflow(workflow))
+    )
 
 
 def test_the_tree_matches_the_freeze_exactly():
@@ -438,37 +496,69 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 26, (
-        f"expected 26 interpolating workflows, got {len(current)}: "
-        f"{sorted(current)}"
+    assert len(BURNED_DOWN) == len(set(BURNED_DOWN)), (
+        "BURNED_DOWN holds a duplicate entry: "
+        f"{sorted({w for w in BURNED_DOWN if BURNED_DOWN.count(w) > 1})}. "
+        "Both baselines are derived from its contents, so a line union-resolved "
+        "in twice would move the expected numbers rather than the tree."
     )
-    write = {
-        w
-        for w in current
-        if any(
-            guard.is_write_environment(e)
-            for e in guard.environments(_workflow(w))
-        )
-    }
-    assert len(write) == 11, f"expected 11 write-environment ones, got {len(write)}: {sorted(write)}"
+    expected_current = FROZEN_BASELINE_CURRENT - len(BURNED_DOWN)
+    assert len(current) == expected_current, (
+        f"expected {expected_current} interpolating workflows, got "
+        f"{len(current)}: {sorted(current)}"
+    )
+    write = {w for w in current if _is_write(w)}
+    expected_write = _expected_write(BURNED_DOWN)
+    assert len(write) == expected_write, (
+        f"expected {expected_write} write-environment ones, got {len(write)}: "
+        f"{sorted(write)}"
+    )
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
-    for burned in (
-        "720-create-repo.yml",
-        "120-bulk-cutover-to-github-pages.yml",
-        "112-dns-bulk-replace-a-ip.yml",
-        "704-website-analytics-wire.yml",
-        "304-m365-dkim-enable.yml",
-        "303-m365-domain-and-dkim.yml",
-        "301-m365-domain-preflight.yml",
-        "110-cloudflare-zone-create.yml",
-        "103-enforce-domain-standard.yml",
-        "306-discover-uncaptured-comms.yml",
-    ):
+    for burned in BURNED_DOWN:
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "
             "free-text input"
         )
+
+
+def test_the_write_baseline_decrements_only_for_write_entries():
+    """Polarity control for the write baseline — it cannot be measured today.
+
+    Every entry in BURNED_DOWN so far enters a write environment, so
+    `FROZEN_BASELINE_WRITE - len(BURNED_DOWN)` and the correct
+    `- len(write subset)` return the SAME number on this tree. The module going
+    green is therefore no evidence that the right one is in use, and the wrong
+    one fails on a correct tree the first time a read-only workflow is burned
+    down — a false red that reads as "the ledger is wrong" rather than "the
+    arithmetic is". Found by review on #1211, before that could happen.
+
+    So this pins the difference directly, with the read-only entry taken from
+    the tree rather than invented.
+    """
+    burned_write = {w for w in BURNED_DOWN if _is_write(w)}
+    assert burned_write, (
+        "positive control: no BURNED_DOWN entry enters a write environment, so "
+        "this test would pass by comparing two empty sets"
+    )
+    read_only = [p.name for p in guard.workflow_paths() if not _is_write(p.name)]
+    assert read_only, (
+        "positive control: every workflow in the tree reads as write-environment, "
+        "so the case this test exists for cannot be constructed"
+    )
+    hypothetical = BURNED_DOWN + (read_only[0],)
+    assert _expected_write(hypothetical) == _expected_write(BURNED_DOWN), (
+        f"{read_only[0]} enters no write environment, so burning it down must "
+        "not move the write baseline — `_expected_write` is counting every "
+        "entry rather than the write ones"
+    )
+    assert (
+        FROZEN_BASELINE_CURRENT - len(hypothetical)
+        == FROZEN_BASELINE_CURRENT - len(BURNED_DOWN) - 1
+    ), (
+        "…while it MUST move the interpolating baseline — if this side stops "
+        "holding, the two baselines have been collapsed back into one"
+    )
 
 
 def test_the_scan_sees_real_workflows():

@@ -89,8 +89,15 @@ jobs:
           # splat, so `-DeptId` binds the NEXT token and every later parameter shifts one
           # position left; an EMPTY STRING is kept and binds silently as `-DeptId ''`,
           # reaching the callee with a blank id. `IsNullOrWhiteSpace` refuses both.
-          # `deptid` is `required: true`; `client_id` is optional and is only appended
-          # when non-empty, so its emptiness is already guarded by the `-ne ''` gate below.
+          # `deptid` is `required: true`. `client_id` / `client_email` are optional and
+          # are only appended when non-blank, so they are gated rather than fatal — but by
+          # the SAME `IsNullOrWhiteSpace` test, not by `-ne ''`. Measured, `-ne ''` is true
+          # for BOTH an unset mapping ($null -ne '') and a whitespace-only dispatch value,
+          # so it admits exactly the two blanks the required guards above refuse: an unset
+          # mapping reaches the binder as a bare `-ClientId` with no value (it fails there,
+          # loudly, but on arity rather than on a named cause), and `client_id: "   "`
+          # reaches the callee as whitespace. `IsNullOrWhiteSpace` refuses all three blanks
+          # and makes every emptiness test in this body one test.
           if ([string]::IsNullOrWhiteSpace($env:TICKET_DEPTID)) {
             Write-Output '::error::TICKET_DEPTID is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank department id. Refusing to call whmcs-ticket-open.ps1 with an empty -DeptId.'
             exit 1
@@ -109,8 +116,8 @@ jobs:
             '-Message', $env:TICKET_MESSAGE,
             '-Priority', '${{ inputs.priority }}'
           )
-          if ($env:TICKET_CLIENT_ID -ne '') { $cliArgs += @('-ClientId', $env:TICKET_CLIENT_ID) }
-          elseif ($env:TICKET_EMAIL -ne '') { $cliArgs += @('-Email', $env:TICKET_EMAIL, '-Name', $env:TICKET_EMAIL) }
+          if (-not [string]::IsNullOrWhiteSpace($env:TICKET_CLIENT_ID)) { $cliArgs += @('-ClientId', $env:TICKET_CLIENT_ID) }
+          elseif (-not [string]::IsNullOrWhiteSpace($env:TICKET_EMAIL)) { $cliArgs += @('-Email', $env:TICKET_EMAIL, '-Name', $env:TICKET_EMAIL) }
           if ('${{ inputs.dry_run }}' -ne 'false') { $cliArgs += '-DryRun' }
 
           & pwsh -NoProfile -File .\scripts\whmcs-ticket-open.ps1 @cliArgs

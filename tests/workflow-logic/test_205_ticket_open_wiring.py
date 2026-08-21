@@ -69,9 +69,24 @@ THE ARITY HAZARD, AND WHICH BLANK ACTUALLY REACHES IT
           scanner SILENTLY: `CALLED DeptId=[]`, rc 0. That is the silent case, and
           the one the fail-closed guard exists to stop.
 
-    Same asymmetry 306 measured, for the same reason. `client_id` is optional and
-    only appended when non-empty, so its emptiness is guarded by the body's own
-    `-ne ''` gate.
+    Same asymmetry 306 measured, for the same reason. `client_id` / `client_email`
+    are optional, so they are gated rather than fatal -- but by the SAME
+    `IsNullOrWhiteSpace` test the three required inputs use. The `-ne ''` gate they
+    carried until #1207 admitted exactly the two blanks the required guards refuse,
+    measured with pwsh 7.4.6:
+
+        * UNSET (mapping deleted or misspelled) -- `$null -ne ''` is TRUE, so the
+          branch is entered and `-ClientId` reaches the binder with no value after
+          it. It does fail there, non-zero, but on arity rather than on a named
+          cause, and only because the dropped pair is LAST in the array: there is no
+          following token for `-ClientId` to swallow. Move the append and the same
+          spelling becomes the silent shift the required guards exist to stop.
+        * WHITESPACE (`client_id: "   "`) -- `'   ' -ne ''` is TRUE, so whitespace
+          reaches the callee as a client id. `IsNullOrWhiteSpace` refuses it.
+
+    The runner's own empty string (`''`, what a blanked dispatch box produces) was
+    handled correctly by both spellings -- which is why this was a latent defect and
+    not a live one, and why the shipped path did not change behaviour.
 
 WHY THIS MODULE EXISTS AT ALL, GIVEN THE CHECKER
     `scripts/check-workflow-input-interpolation.py` proves the fix landed ONCE. It
@@ -336,6 +351,7 @@ def _strip_guards(body: str) -> str:
     pass.
     """
     anchor = "if ([string]::IsNullOrWhiteSpace($env:"
+    expected_optional_gates = body.count("-not [string]::IsNullOrWhiteSpace(")
     assert body.count(anchor) == 3, (
         f"expected exactly three emptiness guards to strip, found "
         f"{body.count(anchor)} — this control would otherwise test an unmodified "
@@ -345,9 +361,22 @@ def _strip_guards(body: str) -> str:
         start = body.index(anchor)
         end = body.index("}", body.index("exit 1", start)) + 1
         body = body[:start] + body[end:]
-    assert "IsNullOrWhiteSpace($env:" not in body, (
-        f"a guard survived the strip, so the control is measuring the guarded "
-        f"body. Stripped: {body!r}"
+    # The optional `client_id` / `client_email` gates test emptiness with the SAME
+    # call (negated), so "no IsNullOrWhiteSpace survives" would fail on a correct
+    # strip. Derive the survivor count from the body rather than freezing it: a
+    # fail-closed guard that survives still fires this, and adding or removing an
+    # optional gate does not (ledger L247 -- a frozen count is the thing that goes
+    # stale).
+    assert body.count(anchor) == 0, (
+        f"a fail-closed guard survived the strip, so the control is measuring the "
+        f"guarded body. Stripped: {body!r}"
+    )
+    surviving = body.count("IsNullOrWhiteSpace(")
+    assert surviving == expected_optional_gates, (
+        f"expected exactly {expected_optional_gates} emptiness tests to survive the "
+        f"strip (the optional gates), found {surviving}. Either a fail-closed guard "
+        f"was respelled so the strip no longer reaches it, or an optional gate was "
+        f"removed. Stripped: {body!r}"
     )
     assert "whmcs-ticket-open.ps1" in body, (
         f"the strip removed the invocation itself, so the control proves nothing. "
@@ -567,6 +596,62 @@ def test_the_shipped_body_still_passes_ordinary_inputs_through():
         f"the ordinary path no longer appends the client id: {out}"
     )
     assert rc == 0, f"the ordinary path exited {rc}: {out}"
+
+
+def test_a_whitespace_client_id_is_not_appended():
+    """#1207 review: `-ne ''` admitted whitespace, `IsNullOrWhiteSpace` refuses it.
+
+    `client_id` is optional, so the refusal is a silent skip, not a failure -- the
+    step must still run and simply not carry a blank id to the callee.
+    """
+    out, _, rc = _run(
+        _step()["run"],
+        TICKET_DEPTID=LEGAL_DEPTID,
+        TICKET_SUBJECT=LEGAL_SUBJECT,
+        TICKET_MESSAGE=LEGAL_MESSAGE,
+        TICKET_EMAIL="",
+        TICKET_CLIENT_ID="   ",
+        **{TOKEN_VAR: FAKE_TOKEN},
+    )
+    assert "ClientId=[]" in out, (
+        f"a whitespace-only client_id reached the callee: {out}"
+    )
+    assert f"CALLED DeptId=[{LEGAL_DEPTID}]" in out and rc == 0, (
+        f"refusing the blank client id also broke the ordinary path (rc {rc}): {out}"
+    )
+
+
+def test_without_the_fix_whitespace_reaches_the_callee():
+    """The control: restore `-ne ''` and watch the same input get through.
+
+    Without this, the test above passes on any body that merely never appends a
+    client id -- including one where the append was deleted outright (ledger L202).
+    The anchor count is asserted BEFORE substituting (ledger L47).
+    """
+    body = _step()["run"]
+    anchor = "-not [string]::IsNullOrWhiteSpace($env:TICKET_CLIENT_ID)"
+    assert body.count(anchor) == 1, (
+        f"expected exactly one client_id gate to downgrade, found "
+        f"{body.count(anchor)} -- this control would otherwise test an unmodified "
+        f"body. Body: {body!r}"
+    )
+    downgraded = body.replace(anchor, "$env:TICKET_CLIENT_ID -ne ''")
+    assert downgraded != body, "the downgrade did not apply"
+
+    out, _, rc = _run(
+        downgraded,
+        TICKET_DEPTID=LEGAL_DEPTID,
+        TICKET_SUBJECT=LEGAL_SUBJECT,
+        TICKET_MESSAGE=LEGAL_MESSAGE,
+        TICKET_EMAIL="",
+        TICKET_CLIENT_ID="   ",
+        **{TOKEN_VAR: FAKE_TOKEN},
+    )
+    assert "ClientId=[   ]" in out, (
+        f"the pre-#1207 gate did NOT admit whitespace, so the test above is not "
+        f"discriminating and the fix it vouches for is not the reason it passes "
+        f"(rc {rc}): {out}"
+    )
 
 
 # --------------------------------------------------------------------------

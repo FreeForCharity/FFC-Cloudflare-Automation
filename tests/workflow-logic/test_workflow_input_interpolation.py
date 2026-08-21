@@ -341,6 +341,7 @@ BURNED_DOWN = (
     "110-cloudflare-zone-create.yml",
     "103-enforce-domain-standard.yml",
     "306-discover-uncaptured-comms.yml",
+    "119-bulk-staging-cname-github-pages.yml",
 )
 
 
@@ -487,6 +488,18 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                Measured: the bearer token was written to a file, the scanner
                was then handed a legal mailbox list, and the step exited 0.
       = 26 / 11
+      -119     burned down: `domains` / `target` moved to step-level `env:`. It
+               writes `staging.<domain>` in every FFC-EX zone across BOTH
+               Cloudflare accounts on cloudflare-prod-write, with the
+               write-scoped tokens arriving through GITHUB_ENV. The first lane
+               where the remedy every earlier one used would have been WRONG:
+               `domains` is `required: false` with an empty default and a
+               documented fallback to a 13-domain list, so a fail-closed guard
+               on empty breaks the common path. It keeps the fallback and omits
+               `Target` from the splat when blank rather than passing an empty
+               string, because the callee already resolves the canonical Pages
+               host (#778). `dry_run` stays interpolated: `type: boolean`.
+      = 25 / 10
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just

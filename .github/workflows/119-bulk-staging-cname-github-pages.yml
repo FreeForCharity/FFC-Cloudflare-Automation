@@ -46,6 +46,30 @@ jobs:
 
       - name: Run bulk staging CNAME wiring
         shell: pwsh
+        # `domains` / `target` are free-text dispatch inputs. Interpolated into this
+        # body they are not arguments — they are source text pasted into the program
+        # GitHub then runs, holding the cloudflare-prod-write token the APPROVER
+        # spent, against `staging.<domain>` across every FFC-EX zone in both
+        # Cloudflare accounts (#1080). The credential is named in no `env:` block in
+        # this file: `cloudflare-tokens-from-kv` with `scope: write` exports
+        # CLOUDFLARE_API_TOKEN_FFC / _CM through GITHUB_ENV, so a reader who checks
+        # this step's own `env:` (ledger L213) sees nothing to protect. Run
+        # `python3 scripts/check-workflow-input-interpolation.py --reachability
+        # 119-bulk-staging-cname-github-pages.yml` for the arrival path (#1188).
+        #
+        # Both inputs sat in SINGLE quotes, where PowerShell expands nothing — so
+        # the `$( )` payload the earlier lanes used is inert here and reports the
+        # pre-fix body as harmless (ledger L243). Closing the quote is not inert,
+        # and `tests/workflow-logic/test_119_bulk_staging_cname_wiring.py` measures
+        # both positions rather than asserting this.
+        #
+        # `$env:` is a runtime lookup on a value handed to the process as data; no
+        # quoting inside it can change the program. `dry_run` stays interpolated on
+        # purpose — GitHub generates a `boolean` from the declared options, so it
+        # cannot carry a payload.
+        env:
+          IN_DOMAINS: ${{ inputs.domains }}
+          IN_TARGET: ${{ inputs.target }}
         run: |
           # Default 13-domain FFC-EX staging list. Override via the 'domains' input.
           $defaultDomains = @(
@@ -64,7 +88,12 @@ jobs:
             'southamptonfriends.org'
           ) -join ','
 
-          $domainsInput = '${{ inputs.domains }}'
+          # Unlike the other #1080 lanes this one must NOT fail closed on an empty
+          # value: `domains` is `required: false` with an empty default and a
+          # documented fallback, so a blank dispatch box is the common path. That
+          # also means a deleted `env:` mapping looks exactly like a blank box —
+          # which is why the wiring is pinned by a test instead of by this body.
+          $domainsInput = [string]$env:IN_DOMAINS
           if ([string]::IsNullOrWhiteSpace($domainsInput)) {
             $domainsInput = $defaultDomains
             Write-Host "No 'domains' input provided. Using default 13-domain FFC-EX staging list."
@@ -72,8 +101,16 @@ jobs:
 
           $params = @{
             Domains = $domainsInput
-            Target  = '${{ inputs.target }}'
           }
+
+          # `Target` is omitted rather than passed empty when the input is blank:
+          # the callee resolves the canonical FFC Pages host itself
+          # (Get-GhPagesWwwTarget, #778), so a default spelled out here would be a
+          # second copy of it, free to drift. Same outcome as the pre-fix body,
+          # which passed `Target = ''` and let that same branch fill it.
+          $target = [string]$env:IN_TARGET
+          if (-not [string]::IsNullOrWhiteSpace($target)) { $params.Target = $target }
+
           if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun = $true }
 
           ./scripts/bulk-staging-cname-github-pages.ps1 @params

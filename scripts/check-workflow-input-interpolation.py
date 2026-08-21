@@ -723,7 +723,19 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     "116-domain-transfer-epp-probe.yml": ("domain",),
     "117-domain-transfer-verify.yml": ("domain",),
     "118-whmcs-domain-lock.yml": ("domain",),
-    "119-bulk-staging-cname-github-pages.yml": ("domains", "target"),
+    # 119-bulk-staging-cname-github-pages.yml burned down: `domains` / `target` now
+    # reach the pwsh body through step-level `env:`. It writes `staging.<domain>` in
+    # every FFC-EX zone across both Cloudflare accounts on cloudflare-prod-write,
+    # with the write-scoped tokens arriving through GITHUB_ENV from
+    # `cloudflare-tokens-from-kv` — see `--reachability` for the path (#1188).
+    #
+    # The lane the OTHER lanes' remedy does not fit: `domains` is `required: false`
+    # with an empty default and a documented fallback to a 13-domain list, so a
+    # fail-closed guard on empty would break the common path. It keeps the fallback
+    # (a "default fill" guard, #1150) and omits `Target` from the splat when blank
+    # rather than passing an empty string, because the callee already resolves the
+    # canonical Pages host (#778) and a second copy of it would drift. `dry_run`
+    # stays interpolated and is NOT a finding: `type: boolean`.
     # 120-bulk-cutover-to-github-pages.yml burned down: `domains` now reaches all four
     # bodies (two pwsh, two bash) through step-level `env:`. It held two write
     # environments at once — cloudflare-prod-write for the apex flip and github-prod for

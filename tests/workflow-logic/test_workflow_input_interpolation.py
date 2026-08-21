@@ -342,6 +342,7 @@ BURNED_DOWN = (
     "103-enforce-domain-standard.yml",
     "306-discover-uncaptured-comms.yml",
     "119-bulk-staging-cname-github-pages.yml",
+    "205-whmcs-ticket-open.yml",
 )
 
 

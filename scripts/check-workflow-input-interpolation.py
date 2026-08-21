@@ -668,7 +668,33 @@ def credentials_in_reach(workflow: dict, job_id: str, step_index: int) -> list[R
 #                    `${{ inputs.exclude && format('--exclude {0}', …) }}`.
 KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # [W] --- Cloudflare / domain -------------------------------------------
-    "101-domain-status.yml": ("domain", "issue_number"),
+    # 101-domain-status.yml burned down: `domain` now reaches all FIVE pwsh bodies
+    # and `issue_number` the `github-script` body through step-level `env:`. Six
+    # call sites in FOUR jobs off one dispatch - the widest entry left after 103.
+    #
+    # It is the lane where THIS TOOL's own answer was the misleading one. Asked
+    # `--reachability 101-domain-status.yml`, it named two steps, both in the
+    # `cloudflare` job, and reported nothing at the two `m365` sites - which are
+    # the sites carrying `m365-prod`, i.e. the only reason 101 was a [W] entry at
+    # all. An L213 read of their `env:` and a `secrets.` grep agree with it: all
+    # three sweeps score them as holding nothing.
+    #
+    # They hold a Microsoft Graph credential. The preceding step is
+    # `azure/login@v3` (OIDC) and both bodies then call
+    # `az account get-access-token`, so the credential is an authenticated CLI
+    # SESSION ON DISK rather than a value in a variable - and every sweep the
+    # burn-down has built, this index included, is defined over variables.
+    # Measured against the shipped body with every credential variable removed
+    # from the environment: the payload ran `az` itself, wrote a Graph bearer
+    # token to a file, then invoked m365-domain-preflight.ps1 with a legal
+    # `Domain=[ffcworkingsite1.org]`, and the step exited 0.
+    #
+    # Tracked as its own issue rather than papered over here: the next lane will
+    # read the same listing and draw the same conclusion. `dmarc_mgmt_debug`
+    # stays interpolated and is NOT a finding - it is `type: boolean`, which is
+    # the whole of what makes it safe, so
+    # test_101_domain_status_wiring.py pins the declaration rather than
+    # leaving it as a reading of this comment.
     "102-domain-add-ffc-cloudflare-and-whmcs.yml": ("domain", "issue_number"),
     # 103-enforce-domain-standard.yml burned down: `domain` now reaches all four
     # pwsh bodies through step-level `env:`, and `domain` + `issue_number` reach
@@ -723,7 +749,19 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     "116-domain-transfer-epp-probe.yml": ("domain",),
     "117-domain-transfer-verify.yml": ("domain",),
     "118-whmcs-domain-lock.yml": ("domain",),
-    "119-bulk-staging-cname-github-pages.yml": ("domains", "target"),
+    # 119-bulk-staging-cname-github-pages.yml burned down: `domains` / `target` now
+    # reach the pwsh body through step-level `env:`. It writes `staging.<domain>` in
+    # every FFC-EX zone across both Cloudflare accounts on cloudflare-prod-write,
+    # with the write-scoped tokens arriving through GITHUB_ENV from
+    # `cloudflare-tokens-from-kv` — see `--reachability` for the path (#1188).
+    #
+    # The lane the OTHER lanes' remedy does not fit: `domains` is `required: false`
+    # with an empty default and a documented fallback to a 13-domain list, so a
+    # fail-closed guard on empty would break the common path. It keeps the fallback
+    # (a "default fill" guard, #1150) and omits `Target` from the splat when blank
+    # rather than passing an empty string, because the callee already resolves the
+    # canonical Pages host (#778) and a second copy of it would drift. `dry_run`
+    # stays interpolated and is NOT a finding: `type: boolean`.
     # 120-bulk-cutover-to-github-pages.yml burned down: `domains` now reaches all four
     # bodies (two pwsh, two bash) through step-level `env:`. It held two write
     # environments at once — cloudflare-prod-write for the apex flip and github-prod for
@@ -735,7 +773,18 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
         "products_output_file",
     ),
     "203-whmcs-export-payment-methods.yml": ("output_file",),
-    "205-whmcs-ticket-open.yml": ("client_id", "deptid"),
+    # 205-whmcs-ticket-open.yml burned down: `deptid` and `client_id` now reach
+    # the pwsh body through step-level `env:` (TICKET_DEPTID / TICKET_CLIENT_ID).
+    # It runs on `whmcs-prod` (write), and its injection point sits beside the
+    # WHMCS API credential that `whmcs-secrets-from-kv` exports through GITHUB_ENV
+    # (WHMCS_API_IDENTIFIER / WHMCS_API_SECRET / WHMCS_APIM_SUBSCRIPTION_KEY) --
+    # so a reviewer reading the step's own `env:` (L213) or grepping the body for
+    # `secrets.` (#1141) scores the file as holding nothing. `deptid` was the
+    # simpler of the two live sites: it interpolated inside a SINGLE-quoted array
+    # element, and single quotes stop `$( )` but not a `'); <payload>; $x = @('`
+    # break-out, so the WHMCS secret exfiltrated and the legitimate call still ran
+    # at exit 0. `priority` (choice) and `dry_run` (boolean) stay interpolated:
+    # GitHub constrains both, so neither can carry a payload.
     "208-whmcs-tickets-export.yml": ("output_file", "status"),
     "213-whmcs-zeffy-payments-import-draft.yml": (
         "clients_output",

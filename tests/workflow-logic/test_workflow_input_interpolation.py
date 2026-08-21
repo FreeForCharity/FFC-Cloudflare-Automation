@@ -304,8 +304,69 @@ jobs:
 
 
 # --------------------------------------------------------------------------
+# The burn-down ledger
+#
+# `BURNED_DOWN` is the ONE place a #1080 lane records itself, and both counts
+# below are derived from it rather than written down again.
+#
+# They used to be two literals inside the test, which made this file a mutex on
+# the burn-down: every lane rewrote the same two integers to the same value, so
+# two lanes branched off one `main` merged them SILENTLY at the first lander's
+# number — outside any conflict marker — and the follower went red on a line
+# the resolver was never shown (#1210).
+#
+# The counts are not independent facts. A burn-down removes exactly one
+# interpolating workflow, so the first baseline decrements with
+# `len(BURNED_DOWN)`. The write baseline does NOT: it decrements only for the
+# burned entries that actually enter a write environment, which is re-derived
+# from the tree rather than assumed. Every entry so far happens to be one, so
+# the two move together today and would silently keep doing so if this were
+# written as `- len(BURNED_DOWN)` — and the first read-only burn-down would
+# then fail a correct tree, which reads as "the ledger is wrong" rather than
+# "the arithmetic is". A lane appends ONE line here and both follow, in any
+# landing order.
+# --------------------------------------------------------------------------
+
+FROZEN_BASELINE_CURRENT = 36  # the #1122 freeze, before any #1080 burn-down
+FROZEN_BASELINE_WRITE = 21
+
+BURNED_DOWN = (
+    "720-create-repo.yml",
+    "120-bulk-cutover-to-github-pages.yml",
+    "112-dns-bulk-replace-a-ip.yml",
+    "704-website-analytics-wire.yml",
+    "304-m365-dkim-enable.yml",
+    "303-m365-domain-and-dkim.yml",
+    "301-m365-domain-preflight.yml",
+    "110-cloudflare-zone-create.yml",
+    "103-enforce-domain-standard.yml",
+    "306-discover-uncaptured-comms.yml",
+    "119-bulk-staging-cname-github-pages.yml",
+    "205-whmcs-ticket-open.yml",
+    "101-domain-status.yml",
+)
+
+
+# --------------------------------------------------------------------------
 # The rule
 # --------------------------------------------------------------------------
+
+
+def _expected_write(burned) -> int:
+    """The write baseline decrements only for burned entries that enter a write
+    environment — NOT for every entry. Both the assertion and its polarity
+    control call this, so a revert to `len(burned)` is caught by the control
+    rather than waiting for the first read-only burn-down to false-red."""
+    return FROZEN_BASELINE_WRITE - len({w for w in burned if _is_write(w)})
+
+
+def _is_write(workflow: str) -> bool:
+    """Does this workflow enter a write environment? Read from the tree, never
+    assumed — a burned-down entry keeps its environments, which is what lets the
+    write baseline decrement for the right entries and only those."""
+    return any(
+        guard.is_write_environment(e) for e in guard.environments(_workflow(workflow))
+    )
 
 
 def test_the_tree_matches_the_freeze_exactly():
@@ -429,6 +490,48 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                Measured: the bearer token was written to a file, the scanner
                was then handed a legal mailbox list, and the step exited 0.
       = 26 / 11
+      -119     burned down: `domains` / `target` moved to step-level `env:`. It
+               writes `staging.<domain>` in every FFC-EX zone across BOTH
+               Cloudflare accounts on cloudflare-prod-write, with the
+               write-scoped tokens arriving through GITHUB_ENV. The first lane
+               where the remedy every earlier one used would have been WRONG:
+               `domains` is `required: false` with an empty default and a
+               documented fallback to a 13-domain list, so a fail-closed guard
+               on empty breaks the common path. It keeps the fallback and omits
+               `Target` from the splat when blank rather than passing an empty
+               string, because the callee already resolves the canonical Pages
+               host (#778). `dry_run` stays interpolated: `type: boolean`.
+      = 25 / 10
+      -205     burned down: `deptid` / `client_id` moved to step-level `env:`
+               (TICKET_DEPTID / TICKET_CLIENT_ID). It runs on whmcs-prod, and
+               the WHMCS API credential the preceding `whmcs-secrets-from-kv`
+               action exports through GITHUB_ENV is the workflow's ONLY
+               credential — invisible to both the L213 `env:` read and the
+               #1141 `secrets.` grep. Its injection point sat in SINGLE quotes
+               like 306, so the `$( )` payload is inert and the control had to
+               close the quote and re-open the array. Measured: the WHMCS secret
+               was written to a file, the callee was handed a legal deptid, and
+               the step exited 0. `priority` (choice) and `dry_run` (boolean)
+               stay interpolated and are not findings.
+      = 24 / 9
+      -101     burned down: `domain` moved to step-level `env:` in all FIVE pwsh
+               bodies and `issue_number` in the `github-script` body — six call
+               sites in four jobs off one dispatch, the widest entry left after
+               103. It is the lane where the #1188 reachability index gave the
+               MISLEADING answer rather than merely a partial one: asked about
+               101 it named two `cloudflare` steps and reported nothing at the
+               two `m365` sites, which are the sites carrying `m365-prod` and
+               so the only reason 101 was a `[W]` entry at all. An L213 read and
+               a `secrets.` grep agree with it, and all three are wrong the same
+               way — the preceding step is `azure/login@v3` and both bodies then
+               run `az account get-access-token`, so the credential is a CLI
+               SESSION rather than a value in a variable, and every sweep the
+               burn-down has built is defined over variables. Measured with
+               every credential variable removed from the environment: the
+               payload ran `az` itself, wrote a Graph bearer token to a file,
+               the callee was then handed a legal domain, and the step exited 0.
+               Filed as #1208; ledger L248.
+      = 23 / 8
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -438,37 +541,78 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     findings, _, scanned = guard.scan_all()
     current = guard.current_map(findings)
     assert scanned >= 90, f"only {scanned} workflow files scanned — the glob broke"
-    assert len(current) == 26, (
-        f"expected 26 interpolating workflows, got {len(current)}: "
-        f"{sorted(current)}"
+    assert len(BURNED_DOWN) == len(set(BURNED_DOWN)), (
+        "BURNED_DOWN holds a duplicate entry: "
+        f"{sorted({w for w in BURNED_DOWN if BURNED_DOWN.count(w) > 1})}. "
+        "Both baselines are derived from its contents, so a line union-resolved "
+        "in twice would move the expected numbers rather than the tree."
     )
-    write = {
-        w
-        for w in current
-        if any(
-            guard.is_write_environment(e)
-            for e in guard.environments(_workflow(w))
-        )
-    }
-    assert len(write) == 11, f"expected 11 write-environment ones, got {len(write)}: {sorted(write)}"
+    expected_current = FROZEN_BASELINE_CURRENT - len(BURNED_DOWN)
+    assert len(current) == expected_current, (
+        f"expected {expected_current} interpolating workflows, got "
+        f"{len(current)}: {sorted(current)}"
+    )
+    write = {w for w in current if _is_write(w)}
+    expected_write = _expected_write(BURNED_DOWN)
+    assert len(write) == expected_write, (
+        f"expected {expected_write} write-environment ones, got {len(write)}: "
+        f"{sorted(write)}"
+    )
     for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
         assert expected in current, f"{expected} must be in the frozen set"
-    for burned in (
-        "720-create-repo.yml",
-        "120-bulk-cutover-to-github-pages.yml",
-        "112-dns-bulk-replace-a-ip.yml",
-        "704-website-analytics-wire.yml",
-        "304-m365-dkim-enable.yml",
-        "303-m365-domain-and-dkim.yml",
-        "301-m365-domain-preflight.yml",
-        "110-cloudflare-zone-create.yml",
-        "103-enforce-domain-standard.yml",
-        "306-discover-uncaptured-comms.yml",
-    ):
+    for burned in BURNED_DOWN:
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "
             "free-text input"
         )
+
+
+def test_the_write_baseline_decrements_only_for_write_entries():
+    """Polarity control for the write baseline — it cannot be measured today.
+
+    Every entry in BURNED_DOWN so far enters a write environment, so
+    `FROZEN_BASELINE_WRITE - len(BURNED_DOWN)` and the correct
+    `- len(write subset)` return the SAME number on this tree. The module going
+    green is therefore no evidence that the right one is in use, and the wrong
+    one fails on a correct tree the first time a read-only workflow is burned
+    down — a false red that reads as "the ledger is wrong" rather than "the
+    arithmetic is". Found by review on #1211, before that could happen.
+
+    So this pins the difference directly, with the read-only entry taken from
+    the tree rather than invented.
+    """
+    burned_write = {w for w in BURNED_DOWN if _is_write(w)}
+    assert burned_write, (
+        "positive control: no BURNED_DOWN entry enters a write environment, so "
+        "this test would pass by comparing two empty sets"
+    )
+    # Must not already be in BURNED_DOWN: appending a duplicate leaves both
+    # baselines unmoved for the wrong reason, and the test would pass while
+    # proving nothing. Sound on today's tree (all 13 burned entries are write),
+    # which is exactly why it needs pinning rather than trusting.
+    read_only = [
+        p.name
+        for p in guard.workflow_paths()
+        if not _is_write(p.name) and p.name not in BURNED_DOWN
+    ]
+    assert read_only, (
+        "positive control: every workflow in the tree reads as write-environment "
+        "or is already burned down, so the case this test exists for cannot be "
+        "constructed"
+    )
+    hypothetical = BURNED_DOWN + (read_only[0],)
+    assert _expected_write(hypothetical) == _expected_write(BURNED_DOWN), (
+        f"{read_only[0]} enters no write environment, so burning it down must "
+        "not move the write baseline — `_expected_write` is counting every "
+        "entry rather than the write ones"
+    )
+    assert (
+        FROZEN_BASELINE_CURRENT - len(hypothetical)
+        == FROZEN_BASELINE_CURRENT - len(BURNED_DOWN) - 1
+    ), (
+        "…while it MUST move the interpolating baseline — if this side stops "
+        "holding, the two baselines have been collapsed back into one"
+    )
 
 
 def test_the_scan_sees_real_workflows():

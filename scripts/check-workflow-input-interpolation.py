@@ -668,7 +668,33 @@ def credentials_in_reach(workflow: dict, job_id: str, step_index: int) -> list[R
 #                    `${{ inputs.exclude && format('--exclude {0}', …) }}`.
 KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # [W] --- Cloudflare / domain -------------------------------------------
-    "101-domain-status.yml": ("domain", "issue_number"),
+    # 101-domain-status.yml burned down: `domain` now reaches all FIVE pwsh bodies
+    # and `issue_number` the `github-script` body through step-level `env:`. Six
+    # call sites in FOUR jobs off one dispatch - the widest entry left after 103.
+    #
+    # It is the lane where THIS TOOL's own answer was the misleading one. Asked
+    # `--reachability 101-domain-status.yml`, it named two steps, both in the
+    # `cloudflare` job, and reported nothing at the two `m365` sites - which are
+    # the sites carrying `m365-prod`, i.e. the only reason 101 was a [W] entry at
+    # all. An L213 read of their `env:` and a `secrets.` grep agree with it: all
+    # three sweeps score them as holding nothing.
+    #
+    # They hold a Microsoft Graph credential. The preceding step is
+    # `azure/login@v3` (OIDC) and both bodies then call
+    # `az account get-access-token`, so the credential is an authenticated CLI
+    # SESSION ON DISK rather than a value in a variable - and every sweep the
+    # burn-down has built, this index included, is defined over variables.
+    # Measured against the shipped body with every credential variable removed
+    # from the environment: the payload ran `az` itself, wrote a Graph bearer
+    # token to a file, then invoked m365-domain-preflight.ps1 with a legal
+    # `Domain=[ffcworkingsite1.org]`, and the step exited 0.
+    #
+    # Tracked as its own issue rather than papered over here: the next lane will
+    # read the same listing and draw the same conclusion. `dmarc_mgmt_debug`
+    # stays interpolated and is NOT a finding - it is `type: boolean`, which is
+    # the whole of what makes it safe, so
+    # test_101_domain_status_wiring.py pins the declaration rather than
+    # leaving it as a reading of this comment.
     "102-domain-add-ffc-cloudflare-and-whmcs.yml": ("domain", "issue_number"),
     # 103-enforce-domain-standard.yml burned down: `domain` now reaches all four
     # pwsh bodies through step-level `env:`, and `domain` + `issue_number` reach

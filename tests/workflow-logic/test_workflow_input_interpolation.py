@@ -586,10 +586,19 @@ def test_the_write_baseline_decrements_only_for_write_entries():
         "positive control: no BURNED_DOWN entry enters a write environment, so "
         "this test would pass by comparing two empty sets"
     )
-    read_only = [p.name for p in guard.workflow_paths() if not _is_write(p.name)]
+    # Must not already be in BURNED_DOWN: appending a duplicate leaves both
+    # baselines unmoved for the wrong reason, and the test would pass while
+    # proving nothing. Sound on today's tree (all 13 burned entries are write),
+    # which is exactly why it needs pinning rather than trusting.
+    read_only = [
+        p.name
+        for p in guard.workflow_paths()
+        if not _is_write(p.name) and p.name not in BURNED_DOWN
+    ]
     assert read_only, (
-        "positive control: every workflow in the tree reads as write-environment, "
-        "so the case this test exists for cannot be constructed"
+        "positive control: every workflow in the tree reads as write-environment "
+        "or is already burned down, so the case this test exists for cannot be "
+        "constructed"
     )
     hypothetical = BURNED_DOWN + (read_only[0],)
     assert _expected_write(hypothetical) == _expected_write(BURNED_DOWN), (

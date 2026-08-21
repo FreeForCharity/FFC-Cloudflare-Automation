@@ -768,6 +768,8 @@ NEEDS_PWSH = {
     "test_an_empty_deptid_fails_closed_and_says_so",
     "test_an_unset_deptid_fails_closed_and_says_which_one",
     "test_without_the_guard_empty_binds_and_unset_refuses",
+    "test_a_whitespace_client_id_is_not_appended",
+    "test_without_the_fix_whitespace_reaches_the_callee",
 }
 
 if __name__ == "__main__":

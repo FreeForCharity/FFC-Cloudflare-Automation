@@ -502,6 +502,36 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                string, because the callee already resolves the canonical Pages
                host (#778). `dry_run` stays interpolated: `type: boolean`.
       = 25 / 10
+      -205     burned down: `deptid` / `client_id` moved to step-level `env:`
+               (TICKET_DEPTID / TICKET_CLIENT_ID). It runs on whmcs-prod, and
+               the WHMCS API credential the preceding `whmcs-secrets-from-kv`
+               action exports through GITHUB_ENV is the workflow's ONLY
+               credential — invisible to both the L213 `env:` read and the
+               #1141 `secrets.` grep. Its injection point sat in SINGLE quotes
+               like 306, so the `$( )` payload is inert and the control had to
+               close the quote and re-open the array. Measured: the WHMCS secret
+               was written to a file, the callee was handed a legal deptid, and
+               the step exited 0. `priority` (choice) and `dry_run` (boolean)
+               stay interpolated and are not findings.
+      = 24 / 9
+      -101     burned down: `domain` moved to step-level `env:` in all FIVE pwsh
+               bodies and `issue_number` in the `github-script` body — six call
+               sites in four jobs off one dispatch, the widest entry left after
+               103. It is the lane where the #1188 reachability index gave the
+               MISLEADING answer rather than merely a partial one: asked about
+               101 it named two `cloudflare` steps and reported nothing at the
+               two `m365` sites, which are the sites carrying `m365-prod` and
+               so the only reason 101 was a `[W]` entry at all. An L213 read and
+               a `secrets.` grep agree with it, and all three are wrong the same
+               way — the preceding step is `azure/login@v3` and both bodies then
+               run `az account get-access-token`, so the credential is a CLI
+               SESSION rather than a value in a variable, and every sweep the
+               burn-down has built is defined over variables. Measured with
+               every credential variable removed from the environment: the
+               payload ran `az` itself, wrote a Graph bearer token to a file,
+               the callee was then handed a legal domain, and the step exited 0.
+               Filed as #1208; ledger L248.
+      = 23 / 8
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just

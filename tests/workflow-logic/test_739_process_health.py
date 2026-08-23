@@ -1146,6 +1146,53 @@ def test_the_workflow_reports_a_capped_read_as_truncated():
         "and must set it when the read stops on the page cap rather than on the thread's end"
     )
 
+def test_a_truncated_window_reports_a_false_dead_run_if_it_is_passed_through():
+    """Why the workflow DISCARDS a capped read instead of only flagging it.
+
+    Raised by Copilot on #1215 and reproduced before being acted on. The first
+    version of this change tracked truncation and used it for the silence
+    verdict alone, which left the neighbouring scan reading the same partial
+    window — and the missing tail is the NEWEST comments, so a run whose START
+    was collected and whose END was cut reads as DEAD.
+
+    That is a false alarm about the supervisor, which this module treats as
+    strictly worse than the silence it replaces. The silence guard being
+    correct is what makes the gap easy to miss: one metric on the read is
+    protected and the other is not.
+    """
+    collected = [_start(151, "2026-08-01T00:00:00Z")]  # its END was in the cut tail
+    passed_through = compute({"nowIso": CR_NOW, "logComments": collected,
+                              "logCommentsTruncated": True})["conductorRuns"]
+    assert passed_through["count"] == 1 and passed_through["dead"][0]["run"] == 151, (
+        f"precondition: passed through, a cut END reads as a dead run: {passed_through}"
+    )
+    assert passed_through["silence"]["assessed"] is False, (
+        "and the silence half IS protected — which is exactly why the gap reads as safe"
+    )
+
+    # Discarded instead, nothing is claimed by either half.
+    discarded = compute({"nowIso": CR_NOW, "logCommentsTruncated": True})["conductorRuns"]
+    assert discarded["assessed"] is False, discarded
+    assert discarded["count"] is None, "null, not 0 — 'unknown' and 'none' are different facts"
+    assert discarded["silence"]["silent"] is None, discarded
+
+
+def test_the_workflow_discards_a_capped_read_rather_than_computing_from_it():
+    """The lib cannot see the page cap; only the caller can, so this is a wiring
+    assertion. Without the discard, the flag protects the silence verdict and
+    leaves the dead-run scan and the trend baseline reading a partial window."""
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
+    assert "logComments = null;" in raw, (
+        "a capped read must be discarded, not merely flagged"
+    )
+    # And the discard must sit inside the truncation branch, not somewhere that
+    # would throw the read away unconditionally.
+    branch = raw.split("if (logCommentsTruncated) {", 1)
+    assert len(branch) == 2, "the truncation branch must exist"
+    assert "logComments = null;" in branch[1].split("}", 1)[0] + branch[1][:1200], (
+        "the discard must be inside the truncation branch"
+    )
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

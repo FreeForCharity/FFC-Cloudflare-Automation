@@ -85,11 +85,22 @@ _WEAK = re.compile(r"-(?:c|i)?(?:ne|eq)\s*(?:''|\"\")")
 # The left operand, immediately before the operator. Two shapes are judged:
 #   '${{ inputs.name }}'   an interpolated input, quoted or bare
 #   $env:NAME              an env read, resolved against the step's `env:`
-_LEFT_INTERP = re.compile(r"\$\{\{\s*inputs\.([A-Za-z0-9_-]+)\s*\}\}[\"']?\s*$")
+_LEFT_EXPR_TAIL = re.compile(r"\$\{\{(.*?)\}\}[\"']?\s*$", re.DOTALL)
 _LEFT_ENV = re.compile(r"\$env:([A-Za-z_][A-Za-z0-9_]*)\s*$")
 
-# An `env:` value that forwards a dispatch input into the step.
-_ENV_FORWARDS = re.compile(r"\$\{\{\s*inputs\.([A-Za-z0-9_-]+)\s*\}\}")
+# A reference to a dispatch input ANYWHERE inside an expression. Deliberately
+# the same pattern `check-workflow-input-interpolation.py` uses, for the reason
+# stated there verbatim: the expression language permits `github.event.inputs.`
+# and whitespace around the dots, and "a guard that can be evaded with a space
+# is decoration".
+#
+# Anchoring on the bare `${{ inputs.x }}` spelling is what the first version of
+# this file did, and it missed FOUR of five equivalent spellings — measured, not
+# supposed. Copilot caught it on #1214; `test_every_equivalent_input_spelling_is_
+# detected` now pins all five, on both the interpolated and the `$env:` side.
+_INPUT_REF = re.compile(
+    r"\b(?:github\s*\.\s*event\s*\.\s*)?inputs\s*\.\s*([A-Za-z_][A-Za-z0-9_-]*)"
+)
 
 # ---------------------------------------------------------------------------
 # The freeze.
@@ -183,9 +194,9 @@ def step_env_map(step: dict) -> dict[str, str]:
         return {}
     forwarded: dict[str, str] = {}
     for var, value in env.items():
-        match = _ENV_FORWARDS.search(str(value))
-        if match:
-            forwarded[str(var)] = match.group(1)
+        names = _INPUT_REF.findall(str(value))
+        if names:
+            forwarded[str(var)] = names[0]
     return forwarded
 
 
@@ -206,10 +217,16 @@ def scan_body(body: str, free_text: set[str], env_map: dict[str, str]):
     for line in body.splitlines():
         for match in _WEAK.finditer(line):
             left = line[: match.start()]
-            interp = _LEFT_INTERP.search(left)
-            if interp and interp.group(1) in free_text:
-                yield interp.group(1), line
-                continue
+            tail = _LEFT_EXPR_TAIL.search(left)
+            if tail:
+                # An expression may reference more than one input (a `format()`
+                # call, a `&&`/`||` chain). Report the first free-text one — the
+                # finding is "this gate tests a dispatch input with the wrong
+                # predicate", which is true regardless of which one it names.
+                named = [n for n in _INPUT_REF.findall(tail.group(1)) if n in free_text]
+                if named:
+                    yield named[0], line
+                    continue
             env_ref = _LEFT_ENV.search(left)
             if env_ref:
                 name = env_map.get(env_ref.group(1))

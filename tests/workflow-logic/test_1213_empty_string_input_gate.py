@@ -253,6 +253,51 @@ def test_the_env_form_is_detected_after_a_1080_conversion():
     assert [f.input_name for f in found] == ["client_id"], [str(f) for f in found]
 
 
+def test_every_equivalent_input_spelling_is_detected():
+    """The expression language has more than one way to name the same input, and
+    a guard anchored on the bare spelling is evaded by a space.
+
+    The first version of the checker matched only `${{ inputs.name }}` with no
+    prefix and no whitespace around the dots. Measured against the five
+    equivalent forms, it detected **one** — the other four bypassed it entirely,
+    on both the interpolated and the `$env:` side. `check-workflow-input-
+    interpolation.py` already tolerates all of them, and its own comment gives
+    the rule: "a guard that can be evaded with a space is decoration." Copilot
+    caught the divergence on #1214.
+
+    Each row is a genuine bypass of the *pre-fix* pattern, not a variation for
+    its own sake — that is what makes this a discrimination test rather than a
+    coverage sweep.
+    """
+    interpolated = [
+        ("canonical", "${{ inputs.client_id }}"),
+        ("github.event prefix", "${{ github.event.inputs.client_id }}"),
+        ("whitespace around dots", "${{ inputs . client_id }}"),
+        ("both", "${{ github . event . inputs . client_id }}"),
+    ]
+    for label, expr in interpolated:
+        found = _scan_text(_sample(f"if ('{expr}' -ne '') {{ $x = 1 }}"))
+        assert [f.input_name for f in found] == ["client_id"], (
+            f"{label}: {expr} was not detected — {[str(f) for f in found]}"
+        )
+
+    # The same equivalence on the `env:` side: the mapping is what resolves
+    # `$env:IN_CLIENT_ID` back to an input, so a tolerant body pattern with a
+    # strict env pattern still leaves the post-#1080 form bypassable.
+    for label, expr in interpolated:
+        text = _SAMPLE.replace("${{ inputs.client_id }}", expr).replace(
+            "__BODY__", "if ($env:IN_CLIENT_ID -ne '') { $x = 1 }")
+        assert expr in text, f"{label}: the env mapping was not substituted"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "999-sample.yml"
+            path.write_text(text, encoding="utf-8", newline="\n")
+            found = guard.scan_workflow(path)
+        assert [f.input_name for f in found] == ["client_id"], (
+            f"env: mapping spelled {label} was not resolved — "
+            f"{[str(f) for f in found]}"
+        )
+
+
 def test_the_remedy_is_not_a_finding():
     found = _scan_text(
         _sample("if (-not [string]::IsNullOrWhiteSpace($env:IN_CLIENT_ID)) { $x = 1 }"))

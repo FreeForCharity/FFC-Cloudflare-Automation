@@ -30,6 +30,14 @@ const PIPELINE_WINDOW_DAYS = 7;
 // a false "alive" is the failure this metric exists to catch going unseen.
 const DEAD_RUN_THRESHOLD_HOURS = 2;
 
+// A log carrying NO conductor run header for longer than this is treated as the
+// supervisor having stopped altogether (#1215). Deliberately much looser than
+// DEAD_RUN_THRESHOLD_HOURS: that one bounds a single run, this one bounds the
+// gap BETWEEN runs, and the Conductor's cadence is several runs a day. 48h is
+// wide enough that a quiet weekend or a few skipped fires cannot trip it, and
+// still narrow enough to catch a stop within the same week it happens.
+const SILENT_THRESHOLD_HOURS = 48;
+
 // The Conductor's own run headers on #719, e.g. `## Run 63 — START (…)`.
 // Matched against the FIRST line of a comment only (see findDeadConductorRuns):
 // the header is the first line by construction, and anchoring there means prose
@@ -212,6 +220,29 @@ function round3(n) {
 }
 
 /**
+ * Coerce an optional hour threshold, falling back rather than throwing.
+ *
+ * An unusable override falls back because these are optional knobs on a health
+ * report, and killing the weekly run over one would cost more than it saves.
+ * `Number('')` is 0 (every in-flight run reads dead) and `Number('2h')` is NaN
+ * (the `< threshold` test never fires, so every unmatched START reads dead) —
+ * both fail in the ALARMING direction, and neither is loud. The effective value
+ * is returned in the metrics and rendered, so a fallback announces itself.
+ *
+ * `Number()` alone is not enough to validate with, which is the trap: it maps
+ * '', '   ', null, false and [] all to 0 — a *finite, non-negative* number that
+ * passes a naive `Number.isFinite(n) && n >= 0` check and then reports every
+ * in-flight run dead. Narrow the accepted TYPES first, then the value.
+ */
+function resolveThresholdHours(requested, fallback) {
+  if (typeof requested === 'number' || (typeof requested === 'string' && requested.trim() !== '')) {
+    const n = Number(requested);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return fallback;
+}
+
+/**
  * Conductor runs that started and never ended (#970).
  *
  * A conductor run is the privileged supervisor: it approves gates, merges PRs,
@@ -237,8 +268,45 @@ function round3(n) {
  *                           page reports every boundary-split run as dead.
  * @param {string} nowIso    report time.
  * @param {number} [thresholdHours]  override for DEAD_RUN_THRESHOLD_HOURS.
+ * @param {object} [opts]
+ *   silentThresholdHours  override for SILENT_THRESHOLD_HOURS.
+ *   truncated             the caller's bounded read hit its page cap, so the
+ *                         NEWEST comments may be missing (see `silence`).
+ *
+ * ## `silence` — the Conductor that never starts at all (#1215)
+ *
+ * The scan above pairs STARTs with ENDs, so its entire population is runs that
+ * *began*. A Conductor that stops posting altogether contributes no START, and
+ * therefore reads `observed: 0, count: 0, dead: []` — indistinguishable, in
+ * every rendered field, from a week in which every run completed cleanly. That
+ * is not hypothetical: the routine stopped after 2026-08-19T15:24Z and `main`
+ * sat frozen for five days behind six green, unlandable PRs while this metric
+ * had nothing to report.
+ *
+ * `observed` was already printed as the denominator precisely because "0 of 0"
+ * is an unread log rather than a healthy week — but a denominator is a number a
+ * human has to notice. `silence` is the same fact promoted to a verdict.
+ *
+ * Three readings, kept distinct because collapsing any two of them is the bug:
+ *
+ *  - **`silent: null`** — not assessed. The log could not be read, or the read
+ *    was `truncated`. `since`-bounded pagination returns oldest-first, so a
+ *    truncated read drops the NEWEST comments — exactly the ones that prove
+ *    liveness — and would manufacture silence out of a busy log.
+ *  - **`silent: true, hours: null`** — the log was read in full and holds no
+ *    run header anywhere in the window. `hours` stays null on purpose: the gap
+ *    is at least the window, and inventing a number from the oldest comment
+ *    read would be a fabricated precision.
+ *  - **`silent: <bool>, hours: <n>`** — a header was seen; `hours` is its age.
+ *
+ * Liveness comes from START *or* END, and from the same first-line-anchored
+ * RUN_HEADER the pairing uses. The forge direction is inverted here — there, a
+ * quoted END could retire a dead run; here, any comment quoting a header could
+ * fake a heartbeat, and #719 is written to by cloud workers and bots that quote
+ * the Conductor constantly. One anchor defends both.
  */
-function findDeadConductorRuns(comments, nowIso, thresholdHours) {
+function findDeadConductorRuns(comments, nowIso, thresholdHours, opts) {
+  const { silentThresholdHours, truncated } = opts || {};
   // The unreadable-log guard lives HERE, ahead of the clock check, because this
   // is the only exported entry point to the scan — buildConductorRuns is
   // internal, so a guard held only there protects the workflow and nothing
@@ -254,6 +322,20 @@ function findDeadConductorRuns(comments, nowIso, thresholdHours) {
       observed: 0,
       count: null,
       dead: [],
+      // An unreadable log tells us nothing about whether the Conductor ran, and
+      // a false alarm about the supervisor is worse than the silence this
+      // metric replaces. `silent: null` is "unknown", never `true`.
+      silence: {
+        thresholdHours: resolveThresholdHours(
+          (opts || {}).silentThresholdHours,
+          SILENT_THRESHOLD_HOURS,
+        ),
+        assessed: false,
+        lastRun: null,
+        lastRunIso: null,
+        hours: null,
+        silent: null,
+      },
     };
   }
   // Exported, so this is a public entry point and cannot lean on
@@ -277,16 +359,12 @@ function findDeadConductorRuns(comments, nowIso, thresholdHours) {
   // '', '   ', null, false and [] all to 0 — a *finite, non-negative* number
   // that passes a naive `Number.isFinite(n) && n >= 0` check and then reports
   // every in-flight run dead. Narrow the accepted TYPES first, then the value.
-  let threshold = DEAD_RUN_THRESHOLD_HOURS;
-  if (
-    typeof thresholdHours === 'number' ||
-    (typeof thresholdHours === 'string' && thresholdHours.trim() !== '')
-  ) {
-    const requested = Number(thresholdHours);
-    if (Number.isFinite(requested) && requested >= 0) threshold = requested;
-  }
+  const threshold = resolveThresholdHours(thresholdHours, DEAD_RUN_THRESHOLD_HOURS);
+  const silenceThreshold = resolveThresholdHours(silentThresholdHours, SILENT_THRESHOLD_HOURS);
   const started = new Map(); // run number -> earliest START created_at
   const ended = new Set();
+  let lastHeaderIso = null; // newest START-or-END created_at: the heartbeat
+  let lastHeaderRun = null;
 
   for (const c of comments || []) {
     const body = c && c.body;
@@ -295,14 +373,25 @@ function findDeadConductorRuns(comments, nowIso, thresholdHours) {
     const m = RUN_HEADER.exec(firstLine);
     if (!m) continue;
     const run = Number(m[1]);
+    const stamp = c.created_at;
+    const stampOk = stamp && !Number.isNaN(new Date(stamp).getTime());
+    // Liveness is recorded BEFORE the END branch returns, and counts START and
+    // END alike: either proves the supervisor was posting. Placing it after the
+    // `continue` would make a run that only ENDed inside the window read as
+    // silence — the newest evidence of life being discarded by the branch that
+    // exists to retire a run.
+    if (stampOk && (!lastHeaderIso || new Date(stamp) > new Date(lastHeaderIso))) {
+      lastHeaderIso = stamp;
+      lastHeaderRun = run;
+    }
     if (m[2] === 'END') {
       ended.add(run);
       continue;
     }
     // A re-posted START keeps the earliest one: the run began when it said it
     // began, and taking the latest would let a repost reset the clock.
-    const at = c.created_at;
-    if (!at || Number.isNaN(new Date(at).getTime())) continue;
+    const at = stamp;
+    if (!stampOk) continue;
     const prevStart = started.get(run);
     if (!prevStart || new Date(at) < new Date(prevStart)) started.set(run, at);
   }
@@ -318,6 +407,24 @@ function findDeadConductorRuns(comments, nowIso, thresholdHours) {
   }
   dead.sort((a, b) => a.run - b.run);
 
+  // A truncated read is NOT a reading. `since`-bounded pagination returns
+  // oldest-first, so hitting the page cap drops the newest comments — the very
+  // ones that would prove the Conductor is alive — and a naive verdict would
+  // then report silence precisely when the log is busiest.
+  const silenceAssessed = !truncated;
+  let silenceHours = null;
+  let silent = null;
+  if (silenceAssessed) {
+    if (lastHeaderIso) {
+      silenceHours = round1(Math.max(0, (now - new Date(lastHeaderIso).getTime()) / HOUR_MS));
+      silent = silenceHours >= silenceThreshold;
+    } else {
+      // Read in full, and the supervisor is not in it. `hours` stays null: the
+      // gap is at least the caller's window and no exact number is available.
+      silent = true;
+    }
+  }
+
   return {
     assessed: true,
     thresholdHours: threshold,
@@ -326,6 +433,14 @@ function findDeadConductorRuns(comments, nowIso, thresholdHours) {
     observed: started.size,
     count: dead.length,
     dead,
+    silence: {
+      thresholdHours: silenceThreshold,
+      assessed: silenceAssessed,
+      lastRun: silenceAssessed ? lastHeaderRun : null,
+      lastRunIso: silenceAssessed ? lastHeaderIso : null,
+      hours: silenceHours,
+      silent,
+    },
   };
 }
 
@@ -334,7 +449,10 @@ function findDeadConductorRuns(comments, nowIso, thresholdHours) {
 // wedge the weekly report, and a swallowed read must not surface as "0 dead".
 // That is exactly the "presence mistaken for validity" shape the ledger is about.
 function buildConductorRuns(input, nowIso) {
-  return findDeadConductorRuns(input.logComments, nowIso, input.deadRunThresholdHours);
+  return findDeadConductorRuns(input.logComments, nowIso, input.deadRunThresholdHours, {
+    silentThresholdHours: input.silentThresholdHours,
+    truncated: input.logCommentsTruncated,
+  });
 }
 
 // Scan issue-comment bodies (oldest→newest as returned by the REST list) and
@@ -415,6 +533,16 @@ function renderReport(metrics, prev, opts) {
   // reads '—' instead of throwing.
   const cr = m.conductorRuns || { assessed: false, count: null, dead: [], observed: 0 };
   const pcr = p.conductorRuns || {};
+  // A report predating #1215 has no silence block; default it to "not assessed"
+  // so an older baseline renders no arrow rather than a delta against undefined.
+  const sil = cr.silence || {
+    assessed: false,
+    lastRun: null,
+    lastRunIso: null,
+    hours: null,
+    silent: null,
+  };
+  const psil = pcr.silence || {};
   const dp = m.dataPipeline;
   const pdp = p.dataPipeline || {};
 
@@ -461,6 +589,17 @@ function renderReport(metrics, prev, opts) {
       cr.assessed ? `${fmt(cr.count)} of ${cr.observed} seen` : 'not assessed'
     } | ${delta(cr.count, pcr.count)} |`,
   );
+  // The row above has a population of runs that STARTED, so it cannot express
+  // "no run started at all" (#1215). This one can.
+  lines.push(
+    `| **Time since the last conductor run** | ${
+      !sil.assessed
+        ? 'not assessed'
+        : sil.lastRunIso === null
+          ? `**none in the window read**`
+          : `${fmt(sil.hours)}h (run ${sil.lastRun})`
+    } | ${delta(sil.hours, psil.hours, 1)} |`,
+  );
   lines.push(
     `| agentic-os closed (${m.windowDays.throughput}d) | ${fmt(ao.closed)} | ${delta(ao.closed, pao.closed)} |`,
   );
@@ -491,6 +630,47 @@ function renderReport(metrics, prev, opts) {
       lines.push('>');
       lines.push(`> Excluded as deliberately parked: ${rw.parked.map((n) => `#${n}`).join(', ')}.`);
     }
+    lines.push('');
+  }
+
+  // Conductor silence (#1215). Deliberately placed ABOVE the dead-run callout:
+  // if the supervisor has stopped entirely, every other line in this report —
+  // including "0 runs died" — is describing a system with nobody driving it,
+  // and that has to be the first thing read, not a footnote under a clean row.
+  if (sil.assessed && sil.silent) {
+    const forBit =
+      sil.lastRunIso === null
+        ? 'no conductor run START or END appears anywhere in the comments read'
+        : `the last one was run ${sil.lastRun}, ${sil.hours}h ago (${sil.lastRunIso})`;
+    lines.push(`> **The Conductor has not run in ${sil.thresholdHours}h+** — ${forBit}.`);
+    lines.push('>');
+    // The zero-header reading has TWO causes and only one of them is an outage.
+    // Naming both is what keeps this alert actionable: a reader who checks the
+    // thread, sees the Conductor posting, and is told nothing about the header
+    // format learns only that the alert is wrong — and starts ignoring it.
+    if (sil.lastRunIso === null) {
+      lines.push(
+        `> Two things produce this reading: the Conductor stopped, **or** its run-header format ` +
+          `changed and no longer matches \`## Run N — START/END\`. Check #${LOG_ISSUE} before ` +
+          'concluding which — if headers are being posted, the scan needs fixing, not the routine.',
+      );
+      lines.push('>');
+    }
+    lines.push(
+      '> Nothing else in this report can show this. The dead-run metric above counts runs that ' +
+        'STARTED, so a supervisor that stops posting altogether reads `0 of 0` — a clean row. ' +
+        'While it is down nothing approves a gate, drains the merge queue, grooms the backlog or ' +
+        'refreshes the public feed, and every agent escalating to it is writing to a thread ' +
+        'nobody reads. It runs on a workstation, not in Actions, so no workflow can restart it: ' +
+        'this needs a human.',
+    );
+    lines.push('');
+  } else if (!sil.assessed) {
+    lines.push(
+      `> Conductor **liveness** was not assessed this week — #${LOG_ISSUE} could not be read, or ` +
+        'the bounded read hit its page cap and the newest comments are missing. A truncated log ' +
+        'cannot prove the supervisor is running OR that it stopped.',
+    );
     lines.push('');
   }
 
@@ -555,6 +735,7 @@ module.exports = {
   THROUGHPUT_WINDOW_DAYS,
   PIPELINE_WINDOW_DAYS,
   DEAD_RUN_THRESHOLD_HOURS,
+  SILENT_THRESHOLD_HOURS,
   mean,
   ageDays,
   computeMetrics,

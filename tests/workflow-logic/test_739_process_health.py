@@ -940,6 +940,212 @@ def test_the_workflow_wiring_feeds_one_read_to_both_consumers():
     assert "per_page: 100" in raw and "page: bp" in raw, "the comment read must be paginated"
 
 
+# --- conductor silence: the supervisor that never starts at all (#1215) ------
+#
+# The block above tests runs that STARTED and never ended. Its population is
+# therefore runs that began, and it is structurally unable to express "no run
+# began". These cases pin the gap: on 2026-08-19 the Conductor stopped posting,
+# `main` sat frozen for five days behind six green unlandable PRs, and the
+# dead-run metric reported `0 of 0 seen` throughout — a clean row.
+
+
+def _sil(comments, now: str = CR_NOW, threshold=None, truncated=None) -> dict:
+    args = {"nowIso": now, "logComments": comments}
+    if threshold is not None:
+        args["silentThresholdHours"] = threshold
+    if truncated is not None:
+        args["logCommentsTruncated"] = truncated
+    return compute(args)["conductorRuns"]["silence"]
+
+
+def test_a_log_with_no_conductor_header_at_all_is_silent_not_healthy():
+    """The regression fixture: the exact reading that stayed green for five days.
+
+    #719 goes on filling with cloud-worker runs and bot reports the whole time,
+    so the log is neither empty nor unreadable — it simply has no Conductor in
+    it. Every field of the dead-run metric reads clean here, which is why this
+    assertion is about `silence` and not about `count`.
+    """
+    comments = [
+        _comment("2026-08-22T15:16:22Z", "## Cloud worker — landing run, day 5.\n\nStill green."),
+        _comment("2026-08-22T07:55:18Z", "### 745 Agentic OS board audit — 16 finding(s)"),
+    ]
+    cr = compute({"nowIso": CR_NOW, "logComments": comments})["conductorRuns"]
+    assert cr["count"] == 0 and cr["observed"] == 0, (
+        "precondition: the dead-run metric is clean here, which is the whole problem"
+    )
+    sil = cr["silence"]
+    assert sil["assessed"] is True, "the log was read in full; this is a real reading"
+    assert sil["silent"] is True, f"no conductor header anywhere is silence, not health: {sil}"
+    assert sil["lastRunIso"] is None, sil
+    assert sil["hours"] is None, (
+        "the gap is at least the caller's window; a number derived from the oldest "
+        "comment read would be a fabricated precision"
+    )
+
+
+def test_the_august_outage_reproduces_as_silence():
+    """The real incident, at its real timestamps.
+
+    Run 149's END on 2026-08-19T15:24Z was the last Conductor artifact on #719.
+    Anything after it is a cloud worker or a bot.
+    """
+    sil = _sil([_start(149, "2026-08-19T15:00:00Z"), _end(149, "2026-08-19T15:24:00Z")],
+               now="2026-08-23T03:00:00Z")
+    assert sil["silent"] is True, sil
+    assert sil["lastRun"] == 149, sil
+    assert sil["hours"] > 48, f"3.5 days must clear the 48h threshold: {sil}"
+
+
+def test_a_conductor_posting_normally_is_not_silent():
+    """The positive control. Without it every assertion above passes vacuously
+    for a metric hard-wired to `silent: true`."""
+    sil = _sil([_start(150, "2026-08-01T02:00:00Z"), _end(150, "2026-08-01T02:30:00Z")])
+    assert sil["silent"] is False, f"a run 90 minutes ago is a live supervisor: {sil}"
+    assert sil["lastRun"] == 150, sil
+    assert sil["hours"] == 1.5, sil
+
+
+def test_an_end_alone_still_proves_life():
+    """A run whose START fell off the top of the window is still evidence.
+
+    Liveness is recorded before the END branch retires the run — putting it
+    after would discard the newest proof of life in the branch that exists to
+    close runs out, and a window that happens to open mid-run would read silent.
+    """
+    sil = _sil([_end(148, "2026-08-01T03:00:00Z")])
+    assert sil["silent"] is False, f"an END is a posted artifact like any other: {sil}"
+    assert sil["lastRun"] == 148, sil
+
+
+def test_an_unreadable_log_is_unknown_rather_than_silent():
+    """A false alarm about the supervisor is worse than the silence it replaces.
+
+    The dead-run scan already refuses to turn an unreadable log into `0 dead`.
+    The same read must not turn into `silent: true`, which would page a human
+    about a Conductor that is running fine.
+    """
+    sil = compute({"nowIso": CR_NOW})["conductorRuns"]["silence"]
+    assert sil["assessed"] is False, sil
+    assert sil["silent"] is None, "null is 'unknown'; True would be an invented outage"
+    assert sil["hours"] is None and sil["lastRunIso"] is None, sil
+    body = render(compute({"nowIso": CR_NOW}), None)
+    assert "liveness** was not assessed" in body, "the report must disclose the gap"
+
+
+def test_a_truncated_read_is_unknown_rather_than_silent():
+    """`since`-bounded pagination returns OLDEST-first, so hitting the page cap
+    drops the NEWEST comments — precisely the ones that prove liveness.
+
+    This is the one input whose mishandling manufactures an outage out of a
+    healthy but busy log, and it fails in the alarming direction on the weeks
+    the thread is most active.
+    """
+    live = [_start(150, "2026-08-01T02:00:00Z")]
+    assert _sil(live)["silent"] is False, "control: untruncated, this log is alive"
+    sil = _sil(live, truncated=True)
+    assert sil["assessed"] is False, f"a capped read is not a reading: {sil}"
+    assert sil["silent"] is None, sil
+    assert sil["lastRunIso"] is None, "a truncated read may not report a 'last run' either"
+
+
+def test_a_quoted_header_cannot_fake_a_heartbeat():
+    """The forge direction is inverted from the dead-run scan's.
+
+    There, a quoted END could wrongly retire a dead run. Here, any comment
+    quoting a header could wrongly prove the supervisor alive — and #719 is
+    written to constantly by cloud workers and bots that quote the Conductor
+    verbatim. The same first-line anchor defends both.
+    """
+    quoting = _comment(
+        "2026-08-01T03:00:00Z",
+        "## Cloud worker — landing run\n\nThe last conductor entry was:\n\n"
+        "## Run 150 — END (2026-08-01T02:3xZ)\n\nNothing since.",
+    )
+    sil = _sil([quoting])
+    assert sil["silent"] is True, (
+        f"a worker quoting a header is not the Conductor posting one: {sil}"
+    )
+    assert sil["lastRunIso"] is None, sil
+
+
+def test_the_silence_threshold_is_configurable_and_applied():
+    comments = [_start(150, "2026-08-01T00:00:00Z")]  # 4h before CR_NOW
+    assert _sil(comments, threshold=2)["silent"] is True
+    assert _sil(comments, threshold=6)["silent"] is False, "a wider threshold must spare it"
+    assert _sil(comments)["thresholdHours"] == 48, "default stays 48h"
+
+
+def test_an_unusable_silence_threshold_falls_back_instead_of_alarming():
+    """Same coercion trap as the dead-run threshold, and the same direction.
+
+    `Number('')` is 0, which makes every log silent — including one whose
+    Conductor posted seconds ago. The shared resolver narrows TYPES before
+    values, so '' / '   ' / False / [] cannot slip through as a finite 0.
+    """
+    live = [_start(150, "2026-08-01T03:30:00Z")]  # 0.5h old
+    for bad in ("", "   ", "48h", "abc", "NaN", -1, False, True, [], [5], {}):
+        sil = _sil(live, threshold=bad)
+        assert sil["thresholdHours"] == 48, f"threshold={bad!r} must fall back: {sil}"
+        assert sil["silent"] is False, f"threshold={bad!r} must not invent an outage: {sil}"
+
+
+def test_the_silence_callout_names_both_causes_of_a_zero_header_read():
+    """An alert a reader learns to distrust is worse than no alert.
+
+    A zero-header reading has two causes — the Conductor stopped, or its header
+    format drifted away from RUN_HEADER. A reader who checks #719, sees the
+    Conductor posting, and is told nothing about the second cause concludes the
+    metric is broken and starts skipping it.
+    """
+    m = compute({"nowIso": CR_NOW, "logComments": [
+        _comment("2026-08-01T03:00:00Z", "## Cloud worker — landing run"),
+    ]})
+    body = render(m, None)
+    assert "has not run in 48h+" in body, body[:600]
+    assert "run-header format" in body, "the alert must name the false-alarm cause too"
+    assert "## Run N" in body, "and name the format it expects, so the fix is obvious"
+
+
+def test_the_silence_callout_is_rendered_above_the_dead_run_callout():
+    """Ordering is the finding, not decoration.
+
+    If the supervisor has stopped, every other line in the report describes a
+    system with nobody driving it. That cannot sit underneath a clean row.
+    """
+    m = compute({"nowIso": CR_NOW, "logComments": [_start(63, "2026-08-01T01:05:45Z")]})
+    body = render(m, None)
+    # This fixture is both silent (last header 2.9h ago < 48h? no — assert what holds)
+    dead_at = body.find("started and never ended")
+    assert dead_at != -1, "precondition: the dead-run callout is present"
+    m2 = compute({"nowIso": "2026-08-05T00:00:00Z",
+                  "logComments": [_start(63, "2026-08-01T01:05:45Z")]})
+    body2 = render(m2, None)
+    sil_at = body2.find("has not run in 48h+")
+    dead_at2 = body2.find("started and never ended")
+    assert sil_at != -1 and dead_at2 != -1, body2[:800]
+    assert sil_at < dead_at2, "silence must be read before the dead-run detail"
+
+
+def test_a_report_predating_the_silence_field_renders_without_an_arrow():
+    """An older baseline has no `silence` block; the delta must degrade, not throw."""
+    m = compute({"nowIso": CR_NOW, "logComments": [_start(150, "2026-08-01T02:00:00Z")]})
+    prev = {"conductorRuns": {"assessed": True, "count": 0, "observed": 1, "dead": []}}
+    body = render(m, prev)
+    assert "Time since the last conductor run" in body, body[:600]
+
+
+def test_the_workflow_reports_a_capped_read_as_truncated():
+    """The lib cannot see the page cap; only the caller can. A silent cap here
+    would put the false-alarm branch permanently out of reach."""
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
+    assert "logCommentsTruncated," in raw, (
+        "the workflow must pass the truncation flag to computeMetrics"
+    )
+    assert "MAX_BASELINE_PAGES) logCommentsTruncated = true" in raw, (
+        "and must set it when the read stops on the page cap rather than on the thread's end"
+    )
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

@@ -263,6 +263,13 @@ jobs:
             const MAX_BASELINE_PAGES = 10;
             const since = new Date(nowMs - BASELINE_LOOKBACK_DAYS * 86400e3).toISOString();
             let logComments = null;
+            // Whether the read above stopped because it ran out of comments or
+            // because it ran out of PAGES. `since` returns oldest-first, so a
+            // capped read is missing the NEWEST comments — exactly the ones the
+            // liveness check (#1215) reads as proof the Conductor is running.
+            // Reported as "not assessed" rather than as silence; a false alarm
+            // about the supervisor is worse than the gap it would be filling.
+            let logCommentsTruncated = false;
             try {
               const acc = [];
               for (let bp = 1; bp <= MAX_BASELINE_PAGES; bp++) {
@@ -271,8 +278,16 @@ jobs:
                 });
                 acc.push(...data);
                 if (data.length < 100) break;
+                // A full last page means the cap, not the end of the thread.
+                if (bp === MAX_BASELINE_PAGES) logCommentsTruncated = true;
               }
               logComments = acc;
+              if (logCommentsTruncated) {
+                core.warning(
+                  `#${logIssue} comment read hit the ${MAX_BASELINE_PAGES}-page cap; ` +
+                    'conductor liveness reported as not assessed.',
+                );
+              }
             } catch (e) {
               // Leave logComments null: computeMetrics then reports the dead-run
               // scan as `assessed: false` rather than a reassuring zero, and the
@@ -286,6 +301,7 @@ jobs:
             const metrics = lib.computeMetrics({
               nowIso,
               logComments,
+              logCommentsTruncated,
               smokeOpen: smokeOpen.map((i) => ({ created_at: i.created_at })),
               smokeClosedRecent: smokeClosed.map((i) => ({
                 created_at: i.created_at, closed_at: i.closed_at,

@@ -229,6 +229,18 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
   minutes later. Re-compose after anything lands, including your own PR. Ledger **L191**; the
   mechanical form is filed as #1123.
 
+  **And composing against `main` is not enough when the other PR has not landed yet.** The recipe
+  above finds the collision once the sibling is in `main`; while both are open it reports green for
+  both, because mergeability and every required check are computed against the base alone. Measured
+  2026-08-23: #1214 declares `L248 #1209` / `L249 #1209` / `L250 #1212` in the `reserved-ids` block
+  and #1212 lands those three as rows; each composes green against `main`, git merges the pair
+  cleanly (different lines), and `test_lessons_ledger.py` fails on the union in **either** order.
+  Whichever reaches the queue second is the one that fails, with a message about a diff it does not
+  contain. When your diff touches a `reserved-ids` entry, compose against the head of the PR the
+  entry names — it is written down for you — and prune the matching lines if you are second. Ledger
+  **L191**; the reservation-specific form is in the block's own preamble in
+  `docs/lessons-ledger.md`.
+
 - **Re-check the PR is still open before pushing to its branch.** Merging main into an agent branch
   whose PR merged moments ago silently **re-creates the auto-deleted branch** — the tell is
   `[new branch]` in push output for a push you meant as an update. If you see it, delete the

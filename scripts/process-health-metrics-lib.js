@@ -444,10 +444,23 @@ function findDeadConductorRuns(comments, nowIso, thresholdHours, opts) {
   };
 }
 
-// `assessed: false` is the honest reading when #719 could not be read at all —
-// the comment fetch is wrapped in a try/catch so a transient API failure cannot
-// wedge the weekly report, and a swallowed read must not surface as "0 dead".
-// That is exactly the "presence mistaken for validity" shape the ledger is about.
+// `assessed: false` is the honest reading for TWO different unusable reads, and
+// they arrive by different routes:
+//
+//   1. #719 could not be read at all — the fetch is wrapped in a try/catch so a
+//      transient API failure cannot wedge the weekly report, and a swallowed
+//      read must not surface as "0 dead". `logComments` arrives non-array.
+//   2. The read was CAPPED (`logCommentsTruncated`). `since` pagination returns
+//      oldest-first, so a capped read is missing the NEWEST comments: a run
+//      whose END was cut reads as dead, and `extractPreviousMetrics` selects a
+//      stale baseline. The workflow therefore nulls `logComments` as well as
+//      setting the flag, so both halves degrade together rather than one metric
+//      reporting "not assessed" beside another reporting a specific dead run
+//      from the same bytes. `truncated` is still honoured here on its own, for
+//      a direct caller that passes the comments through.
+//
+// Both are the "presence mistaken for validity" shape the ledger is about: a
+// partial window is not a smaller reading, it is a confident wrong one.
 function buildConductorRuns(input, nowIso) {
   return findDeadConductorRuns(input.logComments, nowIso, input.deadRunThresholdHours, {
     silentThresholdHours: input.silentThresholdHours,

@@ -254,8 +254,8 @@ def test_the_env_form_is_detected_after_a_1080_conversion():
 
 
 def test_the_remedy_is_not_a_finding():
-    found = _scan_text(_SAMPLE.format(
-        body="if (-not [string]::IsNullOrWhiteSpace($env:IN_CLIENT_ID)) { $x = 1 }"))
+    found = _scan_text(
+        _sample("if (-not [string]::IsNullOrWhiteSpace($env:IN_CLIENT_ID)) { $x = 1 }"))
     assert found == [], [str(f) for f in found]
 
 
@@ -427,6 +427,42 @@ def test_the_checker_exits_zero_on_the_shipped_tree():
     )
     assert out.returncode == 0, f"{out.stdout}\n{out.stderr}"
     assert "empty-string input gate OK" in out.stdout, out.stdout
+
+
+def test_no_case_substitutes_the_sample_with_str_format():
+    """`_SAMPLE` must only ever be substituted through `_sample()`.
+
+    `str.format` collapses `{{` -> `{`, which rewrites the template's own `env:`
+    mapping into a non-expression AND — since the placeholder is `__BODY__`, not
+    a format field — silently ignores the body argument entirely. The case then
+    scans a sample with no gate in it and passes **vacuously**.
+
+    Not hypothetical: one call site survived the conversion to `_sample()`
+    because it wraps across two lines, so a substring rewrite keyed on the
+    single-line spelling missed it — and the rewrite then asserted the count it
+    had *observed* rather than the count that should exist, which is what made
+    the miss invisible. Copilot caught it on #1214; a grep-style assertion is
+    the cheap thing that would have.
+
+    The needle is assembled at runtime so this function's own source cannot
+    match it. The first version spelled it literally and the guard promptly
+    flagged its own docstring — a self-trigger reads as a real finding.
+    """
+    needle = "_SAMPLE" + ".format"
+    source = pathlib.Path(__file__).read_text(encoding="utf-8")
+    offenders = [
+        n for n, line in enumerate(source.splitlines(), start=1) if needle in line
+    ]
+    assert not offenders, (
+        f"lines {offenders} substitute the sample template with str.format — use "
+        f"_sample(), which preserves the expressions and asserts the placeholder "
+        f"is present"
+    )
+    assert "__BODY__" in _SAMPLE, "the sample template lost its body placeholder"
+    assert "{body}" not in _SAMPLE, (
+        "the template regained a str.format placeholder — the two substitution "
+        "styles must not coexist, or the wrong one silently wins"
+    )
 
 
 def test_needs_pwsh_names_tests_that_exist():

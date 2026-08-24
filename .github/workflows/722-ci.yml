@@ -242,8 +242,10 @@ jobs:
           # lane that does its own job perfectly still lands a gate that is
           # newly wrong in a case that did not previously exist. The
           # interpolation guard above has no notion of predicates and cannot
-          # see it. Freezes the 2 remaining sites (205, in flight on #1207) and
-          # fails on a new one or on a freeze entry naming a missing file.
+          # see it. The freeze is now EMPTY — 205, the last two sites, landed
+          # with #1207 — so this fails on ANY empty-string gate anywhere in the
+          # tree, and on a freeze entry naming a missing file. An entry here is
+          # an explicit, reasoned exception, not the normal state.
           # Needs NO PowerShell host — it is a textual predicate check, so tool
           # absence cannot turn "could not run" into "everything passed".
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml

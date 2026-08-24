@@ -109,26 +109,26 @@ _INPUT_REF = re.compile(
 # keyed workflow -> input names, the same shape `KNOWN_UNGUARDED` uses in
 # `check-workflow-input-interpolation.py`.
 #
-# ONE entry, and it is a deliberate cross-PR deferral rather than an
-# endorsement. `205-whmcs-ticket-open.yml` is in flight on #1207 (and carried
-# byte-identical by #1212), and BOTH of those branches already apply the
-# `IsNullOrWhiteSpace` fix to these two gates. Editing `205` here would collide
-# with that lane textually and destroy #1212's byte-identical-to-its-source
-# property, which is the thing letting the Conductor still choose between the
-# two landing paths. So the fix for `205` ships with the lane that owns the
-# file, and this entry records the debt until it lands.
+# EMPTY, and that is the finished state rather than a gap. The one entry this
+# guard shipped with pinned `205-whmcs-ticket-open.yml`'s `client_email` and
+# `client_id`, deferred because the lane that owned the file (#1207, carried
+# byte-identical by #1212) was still in flight and editing `205` here would
+# have collided with it. That lane has landed in this composition, so the two
+# gates now use `-not [string]::IsNullOrWhiteSpace(...)` and the debt the entry
+# recorded is paid. Deleting it is what the entry's own instruction asked for.
 #
-# WHEN #1207 OR #1212 LANDS: delete this entry. The guard prints a NOTE naming
-# it and still exits 0 — see `compare()` for why that direction is not fatal.
-# NOTE ON THE INPUT NAMES: `205`'s email input is declared `client_email`, not
-# `email`. #1213's call-site table calls it `email` (it named the *parameter*
-# the value binds to, `-Email`, not the dispatch input). Writing the issue's
-# spelling here made the freeze silently fail to cover the real site — caught
-# by this guard's own staleness NOTE on the first run, which is the argument
-# for the NOTE existing at all.
-KNOWN_WEAK_GATES: dict[str, tuple[str, ...]] = {
-    "205-whmcs-ticket-open.yml": ("client_email", "client_id"),
-}
+# The scan is what keeps this honest: with the freeze empty, ANY empty-string
+# gate anywhere in the tree is an ERROR, so an emptied freeze is strictly
+# stronger than a populated one. Re-adding an entry is a deliberate act that
+# needs the reason written beside it.
+#
+# NOTE ON INPUT NAMES, kept because it cost a silent miss: `205`'s email input
+# is declared `client_email`, not `email`. #1213's call-site table calls it
+# `email` (it named the *parameter* the value binds to, `-Email`, not the
+# dispatch input). Writing the issue's spelling here made the freeze silently
+# cover nothing — caught by this guard's own staleness NOTE, which is the
+# argument for the NOTE existing at all.
+KNOWN_WEAK_GATES: dict[str, tuple[str, ...]] = {}
 
 
 class Finding:
@@ -298,11 +298,16 @@ def compare(current: dict[str, tuple[str, ...]],
     NOTES (exit 0) are the other direction: a freeze entry whose site has since
     been FIXED. `check-workflow-input-interpolation.py` makes that fatal,
     because there every entry is removed by the same lane that fixes it. Here
-    the single entry is fixed by a PR that predates this guard and cannot edit
-    it (#1207 / #1212), so making it fatal would turn someone else's merge into
-    a red `main` — a landmine, not a forcing function. The trade-off is real
-    and stated rather than hidden: a fixed entry can linger, which is a
-    documentation staleness cost, not a hole in the guard.
+    an entry may be fixed by a lane that predates this guard and cannot edit
+    it, so making it fatal would turn someone else's merge into a red `main` —
+    a landmine, not a forcing function. The trade-off is real and stated rather
+    than hidden: a fixed entry can linger, which is a documentation staleness
+    cost, not a hole in the guard.
+
+    That is exactly how the one shipped entry (`205`, deferred to #1207/#1212)
+    was retired: the NOTE fired the moment that lane composed in, and the
+    entry was deleted rather than lingering. The freeze is empty now, so the
+    ERROR direction covers the whole tree.
     """
     known = KNOWN_WEAK_GATES if known is None else known
     errors: list[str] = []

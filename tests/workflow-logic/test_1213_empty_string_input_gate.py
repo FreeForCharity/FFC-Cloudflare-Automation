@@ -420,20 +420,57 @@ def test_reverting_each_fixed_site_is_detected_and_named():
 
 
 def test_a_new_weak_gate_in_a_frozen_workflow_is_still_a_finding():
-    """The freeze pins named inputs, not the whole file. Adding a THIRD weak
-    gate to `205` must fail even though `205` is listed."""
+    """The freeze pins named inputs, not the whole file. A THIRD weak gate in a
+    listed workflow must fail even though the workflow is listed.
+
+    The freeze is passed EXPLICITLY rather than read from the module. This case
+    is about `compare()`'s set arithmetic, and reading the shipped freeze would
+    couple it to whatever that dict happens to hold — the shipped freeze is
+    empty today, which would make `frozen` empty, put every name in `new`, and
+    let the assertion below pass for the wrong reason (`subject` appears in an
+    error that is really reporting all three). Same lesson as #1211: derive the
+    fixture from the case, not from the tree.
+    """
+    known = {"205-whmcs-ticket-open.yml": ("client_email", "client_id")}
     current = {"205-whmcs-ticket-open.yml": ("client_email", "client_id", "subject")}
-    errors, _notes = guard.compare(current)
+    errors, _notes = guard.compare(current, known=known)
     assert any("subject" in e for e in errors), errors
+    assert not any("client_email" in e for e in errors), (
+        "the two FROZEN names leaked into the finding: the freeze is being "
+        "ignored rather than applied", errors,
+    )
 
 
 def test_a_freeze_entry_whose_site_was_fixed_is_a_note_not_an_error():
-    """The deliberate asymmetry, documented in `compare()`: the 205 entry is
-    fixed by #1207/#1212, which predate this guard and cannot edit it. Making
-    that fatal would turn someone else's merge into a red `main`."""
-    errors, notes = guard.compare({})
+    """The deliberate asymmetry, documented in `compare()`: an entry whose site
+    a DIFFERENT lane has since fixed is a NOTE, not an error. Making it fatal
+    would turn someone else's merge into a red `main`.
+
+    The freeze is supplied explicitly. It used to read the shipped dict, which
+    tied this case to the 205 deferral being present — and the moment that
+    entry was paid off and deleted (the thing the entry itself asked for), a
+    correct prune failed a test that was never about 205.
+    """
+    known = {"205-whmcs-ticket-open.yml": ("client_email", "client_id")}
+    errors, notes = guard.compare({}, known=known)
     assert errors == [], errors
     assert any("205-whmcs-ticket-open.yml" in n for n in notes), notes
+
+
+def test_the_shipped_freeze_is_empty_so_every_weak_gate_is_an_error():
+    """The prune is the point, so assert the state it produced.
+
+    An empty freeze is the STRONGEST configuration: nothing is exempt, so any
+    empty-string gate anywhere is an error rather than a note. If a future lane
+    legitimately re-adds an entry, this case fails and whoever adds it states
+    the reason here — which is the forcing function the freeze's own comment
+    asks for.
+    """
+    assert guard.KNOWN_WEAK_GATES == {}, (
+        "the freeze is no longer empty. Every entry is a place a blank value "
+        "reaches a callee that was told it had a real one (#1213) — if the "
+        "entry is justified, record why here."
+    )
 
 
 def test_a_freeze_entry_naming_a_missing_file_is_an_error():

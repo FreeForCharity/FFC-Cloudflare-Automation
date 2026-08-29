@@ -497,19 +497,21 @@ def exported_env_names(body: str) -> set[str]:
     return names
 
 
-def action_exported_env_names(uses: str, depth: int = 0) -> set[str]:
-    """Env names a LOCAL composite action exports into the caller's job.
+def _local_action_steps(uses: str, depth: int = 0) -> list[dict]:
+    """The steps of a LOCAL composite action, or `[]` if it is not one.
 
-    A composite action's steps run in the calling job, so its `GITHUB_ENV` writes
-    are in reach of every later step of the CALLER — which is exactly how the
-    Cloudflare and WHMCS credentials arrive in workflows whose files contain no
-    `secrets.` reference at all.
+    Shared by both resolvers below, which ask the same question of the same file
+    for two different reasons: what it EXPORTS, and what it ACQUIRES. Splitting
+    it means a third-party `uses:`, an unreadable file and a non-composite
+    action are refused in one place and in one way — a resolver that answered
+    "nothing" for a file it could not read while the other answered from a stale
+    copy would be the worst of both.
     """
     if depth > 2:
-        return set()
+        return []
     match = _LOCAL_ACTION.match(str(uses).strip())
     if not match:
-        return set()
+        return []
     directory = REPO_ROOT / match.group(1)
     for candidate in ("action.yml", "action.yaml"):
         path = directory / candidate
@@ -518,15 +520,29 @@ def action_exported_env_names(uses: str, depth: int = 0) -> set[str]:
         try:
             action = yaml.safe_load(path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError):
-            return set()
+            return []
         if not isinstance(action, dict):
-            return set()
-        names: set[str] = set()
-        for step in ((action.get("runs") or {}).get("steps") or []):
-            if isinstance(step, dict):
-                names |= step_exported_env_names(step, depth + 1)
-        return names
-    return set()
+            return []
+        return [
+            step
+            for step in ((action.get("runs") or {}).get("steps") or [])
+            if isinstance(step, dict)
+        ]
+    return []
+
+
+def action_exported_env_names(uses: str, depth: int = 0) -> set[str]:
+    """Env names a LOCAL composite action exports into the caller's job.
+
+    A composite action's steps run in the calling job, so its `GITHUB_ENV` writes
+    are in reach of every later step of the CALLER — which is exactly how the
+    Cloudflare and WHMCS credentials arrive in workflows whose files contain no
+    `secrets.` reference at all.
+    """
+    names: set[str] = set()
+    for step in _local_action_steps(uses, depth):
+        names |= step_exported_env_names(step, depth + 1)
+    return names
 
 
 def step_exported_env_names(step: dict, depth: int = 0) -> set[str]:
@@ -537,6 +553,115 @@ def step_exported_env_names(step: dict, depth: int = 0) -> set[str]:
     if isinstance(step.get("uses"), str):
         names |= action_exported_env_names(step["uses"], depth)
     return names
+
+
+# --- credentials a step ACQUIRES rather than is handed (#1208) ---------------
+#
+# WHY THIS EXISTS
+#     Everything above indexes ARRIVAL IN A VARIABLE — a name in the step's own
+#     `env:`, a name in the job's, a name written to `$GITHUB_ENV`. That is the
+#     right index for a credential somebody mapped in, and it is blind to the
+#     shape a GATED job reaches for first: an OIDC login that leaves an
+#     AUTHENTICATED CLI SESSION on disk (`~/.azure`, or `$AZURE_CONFIG_DIR`).
+#     Nothing lands in any `env:`, nothing is written to `GITHUB_ENV`, and no
+#     `secrets.` name is in reach of the body — so all three sweeps this repo
+#     recommends score the step as holding nothing, while the shipped body one
+#     line below runs
+#
+#         az account get-access-token --resource-type ms-graph …
+#
+#     and gets a Graph bearer token. An injected body does not need to READ
+#     anything. It runs `az` itself, exactly as the shipped body does.
+#
+#     Measured on `main` at `b7a9f2b` (#1208): `--reachability
+#     101-domain-status.yml` named 101's two `cloudflare` steps and OMITTED both
+#     `m365` steps — and the `m365` job is `environment: m365-prod`, the only
+#     reason 101 was a `[W]` entry in the #1080 freeze at all. Every available
+#     sweep scored the two sites carrying the write environment as empty.
+#
+#     Why that is worth mechanising rather than remembering: the empty answer is
+#     the reassuring one AND it was the mechanical one, so it is the one that
+#     gets trusted. An absent line and an empty line read identically to an
+#     operator and mean very different things.
+#
+# WHAT IT DELIBERATELY DOES NOT DO
+#     It does not become a finding. Like the rest of this section it is a
+#     READING: it never creates or clears a finding and never touches the exit
+#     code (#1188 criterion 4, restated by #1208).
+
+# `uses:` references known to leave an authenticated session behind for every
+# LATER step of the caller's job. First match wins, so the generic `*/…login…@`
+# row sits last: it is the catch-all that keeps an unfamiliar login action from
+# reading as "no credential" — the failure this whole block exists to end.
+#
+# Third-party sources are not in this tree, so this is a NAME-based judgement in
+# a file that otherwise refuses to guess at a third-party `uses:`
+# (`action_exported_env_names` returns nothing for one, deliberately). The
+# asymmetry is the point and it runs the safe way: naming a session that turns
+# out to be unused costs a reviewer one line, and the opposite error is #1208.
+_ACQUIRING_ACTIONS = (
+    (re.compile(r"^azure/login@"), "az CLI session"),
+    (re.compile(r"^google-github-actions/auth@"), "gcloud CLI session"),
+    (re.compile(r"^aws-actions/configure-aws-credentials@"), "aws CLI session"),
+    (re.compile(r"^docker/login-action@"), "docker registry session"),
+    (re.compile(r"^actions/create-github-app-token@"), "GitHub App installation token"),
+    (re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]*login[A-Za-z0-9._-]*@"), "CLI session"),
+)
+
+# The same acquisition performed by a `run:` body instead of an action. The
+# lookbehind keeps `pwsh-az login` and a path ending in `/az` out; a mention
+# inside a comment or an error string is NOT excluded, on the over-report side
+# of the same trade as above.
+_ACQUIRING_COMMANDS = (
+    (re.compile(r"(?<![\w./-])az\s+login(?![\w-])"), "az CLI session"),
+    (re.compile(r"(?<![\w./-])gh\s+auth\s+login(?![\w-])"), "gh CLI session"),
+    (re.compile(r"(?<![\w./-])docker\s+login(?![\w-])"), "docker registry session"),
+    (
+        re.compile(r"(?<![\w./-])gcloud\s+auth\s+(?:login|activate-service-account)(?![\w-])"),
+        "gcloud CLI session",
+    ),
+)
+
+
+def uses_acquired_sessions(uses: str) -> set[str]:
+    """The session a `uses:` reference is known BY NAME to leave behind."""
+    reference = str(uses).strip()
+    for pattern, label in _ACQUIRING_ACTIONS:
+        if pattern.match(reference):
+            return {label}
+    return set()
+
+
+def action_acquired_sessions(uses: str, depth: int = 0) -> set[str]:
+    """Sessions a LOCAL composite action leaves behind in the caller's job.
+
+    This is not a hypothetical extension of the direct case: all five
+    `*-from-kv` actions in `.github/actions/` open with `azure/login@…` and then
+    read Key Vault, and their steps run in the CALLER's job. So every workflow
+    that fetches a credential through one of them also hands every later step in
+    that job an `az` session — which is strictly broader than the two or three
+    names the action exports, because the session can `az keyvault secret show`
+    anything that identity may read.
+    """
+    acquired: set[str] = set()
+    for step in _local_action_steps(uses, depth):
+        acquired |= step_acquired_sessions(step, depth + 1)
+    return acquired
+
+
+def step_acquired_sessions(step: dict, depth: int = 0) -> set[str]:
+    """Sessions one step leaves behind for LATER steps in the same job."""
+    acquired: set[str] = set()
+    run = step.get("run")
+    if isinstance(run, str):
+        for pattern, label in _ACQUIRING_COMMANDS:
+            if pattern.search(run):
+                acquired.add(label)
+    uses = step.get("uses")
+    if isinstance(uses, str):
+        acquired |= uses_acquired_sessions(uses)
+        acquired |= action_acquired_sessions(uses, depth)
+    return acquired
 
 
 class Reach:
@@ -551,6 +676,7 @@ class Reach:
     STEP_ENV = "step env:"
     JOB_ENV = "job env:"
     GITHUB_ENV = "GITHUB_ENV"
+    ACQUIRED = "acquired"
 
     def __init__(self, name: str, arrival: str, source: str | None = None) -> None:
         self.name = name
@@ -559,8 +685,14 @@ class Reach:
 
     @property
     def hidden(self) -> bool:
-        """True when neither recommended sweep can see it (#1188)."""
-        return self.arrival == self.GITHUB_ENV
+        """True when neither recommended sweep can see it (#1188, #1208).
+
+        Both paths are invisible to an L213 read of the step's `env:` and to a
+        `secrets.` grep of the file. `ACQUIRED` is the more thorough of the two:
+        a `GITHUB_ENV` arrival at least has a NAME somewhere in the tree, and a
+        CLI session has no textual trace at the call site at all.
+        """
+        return self.arrival in (self.GITHUB_ENV, self.ACQUIRED)
 
     def _key(self):
         return (self.name, self.arrival, self.source)
@@ -574,6 +706,8 @@ class Reach:
     def __str__(self) -> str:
         if self.arrival == self.GITHUB_ENV:
             return f"{self.name} (GITHUB_ENV from step '{self.source}')"
+        if self.arrival == self.ACQUIRED:
+            return f"{self.name} (acquired by step '{self.source}'; no variable in reach)"
         return f"{self.name} ({self.arrival})"
 
 
@@ -599,11 +733,14 @@ def _exporter_label(step: dict, index: int) -> str:
 def credentials_in_reach(workflow: dict, job_id: str, step_index: int) -> list[Reach]:
     """Credentials in the process environment of `steps[step_index]` of `job_id`.
 
-    Three arrival paths, resolved in the order a runner applies them:
+    Four arrival paths, resolved in the order a runner applies them:
 
       job env:     a `env:` on the job — in reach of every step in it
       GITHUB_ENV   written by an EARLIER step (or a local composite action it
                    calls); the step's own writes are not in reach of itself
+      acquired     an authenticated CLI session an EARLIER step logged in and
+                   left on disk — no variable anywhere, so no sweep defined over
+                   variables can see it (#1208)
       step env:    the step's own `env:` — ledger L213's surface
 
     Deliberately conservative about `if:`: a step guarded by a condition still
@@ -628,6 +765,11 @@ def credentials_in_reach(workflow: dict, job_id: str, step_index: int) -> list[R
         for name in sorted(step_exported_env_names(step)):
             if looks_like_credential(name):
                 reached.append(Reach(name, Reach.GITHUB_ENV, label))
+        # An acquired session is not name-classified: `looks_like_credential`
+        # judges an env-var NAME, and there is no variable here to judge. What
+        # makes it a credential is the login, which is the thing matched.
+        for session in sorted(step_acquired_sessions(step)):
+            reached.append(Reach(session, Reach.ACQUIRED, label))
 
     if 0 <= step_index < len(steps) and isinstance(steps[step_index], dict):
         for name, value in (steps[step_index].get("env") or {}).items():
@@ -992,10 +1134,11 @@ def reachability_paragraph(findings: list[Finding], write_workflows: list[str]) 
     lines = [
         f"credential reachability (#1188): {len(sites)} of {len(findings)} frozen call "
         f"sites run with a credential in reach, across {len(workflows)} workflow(s); "
-        f"{len(hidden_sites)} of those reach one ONLY through GITHUB_ENV, where the "
-        f"injecting step's own `env:` (L213) and a `secrets.` grep of the file (#1141) "
-        f"both read clean. That is the surface #1080 lanes 7, 9 and 10 each rediscovered "
-        f"by hand.",
+        f"{len(hidden_sites)} of those reach one ONLY through GITHUB_ENV or an acquired "
+        f"CLI session, where the injecting step's own `env:` (L213) and a `secrets.` "
+        f"grep of the file (#1141) both read clean. That is the surface #1080 lanes 7, "
+        f"9 and 10 each rediscovered by hand, plus the one lane 13 could not see at all "
+        f"(#1208).",
         "",
     ]
     for workflow, job, step in sorted(sites, key=lambda k: (k[0] not in write_workflows, k)):
@@ -1007,9 +1150,13 @@ def reachability_paragraph(findings: list[Finding], write_workflows: list[str]) 
     lines.append(
         "  [W] = the workflow enters an environment not suffixed `-read`. Arrival path is "
         "the point: a name in the step's own `env:` is visible to anyone who opens the "
-        "file, and a GITHUB_ENV arrival is the one nobody sees. A third-party `uses:` is "
-        "NOT resolved — its source is not in this tree — so a credential it exports is "
-        "absent from these lines rather than known to be absent."
+        "file, a GITHUB_ENV arrival is the one nobody sees, and an `acquired` line is a "
+        "credential with no variable at all — an authenticated CLI session an earlier "
+        "step logged in and left on disk, which an injected body reaches by running the "
+        "CLI itself (#1208). A third-party `uses:` is NOT resolved for its EXPORTS — its "
+        "source is not in this tree — so a variable it exports is absent from these lines "
+        "rather than known to be absent; a third-party login action is still named, "
+        "because its name is enough to know a session exists."
     )
     return "\n".join(lines)
 

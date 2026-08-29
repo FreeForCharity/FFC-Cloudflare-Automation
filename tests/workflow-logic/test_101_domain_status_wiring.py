@@ -737,14 +737,35 @@ def test_the_input_types_are_what_makes_each_choice_correct():
     )
 
 
-def test_the_m365_credential_is_a_cli_session_no_sweep_can_see():
+def test_the_m365_credential_is_a_cli_session_the_index_now_names():
     """This module's central claim, pinned rather than left as prose.
 
-    The two `m365-prod` injection points hold no credential in any `env:` block,
-    match no `secrets.` reference, and are absent from the #1188 reachability
-    index — while sitting one line above `az account get-access-token`. If a
-    later edit ever maps a token into either step's `env:`, the reasoning in the
-    docstring stops being true and should be re-read.
+    Named `…_no_sweep_can_see` until #1208 closed the blind spot it described.
+    The first two halves are unchanged and still load-bearing: the two
+    `m365-prod` injection points hold no credential in any `env:` block and
+    match no `secrets.` reference, while sitting one line above `az account
+    get-access-token`. If a later edit ever maps a token into either step's
+    `env:`, the reasoning in this module's docstring stops being true.
+
+    The third half is inverted. The #1188 index used to omit both steps; it now
+    reports the CLI session and attributes it to the `Azure login (OIDC)` step,
+    which is what #1208 asked for.
+
+    TWO THINGS THIS TEST GOT WRONG, AND THEY ARE WORTH MORE THAN THE CASE
+    It asserted the blind spot through `reachability_by_site(scan_all())`, which
+    is defined over FROZEN FINDINGS — and 101 has none, because this very module
+    is the burn-down that removed them. So the assertion was vacuous the moment
+    it was written: it read `[] == []` and would have gone on passing, green and
+    confident, with the tool fixed or broken. Measured — the fix for #1208 landed
+    and this test still passed before it was touched.
+
+    The second is the reason it was not caught: the vacuous form and the real
+    form are the same shape. "No m365 site reaches a credential" is what you
+    want to assert; asking the wrong INDEX for it turns a claim about the tool
+    into a claim about a set that is empty for an unrelated reason. So it now
+    asks `credentials_in_reach` directly, which answers for any step of any
+    workflow, frozen or not — and asserts a NON-empty result, which cannot be
+    satisfied by an index that has stopped working.
     """
     workflow = load_workflow(WORKFLOW)
     m365_steps = workflow["jobs"]["m365"]["steps"]
@@ -766,17 +787,26 @@ def test_the_m365_credential_is_a_cli_session_no_sweep_can_see():
             f"site {site!r} no longer mints its token from the CLI session, so "
             f"the claim that no sweep can see the credential does not hold"
         )
-    # And the reachability index really does report nothing for them — asserted
+    # And the reachability index reports the session for both of them — asserted
     # against the guard rather than quoted from a run, so it tracks the tool.
-    findings, unreadable, _ = guard.scan_all()
-    assert not unreadable, f"the guard could not read: {unreadable}"
-    reach = guard.reachability_by_site(findings)
-    m365_reach = [key for key in reach if key[0] == WORKFLOW and key[1] == "m365"]
-    assert not m365_reach, (
-        f"the reachability index now reports a credential in reach at the m365 "
-        f"sites. That is an improvement to the tool, and it means this "
-        f"module's docstring is out of date: {m365_reach!r}"
-    )
+    steps = workflow["jobs"]["m365"]["steps"]
+    for site in ("graph", "preflight"):
+        # Located by NAME, never by a hard-coded index: a step inserted above the
+        # one under test must move the answer, not silently test another step.
+        wanted = CALL_SITES[site]["step"]
+        index = next(i for i, step in enumerate(steps) if step.get("name") == wanted)
+        reached = guard.credentials_in_reach(workflow, "m365", index)
+        assert [str(r) for r in reached] == [
+            "az CLI session (acquired by step 'Azure login (OIDC)'; no variable in reach)"
+        ], (
+            f"site {site!r}: the index must name the session the OIDC login left "
+            f"behind and attribute it to that step (#1208). Got "
+            f"{[str(r) for r in reached]}"
+        )
+        assert all(r.hidden for r in reached), (
+            "an acquired session is invisible to an L213 read and to a `secrets.` "
+            "grep, so it must count as hidden in the report's tally"
+        )
 
 
 def test_the_artifact_fixtures_cover_every_path_the_bodies_read():

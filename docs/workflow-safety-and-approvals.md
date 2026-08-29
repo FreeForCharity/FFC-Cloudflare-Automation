@@ -133,10 +133,33 @@ anyone who opens the file and a `GITHUB_ENV` arrival is the one nobody sees, so 
 would rebuild the same blind spot one layer up. The classifier is deliberately **pessimistic**, on
 the same reasoning as the write-environment rule below: a name that looks like a credential counts,
 and any value referencing `secrets.` counts whatever it is called. And a **third-party `uses:` is
-not resolved** — its source is not in this tree, so a credential it exports is absent from the
-output rather than known to be absent. Covered by
+not resolved for its EXPORTS** — its source is not in this tree, so a variable it exports is absent
+from the output rather than known to be absent. Covered by
 `tests/workflow-logic/test_workflow_credential_reachability.py`, including the mutation that deletes
 `306`'s export and requires the token to stop being reported.
+
+**A credential can also be ACQUIRED rather than handed, and that case was invisible for the same
+reason the others were (#1208).** Everything above indexes arrival _in a variable_. A gated job
+typically opens with an OIDC login, which leaves an authenticated **CLI session on disk** — nothing
+in any `env:`, nothing in `GITHUB_ENV`, no `secrets.` name at the call site — and an injected body
+does not need to read anything, because it can run the CLI itself. On `101` that was both sites of
+the `m365-prod` job, i.e. the only reason the workflow carried a write environment at all, and every
+available sweep scored them as holding nothing:
+
+```bash
+python3 scripts/check-workflow-input-interpolation.py --reachability 101-domain-status.yml
+#   job 'm365' step 'M365 domain status (Graph summary)' (run)
+#       az CLI session (acquired by step 'Azure login (OIDC)'; no variable in reach)
+```
+
+A step's own `run:` counts too (`az login`, `gh auth login`, `docker login`), and so does a **local
+composite action**: all five `*-from-kv` actions log into Azure before reading Key Vault and their
+steps run in the caller's job, so every later step there holds an `az` session that is strictly
+broader than the two or three names the action exports — it can read anything that identity may
+`az keyvault secret show`. Unlike the export side, a **third-party login action IS named**, because
+its name is enough to know a session exists even though its source is not in this tree. This stays a
+**reading, never a finding**: it adds a line, never changes the exit code. What it buys is that an
+absent line and an empty line stop meaning the same thing to an operator.
 
 **This was a tightening — three workflows came off the ✅ list (#916, 2026-07-23).** All three were
 labelled `Reads` and all three loaded write-scoped credentials, so under condition 2 none was

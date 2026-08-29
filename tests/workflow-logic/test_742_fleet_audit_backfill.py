@@ -344,15 +344,34 @@ def test_template_with_two_schedules_is_rejected():
     assert "error" in render_workflow(raw, "5 6 * * *")
 
 
-def test_template_that_stopped_running_audit_high_is_rejected():
-    """The pnpm-drift case (#771). If the canonical file moves off npm, a blind
-    copy leaves the fleet with an audit that fails on every run — which looks
-    identical to the vulnerability it exists to report."""
+def test_coherent_pnpm_template_is_accepted():
+    """The fleet pnpm migration inverted the original #771 posture: a template
+    whose BOTH halves moved to pnpm is now a valid shape (the rollout derives
+    the lockfile and audit command from it), not drift to reject."""
     raw = CANONICAL.replace("npm run audit:high", "pnpm run audit:high").replace(
-        "npm ci --ignore-scripts", "pnpm install --frozen-lockfile"
+        "npm ci --ignore-scripts", "pnpm install --frozen-lockfile --ignore-scripts"
     )
     problems = validate_template(raw)
-    assert len(problems) == 2, problems
+    assert problems == [], problems
+    assert "content" in render_workflow(raw, "5 6 * * *")
+
+
+def test_mixed_shape_template_is_rejected():
+    """Half-migrated is the dangerous state #771 warned about: `npm ci` with
+    `pnpm run audit:high` (or vice versa) fails on every run in whichever repo
+    it lands, looking identical to the vulnerability it exists to report."""
+    raw = CANONICAL.replace("npm run audit:high", "pnpm run audit:high")
+    problems = validate_template(raw)
+    assert any("mixed" in p for p in problems), problems
+    assert "error" in render_workflow(raw, "5 6 * * *")
+
+
+def test_template_that_stopped_running_audit_high_is_rejected():
+    """A template that no longer runs the script half AT ALL (either shape) is
+    unusable — the audit would install a tree and never scan it."""
+    raw = CANONICAL.replace("npm run audit:high", "echo skipped")
+    problems = validate_template(raw)
+    assert any("audit:high" in p for p in problems), problems
     assert "error" in render_workflow(raw, "5 6 * * *")
 
 
@@ -1015,13 +1034,19 @@ def test_no_dependency_manifest_sections_are_touched():
     for path in [REPO_ROOT / ".github" / "workflows" / WF_FILE, LIB, CLI]:
         text = path.read_text(encoding="utf-8")
         for forbidden in [
-            '"dependencies"',
-            '"devDependencies"',
-            "npm install",
-            "npm update",
-            "npm upgrade",
+            r'"dependencies"',
+            r'"devDependencies"',
+            # Word-boundary on the left: `pnpm` CONTAINS `npm`, and the lib
+            # legitimately names `pnpm install --frozen-lockfile` (which cannot
+            # mutate a manifest) — the same trap validateTemplate documents.
+            r"(?<![\w-])npm install",
+            r"(?<![\w-])npm update",
+            r"(?<![\w-])npm upgrade",
+            r"pnpm add\b",
+            r"pnpm update\b",
+            r"pnpm up\b",
         ]:
-            assert forbidden not in text, f"{path.name} references {forbidden}"
+            assert not re.search(forbidden, text), f"{path.name} references {forbidden}"
 
 
 def test_the_editor_cannot_alter_a_dependency_version():

@@ -300,6 +300,55 @@ def test_a_command_invocation_in_an_untagged_fence_is_never_an_anchor():
     assert M.extract_anchors(body) == [], M.extract_anchors(body)
 
 
+def test_an_untagged_fence_does_not_leak_a_wrapped_commands_continuation_line():
+    # Copilot's finding on #1224, reproduced before it was fixed: an untagged
+    # fence has no language to filter on, so only the per-span command-prefix
+    # check applied -- and a continuation line opens with no command name.
+    # `--repo FreeForCharity/... --json` is 54 characters of code punctuation
+    # and passed every span-level filter.
+    #
+    # The harm is to the honest denominator rather than to the findings (the
+    # was-it-ever-there gate rejects a CLI flag that was never in the file), and
+    # that is precisely why it is worth fixing: it inflates `usable`, so the
+    # sweep counts an issue as one it could see into when it could not, and the
+    # one number #1193 insists must not be hidden quietly gets smaller.
+    body = (
+        "See `scripts/foo.py`.\n\n"
+        "```\n"
+        "GH_TOKEN=... python3 scripts/foo.py \\\n"
+        "  --repo FreeForCharity/FFC-Cloudflare-Automation --json\n"
+        "```\n"
+    )
+    assert M.extract_anchors(body) == [], M.extract_anchors(body)
+    # ...and the issue must land in the no-anchor bucket, not read as usable.
+    result = M.audit([issue(11, body)], FakeTree({"scripts/foo.py": "pass\n"}))
+    assert len(result["no_anchor_extracted"]) == 1, result
+
+
+def test_an_inline_command_span_in_prose_is_not_an_anchor():
+    # A command quoted INLINE in a sentence belongs to no block, so the
+    # per-span prefix filter in `is_anchor` is the only thing that can reject
+    # it. This case exists because the block-level fix above silently took over
+    # every case that used to cover that filter: with the per-span check
+    # disabled, the whole suite stayed green until this test was added. A fix
+    # that subsumes another guard's only coverage leaves it untested rather
+    # than redundant, and nothing says so.
+    body = "Reproduce with `gh run view 33268448034 --log-failed` against `scripts/foo.py`."
+    assert M.extract_anchors(body) == [], M.extract_anchors(body)
+    assert not M.is_anchor("gh run view 33268448034 --log-failed")
+
+
+def test_a_flag_leading_fragment_is_still_a_valid_anchor():
+    # The polarity control for the fix above, and the reason it is block-level.
+    # #1077's premise is quoted inline as a bare flag fragment; a rule that
+    # rejected spans opening with `-` would pass the test above by discarding
+    # the case this sweep exists to catch.
+    assert M.is_anchor(r"-Zone $Domain -List -ErrorAction SilentlyContinue")
+    body = "`105-manage-record.yml` calls `-Zone $Domain -List -ErrorAction SilentlyContinue`."
+    tree = FakeTree({WF105: POST_FIX_105}, at={WF105: PRE_FIX_105})
+    assert len(M.audit([issue(12, body)], tree)["premise_may_be_gone"]) == 1
+
+
 def test_short_spans_bare_identifiers_prose_and_paths_are_not_anchors():
     for span in (
         "curl.exe",  # 8 chars: names a thing, cannot be checked for presence

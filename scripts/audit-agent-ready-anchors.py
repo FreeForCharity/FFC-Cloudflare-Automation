@@ -53,10 +53,12 @@ also costs recall:
 
   * an anchor must be >= 12 characters, and must not be a bare identifier or
     plain prose -- those false-positive the moment something is renamed;
-  * fenced blocks tagged as a shell language, and spans that open with a command
-    invocation (`python3 `, `gh `, `npx `, ...), are dropped: those are the
-    issue's own *verification* steps, which were never in the file and would
-    report `PREMISE MAY BE GONE` on every well-written issue;
+  * fenced blocks tagged as a shell language are dropped whole, and so is an
+    untagged fence whose first non-empty line opens with a command invocation
+    (`python3 `, `gh `, `npx `, ...) -- block-level, so a wrapped command's
+    continuation line goes with it rather than surviving as `--repo … --json`.
+    Those are the issue's own *verification* steps, which were never in any
+    file and would otherwise report on every well-written issue;
   * an anchor is reported only when it is absent from **every** cited path that
     exists. Present in any one of them means the premise is still live
     somewhere, and this stays quiet.
@@ -447,6 +449,29 @@ def is_anchor(span):
     return True
 
 
+def _is_command_block(lines):
+    """Does this UNTAGGED fence hold shell commands?
+
+    Classified by the FIRST non-empty line, and the classification then covers
+    the whole block. Deciding line-by-line is what leaks a continuation:
+    `--repo … --json` on the second line of a wrapped invocation opens with no
+    command name, is well over 12 characters and is full of code punctuation,
+    so every span-level filter accepts it.
+
+    Line-level rejection cannot be tightened to fix that. An anchor legitimately
+    starts with a flag — #1077's own premise is quoted inline as
+    `-Zone $Domain -List -ErrorAction SilentlyContinue` — so a rule keyed on the
+    leading `-` would throw away the case this sweep exists for. The block is
+    the only level at which a continuation is distinguishable from a fragment."""
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lowered = stripped.lower()
+        return any(lowered.startswith(prefix.lower()) for prefix in COMMAND_PREFIXES)
+    return False
+
+
 def extract_anchors(body):
     """Checkable anchors from a body, in first-seen order.
 
@@ -457,6 +482,10 @@ def extract_anchors(body):
     candidates = [m.group(1) for m in INLINE_SPAN_RE.finditer(prose)]
     for lang, lines in blocks:
         if lang in SHELL_LANGS:
+            continue
+        # An untagged fence carries no language to filter on, so it is
+        # classified by what it opens with instead.
+        if not lang and _is_command_block(lines):
             continue
         candidates.extend(lines)
     seen, out = set(), []

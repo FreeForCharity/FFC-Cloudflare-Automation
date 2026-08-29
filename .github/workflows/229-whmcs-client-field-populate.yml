@@ -64,8 +64,11 @@ jobs:
             MapJson    = 'config/whmcs-client-field-populate-map.json'
             OutputFile = 'artifacts/whmcs/whmcs_client_field_populate.json'
           }
-          if ('${{ inputs.client_id }}' -ne '') { $params.ClientId = '${{ inputs.client_id }}' }
-          if ('${{ inputs.email }}' -ne '') { $params.Email = '${{ inputs.email }}' }
+          # `-not IsNullOrWhiteSpace`, not `-ne ''`: the latter is True for
+          # whitespace, so `client_id: "   "` would be splatted through as a
+          # blank -ClientId and select nothing rather than failing (#1213).
+          if (-not [string]::IsNullOrWhiteSpace('${{ inputs.client_id }}')) { $params.ClientId = '${{ inputs.client_id }}' }
+          if (-not [string]::IsNullOrWhiteSpace('${{ inputs.email }}')) { $params.Email = '${{ inputs.email }}' }
           if ('${{ inputs.overwrite }}' -eq 'true') { $params.Overwrite = $true }
           if ('${{ inputs.dry_run }}' -eq 'false') { $params.Execute = $true }
           & pwsh -NoProfile -File ./scripts/whmcs-client-field-populate.ps1 @params | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append

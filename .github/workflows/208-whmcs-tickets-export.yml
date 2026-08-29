@@ -43,7 +43,11 @@ jobs:
           $dir = Split-Path -Parent $out
           if (-not [string]::IsNullOrWhiteSpace($dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
           $cliArgs = @('-OutputFile', $out)
-          if ('${{ inputs.status }}' -ne '') { $cliArgs += @('-Status', '${{ inputs.status }}') }
+          # `-not IsNullOrWhiteSpace`, not `-ne ''`: the latter is True for
+          # whitespace, so `status: "   "` would reach the callee as a blank
+          # -Status filter (#1213). Matches the predicate `$dir` already uses
+          # two lines above.
+          if (-not [string]::IsNullOrWhiteSpace('${{ inputs.status }}')) { $cliArgs += @('-Status', '${{ inputs.status }}') }
           & pwsh -NoProfile -File .\scripts\whmcs-tickets-export.ps1 @cliArgs
           if ($LASTEXITCODE -ne 0) { throw "Tickets export failed (exit $LASTEXITCODE)." }
 

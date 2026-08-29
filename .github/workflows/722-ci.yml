@@ -224,6 +224,33 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/check-workflow-empty-input-guard.py
 
+      - name: Validate optional-input gates are not empty-string comparisons
+        shell: bash
+        run: |
+          # The third half of the same remedy, and the one the other two are
+          # blind to. `-ne ''` reads as "was this optional input supplied" and
+          # is correct for exactly one of the three blank forms: it is TRUE for
+          # whitespace and TRUE for an unset variable, so `client_id: "   "`
+          # binds silently at exit 0 and reaches the callee inside a write
+          # environment, after the approval (#1213).
+          #
+          # It is systemic rather than four nits because the #1080 burn-down
+          # WIDENS it: rewriting an interpolated `inputs.x -ne ''` as
+          # `$env:X -ne ''` (the literal spelling is left out here because
+          # actionlint parses expressions inside a run: comment too)
+          # moves the predicate's domain from string to string-or-null, so a
+          # lane that does its own job perfectly still lands a gate that is
+          # newly wrong in a case that did not previously exist. The
+          # interpolation guard above has no notion of predicates and cannot
+          # see it. The freeze is now EMPTY — 205, the last two sites, landed
+          # with #1207 — so this fails on ANY empty-string gate anywhere in the
+          # tree, and on a freeze entry naming a missing file. An entry here is
+          # an explicit, reasoned exception, not the normal state.
+          # Needs NO PowerShell host — it is a textual predicate check, so tool
+          # absence cannot turn "could not run" into "everything passed".
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 scripts/check-workflow-empty-string-input-gate.py
+
       - name: Validate text-mode subprocess calls pin an encoding
         shell: bash
         run: |

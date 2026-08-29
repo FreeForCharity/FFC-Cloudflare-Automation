@@ -282,6 +282,29 @@ def test_rendered_settings_carry_no_leftover_placeholder():
         assert str(REPO_ROOT.as_posix()) in body
 
 
+def test_render_and_json_together_still_emit_parseable_json():
+    """`--render --json` must not put a status line ahead of the report.
+
+    Found by Copilot on #1223. stdout belongs to the data whenever --json is in
+    play; a render status line is not data, so it goes to stderr. Cheap to get
+    wrong because neither flag is broken on its own -- only the combination is,
+    and no test exercised the combination.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        proc = run("--render", "--json", "--workspace", td, "--hub-clone", str(REPO_ROOT))
+        try:
+            report = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            # Asserted, not left to raise: a non-AssertionError ends the module
+            # and the PASSes already printed read as a green roster (L82). The
+            # runner catches AssertionError only.
+            raise AssertionError(
+                f"--json stdout is not parseable ({exc}); first line: {proc.stdout.splitlines()[:1]}"
+            ) from None
+        assert report["wired"] is True, report
+        assert "rendered" in proc.stderr, proc.stderr
+
+
 def test_the_json_report_carries_a_start_line_in_both_directions():
     """AC2: the START comment says which state the run is in, not only the bad one."""
     with tempfile.TemporaryDirectory() as td:

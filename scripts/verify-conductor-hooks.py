@@ -338,7 +338,10 @@ def render(workspace: pathlib.Path, hub_clone: pathlib.Path, force: bool) -> int
     # rewrites every \n to \r\n on Windows, which is this repo's L182/CLAUDE.md trap.
     with open(target, "w", encoding="utf-8", newline="") as fh:
         fh.write(body)
-    print(f"rendered {template} -> {target} (hub clone: {hub_clone})")
+    # stderr, not stdout: `--render --json` would otherwise emit this line ahead
+    # of the report and produce output that is not parseable JSON. stdout belongs
+    # to the data whenever --json is in play, and a status line is not data.
+    print(f"rendered {template} -> {target} (hub clone: {hub_clone})", file=sys.stderr)
     return 0
 
 

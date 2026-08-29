@@ -642,7 +642,15 @@ def audit(issues, tree):
         p, g, usable = audit_issue(issue, tree)
         premise.extend(p)
         gone.extend(g)
-        if not usable:
+        # "Invisible to this sweep" has to mean the sweep said NOTHING about the
+        # issue. `usable` alone is the wrong test: a PATH GONE finding comes from
+        # the path-only branch, where every cited path is missing, so `present`
+        # is empty and `usable` is False — and the issue would be reported and
+        # simultaneously counted as one this sweep could not see into. That
+        # inflates the one number #1193 asks to be kept honest, in the direction
+        # that makes the technique look blinder than it is. Measured on the first
+        # live run: #859 appeared in both buckets.
+        if not usable and not p and not g:
             no_anchor.append(
                 {
                     "issue": issue.get("number"),

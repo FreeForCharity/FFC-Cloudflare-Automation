@@ -541,6 +541,29 @@ def test_no_anchor_extracted_is_counted_but_is_not_a_finding():
     assert "no usable anchor" in M.summary_line(result)
 
 
+def test_a_reported_issue_is_never_also_counted_as_invisible():
+    # Copilot's third finding. A PATH GONE comes from the path-only branch,
+    # where every cited path is missing -- so `present` is empty, `usable` is
+    # False, and the issue was reported AND counted under "no usable anchor
+    # (invisible to this sweep)" at the same time. The two buckets contradicted
+    # each other, and the error inflated the honest-limit denominator, making
+    # the technique look blinder than it is. #859 hit this on the first live run.
+    body = "The check lives in `scripts/check-deleted-thing.py` and is wrong."
+    tree = FakeTree({}, at={"scripts/check-deleted-thing.py": "def check():\n    return True\n"})
+    result = M.audit([issue(859, body)], tree)
+    assert [r["issue"] for r in result["path_gone"]] == [859], result["path_gone"]
+    assert result["no_anchor_extracted"] == [], result["no_anchor_extracted"]
+
+
+def test_an_issue_the_sweep_said_nothing_about_is_still_counted_as_invisible():
+    # The polarity control: the fix above must not empty the bucket entirely.
+    # A bucket that is always zero would satisfy the assertion above while
+    # destroying the number #1193 exists to keep visible.
+    result = M.audit([issue(1, "prose only, nothing quoted")], FakeTree({}))
+    assert [r["issue"] for r in result["no_anchor_extracted"]] == [1], result
+    assert not M.has_findings(result)
+
+
 def test_the_summary_line_always_states_both_denominators():
     result = M.audit([issue(1, "prose only"), issue(2, "also prose")], FakeTree({}))
     line = M.summary_line(result)

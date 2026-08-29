@@ -1,10 +1,18 @@
-"""Tests for the credential-reachability resolver (#1188).
+"""Tests for the credential-reachability resolver (#1188, extended by #1208).
 
 The subject is the `credentials_in_reach` half of
 `scripts/check-workflow-input-interpolation.py`. What it claims: for any step,
 the credentials in its process environment and HOW each arrived — the step's own
-`env:`, the job's `env:`, or a `$GITHUB_ENV` write by an earlier step in the same
-job (including one performed by a local composite action the job `uses:`).
+`env:`, the job's `env:`, a `$GITHUB_ENV` write by an earlier step in the same
+job (including one performed by a local composite action the job `uses:`), or
+an authenticated CLI session an earlier step logged in and left on disk.
+
+That fourth path is #1208, and it is the one with no variable anywhere. The
+index was defined over env-var ARRIVAL, so on 101 it named the two `cloudflare`
+steps and omitted both `m365` ones — while the `m365` job is the only reason 101
+carried a write environment at all, and its bodies mint a Graph token by running
+`az account get-access-token` one line below an `azure/login`. An absent line and
+an empty line read identically to an operator and mean very different things.
 
 Why the third path is the whole point. Both sweeps this repo recommends for
 judging a #1080 call site read the workflow's declarative surface only — the
@@ -105,6 +113,22 @@ def _reach_at(workflow: dict, step_name: str) -> list:
 
 def _names(reaches) -> set[str]:
     return {r.name for r in reaches}
+
+
+def _var_names(reaches) -> set[str]:
+    """Only the credentials that arrive IN A VARIABLE.
+
+    #1208 added a second kind of entry — a CLI session a login step left behind,
+    which has no variable name at all. The env-var cases below assert an EXACT
+    set, and they mean "these are the variables in reach", so they filter rather
+    than widen: a test that accepted any extra entry would stop catching the
+    over-report this resolver is most at risk of.
+    """
+    return {r.name for r in reaches if r.arrival != guard.Reach.ACQUIRED}
+
+
+def _session_names(reaches) -> set[str]:
+    return {r.name for r in reaches if r.arrival == guard.Reach.ACQUIRED}
 
 
 # --- the export extractor, shape by shape -----------------------------------
@@ -250,8 +274,15 @@ def test_306_reaches_the_graph_token_through_github_env():
     """
     workflow = _workflow("306-discover-uncaptured-comms.yml")
     reached = _reach_at(workflow, "Discover uncaptured comms (PII masked)")
-    assert _names(reached) == {"GRAPH_ACCESS_TOKEN"}, reached
-    token = reached[0]
+    assert _var_names(reached) == {"GRAPH_ACCESS_TOKEN"}, reached
+    assert _session_names(reached) == {"az CLI session"}, (
+        "the step that mints the token logs in with azure/login first, so the "
+        f"session is in reach too (#1208): {[str(r) for r in reached]}"
+    )
+    # By NAME, never by index: `credentials_in_reach` returns a SORTED list, so
+    # `reached[0]` silently becomes a different entry the moment another arrival
+    # sorts ahead of this one — a correct result read as a wrong one.
+    token = next(r for r in reached if r.name == "GRAPH_ACCESS_TOKEN")
     assert token.hidden, "a GITHUB_ENV arrival is the one neither sweep can see"
     assert token.arrival == guard.Reach.GITHUB_ENV
     assert token.source == "Acquire Microsoft Graph token", (
@@ -268,10 +299,15 @@ def test_103_and_110_reach_the_cloudflare_tokens_through_a_composite_action():
         ("110-cloudflare-zone-create.yml", "Create zone"),
     ):
         reached = _reach_at(_workflow(name), step)
-        assert _names(reached) == {
+        assert _var_names(reached) == {
             "CLOUDFLARE_API_TOKEN_CM",
             "CLOUDFLARE_API_TOKEN_FFC",
         }, f"{name}: {reached}"
+        assert _session_names(reached) == {"az CLI session"}, (
+            f"{name}: the composite action logs into Azure before it reads Key "
+            f"Vault, so its az session is in reach of the caller too (#1208) — "
+            f"and that session is broader than the two tokens it exports"
+        )
         assert all(r.hidden for r in reached), f"{name}: {reached}"
         assert all("cloudflare-tokens-from-kv" in (r.source or "") for r in reached), (
             f"{name}: the exporting step is the composite action, and naming it is "
@@ -283,7 +319,8 @@ def test_301_reaches_the_cloudflare_tokens_in_its_second_job():
     """Lane 7. The two jobs differ in ARRIVAL, which is the point of the field."""
     workflow = _workflow("301-m365-domain-preflight.yml")
     cloudflare = _reach_at(workflow, "Run Cloudflare audit portion")
-    assert _names(cloudflare) == {"CLOUDFLARE_API_TOKEN_CM", "CLOUDFLARE_API_TOKEN_FFC"}
+    assert _var_names(cloudflare) == {"CLOUDFLARE_API_TOKEN_CM", "CLOUDFLARE_API_TOKEN_FFC"}
+    assert _session_names(cloudflare) == {"az CLI session"}, cloudflare
     assert all(r.hidden for r in cloudflare), cloudflare
 
 
@@ -297,8 +334,8 @@ def test_a_step_env_credential_is_reported_as_step_env():
     reported both as `GITHUB_ENV` the field would be decoration.
     """
     reached = _reach_at(_workflow("301-m365-domain-preflight.yml"), "Run domain preflight")
-    assert _names(reached) == {"GRAPH_ACCESS_TOKEN"}, reached
-    token = reached[0]
+    assert _var_names(reached) == {"GRAPH_ACCESS_TOKEN"}, reached
+    token = next(r for r in reached if r.name == "GRAPH_ACCESS_TOKEN")
     assert token.arrival == guard.Reach.STEP_ENV, token.arrival
     assert not token.hidden
     assert token.source is None
@@ -383,6 +420,183 @@ def test_a_local_composite_action_is_resolved_from_the_tree():
     assert "WHMCS_APIM_SUBSCRIPTION_KEY" in found, found
 
 
+# --- the acquired arrival (#1208), in both directions -----------------------
+#
+# The three cases above index a credential the step was HANDED, in a variable.
+# #1208 is the credential a step ACQUIRES: an OIDC login leaves an authenticated
+# CLI session on disk, no variable exists anywhere, and every sweep defined over
+# variables therefore reported the step as empty — on 101 that was both sites of
+# the `m365-prod` job, the only reason the workflow was a `[W]` entry at all.
+#
+# Over-reporting is the safe direction here, so the negative controls carry the
+# weight: an ordinary action is not a login, a login is not in reach of a step
+# ABOVE it, and a job with neither a login nor a variable must still print
+# nothing — otherwise "nothing in reach" stops meaning anything.
+
+
+def test_101s_m365_sites_reach_the_session_the_azure_login_left():
+    """#1208 criterion 1, on the real tree and at the real call sites.
+
+    Both `m365` steps sit one line above `az account get-access-token` and map
+    only `IN_DOMAIN` into their `env:`. Before this landed the index named
+    neither.
+    """
+    workflow = _workflow("101-domain-status.yml")
+    for step_name in (
+        "M365 domain status (Graph summary)",
+        "Run repo M365 preflight (read-only)",
+    ):
+        reached = _reach_at(workflow, step_name)
+        assert [str(r) for r in reached] == [
+            "az CLI session (acquired by step 'Azure login (OIDC)'; no variable in reach)"
+        ], f"{step_name}: {[str(r) for r in reached]}"
+        assert all(r.arrival == guard.Reach.ACQUIRED for r in reached)
+
+
+def test_the_acquired_arrival_is_hidden_from_both_recommended_sweeps():
+    """`hidden` is what the report counts, and an acquired session belongs in it.
+
+    It is the more thorough of the two hidden paths: a GITHUB_ENV arrival at
+    least has a NAME somewhere in the tree for a grep to find, and this has no
+    textual trace at the call site at all.
+    """
+    acquired = guard.Reach("az CLI session", guard.Reach.ACQUIRED, "Azure login (OIDC)")
+    assert acquired.hidden
+    assert not guard.Reach("GH_TOKEN", guard.Reach.STEP_ENV).hidden
+    assert not guard.Reach("GH_TOKEN", guard.Reach.JOB_ENV).hidden
+
+
+def test_a_run_body_that_logs_in_is_a_source():
+    """The same acquisition performed by a `run:` rather than an action."""
+    workflow = yaml.safe_load(
+        "jobs:\n"
+        "  j:\n"
+        "    steps:\n"
+        "      - name: login\n"
+        "        run: |\n"
+        "          az login --service-principal -u $APP_ID --federated-token $T\n"
+        "          gh auth login --with-token < token.txt\n"
+        "      - name: victim\n"
+        "        run: echo hi\n"
+    )
+    assert _names(guard.credentials_in_reach(workflow, "j", 1)) == {
+        "az CLI session",
+        "gh CLI session",
+    }
+
+
+def test_a_job_with_no_login_and_no_variable_still_reports_nothing():
+    """#1208 criterion 3 — the distinction has to stay meaningful.
+
+    If every step grew a line, "nothing in reach" would stop being a reading and
+    the report would be noise. This is the negative control that keeps the
+    over-report side of the trade bounded.
+    """
+    workflow = yaml.safe_load(
+        "jobs:\n"
+        "  j:\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v7.0.1\n"
+        "      - name: build\n"
+        "        run: npm run build\n"
+        "      - name: upload\n"
+        "        uses: actions/upload-artifact@v4\n"
+    )
+    for index in range(3):
+        assert guard.credentials_in_reach(workflow, "j", index) == [], index
+
+
+def test_an_ordinary_action_is_not_read_as_a_login():
+    """The `uses:` classifier must discriminate, not match everything."""
+    assert guard.uses_acquired_sessions("actions/checkout@v7.0.1") == set()
+    assert guard.uses_acquired_sessions("actions/upload-artifact@v4") == set()
+    assert guard.uses_acquired_sessions("./.github/actions/candid-keys-from-kv") == set(), (
+        "a LOCAL action is resolved from its source by action_acquired_sessions, "
+        "not matched by name — this classifier is the third-party half"
+    )
+    assert guard.uses_acquired_sessions("azure/login@f5d393ae") == {"az CLI session"}
+    assert guard.uses_acquired_sessions("docker/login-action@v3") == {
+        "docker registry session"
+    }
+
+
+def test_an_action_that_returns_a_step_output_is_not_an_acquired_session():
+    """The line between "left something ambient" and "handed back a value".
+
+    Every entry in `_ACQUIRING_ACTIONS` leaves state a later step inherits with
+    no mapping — `~/.azure`, a credentials file, the `AWS_*` job env,
+    `~/.docker/config.json`. `actions/create-github-app-token@…` does not: it
+    returns `steps.<id>.outputs.token` and leaves nothing behind, so listing it
+    would assert the ARRIVAL PATH — the one thing this resolver exists to get
+    right — incorrectly, and in the direction that merely looks thorough.
+
+    Neither of its real shapes is lost. Mapped into a later `env:` it is already
+    reported as `step env:`, which the second half of this test pins so the
+    exclusion cannot quietly become a hole. Interpolated straight into a body it
+    is not "in reach" at all; it is pasted into the source, which is a #1080
+    finding. Raised by review on #1219; #1208's own proposal carried the
+    qualifier "where the token is consumed from a step output", and indexing
+    those references is not something this resolver does yet.
+    """
+    assert guard.uses_acquired_sessions("actions/create-github-app-token@v2") == set()
+    workflow = yaml.safe_load(
+        "jobs:\n"
+        "  j:\n"
+        "    steps:\n"
+        "      - name: mint\n"
+        "        id: app\n"
+        "        uses: actions/create-github-app-token@v2\n"
+        "      - name: use\n"
+        "        env:\n"
+        "          GH_TOKEN: ${{ steps.app.outputs.token }}\n"
+        "        run: gh pr list\n"
+    )
+    assert guard.credentials_in_reach(workflow, "j", 0) == []
+    assert [str(r) for r in guard.credentials_in_reach(workflow, "j", 1)] == [
+        "GH_TOKEN (step env:)"
+    ], "the mapped form must still be reported, by the path it actually arrives on"
+
+
+def test_a_login_below_a_step_is_not_in_its_reach():
+    """Same ordering rule as GITHUB_ENV, and the same flattering failure.
+
+    Reporting a later login would inflate the blast radius of an early step —
+    exactly the direction that makes a reading untrustworthy.
+    """
+    workflow = yaml.safe_load(
+        "jobs:\n"
+        "  j:\n"
+        "    steps:\n"
+        "      - name: early\n"
+        "        run: echo hi\n"
+        "      - name: login\n"
+        "        uses: azure/login@f5d393ae\n"
+        "      - name: late\n"
+        "        run: az account get-access-token\n"
+    )
+    assert guard.credentials_in_reach(workflow, "j", 0) == []
+    assert guard.credentials_in_reach(workflow, "j", 1) == [], (
+        "a step does not see its own login — the session exists after it runs"
+    )
+    assert _names(guard.credentials_in_reach(workflow, "j", 2)) == {"az CLI session"}
+
+
+def test_a_local_from_kv_action_leaves_an_az_session_in_the_callers_job():
+    """Not a hypothetical extension of the direct case — it is the common one.
+
+    All five `*-from-kv` actions open with `azure/login@…`, and a composite
+    action's steps run in the CALLER's job. So the session is in reach of every
+    later step, and it is strictly broader than the two or three names the
+    action exports: it can read anything that identity may `az keyvault secret
+    show`.
+    """
+    for action in (
+        "./.github/actions/cloudflare-tokens-from-kv",
+        "./.github/actions/whmcs-secrets-from-kv",
+    ):
+        assert guard.action_acquired_sessions(action) == {"az CLI session"}, action
+
+
 # --- mutation: the resolver must be READING the export, not asserting it ----
 
 
@@ -409,14 +623,57 @@ def test_deleting_306s_export_stops_the_token_being_reported():
         # non-zero and would score as a clean detection (L203).
         assert isinstance(mutant, dict) and mutant.get("jobs"), "the mutant is not a workflow"
         reached = _reach_at(mutant, "Discover uncaptured comms (PII masked)")
-    assert reached == [], (
+    assert _var_names(reached) == set(), (
         "with the export deleted the Graph token must NOT be reported — the "
         f"resolver is not reading the export, it is asserting it. Got {reached}"
     )
+    # The az session survives the mutation and SHOULD: deleting the export does
+    # not delete the login above it, and the step can still mint a fresh token
+    # by hand. That is #1208's whole point, and it is why this assertion is
+    # scoped to the variable rather than to the list being empty — a step with
+    # its export removed is not a step holding nothing.
+    assert _session_names(reached) == {"az CLI session"}, reached
     # …and the unmutated tree still reports it, so the delta is the mutation and
     # not a resolver that has stopped working altogether.
-    assert _names(_reach_at(_workflow(path.name), "Discover uncaptured comms (PII masked)")) == {
-        "GRAPH_ACCESS_TOKEN"
+    assert _var_names(
+        _reach_at(_workflow(path.name), "Discover uncaptured comms (PII masked)")
+    ) == {"GRAPH_ACCESS_TOKEN"}
+
+
+def test_deleting_101s_azure_login_stops_the_session_being_reported():
+    """The #1208 mutation, on a COPY — never the tracked file (L182).
+
+    A resolver that named the session either way would pass every case above
+    while reading nothing: `az account get-access-token` is still in both
+    bodies, so a checker that matched on the CONSUMER rather than the LOGIN
+    would look identical until the login is removed.
+    """
+    path = guard.WORKFLOWS / "101-domain-status.yml"
+    raw = path.read_text(encoding="utf-8")
+    anchor = "uses: azure/login@"
+    # Assert the anchor BEFORE substituting: a mutation that silently fails to
+    # apply produces a green run that reads as "the resolver has a hole" (L96).
+    assert raw.count(anchor) == 1, (
+        f"{path.name} no longer performs exactly one direct azure/login — this "
+        f"mutation would test something other than what it names ({raw.count(anchor)} found)"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        mutant_path = pathlib.Path(tmp) / path.name
+        mutant_path.write_text(
+            raw.replace(anchor, "uses: actions/checkout@"), encoding="utf-8", newline=""
+        )
+        mutant = yaml.safe_load(mutant_path.read_text(encoding="utf-8"))
+        # The mutant must still be a workflow: a parse failure exits every reader
+        # non-zero and would score as a clean detection (L203).
+        assert isinstance(mutant, dict) and mutant.get("jobs"), "the mutant is not a workflow"
+        reached = _reach_at(mutant, "M365 domain status (Graph summary)")
+    assert reached == [], (
+        "with the login removed the session must NOT be reported — the resolver "
+        f"is matching the CONSUMER, not the acquisition. Got {[str(r) for r in reached]}"
+    )
+    # …and the unmutated tree still reports it, so the delta is the mutation.
+    assert _names(_reach_at(_workflow(path.name), "M365 domain status (Graph summary)")) == {
+        "az CLI session"
     }
 
 
@@ -473,6 +730,27 @@ def test_the_reachability_mode_answers_for_a_burned_down_workflow():
     assert "GRAPH_ACCESS_TOKEN (GITHUB_ENV from step 'Acquire Microsoft Graph token')" in proc.stdout
     assert "306-discover-uncaptured-comms.yml" not in guard.current_map(guard.scan_all()[0]), (
         "306 is back in the freeze — this test's premise (it is burned down) is gone"
+    )
+
+
+def test_the_reachability_mode_names_101s_gated_sites_to_an_operator():
+    """#1208 criterion 1 as the operator meets it, not as the library reports it.
+
+    101 is burned down, so it has no frozen finding and the report paragraph
+    cannot speak about it at all — `--reachability <file>` is the ONLY surface
+    that answers for it, and it is the surface the next lane will read.
+    """
+    proc = _run_checker("--reachability", "101-domain-status.yml")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "job 'm365' step 'M365 domain status (Graph summary)'" in proc.stdout
+    assert "job 'm365' step 'Run repo M365 preflight (read-only)'" in proc.stdout
+    assert (
+        "az CLI session (acquired by step 'Azure login (OIDC)'; no variable in reach)"
+        in proc.stdout
+    ), proc.stdout
+    assert "101-domain-status.yml" not in guard.current_map(guard.scan_all()[0]), (
+        "101 is back in the freeze — this test's premise (only --reachability can "
+        "answer for it) is gone"
     )
 
 

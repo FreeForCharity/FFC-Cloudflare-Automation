@@ -1,0 +1,486 @@
+"""Unit tests for scripts/audit-agent-ready-anchors.py (#1193).
+
+#1193 measured two detectors against the live backlog and only one survived:
+
+  * "a file this issue cites changed since it was filed" flagged **20 of 52**
+    open `agent-ready` issues, **1 real** -- Dependabot bumps and one
+    comment-fix commit to `run_all.py` light up a third of the backlog;
+  * "the anchor the issue quotes is gone from the file it quotes it from"
+    agreed with the manual verdict on all three issues it was hand-checked
+    against.
+
+So the tests here are mostly about the ways this decays back into the first
+detector, or into noise. The discriminating one is
+`test_ac4_a_changed_file_whose_anchor_survives_reports_nothing`: #1060's cited
+guard file *did* change, and the anchor is still in it, and a detector that
+flags on file-change alone passes AC1-AC3 and fails only that. It is written
+first for that reason.
+
+No network and no fixtures on disk. The tree is injected (`FakeTree`), so these
+tests do not decay when the real `105-manage-record.yml` changes again, and the
+transport is injected at `_request`, so the real Link-header pagination and the
+real shape-check are the code under test rather than a mock of them.
+
+Locked down here:
+  * the #1077 shape reports, and the same body against PRE-fix content does not
+    -- the guard proved to fail without its fix (L47);
+  * an anchor still present anywhere it is cited stays quiet, whatever else
+    moved in the file;
+  * an issue's own `bash` verification block is never an anchor, and neither is
+    a bare identifier, a sentence, a path citation, or a span under 12 chars --
+    each of those is a false positive that would land on nearly every issue;
+  * a cited path that git has no history for is a **proposed** file and is
+    silent, not `PATH GONE`: issues asking for a new script name one, and this
+    sweep's own issue (#1193) is one of them;
+  * every failed enumeration exits NON-ZERO -- no token, a non-list payload. A
+    sweep with no verdict must never report a clean one;
+  * the exit-code decision is asserted in-process via `has_findings`, because a
+    clean-fixture subprocess run only ever exercises the zero path and would
+    pass against a `main` that returned 0 unconditionally (#912/#927);
+  * `no_anchor_extracted` is counted and printed but is NOT a finding -- it is
+    the technique's stated limit, and burying it would make the rest unreadable;
+  * the script issues no write, which no fixture can demonstrate.
+
+Run: python3 tests/workflow-logic/test_agent_ready_anchors.py
+"""
+
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import io
+import os
+import pathlib
+import sys
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+SCRIPT = REPO_ROOT / "scripts" / "audit-agent-ready-anchors.py"
+
+HUB = "FreeForCharity/FFC-Cloudflare-Automation"
+WF105 = ".github/workflows/105-manage-record.yml"
+WF111 = ".github/workflows/111-dns-create-redirect-rule.yml"
+GUARD = "scripts/check-pwsh-workflow-invocations.py"
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location("agent_ready_anchors", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+M = load_module()
+
+SOURCE = SCRIPT.read_text(encoding="utf-8")
+
+
+class FakeTree:
+    """The working tree, as data, at two points in time.
+
+    `files` is the tree NOW; `at` is what each path held when the issue was
+    filed. Two timestamps is the whole point -- "the premise is gone" is a
+    statement about a change, and a fake with only one of them can express
+    "absent" but not "was there and now is not", which is the only condition
+    that should ever be reported. `at` defaults to `files` (nothing changed),
+    so a test only spells it out when it means something moved."""
+
+    def __init__(self, files, at=None, commits=None):
+        self.files = dict(files)
+        self.at = dict(files) if at is None else dict(at)
+        self._commits = dict(commits or {})
+
+    def exists(self, path):
+        return path in self.files
+
+    def read(self, path):
+        return self.files.get(path, "")
+
+    def content_at(self, path, when):
+        return self.at.get(path)
+
+    def commits_since(self, path, since):
+        return list(self._commits.get(path, []))
+
+
+def issue(number, body, title="t", created="2026-08-01T00:00:00Z"):
+    return {
+        "number": number,
+        "title": title,
+        "body": body,
+        "created_at": created,
+        "html_url": f"https://github.com/{HUB}/issues/{number}",
+    }
+
+
+# --- the three real shapes #1193 hand-checked -----------------------------
+
+# #1077 quotes the call it says is wrong, and names the workflow by basename.
+BODY_1077 = (
+    "The preflight in `105-manage-record.yml` runs\n"
+    "`.\\Update-CloudflareDns.ps1 -Zone $Domain -List -ErrorAction SilentlyContinue`\n"
+    "and swallows the miss.\n\n"
+    "## Verification\n\n"
+    "```bash\n"
+    "python3 tests/workflow-logic/run_all.py\n"
+    "gh workflow run 105-manage-record.yml\n"
+    "```\n"
+)
+ANCHOR_1077 = r".\Update-CloudflareDns.ps1 -Zone $Domain -List -ErrorAction SilentlyContinue"
+PRE_FIX_105 = "steps:\n  - run: |\n      " + ANCHOR_1077 + "\n"
+POST_FIX_105 = "steps:\n  - run: |\n      .\\Update-CloudflareDns.ps1 -ExportAll -OutputFile out.json\n"
+
+# #1037's anchor is still live in 111.
+BODY_1037 = (
+    "`111-dns-create-redirect-rule.yml` still shells out with\n"
+    "`curl.exe -sS -X POST --data-binary @payload.json` instead of the module.\n"
+)
+LIVE_111 = "run: |\n  curl.exe -sS -X POST --data-binary @payload.json\n"
+
+# #1060: the cited guard file CHANGED, and the anchor is still in it.
+BODY_1060 = (
+    "`scripts/check-pwsh-workflow-invocations.py` skips a variable command:\n"
+    "`if not command or command.startswith(\"$\"): continue`\n"
+)
+GUARD_SRC = 'for command in commands:\n    if not command or command.startswith("$"): continue\n'
+
+
+# --------------------------------------------------------------------------
+# AC4 first: the case that separates this from a file-changed sweep
+# --------------------------------------------------------------------------
+
+
+def test_ac4_a_changed_file_whose_anchor_survives_reports_nothing():
+    # eeee163 edited the guard only to make it STATE its blind spot; its own
+    # message says "the guard itself is unchanged". A file-changed detector
+    # flags this. An anchor detector must not.
+    tree = FakeTree(
+        {GUARD: GUARD_SRC},
+        commits={GUARD: ["eeee163 2026-08-07 docs: state the guard's blind spot"]},
+    )
+    result = M.audit([issue(1060, BODY_1060)], tree)
+    assert result["premise_may_be_gone"] == [], result["premise_may_be_gone"]
+    assert not M.has_findings(result), "a changed file with a live anchor is not a finding"
+
+
+def test_ac1_the_1077_shape_reports_premise_may_be_gone_naming_the_workflow():
+    tree = FakeTree(
+        {WF105: POST_FIX_105},
+        at={WF105: PRE_FIX_105},
+        commits={WF105: ["761bfdf 2026-08-06 fix(105): export all records"]},
+    )
+    result = M.audit([issue(1077, BODY_1077)], tree)
+    rows = result["premise_may_be_gone"]
+    assert len(rows) == 1, rows
+    assert rows[0]["issue"] == 1077
+    assert rows[0]["kind"] == "PREMISE MAY BE GONE"
+    assert WF105 in rows[0]["paths_searched"], rows[0]
+    assert "Update-CloudflareDns.ps1" in rows[0]["anchor"], rows[0]
+    assert M.has_findings(result)
+
+
+def test_ac2_the_same_body_against_pre_fix_content_reports_nothing():
+    # L47: the guard must be shown to fail without its fix. Only the FILE
+    # differs between this and AC1 -- same issue body, same paths, same code.
+    tree = FakeTree({WF105: PRE_FIX_105})
+    result = M.audit([issue(1077, BODY_1077)], tree)
+    assert result["premise_may_be_gone"] == [], result["premise_may_be_gone"]
+    assert not M.has_findings(result)
+
+
+def test_ac3_an_anchor_still_present_reports_nothing():
+    tree = FakeTree({WF111: LIVE_111})
+    result = M.audit([issue(1037, BODY_1037)], tree)
+    assert not M.has_findings(result), result["premise_may_be_gone"]
+
+
+# --------------------------------------------------------------------------
+# refusal and silence
+# --------------------------------------------------------------------------
+
+
+def test_ac5_an_unauthenticated_run_refuses_and_emits_no_partial_report():
+    saved = {k: os.environ.pop(k) for k in ("GH_TOKEN", "GITHUB_TOKEN") if k in os.environ}
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                M.main(["--repo", HUB])
+            except SystemExit as exc:
+                code = exc.code
+            else:  # pragma: no cover - reaching here IS the failure
+                code = 0
+    finally:
+        os.environ.update(saved)
+    assert code != 0, "an unauthenticated sweep must not exit 0"
+    assert isinstance(code, str) and "GH_TOKEN" in code, code
+    assert out.getvalue() == "", f"no partial report may be printed: {out.getvalue()!r}"
+
+
+def test_ac6_a_clean_backlog_prints_nothing_on_stdout_and_exits_zero():
+    saved = os.environ.get("GH_TOKEN")
+    os.environ["GH_TOKEN"] = "x"
+    real_list, real_tree = M.list_agent_ready_issues, M.Tree
+    M.list_agent_ready_issues = lambda repo, token, _request_fn=None: [issue(1, "no anchors here")]
+    M.Tree = lambda root: FakeTree({})
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = M.main(["--repo", HUB])
+    finally:
+        M.list_agent_ready_issues, M.Tree = real_list, real_tree
+        if saved is None:
+            os.environ.pop("GH_TOKEN", None)
+        else:
+            os.environ["GH_TOKEN"] = saved
+    assert code == 0, code
+    assert out.getvalue() == "", f"clean must be silent on stdout: {out.getvalue()!r}"
+    assert "scanned" in err.getvalue(), "the denominators must still be accountable on stderr"
+
+
+# --------------------------------------------------------------------------
+# PATH GONE: deleted vs never-existed
+# --------------------------------------------------------------------------
+
+
+def test_a_cited_path_git_never_saw_is_a_proposed_file_and_stays_silent():
+    # #1193 itself names `scripts/audit-agent-ready-anchors.py` in its Scope
+    # section before it exists. Reporting that as PATH GONE would fire on
+    # nearly every feature request.
+    body = "Add **`scripts/audit-agent-ready-anchors.py`** *(new)* — the sweep."
+    tree = FakeTree({}, at={})
+    result = M.audit([issue(1193, body)], tree)
+    assert result["path_gone"] == [], result["path_gone"]
+    assert not M.has_findings(result)
+
+
+def test_a_cited_path_with_git_history_that_is_gone_is_reported_as_path_gone():
+    body = "The check lives in `scripts/check-deleted-thing.py` and is wrong."
+    tree = FakeTree(
+        {},
+        at={"scripts/check-deleted-thing.py": "def check():\n    return True\n"},
+        commits={"scripts/check-deleted-thing.py": ["abc1234 2026-08-09 chore: drop the check"]},
+    )
+    result = M.audit([issue(9, body)], tree)
+    assert len(result["path_gone"]) == 1, result["path_gone"]
+    row = result["path_gone"][0]
+    assert row["kind"] == "PATH GONE"
+    assert row["path"] == "scripts/check-deleted-thing.py"
+    assert M.has_findings(result)
+
+
+# --------------------------------------------------------------------------
+# anchor extraction: every filter is a false positive that would otherwise land
+# --------------------------------------------------------------------------
+
+
+def test_a_shell_fenced_verification_block_is_never_an_anchor():
+    # Every well-written issue in this repo ends with one. Without this filter
+    # the sweep reports PREMISE MAY BE GONE on all of them.
+    #
+    # The CONTINUATION line is the load-bearing case and the reason this test
+    # is not redundant with the command-prefix filter: `--repo Free... --json`
+    # opens with no command name, is well over 12 characters, and is full of
+    # code punctuation, so the fence's language tag is the ONLY thing that can
+    # reject it. A first draft of this test used two lines that both began with
+    # a command, and it passed with the fence filter deleted.
+    body = (
+        "See `scripts/foo.py`.\n\n"
+        "```bash\n"
+        "GH_TOKEN=... python3 scripts/foo.py \\\n"
+        "  --repo FreeForCharity/FFC-Cloudflare-Automation --json\n"
+        "```\n"
+    )
+    assert M.extract_anchors(body) == [], M.extract_anchors(body)
+
+
+def test_a_command_invocation_in_an_untagged_fence_is_never_an_anchor():
+    # An untagged fence carries no language to filter on, so the prefix list is
+    # the only defence left.
+    body = "See `scripts/foo.py`.\n\n```\nGH_TOKEN=... python3 scripts/foo.py\ngh pr view 1\n```\n"
+    assert M.extract_anchors(body) == [], M.extract_anchors(body)
+
+
+def test_short_spans_bare_identifiers_prose_and_paths_are_not_anchors():
+    for span in (
+        "curl.exe",  # 8 chars: names a thing, cannot be checked for presence
+        "SELF_ALERT_MARKER",  # bare identifier: a rename, not a deletion
+        "the merge queue is strict",  # a sentence in backticks
+        "scripts/audit-agentic-os-board.py",  # a path citation is a path
+        "105-manage-record.yml",  # ditto, by basename
+        "https://github.com/FreeForCharity/x",  # a link
+    ):
+        assert not M.is_anchor(span), span
+    assert M.is_anchor(r"-Zone $Domain -List -ErrorAction SilentlyContinue")
+
+
+def test_an_anchor_present_in_any_one_cited_path_stays_quiet():
+    # Two files cited, anchor lives in the second. "Gone from the first" is not
+    # "gone" -- the premise is still live somewhere.
+    body = "`scripts/a.py` and `scripts/b.py` both call `helper(timeout=30, retries=2)`."
+    tree = FakeTree({"scripts/a.py": "pass\n", "scripts/b.py": "helper(timeout=30, retries=2)\n"})
+    result = M.audit([issue(5, body)], tree)
+    assert not M.has_findings(result), result["premise_may_be_gone"]
+
+
+def test_reindenting_a_run_body_is_not_a_deletion():
+    body = "`scripts/a.py` runs `helper(timeout=30, retries=2)` on every tick."
+    tree = FakeTree(
+        {"scripts/a.py": "if x:\n        helper(timeout=30,\n               retries=2)\n"},
+        at={"scripts/a.py": "helper(timeout=30, retries=2)\n"},
+    )
+    result = M.audit([issue(6, body)], tree)
+    assert not M.has_findings(result), "whitespace must be normalised on both sides"
+
+
+# --------------------------------------------------------------------------
+# enumeration: never a falsely-clean report
+# --------------------------------------------------------------------------
+
+
+def test_pull_requests_are_not_part_of_the_backlog():
+    rows = [
+        {"number": 1, "title": "an issue", "body": "b"},
+        {"number": 2, "title": "a pr", "body": "b", "pull_request": {"url": "..."}},
+    ]
+    got = M.list_agent_ready_issues(HUB, "tok", _request_fn=lambda url, token, params=None: (rows, None))
+    assert [r["number"] for r in got] == [1], got
+
+
+def test_a_non_list_payload_aborts_rather_than_reading_as_zero_issues():
+    def fake(url, token, params=None):
+        return {"message": "Bad credentials"}, None
+
+    try:
+        M.list_agent_ready_issues(HUB, "tok", _request_fn=fake)
+    except SystemExit as exc:
+        assert "expected a JSON array" in str(exc), exc
+    else:
+        raise AssertionError("a 200-with-an-error-body must not read as an empty backlog")
+
+
+def test_the_listing_follows_the_link_header_to_the_last_page():
+    pages = {
+        None: ([{"number": 1, "body": "a"}], '<https://api.github.com/x?page=2>; rel="next"'),
+        "https://api.github.com/x?page=2": ([{"number": 2, "body": "b"}], None),
+    }
+
+    def fake(url, token, params=None):
+        return pages.get(url if url in pages else None)
+
+    got = M.list_agent_ready_issues(HUB, "tok", _request_fn=fake)
+    assert [r["number"] for r in got] == [1, 2], got
+
+
+# --------------------------------------------------------------------------
+# reporting
+# --------------------------------------------------------------------------
+
+
+def test_an_anchor_that_was_never_in_the_cited_file_is_not_reported():
+    # THE lesson of the first live run: without a was-it-ever-there check this
+    # sweep reported 408 rows across 45 of 53 issues -- worse than the
+    # file-changed detector #1193 rejected at 20 of 52. Bodies are full of
+    # strings that were never in the file they cite: version ranges, log lines,
+    # `path.py:243-254` citations, search queries, proposed new code. Every one
+    # of them is "absent from the file" and none of them is a premise.
+    body = (
+        "`105-manage-record.yml` breaks when the advisory names "
+        "`fast-uri 3.0.0 - 3.1.4` and the run logs `status=pending-approval`.\n"
+    )
+    tree = FakeTree({WF105: POST_FIX_105})  # unchanged since filing
+    result = M.audit([issue(7, body)], tree)
+    assert not M.has_findings(result), result["premise_may_be_gone"]
+
+
+def test_content_at_accepts_a_blob_and_refuses_a_directory_in_the_REAL_tree():
+    # FakeTree cannot express this one: the defect is a git behaviour, not a
+    # logic error. `git show <rev>:docs` prints a tree LISTING rather than
+    # failing, so a cited directory came back as plausible content and #859 was
+    # reported as PATH GONE on the first live run.
+    #
+    # The two halves are asserted TOGETHER on purpose. Alone, the directory
+    # assertion passes when git is missing, the repo is unreadable, or the
+    # revision will not resolve -- every one of which also returns None. Pairing
+    # it with a blob that MUST return content means a broken environment fails
+    # this test loudly instead of scoring it green (#1182).
+    tree = M.Tree(REPO_ROOT)
+    now = "2099-01-01T00:00:00Z"  # after any horizon: resolves to HEAD
+    blob = tree.content_at("tests/workflow-logic/run_all.py", now)
+    assert blob and "def main" in blob, "a real blob must come back as content"
+    assert tree.content_at("tests/workflow-logic", now) is None, "a tree is not content"
+    assert tree.content_at("scripts", now) is None, "a tree is not content"
+
+
+def test_a_cited_directory_is_not_reported_as_path_gone():
+    # `docs/data` has git history (its children do) but no content of its own.
+    # The first live run reported it as PATH GONE against issue #859.
+    body = "The baseline lives under `docs/data` and is never refreshed."
+    tree = FakeTree({}, at={})
+    result = M.audit([issue(859, body)], tree)
+    assert result["path_gone"] == [], result["path_gone"]
+
+
+def test_the_report_names_only_the_paths_the_anchor_was_actually_in():
+    # An issue citing four files must not be reported against all four; the
+    # finding points at the one the premise actually left.
+    body = "`scripts/a.py` and `scripts/b.py` — see `helper(timeout=30, retries=2)`."
+    tree = FakeTree(
+        {"scripts/a.py": "pass\n", "scripts/b.py": "pass\n"},
+        at={"scripts/a.py": "helper(timeout=30, retries=2)\n", "scripts/b.py": "pass\n"},
+    )
+    rows = M.audit([issue(8, body)], tree)["premise_may_be_gone"]
+    assert len(rows) == 1, rows
+    assert rows[0]["paths_searched"] == ["scripts/a.py"], rows[0]["paths_searched"]
+
+
+def test_no_anchor_extracted_is_counted_but_is_not_a_finding():
+    # The technique's limit is not a defect in the backlog. If this counted as
+    # a finding the sweep would be red permanently and mean nothing.
+    result = M.audit([issue(1, "prose only, nothing quoted")], FakeTree({}))
+    assert len(result["no_anchor_extracted"]) == 1, result
+    assert not M.has_findings(result)
+    assert "no usable anchor" in M.summary_line(result)
+
+
+def test_the_summary_line_always_states_both_denominators():
+    result = M.audit([issue(1, "prose only"), issue(2, "also prose")], FakeTree({}))
+    line = M.summary_line(result)
+    assert "2 agent-ready issues scanned" in line, line
+    assert "2 with no usable anchor" in line, line
+
+
+def test_the_report_names_the_anchor_the_paths_and_the_candidate_commits():
+    tree = FakeTree(
+        {WF105: POST_FIX_105},
+        at={WF105: PRE_FIX_105},
+        commits={WF105: ["761bfdf 2026-08-06 fix(105): export all records"]},
+    )
+    text = M.render(M.audit([issue(1077, BODY_1077)], tree), HUB)
+    assert "PREMISE MAY BE GONE" in text
+    assert WF105 in text
+    assert "761bfdf" in text, "a human needs the candidate fix in hand"
+    assert "MAY, deliberately" in text, "the report must not read as a verdict"
+
+
+def test_the_script_issues_no_write_of_any_kind():
+    # No fixture can demonstrate this; the source is the only place to assert it.
+    for forbidden in ('method="POST"', "method='POST'", "mutation", "issue_write", "--patch"):
+        assert forbidden not in SOURCE, forbidden
+    assert "urlopen" in SOURCE, "sanity: the transport is still urllib"
+
+
+TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+
+if __name__ == "__main__":
+    failures = 0
+    for t in TESTS:
+        try:
+            t()
+            print(f"  PASS {t.__name__}")
+        except AssertionError as e:
+            failures += 1
+            print(f"  FAIL {t.__name__}: {str(e)[:2000]}")
+        except Exception as e:  # never truncate the module: report and continue
+            failures += 1
+            print(f"  FAIL {t.__name__}: unexpected {type(e).__name__}: {str(e)[:2000]}")
+    sys.exit(1 if failures else 0)

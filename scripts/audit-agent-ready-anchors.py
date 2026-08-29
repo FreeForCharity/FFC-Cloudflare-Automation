@@ -89,7 +89,9 @@ Exit codes:
   1  at least one finding, OR any API, auth or config error. **Never 0 on a
      failed enumeration**: a sweep that could not read the backlog has no
      verdict, and reporting "clean" would be the silence-read-as-green shape
-     #966 is about.
+     #966 is about. That covers the LOCAL half too -- a missing or broken git
+     aborts, because with no history every anchor reads as unverifiable and the
+     run would otherwise exit 0 having examined nothing.
 """
 
 from __future__ import annotations
@@ -304,6 +306,31 @@ class Tree:
 
     def __init__(self, root=REPO_ROOT):
         self.root = pathlib.Path(root)
+        self._git_ok = None
+
+    def _require_git(self):
+        """Abort unless `root` is a readable git checkout.
+
+        Checked once, before the first history question, because every
+        `PREMISE MAY BE GONE` depends on being able to read the past: if git
+        cannot answer, `content_at` returns None for every anchor, nothing is
+        reported, and the run exits 0. That is a clean bill of health produced
+        by having no history at all -- the same shape as the unauthenticated
+        sweep `_token()` refuses, one input over.
+
+        Deliberately NOT a per-call check on the exit code: `git cat-file -t
+        <rev>:<path>` exits non-zero exactly when the object is absent, which is
+        the meaningful negative this sweep is built on. Failing on that would
+        abort on the ordinary case."""
+        if self._git_ok is None:
+            self._git_ok = _run_git(["rev-parse", "--git-dir"], self.root).returncode == 0
+            if not self._git_ok:
+                raise SystemExit(
+                    f"error: {self.root} is not a readable git checkout, so the "
+                    "was-it-ever-there check cannot run. Refusing to continue: with no "
+                    "history every anchor reads as unverifiable and the sweep would report "
+                    "a clean backlog it never examined."
+                )
 
     def exists(self, path):
         return (self.root / path).is_file()
@@ -325,6 +352,7 @@ class Tree:
         cannot read the past must not guess about it."""
         if not when:
             return None
+        self._require_git()
         rev = _git(["rev-list", "-1", f"--before={when}", "HEAD"], self.root).strip()
         if not rev:
             return None
@@ -347,6 +375,7 @@ class Tree:
         whether something is reported."""
         if not since:
             return []
+        self._require_git()
         out = _git(
             ["log", f"--since={since}", "--format=%h %ad %s", "--date=short", "--", path],
             self.root,
@@ -355,12 +384,24 @@ class Tree:
 
 
 def _git(args, cwd):
-    """Run one read-only git command, returning stdout ('' on any failure).
+    """stdout of one read-only git command ('' when git answers non-zero)."""
+    return _run_git(args, cwd).stdout or ""
+
+
+def _run_git(args, cwd):
+    """Run one read-only git command and return the CompletedProcess.
 
     `encoding=` is pinned because this repository's commit subjects carry
     em-dashes and arrows, and text-mode subprocess decodes with cp1252 on a
     Windows host (#945). git is not a Python child, so the parent's decode is
     the only side that needs pinning (#962).
+
+    An ENVIRONMENT failure -- git absent from PATH, or a command that hangs --
+    aborts the run rather than returning ''. Swallowing it would turn every
+    history question into "cannot establish", which this sweep reads as "say
+    nothing", so a host with no git would report a clean backlog and exit 0. A
+    non-zero EXIT is a different thing and is NOT an error here: it is how git
+    reports an absent object, which is the answer `content_at` needs.
 
     `MSYS_NO_PATHCONV=1` is not optional on the Conductor's git-bash host: MSYS
     rewrites a `<rev>:<path>` argument whose path starts with a dot, so
@@ -368,7 +409,7 @@ def _git(args, cwd):
     `abc123\\.github\\workflows\\x.yml` and git rejects it (CLAUDE.md, L42).
     Every workflow path this sweep resolves starts with that dot."""
     try:
-        proc = subprocess.run(
+        return subprocess.run(
             ["git", *args],
             cwd=str(cwd),
             env={**os.environ, "MSYS_NO_PATHCONV": "1"},
@@ -379,9 +420,19 @@ def _git(args, cwd):
             timeout=HTTP_TIMEOUT,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return proc.stdout or ""
+    except FileNotFoundError:
+        raise SystemExit(
+            "error: git is not on PATH, so the was-it-ever-there check cannot run. "
+            "Refusing to continue: without it every anchor reads as unverifiable and "
+            "the sweep would report a clean backlog it never examined."
+        )
+    except subprocess.TimeoutExpired:
+        raise SystemExit(
+            f"error: git timed out after {HTTP_TIMEOUT}s running `git {' '.join(args)}` in {cwd}. "
+            "Refusing to continue on a partial history read."
+        )
+    except OSError as exc:
+        raise SystemExit(f"error: could not run git in {cwd}: {exc}")
 
 
 # --------------------------------------------------------------------------

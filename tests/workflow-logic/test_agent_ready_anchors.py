@@ -51,7 +51,9 @@ import importlib.util
 import io
 import os
 import pathlib
+import subprocess
 import sys
+import tempfile
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "audit-agent-ready-anchors.py"
@@ -458,6 +460,54 @@ def test_content_at_accepts_a_blob_and_refuses_a_directory_in_the_REAL_tree():
     assert blob and "def main" in blob, "a real blob must come back as content"
     assert tree.content_at("tests/workflow-logic", now) is None, "a tree is not content"
     assert tree.content_at("scripts", now) is None, "a tree is not content"
+
+
+def test_a_missing_git_aborts_instead_of_reporting_a_clean_backlog():
+    # Copilot's second finding. `_git` used to swallow OSError and return "",
+    # so `content_at` answered None for every anchor, nothing was reported, and
+    # the run exited 0. Measured before the fix: the same issue that yields a
+    # finding against the real tree yielded has_findings=False on a host with no
+    # git. That is the unauthenticated-sweep failure one input over — a clean
+    # bill of health produced by having no access — and the module docstring
+    # promises never to do it.
+    real = subprocess.run
+
+    def no_git(*a, **k):
+        raise FileNotFoundError("git")
+
+    subprocess.run = no_git
+    try:
+        M.Tree(REPO_ROOT).content_at("scripts/audit-agent-ready-anchors.py", "2026-08-01T00:00:00Z")
+    except SystemExit as exc:
+        assert "git is not on PATH" in str(exc), exc
+    else:
+        raise AssertionError("a missing git must abort, not read as 'no history'")
+    finally:
+        subprocess.run = real
+
+
+def test_a_root_that_is_not_a_git_checkout_aborts():
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            M.Tree(td).content_at("scripts/whatever.py", "2026-08-01T00:00:00Z")
+        except SystemExit as exc:
+            assert "not a readable git checkout" in str(exc), exc
+        else:
+            raise AssertionError("a non-repo root must abort rather than report nothing")
+
+
+def test_an_absent_object_is_a_quiet_negative_and_never_an_abort():
+    # The polarity control for the two aborts above, and the reason the check is
+    # one-time rather than per-call: `git cat-file -t <rev>:<path>` exits
+    # non-zero precisely when the object is absent, which is the answer this
+    # sweep is built on. A fix that keyed on the exit code would pass both tests
+    # above by aborting on the ordinary case.
+    tree = M.Tree(REPO_ROOT)
+    now = "2099-01-01T00:00:00Z"
+    assert tree.content_at("scripts/this-path-has-never-existed.py", now) is None
+    assert tree.commits_since("scripts/this-path-has-never-existed.py", now) == []
+    # ...and a real blob still reads, so the tree is genuinely being consulted.
+    assert tree.content_at("tests/workflow-logic/run_all.py", now)
 
 
 def test_a_cited_directory_is_not_reported_as_path_gone():

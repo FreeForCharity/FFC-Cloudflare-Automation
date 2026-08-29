@@ -599,12 +599,30 @@ def step_exported_env_names(step: dict, depth: int = 0) -> set[str]:
 # (`action_exported_env_names` returns nothing for one, deliberately). The
 # asymmetry is the point and it runs the safe way: naming a session that turns
 # out to be unused costs a reviewer one line, and the opposite error is #1208.
+#
+# WHAT DOES *NOT* BELONG HERE, AND THE LINE IT DRAWS
+#     Every row above leaves state a later step inherits with no mapping of any
+#     kind — `~/.azure`, a credentials file plus `GOOGLE_APPLICATION_CREDENTIALS`,
+#     the `AWS_*` job env, `~/.docker/config.json`. That is what makes "in the
+#     process environment of the later step" true of them.
+#
+#     `actions/create-github-app-token@…` is NOT one, and #1208's proposal listed
+#     it with the qualifier "where the token is consumed from a step output".
+#     It hands back `steps.<id>.outputs.token` and leaves nothing ambient, so
+#     reporting it here would assert the one thing this whole section exists to
+#     get right — the ARRIVAL PATH — incorrectly, in the flattering-looking
+#     direction of a longer list. Neither of its real shapes is lost by the
+#     omission: mapped into a later `env:` it is already reported as `step env:`
+#     (the name matches `_CREDENTIAL_NAME`), and interpolated straight into a
+#     body it is not "in reach" at all but literally pasted into the source,
+#     which is a #1080 finding rather than a reachability line. Resolving the
+#     output-consumption case properly means indexing `steps.<id>.outputs`
+#     references, which nothing here does yet. Raised by review on #1219.
 _ACQUIRING_ACTIONS = (
     (re.compile(r"^azure/login@"), "az CLI session"),
     (re.compile(r"^google-github-actions/auth@"), "gcloud CLI session"),
     (re.compile(r"^aws-actions/configure-aws-credentials@"), "aws CLI session"),
     (re.compile(r"^docker/login-action@"), "docker registry session"),
-    (re.compile(r"^actions/create-github-app-token@"), "GitHub App installation token"),
     (re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]*login[A-Za-z0-9._-]*@"), "CLI session"),
 )
 

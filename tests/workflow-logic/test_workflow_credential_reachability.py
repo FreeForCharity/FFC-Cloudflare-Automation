@@ -279,7 +279,10 @@ def test_306_reaches_the_graph_token_through_github_env():
         "the step that mints the token logs in with azure/login first, so the "
         f"session is in reach too (#1208): {[str(r) for r in reached]}"
     )
-    token = reached[0]
+    # By NAME, never by index: `credentials_in_reach` returns a SORTED list, so
+    # `reached[0]` silently becomes a different entry the moment another arrival
+    # sorts ahead of this one — a correct result read as a wrong one.
+    token = next(r for r in reached if r.name == "GRAPH_ACCESS_TOKEN")
     assert token.hidden, "a GITHUB_ENV arrival is the one neither sweep can see"
     assert token.arrival == guard.Reach.GITHUB_ENV
     assert token.source == "Acquire Microsoft Graph token", (
@@ -515,6 +518,43 @@ def test_an_ordinary_action_is_not_read_as_a_login():
     assert guard.uses_acquired_sessions("docker/login-action@v3") == {
         "docker registry session"
     }
+
+
+def test_an_action_that_returns_a_step_output_is_not_an_acquired_session():
+    """The line between "left something ambient" and "handed back a value".
+
+    Every entry in `_ACQUIRING_ACTIONS` leaves state a later step inherits with
+    no mapping — `~/.azure`, a credentials file, the `AWS_*` job env,
+    `~/.docker/config.json`. `actions/create-github-app-token@…` does not: it
+    returns `steps.<id>.outputs.token` and leaves nothing behind, so listing it
+    would assert the ARRIVAL PATH — the one thing this resolver exists to get
+    right — incorrectly, and in the direction that merely looks thorough.
+
+    Neither of its real shapes is lost. Mapped into a later `env:` it is already
+    reported as `step env:`, which the second half of this test pins so the
+    exclusion cannot quietly become a hole. Interpolated straight into a body it
+    is not "in reach" at all; it is pasted into the source, which is a #1080
+    finding. Raised by review on #1219; #1208's own proposal carried the
+    qualifier "where the token is consumed from a step output", and indexing
+    those references is not something this resolver does yet.
+    """
+    assert guard.uses_acquired_sessions("actions/create-github-app-token@v2") == set()
+    workflow = yaml.safe_load(
+        "jobs:\n"
+        "  j:\n"
+        "    steps:\n"
+        "      - name: mint\n"
+        "        id: app\n"
+        "        uses: actions/create-github-app-token@v2\n"
+        "      - name: use\n"
+        "        env:\n"
+        "          GH_TOKEN: ${{ steps.app.outputs.token }}\n"
+        "        run: gh pr list\n"
+    )
+    assert guard.credentials_in_reach(workflow, "j", 0) == []
+    assert [str(r) for r in guard.credentials_in_reach(workflow, "j", 1)] == [
+        "GH_TOKEN (step env:)"
+    ], "the mapped form must still be reported, by the path it actually arrives on"
 
 
 def test_a_login_below_a_step_is_not_in_its_reach():

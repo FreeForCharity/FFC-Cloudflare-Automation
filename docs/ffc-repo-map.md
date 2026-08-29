@@ -48,14 +48,15 @@ sandboxed agent should use whatever workspace root it was given rather than a pa
 objects, and without the prefix the clone aborts at the smudge filter instead of landing LFS-tracked
 files as pointer stubs.
 
-| If you are about to…                                  | Read first                                                                         |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Write anything about how FFC develops                 | `docs/agent-issue-pr-workflow.md`, `CONTRIBUTING.md`, `CODE_QUALITY.md`            |
-| Tell a charity how to work on their site              | The **template's own** docs — see the next section                                 |
-| Reason about intake → provisioning end to end         | `docs/intake-automation-architecture.md`, `docs/gated-journey-operator-runbook.md` |
-| Touch agentic-OS governance, autonomy, or the roadmap | `docs/agentic-os/` (`03-target-architecture`, `06-governance`, `07-autonomy`)      |
-| Change a footer, or check site parity                 | `docs/footer-standard-adoption-checklist.md`, `docs/standards/`                    |
-| Do a DNS cutover for a live site                      | `docs/dns-cutover-runbook.md` — alongside this repo's own runbooks                 |
+| If you are about to…                                       | Read first                                                                                                                                                                          |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Write anything about how FFC develops                      | `docs/agent-issue-pr-workflow.md`, `CONTRIBUTING.md`, `CODE_QUALITY.md`                                                                                                             |
+| Tell a charity how to work on their site                   | The **template's own** docs — see the next section                                                                                                                                  |
+| Reason about intake → provisioning end to end              | `docs/intake-automation-architecture.md`, `docs/gated-journey-operator-runbook.md`                                                                                                  |
+| Touch agentic-OS governance, autonomy, or the roadmap      | `docs/agentic-os/` (`03-target-architecture`, `06-governance`, `07-autonomy`)                                                                                                       |
+| Change a footer, or check site parity                      | `docs/footer-standard-adoption-checklist.md`, `docs/standards/`                                                                                                                     |
+| Explain which template to use, or why a footer item exists | The public explainers: <https://ffcadmin.org/guides/website-templates-and-footer-standard/> (volunteer-facing) and <https://freeforcharity.org/website-templates/> (charity-facing) |
+| Do a DNS cutover for a live site                           | `docs/dns-cutover-runbook.md` — alongside this repo's own runbooks                                                                                                                  |
 
 **The one rule worth internalizing:** this repo is authoritative for _how the automation runs_.
 FFCadmin is authoritative for _how FFC works_. When they appear to disagree about process, FFCadmin

@@ -1618,6 +1618,25 @@
       "categoryCode": "GH"
     },
     {
+      "number": 705,
+      "title": "Website - Capture WordPress Site (REST API + Scrape)",
+      "apis": [
+        "WP"
+      ],
+      "file": "705-website-wordpress-capture.yml",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Captures a live WordPress site from its own REST API plus a rendered-HTML scrape, and uploads the result as an artifact for the FFC-EX migration PR.  Why this sits beside 702 rather than replacing it: 702 mirrors with httrack, which discovers pages by following links, so its page count is a property of the theme's navigation. 705 takes the inventory from /wp-json/wp/v2/pages \u2014 the CMS's own list, with an X-WP-Total to check it against \u2014 and then fetches the rendered markup for each of those URLs. That makes \"did we get the whole site?\" a question the run can answer and fail on, instead of one nobody can ask. See the header of scripts/capture-wordpress-api.mjs.  A cPanel/FTP backup is deliberately not an input. It yields PHP, a database dump and a plugin tree \u2014 the inputs to a renderer that will not exist after the migration \u2014 rather than the rendered artifact being migrated.  Read-only and ungated: it loads no credentials and writes nothing outside the run's own artifact. `mode=inspect` (the default) additionally makes no request beyond a handful of probes, so it is the safe first dispatch for any domain.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "none (no credentials)",
+      "guard": "read-only capture of a public site; `mode=inspect` default (probe only), `capture` writes only the run artifact; politeness delay default 250ms; serialized per domain; offline `--self-test` gates the logic before any live request",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 720,
       "title": "Repo - Create GitHub Repo",
       "apis": [

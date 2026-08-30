@@ -1,0 +1,184 @@
+name: '705. Website - Capture WordPress Site (REST API + Scrape) [WP]'
+run-name: 'WP capture ${{ inputs.domain }} (mode=${{ inputs.mode }})'
+
+# Captures a live WordPress site from its own REST API plus a rendered-HTML
+# scrape, and uploads the result as an artifact for the FFC-EX migration PR.
+#
+# Why this sits beside 702 rather than replacing it: 702 mirrors with httrack,
+# which discovers pages by following links, so its page count is a property of
+# the theme's navigation. 705 takes the inventory from /wp-json/wp/v2/pages —
+# the CMS's own list, with an X-WP-Total to check it against — and then fetches
+# the rendered markup for each of those URLs. That makes "did we get the whole
+# site?" a question the run can answer and fail on, instead of one nobody can
+# ask. See the header of scripts/capture-wordpress-api.mjs.
+#
+# A cPanel/FTP backup is deliberately not an input. It yields PHP, a database
+# dump and a plugin tree — the inputs to a renderer that will not exist after
+# the migration — rather than the rendered artifact being migrated.
+#
+# Read-only and ungated: it loads no credentials and writes nothing outside the
+# run's own artifact. `mode=inspect` (the default) additionally makes no request
+# beyond a handful of probes, so it is the safe first dispatch for any domain.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Live apex domain to capture (e.g. vpmin.org). No scheme, no www.'
+        required: true
+        type: string
+      mode:
+        description: >-
+          inspect = probe the REST API and report what a capture would get (read-only, seconds).
+          capture = fetch every page and asset and upload the result as an artifact.
+        required: false
+        type: choice
+        options: [inspect, capture]
+        default: inspect
+      max_items:
+        description: 'Cap on items fetched per REST collection.'
+        required: false
+        type: string
+        default: '500'
+      delay_ms:
+        description: >-
+          Politeness delay between requests, in milliseconds. These are small shared-hosting
+          origins; do not lower this without a reason.
+        required: false
+        type: string
+        default: '250'
+      include_posts:
+        description: 'Also capture blog posts (not just pages).'
+        required: false
+        type: boolean
+        default: false
+
+  # TEMPORARY (this branch only): produces the live-reachability evidence for
+  # the migration PR. Removed before merge — the permanent triggers are the
+  # dispatch above plus the offline self-test, which runs in 722 CI.
+  push:
+    branches: ['claude/wordpress-migration-scraping-qpzewr']
+    paths:
+      - 'scripts/capture-wordpress-api.mjs'
+      - '.github/workflows/705-website-wordpress-capture.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize per domain so two runs cannot hammer one small origin at once.
+  group: wp-capture-${{ inputs.domain || 'vpmin.org' }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    name: Capture WordPress site
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      # Runs first and unconditionally: the pure logic (URL mapping, asset
+      # classification, the rewrite pass, the verdict) is what decides whether
+      # the capture is correct, and a live run that exercises broken logic
+      # produces a confident, wrong artifact rather than an error.
+      - name: Self-test the capture logic (offline)
+        run: node scripts/capture-wordpress-api.mjs --self-test
+
+      - name: Resolve inputs
+        id: resolve
+        # Inputs go through the environment rather than into the script body, so
+        # a value carrying shell metacharacters cannot be executed. On the push
+        # trigger there are no inputs at all, hence the defaults.
+        env:
+          INPUT_DOMAIN: ${{ inputs.domain }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_MAX: ${{ inputs.max_items }}
+          INPUT_DELAY: ${{ inputs.delay_ms }}
+          INPUT_POSTS: ${{ inputs.include_posts }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          domain="${INPUT_DOMAIN:-}"
+          if [ -z "$domain" ]; then domain="vpmin.org"; fi
+          # Reject anything that is not a bare hostname before it reaches the
+          # script, so a pasted URL or a stray argument fails here with a clear
+          # message rather than as a confusing DNS error 200 lines into a run.
+          if ! printf '%s' "$domain" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+            echo "::error::domain must be a bare apex hostname (got '$domain'). No scheme, no www, no path."
+            exit 1
+          fi
+
+          mode="${INPUT_MODE:-}"
+          if [ -z "$mode" ]; then mode="inspect"; fi
+          case "$mode" in
+            inspect|capture) ;;
+            *) echo "::error::mode must be 'inspect' or 'capture' (got '$mode')."; exit 1 ;;
+          esac
+
+          max="${INPUT_MAX:-}"
+          if [ -z "$max" ]; then max="500"; fi
+          delay="${INPUT_DELAY:-}"
+          if [ -z "$delay" ]; then delay="250"; fi
+          posts="${INPUT_POSTS:-}"
+          if [ -z "$posts" ]; then posts="false"; fi
+
+          {
+            echo "domain=$domain"
+            echo "mode=$mode"
+            echo "max=$max"
+            echo "delay=$delay"
+            echo "posts=$posts"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Resolved: domain=$domain mode=$mode max=$max delay=$delay posts=$posts"
+
+      # Always runs, in both modes. In capture mode it is the preflight: it says
+      # what the REST API reports, which is the number the capture is then
+      # checked against.
+      - name: Inspect the live WordPress REST API
+        id: inspect
+        env:
+          DOMAIN: ${{ steps.resolve.outputs.domain }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _capture
+          set +e
+          node scripts/capture-wordpress-api.mjs --domain "$DOMAIN" --inspect --json-out _capture/inspect.json
+          rc=$?
+          set -e
+          echo "verdict_rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ $rc -ne 0 ]; then
+            echo "::warning::Inspect returned a non-ready verdict (exit $rc). See the job summary for which one."
+          fi
+
+      - name: Capture the site
+        if: steps.resolve.outputs.mode == 'capture'
+        env:
+          DOMAIN: ${{ steps.resolve.outputs.domain }}
+          MAX: ${{ steps.resolve.outputs.max }}
+          DELAY: ${{ steps.resolve.outputs.delay }}
+          POSTS: ${{ steps.resolve.outputs.posts }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--domain "$DOMAIN" --out _capture/site --max "$MAX" --delay "$DELAY")
+          if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
+          node scripts/capture-wordpress-api.mjs "${args[@]}"
+
+      - name: Upload capture artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp-capture-${{ steps.resolve.outputs.domain }}
+          path: _capture/
+          if-no-files-found: warn
+          retention-days: 14

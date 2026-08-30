@@ -446,6 +446,33 @@ export function remainingExternalAssetHosts(html, domain) {
 }
 
 /**
+ * Break the captured set down by content type and by which inventory found it.
+ *
+ * The report used to set `pages.captured` to the total number of rendered
+ * documents, which is every page PLUS every post, every sitemap-only URL and
+ * the synthetic front page. On a site with 19 pages and a 587-URL sitemap that
+ * prints `pages: {captured: 587, reported: 19}` — a number that reads as a
+ * spectacular over-achievement rather than as the category error it is, which
+ * is exactly the kind of wrong that survives review.
+ *
+ * `posts.captured` had the mirror-image fault: it counted the REST items
+ * FETCHED rather than the pages actually RENDERED, so a post whose page failed
+ * to download still counted as captured.
+ */
+export function summarizeCaptured(entries, renderedPaths) {
+  const byType = {};
+  const bySource = {};
+  let total = 0;
+  for (const e of entries) {
+    if (!e || !e.localPath || !renderedPaths.has(e.localPath)) continue;
+    total++;
+    byType[e.type ?? 'unknown'] = (byType[e.type ?? 'unknown'] ?? 0) + 1;
+    bySource[e.source ?? 'unknown'] = (bySource[e.source ?? 'unknown'] ?? 0) + 1;
+  }
+  return { total, byType, bySource };
+}
+
+/**
  * Capture verdict. `ok` only when the inventory is complete AND nothing that
  * should have been localized is still pointing off-site.
  */
@@ -703,6 +730,34 @@ function selfTest() {
     'remainingExternalAssetHosts ignores kept-external embeds',
     remainingExternalAssetHosts('<iframe src="https://youtube.com/embed/1"></iframe>', 'x.org'),
     [],
+  );
+
+  // Regression anchor for the conflated counter: 19 pages and a 587-URL
+  // sitemap must not report `pages.captured` as the whole rendered set.
+  const sc = summarizeCaptured(
+    [
+      { localPath: 'index.html', type: 'front', source: 'front' },
+      { localPath: 'a/index.html', type: 'page', source: 'rest' },
+      { localPath: 'b/index.html', type: 'page', source: 'rest' },
+      { localPath: 'p1/index.html', type: 'post', source: 'rest' },
+      { localPath: 's1/index.html', type: 'sitemap', source: 'sitemap' },
+      { localPath: 'missed/index.html', type: 'page', source: 'rest' },
+    ],
+    new Set(['index.html', 'a/index.html', 'b/index.html', 'p1/index.html', 's1/index.html']),
+  );
+  eq('summarizeCaptured counts only rendered entries', sc.total, 5);
+  eq('summarizeCaptured separates pages from the total', sc.byType.page, 2);
+  eq('summarizeCaptured counts posts separately', sc.byType.post, 1);
+  eq('summarizeCaptured counts sitemap-only entries separately', sc.byType.sitemap, 1);
+  eq('summarizeCaptured attributes by inventory source', sc.bySource, {
+    front: 1,
+    rest: 3,
+    sitemap: 1,
+  });
+  eq(
+    'summarizeCaptured omits an entry that never rendered',
+    Object.values(sc.byType).reduce((a, b) => a + b, 0),
+    5,
   );
 
   eq(
@@ -1316,6 +1371,8 @@ async function capture() {
     for (const h of remainingExternalAssetHosts(html, domain)) externalHosts.add(h);
   }
 
+  const captureSummary = summarizeCaptured(entries, new Set(rendered.keys()));
+
   // Measured against the MERGED inventory, not the REST total. Comparing the
   // REST total against pages fetched from the REST list is a tautology; the
   // union with the sitemap is the only figure that can be short.
@@ -1339,8 +1396,9 @@ async function capture() {
       addedBySitemap: fromSitemap,
       merged: entries.length,
     },
-    pages: { captured: rendered.size, reported: pages.total },
-    posts: { captured: posts.items.length, reported: posts.total },
+    captured: captureSummary,
+    pages: { captured: captureSummary.byType.page ?? 0, reported: pages.total },
+    posts: { captured: captureSummary.byType.post ?? 0, reported: posts.total },
     media: {
       reported: media.total,
       collectionStatus: media.lastStatus,
@@ -1378,7 +1436,9 @@ async function capture() {
       `**${verdict.ok ? '✅ capture gates passed' : '⚠️ capture gates failed'}**`,
       ...(verdict.ok ? [] : ['', ...verdict.problems.map((p) => `- ${p}`)]),
       '',
-      `- Captured ${rendered.size} of ${entries.length} merged inventory entries`,
+      `- Captured ${rendered.size} of ${entries.length} merged inventory entries ` +
+        `(${captureSummary.byType.page ?? 0} pages, ${captureSummary.byType.post ?? 0} posts, ` +
+        `${captureSummary.byType.sitemap ?? 0} sitemap-only)`,
       `- Inventory: REST ${pages.total} page(s) + ${posts.total} post(s); sitemap ${sm.urls.length} URL(s) (${fromSitemap} not in REST)`,
       `- Media collection: ${report.media.available ? `${media.total} item(s)` : `unavailable (HTTP ${media.lastStatus}) — images taken from the captured pages instead`}`,
       `- Assets localized: ${report.assets.downloaded} (${failedAssets} failed)`,

@@ -119,6 +119,48 @@ export function collectionUrlFor(kind, domain, collection, params = {}) {
 }
 
 /**
+ * URLs out of a sitemap, and whether this document is an INDEX of other
+ * sitemaps rather than a list of pages.
+ *
+ * This is the second, independent inventory source, and it exists because the
+ * first one can under-report without saying so. Measured on vpmin.org: the
+ * WordPress.com public API answers 200 for `pages` but 401 for `media` — proof
+ * that this endpoint restricts per collection on a live FFC site. If `pages`
+ * were ever restricted the same way, "captured 1 of 1 reported" would be a
+ * green gate over a site with pages missing, which is the precise failure the
+ * X-WP-Total check was introduced to prevent. A gate that can only compare a
+ * number against itself is not a gate.
+ */
+export function parseSitemapUrls(xml) {
+  const isIndex = /<sitemapindex[\s>]/i.test(xml);
+  const urls = [];
+  for (const m of xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)) {
+    urls.push(m[1].replace(/&amp;/g, '&').trim());
+  }
+  return { isIndex, urls };
+}
+
+/**
+ * Sitemap entries that are plausibly capturable HTML pages on this site.
+ * Drops other hosts, and drops feed/asset URLs a static capture has no use for.
+ */
+export function sitemapPageUrls(urls, domain) {
+  return urls.filter((u) => {
+    let parsed;
+    try {
+      parsed = new URL(u);
+    } catch {
+      return false;
+    }
+    const host = parsed.hostname.replace(/^www\./, '');
+    if (host !== domain && !host.endsWith(`.${domain}`)) return false;
+    if (/\.(xml|xsl|json|jpe?g|png|gif|webp|svg|pdf|css|js)$/i.test(parsed.pathname)) return false;
+    if (/\/(feed|comments)\/?$/i.test(parsed.pathname)) return false;
+    return true;
+  });
+}
+
+/**
  * Turn a REST index response into a verdict.
  *
  * Deliberately three-valued. "not 200" collapses two states that need
@@ -435,6 +477,29 @@ function selfTest() {
     'https://public-api.wordpress.com/wp/v2/sites/x.org/pages',
   );
 
+  const urlset = `<?xml version="1.0"?><urlset><url><loc>https://x.org/</loc></url>
+    <url><loc>https://x.org/about/</loc></url><url><loc>https://x.org/feed/</loc></url>
+    <url><loc>https://other.org/nope/</loc></url><url><loc>https://x.org/a.pdf</loc></url></urlset>`;
+  eq('parseSitemapUrls reads a urlset', parseSitemapUrls(urlset).urls.length, 5);
+  eq('parseSitemapUrls knows a urlset is not an index', parseSitemapUrls(urlset).isIndex, false);
+  eq(
+    'parseSitemapUrls detects a sitemap index',
+    parseSitemapUrls(
+      '<sitemapindex><sitemap><loc>https://x.org/s1.xml</loc></sitemap></sitemapindex>',
+    ).isIndex,
+    true,
+  );
+  eq(
+    'parseSitemapUrls unescapes &amp;',
+    parseSitemapUrls('<urlset><url><loc>https://x.org/?a=1&amp;b=2</loc></url></urlset>').urls,
+    ['https://x.org/?a=1&b=2'],
+  );
+  eq(
+    'sitemapPageUrls keeps pages, drops feeds/assets/other hosts',
+    sitemapPageUrls(parseSitemapUrls(urlset).urls, 'x.org').sort(),
+    ['https://x.org/', 'https://x.org/about/'],
+  );
+
   eq('classify 200 + namespaces = ok', classifyRestIndex(200, { namespaces: ['wp/v2'] }), 'ok');
   eq('classify 200 + junk = absent', classifyRestIndex(200, 'not json'), 'absent');
   eq('classify 401 = blocked', classifyRestIndex(401, null), 'blocked');
@@ -710,6 +775,51 @@ function collectionUrl(rest, collection, params) {
 }
 
 /**
+ * Every page URL the site's sitemap advertises, following a sitemap INDEX one
+ * level down. WordPress serves this at /wp-sitemap.xml (5.5+) or /sitemap.xml
+ * (Yoast, Rank Math, WordPress.com), so both are tried.
+ *
+ * Bounded to `sitemapChildLimit` children: an index on a large site can name
+ * dozens of child sitemaps, and this is a cross-check on the inventory, not a
+ * second crawler.
+ */
+const sitemapChildLimit = 10;
+async function collectSitemapUrls() {
+  for (const path of ['/wp-sitemap.xml', '/sitemap.xml', '/sitemap_index.xml']) {
+    const res = await request(`${origin}${path}`, { accept: 'application/xml', retries: 0 });
+    if (!res || res.status !== 200) continue;
+    let xml;
+    try {
+      xml = await res.text();
+    } catch {
+      continue;
+    }
+    const { isIndex, urls } = parseSitemapUrls(xml);
+    if (!isIndex) return { source: path, urls: sitemapPageUrls(urls, domain) };
+
+    const collected = new Set();
+    for (const child of urls.slice(0, sitemapChildLimit)) {
+      const childRes = await request(child, { accept: 'application/xml', retries: 0 });
+      if (!childRes || childRes.status !== 200) continue;
+      let childXml;
+      try {
+        childXml = await childRes.text();
+      } catch {
+        continue;
+      }
+      for (const u of sitemapPageUrls(parseSitemapUrls(childXml).urls, domain)) collected.add(u);
+      await sleep(delayMs);
+    }
+    return {
+      source: path,
+      urls: [...collected],
+      childrenRead: Math.min(urls.length, sitemapChildLimit),
+    };
+  }
+  return { source: null, urls: [] };
+}
+
+/**
  * Page through a REST collection.
  *
  * Returns the items AND the server's own `X-WP-Total`, because the completeness
@@ -721,6 +831,7 @@ async function fetchCollection(rest, collection, extraParams = {}) {
   const items = [];
   let total = null;
   let totalPages = 1;
+  let lastStatus = 0;
 
   for (let page = 1; page <= totalPages && items.length < maxItems; page++) {
     const url = collectionUrl(rest, collection, {
@@ -729,6 +840,7 @@ async function fetchCollection(rest, collection, extraParams = {}) {
       ...extraParams,
     });
     const { status, body, headers } = await getJson(url);
+    lastStatus = status;
     if (status !== 200 || !Array.isArray(body)) {
       console.error(`[rest] ${collection} page ${page}: HTTP ${status} — stopping this collection`);
       break;
@@ -742,7 +854,7 @@ async function fetchCollection(rest, collection, extraParams = {}) {
     items.push(...body);
     await sleep(delayMs);
   }
-  return { items, total: total ?? items.length, totalPages };
+  return { items, total: total ?? items.length, totalPages, lastStatus };
 }
 
 // --- inspect ---------------------------------------------------------------
@@ -833,8 +945,28 @@ async function inspect() {
     report[key] = { status: r.status };
   }
 
+  // Second inventory source, compared against the first. A restricted
+  // collection (see the media 401 on vpmin.org) makes the REST total an
+  // under-count that reports itself as complete, so the two numbers are
+  // printed side by side and their disagreement is named.
+  const sm = await collectSitemapUrls();
   const pagesTotal = report.collections?.pages?.total ?? 0;
-  const usable = rest.verdict === 'ok' && pagesTotal > 0;
+  report.sitemapInventory = {
+    source: sm.source,
+    pageUrls: sm.urls.length,
+    sample: sm.urls.slice(0, 10),
+  };
+  report.inventoryAgreement =
+    sm.source === null
+      ? 'no sitemap — REST is the only inventory source'
+      : sm.urls.length > pagesTotal
+        ? `DISAGREE: sitemap lists ${sm.urls.length} page URL(s), REST reports ${pagesTotal} — capture will take the union`
+        : 'agree (sitemap adds nothing beyond the REST inventory)';
+  report.restrictedCollections = Object.entries(report.collections ?? {})
+    .filter(([, v]) => v.status !== 200)
+    .map(([k, v]) => `${k} (HTTP ${v.status})`);
+
+  const usable = rest.verdict === 'ok' && (pagesTotal > 0 || sm.urls.length > 0);
   report.verdict = usable
     ? 'CAPTURE_READY'
     : rest.verdict === 'blocked'
@@ -869,6 +1001,13 @@ async function inspect() {
       ),
       '',
       `- Sitemap: HTTP ${report.sitemap.status} (legacy ${report.sitemapLegacy.status}) · robots.txt: HTTP ${report.robots.status}`,
+      `- Sitemap inventory: ${report.sitemapInventory.pageUrls} page URL(s) from ${report.sitemapInventory.source ?? 'none'}`,
+      `- Inventory agreement: ${report.inventoryAgreement}`,
+      ...(report.restrictedCollections.length
+        ? [
+            `- ⚠️ Restricted collections (not readable unauthenticated): ${report.restrictedCollections.join(', ')}`,
+          ]
+        : []),
     ].join('\n');
     writeFileSync(process.env.GITHUB_STEP_SUMMARY, s + '\n', { flag: 'a', encoding: 'utf8' });
   }
@@ -893,8 +1032,20 @@ async function capture() {
     posts = await fetchCollection(rest, 'posts', { status: 'publish' });
     console.error(`[capture] posts: ${posts.items.length} of ${posts.total} reported`);
   }
+  // The media library is a convenience, not a requirement: on a WordPress.com
+  // site it answers 401 unauthenticated (measured on vpmin.org). Losing it
+  // costs only the images no captured page happens to reference, so it must
+  // not fail the run — but it is reported, because silently capturing fewer
+  // images than the site has is exactly the kind of quiet shortfall this
+  // script exists to make visible.
   const media = await fetchCollection(rest, 'media');
-  console.error(`[capture] media: ${media.items.length} of ${media.total} reported`);
+  if (media.lastStatus !== 200) {
+    console.error(
+      `[capture] media collection unavailable (HTTP ${media.lastStatus}) — falling back to images referenced by the captured pages`,
+    );
+  } else {
+    console.error(`[capture] media: ${media.items.length} of ${media.total} reported`);
+  }
 
   const entries = [...pages.items, ...posts.items]
     .filter((it) => it && it.link)
@@ -909,9 +1060,40 @@ async function capture() {
       parent: it.parent ?? 0,
       menuOrder: it.menu_order ?? 0,
       template: it.template ?? '',
+      source: 'rest',
       localPath: localPathForLink(it.link, domain),
     }))
     .filter((e) => e.localPath);
+
+  // 1b. SECOND INVENTORY: the sitemap. Anything it advertises that the REST
+  // collections did not return gets captured too. This is what keeps the
+  // completeness gate honest — without it the run compares the REST total
+  // against itself, so a restricted `pages` collection would report a green
+  // "captured 1 of 1" for a site with pages missing.
+  const sm = await collectSitemapUrls();
+  const known = new Set(entries.map((e) => e.localPath));
+  let fromSitemap = 0;
+  for (const url of sm.urls) {
+    const localPath = localPathForLink(url, domain);
+    if (!localPath || known.has(localPath)) continue;
+    known.add(localPath);
+    fromSitemap++;
+    entries.push({
+      id: null,
+      type: 'sitemap',
+      slug: '',
+      link: url,
+      title: '',
+      parent: 0,
+      menuOrder: 0,
+      template: '',
+      source: 'sitemap',
+      localPath,
+    });
+  }
+  console.error(
+    `[capture] sitemap (${sm.source ?? 'none'}): ${sm.urls.length} page URL(s), ${fromSitemap} not in the REST inventory`,
+  );
 
   // The home page is often a page whose `link` is the site root, but on a
   // "latest posts" front page it is not in the pages collection at all — and
@@ -927,6 +1109,7 @@ async function capture() {
       parent: 0,
       menuOrder: 0,
       template: '',
+      source: 'front',
     });
   }
 
@@ -1054,8 +1237,11 @@ async function capture() {
     for (const h of remainingExternalAssetHosts(html, domain)) externalHosts.add(h);
   }
 
+  // Measured against the MERGED inventory, not the REST total. Comparing the
+  // REST total against pages fetched from the REST list is a tautology; the
+  // union with the sitemap is the only figure that can be short.
   const verdict = captureVerdict({
-    expected: pages.total,
+    expected: entries.length,
     captured: rendered.size,
     externalHosts: [...externalHosts],
     failedAssets,
@@ -1066,13 +1252,25 @@ async function capture() {
     capturedAt: new Date().toISOString(),
     restRoot: rest.indexUrl,
     restFlavor: rest.kind,
+    inventory: {
+      restPages: pages.total,
+      restPosts: posts.total,
+      sitemapSource: sm.source,
+      sitemapPageUrls: sm.urls.length,
+      addedBySitemap: fromSitemap,
+      merged: entries.length,
+    },
     pages: { captured: rendered.size, reported: pages.total },
     posts: { captured: posts.items.length, reported: posts.total },
-    media: { downloaded: [...downloaded.values()].filter(Boolean).length, reported: media.total },
+    media: {
+      reported: media.total,
+      collectionStatus: media.lastStatus,
+      available: media.lastStatus === 200,
+    },
     assets: { downloaded: [...downloaded.values()].filter(Boolean).length, failed: failedAssets },
     remainingExternalHosts: [...externalHosts],
     entries: entries.map(
-      ({ id, type, slug, link, title, localPath, parent, menuOrder, bytes }) => ({
+      ({ id, type, slug, link, title, localPath, parent, menuOrder, source, bytes }) => ({
         id,
         type,
         slug,
@@ -1081,6 +1279,7 @@ async function capture() {
         localPath,
         parent,
         menuOrder,
+        source,
         bytes: bytes ?? 0,
       }),
     ),
@@ -1100,8 +1299,9 @@ async function capture() {
       `**${verdict.ok ? '✅ capture gates passed' : '⚠️ capture gates failed'}**`,
       ...(verdict.ok ? [] : ['', ...verdict.problems.map((p) => `- ${p}`)]),
       '',
-      `- Pages: ${rendered.size} captured / ${pages.total} reported by the REST API`,
-      `- Posts: ${posts.items.length} captured / ${posts.total} reported`,
+      `- Captured ${rendered.size} of ${entries.length} merged inventory entries`,
+      `- Inventory: REST ${pages.total} page(s) + ${posts.total} post(s); sitemap ${sm.urls.length} URL(s) (${fromSitemap} not in REST)`,
+      `- Media collection: ${report.media.available ? `${media.total} item(s)` : `unavailable (HTTP ${media.lastStatus}) — images taken from the captured pages instead`}`,
       `- Assets localized: ${report.assets.downloaded} (${failedAssets} failed)`,
       `- Remaining external asset hosts: ${externalHosts.size ? [...externalHosts].join(', ') : 'none'}`,
     ].join('\n');

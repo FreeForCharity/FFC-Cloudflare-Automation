@@ -102,6 +102,12 @@ jobs:
           INPUT_MAX: ${{ inputs.max_items }}
           INPUT_DELAY: ${{ inputs.delay_ms }}
           INPUT_POSTS: ${{ inputs.include_posts }}
+          # TEMPORARY, removed with the push trigger. The dispatch default stays
+          # `inspect`; this only decides what the branch's evidence run does, and
+          # it is set to `capture` so the PR carries a real end-to-end capture
+          # rather than a probe. vpmin.org is a 1-page site, so this is a few
+          # requests at the 250ms default delay.
+          EVIDENCE_MODE: capture
         shell: bash
         run: |
           set -euo pipefail
@@ -117,7 +123,7 @@ jobs:
           fi
 
           mode="${INPUT_MODE:-}"
-          if [ -z "$mode" ]; then mode="inspect"; fi
+          if [ -z "$mode" ]; then mode="${EVIDENCE_MODE:-inspect}"; fi
           case "$mode" in
             inspect|capture) ;;
             *) echo "::error::mode must be 'inspect' or 'capture' (got '$mode')."; exit 1 ;;

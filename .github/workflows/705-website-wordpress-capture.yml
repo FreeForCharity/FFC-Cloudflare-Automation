@@ -53,12 +53,21 @@ on:
         type: boolean
         default: false
 
+  # TEMPORARY (this branch only): re-runs the evidence capture against the real
+  # source domain. Removed before merge — the permanent trigger is the dispatch
+  # above, plus the offline self-test which runs in 722 CI.
+  push:
+    branches: ['claude/wordpress-migration-scraping-qpzewr']
+    paths:
+      - 'scripts/capture-wordpress-api.mjs'
+      - '.github/workflows/705-website-wordpress-capture.yml'
+
 permissions:
   contents: read
 
 concurrency:
   # Serialize per domain so two runs cannot hammer one small origin at once.
-  group: wp-capture-${{ inputs.domain || 'vpmin.org' }}
+  group: wp-capture-${{ inputs.domain || 'evidence' }}
   cancel-in-progress: false
 
 jobs:
@@ -93,6 +102,10 @@ jobs:
           INPUT_MAX: ${{ inputs.max_items }}
           INPUT_DELAY: ${{ inputs.delay_ms }}
           INPUT_POSTS: ${{ inputs.include_posts }}
+          # TEMPORARY, removed with the push trigger above. Only the branch's
+          # evidence run reads these; a dispatch always supplies its own inputs.
+          EVIDENCE_DOMAIN: viewpointministriesinternational.org
+          EVIDENCE_MODE: inspect
         shell: bash
         run: |
           set -euo pipefail
@@ -102,6 +115,7 @@ jobs:
           # is no safe default: substituting some other charity's domain would
           # point a live capture at a site nobody asked about.
           domain="${INPUT_DOMAIN:-}"
+          if [ -z "$domain" ]; then domain="${EVIDENCE_DOMAIN:-}"; fi
           if [ -z "$domain" ]; then
             echo "::error::domain is empty — a required input did not reach this step. Refusing to guess a site to capture."
             exit 1
@@ -115,7 +129,7 @@ jobs:
           fi
 
           mode="${INPUT_MODE:-}"
-          if [ -z "$mode" ]; then mode="inspect"; fi
+          if [ -z "$mode" ]; then mode="${EVIDENCE_MODE:-inspect}"; fi
           case "$mode" in
             inspect|capture) ;;
             *) echo "::error::mode must be 'inspect' or 'capture' (got '$mode')."; exit 1 ;;

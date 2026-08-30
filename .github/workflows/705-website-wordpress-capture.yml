@@ -74,7 +74,12 @@ jobs:
   capture:
     name: Capture WordPress site
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A real charity site is not the 1-page case. viewpointministriesinternational.org
+    # advertises 587 page URLs in its sitemap, and at the 250ms politeness delay
+    # the page fetches alone are ~10 minutes before any asset is downloaded.
+    # 30 minutes would abort a legitimate capture partway and leave a truncated
+    # artifact that still looks like output.
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
@@ -105,7 +110,8 @@ jobs:
           # TEMPORARY, removed with the push trigger above. Only the branch's
           # evidence run reads these; a dispatch always supplies its own inputs.
           EVIDENCE_DOMAIN: viewpointministriesinternational.org
-          EVIDENCE_MODE: inspect
+          EVIDENCE_MODE: capture
+          EVIDENCE_POSTS: 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -140,7 +146,7 @@ jobs:
           delay="${INPUT_DELAY:-}"
           if [ -z "$delay" ]; then delay="250"; fi
           posts="${INPUT_POSTS:-}"
-          if [ -z "$posts" ]; then posts="false"; fi
+          if [ -z "$posts" ]; then posts="${EVIDENCE_POSTS:-false}"; fi
 
           {
             echo "domain=$domain"

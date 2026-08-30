@@ -53,6 +53,7 @@ def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]
             # picked one up would be asserting against a different step than
             # the one a dispatch actually executes.
             EVIDENCE_MODE="",
+            EVIDENCE_POSTS="",
             EVIDENCE_DOMAIN="",
         )
         env.update(env_overrides)

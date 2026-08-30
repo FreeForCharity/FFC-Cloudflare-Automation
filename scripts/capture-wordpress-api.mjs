@@ -162,6 +162,28 @@ export function sitemapPageUrls(urls, domain) {
 }
 
 /**
+ * Choose which probed candidate the run should report, given every outcome
+ * that was actually observed.
+ *
+ * Preference order is `ok` > `blocked` > `unreachable` > nothing, and the last
+ * two matter more than they look. The resolver previously handled only `ok`
+ * and `blocked` and fell through to a default of `absent`, so a candidate that
+ * could not be reached at all — DNS failure, TLS failure, timeout — was
+ * reported as "this is not WordPress". That is the exact collapse
+ * `classifyRestIndex` is three-valued to prevent: "not WordPress" sends the
+ * operator to a different capture path, while "unreachable" sends them to
+ * check the network or the host. Returns null when nothing better than
+ * `absent` was seen.
+ */
+export function pickRestOutcome(observed) {
+  for (const wanted of ['ok', 'blocked', 'unreachable']) {
+    const hit = observed.find((o) => o && o.verdict === wanted);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
  * Turn a REST index response into a verdict.
  *
  * Deliberately three-valued. "not 200" collapses two states that need
@@ -540,7 +562,9 @@ export function captureVerdict({
 }) {
   const problems = [];
   if (expected > 0 && captured < expected)
-    problems.push(`captured ${captured} of ${expected} pages the REST API reported`);
+    problems.push(
+      `captured ${captured} of ${expected} inventory entries (REST collections + sitemap union)`,
+    );
   if (externalHosts.length) problems.push(`unlocalized asset hosts: ${externalHosts.join(', ')}`);
   // Prefer the diagnostic sentence when one is available: "823 asset
   // download(s) failed" is a count, and the operator's next question is always
@@ -631,6 +655,36 @@ function selfTest() {
     sitemapPageUrls(parseSitemapUrls(urlset).urls, 'x.org').sort(),
     ['https://x.org/', 'https://x.org/about/'],
   );
+
+  // The resolver used to handle only ok/blocked and default to `absent`, so an
+  // unreachable host was reported as "not WordPress" — collapsing exactly the
+  // distinction classifyRestIndex is three-valued to preserve, and sending the
+  // operator to a different capture path instead of to the network.
+  eq(
+    'pickRestOutcome prefers ok',
+    pickRestOutcome([
+      { verdict: 'absent' },
+      { verdict: 'blocked' },
+      { verdict: 'ok', kind: 'dotcom' },
+    ])?.kind ?? null,
+    'dotcom',
+  );
+  eq(
+    'pickRestOutcome prefers blocked over unreachable',
+    pickRestOutcome([{ verdict: 'unreachable' }, { verdict: 'blocked' }])?.verdict ?? null,
+    'blocked',
+  );
+  eq(
+    'pickRestOutcome surfaces unreachable rather than absent',
+    pickRestOutcome([{ verdict: 'absent' }, { verdict: 'unreachable' }])?.verdict ?? null,
+    'unreachable',
+  );
+  eq(
+    'pickRestOutcome returns null when everything is absent',
+    pickRestOutcome([{ verdict: 'absent' }]),
+    null,
+  );
+  eq('pickRestOutcome handles an empty probe list', pickRestOutcome([]), null);
 
   eq('classify 200 + namespaces = ok', classifyRestIndex(200, { namespaces: ['wp/v2'] }), 'ok');
   eq('classify 200 + junk = absent', classifyRestIndex(200, 'not json'), 'absent');
@@ -1001,20 +1055,25 @@ async function getJson(url) {
  * candidate anyway, so it is reported either way.
  */
 async function resolveRestRoot() {
-  let firstBlocked = null;
+  const observed = [];
   for (const candidate of restRootCandidates(domain)) {
     const { status, body } = await getJson(candidate.indexUrl);
     const verdict = classifyRestIndex(status, body);
-    if (verdict === 'ok') {
-      return { ...candidate, verdict, index: body, status };
-    }
-    if (verdict === 'blocked') {
-      firstBlocked = { ...candidate, verdict, index: null, status };
-      break;
-    }
+    const outcome = { ...candidate, verdict, index: verdict === 'ok' ? body : null, status };
+    observed.push(outcome);
+    if (verdict === 'ok') return outcome;
+    // An explicitly locked-down candidate is a definite answer about this site;
+    // stop probing rather than falling through to report the vaguer 404.
+    if (verdict === 'blocked') break;
   }
   return (
-    firstBlocked ?? { kind: null, indexUrl: null, verdict: 'absent', index: null, status: 404 }
+    pickRestOutcome(observed) ?? {
+      kind: null,
+      indexUrl: null,
+      verdict: 'absent',
+      index: null,
+      status: 404,
+    }
   );
 }
 

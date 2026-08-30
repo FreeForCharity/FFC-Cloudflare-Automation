@@ -87,7 +87,7 @@ def test_pasted_url_is_refused_with_a_specific_message():
     # The mistake this guard exists for: "domain" invites a pasted URL.
     proc, _ = run_resolve(INPUT_DOMAIN="https://vpmin.org/")
     assert proc.returncode != 0, proc.stdout
-    assert "bare apex hostname" in proc.stdout, proc.stdout
+    assert "bare hostname" in proc.stdout, proc.stdout
 
 
 def test_www_prefix_passes_the_step_and_is_normalized_by_the_script():
@@ -116,10 +116,18 @@ def test_www_prefix_passes_the_step_and_is_normalized_by_the_script():
     assert normalized.stdout.strip() == "vpmin.org", normalized.stdout + normalized.stderr
 
 
+def test_uppercase_domain_is_accepted_and_lowercased():
+    """Hostnames are case-insensitive and the script lowercases anyway, so
+    refusing `VpMin.org` would be a gratuitous refusal of a correct value."""
+    proc, outputs = run_resolve(INPUT_DOMAIN="ViewPointMinistriesInternational.ORG")
+    assert proc.returncode == 0, proc.stdout
+    assert "domain=viewpointministriesinternational.org" in outputs, outputs
+
+
 def test_shell_metacharacters_are_refused():
     proc, _ = run_resolve(INPUT_DOMAIN="vpmin.org$(id)")
     assert proc.returncode != 0, proc.stdout
-    assert "bare apex hostname" in proc.stdout, proc.stdout
+    assert "bare hostname" in proc.stdout, proc.stdout
     # The injected command must not have run.
     assert "uid=" not in proc.stdout, proc.stdout
 
@@ -127,7 +135,7 @@ def test_shell_metacharacters_are_refused():
 def test_path_suffix_is_refused():
     proc, _ = run_resolve(INPUT_DOMAIN="vpmin.org/about")
     assert proc.returncode != 0, proc.stdout
-    assert "bare apex hostname" in proc.stdout, proc.stdout
+    assert "bare hostname" in proc.stdout, proc.stdout
 
 
 def test_unknown_mode_is_refused():

@@ -473,15 +473,82 @@ export function summarizeCaptured(entries, renderedPaths) {
 }
 
 /**
+ * Group fetch failures by status and by host.
+ *
+ * The first real capture emitted 823 identical-looking `[asset] … HTTP 404`
+ * lines and a verdict that said only "823 asset download(s) failed". Both are
+ * true and neither is a diagnosis: the actual finding was that every one of
+ * those URLs was on a DIFFERENT HOST than the site being captured
+ * (viewpointministriesinternational.org's pages reference vpmin.org for their
+ * Divi cache CSS, and vpmin.org does not serve /wp-content/). A count cannot
+ * say that; a breakdown by host says it in one line.
+ */
+export function tallyFailures(failures) {
+  const byStatus = {};
+  const byHost = {};
+  for (const f of failures) {
+    const status = String(f?.status ?? 0);
+    byStatus[status] = (byStatus[status] ?? 0) + 1;
+    let host = 'unparseable';
+    try {
+      host = new URL(f.url).hostname;
+    } catch {
+      /* keep the placeholder */
+    }
+    byHost[host] = (byHost[host] ?? 0) + 1;
+  }
+  return {
+    total: failures.length,
+    byStatus,
+    byHost,
+    sample: failures.slice(0, 8).map((f) => `HTTP ${f?.status ?? 0} ${f?.url}`),
+  };
+}
+
+/**
+ * A one-line reading of a failure tally, or null when there is nothing to say.
+ *
+ * Names the dominant host when it is NOT the site being captured, because that
+ * is a statement about the live site's own configuration — its pages point at
+ * a host that does not serve them — rather than about this capture.
+ */
+export function describeFailures(tally, domain) {
+  if (!tally || tally.total === 0) return null;
+  const hosts = Object.entries(tally.byHost).sort((a, b) => b[1] - a[1]);
+  const [topHost, topCount] = hosts[0];
+  const statuses = Object.entries(tally.byStatus)
+    .sort((a, b) => b[1] - a[1])
+    .map(([s, n]) => `${n}×HTTP ${s}`)
+    .join(', ');
+  const foreign = topHost !== domain && !topHost.endsWith(`.${domain}`);
+  const where = foreign
+    ? `${topCount} of them on ${topHost}, which is NOT the site being captured — the live pages reference a host that does not serve those files`
+    : `${topCount} of them on ${topHost}`;
+  return `${tally.total} failed (${statuses}); ${where}`;
+}
+
+/**
  * Capture verdict. `ok` only when the inventory is complete AND nothing that
  * should have been localized is still pointing off-site.
  */
-export function captureVerdict({ expected, captured, externalHosts, failedAssets }) {
+export function captureVerdict({
+  expected,
+  captured,
+  externalHosts,
+  failedAssets,
+  assetFailureNote,
+}) {
   const problems = [];
   if (expected > 0 && captured < expected)
     problems.push(`captured ${captured} of ${expected} pages the REST API reported`);
   if (externalHosts.length) problems.push(`unlocalized asset hosts: ${externalHosts.join(', ')}`);
-  if (failedAssets > 0) problems.push(`${failedAssets} asset download(s) failed`);
+  // Prefer the diagnostic sentence when one is available: "823 asset
+  // download(s) failed" is a count, and the operator's next question is always
+  // "failed how, and where?".
+  if (failedAssets > 0)
+    problems.push(
+      assetFailureNote ? `assets: ${assetFailureNote}` : `${failedAssets} asset download(s) failed`,
+    );
   return { ok: problems.length === 0, problems };
 }
 
@@ -758,6 +825,54 @@ function selfTest() {
     'summarizeCaptured omits an entry that never rendered',
     Object.values(sc.byType).reduce((a, b) => a + b, 0),
     5,
+  );
+
+  // Regression anchor from the first capture of the real site: 823 asset
+  // failures, all on a host that is NOT the site being captured. The count
+  // alone said nothing; the breakdown by host is the diagnosis.
+  const failTally = tallyFailures([
+    { url: 'https://vpmin.org/wp-content/et-cache/a.css', status: 404 },
+    { url: 'https://vpmin.org/wp-content/et-cache/b.css', status: 404 },
+    { url: 'https://vpmin.org/wp-content/et-cache/c.css', status: 404 },
+    { url: 'https://x.org/missing.png', status: 500 },
+  ]);
+  eq('tallyFailures totals', failTally.total, 4);
+  eq('tallyFailures groups by status', failTally.byStatus, { 404: 3, 500: 1 });
+  eq('tallyFailures groups by host', failTally.byHost, { 'vpmin.org': 3, 'x.org': 1 });
+  eq(
+    'tallyFailures handles an unparseable url',
+    tallyFailures([{ url: '???', status: 0 }]).byHost,
+    {
+      unparseable: 1,
+    },
+  );
+  eq(
+    'describeFailures is null when nothing failed',
+    describeFailures(tallyFailures([]), 'x.org'),
+    null,
+  );
+  eq(
+    'describeFailures names a foreign dominant host as a live-site problem',
+    /NOT the site being captured/.test(describeFailures(failTally, 'x.org')),
+    true,
+  );
+  eq(
+    'describeFailures does not cry foreign when the host IS the site',
+    /NOT the site being captured/.test(
+      describeFailures(tallyFailures([{ url: 'https://x.org/a.png', status: 404 }]), 'x.org'),
+    ),
+    false,
+  );
+  eq(
+    'captureVerdict prefers the diagnostic note over a bare count',
+    captureVerdict({
+      expected: 1,
+      captured: 1,
+      externalHosts: [],
+      failedAssets: 823,
+      assetFailureNote: 'all on vpmin.org',
+    }).problems,
+    ['assets: all on vpmin.org'],
   );
 
   eq(
@@ -1252,12 +1367,18 @@ async function capture() {
 
   // 2. SCRAPE the rendered markup for each inventoried URL.
   const rendered = new Map(); // localPath -> html
-  let fetchFailures = 0;
+  const pageFailures = [];
+  // Per-failure lines are capped. The first real capture printed 823 of them,
+  // which pushed the actual diagnosis off the readable end of the log and made
+  // a one-cause failure look like 823 unrelated ones. The tally below reports
+  // the whole set; these lines are only for spotting a pattern early.
+  const LOG_CAP = 20;
   for (const e of entries) {
     const res = await request(e.link, { accept: 'text/html' });
     if (!res || res.status !== 200) {
-      console.error(`[scrape] ${e.link}: HTTP ${res?.status ?? 0} — skipped`);
-      fetchFailures++;
+      if (pageFailures.length < LOG_CAP)
+        console.error(`[scrape] ${e.link}: HTTP ${res?.status ?? 0} — skipped`);
+      pageFailures.push({ url: e.link, status: res?.status ?? 0 });
       await sleep(delayMs);
       continue;
     }
@@ -1265,7 +1386,7 @@ async function capture() {
     try {
       html = await res.text();
     } catch {
-      fetchFailures++;
+      pageFailures.push({ url: e.link, status: -1 });
       await sleep(delayMs);
       continue;
     }
@@ -1273,29 +1394,32 @@ async function capture() {
     e.bytes = html.length;
     await sleep(delayMs);
   }
-  console.error(`[capture] rendered ${rendered.size} page(s), ${fetchFailures} failure(s)`);
+  const pageTally = tallyFailures(pageFailures);
+  console.error(`[capture] rendered ${rendered.size} page(s), ${pageTally.total} failure(s)`);
+  if (pageTally.total) console.error(`[capture] pages: ${describeFailures(pageTally, domain)}`);
 
   // 3. Localize assets, following CSS one level deep so @font-face and
   //    background images inside a stylesheet come along too. Without that pass
   //    the page's CSS downloads fine and every font it names still 404s.
   const assetsRoot = join(outDir, assetsDirName);
   const downloaded = new Map(); // absolute URL -> local name (or null on failure)
-  let failedAssets = 0;
+  const assetFailures = [];
 
   async function localizeAsset(absUrl) {
     if (downloaded.has(absUrl)) return downloaded.get(absUrl);
     downloaded.set(absUrl, null); // claim it first so a cycle cannot recurse forever
     const res = await request(absUrl);
     if (!res || res.status !== 200) {
-      console.error(`[asset] ${absUrl}: HTTP ${res?.status ?? 0}`);
-      failedAssets++;
+      if (assetFailures.length < LOG_CAP)
+        console.error(`[asset] ${absUrl}: HTTP ${res?.status ?? 0}`);
+      assetFailures.push({ url: absUrl, status: res?.status ?? 0 });
       return null;
     }
     let buf;
     try {
       buf = Buffer.from(await res.arrayBuffer());
     } catch {
-      failedAssets++;
+      assetFailures.push({ url: absUrl, status: -1 });
       return null;
     }
     const name = assetLocalName(absUrl);
@@ -1376,11 +1500,16 @@ async function capture() {
   // Measured against the MERGED inventory, not the REST total. Comparing the
   // REST total against pages fetched from the REST list is a tautology; the
   // union with the sitemap is the only figure that can be short.
+  const assetTally = tallyFailures(assetFailures);
+  const assetFailureNote = describeFailures(assetTally, domain);
+  if (assetFailureNote) console.error(`[capture] assets: ${assetFailureNote}`);
+
   const verdict = captureVerdict({
     expected: entries.length,
     captured: rendered.size,
     externalHosts: [...externalHosts],
-    failedAssets,
+    failedAssets: assetTally.total,
+    assetFailureNote,
   });
 
   const report = {
@@ -1404,7 +1533,12 @@ async function capture() {
       collectionStatus: media.lastStatus,
       available: media.lastStatus === 200,
     },
-    assets: { downloaded: [...downloaded.values()].filter(Boolean).length, failed: failedAssets },
+    assets: {
+      downloaded: [...downloaded.values()].filter(Boolean).length,
+      failed: assetTally.total,
+      failures: assetTally,
+    },
+    pageFetch: { failed: pageTally.total, failures: pageTally },
     remainingExternalHosts: [...externalHosts],
     entries: entries.map(
       ({ id, type, slug, link, title, localPath, parent, menuOrder, source, bytes }) => ({
@@ -1441,7 +1575,9 @@ async function capture() {
         `${captureSummary.byType.sitemap ?? 0} sitemap-only)`,
       `- Inventory: REST ${pages.total} page(s) + ${posts.total} post(s); sitemap ${sm.urls.length} URL(s) (${fromSitemap} not in REST)`,
       `- Media collection: ${report.media.available ? `${media.total} item(s)` : `unavailable (HTTP ${media.lastStatus}) — images taken from the captured pages instead`}`,
-      `- Assets localized: ${report.assets.downloaded} (${failedAssets} failed)`,
+      `- Assets localized: ${report.assets.downloaded}` +
+        (assetFailureNote ? ` — ${assetFailureNote}` : ' (0 failed)'),
+      ...(pageTally.total ? [`- Page fetches: ${describeFailures(pageTally, domain)}`] : []),
       `- Remaining external asset hosts: ${externalHosts.size ? [...externalHosts].join(', ') : 'none'}`,
     ].join('\n');
     writeFileSync(process.env.GITHUB_STEP_SUMMARY, s + '\n', { flag: 'a', encoding: 'utf8' });

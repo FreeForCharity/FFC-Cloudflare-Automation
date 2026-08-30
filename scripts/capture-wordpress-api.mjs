@@ -388,6 +388,10 @@ export function shouldLocalize(absUrl, domain) {
     return false;
   }
   const host = u.hostname.replace(/^www\./, '');
+  // Never fetch into a private network on a page's say-so, even for the site
+  // being captured — a same-domain hostname resolving to a private literal is
+  // still a request the runner makes on someone else's behalf.
+  if (isPrivateHost(u.hostname)) return false;
   if (host === domain || host.endsWith(`.${domain}`)) return true;
 
   const KEEP_EXTERNAL = [
@@ -433,6 +437,78 @@ export function shouldLocalize(absUrl, domain) {
   return /\.(css|js|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot|otf|mp4|webm|mp3|pdf)(\?|$)/i.test(
     u.pathname + u.search,
   );
+}
+
+/**
+ * Hosts this script must never fetch, whatever a page asks for.
+ *
+ * Every URL fetched here comes from markup on a site named by whoever
+ * dispatched the workflow, and the fetch happens inside a CI runner. A page
+ * that references `http://169.254.169.254/…` or `http://10.0.0.5/x.png` would
+ * otherwise have the runner reach into its own network on that page's behalf.
+ * Nothing sensitive is loaded into this job, so the exposure is small — but the
+ * cost of refusing is one comparison, and "small" is not a property that
+ * survives someone reusing this script somewhere else.
+ */
+export function isPrivateHost(hostname) {
+  if (!hostname) return true;
+  const h = String(hostname)
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '');
+  if (
+    h === 'localhost' ||
+    h.endsWith('.localhost') ||
+    h.endsWith('.local') ||
+    h.endsWith('.internal')
+  )
+    return true;
+  // Any IPv6 literal, which includes ::1 and the unique-local fc00::/7 range.
+  // Public IPv6 assets are rare enough that refusing the whole family costs
+  // nothing next to enumerating its private ranges correctly.
+  if (h.includes(':')) return true;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  if ([a, Number(m[2]), Number(m[3]), Number(m[4])].some((n) => n > 255)) return true;
+  if (a === 0 || a === 127 || a === 10) return true; // this-network, loopback, private
+  if (a === 169 && b === 254) return true; // link-local, incl. cloud metadata
+  if (a === 172 && b >= 16 && b <= 31) return true; // private
+  if (a === 192 && b === 168) return true; // private
+  if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
+  return false;
+}
+
+/**
+ * Same-site page links actually present in this page's markup.
+ *
+ * The rewrite pass used to add a replacement for EVERY entry in the inventory
+ * to EVERY page, and `rewriteRefs` does a split/join over the whole document
+ * per pair. On the 590-entry site that is ~1,180 full-document passes per page
+ * across 590 pages — work quadratic in the size of the site, for a set of
+ * links of which any one page references a handful. Reading the page's own
+ * hrefs once and rewriting only those is linear in the document.
+ */
+export function collectPageLinks(html) {
+  const links = new Set();
+  for (const m of html.matchAll(/\bhref\s*=\s*["']([^"']+)["']/gi)) links.add(m[1].trim());
+  return links;
+}
+
+/**
+ * Parse a positive-integer CLI option, or return null when it is not one.
+ *
+ * `parseInt` answers NaN for junk, and NaN is silently catastrophic here rather
+ * than loud: `setTimeout(fn, NaN)` fires immediately, so every request would
+ * abort instantly, and `items.length < NaN` is false, so a collection would
+ * paginate zero times and report an empty site as complete. Both look like
+ * findings about the site rather than about the arguments.
+ */
+export function parsePositiveInt(raw, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+  if (!/^\d+$/.test(String(raw).trim())) return null;
+  const n = Number(String(raw).trim());
+  if (!Number.isFinite(n) || n < min || n > max) return null;
+  return n;
 }
 
 /**
@@ -777,6 +853,51 @@ function selfTest() {
     assetLocalName('https://h.org/..%2f..%2fetc/x.png'),
     'h.org/..%2f..%2fetc/x.png',
   );
+  // Never fetch into a private network on a page's say-so.
+  eq('isPrivateHost blocks localhost', isPrivateHost('localhost'), true);
+  eq('isPrivateHost blocks loopback', isPrivateHost('127.0.0.1'), true);
+  eq('isPrivateHost blocks cloud metadata', isPrivateHost('169.254.169.254'), true);
+  eq('isPrivateHost blocks 10/8', isPrivateHost('10.1.2.3'), true);
+  eq('isPrivateHost blocks 172.16/12', isPrivateHost('172.20.0.1'), true);
+  eq('isPrivateHost allows 172.15, outside the range', isPrivateHost('172.15.0.1'), false);
+  eq('isPrivateHost allows 172.32, outside the range', isPrivateHost('172.32.0.1'), false);
+  eq('isPrivateHost blocks 192.168/16', isPrivateHost('192.168.1.1'), true);
+  eq('isPrivateHost blocks an IPv6 literal', isPrivateHost('[::1]'), true);
+  eq('isPrivateHost blocks .internal', isPrivateHost('db.internal'), true);
+  eq('isPrivateHost allows a normal public host', isPrivateHost('vpmin.org'), false);
+  eq('isPrivateHost allows a public IPv4', isPrivateHost('93.184.216.34'), false);
+  eq(
+    'shouldLocalize refuses a private host even with an asset extension',
+    shouldLocalize('http://169.254.169.254/latest/meta-data/x.png', 'x.org'),
+    false,
+  );
+
+  // The rewrite must only touch links the page actually contains.
+  eq(
+    'collectPageLinks reads hrefs',
+    [...collectPageLinks('<a href="https://x.org/a/">A</a><a href=\'/b\'>B</a>')].sort(),
+    ['/b', 'https://x.org/a/'],
+  );
+  eq('collectPageLinks is empty for a page with no links', [...collectPageLinks('<p>hi</p>')], []);
+
+  // NaN is silently catastrophic here, not loud.
+  eq('parsePositiveInt accepts an integer', parsePositiveInt('500', { min: 1, max: 1000 }), 500);
+  eq('parsePositiveInt rejects junk', parsePositiveInt('abc', { min: 1, max: 1000 }), null);
+  eq('parsePositiveInt rejects a negative', parsePositiveInt('-5', { min: 0, max: 1000 }), null);
+  eq('parsePositiveInt rejects a float', parsePositiveInt('2.5', { min: 0, max: 1000 }), null);
+  eq(
+    'parsePositiveInt rejects out of range',
+    parsePositiveInt('99999', { min: 1, max: 1000 }),
+    null,
+  );
+  eq('parsePositiveInt rejects empty', parsePositiveInt('', { min: 0, max: 10 }), null);
+  eq(
+    'parsePositiveInt rejects what parseInt would silently truncate',
+    parsePositiveInt('30s', { min: 1, max: 600 }),
+    null,
+  );
+  eq('parsePositiveInt allows zero when min is 0', parsePositiveInt('0', { min: 0, max: 10 }), 0);
+
   eq(
     'isContainedPath allows a normal nested path',
     isContainedPath('/out', 'a/b/index.html'),
@@ -1077,9 +1198,24 @@ const flag = (name) => process.argv.includes(`--${name}`);
 const domain = normalizeDomain(arg('domain', ''));
 const inspectOnly = flag('inspect');
 const outDir = arg('out', '');
-const maxItems = parseInt(arg('max', '500'), 10);
-const delayMs = parseInt(arg('delay', '250'), 10);
-const timeoutMs = parseInt(arg('timeout', '30'), 10) * 1000;
+// Validated rather than parseInt'd: NaN here is silently catastrophic, not
+// loud. See parsePositiveInt.
+const numericOptions = [
+  ['max', arg('max', '500'), { min: 1, max: 100000 }],
+  ['delay', arg('delay', '250'), { min: 0, max: 60000 }],
+  ['timeout', arg('timeout', '30'), { min: 1, max: 600 }],
+];
+const parsedOptions = {};
+const badOptions = [];
+for (const [name, raw, bounds] of numericOptions) {
+  const value = parsePositiveInt(raw, bounds);
+  if (value === null)
+    badOptions.push(`--${name}=${raw} (expected an integer ${bounds.min}..${bounds.max})`);
+  else parsedOptions[name] = value;
+}
+const maxItems = parsedOptions.max;
+const delayMs = parsedOptions.delay;
+const timeoutMs = parsedOptions.timeout * 1000;
 const includePosts = flag('include-posts');
 const jsonOut = arg('json-out', '');
 
@@ -1090,6 +1226,11 @@ if (isMain && (!domain || (!inspectOnly && !outDir))) {
       '  --domain <domain> --out <dir> [--max 500] [--delay 250] [--include-posts] [--timeout 30]\n' +
       '  --self-test',
   );
+  process.exit(2);
+}
+
+if (isMain && badOptions.length) {
+  console.error(`Invalid numeric option(s):\n  ${badOptions.join('\n  ')}`);
   process.exit(2);
 }
 
@@ -1644,11 +1785,21 @@ async function capture() {
     // Same-site page links must point at the captured copies, or every nav
     // click leaves the static site for the host being decommissioned — which
     // still resolves today and silently stops after the DNS cutover.
+    //
+    // Only links this page actually contains. Adding a replacement for every
+    // entry made the rewrite quadratic in the size of the site: rewriteRefs
+    // does a full-document split/join per pair, so a 590-entry inventory meant
+    // ~1,180 passes over every one of 590 documents.
+    const present = collectPageLinks(html);
     for (const e of entries) {
       if (e.localPath === localPath) continue;
+      const bare = e.link.endsWith('/') ? e.link.slice(0, -1) : null;
+      const hasFull = present.has(e.link);
+      const hasBare = bare !== null && present.has(bare);
+      if (!hasFull && !hasBare) continue;
       const target = `${relativePrefix(localPath)}${e.localPath.replace(/index\.html$/, '')}`;
-      reps.set(e.link, target || './');
-      if (e.link.endsWith('/')) reps.set(e.link.slice(0, -1), target || './');
+      if (hasFull) reps.set(e.link, target || './');
+      if (hasBare) reps.set(bare, target || './');
     }
     const out = rewriteRefs(html, reps);
     if (!isContainedPath(outDir, localPath)) {

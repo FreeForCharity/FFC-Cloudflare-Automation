@@ -144,10 +144,24 @@ jobs:
             *) echo "::error::mode must be 'inspect' or 'capture' (got '$mode')."; exit 1 ;;
           esac
 
+          # Validated here, in the job that holds no concurrency slot, so a
+          # typo fails in seconds instead of after queueing behind another
+          # capture. Unvalidated these reach parseInt in the script, where NaN
+          # is silently catastrophic rather than loud: a NaN timeout aborts
+          # every request instantly and a NaN cap paginates zero times, both of
+          # which read as findings about the site.
           max="${INPUT_MAX:-}"
           if [ -z "$max" ]; then max="500"; fi
           delay="${INPUT_DELAY:-}"
           if [ -z "$delay" ]; then delay="250"; fi
+          if ! printf '%s' "$max" | grep -qE '^[0-9]+$' || [ "$max" -lt 1 ] || [ "$max" -gt 100000 ]; then
+            echo "::error::max_items must be a whole number between 1 and 100000 (got '$max')."
+            exit 1
+          fi
+          if ! printf '%s' "$delay" | grep -qE '^[0-9]+$' || [ "$delay" -gt 60000 ]; then
+            echo "::error::delay_ms must be a whole number of milliseconds between 0 and 60000 (got '$delay'). These are small shared-hosting origins; 250 is the default for a reason."
+            exit 1
+          fi
           posts="${INPUT_POSTS:-}"
           if [ -z "$posts" ]; then posts="false"; fi
 

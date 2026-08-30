@@ -154,6 +154,35 @@ def test_numeric_defaults_are_applied_when_inputs_are_empty():
     assert "posts=false" in outputs, outputs
 
 
+def test_non_numeric_max_items_is_refused():
+    """Unvalidated these reach parseInt, where NaN is silently catastrophic:
+    a NaN cap paginates zero times and reports an empty site as complete."""
+    proc, _ = run_resolve(INPUT_DOMAIN="vpmin.org", INPUT_MAX="lots")
+    assert proc.returncode != 0, proc.stdout
+    assert "max_items must be a whole number" in proc.stdout, proc.stdout
+
+
+def test_non_numeric_delay_is_refused():
+    proc, _ = run_resolve(INPUT_DOMAIN="vpmin.org", INPUT_DELAY="fast")
+    assert proc.returncode != 0, proc.stdout
+    assert "delay_ms must be a whole number" in proc.stdout, proc.stdout
+
+
+def test_absurd_delay_is_refused():
+    proc, _ = run_resolve(INPUT_DOMAIN="vpmin.org", INPUT_DELAY="999999")
+    assert proc.returncode != 0, proc.stdout
+    assert "delay_ms must be a whole number" in proc.stdout, proc.stdout
+
+
+def test_zero_delay_is_allowed_but_max_zero_is_not():
+    """0ms is impolite yet occasionally deliberate; a 0 cap is never meaningful."""
+    ok, outputs = run_resolve(INPUT_DOMAIN="vpmin.org", INPUT_DELAY="0")
+    assert ok.returncode == 0, ok.stdout
+    assert "delay=0" in outputs, outputs
+    bad, _ = run_resolve(INPUT_DOMAIN="vpmin.org", INPUT_MAX="0")
+    assert bad.returncode != 0, bad.stdout
+
+
 def test_capture_script_self_test_passes():
     proc = subprocess.run(
         ["node", str(REPO_ROOT / "scripts" / "capture-wordpress-api.mjs"), "--self-test"],

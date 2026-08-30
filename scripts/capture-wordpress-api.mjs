@@ -47,7 +47,7 @@
  */
 
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
-import { join, dirname, extname } from 'node:path';
+import { join, dirname, extname, resolve as resolvePath, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const UA = 'Mozilla/5.0 (FFC static-capture bot; +https://freeforcharity.org)';
@@ -224,6 +224,25 @@ export function localPathForLink(link, domain) {
   return `${path}/index.html`;
 }
 
+/**
+ * Would writing `relative` under `root` stay inside `root`?
+ *
+ * Every path this script writes is derived from a URL found in someone else's
+ * markup, so containment must be ENFORCED rather than inferred. As it happens
+ * the obvious traversal vectors do not survive `new URL()`: it normalises
+ * `/../../etc/passwd` and `/%2e%2e/%2e%2e/etc/passwd` both to `/etc/passwd`,
+ * and `..%2f..%2f` survives only as one literal directory name that `join`
+ * does not treat as traversal. Measured, not assumed — and that is exactly why
+ * this guard is worth having: it is a property of WHATWG URL parsing today,
+ * held in a dependency this script does not control, and the cost of pinning
+ * it here is one comparison per write.
+ */
+export function isContainedPath(root, relative) {
+  const base = resolvePath(root);
+  const target = resolvePath(base, relative);
+  return target === base || target.startsWith(base + sep);
+}
+
 /** Depth of a local path, for building a relative prefix back to the root. */
 export function relativePrefix(localPath) {
   const depth = localPath.split('/').length - 1;
@@ -231,8 +250,9 @@ export function relativePrefix(localPath) {
 }
 
 /**
- * Every asset URL referenced by a chunk of HTML: src, href, srcset candidates,
- * inline style url(), and the content attribute of og:image-style meta tags.
+ * Every asset URL referenced by a chunk of HTML: src, poster and data-src;
+ * asset-bearing <link rel>; srcset candidates; og:image / twitter:image meta
+ * content; and url() inside <style> blocks and style attributes.
  */
 export function collectAssetUrls(html) {
   const urls = new Set();
@@ -269,6 +289,18 @@ export function collectAssetUrls(html) {
     for (const cand of m[1].split(/,(?=\s*[^\s,]+\s*(?:[\d.]+[wx])?\s*(?:,|$))/)) {
       push(cand.trim().split(/\s+/)[0]);
     }
+  }
+
+  // Social preview images. These are real assets the page references, and
+  // after the migration they would otherwise keep pointing at the host being
+  // decommissioned. Restricted to the image properties: a blanket `content=`
+  // scan would drag in every description and viewport string on the page.
+  for (const m of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const tag = m[0];
+    const key = /\b(?:property|name)\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.toLowerCase() ?? '';
+    if (!/^(og:image(:secure_url|:url)?|twitter:image(:src)?)$/.test(key)) continue;
+    const content = /\bcontent\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
+    if (looksLikeAssetRef(content)) push(content);
   }
 
   // Inline style="background:url(...)" and <style> blocks ONLY.
@@ -724,6 +756,72 @@ function selfTest() {
   eq(
     'collectAssetUrls skips data: URIs',
     collectAssetUrls('<img src="data:image/png;base64,AAA">'),
+    [],
+  );
+
+  // Containment. The first three pin what WHATWG URL actually does today
+  // (measured, not assumed); the last two pin that the guard would still catch
+  // an escape if that ever changed, since it is a dependency we do not control.
+  eq(
+    'new URL normalises ../ away before it reaches a path',
+    localPathForLink('https://h.org/a/../../../etc/passwd', 'h.org'),
+    'etc/passwd/index.html',
+  );
+  eq(
+    'new URL normalises percent-encoded ../ away too',
+    localPathForLink('https://h.org/%2e%2e/%2e%2e/etc/passwd', 'h.org'),
+    'etc/passwd/index.html',
+  );
+  eq(
+    'an encoded slash survives only as a literal directory name',
+    assetLocalName('https://h.org/..%2f..%2fetc/x.png'),
+    'h.org/..%2f..%2fetc/x.png',
+  );
+  eq(
+    'isContainedPath allows a normal nested path',
+    isContainedPath('/out', 'a/b/index.html'),
+    true,
+  );
+  eq('isContainedPath allows the root itself', isContainedPath('/out', '.'), true);
+  eq('isContainedPath rejects a parent escape', isContainedPath('/out', '../evil.html'), false);
+  eq(
+    'isContainedPath rejects a deep parent escape',
+    isContainedPath('/out', 'a/../../../etc/passwd'),
+    false,
+  );
+  eq('isContainedPath rejects an absolute path', isContainedPath('/out', '/etc/passwd'), false);
+  eq(
+    'isContainedPath is not fooled by a sibling with a shared prefix',
+    isContainedPath('/out', '../outside/x'),
+    false,
+  );
+
+  // og:image / twitter:image — the docstring claimed these and the code did not
+  // read them, so a social preview kept pointing at the decommissioned host.
+  eq(
+    'collectAssetUrls reads og:image',
+    collectAssetUrls('<meta property="og:image" content="https://x.org/social.png">'),
+    ['https://x.org/social.png'],
+  );
+  eq(
+    'collectAssetUrls reads twitter:image',
+    collectAssetUrls('<meta name="twitter:image" content="/tw.png">'),
+    ['/tw.png'],
+  );
+  eq(
+    'collectAssetUrls ignores non-image meta content',
+    collectAssetUrls(
+      '<meta name="description" content="A charity in Ohio."><meta name="viewport" content="width=device-width">',
+    ),
+    [],
+  );
+  // The case above passes even with no property filter at all, because
+  // looksLikeAssetRef rejects prose — so it proves nothing about the filter.
+  // og:url is the discriminating case: it IS a well-formed URL, and it is a
+  // page rather than an asset, so only the property filter can exclude it.
+  eq(
+    'collectAssetUrls ignores og:url — a page URL, not an asset',
+    collectAssetUrls('<meta property="og:url" content="https://x.org/about/">'),
     [],
   );
 
@@ -1274,7 +1372,11 @@ async function inspect() {
     .filter(([, v]) => v.status !== 200)
     .map(([k, v]) => `${k} (HTTP ${v.status})`);
 
-  const usable = rest.verdict === 'ok' && (pagesTotal > 0 || sm.urls.length > 0);
+  // Posts count. A blog-only WordPress site legitimately has 0 pages and N
+  // posts, and reporting it NO_REST_API would send the operator to a different
+  // capture path for a site whose REST API answered perfectly well.
+  const postsTotal = report.collections?.posts?.total ?? 0;
+  const usable = rest.verdict === 'ok' && (pagesTotal > 0 || postsTotal > 0 || sm.urls.length > 0);
   report.verdict = usable
     ? 'CAPTURE_READY'
     : rest.verdict === 'blocked'
@@ -1427,6 +1529,9 @@ async function capture() {
   // 2. SCRAPE the rendered markup for each inventoried URL.
   const rendered = new Map(); // localPath -> html
   const pageFailures = [];
+  // Paths that would have escaped the output directory. Expected to stay empty;
+  // recorded rather than merely skipped so an empty list is evidence.
+  const escapedPaths = [];
   // Per-failure lines are capped. The first real capture printed 823 of them,
   // which pushed the actual diagnosis off the readable end of the log and made
   // a one-cause failure look like 823 unrelated ones. The tally below reports
@@ -1482,6 +1587,12 @@ async function capture() {
       return null;
     }
     const name = assetLocalName(absUrl);
+    if (!isContainedPath(assetsRoot, name)) {
+      console.error(`[asset] refusing to write outside the assets dir: ${name}`);
+      escapedPaths.push(name);
+      assetFailures.push({ url: absUrl, status: -2 });
+      return null;
+    }
     const dest = join(assetsRoot, name);
     mkdirSync(dirname(dest), { recursive: true });
 
@@ -1540,6 +1651,11 @@ async function capture() {
       if (e.link.endsWith('/')) reps.set(e.link.slice(0, -1), target || './');
     }
     const out = rewriteRefs(html, reps);
+    if (!isContainedPath(outDir, localPath)) {
+      console.error(`[capture] refusing to write outside the output dir: ${localPath}`);
+      escapedPaths.push(localPath);
+      continue;
+    }
     const dest = join(outDir, localPath);
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, out, { encoding: 'utf8' });
@@ -1599,6 +1715,7 @@ async function capture() {
     },
     pageFetch: { failed: pageTally.total, failures: pageTally },
     remainingExternalHosts: [...externalHosts],
+    escapedPaths,
     entries: entries.map(
       ({ id, type, slug, link, title, localPath, parent, menuOrder, source, bytes }) => ({
         id,

@@ -10,11 +10,11 @@ way to type this input is wrong: an operator reading "domain" pastes
 several hundred lines into a run. It also refuses shell metacharacters, since
 the value is interpolated into a shell variable that is later passed to node.
 
-The script's own pure logic has its own offline suite (`--self-test`, run as
-the first step of the workflow); this module asserts that the suite exists,
-passes, and is wired into the workflow ahead of any live request — so a run
-cannot exercise broken classification logic against a real charity's site and
-produce a confident, wrong artifact.
+The script's own pure logic has its own offline suite (`--self-test`), which
+runs in the `resolve` job that `capture` depends on; this module asserts that
+the suite exists, passes, and gates every live request — so a run cannot
+exercise broken classification logic against a real charity's site and produce
+a confident, wrong artifact.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ WORKFLOW = "705-website-wordpress-capture.yml"
 
 def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]:
     """Run the 'Resolve inputs' step. Returns (proc, GITHUB_OUTPUT contents)."""
-    script = step_run(WORKFLOW, "capture", "Resolve inputs")
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
     with tempfile.TemporaryDirectory() as td:
         tdp = pathlib.Path(td)
         outputs = tdp / "output.txt"
@@ -48,13 +48,6 @@ def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]
             INPUT_MAX="",
             INPUT_DELAY="",
             INPUT_POSTS="",
-            # Cleared explicitly rather than left to inheritance: these exist
-            # only for the branch's evidence run, and a test that silently
-            # picked one up would be asserting against a different step than
-            # the one a dispatch actually executes.
-            EVIDENCE_MODE="",
-            EVIDENCE_POSTS="",
-            EVIDENCE_DOMAIN="",
         )
         env.update(env_overrides)
         proc = subprocess.run(
@@ -90,14 +83,14 @@ def test_pasted_url_is_refused_with_a_specific_message():
     assert "bare hostname" in proc.stdout, proc.stdout
 
 
-def test_www_prefix_passes_the_step_and_is_normalized_by_the_script():
-    """`www.` is a valid hostname, so the shell guard lets it through — the
-    script is what strips it. Pinned in both places because a capture run
-    against `www.x.org` while the REST candidates say `x.org` would silently
-    treat every same-site asset as foreign."""
+def test_www_prefix_is_stripped_by_the_step_and_by_the_script():
+    """`www.` is accepted and stripped. It must be stripped HERE as well as in
+    the script, because the concurrency group keys on this step's output: if
+    the step emitted `www.x.org` while the script captured `x.org`, the two
+    forms would crawl the same origin concurrently."""
     proc, outputs = run_resolve(INPUT_DOMAIN="www.vpmin.org")
     assert proc.returncode == 0, proc.stdout
-    assert "domain=www.vpmin.org" in outputs, outputs
+    assert "domain=vpmin.org" in outputs, outputs
 
     normalized = subprocess.run(
         [
@@ -178,28 +171,38 @@ def test_capture_script_self_test_passes():
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-def test_self_test_runs_before_any_live_request():
-    """The offline suite must gate the live steps, not merely accompany them."""
+def test_self_test_gates_every_live_request():
+    """The offline suite must gate the live steps, not merely accompany them.
+
+    It lives in `resolve`, and `capture` — which holds every network call —
+    declares `needs: resolve`, so a self-test failure stops the run before any
+    request reaches the charity's server."""
     wf = load_workflow(WORKFLOW)
-    steps = wf["jobs"]["capture"]["steps"]
-    names = [s.get("name", "") for s in steps]
-    selftest_at = next(i for i, n in enumerate(names) if "Self-test" in n)
-    inspect_at = next(i for i, n in enumerate(names) if "Inspect the live" in n)
-    capture_at = next(i for i, n in enumerate(names) if n == "Capture the site")
-    assert selftest_at < inspect_at < capture_at, names
-    # And it must not be skippable behind a condition.
-    assert "if" not in steps[selftest_at], steps[selftest_at]
+    resolve_names = [s.get("name", "") for s in wf["jobs"]["resolve"]["steps"]]
+    selftest_at = next(i for i, n in enumerate(resolve_names) if "Self-test" in n)
+    assert "if" not in wf["jobs"]["resolve"]["steps"][selftest_at], "self-test must not be skippable"
+
+    needs = wf["jobs"]["capture"].get("needs")
+    needs = [needs] if isinstance(needs, str) else needs
+    assert "resolve" in needs, needs
+
+    # No live request may sit in the resolve job alongside the self-test.
+    assert not any("Inspect the live" in n or n == "Capture the site" for n in resolve_names), resolve_names
+    capture_names = [s.get("name", "") for s in wf["jobs"]["capture"]["steps"]]
+    inspect_at = next(i for i, n in enumerate(capture_names) if "Inspect the live" in n)
+    capture_at = next(i for i, n in enumerate(capture_names) if n == "Capture the site")
+    assert inspect_at < capture_at, capture_names
 
 
 def test_workflow_is_read_only_and_ungated():
     """705 loads no credentials and touches nothing outside the run artifact."""
     wf = load_workflow(WORKFLOW)
     assert wf["permissions"] == {"contents": "read"}, wf["permissions"]
-    job = wf["jobs"]["capture"]
-    assert "environment" not in job, job.get("environment")
-    for step in job["steps"]:
-        assert "secrets." not in str(step.get("env", "")), step
-        assert "azure/login" not in str(step.get("uses", "")), step
+    for name, job in wf["jobs"].items():
+        assert "environment" not in job, (name, job.get("environment"))
+        for step in job["steps"]:
+            assert "secrets." not in str(step.get("env", "")), (name, step)
+            assert "azure/login" not in str(step.get("uses", "")), (name, step)
 
 
 def test_capture_mode_is_gated_on_the_resolved_mode():
@@ -207,8 +210,20 @@ def test_capture_mode_is_gated_on_the_resolved_mode():
     wf = load_workflow(WORKFLOW)
     step = next(s for s in wf["jobs"]["capture"]["steps"] if s.get("name") == "Capture the site")
     cond = step["if"]
-    assert "steps.resolve.outputs.mode" in cond, cond
+    assert "needs.resolve.outputs.mode" in cond, cond
     assert "inputs.mode" not in cond, cond
+
+
+def test_concurrency_group_keys_on_the_normalized_domain():
+    """Keying on the raw input would let `VPMin.org` and `vpmin.org` crawl the
+    same origin at once — exactly what the group exists to prevent."""
+    wf = load_workflow(WORKFLOW)
+    group = wf["jobs"]["capture"]["concurrency"]["group"]
+    assert "needs.resolve.outputs.domain" in group, group
+    assert "inputs.domain" not in group, group
+    assert wf["jobs"]["capture"]["concurrency"]["cancel-in-progress"] is False
+    # A workflow-level group would reintroduce the raw input.
+    assert "concurrency" not in wf, wf.get("concurrency")
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

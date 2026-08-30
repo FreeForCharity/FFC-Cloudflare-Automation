@@ -19,6 +19,14 @@ run-name: 'WP capture ${{ inputs.domain }} (mode=${{ inputs.mode }})'
 # Read-only and ungated: it loads no credentials and writes nothing outside the
 # run's own artifact. `mode=inspect` (the default) additionally makes no request
 # beyond a handful of probes, so it is the safe first dispatch for any domain.
+#
+# Two jobs, for one reason: the concurrency group that protects a small charity
+# origin from two simultaneous crawls has to key on the NORMALISED domain, and
+# a workflow-level `concurrency:` can only see the raw dispatch input. Keying on
+# `inputs.domain` would let `VPMin.org` and `vpmin.org` — or `www.` and the apex
+# — run at the same time against the same server, which is precisely what the
+# group exists to prevent. `resolve` normalises and makes no network request;
+# `capture` does every live request and carries the group.
 
 on:
   workflow_dispatch:
@@ -61,21 +69,19 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # Serialize per domain so two runs cannot hammer one small origin at once.
-  group: wp-capture-${{ inputs.domain }}
-  cancel-in-progress: false
-
 jobs:
-  capture:
-    name: Capture WordPress site
+  # Makes no network request, so it is safe to run outside the per-domain
+  # concurrency group — which is the point: the group needs this job's output.
+  resolve:
+    name: Resolve and validate inputs
     runs-on: ubuntu-latest
-    # A real charity site is not the 1-page case. viewpointministriesinternational.org
-    # advertises 587 page URLs in its sitemap, and at the 250ms politeness delay
-    # the page fetches alone are ~10 minutes before any asset is downloaded.
-    # 30 minutes would abort a legitimate capture partway and leave a truncated
-    # artifact that still looks like output.
-    timeout-minutes: 60
+    timeout-minutes: 5
+    outputs:
+      domain: ${{ steps.resolve.outputs.domain }}
+      mode: ${{ steps.resolve.outputs.mode }}
+      max: ${{ steps.resolve.outputs.max }}
+      delay: ${{ steps.resolve.outputs.delay }}
+      posts: ${{ steps.resolve.outputs.posts }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
@@ -85,10 +91,11 @@ jobs:
         with:
           node-version: '20'
 
-      # Runs first and unconditionally: the pure logic (URL mapping, asset
-      # classification, the rewrite pass, the verdict) is what decides whether
-      # the capture is correct, and a live run that exercises broken logic
-      # produces a confident, wrong artifact rather than an error.
+      # Gates the whole workflow: `capture` needs this job, so no live request
+      # is made until the pure logic (URL mapping, asset classification, the
+      # rewrite pass, path containment, the verdict) has been exercised. A run
+      # against a real charity's site with broken logic produces a confident,
+      # wrong artifact rather than an error.
       - name: Self-test the capture logic (offline)
         run: node scripts/capture-wordpress-api.mjs --self-test
 
@@ -108,8 +115,11 @@ jobs:
 
           # Hostnames are case-insensitive and the capture script lowercases
           # anyway, so normalise here rather than refusing a value that differs
-          # from the canonical form only in case.
+          # from the canonical form only in case. The concurrency group on the
+          # capture job keys on this output, so normalising here is also what
+          # makes "serialize per domain" actually hold.
           domain="$(printf '%s' "${INPUT_DOMAIN:-}" | tr '[:upper:]' '[:lower:]')"
+          domain="${domain#www.}"
 
           # `domain` is a required dispatch input, so an empty value here means
           # the input did not arrive rather than that a default is wanted. There
@@ -123,7 +133,7 @@ jobs:
           # script, so a pasted URL or a stray argument fails here with a clear
           # message rather than as a confusing DNS error 200 lines into a run.
           if ! printf '%s' "$domain" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
-            echo "::error::domain must be a bare hostname (got '$domain'). No scheme and no path; a leading 'www.' is accepted and stripped by the capture script."
+            echo "::error::domain must be a bare hostname (got '$domain'). No scheme and no path; a leading 'www.' is accepted and stripped."
             exit 1
           fi
 
@@ -151,13 +161,38 @@ jobs:
 
           echo "Resolved: domain=$domain mode=$mode max=$max delay=$delay posts=$posts"
 
+  capture:
+    name: Capture WordPress site
+    needs: resolve
+    runs-on: ubuntu-latest
+    # A real charity site is not the 1-page case. viewpointministriesinternational.org
+    # advertises 587 page URLs in its sitemap, and at the 250ms politeness delay
+    # the page fetches alone are ~10 minutes before any asset is downloaded.
+    # 30 minutes would abort a legitimate capture partway and leave a truncated
+    # artifact that still looks like output.
+    timeout-minutes: 60
+    concurrency:
+      # Keyed on the NORMALISED domain, so two dispatches that differ only in
+      # case or a `www.` prefix serialize instead of crawling the same origin
+      # at once.
+      group: wp-capture-${{ needs.resolve.outputs.domain }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
       # Always runs, in both modes. In capture mode it is the preflight: it says
       # what the REST API reports, which is the number the capture is then
       # checked against.
       - name: Inspect the live WordPress REST API
         id: inspect
         env:
-          DOMAIN: ${{ steps.resolve.outputs.domain }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
         shell: bash
         run: |
           set -euo pipefail
@@ -172,12 +207,12 @@ jobs:
           fi
 
       - name: Capture the site
-        if: steps.resolve.outputs.mode == 'capture'
+        if: needs.resolve.outputs.mode == 'capture'
         env:
-          DOMAIN: ${{ steps.resolve.outputs.domain }}
-          MAX: ${{ steps.resolve.outputs.max }}
-          DELAY: ${{ steps.resolve.outputs.delay }}
-          POSTS: ${{ steps.resolve.outputs.posts }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          MAX: ${{ needs.resolve.outputs.max }}
+          DELAY: ${{ needs.resolve.outputs.delay }}
+          POSTS: ${{ needs.resolve.outputs.posts }}
         shell: bash
         run: |
           set -euo pipefail
@@ -189,7 +224,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: wp-capture-${{ steps.resolve.outputs.domain }}
+          name: wp-capture-${{ needs.resolve.outputs.domain }}
           path: _capture/
           if-no-files-found: warn
           retention-days: 14

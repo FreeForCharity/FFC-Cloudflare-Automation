@@ -34,6 +34,47 @@ const AUDIT_SCRIPT = 'audit:high';
 const AUDIT_SCRIPT_CMD = 'npm audit --omit=dev --audit-level=high';
 const LOCKFILE_PATH = 'package-lock.json';
 
+// The two package-manager shapes a canonical template can have. The fleet
+// migrated npm → pnpm (7-day minimumReleaseAge, blocked dependency scripts —
+// the #771 migration this file's checks were built to catch); the backfill now
+// understands BOTH shapes and derives everything shape-specific — the lockfile
+// a target repo must have, the install command named in messages, the
+// `audit:high` command written into package.json — from the canonical
+// template's own text, so template and rollout can never disagree.
+//
+// Regex boundaries are load-bearing in both directions: `pnpm` CONTAINS `npm`,
+// so the npm patterns exclude a preceding word character, and the pnpm
+// patterns are anchored on the full `pnpm` token.
+const SHAPES = {
+  npm: {
+    lockfile: 'package-lock.json',
+    install: 'npm ci',
+    auditCmd: 'npm audit --omit=dev --audit-level=high',
+    runRe: /(?:^|[^\w-])npm\s+run\s+audit:high/m,
+    installRe: /(?:^|[^\w-])npm\s+ci\b/m,
+  },
+  pnpm: {
+    lockfile: 'pnpm-lock.yaml',
+    install: 'pnpm install --frozen-lockfile',
+    auditCmd: 'pnpm audit --prod --audit-level high',
+    runRe: /(?:^|[^\w-])pnpm\s+run\s+audit:high/m,
+    installRe: /(?:^|[^\w-])pnpm\s+install\s+--frozen-lockfile\b/m,
+  },
+};
+
+/**
+ * Which package-manager shape a canonical template has: 'npm', 'pnpm', or
+ * null when neither shape's BOTH halves (run + install) are present — a
+ * mixed or unrecognizable template must not be classified by its closer half.
+ */
+function templateShape(raw) {
+  const text = String(raw || '');
+  for (const [name, s] of Object.entries(SHAPES)) {
+    if (s.runRe.test(text) && s.installRe.test(text)) return name;
+  }
+  return null;
+}
+
 // Source of truth for the workflow file, per #838: "do not write a new one".
 // Fetched at run time rather than vendored into this repo so the fleet cannot
 // drift from the canonical copy the way a checked-in duplicate would.
@@ -109,15 +150,30 @@ function validateTemplate(raw) {
   } else if (crons.length > 1) {
     problems.push(`${crons.length} \`cron:\` lines — cannot tell which one to stagger`);
   }
-  // The leading boundary is load-bearing: `pnpm` CONTAINS `npm`, so an
-  // unanchored /npm\s+run/ happily matches `pnpm run audit:high` and the pnpm
-  // migration (#771) this check exists to catch would sail through. Excluding a
-  // preceding word character is what makes the check mean "npm".
-  if (!/(?:^|[^\w-])npm\s+run\s+audit:high/m.test(text)) {
-    problems.push('does not run `npm run audit:high` — the script half would not be exercised');
-  }
-  if (!/(?:^|[^\w-])npm\s+ci\b/m.test(text)) {
-    problems.push('does not run `npm ci` — no dependency tree would be installed to audit');
+  // Either coherent shape is usable; a template matching neither shape's BOTH
+  // halves is not. The per-half diagnostics below name what is missing across
+  // both shapes, and the mixed case is called out explicitly — a template
+  // running `npm ci` but `pnpm run audit:high` would fail on every run in
+  // whichever repo it lands.
+  const shape = templateShape(text);
+  if (!shape) {
+    const runsScript = SHAPES.npm.runRe.test(text) || SHAPES.pnpm.runRe.test(text);
+    const installs = SHAPES.npm.installRe.test(text) || SHAPES.pnpm.installRe.test(text);
+    if (!runsScript) {
+      problems.push(
+        'does not run `npm run audit:high` (npm shape) or `pnpm run audit:high` (pnpm shape) — the script half would not be exercised',
+      );
+    }
+    if (!installs) {
+      problems.push(
+        'does not run `npm ci` (npm shape) or `pnpm install --frozen-lockfile` (pnpm shape) — no dependency tree would be installed to audit',
+      );
+    }
+    if (runsScript && installs) {
+      problems.push(
+        'mixed npm/pnpm shape — the install and run halves must come from the same package manager',
+      );
+    }
   }
   // Exactly `contents: read`, not merely "contents: read appears somewhere".
   // The weaker check would pass a template that had GAINED a scope — a
@@ -344,7 +400,11 @@ function stableStringify(value) {
  * looks-monitored-but-isn't failure #838 was opened about. pnpm/yarn repos need
  * a different audit shape (#771), which is a separate piece of work.
  */
-function planTargets(candidates) {
+function planTargets(candidates, shape) {
+  // The caller's gather step checked for the lockfile matching the canonical
+  // template's shape; the messages here must name the same shape or the gate
+  // approver reads an `npm ci` reason on a pnpm rollout.
+  const s = SHAPES[shape] || SHAPES.npm;
   const targets = [];
   const skipped = [];
   const blocked = [];
@@ -376,7 +436,7 @@ function planTargets(candidates) {
     if (!c.hasLockfile) {
       blocked.push({
         repo,
-        reason: `no ${LOCKFILE_PATH} — \`npm ci\` would fail on every run, making the audit red for the wrong reason (pnpm/yarn needs a different shape, #771)`,
+        reason: `no ${s.lockfile} — \`${s.install}\` would fail on every run, making the audit red for the wrong reason (a repo on a different package manager needs a matching-shape template, #771)`,
       });
       continue;
     }
@@ -496,6 +556,8 @@ module.exports = {
   AUDIT_SCRIPT,
   AUDIT_SCRIPT_CMD,
   LOCKFILE_PATH,
+  SHAPES,
+  templateShape,
   CANONICAL_REPO,
   CROWDED_MINUTE,
   BRANCH,

@@ -110,7 +110,14 @@ jobs:
           # shape (e.g. moved to pnpm, #771) must stop the rollout rather than
           # be amplified 34 times.
           node scripts/fleet-audit-backfill.js validate-template canonical-security-audit.yml
-          echo "Canonical template validated."
+          # The template's package-manager shape (npm or pnpm) drives which
+          # lockfile the gather step requires of target repos and which audit
+          # command apply writes — derived from the template text so the two
+          # can never disagree (#771 made this a hard stop; it is now a
+          # first-class input).
+          shape=$(node scripts/fleet-audit-backfill.js template-shape canonical-security-audit.yml)
+          echo "AUDIT_SHAPE=$shape" >> "$GITHUB_ENV"
+          echo "Canonical template validated (shape: $shape)."
 
       - name: Gather fleet coverage facts
         id: gather
@@ -225,8 +232,13 @@ jobs:
               continue
             fi
 
+            # The lockfile that matters is the one the canonical template's
+            # install command reads — package-lock.json for the npm shape,
+            # pnpm-lock.yaml for the pnpm shape (AUDIT_SHAPE, set at validate).
+            lockname="package-lock.json"
+            if [ "${AUDIT_SHAPE:-npm}" = "pnpm" ]; then lockname="pnpm-lock.yaml"; fi
             has_lock=false
-            if [[ ",$root," == *",package-lock.json,"* ]]; then has_lock=true; fi
+            if [[ ",$root," == *",$lockname,"* ]]; then has_lock=true; fi
 
             wf_status=$(list_dir "$full" ".github/workflows" wfs.txt)
             case "$wf_status" in
@@ -293,7 +305,7 @@ jobs:
           MAX_REPOS: ${{ inputs.max_repos }}
         run: |
           set -euo pipefail
-          node scripts/fleet-audit-backfill.js plan "$CANDIDATES_FILE" > plan.json
+          node scripts/fleet-audit-backfill.js plan "$CANDIDATES_FILE" "${AUDIT_SHAPE:-npm}" > plan.json
 
           # Base-10 normalized (see the validate step): required for the bash
           # arithmetic, and belt-and-braces for jq, which accepts `08` today but

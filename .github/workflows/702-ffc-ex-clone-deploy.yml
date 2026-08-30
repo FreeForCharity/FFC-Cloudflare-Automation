@@ -349,9 +349,19 @@ jobs:
       - name: Verify Next.js static export builds
         if: ${{ inputs.build_check }}
         working-directory: ffc-ex
+        # The FFC-EX fleet migrated to pnpm (7-day minimumReleaseAge, blocked
+        # dependency scripts — see the fleet pnpm rollout PRs). Detect the
+        # lockfile so this verification matches whichever shape the repo has;
+        # corepack reads the exact pnpm version from packageManager.
         run: |
-          npm ci
-          npm run build
+          if [ -f pnpm-lock.yaml ]; then
+            corepack enable
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm install --frozen-lockfile
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm run build
+          else
+            npm ci
+            npm run build
+          fi
           if [ -f out/index.html ]; then
             echo "out/index.html present"
           else

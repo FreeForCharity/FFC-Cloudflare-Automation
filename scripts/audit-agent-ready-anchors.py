@@ -610,11 +610,15 @@ def audit_issue(issue, tree):
             if any(needle in blob for blob in contents.values()):
                 continue
             # ...and it has to have BEEN there. Without this, every version
-            # range, log line, stack frame, `path.py:243-254` citation, search
-            # query and block of proposed-new code in a body reads as a
-            # deletion. Measured against this backlog: 408 rows over 45 of 53
-            # issues before the check, 3 over 3 after it.
-            was_in = [p for p in present if (content_when_filed(p) or "") and needle in content_when_filed(p)]
+            # range, log line, stack frame, line-range citation, search query
+            # and block of proposed-new code in a body reads as a deletion.
+            # Measured against this backlog: 408 rows over 45 of 53 issues
+            # before the check, 5 rows over 3 issues after it.
+            was_in = []
+            for path in present:
+                snapshot = content_when_filed(path)
+                if snapshot and needle in snapshot:
+                    was_in.append(path)
             if not was_in:
                 continue
             commits = []

@@ -78,14 +78,39 @@ completeness becomes something the run can fail on. It reports:
 - **Which REST flavor answers** — `pretty` (`/wp-json/`), `query` (`/?rest_route=/`), or `dotcom`
   (`public-api.wordpress.com/wp/v2/sites/<domain>/`). **A WordPress.com-hosted site serves 404 on
   its own `/wp-json/`**, so a probe that only tries the site's own domain reports "not WordPress"
-  for a site whose full inventory is one URL away. Measured on vpmin.org, 2026-08-30.
-- **Which collections are restricted.** The `.com` public API answers per collection: vpmin.org
+  for a site whose full inventory is one URL away. Measured 2026-08-30 on vpmin.org, which is a
+  WordPress.com stub.
+- **Which collections are restricted.** The `.com` public API answers per collection — vpmin.org
   returns 200 for `pages` and **401 for `media`**. A restricted collection is reported, never
-  silently treated as empty.
-- **Sitemap vs REST disagreement.** Because a restricted collection makes the REST total an
-  under-count that reports itself as complete, the run cross-checks against `sitemap.xml` and
-  captures the **union**. On vpmin.org the sitemap listed a page the REST API did not
-  (`restPages: 1`, merged inventory `2`) — so this is not a hypothetical.
+  silently treated as empty, because a collection that returns nothing and a collection that is not
+  readable look identical in the output otherwise.
+- **The plugin/builder fingerprint**, from the REST namespace list. This decides whether the
+  rendered scrape is optional or mandatory (see the Divi note below).
+- **Sitemap vs REST disagreement.** The run cross-checks `sitemap.xml` and captures the **union**,
+  because comparing the REST total against pages fetched from that same REST list is a tautology,
+  not a check. The gap is routinely large: on viewpointministriesinternational.org the sitemap
+  advertises **587** page URLs against `wp/v2/pages`' **19**.
+
+> **Read the two domains apart.** A charity often has a long legacy domain and a short new one, and
+> they can be different systems. For Viewpoint Ministries the **capture source** is
+> `viewpointministriesinternational.org` (self-hosted WordPress on WPMU DEV, Divi, 19 pages / 229
+> posts / 280 media) while `vpmin.org` is a **new short domain** parked on a WordPress.com stub, to
+> be pointed at the migrated site later — and the repo is named for the destination,
+> `FFC-EX-vpmin.org`. Capturing the repo's namesake rather than the live site would have produced a
+> clean, green, 2-page artifact of the wrong website. Confirm which domain actually serves the
+> content before capturing, and do not infer it from the repo name.
+>
+> Beware near-miss matches when reconciling the inventory: `sites-list/` contains
+> `viewpointnorth.org`, an unrelated organization.
+
+**Divi / page builders make the rendered scrape mandatory, not optional.** When the namespace list
+carries `divi/v1` (or the markup shows Elementor, WPBakery, Fusion/Avada), the real page markup
+lives in postmeta and `content.rendered` is a shortcode husk — a REST-only export of such a site
+reproduces almost nothing. Path C scrapes the rendered URL for exactly this reason.
+
+**Forminator / contact forms** (namespace `forminator/v1`) have no backend after migration. Apply
+the Forms gotcha below: replace with `mailto:` or a preserved external service; never ship a form
+that silently posts to a dead endpoint.
 
 Use Path A or B when the site is not WordPress at all, or when its REST API is blocked (the inspect
 verdict says `API_BLOCKED`).

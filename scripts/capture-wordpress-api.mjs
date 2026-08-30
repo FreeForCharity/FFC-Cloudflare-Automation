@@ -48,6 +48,7 @@
 
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const UA = 'Mozilla/5.0 (FFC static-capture bot; +https://freeforcharity.org)';
 
@@ -248,10 +249,44 @@ export function collectAssetUrls(html) {
     }
   }
 
-  // Inline style="background:url(...)" and <style> blocks.
-  for (const m of html.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) push(m[1]);
+  // Inline style="background:url(...)" and <style> blocks ONLY.
+  //
+  // Scanning the whole document for `url(` is what the first live capture did,
+  // and it is wrong for a reason that is invisible until it runs: the pattern
+  // is case-insensitive, so it also matches JavaScript's `new URL(r)` inside
+  // any minified script on the page. The vpmin.org run turned two such matches
+  // into fetches of https://vpmin.org/r and https://vpmin.org/about/r, both
+  // 404, and failed its own gate on them. A page's <script> tags are not a
+  // place asset references live; its CSS is.
+  for (const m of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)) {
+    for (const u of collectCssUrls(m[1])) push(u);
+  }
+  for (const m of html.matchAll(/\bstyle\s*=\s*"([^"]*)"/gi)) {
+    for (const u of collectCssUrls(m[1])) push(u);
+  }
+  for (const m of html.matchAll(/\bstyle\s*=\s*'([^']*)'/gi)) {
+    for (const u of collectCssUrls(m[1])) push(u);
+  }
 
   return [...urls];
+}
+
+/**
+ * Could this string be a reference to a file?
+ *
+ * A CSS `url()` argument always names a path, so it carries a slash, an
+ * extension, or a scheme. A bare identifier does not — and a bare identifier is
+ * exactly what a mis-scanned `URL(r)` yields. Rejecting those here means a
+ * false match costs nothing instead of costing a 404 and a failed gate.
+ */
+export function looksLikeAssetRef(value) {
+  if (!value) return false;
+  const v = value.trim();
+  if (!v || v.startsWith('data:') || v.startsWith('#')) return false;
+  if (v.startsWith('/') || v.startsWith('./') || v.startsWith('../')) return true;
+  if (/^https?:\/\//i.test(v)) return true;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return false; // some other scheme — not ours to fetch
+  return v.includes('/') || /\.[a-z0-9]{2,5}([?#]|$)/i.test(v);
 }
 
 /** Asset URLs referenced from inside a stylesheet. */
@@ -259,9 +294,12 @@ export function collectCssUrls(css) {
   const urls = new Set();
   for (const m of css.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) {
     const u = m[1].trim();
-    if (u && !u.startsWith('data:') && !u.startsWith('#')) urls.add(u);
+    if (looksLikeAssetRef(u)) urls.add(u);
   }
-  for (const m of css.matchAll(/@import\s+(?:url\()?\s*["']([^"']+)["']/gi)) urls.add(m[1].trim());
+  for (const m of css.matchAll(/@import\s+(?:url\()?\s*["']([^"']+)["']/gi)) {
+    const u = m[1].trim();
+    if (looksLikeAssetRef(u)) urls.add(u);
+  }
   return [...urls];
 }
 
@@ -547,6 +585,36 @@ function selfTest() {
     ['a.css', 'b.png'],
   );
 
+  // Regression anchors from the first live vpmin.org capture, which fetched
+  // https://vpmin.org/r and https://vpmin.org/about/r (both 404) and failed
+  // its own gate, because a case-insensitive whole-document `url(` scan
+  // matched JavaScript's `new URL(r)` in a minified script.
+  eq(
+    'collectAssetUrls ignores url( inside <script>',
+    collectAssetUrls('<script>var u=new URL(r);fetch(URL(x))</script>'),
+    [],
+  );
+  eq(
+    'collectAssetUrls still finds url() in a <style> block',
+    collectAssetUrls('<style>.hero{background:url(/img/hero.jpg)}</style>'),
+    ['/img/hero.jpg'],
+  );
+  eq(
+    'collectAssetUrls still finds url() in a style attribute',
+    collectAssetUrls(`<div style="background:url('/bg.png')"></div>`),
+    ['/bg.png'],
+  );
+  eq('looksLikeAssetRef rejects a bare identifier', looksLikeAssetRef('r'), false);
+  eq('looksLikeAssetRef rejects a css keyword', looksLikeAssetRef('transparent'), false);
+  eq('looksLikeAssetRef accepts a root-relative path', looksLikeAssetRef('/a/b.png'), true);
+  eq(
+    'looksLikeAssetRef accepts a bare filename with an extension',
+    looksLikeAssetRef('b.png'),
+    true,
+  );
+  eq('looksLikeAssetRef accepts an absolute URL', looksLikeAssetRef('https://x.org/a.png'), true);
+  eq('looksLikeAssetRef rejects a non-http scheme', looksLikeAssetRef('about:blank'), false);
+
   eq('absolutize relative', absolutize('/a.png', 'https://x.org/about/'), 'https://x.org/a.png');
   eq(
     'absolutize protocol-relative',
@@ -659,7 +727,18 @@ function selfTest() {
   process.exit(failures ? 2 : 0);
 }
 
-if (process.argv.includes('--self-test')) selfTest();
+/**
+ * True only when this file was executed directly, rather than imported.
+ *
+ * Without this the module cannot be imported at all: the usage guard below
+ * calls process.exit(2) the moment there is no --domain, so `import(...)` from
+ * a test or a sibling script dies before it can reach a single exported
+ * function. The pure helpers are the reusable half of this file, and they are
+ * only reusable if importing is side-effect free.
+ */
+const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
+
+if (isMain && process.argv.includes('--self-test')) selfTest();
 
 // ---------------------------------------------------------------------------
 // NETWORK
@@ -682,7 +761,7 @@ const timeoutMs = parseInt(arg('timeout', '30'), 10) * 1000;
 const includePosts = flag('include-posts');
 const jsonOut = arg('json-out', '');
 
-if (!domain || (!inspectOnly && !outDir)) {
+if (isMain && (!domain || (!inspectOnly && !outDir))) {
   console.error(
     'Usage:\n' +
       '  --domain <domain> --inspect [--json-out <file>]\n' +
@@ -1311,4 +1390,4 @@ async function capture() {
   process.exit(verdict.ok ? 0 : 1);
 }
 
-await (inspectOnly ? inspect() : capture());
+if (isMain) await (inspectOnly ? inspect() : capture());

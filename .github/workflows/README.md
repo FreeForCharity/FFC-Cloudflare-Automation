@@ -612,7 +612,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 702 | Domain - Deploy Static Clone to FFC-EX Repo | `702-ffc-ex-clone-deploy.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
 | 703 | Sites List - Generate (CSV + JSON) [GH] | `703-sites-list-generate.yml` | schedule, workflow_dispatch | Writes (data PR only) | ✅ github-prod |
 | 704 | Website - Analytics Wire [GH] | `704-website-analytics-wire.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod |
-| 705 | Website - Capture WordPress Site (REST API + Scrape) [WP] | `705-website-wordpress-capture.yml` | workflow_dispatch | Reads | none (no credentials) |
+| 705 | Website - Capture WordPress Site (REST API + Scrape) [WP] | `705-website-wordpress-capture.yml` | push, workflow_dispatch | Reads | none (no credentials) |
 | 720 | Repo - Create GitHub Repo [Repo] | `720-create-repo.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
 | 721 | Repo - Deploy GitHub Pages [Repo] | `721-deploy-pages.yml` | push, workflow_dispatch | (repo plumbing) | — |
 | 722 | Repo - CI Validate and Test [Repo] | `722-ci.yml` | merge_group, pull_request, push | (repo plumbing) | — |

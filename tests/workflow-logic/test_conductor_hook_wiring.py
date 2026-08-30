@@ -31,7 +31,7 @@ HUB_SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 PLACEHOLDER = "__HUB_CLONE__"
 
 
-def run(*args: str) -> subprocess.CompletedProcess:
+def run(*args: str, cwd: str | None = None) -> subprocess.CompletedProcess:
     """Invoke the verifier. Full env (never a scrubbed dict -- CLAUDE.md), pinned codec (#945)."""
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
@@ -39,6 +39,7 @@ def run(*args: str) -> subprocess.CompletedProcess:
         encoding="utf-8",
         errors="replace",
         env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        cwd=cwd,
         timeout=120,
     )
 
@@ -80,6 +81,24 @@ def stub(tmp: pathlib.Path, name: str, code: int) -> str:
     path = tmp / f"{name}.py"
     path.write_text(f"import sys; sys.exit({code})\n", encoding="utf-8")
     return str(path)
+
+
+def behaving_guard(path: pathlib.Path) -> None:
+    """A stub that PASSES both probes -- blocks the L50 shape, allows `git status`.
+
+    The always-allow/always-block stubs above cannot expose a resolution bug:
+    whichever file gets found, they fail the probe anyway, so the report reads
+    "not wired" for a reason that has nothing to do with which file was read.
+    Only a guard that would legitimately pass can turn a wrong path into a
+    green verdict.
+    """
+    path.write_text(
+        "import json, sys\n"
+        "payload = json.load(sys.stdin)\n"
+        "command = payload['tool_input']['command']\n"
+        "sys.exit(2 if 'tail -45' in command else 0)\n",
+        encoding="utf-8",
+    )
 
 
 # --------------------------------------------------------------------------
@@ -187,6 +206,56 @@ def test_a_hook_path_that_does_not_exist_is_named_in_the_report():
         # exits 1, so an assertion on the data alone cannot tell the two apart.
         # Mutation M4 (drop the missing-path early return) survives without this.
         assert any("do not exist" in p for p in report["problems"]), report["problems"]
+
+
+def test_a_relative_hook_path_resolves_against_the_workspace_not_the_cwd():
+    """A hook path that is still relative after expansion is the workspace's.
+
+    Measured on `36ca99c`, before the fix: a workspace whose only hook names a
+    bare `guard_rel.py`, with that file absent from the workspace and present
+    only in the directory the verifier was invoked from, reported
+    `missing_paths: []`, `problems: []`, `wired: True`, rc=0. The verifier
+    cleared a session by probing a guard that was not part of it -- the exact
+    L218 false green it exists to make impossible, reached through the cwd
+    instead of through `$CLAUDE_PROJECT_DIR`.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        ws, elsewhere = root / "workspace", root / "elsewhere"
+        (ws / ".claude").mkdir(parents=True)
+        elsewhere.mkdir()
+        write_settings(ws, guard_config("guard_rel.py"))
+        behaving_guard(elsewhere / "guard_rel.py")
+        proc = run("--workspace", str(ws), "--json", cwd=str(elsewhere))
+        report = json.loads(proc.stdout)
+        assert proc.returncode == 1, proc.stdout
+        assert not report["wired"], report
+        assert report["missing_paths"], report
+        # The reported path must be the one the SESSION would load, so a reader
+        # of the report is told where to put the file.
+        named = pathlib.Path(report["missing_paths"][0]["path"])
+        assert named == ws / "guard_rel.py", named
+
+
+def test_a_relative_hook_path_in_the_workspace_is_still_found():
+    """Polarity control for the test above.
+
+    Resolving relative paths against the workspace must FIND them there; a fix
+    that simply stopped accepting relative paths would satisfy the case above
+    and break every config that uses one.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        ws, elsewhere = root / "workspace", root / "elsewhere"
+        (ws / ".claude").mkdir(parents=True)
+        elsewhere.mkdir()
+        write_settings(ws, guard_config("guard_rel.py"))
+        behaving_guard(ws / "guard_rel.py")
+        proc = run("--workspace", str(ws), "--json", cwd=str(elsewhere))
+        report = json.loads(proc.stdout)
+        assert not report["missing_paths"], report
+        assert report["wired"], report
+        assert proc.returncode == 0, proc.stdout
 
 
 def test_hooks_present_but_no_bash_matcher_is_not_wired():

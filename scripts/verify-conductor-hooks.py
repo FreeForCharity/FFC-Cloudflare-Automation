@@ -253,6 +253,16 @@ def verify(workspace: pathlib.Path) -> dict:
     for event, matcher, command in commands:
         for raw in script_paths(command):
             resolved = pathlib.Path(_expand(raw, workspace))
+            # A path that is still relative after expansion must resolve against
+            # the WORKSPACE, never the cwd the verifier happens to be invoked
+            # from. Measured before this line existed: a hook naming a bare
+            # `guard_rel.py`, with that file present only in the caller's cwd
+            # and absent from the workspace entirely, reported `missing_paths:
+            # []` and `wired: True` -- the verifier validated a guard that had
+            # nothing to do with the session it was clearing. That is the L218
+            # false green this script exists to make impossible.
+            if not resolved.is_absolute():
+                resolved = workspace / resolved
             if not resolved.is_file():
                 report["missing_paths"].append(
                     {"event": event, "matcher": matcher, "path": str(resolved)}

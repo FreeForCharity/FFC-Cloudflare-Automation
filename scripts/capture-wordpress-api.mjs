@@ -73,13 +73,49 @@ export function normalizeDomain(input) {
 /**
  * REST root candidates, in preference order.
  *
- * The pretty form is the default, but a site with plain permalinks — or one
- * whose host rewrites /wp-json/ away — still answers on the query form. Trying
- * only the pretty one reports "no REST API" for a site that has a perfectly
- * good one, which is a false NOT_WORDPRESS on a migratable site.
+ * Three flavors, because "WordPress" is three different hosting shapes and only
+ * the first is the one everyone pictures:
+ *
+ *   pretty — self-hosted, pretty permalinks: https://site/wp-json/
+ *   query  — self-hosted, plain permalinks or a host that rewrites /wp-json/
+ *            away: https://site/?rest_route=/
+ *   dotcom — WordPress.com-hosted (and Jetpack-connected) sites, which serve
+ *            404 on their OWN /wp-json/ and expose the same wp/v2 collections
+ *            from public-api.wordpress.com instead.
+ *
+ * The third one is not an edge case, and omitting it is actively misleading:
+ * vpmin.org answers 200 with `<meta name="generator" content="WordPress.com">`
+ * and 404 on /wp-json/, so a two-candidate probe reports NO_REST_API for a site
+ * whose full REST inventory is one URL away. That false negative is expensive
+ * in the wrong direction — it sends the operator looking for a cPanel/FTP
+ * backup of a site that has no cPanel behind it at all.
  */
 export function restRootCandidates(domain) {
-  return [`https://${domain}/wp-json/`, `https://${domain}/?rest_route=/`];
+  return [
+    { kind: 'pretty', indexUrl: `https://${domain}/wp-json/` },
+    { kind: 'query', indexUrl: `https://${domain}/?rest_route=/` },
+    { kind: 'dotcom', indexUrl: `https://public-api.wordpress.com/wp/v2/sites/${domain}` },
+  ];
+}
+
+/**
+ * Build a wp/v2 collection URL for a given REST flavor.
+ *
+ * Each flavor puts the `wp/v2` segment somewhere different, and the dotcom form
+ * has it before the site rather than after — so this cannot be one template
+ * with a variable prefix.
+ */
+export function collectionUrlFor(kind, domain, collection, params = {}) {
+  const qs = new URLSearchParams(params).toString();
+  const suffix = qs ? `?${qs}` : '';
+  if (kind === 'query') {
+    const q = qs ? `&${qs}` : '';
+    return `https://${domain}/?rest_route=/wp/v2/${collection}${q}`;
+  }
+  if (kind === 'dotcom') {
+    return `https://public-api.wordpress.com/wp/v2/sites/${domain}/${collection}${suffix}`;
+  }
+  return `https://${domain}/wp-json/wp/v2/${collection}${suffix}`;
 }
 
 /**
@@ -244,7 +280,13 @@ export function shouldLocalize(absUrl, domain) {
     'fonts.gstatic.com',
     'gstatic.com',
     'gravatar.com',
+    // WordPress.com / Jetpack asset CDNs. A .com-hosted site serves nearly
+    // every image from <site>.files.wordpress.com and i0/i1/i2.wp.com, and its
+    // core CSS/JS from s0.wp.com and s.w.org — so without these a .com capture
+    // localizes almost nothing and still reports success on the page fetches.
     'wp.com',
+    'files.wordpress.com',
+    'w.org',
     'cloudfront.net',
     'amazonaws.com',
     'cdnjs.cloudflare.com',
@@ -362,7 +404,36 @@ function selfTest() {
   eq('normalizeDomain strips port', normalizeDomain('example.org:8080'), 'example.org');
   eq('normalizeDomain rejects non-string', normalizeDomain(null), '');
 
-  eq('restRootCandidates offers both forms', restRootCandidates('x.org').length, 2);
+  eq(
+    'restRootCandidates offers all three flavors',
+    restRootCandidates('x.org').map((c) => c.kind),
+    ['pretty', 'query', 'dotcom'],
+  );
+  eq(
+    'restRootCandidates dotcom index targets public-api',
+    restRootCandidates('x.org')[2].indexUrl,
+    'https://public-api.wordpress.com/wp/v2/sites/x.org',
+  );
+  eq(
+    'collectionUrlFor pretty',
+    collectionUrlFor('pretty', 'x.org', 'pages', { per_page: '1' }),
+    'https://x.org/wp-json/wp/v2/pages?per_page=1',
+  );
+  eq(
+    'collectionUrlFor query keeps rest_route and appends with &',
+    collectionUrlFor('query', 'x.org', 'pages', { per_page: '1' }),
+    'https://x.org/?rest_route=/wp/v2/pages&per_page=1',
+  );
+  eq(
+    'collectionUrlFor dotcom puts wp/v2 before the site',
+    collectionUrlFor('dotcom', 'x.org', 'media', { per_page: '1' }),
+    'https://public-api.wordpress.com/wp/v2/sites/x.org/media?per_page=1',
+  );
+  eq(
+    'collectionUrlFor omits a bare ? when there are no params',
+    collectionUrlFor('dotcom', 'x.org', 'pages'),
+    'https://public-api.wordpress.com/wp/v2/sites/x.org/pages',
+  );
 
   eq('classify 200 + namespaces = ok', classifyRestIndex(200, { namespaces: ['wp/v2'] }), 'ok');
   eq('classify 200 + junk = absent', classifyRestIndex(200, 'not json'), 'absent');
@@ -424,6 +495,21 @@ function selfTest() {
   eq(
     'shouldLocalize google fonts',
     shouldLocalize('https://fonts.gstatic.com/f.woff2', 'x.org'),
+    true,
+  );
+  eq(
+    'shouldLocalize wordpress.com image CDN',
+    shouldLocalize('https://i0.wp.com/x.org/a.png', 'x.org'),
+    true,
+  );
+  eq(
+    'shouldLocalize wordpress.com media library',
+    shouldLocalize('https://vpmin.files.wordpress.com/2024/logo.png', 'x.org'),
+    true,
+  );
+  eq(
+    'shouldLocalize wordpress.com core assets',
+    shouldLocalize('https://s.w.org/a.js', 'x.org'),
     true,
   );
   eq(
@@ -591,24 +677,36 @@ async function getJson(url) {
   return { status: res.status, body, headers: res.headers };
 }
 
-/** Resolve which REST root this site actually answers on. */
+/**
+ * Resolve which REST flavor this site actually answers on.
+ *
+ * A `blocked` answer from a SELF-HOSTED candidate stops the search: it is a
+ * definite statement about this site (a security plugin or a WAF), and falling
+ * through to the dotcom endpoint would then report the vaguer 404 and hide the
+ * real, actionable cause. A blocked answer from the dotcom endpoint is the last
+ * candidate anyway, so it is reported either way.
+ */
 async function resolveRestRoot() {
+  let firstBlocked = null;
   for (const candidate of restRootCandidates(domain)) {
-    const { status, body } = await getJson(candidate);
+    const { status, body } = await getJson(candidate.indexUrl);
     const verdict = classifyRestIndex(status, body);
-    if (verdict === 'ok') return { root: candidate, verdict, index: body, status };
-    // A blocked API is a definite answer about this site; stop and report it
-    // rather than trying the other form and reporting the vaguer 404.
-    if (verdict === 'blocked') return { root: candidate, verdict, index: null, status };
+    if (verdict === 'ok') {
+      return { ...candidate, verdict, index: body, status };
+    }
+    if (verdict === 'blocked') {
+      firstBlocked = { ...candidate, verdict, index: null, status };
+      break;
+    }
   }
-  return { root: null, verdict: 'absent', index: null, status: 404 };
+  return (
+    firstBlocked ?? { kind: null, indexUrl: null, verdict: 'absent', index: null, status: 404 }
+  );
 }
 
-/** Build a collection URL that works for both the pretty and query REST forms. */
-function collectionUrl(root, collection, params) {
-  const qs = new URLSearchParams(params).toString();
-  if (root.includes('?rest_route=')) return `${origin}/?rest_route=/wp/v2/${collection}&${qs}`;
-  return `${root}wp/v2/${collection}?${qs}`;
+/** Collection URL for the resolved flavor. */
+function collectionUrl(rest, collection, params) {
+  return collectionUrlFor(rest.kind, domain, collection, params);
 }
 
 /**
@@ -618,14 +716,14 @@ function collectionUrl(root, collection, params) {
  * gate compares the two. A collection that returns fewer items than the header
  * promised is the failure this whole approach exists to be able to notice.
  */
-async function fetchCollection(root, collection, extraParams = {}) {
+async function fetchCollection(rest, collection, extraParams = {}) {
   const perPage = 100;
   const items = [];
   let total = null;
   let totalPages = 1;
 
   for (let page = 1; page <= totalPages && items.length < maxItems; page++) {
-    const url = collectionUrl(root, collection, {
+    const url = collectionUrl(rest, collection, {
       per_page: String(perPage),
       page: String(page),
       ...extraParams,
@@ -686,7 +784,23 @@ async function inspect() {
   report.usesWpContent = /wp-content\//i.test(homeHtml);
 
   const rest = await resolveRestRoot();
-  report.rest = { root: rest.root, verdict: rest.verdict, status: rest.status };
+  report.rest = {
+    kind: rest.kind,
+    indexUrl: rest.indexUrl,
+    verdict: rest.verdict,
+    status: rest.status,
+  };
+  // Which flavor answered is the operator-facing fact: `dotcom` means the site
+  // is WordPress.com-hosted, so there is no origin server, no cPanel and no
+  // filesystem to take a backup from — this API IS the only structured source.
+  report.hosting =
+    rest.kind === 'dotcom'
+      ? 'wordpress.com (no origin filesystem)'
+      : rest.kind
+        ? 'self-hosted'
+        : /wordpress\.com/i.test(report.home.generator ?? '')
+          ? 'wordpress.com (REST not reachable)'
+          : 'unknown';
   if (rest.index) {
     report.rest.name = rest.index.name ?? null;
     report.rest.description = rest.index.description ?? null;
@@ -697,13 +811,11 @@ async function inspect() {
   if (rest.verdict === 'ok') {
     report.collections = {};
     for (const c of ['pages', 'posts', 'media', 'categories', 'tags']) {
-      const url = collectionUrl(rest.root, c, {
-        per_page: '1',
-        status: c === 'media' ? '' : 'publish',
-      });
-      const { status, headers } = await getJson(
-        url.replace('&status=', '').replace('?status=&', '?'),
-      );
+      // `status=publish` is invalid on media (attachments are `inherit`), so it
+      // is added per collection rather than filtered back out of a built URL.
+      const params = { per_page: '1' };
+      if (c !== 'media') params.status = 'publish';
+      const { status, headers } = await getJson(collectionUrl(rest, c, params));
       report.collections[c] =
         status === 200
           ? { total: parseInt(headers?.get?.('x-wp-total') ?? '0', 10), status }
@@ -746,7 +858,8 @@ async function inspect() {
       `- Home: HTTP ${report.home.status}${report.home.server ? ` (server: ${report.home.server})` : ''}`,
       `- Generator: ${report.home.generator ?? '—'}`,
       `- Theme: ${report.theme ?? '—'}${report.builders.length ? ` · builders: ${report.builders.join(', ')}` : ''}`,
-      `- REST root: ${report.rest.root ?? '—'} (${report.rest.verdict}, HTTP ${report.rest.status})`,
+      `- Hosting: ${report.hosting}`,
+      `- REST root: ${report.rest.indexUrl ?? '—'} (flavor: ${report.rest.kind ?? 'none'}, ${report.rest.verdict}, HTTP ${report.rest.status})`,
       `- Site name: ${report.rest.name ?? '—'}`,
       '',
       '| Collection | Total |',
@@ -770,17 +883,17 @@ async function capture() {
     console.error(`[capture] REST API is not usable (${rest.verdict}). Run --inspect for detail.`);
     process.exit(1);
   }
-  console.error(`[capture] REST root: ${rest.root}`);
+  console.error(`[capture] REST root: ${rest.indexUrl} (flavor: ${rest.kind})`);
 
   // 1. INVENTORY from the CMS.
-  const pages = await fetchCollection(rest.root, 'pages', { status: 'publish' });
+  const pages = await fetchCollection(rest, 'pages', { status: 'publish' });
   console.error(`[capture] pages: ${pages.items.length} of ${pages.total} reported`);
   let posts = { items: [], total: 0 };
   if (includePosts) {
-    posts = await fetchCollection(rest.root, 'posts', { status: 'publish' });
+    posts = await fetchCollection(rest, 'posts', { status: 'publish' });
     console.error(`[capture] posts: ${posts.items.length} of ${posts.total} reported`);
   }
-  const media = await fetchCollection(rest.root, 'media');
+  const media = await fetchCollection(rest, 'media');
   console.error(`[capture] media: ${media.items.length} of ${media.total} reported`);
 
   const entries = [...pages.items, ...posts.items]
@@ -951,7 +1064,8 @@ async function capture() {
   const report = {
     domain,
     capturedAt: new Date().toISOString(),
-    restRoot: rest.root,
+    restRoot: rest.indexUrl,
+    restFlavor: rest.kind,
     pages: { captured: rendered.size, reported: pages.total },
     posts: { captured: posts.items.length, reported: posts.total },
     media: { downloaded: [...downloaded.values()].filter(Boolean).length, reported: media.total },

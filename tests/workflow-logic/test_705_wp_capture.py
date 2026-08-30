@@ -69,6 +69,14 @@ def test_bare_domain_is_accepted_and_echoed():
     assert "mode=inspect" in outputs, outputs
 
 
+def test_empty_domain_refuses_rather_than_guessing():
+    """There is no safe default: a substituted domain would point a live
+    capture at a site nobody asked about."""
+    proc, _ = run_resolve(INPUT_DOMAIN="")
+    assert proc.returncode != 0, proc.stdout
+    assert "Refusing to guess" in proc.stdout, proc.stdout
+
+
 def test_pasted_url_is_refused_with_a_specific_message():
     # The mistake this guard exists for: "domain" invites a pasted URL.
     proc, _ = run_resolve(INPUT_DOMAIN="https://vpmin.org/")

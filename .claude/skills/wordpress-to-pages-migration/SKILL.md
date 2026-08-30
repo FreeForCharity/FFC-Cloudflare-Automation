@@ -51,7 +51,44 @@ Read alongside:
 
 ## 2. Capture the live site (fully localized)
 
-Two proven capture paths; either is acceptable, the verification gate is the same.
+Three capture paths; the verification gate is the same for all of them. **Start by running the Path
+C inspect** — it is read-only, takes seconds, and tells you which of the three the site can actually
+support before you spend a mirror on it.
+
+> **Not cPanel.** A cPanel/FTP backup is not a starting point for this work, and on a
+> WordPress.com-hosted site there is no cPanel to take one from. A backup yields PHP, a database
+> dump and a plugin tree — the inputs to a rendering engine that will not exist after the migration.
+> What is being migrated is the rendered artifact, and the live site is the only place that exists.
+
+**Path C — WordPress REST API + rendered scrape** (workflow
+**`705. Website - Capture WordPress Site (REST API + Scrape)`**,
+`scripts/capture-wordpress-api.mjs`). Read-only, ungated:
+
+```bash
+# Probe first — read-only, seconds, no capture.
+node scripts/capture-wordpress-api.mjs --domain <domain> --inspect
+# Or dispatch 705 with mode=inspect, then mode=capture.
+```
+
+The other two paths discover pages by **following links**, so their page count is a property of the
+theme's navigation. Path C takes the inventory from the CMS itself (`wp/v2/pages`, with an
+`X-WP-Total` to check it against) and then fetches the rendered markup for each of those URLs — so
+completeness becomes something the run can fail on. It reports:
+
+- **Which REST flavor answers** — `pretty` (`/wp-json/`), `query` (`/?rest_route=/`), or `dotcom`
+  (`public-api.wordpress.com/wp/v2/sites/<domain>/`). **A WordPress.com-hosted site serves 404 on
+  its own `/wp-json/`**, so a probe that only tries the site's own domain reports "not WordPress"
+  for a site whose full inventory is one URL away. Measured on vpmin.org, 2026-08-30.
+- **Which collections are restricted.** The `.com` public API answers per collection: vpmin.org
+  returns 200 for `pages` and **401 for `media`**. A restricted collection is reported, never
+  silently treated as empty.
+- **Sitemap vs REST disagreement.** Because a restricted collection makes the REST total an
+  under-count that reports itself as complete, the run cross-checks against `sitemap.xml` and
+  captures the **union**. On vpmin.org the sitemap listed a page the REST API did not
+  (`restPages: 1`, merged inventory `2`) — so this is not a hypothetical.
+
+Use Path A or B when the site is not WordPress at all, or when its REST API is blocked (the inspect
+verdict says `API_BLOCKED`).
 
 **Path A — `capture_site.py`** (repo `FFC-Static-Site-Capture-Tools`, local
 `C:\vscode\FFC-Static-Site-Capture-Tools`):

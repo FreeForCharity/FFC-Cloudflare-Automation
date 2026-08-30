@@ -53,15 +53,6 @@ on:
         type: boolean
         default: false
 
-  # TEMPORARY (this branch only): produces the live-reachability evidence for
-  # the migration PR. Removed before merge — the permanent triggers are the
-  # dispatch above plus the offline self-test, which runs in 722 CI.
-  push:
-    branches: ['claude/wordpress-migration-scraping-qpzewr']
-    paths:
-      - 'scripts/capture-wordpress-api.mjs'
-      - '.github/workflows/705-website-wordpress-capture.yml'
-
 permissions:
   contents: read
 
@@ -102,18 +93,19 @@ jobs:
           INPUT_MAX: ${{ inputs.max_items }}
           INPUT_DELAY: ${{ inputs.delay_ms }}
           INPUT_POSTS: ${{ inputs.include_posts }}
-          # TEMPORARY, removed with the push trigger. The dispatch default stays
-          # `inspect`; this only decides what the branch's evidence run does, and
-          # it is set to `capture` so the PR carries a real end-to-end capture
-          # rather than a probe. vpmin.org is a 1-page site, so this is a few
-          # requests at the 250ms default delay.
-          EVIDENCE_MODE: capture
         shell: bash
         run: |
           set -euo pipefail
 
+          # `domain` is a required dispatch input, so an empty value here means
+          # the input did not arrive rather than that a default is wanted. There
+          # is no safe default: substituting some other charity's domain would
+          # point a live capture at a site nobody asked about.
           domain="${INPUT_DOMAIN:-}"
-          if [ -z "$domain" ]; then domain="vpmin.org"; fi
+          if [ -z "$domain" ]; then
+            echo "::error::domain is empty — a required input did not reach this step. Refusing to guess a site to capture."
+            exit 1
+          fi
           # Reject anything that is not a bare hostname before it reaches the
           # script, so a pasted URL or a stray argument fails here with a clear
           # message rather than as a confusing DNS error 200 lines into a run.
@@ -123,7 +115,7 @@ jobs:
           fi
 
           mode="${INPUT_MODE:-}"
-          if [ -z "$mode" ]; then mode="${EVIDENCE_MODE:-inspect}"; fi
+          if [ -z "$mode" ]; then mode="inspect"; fi
           case "$mode" in
             inspect|capture) ;;
             *) echo "::error::mode must be 'inspect' or 'capture' (got '$mode')."; exit 1 ;;

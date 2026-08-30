@@ -54,6 +54,14 @@ function fail(message, code) {
  */
 function apply(repoDir, repoFullName, cron, templateFile) {
   const template = read(templateFile);
+  // Everything shape-specific below — which lockfile the clone must have, and
+  // which audit command is written into package.json — derives from the
+  // template's own text, so the rollout can never mix shapes with its source.
+  const shape = lib.templateShape(template);
+  if (!shape) {
+    fail(`${repoFullName}: canonical template matches neither npm nor pnpm shape`, BLOCKED);
+  }
+  const shapeCfg = lib.SHAPES[shape];
   const rendered = lib.renderAuditWorkflow(template, cron);
   if (rendered.error) {
     fail(`${repoFullName}: ${rendered.error}`, BLOCKED);
@@ -71,14 +79,14 @@ function apply(repoDir, repoFullName, cron, templateFile) {
   // a permanently red audit that reads as real vulnerability signal. The
   // canonical template is re-validated after the gate for the same reason, so
   // checking one post-gate assumption and not the other was an inconsistency.
-  if (!fs.existsSync(path.join(repoDir, lib.LOCKFILE_PATH))) {
+  if (!fs.existsSync(path.join(repoDir, shapeCfg.lockfile))) {
     fail(
-      `${repoFullName}: no ${lib.LOCKFILE_PATH} in the clone — \`npm ci\` would fail on every run, making the audit red for the wrong reason`,
+      `${repoFullName}: no ${shapeCfg.lockfile} in the clone — \`${shapeCfg.install}\` would fail on every run, making the audit red for the wrong reason`,
       BLOCKED,
     );
   }
   const pkgRaw = read(pkgPath);
-  const edit = lib.addAuditScript(pkgRaw);
+  const edit = lib.addAuditScript(pkgRaw, shapeCfg.auditCmd);
   if (!edit.changed && edit.reason !== 'already-present') {
     fail(`${repoFullName}: ${edit.reason}`, BLOCKED);
   }
@@ -134,7 +142,15 @@ function main(argv) {
       return;
     }
     case 'plan': {
-      process.stdout.write(JSON.stringify(lib.planTargets(readJson(args[0]))));
+      process.stdout.write(JSON.stringify(lib.planTargets(readJson(args[0]), args[1])));
+      return;
+    }
+    case 'template-shape': {
+      const shape = lib.templateShape(read(args[0]));
+      if (!shape) {
+        fail('canonical template matches neither npm nor pnpm shape');
+      }
+      process.stdout.write(shape);
       return;
     }
     case 'summary': {

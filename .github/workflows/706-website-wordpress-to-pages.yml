@@ -362,6 +362,53 @@ jobs:
             --domain "${{ needs.resolve.outputs.domain }}" \
             --dir ffc-ex/out
 
+      # Integration REMOVES the template's app routes — that is its design, and
+      # correct: the site is public/ now, and a surviving route would both risk
+      # colliding with a captured path and export a stray page. But the target
+      # repo's own unit and e2e tests still assert those routes exist, so the
+      # delivered PR arrives with its CI red for a reason that is not a defect.
+      #
+      # Reported, not fixed, and not fatal: deciding what to do with a
+      # template's test suite belongs to whoever reviews the conversion, and
+      # failing here would block every conversion on a condition that is always
+      # true. What must not happen is the reviewer meeting it as a surprise.
+      - name: Report tests that reference the parked routes
+        working-directory: ffc-ex
+        shell: bash
+        run: |
+          set -uo pipefail
+          parked="_disabled_template_routes"
+          if [ ! -d "$parked" ]; then
+            echo "No template routes were parked."
+            exit 0
+          fi
+          # `%h` for the root route is `$parked` itself with no subpath. Left
+          # unhandled that becomes a grep for `/_disabled_template_routes`,
+          # which matches nothing and quietly reports "no tests affected" for
+          # the one route every template has.
+          routes="$(find "$parked" -name 'page.*' -printf '%h\n' 2>/dev/null \
+            | sed -e "s|^$parked$|/|" -e "s|^$parked/||" | sort -u)"
+          echo "Parked routes:"; echo "$routes"
+          hits=""
+          for r in $routes; do
+            [ -n "$r" ] || continue
+            if [ "$r" = "/" ]; then continue; fi
+            f="$(grep -rlF -- "/$r" __tests__ tests 2>/dev/null | tr '\n' ' ')"
+            if [ -n "$f" ]; then hits="${hits}- \`/$r\` referenced by: $f"$'\n'; fi
+          done
+          {
+            echo ""
+            echo "### Target repo tests referencing parked routes"
+            echo ""
+            if [ -n "$hits" ]; then
+              echo "$hits"
+              echo "These will fail in the target repo's CI after delivery. Integration removes"
+              echo "the template's app routes by design; the template's tests still assert them."
+            else
+              echo "None."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Report what would be written
         shell: bash
         working-directory: ffc-ex

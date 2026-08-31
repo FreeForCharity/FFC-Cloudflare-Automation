@@ -1452,6 +1452,24 @@ function selfTest() {
     [...collectAssetUrls('<img src="/a.png?x=1&#038;y=2">')],
     ['/a.png?x=1&y=2'],
   );
+  // EXACTLY once, and a doubly-escaped entity is the case that proves it.
+  // An HTML serializer escapes an attribute value once, so one pass recovers
+  // the text the browser sees — and the browser then requests that text
+  // verbatim. Measured on this migration: the page carried `?i=17&amp;m=…`
+  // and Playwright requested `?i=17&m=…`. If a page really carries
+  // `&amp;amp;`, the browser requests a parameter literally named `amp;m`,
+  // and the capture must fetch the same thing or it is mirroring a URL the
+  // live site never serves.
+  //
+  // Decoding "until stable" would also make the number of passes depend on
+  // the CONTENT rather than on the known encoding layers, which is the
+  // double-decode anti-pattern: a query value that legitimately contains the
+  // text `&amp;` would be silently rewritten.
+  eq(
+    'a doubly-escaped entity is decoded ONCE, matching what a browser requests',
+    [...collectAssetUrls('<img src="/a.png?x=1&amp;amp;y=2">')],
+    ['/a.png?x=1&amp;y=2'],
+  );
 
   // Never fetch into a private network on a page's say-so.
   eq('isPrivateHost blocks localhost', isPrivateHost('localhost'), true);

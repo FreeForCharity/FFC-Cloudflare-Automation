@@ -543,6 +543,15 @@ def test_a_target_repo_with_no_test_directories_says_so():
     proc, summary = _run_parked_routes_step(referencing_test=None, test_dirs=())
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "no `__tests__` or `tests` directory" in summary, summary
+    # And the home-page note survives. The first version of this test asserted
+    # only the message it had just added, so it passed while the `searched`
+    # guard — placed before the root-route check — silently dropped the one
+    # note that matters most: that the template home page was replaced. A test
+    # that checks only the behaviour you added cannot see what you broke.
+    # Caught in review on #1231.
+    assert "the home page) was parked" in summary, (
+        "the root-parked note vanished when the repo has no test dirs:\n" + summary
+    )
 
 
 def test_the_capture_output_path_is_the_path_every_later_step_reads():

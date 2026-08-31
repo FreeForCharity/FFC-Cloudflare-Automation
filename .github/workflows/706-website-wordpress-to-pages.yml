@@ -633,14 +633,21 @@ jobs:
           if [ ${#dirs[@]} -eq 0 ]; then searched=""; fi
           for r in $routes; do
             [ -n "$r" ] || continue
-            [ -n "$searched" ] || continue
             # The root route cannot be searched for the way the others can: a
             # grep for "/" matches every path in every test file, so it would
             # report all of them as affected. It is REPORTED SEPARATELY rather
             # than skipped — skipping it silently prints "None." for the one
             # route every template has, which reads as "nothing is affected"
             # when the home page has in fact just been replaced.
+            #
+            # This check must come BEFORE the no-test-directories guard below:
+            # noting that the home page was replaced does not depend on there
+            # being tests to search. Ordering it the other way silently dropped
+            # the note on a repo with no test dirs — caught in review on #1231.
             if [ "$r" = "/" ]; then root_parked="yes"; continue; fi
+            # Nothing to search against, so the per-route greps are skipped —
+            # but the root note above is still reported.
+            [ -n "$searched" ] || continue
             # grep exits 1 for "no match", which is the NORMAL answer here and
             # must not end the step; `shell: bash` runs with -e, and with
             # pipefail that 1 propagates out of the pipeline and through the

@@ -2186,22 +2186,6 @@
       "guard": "read-only profile search; public org data only",
       "category": "Candid (GuideStar)",
       "categoryCode": "CANDID"
-    },
-    {
-      "number": 999,
-      "title": "TEMPORARY - vpmin.org host probe (delete before merge)",
-      "apis": [],
-      "file": "999-temp-host-probe.yml",
-      "triggers": [
-        "push"
-      ],
-      "environments": [],
-      "description": "TEMPORARY. Delete before #1226 leaves draft. The 999 prefix is a placeholder that satisfies 722's uniqueness check without squatting a real workflow slot.  One question, measured rather than argued:  The capture of viewpointministriesinternational.org failed 247 of 590 page fetches and 822 of 823 asset downloads. Every one of those failures is a vpmin.org URL returning 404 \u2014 and those URLs come from the SOURCE site's own inventory: its sitemap.xml and its wp/v2 `link` fields name vpmin.org as the canonical host for its own pages and its own /wp-content/uploads/.  So the site's WordPress Site Address disagrees with the host actually serving it. Two readings, with opposite remedies:  A. The paths exist on the long domain and only the hostname is wrong. Then normalizing vpmin.org -> the capture domain recovers 247 pages and 822 assets, and DROPPING them silently discards most of the site. B. The paths do not exist anywhere. Then they are dead references, dropping is right, and normalizing would fabricate URLs that 404 twice.  Reading (A) off \"the alias run reduced failures\" is not enough: fewer failures is consistent with either, since a normalized URL that happens to 200 on some OTHER page's path would also reduce the count. This probe asks the only question that separates them \u2014 does THIS path serve content on the long domain? \u2014 and prints the status codes rather than a verdict.",
-      "safetyLevel": "Reads",
-      "approvalEnv": "none (no credentials)",
-      "guard": "TEMPORARY, delete before #1226 leaves draft. Branch-scoped push trigger; issues ~25 read-only HTTP requests to a public site to settle one measurable question \u2014 whether the vpmin.org URLs in the source site's own sitemap and REST `link` fields correspond to real content on the long domain. The 999 prefix is a placeholder that satisfies 722's uniqueness check without squatting a real workflow slot.",
-      "category": "Reserved",
-      "categoryCode": "-"
     }
   ]
 }

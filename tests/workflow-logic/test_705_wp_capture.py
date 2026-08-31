@@ -274,10 +274,33 @@ def test_alias_domains_are_lowercased_and_passed_through():
     assert "aliases=vpmin.org" in outputs, outputs
 
 
+def test_alias_domains_reject_a_comma_typo():
+    """`vpmin,org` looks like one hostname with a typo but parses as TWO
+    aliases that match nothing, so localization would quietly do nothing and
+    the run would report only the resulting 404s."""
+    proc, _ = run_resolve(INPUT_DOMAIN="vpmi.org", INPUT_ALIASES="vpmin,org")
+    assert proc.returncode != 0, proc.stdout
+    assert "is not a bare hostname" in proc.stdout, proc.stdout
+
+
+def test_alias_domains_tolerate_trailing_comma_and_dedupe():
+    proc, outputs = run_resolve(
+        INPUT_DOMAIN="vpmi.org", INPUT_ALIASES="vpmin.org,,www.vpmin.org,a.org,"
+    )
+    assert proc.returncode == 0, proc.stdout
+    assert "aliases=vpmin.org,a.org" in outputs, outputs
+
+
+def test_alias_domains_accept_multiple_hosts():
+    proc, outputs = run_resolve(INPUT_DOMAIN="vpmi.org", INPUT_ALIASES="a.org,b.example.com")
+    assert proc.returncode == 0, proc.stdout
+    assert "aliases=a.org,b.example.com" in outputs, outputs
+
+
 def test_alias_domains_reject_a_pasted_url():
     proc, _ = run_resolve(INPUT_DOMAIN="vpmi.org", INPUT_ALIASES="https://vpmin.org/")
     assert proc.returncode != 0, proc.stdout
-    assert "alias_domains must be" in proc.stdout, proc.stdout
+    assert "is not a bare hostname" in proc.stdout, proc.stdout
 
 
 def test_alias_domains_default_to_empty():

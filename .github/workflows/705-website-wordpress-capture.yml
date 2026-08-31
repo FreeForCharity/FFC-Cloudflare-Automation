@@ -191,11 +191,32 @@ jobs:
           posts="${INPUT_POSTS:-}"
           if [ -z "$posts" ]; then posts="${EVIDENCE_POSTS:-false}"; fi
 
-          aliases="$(printf '%s' "${INPUT_ALIASES:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-          if [ -z "$aliases" ]; then aliases="${EVIDENCE_ALIASES:-}"; fi
-          if [ -n "$aliases" ] && ! printf '%s' "$aliases" | grep -qE '^[a-z0-9.,-]+$'; then
-            echo "::error::alias_domains must be a comma-separated list of bare hostnames (got '$aliases')."
-            exit 1
+          # Validated ENTRY BY ENTRY against the same hostname rule as `domain`.
+          # A character-class check over the whole string is not enough: it
+          # accepts `vpmin,org`, which silently becomes two aliases (`vpmin`
+          # and `org`) that match nothing, so the capture would run with
+          # localization quietly disabled and report only the resulting 404s.
+          raw_aliases="$(printf '%s' "${INPUT_ALIASES:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          if [ -z "$raw_aliases" ]; then raw_aliases="${EVIDENCE_ALIASES:-}"; fi
+          aliases=""
+          if [ -n "$raw_aliases" ]; then
+            # Word-splitting on spaces rather than a heredoc: a heredoc
+            # terminator must sit at column 0, which would end this YAML block
+            # scalar. Whitespace was already stripped above, so commas are the
+            # only separator and empty entries (a trailing comma) simply vanish.
+            # Globbing is off so an entry like `*.org` cannot expand to filenames.
+            set -f
+            for entry in $(printf '%s' "$raw_aliases" | tr ',' ' '); do
+              entry="${entry#www.}"
+              if ! printf '%s' "$entry" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+                set +f
+                echo "::error::alias_domains entry '$entry' is not a bare hostname. Expected a comma-separated list like 'vpmin.org' or 'a.org,b.org'."
+                exit 1
+              fi
+              case ",$aliases," in *",$entry,"*) continue ;; esac
+              aliases="${aliases:+$aliases,}$entry"
+            done
+            set +f
           fi
 
           {

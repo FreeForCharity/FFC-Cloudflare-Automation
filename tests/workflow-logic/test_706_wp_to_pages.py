@@ -52,6 +52,7 @@ def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]
             INPUT_DELAY="",
             INPUT_POSTS="",
             INPUT_IGNORE="",
+            INPUT_PUBLISH="",
         )
         env.update(env_overrides)
         proc = subprocess.run(
@@ -536,6 +537,81 @@ def test_internal_whitespace_in_a_numeric_input_fails_closed():
     """`1 2` deleted to `12` is a bound the operator never set."""
     proc, outputs = run_resolve(INPUT_MAX="1 2")
     assert proc.returncode != 0, f"accepted a spaced number:\n{outputs}"
+
+
+# --- the CNAME, where confusing the two domains is most dangerous ------------
+
+
+def test_the_cname_is_never_the_source_domain():
+    """integrate-clone-into-nextjs writes public/CNAME as
+    (existing CNAME || --domain). Passing the SOURCE domain sets the clone's
+    Pages custom domain to the host the original WordPress still serves from —
+    the single most dangerous line in the conversion, and invisible in any
+    output that only counts pages."""
+    wf = load_workflow(WORKFLOW)
+    for job in ("convert", "deliver"):
+        run = step_run(WORKFLOW, job, "Integrate the capture into the Next.js app")
+        assert "--domain \"$CNAME_DOMAIN\"" in run, f"{job}: {run}"
+        assert "outputs.domain" not in run, (
+            f"{job}: the SOURCE domain reaches --domain and becomes the Pages custom domain:\n{run}"
+        )
+
+
+def test_the_cname_domain_defaults_to_the_destination_not_the_source():
+    """FFC-EX-vpmin.org -> vpmin.org, never viewpointministriesinternational.org."""
+    proc, outputs = run_resolve(
+        INPUT_DOMAIN="viewpointministriesinternational.org",
+        INPUT_REPO="FFC-EX-vpmin.org",
+        INPUT_PUBLISH="",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "cname_domain=vpmin.org" in outputs, outputs
+    assert "cname_domain=viewpointministriesinternational.org" not in outputs, outputs
+
+
+def test_an_explicit_publish_domain_wins():
+    proc, outputs = run_resolve(INPUT_REPO="FFC-EX-a.org", INPUT_PUBLISH="https://WWW.Custom.org/")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "cname_domain=custom.org" in outputs, outputs
+    assert "publish_domain=custom.org" in outputs, outputs
+
+
+def test_no_publish_domain_removes_the_cname_so_the_default_pages_url_works():
+    """A CNAME file is not inert: Pages switches to the custom domain and
+    REDIRECTS the default URL to it. Leaving one behind makes the converted
+    site unreachable at the only address that works before DNS cutover — which
+    is exactly the state this workflow is meant to deliver."""
+    for job in ("convert", "deliver"):
+        run = step_run(WORKFLOW, job, "Integrate the capture into the Next.js app")
+        assert "rm -f ffc-ex/public/CNAME" in run, f"{job}: {run}"
+        assert '[ -z "$PUBLISH_DOMAIN" ]' in run, f"{job}: {run}"
+
+
+def test_a_pre_existing_cname_is_never_removed():
+    """Deleting a custom domain the target repo already had would be a silent,
+    destructive change to a site that is already cut over."""
+    for job in ("convert", "deliver"):
+        run = step_run(WORKFLOW, job, "Integrate the capture into the Next.js app")
+        assert "had_cname" in run, f"{job}: {run}"
+        idx_record = run.index("had_cname=yes")
+        idx_rm = run.index("rm -f ffc-ex/public/CNAME")
+        assert idx_record < idx_rm, f"{job}: the check must be recorded before integration"
+        assert '[ "$had_cname" = "no" ]' in run, f"{job}: {run}"
+
+
+def test_target_repo_outside_the_ffc_ex_fleet_is_refused():
+    """`deliver` holds an org-wide PAT and the integration replaces the
+    target's public/ wholesale, so a typo does not fail — it succeeds against
+    a repo nobody meant to touch."""
+    proc, _ = run_resolve(INPUT_REPO="FFC-Cloudflare-Automation")
+    assert proc.returncode != 0, proc.stdout
+    assert "not an FFC-EX repository" in proc.stdout, proc.stdout
+
+
+def test_a_lowercase_owner_prefix_is_accepted():
+    proc, outputs = run_resolve(INPUT_REPO="https://github.com/freeforcharity/FFC-EX-a.org")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "repo=FFC-EX-a.org" in outputs, outputs
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

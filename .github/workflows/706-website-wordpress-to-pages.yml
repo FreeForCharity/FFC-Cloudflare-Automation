@@ -64,6 +64,15 @@ on:
         required: false
         type: string
         default: ''
+      publish_domain:
+        description: >-
+          Custom domain to publish the converted site at, bare. Leave EMPTY (the default) to serve
+          on the repository's default Pages URL, which is what "DNS-ready but not cut over" means.
+          This is NOT the source domain: writing the source domain here points the clone's Pages at
+          the host the original site still serves from.
+        required: false
+        type: string
+        default: ''
       mode:
         description: >-
           `convert` = capture, integrate and build on the runner, write nothing (no approval
@@ -109,6 +118,8 @@ jobs:
       domain: ${{ steps.resolve.outputs.domain }}
       repo: ${{ steps.resolve.outputs.repo }}
       email: ${{ steps.resolve.outputs.email }}
+      publish_domain: ${{ steps.resolve.outputs.publish_domain }}
+      cname_domain: ${{ steps.resolve.outputs.cname_domain }}
       mode: ${{ steps.resolve.outputs.mode }}
       max: ${{ steps.resolve.outputs.max }}
       delay: ${{ steps.resolve.outputs.delay }}
@@ -126,6 +137,7 @@ jobs:
           INPUT_DOMAIN: ${{ inputs.domain }}
           INPUT_REPO: ${{ inputs.target_repo }}
           INPUT_EMAIL: ${{ inputs.contact_email }}
+          INPUT_PUBLISH: ${{ inputs.publish_domain }}
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_MAX: ${{ inputs.max_items }}
           INPUT_DELAY: ${{ inputs.delay_ms }}
@@ -177,7 +189,14 @@ jobs:
           # a checkout path and a gh --repo argument.
           repo="$(trim "${INPUT_REPO:-}")"
           repo="${repo#https://github.com/}"
-          repo="${repo#FreeForCharity/}"
+          repo="${repo#http://github.com/}"
+          # Case-insensitively, because GitHub URLs are: a pasted
+          # `github.com/freeforcharity/<repo>` would otherwise keep its slash
+          # and be rejected as "not a bare repository name" — an error that
+          # blames the repo name for a casing difference in the OWNER.
+          case "$repo" in
+            [Ff][Rr][Ee][Ee][Ff][Oo][Rr][Cc][Hh][Aa][Rr][Ii][Tt][Yy]/*) repo="${repo#*/}" ;;
+          esac
           # A pasted repo URL usually carries one of these; both are unambiguous.
           repo="${repo%.git}"
           repo="${repo%/}"
@@ -188,6 +207,46 @@ jobs:
           if ! printf '%s' "$repo" | grep -qE '^[A-Za-z0-9._-]+$'; then
             echo "::error::target_repo '$repo' is not a bare repository name. Expected e.g. 'FFC-EX-example.org'."
             exit 1
+          fi
+          # Fail closed on anything outside the FFC-EX fleet. `deliver` holds an
+          # ORG-WIDE PAT, so a typo here does not fail — it succeeds against a
+          # repo nobody meant to touch, and the integration would replace that
+          # repo's public/ wholesale. The destination is also the one input with
+          # no natural cross-check: the source domain cannot confirm it, by
+          # design. Narrowing to the prefix this workflow is written for costs
+          # nothing, since integrate-clone-into-nextjs targets that template.
+          case "$repo" in
+            FFC-EX-*) ;;
+            *)
+              echo "::error::target_repo '$repo' is not an FFC-EX repository. This workflow replaces the target's public/ wholesale and runs with an org-wide token, so it refuses any repo outside the FFC-EX-* fleet."
+              exit 1
+              ;;
+          esac
+
+          # The CNAME question, which is the one place the two domains are most
+          # dangerous to confuse. integrate-clone-into-nextjs writes
+          # `public/CNAME` as (existing CNAME || --domain), so passing the
+          # SOURCE domain would set the clone's Pages custom domain to the host
+          # the original WordPress still serves from. The destination is derived
+          # from the repo name instead — FFC-EX-vpmin.org -> vpmin.org — and the
+          # source domain is never a candidate.
+          publish="$(trim "${INPUT_PUBLISH:-}" | tr '[:upper:]' '[:lower:]')"
+          publish="${publish#https://}"
+          publish="${publish#http://}"
+          publish="${publish#www.}"
+          publish="${publish%%/*}"
+          if [ -n "$publish" ]; then
+            if ! printf '%s' "$publish" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+              echo "::error::publish_domain '$publish' is not a bare hostname."
+              exit 1
+            fi
+          fi
+          # integrate REQUIRES a --domain, so one is always supplied; when the
+          # operator asked for no custom domain the CNAME it writes is deleted
+          # again after integration (see the integrate step).
+          cname_domain="$publish"
+          if [ -z "$cname_domain" ]; then
+            cname_domain="$(printf '%s' "${repo#FFC-EX-}" | tr '[:upper:]' '[:lower:]')"
           fi
 
           mode="${INPUT_MODE:-}"
@@ -261,6 +320,8 @@ jobs:
             echo "domain=$domain"
             echo "repo=$repo"
             echo "email=$email"
+            echo "publish_domain=$publish"
+            echo "cname_domain=$cname_domain"
             echo "mode=$mode"
             echo "max=$max"
             echo "delay=$delay"
@@ -382,11 +443,35 @@ jobs:
           fetch-depth: 0
 
       - name: Integrate the capture into the Next.js app
+        env:
+          CNAME_DOMAIN: ${{ needs.resolve.outputs.cname_domain }}
+          PUBLISH_DOMAIN: ${{ needs.resolve.outputs.publish_domain }}
+        shell: bash
         run: |
+          set -euo pipefail
+          # Whether the repo already had a custom domain decides whether we may
+          # remove the one integration writes. Recorded BEFORE integration,
+          # because integration always creates it.
+          had_cname=no
+          if [ -f ffc-ex/public/CNAME ]; then had_cname=yes; fi
+
+          # Never the source domain — see the resolve step. integrate writes
+          # (existing CNAME || --domain), so an existing custom domain still
+          # wins and is preserved.
           node automation/scripts/integrate-clone-into-nextjs.mjs \
             --clone "$RUNNER_TEMP/capture/site" \
             --repo ffc-ex \
-            --domain "${{ needs.resolve.outputs.domain }}"
+            --domain "$CNAME_DOMAIN"
+
+          # No custom domain requested and none before: serve on the default
+          # Pages URL. A CNAME file is not inert — Pages switches to the custom
+          # domain and REDIRECTS the default URL to it, so leaving one here
+          # would make the converted site unreachable at the only address that
+          # works before DNS is cut over.
+          if [ -z "$PUBLISH_DOMAIN" ] && [ "$had_cname" = "no" ]; then
+            rm -f ffc-ex/public/CNAME
+            echo "No publish_domain and no pre-existing CNAME: removed public/CNAME so Pages serves the default URL."
+          fi
 
       - name: Build the static export
         working-directory: ffc-ex
@@ -666,11 +751,35 @@ jobs:
           fetch-depth: 0
 
       - name: Integrate the capture into the Next.js app
+        env:
+          CNAME_DOMAIN: ${{ needs.resolve.outputs.cname_domain }}
+          PUBLISH_DOMAIN: ${{ needs.resolve.outputs.publish_domain }}
+        shell: bash
         run: |
+          set -euo pipefail
+          # Whether the repo already had a custom domain decides whether we may
+          # remove the one integration writes. Recorded BEFORE integration,
+          # because integration always creates it.
+          had_cname=no
+          if [ -f ffc-ex/public/CNAME ]; then had_cname=yes; fi
+
+          # Never the source domain — see the resolve step. integrate writes
+          # (existing CNAME || --domain), so an existing custom domain still
+          # wins and is preserved.
           node automation/scripts/integrate-clone-into-nextjs.mjs \
             --clone "$RUNNER_TEMP/capture/site" \
             --repo ffc-ex \
-            --domain "${{ needs.resolve.outputs.domain }}"
+            --domain "$CNAME_DOMAIN"
+
+          # No custom domain requested and none before: serve on the default
+          # Pages URL. A CNAME file is not inert — Pages switches to the custom
+          # domain and REDIRECTS the default URL to it, so leaving one here
+          # would make the converted site unreachable at the only address that
+          # works before DNS is cut over.
+          if [ -z "$PUBLISH_DOMAIN" ] && [ "$had_cname" = "no" ]; then
+            rm -f ffc-ex/public/CNAME
+            echo "No publish_domain and no pre-existing CNAME: removed public/CNAME so Pages serves the default URL."
+          fi
 
       - name: Commit and open a draft PR on the FFC-EX repo
         working-directory: ffc-ex

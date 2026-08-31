@@ -205,8 +205,13 @@ jobs:
           if [ -n "$raw_ignore" ]; then
             # Word-splitting on spaces rather than a heredoc: a heredoc
             # terminator must sit at column 0, which would end this YAML block
-            # scalar. Whitespace was already stripped above, so commas are the
-            # only separator and empty entries (a trailing comma) simply vanish.
+            # scalar. Commas are turned into spaces, and since raw_ignore is
+            # only TRIMMED, whitespace already present is a separator too —
+            # `a.org b.org` is two entries. Empty entries (a trailing comma)
+            # simply vanish. This comment used to say whitespace had been
+            # stripped and commas were the only separator; that was true of the
+            # old `tr -d` and is exactly the note that would invite someone to
+            # reintroduce it.
             # Globbing is off so an entry like `*.org` cannot expand to filenames.
             set -f
             for entry in $(printf '%s' "$raw_ignore" | tr ',' ' '); do

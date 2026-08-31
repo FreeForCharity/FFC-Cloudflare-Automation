@@ -613,6 +613,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 703 | Sites List - Generate (CSV + JSON) [GH] | `703-sites-list-generate.yml` | schedule, workflow_dispatch | Writes (data PR only) | ✅ github-prod |
 | 704 | Website - Analytics Wire [GH] | `704-website-analytics-wire.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod |
 | 705 | Website - Capture WordPress Site (REST API + Scrape) [WP] | `705-website-wordpress-capture.yml` | workflow_dispatch | Reads | none (no credentials) |
+| 706 | Website - WordPress to Pages Conversion (end to end) [WP] | `706-website-wordpress-to-pages.yml` | workflow_dispatch | Reads + writes a PR on the target FFC-EX repo | `github-prod` on the `deliver` job ONLY |
 | 720 | Repo - Create GitHub Repo [Repo] | `720-create-repo.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
 | 721 | Repo - Deploy GitHub Pages [Repo] | `721-deploy-pages.yml` | push, workflow_dispatch | (repo plumbing) | — |
 | 722 | Repo - CI Validate and Test [Repo] | `722-ci.yml` | merge_group, pull_request, push | (repo plumbing) | — |

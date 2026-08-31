@@ -550,7 +550,9 @@ export function isIgnoredHost(absUrl, ignoreHosts = []) {
  * wrong contact route on a charity's website.
  */
 export function detectForms(html) {
-  const forms = [...html.matchAll(/<form\b[^>]*>/gi)].length;
+  // Not `<form\b`: \b matches before a hyphen, so a custom element such as
+  // <form-widget> would be counted as a form.
+  const forms = [...html.matchAll(/<form(?=[\s/>])[^>]*>/gi)].length;
   const forminator = /forminator|wpcf7|gravity[_-]?form|ninja[_-]?forms/i.test(html) ? 1 : 0;
   const emails = new Set();
   for (const m of html.matchAll(/mailto:([^"'?>\s]+@[^"'?>\s]+)/gi)) emails.add(m[1].toLowerCase());

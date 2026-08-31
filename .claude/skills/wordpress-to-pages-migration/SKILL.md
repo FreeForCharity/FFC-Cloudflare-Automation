@@ -100,11 +100,35 @@ completeness becomes something the run can fail on. It reports:
 > produces a clean, green, 2-page artifact of the wrong website. Confirm which domain actually
 > serves the content before capturing, and do not infer it from the repo name.
 >
-> The tempting middle position is also wrong: an empty destination domain is **not an alias** of the
-> source, so references to it must not be re-pointed at the source and re-fetched. That treats a
-> dead reference as a live asset and manufactures a second wrong site. Drop such references with
-> `ignore_hosts` — the run then stops counting them as failures and stops holding the external-host
-> gate open, without inventing content for them.
+> **But do not then conclude the other domain is irrelevant to the capture — check what the CMS
+> thinks its own address is.** This is the trap that cost the most on this migration, and it looks
+> exactly like the one above. Measured 2026-08-31: `viewpointministriesinternational.org`'s
+> WordPress has `siteurl` **and** `home` set to `https://vpmin.org`, so its REST `link` fields, its
+> sitemap entries and its `/wp-content/uploads/` references all name the empty domain. All 19
+> `wp/v2/pages` links are on vpmin.org; every one 404s there; every one returns 200 on the serving
+> domain (11/11 probed, pages and uploads alike). Untreated that lost **247 of 590 pages and 822 of
+> 823 assets** — and it is one site with a stale self-reference, not two sites.
+>
+> So the two situations are opposites and are told apart by ONE reading, not by reasoning about
+> which domain is "real":
+>
+> ```bash
+> curl -s https://<serving-domain>/wp-json/ | jq '{url, home}'
+> ```
+>
+> If that names a host other than the one serving the site, its self-references are stale and must
+> be **normalized onto the serving host** — 705/706 now derive this automatically
+> (`declaredSelfHost`) and report it, so no operator has to spot it. If it agrees, then a foreign
+> host in the markup really is foreign, and `ignore_hosts` drops it without inventing content.
+>
+> Two corollaries worth carrying:
+>
+> - **A stale self-reference is invisible in the inventory count.** `localPathForLink` maps by
+>   pathname, so a wrong-host link still yields a correct local path: the entry count stays right
+>   while the fetch 404s. The number that looks healthiest is the one that cannot see this.
+> - **It is a live defect, not just a migration obstacle.** Those URLs are 404ing for real visitors
+>   right now. Report it to whoever owns the WordPress; the fix is a search-replace on
+>   `siteurl`/`home`, and it is worth doing whether or not the site is being migrated.
 >
 > Beware near-miss matches when reconciling the inventory: `sites-list/` contains
 > `viewpointnorth.org`, an unrelated organization.

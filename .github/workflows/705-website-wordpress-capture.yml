@@ -75,15 +75,6 @@ on:
         type: string
         default: ''
 
-  # TEMPORARY (this branch only): runs the alias-corrected capture of the real
-  # source site so the migration PR carries a passing artifact. Removed before
-  # merge — the permanent trigger is the dispatch above.
-  push:
-    branches: ['claude/wordpress-migration-scraping-qpzewr']
-    paths:
-      - 'scripts/capture-wordpress-api.mjs'
-      - '.github/workflows/705-website-wordpress-capture.yml'
-
 permissions:
   contents: read
 
@@ -129,11 +120,6 @@ jobs:
           INPUT_DELAY: ${{ inputs.delay_ms }}
           INPUT_POSTS: ${{ inputs.include_posts }}
           INPUT_ALIASES: ${{ inputs.alias_domains }}
-          # TEMPORARY, removed with the push trigger above.
-          EVIDENCE_DOMAIN: viewpointministriesinternational.org
-          EVIDENCE_MODE: capture
-          EVIDENCE_POSTS: 'true'
-          EVIDENCE_ALIASES: vpmin.org
         shell: bash
         run: |
           set -euo pipefail
@@ -144,7 +130,6 @@ jobs:
           # capture job keys on this output, so normalising here is also what
           # makes "serialize per domain" actually hold.
           domain="$(printf '%s' "${INPUT_DOMAIN:-}" | tr '[:upper:]' '[:lower:]')"
-          if [ -z "$domain" ]; then domain="${EVIDENCE_DOMAIN:-}"; fi
           domain="${domain#www.}"
 
           # `domain` is a required dispatch input, so an empty value here means
@@ -164,7 +149,7 @@ jobs:
           fi
 
           mode="${INPUT_MODE:-}"
-          if [ -z "$mode" ]; then mode="${EVIDENCE_MODE:-inspect}"; fi
+          if [ -z "$mode" ]; then mode="inspect"; fi
           case "$mode" in
             inspect|capture) ;;
             *) echo "::error::mode must be 'inspect' or 'capture' (got '$mode')."; exit 1 ;;
@@ -189,7 +174,7 @@ jobs:
             exit 1
           fi
           posts="${INPUT_POSTS:-}"
-          if [ -z "$posts" ]; then posts="${EVIDENCE_POSTS:-false}"; fi
+          if [ -z "$posts" ]; then posts="false"; fi
 
           # Validated ENTRY BY ENTRY against the same hostname rule as `domain`.
           # A character-class check over the whole string is not enough: it
@@ -197,7 +182,6 @@ jobs:
           # and `org`) that match nothing, so the capture would run with
           # localization quietly disabled and report only the resulting 404s.
           raw_aliases="$(printf '%s' "${INPUT_ALIASES:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-          if [ -z "$raw_aliases" ]; then raw_aliases="${EVIDENCE_ALIASES:-}"; fi
           aliases=""
           if [ -n "$raw_aliases" ]; then
             # Word-splitting on spaces rather than a heredoc: a heredoc

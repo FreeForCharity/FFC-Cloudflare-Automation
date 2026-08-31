@@ -49,13 +49,6 @@ def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]
             INPUT_DELAY="",
             INPUT_POSTS="",
             INPUT_ALIASES="",
-            # Cleared explicitly: these exist only for this branch's evidence
-            # run, and a test that silently inherited one would be asserting
-            # against a different step than a dispatch actually executes.
-            EVIDENCE_DOMAIN="",
-            EVIDENCE_MODE="",
-            EVIDENCE_POSTS="",
-            EVIDENCE_ALIASES="",
         )
         env.update(env_overrides)
         proc = subprocess.run(

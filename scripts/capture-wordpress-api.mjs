@@ -258,7 +258,12 @@ export function collectAssetUrls(html) {
   const urls = new Set();
   const push = (u) => {
     if (!u) return;
-    const t = u.trim();
+    // `&amp;` is how a multi-parameter URL is spelled in an HTML attribute, so
+    // the real URL is the decoded one. Fetching the literal `&amp;` asks the
+    // origin for a query string it does not have — measured on this migration:
+    // `bilmur.min.js?i=17&amp;m=202636` was requested, and reported, with the
+    // entity still in it. WordPress emits the numeric form as well.
+    const t = u.trim().replace(/&(?:amp|#0*38|#x0*26);/gi, '&');
     if (
       !t ||
       t.startsWith('data:') ||
@@ -288,6 +293,35 @@ export function collectAssetUrls(html) {
   for (const m of html.matchAll(/\b(?:srcset|imagesrcset|data-srcset)\s*=\s*["']([^"']+)["']/gi)) {
     for (const cand of m[1].split(/,(?=\s*[^\s,]+\s*(?:[\d.]+[wx])?\s*(?:,|$))/)) {
       push(cand.trim().split(/\s+/)[0]);
+    }
+  }
+
+  // URLs inside inline <script> config blocks, which live in no attribute and
+  // which every attribute-based scan therefore misses. WordPress emits
+  //
+  //   window._wpemojiSettings = {"source":{"concatemoji":"https:\/\/site\/wp-includes\/js\/wp-emoji-release.min.js?ver=…"}}
+  //
+  // and the browser loads that file at runtime. Measured on the fourth delivery
+  // of viewpointministriesinternational.org: it was the ONE asset the source
+  // still served (HTTP 200) that the clone had lost — the self-containment gate
+  // caught it on 2 of 120 pages, which is exactly the class of defect the gate
+  // exists for and no attribute scan can see.
+  //
+  // Restricted to strings that look like an asset reference, so a script's
+  // ordinary string literals are not dragged in as URLs.
+  for (const m of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const body = m[1];
+    if (!body) continue;
+    for (const lit of body.matchAll(/["'`]([^"'`\s\\]*(?:\\.[^"'`\s\\]*)*)["'`]/g)) {
+      // JSON inside HTML escapes its slashes: "https:\/\/host\/path".
+      const raw = lit[1].replace(/\\\//g, '/');
+      if (
+        /\.(?:css|js|mjs|png|jpe?g|gif|svg|webp|avif|ico|woff2?|ttf|eot|mp4|webm)(?:[?#]|$)/i.test(
+          raw,
+        )
+      ) {
+        push(raw);
+      }
     }
   }
 
@@ -726,7 +760,33 @@ export function stripEdgeInjectedTags(html) {
 export function assetLocalName(absUrl) {
   const u = new URL(absUrl);
   const host = u.hostname.replace(/^www\./, '');
-  let p = u.pathname.replace(/^\/+/, '');
+  // `u.pathname` is percent-ENCODED. Writing that verbatim produces a file whose
+  // NAME literally contains `%C3%97`, while every request for it is
+  // percent-DECODED before the filesystem lookup — so the server goes looking
+  // for `×` and 404s on a file that is sitting right there. Measured on this
+  // migration: an upload named `…-2160-×-1080-px.jpg` was unreachable in the
+  // export, and would have been unreachable on GitHub Pages too. Any non-ASCII
+  // filename hits this, which on a charity site means any upload named by a
+  // human. Decoding here makes the round trip close.
+  let p = u.pathname;
+  try {
+    const decoded = decodeURIComponent(p);
+    // Decode ONLY where it cannot change the shape of the path. `new URL()`
+    // normalises a real `../` away, so any `..` still present is percent-encoded
+    // — an inert literal directory name that decoding would turn into genuine
+    // traversal. Same for a NUL, which would truncate the write. Those fall back
+    // to the encoded form, which is what this function always used to emit and
+    // is provably safe; everything else — the accented and multi-byte filenames
+    // this exists for — decodes.
+    const segments = decoded.split('/');
+    if (!segments.includes('..') && !segments.includes('.') && !decoded.includes('\0')) {
+      p = decoded;
+    }
+  } catch {
+    // A malformed escape is not decodable; keep it literal rather than throwing
+    // and losing the asset entirely.
+  }
+  p = p.replace(/^\/+/, '');
   if (p === '' || p.endsWith('/')) p += 'index';
   let ext = extname(p);
   if (u.search) {
@@ -1313,6 +1373,85 @@ function selfTest() {
     '<a href="/cdn-cgi/l/email-protection#zzzz">w</a>',
   );
   eq('a page with no obfuscation is unchanged', decodeCloudflareEmails('<p>a@b.co</p>').decoded, 0);
+
+  // --- Delivery attempt 4: the two defects the gate caught at 118/120 -------
+  // 1. A percent-encoded filename was written to disk verbatim, so the file was
+  //    named `…%C3%97…` while every request for it decodes to `…×…`. The asset
+  //    was unreachable in the export and would have been on GitHub Pages too.
+  eq(
+    'a non-ASCII filename is stored decoded, so the request round-trips',
+    assetLocalName('https://h.org/wp-content/uploads/Digest-2160-%C3%97-1080-px.jpg'),
+    'h.org/wp-content/uploads/Digest-2160-×-1080-px.jpg',
+  );
+  eq(
+    'the round trip actually closes: what a browser asks for is what is on disk',
+    decodeURIComponent(encodeURI(assetLocalName('https://h.org/a/Digest-2160-%C3%97-1080-px.jpg'))),
+    assetLocalName('https://h.org/a/Digest-2160-%C3%97-1080-px.jpg'),
+  );
+  eq(
+    'an accented upload decodes too',
+    assetLocalName('https://h.org/uploads/Cr%C3%A8che.png'),
+    'h.org/uploads/Crèche.png',
+  );
+  // The safety property the decode must not cost. `new URL()` normalises a real
+  // `../` away, so a surviving `..` is percent-encoded — decoding it would turn
+  // an inert literal into genuine traversal.
+  eq(
+    'encoded traversal is NOT decoded into real traversal',
+    assetLocalName('https://h.org/..%2f..%2fetc/x.png'),
+    'h.org/..%2f..%2fetc/x.png',
+  );
+  // Three forms, and they are defended in two different places — worth stating
+  // because only the third is this decode's responsibility.
+  eq(
+    'encoded DOTS with a real slash are normalised away by the URL parser',
+    assetLocalName('https://h.org/a/%2e%2e/x.png'),
+    'h.org/x.png',
+  );
+  eq(
+    'a fully-encoded ../ stays literal, uppercase included',
+    assetLocalName('https://h.org/a/%2E%2E%2Fx.png'),
+    'h.org/a/%2E%2E%2Fx.png',
+  );
+  eq(
+    'a malformed escape keeps the asset rather than throwing',
+    assetLocalName('https://h.org/a/100%.png'),
+    'h.org/a/100%.png',
+  );
+
+  // 2. An asset referenced ONLY inside an inline <script> config blob. This was
+  //    the one URL the source still served (HTTP 200) that the clone had lost.
+  const EMOJI =
+    '<script>window._wpemojiSettings = {"source":{"concatemoji":' +
+    '"https:\\/\\/h.org\\/wp-includes\\/js\\/wp-emoji-release.min.js?ver=7.1"}};</script>';
+  eq(
+    'a URL inside an inline script blob is collected',
+    [...collectAssetUrls(EMOJI)],
+    ['https://h.org/wp-includes/js/wp-emoji-release.min.js?ver=7.1'],
+  );
+  eq(
+    "a script's ordinary string literals are not dragged in as assets",
+    [...collectAssetUrls('<script>var a="hello world";var b="/api/v1/thing";</script>')],
+    [],
+  );
+  eq(
+    'a single-quoted script URL is collected too',
+    [...collectAssetUrls("<script>load('/wp-content/x.js')</script>")],
+    ['/wp-content/x.js'],
+  );
+
+  // 3. `&amp;` is how a multi-parameter URL is spelled in an attribute. Fetching
+  //    the literal entity asks the origin for a query string it does not have.
+  eq(
+    'an &amp; in an attribute URL is decoded before fetching',
+    [...collectAssetUrls('<script src="/wp-content/js/bilmur.min.js?i=17&amp;m=202636"></script>')],
+    ['/wp-content/js/bilmur.min.js?i=17&m=202636'],
+  );
+  eq(
+    'the numeric entity form is decoded as well',
+    [...collectAssetUrls('<img src="/a.png?x=1&#038;y=2">')],
+    ['/a.png?x=1&y=2'],
+  );
 
   // Never fetch into a private network on a page's say-so.
   eq('isPrivateHost blocks localhost', isPrivateHost('localhost'), true);

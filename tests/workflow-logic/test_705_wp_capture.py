@@ -342,6 +342,59 @@ def test_internal_whitespace_in_the_domain_still_fails_closed():
     assert "example.orgattacker.com" not in outputs, outputs
 
 
+def _self_test(script: str) -> subprocess.CompletedProcess:
+    """Run a shipped script's own offline self-test suite."""
+    import os
+
+    return subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / script), "--self-test"],
+        env=dict(os.environ),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+    )
+
+
+def test_the_capture_strips_cdn_injected_instrumentation():
+    """Every page of the first delivery failed the self-containment gate on a
+    same-origin request to `/cdn-cgi/rum?`. Nothing in the captured HTML
+    referenced it — the capture's asset inventory never saw the URL — because
+    Cloudflare's beacon fabricates it at runtime. Only removing the beacon tag
+    stops the request, and `/cdn-cgi/*` is answered by the edge, so no capture
+    could mirror it either.
+
+    Asserted against the shipped suite's OUTPUT rather than restated here: this
+    checks the coverage still exists, which a copy of the assertions could not.
+    """
+    proc = _self_test("capture-wordpress-api.mjs")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out = proc.stdout + proc.stderr
+    for case in (
+        "the Cloudflare beacon script is removed",
+        "a same-origin /cdn-cgi/ script is removed",
+        "the site's own scripts survive",
+    ):
+        assert f"ok   {case}" in out, f"coverage for {case!r} is gone:\n{out[-1500:]}"
+
+
+def test_the_capture_decodes_obfuscated_addresses_before_dropping_the_decoder():
+    """Cloudflare rewrites `mailto:` into `/cdn-cgi/l/email-protection#<hex>`
+    and ships the decoder from `/cdn-cgi/`, which a static host cannot serve.
+    Removing that script without decoding first would leave every obfuscated
+    address on a charity's contact page rendered as hex — so the decode is what
+    makes the strip safe, not a separate nicety."""
+    proc = _self_test("capture-wordpress-api.mjs")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out = proc.stdout + proc.stderr
+    for case in (
+        "an obfuscated address span decodes to the real address",
+        "an email-protection href becomes a real mailto",
+        "a decode that does not yield an address leaves the markup untouched",
+    ):
+        assert f"ok   {case}" in out, f"coverage for {case!r} is gone:\n{out[-1500:]}"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

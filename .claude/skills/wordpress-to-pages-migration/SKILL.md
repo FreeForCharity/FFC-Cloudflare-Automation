@@ -106,8 +106,16 @@ completeness becomes something the run can fail on. It reports:
 > WordPress has `siteurl` **and** `home` set to `https://vpmin.org`, so its REST `link` fields, its
 > sitemap entries and its `/wp-content/uploads/` references all name the empty domain. All 19
 > `wp/v2/pages` links are on vpmin.org; every one 404s there; every one returns 200 on the serving
-> domain (11/11 probed, pages and uploads alike). Untreated that lost **247 of 590 pages and 822 of
-> 823 assets** — and it is one site with a stale self-reference, not two sites.
+> domain (11/11 probed, pages and uploads alike). It is one site with a stale self-reference, not
+> two sites. Correcting it, measured on the same runner:
+>
+> |                        | untreated | normalized    |
+> | ---------------------- | --------- | ------------- |
+> | entries captured       | 343 / 590 | **589 / 590** |
+> | page-fetch failures    | 247       | **0**         |
+> | asset failures         | 823       | **15**        |
+> | assets downloaded      | 177       | **1838**      |
+> | `wp/v2/pages` captured | 1 / 19    | **19 / 19**   |
 >
 > So the two situations are opposites and are told apart by ONE reading, not by reasoning about
 > which domain is "real":
@@ -129,6 +137,14 @@ completeness becomes something the run can fail on. It reports:
 > - **It is a live defect, not just a migration obstacle.** Those URLs are 404ing for real visitors
 >   right now. Report it to whoever owns the WordPress; the fix is a search-replace on
 >   `siteurl`/`home`, and it is worth doing whether or not the site is being migrated.
+> - **What survives the correction is what `ignore_hosts` is actually for.** The 15 remaining asset
+>   failures are the genuine article: 11×404 for WordPress.com scaffolding the site still references
+>   but does not serve (`remote-login.php?wpcom_remote_login=validate`,
+>   `wp-content/js/rlt-proxy.js`, `mu-plugins/actionbar/actionbar.js`, a `themes/a8c/…` watermark —
+>   leftovers of an earlier move off WordPress.com), and 4×**410 Gone** on
+>   `myviewletstalkaboutjesus.files.wordpress.com`. A 410 is the origin stating the resource is
+>   deliberately gone. Neither can be recovered by rewriting a hostname, and both 404 for live
+>   visitors too. Drop them with `ignore_hosts`; do not normalize them.
 >
 > Beware near-miss matches when reconciling the inventory: `sites-list/` contains
 > `viewpointnorth.org`, an unrelated organization.

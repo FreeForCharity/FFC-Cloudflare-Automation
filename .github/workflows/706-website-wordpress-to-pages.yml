@@ -381,6 +381,7 @@ jobs:
           node scripts/replace-forms-with-mailto.mjs --self-test
           node scripts/integrate-clone-into-nextjs.mjs --self-test
           node scripts/verify-no-legacy.mjs --self-test
+          node scripts/assess-capture-completeness.mjs --self-test
 
   convert:
     runs-on: ubuntu-latest
@@ -451,35 +452,13 @@ jobs:
             exit 1
           fi
 
-          node -e '
-            const fs = require("fs");
-            const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            const captured = r.captured?.total ?? 0;
-            const expected = Array.isArray(r.entries) ? r.entries.length : 0;
-            const minPct = Number(process.argv[2]);
-            const pct = expected ? (captured / expected) * 100 : 0;
-            const line = `${captured} of ${expected} inventory entries (${pct.toFixed(1)}%)`;
-            const problems = r.verdict?.problems ?? [];
-            const out = [];
-            out.push(`- Captured **${line}**; completeness floor is ${minPct}%`);
-            if (r.declaredSelfHost) {
-              out.push(`- ⚠️ The live site declares its home as **${r.declaredSelfHost}** — its own URLs were rewritten onto the serving host for this capture. The LIVE site still has this bug.`);
-            }
-            for (const p of problems) out.push(`- capture verdict: ${p}`);
-            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n### Capture\n\n" + out.join("\n") + "\n");
-            console.log(out.join("\n"));
-            if (!expected) {
-              console.error("::error::The capture report lists no inventory entries at all.");
-              process.exit(1);
-            }
-            if (pct < minPct) {
-              console.error(`::error::Captured ${line}, below the ${minPct}% completeness floor. The migration would lose content — refusing to continue.`);
-              process.exit(1);
-            }
-            if (problems.length) {
-              console.error("::warning::The capture reported problems that are NOT completeness failures (see the job summary). A live site\u2019s own dead references are reproduced faithfully; verify-no-legacy is the gate on whether the export stands alone.");
-            }
-          ' "$report" "$MIN_PERCENT"
+          # In a script, not `node -e '…'`: every JS template literal inside a
+          # single-quoted shell string reads to shellcheck as an unexpanded
+          # shell variable (SC2016), and quoting around that is how a script
+          # acquires escaping nobody can safely edit later. The file also gets
+          # its own self-tests, which an inline block cannot have.
+          node scripts/assess-capture-completeness.mjs \
+            --report "$report" --min-percent "$MIN_PERCENT"
 
       # Runs BEFORE integration, so the forms are dead in the artifact too and
       # a later stage cannot accidentally publish the un-neutralized capture.

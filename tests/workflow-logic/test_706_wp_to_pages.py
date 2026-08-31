@@ -658,37 +658,37 @@ def test_a_derived_destination_domain_must_be_a_hostname():
 
 
 def _run_capture_gate(
-    captured: int, expected: int, problems: list[str], min_pct: str = "98", rc: int = 1
+    captured: int, expected: int, problems: list[str], min_pct: str = "98", write_report: bool = True
 ):
-    """EXECUTE the capture step's assessment half against a synthetic report."""
+    """EXECUTE the real assessment script against a synthetic report.
+
+    Runs the shipped binary, not a shell fragment lifted out of the workflow:
+    the logic moved into scripts/assess-capture-completeness.mjs, and a test
+    that kept exercising an inlined copy would pass while the workflow ran
+    something else.
+    """
     import json
     import os
 
-    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
-    frag = run[run.index('report="$RUNNER_TEMP') :]
+    script = REPO_ROOT / "scripts" / "assess-capture-completeness.mjs"
     with tempfile.TemporaryDirectory() as td:
-        site = pathlib.Path(td, "capture", "site")
-        site.mkdir(parents=True)
-        (site / "wp-capture-report.json").write_text(
-            json.dumps(
-                {
-                    "captured": {"total": captured},
-                    "entries": [{"i": i} for i in range(expected)],
-                    "verdict": {"ok": not problems, "problems": problems},
-                }
-            ),
-            encoding="utf-8",
-        )
-        summary = pathlib.Path(td, "summary.md")
+        report = pathlib.Path(td) / "wp-capture-report.json"
+        if write_report:
+            report.write_text(
+                json.dumps(
+                    {
+                        "captured": {"total": captured},
+                        "entries": [{"i": i} for i in range(expected)],
+                        "verdict": {"ok": not problems, "problems": problems},
+                    }
+                ),
+                encoding="utf-8",
+            )
+        summary = pathlib.Path(td) / "summary.md"
         summary.touch()
-        env = dict(
-            os.environ,
-            RUNNER_TEMP=td,
-            MIN_PERCENT=min_pct,
-            GITHUB_STEP_SUMMARY=str(summary),
-        )
+        env = dict(os.environ, GITHUB_STEP_SUMMARY=str(summary))
         return subprocess.run(
-            ["bash", "-c", f"set -uo pipefail\nrc={rc}\n" + frag],
+            ["node", str(script), "--report", str(report), "--min-percent", min_pct],
             env=env,
             capture_output=True,
             text=True,
@@ -716,8 +716,6 @@ def test_a_sites_own_dead_links_do_not_block_the_conversion():
 
 
 def test_losing_content_still_blocks_the_conversion():
-    """The other half: completeness is the property that must not regress, and
-    relaxing the asset gate must not relax this one."""
     proc = _run_capture_gate(2, 587, ["captured 2 of 587"])
     assert proc.returncode != 0, proc.stdout
     assert "below the 98% completeness floor" in proc.stderr, proc.stderr
@@ -730,12 +728,20 @@ def test_the_completeness_floor_is_enforced_near_the_boundary():
 
 
 def test_an_empty_inventory_is_a_failure_not_a_vacuous_pass():
-    """0 captured of 0 expected is 0/0. Treated as a ratio it is NaN or 1.0
-    depending on how it is written, and one of those reads as a perfect
-    capture of a site with no pages."""
+    """0 captured of 0 expected is 0/0. As a ratio it is NaN or 1.0 depending
+    on how it is written, and one of those reads as a perfect capture of a site
+    with no pages."""
     proc = _run_capture_gate(0, 0, ["nothing"])
     assert proc.returncode != 0, proc.stdout
-    assert "no inventory entries at all" in (proc.stdout + proc.stderr), proc.stderr
+    assert "no inventory entries at all" in proc.stderr, proc.stderr
+
+
+def test_an_unreadable_report_is_a_failure_not_an_assumed_pass():
+    """A capture that died mid-write leaves no readable report. Treating that
+    as "no problems found" converts whatever fragment it left behind."""
+    proc = _run_capture_gate(0, 0, [], write_report=False)
+    assert proc.returncode != 0, proc.stdout
+    assert "Cannot read the capture report" in proc.stderr, proc.stderr
 
 
 def test_the_floor_is_operator_controllable():
@@ -744,44 +750,20 @@ def test_the_floor_is_operator_controllable():
     assert "below the 100% completeness floor" in proc.stderr, proc.stderr
 
 
-def test_a_missing_report_is_a_failure_not_an_assumed_pass():
-    """If the capture died before writing its report there is nothing to assess,
-    and `node -e` reading a non-existent file throws — which is a failure, but
-    one whose message names fs and not the migration. The explicit guard is
-    what makes the run say why it stopped."""
-    import os
-
+def test_the_workflow_calls_the_shipped_script_not_an_inline_copy():
+    """The assessment logic lives in a file so it can be self-tested and so it
+    is not a `node -e` single-quoted string whose JS template literals read to
+    shellcheck as shell variables (SC2016 — this failed CI)."""
     run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
-    frag = run[run.index('report="$RUNNER_TEMP') :]
-    with tempfile.TemporaryDirectory() as td:
-        summary = pathlib.Path(td, "summary.md")
-        summary.touch()
-        env = dict(os.environ, RUNNER_TEMP=td, MIN_PERCENT="98", GITHUB_STEP_SUMMARY=str(summary))
-        proc = subprocess.run(
-            ["bash", "-c", "set -uo pipefail\nrc=1\n" + frag],
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=60,
-        )
-    assert proc.returncode != 0, proc.stdout
-    assert "produced no report" in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
-
-
-def test_a_crash_is_not_assessed_as_a_gate_result():
-    """The capture exits 2 for a usage error or a crash, and 1 for an unmet
-    gate. Assessing a crash against the completeness floor would let a run that
-    never really executed pass on whatever half-written report it left behind —
-    the same shape as a search that never ran reading as "nothing to do"."""
-    proc = _run_capture_gate(589, 590, [], rc=2)
-    assert proc.returncode != 0, proc.stdout
-    # Shell `echo` writes to stdout; the node assessment writes to stderr. The
-    # first version of this assertion checked only stderr and failed against
-    # correct code — a test that reads the wrong stream indicts the wrong side.
-    assert "usage error or crash, not a gate result" in (proc.stdout + proc.stderr), (
-        proc.stdout + proc.stderr
-    )
+    assert "assess-capture-completeness.mjs" in run, run
+    # Comments are stripped first: the comment above the call NAMES `node -e`
+    # to explain why it is not used, and a bare substring match flags that as
+    # the very thing it forbids. A check that cannot tell code from prose
+    # reports the explanation as the violation.
+    code = "\n".join(l for l in run.splitlines() if not l.strip().startswith("#"))
+    assert "node -e" not in code, "the assessment was inlined again:\n" + code
+    gate = step_run(WORKFLOW, "resolve", "Offline self-tests (gate every later job)")
+    assert "assess-capture-completeness.mjs --self-test" in gate, gate
 
 
 def test_min_capture_percent_is_validated():

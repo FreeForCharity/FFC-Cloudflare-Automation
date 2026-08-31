@@ -384,8 +384,14 @@ class Tree:
         # and accept nothing but a blob.
         if _git(["cat-file", "-t", f"{rev}:{path}"], self.root).strip() != "blob":
             return None
-        content = _git(["show", f"{rev}:{path}"], self.root)
-        return content or None
+        # `content or None` would be wrong here: a legitimately EMPTY file is a
+        # zero-length blob, and folding it into None makes "existed but was
+        # empty" indistinguishable from "never existed" -- so deleting an empty
+        # file is never reported as PATH GONE. The `cat-file -t` check above has
+        # already established that a blob exists at this rev, which is exactly
+        # the existence question the sentinel answers, so "" can be returned
+        # honestly as content.
+        return _git(["show", f"{rev}:{path}"], self.root)
 
     def commits_since(self, path, since):
         """Commits touching `path` since `since` -- advisory, never load-bearing.
@@ -604,7 +610,9 @@ def audit_issue(issue, tree):
     def content_when_filed(path):
         if path not in was:
             snapshot = tree.content_at(path, created)
-            was[path] = normalize(snapshot) if snapshot else None
+            # `if snapshot` again folds the empty file into "no history";
+            # `is not None` keeps the two apart all the way to the caller.
+            was[path] = normalize(snapshot) if snapshot is not None else None
         return was[path]
 
     path_findings = []

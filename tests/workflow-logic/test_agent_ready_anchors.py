@@ -574,6 +574,55 @@ def test_a_readable_file_is_still_read_verbatim():
         assert got == "anchor here\n", got
 
 
+def test_an_empty_file_that_existed_is_not_confused_with_one_that_never_did():
+    # Copilot round 6. `content_at` returned `content or None`, folding a
+    # zero-length blob into the same answer as "no such object" — so deleting a
+    # legitimately EMPTY file was never reported as PATH GONE.
+    #
+    # A real git fixture, because the defect is in the sentinel that git's own
+    # output feeds; FakeTree cannot express "a blob exists and its content is
+    # the empty string". The `cat-file -t` blob check already answers the
+    # existence question, which is what lets "" be returned honestly.
+    #
+    # Both directions in one fixture: the empty file must read as "", and a path
+    # git never saw must still read as None. A fix that returned "" for
+    # everything would satisfy the first assertion and destroy PATH GONE's only
+    # guard against reporting proposed-new files.
+    import os as _os
+    import subprocess as _sp
+    import tempfile as _tf
+
+    with _tf.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+
+        def git(*args, when=None):
+            env = dict(_os.environ)
+            if when:
+                env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = when
+            _sp.run(["git", "-C", str(root), *args], check=True, env=env,
+                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+
+        git("init", "-q")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        (root / "scripts").mkdir()
+        (root / "scripts" / "empty.py").write_text("", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-q", "-m", "add an empty file", when="2026-08-01T00:00:00")
+        (root / "scripts" / "empty.py").unlink()
+        git("add", "-A")
+        git("commit", "-q", "-m", "delete it", when="2026-08-20T00:00:00")
+
+        tree = M.Tree(root)
+        filed = "2026-08-10T00:00:00Z"  # after the add, before the delete
+        assert tree.content_at("scripts/empty.py", filed) == "", "an empty blob existed; say so"
+        assert tree.content_at("scripts/never.py", filed) is None, "a path git never saw stays None"
+
+        body = "The check lives in `scripts/empty.py` and is wrong."
+        result = M.audit([issue(1, body, created=filed)], tree)
+        assert [r["path"] for r in result["path_gone"]] == ["scripts/empty.py"], result["path_gone"]
+
+
 def test_a_cited_directory_is_not_reported_as_path_gone():
     # `docs/data` has git history (its children do) but no content of its own.
     # The first live run reported it as PATH GONE against issue #859.

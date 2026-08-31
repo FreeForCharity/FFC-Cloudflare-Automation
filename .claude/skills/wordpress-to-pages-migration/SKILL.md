@@ -91,14 +91,20 @@ completeness becomes something the run can fail on. It reports:
   not a check. The gap is routinely large: on viewpointministriesinternational.org the sitemap
   advertises **587** page URLs against `wp/v2/pages`' **19**.
 
-> **Read the two domains apart.** A charity often has a long legacy domain and a short new one, and
-> they can be different systems. For Viewpoint Ministries the **capture source** is
-> `viewpointministriesinternational.org` (self-hosted WordPress on WPMU DEV, Divi, 19 pages / 229
-> posts / 280 media) while `vpmin.org` is a **new short domain** parked on a WordPress.com stub, to
-> be pointed at the migrated site later — and the repo is named for the destination,
-> `FFC-EX-vpmin.org`. Capturing the repo's namesake rather than the live site would have produced a
-> clean, green, 2-page artifact of the wrong website. Confirm which domain actually serves the
-> content before capturing, and do not infer it from the repo name.
+> **Read the two domains apart, and do not treat the new one as part of the site.** A charity often
+> has a long legacy domain and a short new one, and they can be different systems. For Viewpoint
+> Ministries the **capture source** is `viewpointministriesinternational.org` (self-hosted WordPress
+> on WPMU DEV, Divi, 19 pages / 229 posts / 280 media). `vpmin.org` is a **new, empty short domain**
+> parked on a WordPress.com stub, to be pointed at the migrated site later — and the repo is named
+> for that destination, `FFC-EX-vpmin.org`. Capturing the repo's namesake rather than the live site
+> produces a clean, green, 2-page artifact of the wrong website. Confirm which domain actually
+> serves the content before capturing, and do not infer it from the repo name.
+>
+> The tempting middle position is also wrong: an empty destination domain is **not an alias** of the
+> source, so references to it must not be re-pointed at the source and re-fetched. That treats a
+> dead reference as a live asset and manufactures a second wrong site. Drop such references with
+> `ignore_hosts` — the run then stops counting them as failures and stops holding the external-host
+> gate open, without inventing content for them.
 >
 > Beware near-miss matches when reconciling the inventory: `sites-list/` contains
 > `viewpointnorth.org`, an unrelated organization.

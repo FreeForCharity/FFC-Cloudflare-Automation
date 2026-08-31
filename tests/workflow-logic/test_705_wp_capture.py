@@ -48,7 +48,7 @@ def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]
             INPUT_MAX="",
             INPUT_DELAY="",
             INPUT_POSTS="",
-            INPUT_ALIASES="",
+            INPUT_IGNORE="",
         )
         env.update(env_overrides)
         proc = subprocess.run(
@@ -257,49 +257,58 @@ def test_concurrency_group_keys_on_the_normalized_domain():
 
 
 
-def test_alias_domains_are_lowercased_and_passed_through():
-    """vpmin.org hosts nothing, so the source site's asset URLs on it are its
-    own files under the wrong hostname; the capture re-points them."""
+def test_ignore_hosts_are_lowercased_and_normalized():
+    """The list is a DROP list: a reference to one of these hosts is not
+    fetched and does not count against the capture's asset gate."""
     proc, outputs = run_resolve(
-        INPUT_DOMAIN="viewpointministriesinternational.org", INPUT_ALIASES="VPMin.org"
+        INPUT_DOMAIN="viewpointministriesinternational.org", INPUT_IGNORE="Drop.Example"
     )
     assert proc.returncode == 0, proc.stdout
-    assert "aliases=vpmin.org" in outputs, outputs
+    assert "ignore_hosts=drop.example" in outputs, outputs
 
 
-def test_alias_domains_reject_a_comma_typo():
-    """`vpmin,org` looks like one hostname with a typo but parses as TWO
-    aliases that match nothing, so localization would quietly do nothing and
-    the run would report only the resulting 404s."""
-    proc, _ = run_resolve(INPUT_DOMAIN="vpmi.org", INPUT_ALIASES="vpmin,org")
+def test_ignore_hosts_reject_a_comma_typo():
+    """`a,org` looks like one hostname with a typo but parses as TWO entries
+    that match nothing. A list that matches nothing fails silently — the
+    capture goes on reporting the very failures the list was added to drop,
+    which reads as "the fix did not work" rather than "the input was wrong"."""
+    proc, _ = run_resolve(INPUT_DOMAIN="vpmi.org", INPUT_IGNORE="a,org")
     assert proc.returncode != 0, proc.stdout
     assert "is not a bare hostname" in proc.stdout, proc.stdout
 
 
-def test_alias_domains_tolerate_trailing_comma_and_dedupe():
+def test_ignore_hosts_tolerate_trailing_comma_and_dedupe():
     proc, outputs = run_resolve(
-        INPUT_DOMAIN="vpmi.org", INPUT_ALIASES="vpmin.org,,www.vpmin.org,a.org,"
+        INPUT_DOMAIN="vpmi.org", INPUT_IGNORE="a.org,,www.a.org,b.org,"
     )
     assert proc.returncode == 0, proc.stdout
-    assert "aliases=vpmin.org,a.org" in outputs, outputs
+    assert "ignore_hosts=a.org,b.org" in outputs, outputs
 
 
-def test_alias_domains_accept_multiple_hosts():
-    proc, outputs = run_resolve(INPUT_DOMAIN="vpmi.org", INPUT_ALIASES="a.org,b.example.com")
+def test_ignore_hosts_accept_multiple_hosts():
+    proc, outputs = run_resolve(INPUT_DOMAIN="vpmi.org", INPUT_IGNORE="a.org,b.example.com")
     assert proc.returncode == 0, proc.stdout
-    assert "aliases=a.org,b.example.com" in outputs, outputs
+    assert "ignore_hosts=a.org,b.example.com" in outputs, outputs
 
 
-def test_alias_domains_reject_a_pasted_url():
-    proc, _ = run_resolve(INPUT_DOMAIN="vpmi.org", INPUT_ALIASES="https://vpmin.org/")
+def test_ignore_hosts_reject_a_pasted_url():
+    proc, _ = run_resolve(INPUT_DOMAIN="vpmi.org", INPUT_IGNORE="https://a.org/")
     assert proc.returncode != 0, proc.stdout
     assert "is not a bare hostname" in proc.stdout, proc.stdout
 
 
-def test_alias_domains_default_to_empty():
+def test_ignore_hosts_default_to_empty():
     proc, outputs = run_resolve(INPUT_DOMAIN="vpmi.org")
     assert proc.returncode == 0, proc.stdout
-    assert "aliases=" in outputs, outputs
+    assert "ignore_hosts=" in outputs, outputs
+
+
+def test_capture_passes_the_ignore_list_through_to_the_script():
+    """The resolve job can validate perfectly and still be inert if the capture
+    job never forwards the value."""
+    run = step_run(WORKFLOW, "capture", "Capture the site")
+    assert "--ignore-hosts" in run, run
+    assert "$IGNORE_HOSTS" in run, run
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

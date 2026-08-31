@@ -380,7 +380,7 @@ export function absolutize(ref, baseUrl) {
  * are third-party runtime services, not page assets, and localizing them breaks
  * them.
  */
-export function shouldLocalize(absUrl, domain, aliasHosts = []) {
+export function shouldLocalize(absUrl, domain, ignoreHosts = []) {
   let u;
   try {
     u = new URL(absUrl);
@@ -392,8 +392,10 @@ export function shouldLocalize(absUrl, domain, aliasHosts = []) {
   // being captured — a same-domain hostname resolving to a private literal is
   // still a request the runner makes on someone else's behalf.
   if (isPrivateHost(u.hostname)) return false;
+  // The ignore list wins over every other rule, including same-site: a
+  // reference to a host that serves nothing is not an asset.
+  if (isIgnoredHost(absUrl, ignoreHosts)) return false;
   if (host === domain || host.endsWith(`.${domain}`)) return true;
-  if (aliasHosts.includes(host)) return true;
 
   const KEEP_EXTERNAL = [
     'youtube.com',
@@ -513,30 +515,29 @@ export function parsePositiveInt(raw, { min = 0, max = Number.MAX_SAFE_INTEGER }
 }
 
 /**
- * Re-point an asset URL that a site emits under a DIFFERENT hostname it owns.
+ * Should references to this host be dropped from the capture entirely?
  *
  * viewpointministriesinternational.org emits its Divi cache stylesheets as
- * `https://vpmin.org/wp-content/et-cache/...`. vpmin.org hosts nothing — it is a
- * short domain reserved for the migrated site — so those URLs are the source
- * site's own assets carrying the wrong hostname, and every one of them 404s.
- * Fetching them as written produced 823 failures on the first real capture.
+ * `https://vpmin.org/wp-content/et-cache/...`. vpmin.org is a blank, unrelated
+ * domain that serves none of them, so those URLs are dead on the live site and
+ * would be dead in the clone. They are not assets to fetch, not failures to
+ * report, and not an "unlocalized external host" to fail the gate on — they are
+ * references to nothing.
  *
- * The swap is applied only for the FETCH. The rewrite map still keys on the
- * original text as it appears in the markup, because that is the string that
- * has to be replaced in the captured HTML.
+ * Dropping them is deliberate and reported, never silent: the run prints how
+ * many references it ignored and on which host, so an ignore list that is
+ * quietly swallowing something real stays visible.
  */
-export function canonicalizeAssetUrl(absUrl, domain, aliases = []) {
-  if (!aliases.length) return absUrl;
+export function isIgnoredHost(absUrl, ignoreHosts = []) {
+  if (!ignoreHosts.length) return false;
   let u;
   try {
     u = new URL(absUrl);
   } catch {
-    return absUrl;
+    return false;
   }
   const host = u.hostname.replace(/^www\./, '');
-  if (!aliases.includes(host)) return absUrl;
-  u.hostname = domain;
-  return u.toString();
+  return ignoreHosts.includes(host);
 }
 
 /**
@@ -605,11 +606,12 @@ export function rewriteRefs(text, replacements) {
  * External http(s) references still present after localization, excluding the
  * ones we deliberately keep. This is the "zero external asset hosts" gate.
  */
-export function remainingExternalAssetHosts(html, domain) {
+export function remainingExternalAssetHosts(html, domain, ignoreHosts = []) {
   const hosts = new Set();
   for (const ref of collectAssetUrls(html)) {
     if (!/^https?:\/\//i.test(ref)) continue;
-    if (shouldLocalize(ref, domain)) {
+    if (isIgnoredHost(ref, ignoreHosts)) continue;
+    if (shouldLocalize(ref, domain, ignoreHosts)) {
       try {
         hosts.add(new URL(ref).hostname);
       } catch {
@@ -898,38 +900,62 @@ function selfTest() {
     assetLocalName('https://h.org/..%2f..%2fetc/x.png'),
     'h.org/..%2f..%2fetc/x.png',
   );
-  // Alias hosts: another domain the SAME site emits its own asset URLs under.
-  // vpmin.org hosts nothing, so those URLs are the source site's assets wearing
-  // the wrong hostname; fetching them as written produced 823 404s.
+  // Ignored hosts: a host the source site emits references to that serves
+  // nothing we want. Such a reference is not an asset — do not fetch it, do not
+  // count it as a failure, and do not let it hold the "zero external hosts"
+  // gate open. This is a DROP, not a rewrite: nothing is re-pointed at --domain.
   eq(
-    'canonicalizeAssetUrl swaps an alias host for the capture domain',
-    canonicalizeAssetUrl('https://vpmin.org/wp-content/a.css', 'vpmi.org', ['vpmin.org']),
-    'https://vpmi.org/wp-content/a.css',
-  );
-  eq(
-    'canonicalizeAssetUrl preserves the path and query',
-    canonicalizeAssetUrl('https://vpmin.org/a/b.css?ver=1', 'vpmi.org', ['vpmin.org']),
-    'https://vpmi.org/a/b.css?ver=1',
-  );
-  eq(
-    'canonicalizeAssetUrl leaves a genuinely foreign host alone',
-    canonicalizeAssetUrl('https://cdn.example.net/a.css', 'vpmi.org', ['vpmin.org']),
-    'https://cdn.example.net/a.css',
-  );
-  eq(
-    'canonicalizeAssetUrl is a no-op with no aliases configured',
-    canonicalizeAssetUrl('https://vpmin.org/a.css', 'vpmi.org', []),
-    'https://vpmin.org/a.css',
-  );
-  eq(
-    'shouldLocalize accepts an alias host',
-    shouldLocalize('https://vpmin.org/wp-content/a.css', 'vpmi.org', ['vpmin.org']),
+    'isIgnoredHost matches a listed host',
+    isIgnoredHost('https://drop.example/a.css', ['drop.example']),
     true,
   );
   eq(
-    'shouldLocalize still refuses a foreign HTML page on an alias run',
-    shouldLocalize('https://other.org/about/', 'vpmi.org', ['vpmin.org']),
+    'isIgnoredHost ignores a leading www. on the reference',
+    isIgnoredHost('https://www.drop.example/a.css', ['drop.example']),
+    true,
+  );
+  eq(
+    'isIgnoredHost does not match a sibling host by prefix',
+    isIgnoredHost('https://drop.example.net/a.css', ['drop.example']),
     false,
+  );
+  eq(
+    'isIgnoredHost does not match a subdomain of a listed host',
+    isIgnoredHost('https://cdn.drop.example/a.css', ['drop.example']),
+    false,
+  );
+  eq(
+    'isIgnoredHost is a no-op with an empty list',
+    isIgnoredHost('https://drop.example/a.css', []),
+    false,
+  );
+  eq(
+    'isIgnoredHost tolerates a malformed reference',
+    isIgnoredHost('not a url', ['drop.example']),
+    false,
+  );
+  eq(
+    'shouldLocalize refuses an ignored host even though it would otherwise localize',
+    [
+      shouldLocalize('https://drop.example/wp-content/a.css', 'h.org', []),
+      shouldLocalize('https://drop.example/wp-content/a.css', 'h.org', ['drop.example']),
+    ],
+    [true, false],
+  );
+  eq(
+    'the ignore list beats even the same-site rule',
+    shouldLocalize('https://h.org/wp-content/a.css', 'h.org', ['h.org']),
+    false,
+  );
+  eq(
+    'remainingExternalAssetHosts does not report an ignored host',
+    [
+      remainingExternalAssetHosts('<img src="https://drop.example/a.png">', 'h.org', []),
+      remainingExternalAssetHosts('<img src="https://drop.example/a.png">', 'h.org', [
+        'drop.example',
+      ]),
+    ],
+    [['drop.example'], []],
   );
 
   // Forms have no backend once static; report them rather than guess a replacement.
@@ -1313,9 +1339,10 @@ const delayMs = parsedOptions.delay;
 const timeoutMs = parsedOptions.timeout * 1000;
 const includePosts = flag('include-posts');
 const jsonOut = arg('json-out', '');
-// Other hostnames this site owns and emits its own asset URLs under. Assets on
-// these are re-pointed at --domain before fetching; see canonicalizeAssetUrl.
-const aliasDomains = (arg('alias-domains', '') || '')
+// Hosts whose references are dropped from the capture entirely: not fetched,
+// not counted as failures, not counted against the "zero external asset hosts"
+// gate. See isIgnoredHost.
+const ignoreHosts = (arg('ignore-hosts', '') || '')
   .split(',')
   .map((d) => normalizeDomain(d))
   .filter(Boolean);
@@ -1845,7 +1872,11 @@ async function capture() {
       const cssReps = new Map();
       for (const ref of collectCssUrls(css)) {
         const abs = absolutize(ref, res.url || absUrl);
-        if (!abs || !shouldLocalize(abs, domain)) continue;
+        if (!abs || !shouldLocalize(abs, domain, ignoreHosts)) continue;
+        // This path needs the same ignore-list filtering as the page loop, and
+        // it is easy to miss: stylesheets reference other stylesheets, so a
+        // host filtered only in the page loop comes straight back in here.
+        // shouldLocalize applies the list, which is why the check is shared.
         const inner = await localizeAsset(abs);
         if (inner) {
           // Both are under assetsRoot, so the reference from one stylesheet to
@@ -1871,7 +1902,7 @@ async function capture() {
   // reference (a gallery behind a builder widget, for instance).
   for (const m of media.items) {
     if (!m?.source_url) continue;
-    if (shouldLocalize(m.source_url, domain)) await localizeAsset(m.source_url);
+    if (shouldLocalize(m.source_url, domain, ignoreHosts)) await localizeAsset(m.source_url);
   }
 
   for (const [localPath, html] of rendered) {
@@ -1879,10 +1910,10 @@ async function capture() {
     const reps = new Map();
     for (const ref of collectAssetUrls(html)) {
       const abs = absolutize(ref, pageUrl);
-      if (!abs || !shouldLocalize(abs, domain, aliasDomains)) continue;
+      if (!abs || !shouldLocalize(abs, domain, ignoreHosts)) continue;
       // Fetch from the canonical host; the replacement still keys on `ref`,
       // the string that actually appears in this page's markup.
-      const name = await localizeAsset(canonicalizeAssetUrl(abs, domain, aliasDomains));
+      const name = await localizeAsset(abs);
       if (name) reps.set(ref, `${relativePrefix(localPath)}${assetsDirName}/${name}`);
     }
     // Same-site page links must point at the captured copies, or every nav
@@ -1921,7 +1952,7 @@ async function capture() {
     const dest = join(outDir, localPath);
     if (!existsSync(dest)) continue;
     const html = (await import('node:fs')).readFileSync(dest, 'utf8');
-    for (const h of remainingExternalAssetHosts(html, domain)) externalHosts.add(h);
+    for (const h of remainingExternalAssetHosts(html, domain, ignoreHosts)) externalHosts.add(h);
   }
 
   // Forms have no backend on a static host. Collected across every captured
@@ -1989,8 +2020,13 @@ async function capture() {
     pageFetch: { failed: pageTally.total, failures: pageTally },
     remainingExternalHosts: [...externalHosts],
     escapedPaths,
-    aliasDomains,
-    forms: { pages: formPages, contactEmailsFound: [...contactEmails] },
+    ignoreHosts,
+    forms: {
+      pageCount: formPages.length,
+      pages: formPages.slice(0, 15),
+      truncated: Math.max(0, formPages.length - 15),
+      contactEmailsFound: [...contactEmails],
+    },
     entries: entries.map(
       ({ id, type, slug, link, title, localPath, parent, menuOrder, source, bytes }) => ({
         id,
@@ -2030,8 +2066,8 @@ async function capture() {
         (assetFailureNote ? ` — ${assetFailureNote}` : ' (0 failed)'),
       ...(pageTally.total ? [`- Page fetches: ${describeFailures(pageTally, domain)}`] : []),
       `- Remaining external asset hosts: ${externalHosts.size ? [...externalHosts].join(', ') : 'none'}`,
-      ...(aliasDomains.length
-        ? [`- Alias domains re-pointed at ${domain}: ${aliasDomains.join(', ')}`]
+      ...(ignoreHosts.length
+        ? [`- Ignored hosts (references dropped): ${ignoreHosts.join(', ')}`]
         : []),
       ...(formPages.length
         ? [

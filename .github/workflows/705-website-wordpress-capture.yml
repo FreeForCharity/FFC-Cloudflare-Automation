@@ -65,12 +65,13 @@ on:
         required: false
         type: boolean
         default: false
-      alias_domains:
+      ignore_hosts:
         description: >-
-          Comma-separated OTHER hostnames this same site emits its own asset URLs under. Assets on
-          these are re-pointed at `domain` before fetching. Use when a site has been part-configured
-          for a new short domain that does not serve its files yet — e.g. capturing
-          viewpointministriesinternational.org with alias_domains=vpmin.org.
+          Comma-separated hostnames whose references are DROPPED from the capture: not fetched, not
+          counted as asset failures, and not counted against the "zero external asset hosts" gate.
+          Use for a host the source site links to that serves nothing you want in the clone. Nothing
+          is re-pointed — an ignored reference is simply left alone. Leave empty unless a capture
+          has actually reported failures on a host you have decided to exclude.
         required: false
         type: string
         default: ''
@@ -91,7 +92,7 @@ jobs:
       max: ${{ steps.resolve.outputs.max }}
       delay: ${{ steps.resolve.outputs.delay }}
       posts: ${{ steps.resolve.outputs.posts }}
-      aliases: ${{ steps.resolve.outputs.aliases }}
+      ignore_hosts: ${{ steps.resolve.outputs.ignore_hosts }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
@@ -119,7 +120,7 @@ jobs:
           INPUT_MAX: ${{ inputs.max_items }}
           INPUT_DELAY: ${{ inputs.delay_ms }}
           INPUT_POSTS: ${{ inputs.include_posts }}
-          INPUT_ALIASES: ${{ inputs.alias_domains }}
+          INPUT_IGNORE: ${{ inputs.ignore_hosts }}
         shell: bash
         run: |
           set -euo pipefail
@@ -178,27 +179,28 @@ jobs:
 
           # Validated ENTRY BY ENTRY against the same hostname rule as `domain`.
           # A character-class check over the whole string is not enough: it
-          # accepts `vpmin,org`, which silently becomes two aliases (`vpmin`
-          # and `org`) that match nothing, so the capture would run with
-          # localization quietly disabled and report only the resulting 404s.
-          raw_aliases="$(printf '%s' "${INPUT_ALIASES:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-          aliases=""
-          if [ -n "$raw_aliases" ]; then
+          # accepts `a,org`, which silently becomes two entries (`a` and `org`)
+          # that match nothing. An ignore list that matches nothing does not
+          # fail loudly — the capture just goes on reporting the 404s the list
+          # was added to suppress, which reads as "the fix did not work".
+          raw_ignore="$(printf '%s' "${INPUT_IGNORE:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          ignore_hosts=""
+          if [ -n "$raw_ignore" ]; then
             # Word-splitting on spaces rather than a heredoc: a heredoc
             # terminator must sit at column 0, which would end this YAML block
             # scalar. Whitespace was already stripped above, so commas are the
             # only separator and empty entries (a trailing comma) simply vanish.
             # Globbing is off so an entry like `*.org` cannot expand to filenames.
             set -f
-            for entry in $(printf '%s' "$raw_aliases" | tr ',' ' '); do
+            for entry in $(printf '%s' "$raw_ignore" | tr ',' ' '); do
               entry="${entry#www.}"
               if ! printf '%s' "$entry" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
                 set +f
-                echo "::error::alias_domains entry '$entry' is not a bare hostname. Expected a comma-separated list like 'vpmin.org' or 'a.org,b.org'."
+                echo "::error::ignore_hosts entry '$entry' is not a bare hostname. Expected a comma-separated list like 'a.org' or 'a.org,b.org'."
                 exit 1
               fi
-              case ",$aliases," in *",$entry,"*) continue ;; esac
-              aliases="${aliases:+$aliases,}$entry"
+              case ",$ignore_hosts," in *",$entry,"*) continue ;; esac
+              ignore_hosts="${ignore_hosts:+$ignore_hosts,}$entry"
             done
             set +f
           fi
@@ -209,7 +211,7 @@ jobs:
             echo "max=$max"
             echo "delay=$delay"
             echo "posts=$posts"
-            echo "aliases=$aliases"
+            echo "ignore_hosts=$ignore_hosts"
           } >> "$GITHUB_OUTPUT"
 
           echo "Resolved: domain=$domain mode=$mode max=$max delay=$delay posts=$posts"
@@ -266,13 +268,13 @@ jobs:
           MAX: ${{ needs.resolve.outputs.max }}
           DELAY: ${{ needs.resolve.outputs.delay }}
           POSTS: ${{ needs.resolve.outputs.posts }}
-          ALIASES: ${{ needs.resolve.outputs.aliases }}
+          IGNORE_HOSTS: ${{ needs.resolve.outputs.ignore_hosts }}
         shell: bash
         run: |
           set -euo pipefail
           args=(--domain "$DOMAIN" --out _capture/site --max "$MAX" --delay "$DELAY")
           if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
-          if [ -n "$ALIASES" ]; then args+=(--alias-domains "$ALIASES"); fi
+          if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
           node scripts/capture-wordpress-api.mjs "${args[@]}"
 
       - name: Upload capture artifact

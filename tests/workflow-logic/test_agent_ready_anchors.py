@@ -486,6 +486,20 @@ def test_a_missing_git_aborts_instead_of_reporting_a_clean_backlog():
         subprocess.run = real
 
 
+def test_audit_issue_documents_the_third_return_value_it_actually_returns():
+    # Copilot round 5: the docstring said `had_anchor` while the value is
+    # `usable` (a cited path that EXISTS *and* an anchor). The two differ
+    # exactly where the denominator is decided, so the wrong name invites a
+    # future change that overstates what the sweep can see.
+    doc = M.audit_issue.__doc__ or ""
+    assert "usable" in doc, doc
+    assert "had_anchor" not in doc, "the docstring still names a value this does not return"
+    # And the contract itself: an anchor with no existing cited path is NOT usable.
+    body = "`scripts/gone.py` calls `helper(timeout=30, retries=2)` on every tick."
+    _, _, usable = M.audit_issue(issue(3, body), FakeTree({}, at={}))
+    assert usable is False, "an anchor with no existing path must not count as usable"
+
+
 def test_a_root_that_is_not_a_git_checkout_aborts():
     with tempfile.TemporaryDirectory() as td:
         try:

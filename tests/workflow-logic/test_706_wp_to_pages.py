@@ -373,6 +373,39 @@ def test_the_report_filename_matches_what_the_script_writes():
             assert "wp-capture-report.json" in line, line
 
 
+def test_the_forms_output_is_named_for_what_it_actually_counts():
+    """The step counts FILES matching a form tag (grep -rl | wc -l), not forms.
+    Calling that `replaced` invites a later reader to use it as a replacement
+    count — a number that is wrong by however many pages carry two forms, which
+    on this first target is most of them (343 pages, 2 forms each)."""
+    wf = load_workflow(WORKFLOW)
+    assert wf["jobs"]["convert"]["outputs"] == {
+        "pages_with_forms": "${{ steps.forms.outputs.pages_with_forms }}"
+    }, wf["jobs"]["convert"]["outputs"]
+    run = step_run(WORKFLOW, "convert", "Replace forms with a mailto: block")
+    assert "grep -rlIE" in run and "wc -l" in run, run
+    assert "replaced=" not in run, "output name no longer matches what is counted:\n" + run
+
+
+def test_a_parked_root_route_is_reported_rather_than_skipped():
+    """`/` cannot be grepped for the way other routes can — a search for "/"
+    matches every test file. Skipping it prints "None.", which reads as
+    "nothing is affected" for the one route every template has, at the exact
+    moment the home page has been replaced."""
+    run = step_run(WORKFLOW, "convert", "Report tests that reference the parked routes")
+    # Counting occurrences of the flag is a PROXY, not the property, and it
+    # passes when the assignment is deleted but the reporting branches remain.
+    # Assert the two halves that actually matter, at the lines that matter.
+    branch = next((l for l in run.splitlines() if '"$r" = "/"' in l), None)
+    assert branch is not None, "no root-route branch at all:\n" + run
+    assert "root_parked" in branch, (
+        "the root route is skipped without recording it, so the summary prints "
+        '"None." for the one route every template has:\n' + branch
+    )
+    assert 'if [ -n "$root_parked" ]' in run, "recorded but never reported:\n" + run
+    assert "the home page" in run, run
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

@@ -267,7 +267,7 @@ jobs:
       group: wp-convert-${{ needs.resolve.outputs.domain }}
       cancel-in-progress: false
     outputs:
-      forms: ${{ steps.forms.outputs.replaced }}
+      pages_with_forms: ${{ steps.forms.outputs.pages_with_forms }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -310,7 +310,7 @@ jobs:
           found="$(grep -rlIE '<form[[:space:]/>]' "$site" --include='*.html' --include='*.htm' 2>/dev/null | wc -l | tr -d ' ')"
           echo "Pages carrying a form tag: $found"
           if [ "$found" -eq 0 ]; then
-            echo "replaced=0" >> "$GITHUB_OUTPUT"
+            echo "pages_with_forms=0" >> "$GITHUB_OUTPUT"
             echo "- No forms found; nothing to replace." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -320,7 +320,7 @@ jobs:
           fi
           node scripts/replace-forms-with-mailto.mjs \
             --dir "$site" --email "$EMAIL" --subject "Website enquiry from $DOMAIN"
-          echo "replaced=$found" >> "$GITHUB_OUTPUT"
+          echo "pages_with_forms=$found" >> "$GITHUB_OUTPUT"
 
       # Deliberately unauthenticated: this job is the ungated lane, and giving it
       # the cross-repo PAT would mean a read-only conversion carried a
@@ -403,17 +403,23 @@ jobs:
             echo "No template routes were parked."
             exit 0
           fi
-          # `%h` for the root route is `$parked` itself with no subpath. Left
-          # unhandled that becomes a grep for `/_disabled_template_routes`,
-          # which matches nothing and quietly reports "no tests affected" for
-          # the one route every template has.
+          # `%h` for the root route is `$parked` itself with no subpath, which
+          # is why it is mapped to `/` here rather than left to become a grep
+          # for `/_disabled_template_routes`.
           routes="$(find "$parked" -name 'page.*' -printf '%h\n' 2>/dev/null \
             | sed -e "s|^$parked$|/|" -e "s|^$parked/||" | sort -u)"
           echo "Parked routes:"; echo "$routes"
           hits=""
+          root_parked=""
           for r in $routes; do
             [ -n "$r" ] || continue
-            if [ "$r" = "/" ]; then continue; fi
+            # The root route cannot be searched for the way the others can: a
+            # grep for "/" matches every path in every test file, so it would
+            # report all of them as affected. It is REPORTED SEPARATELY rather
+            # than skipped — skipping it silently prints "None." for the one
+            # route every template has, which reads as "nothing is affected"
+            # when the home page has in fact just been replaced.
+            if [ "$r" = "/" ]; then root_parked="yes"; continue; fi
             f="$(grep -rlF -- "/$r" __tests__ tests 2>/dev/null | tr '\n' ' ')"
             if [ -n "$f" ]; then hits="${hits}- \`/$r\` referenced by: $f"$'\n'; fi
           done
@@ -423,10 +429,19 @@ jobs:
             echo ""
             if [ -n "$hits" ]; then
               echo "$hits"
+            else
+              echo "No non-root parked route is referenced by a test."
+            fi
+            if [ -n "$root_parked" ]; then
+              echo ""
+              echo "- \`/\` (the home page) was parked. Not searchable by path — a grep for"
+              echo "  \"/\" matches every test file — so check the target repo's home-page and"
+              echo "  smoke tests by hand."
+            fi
+            if [ -n "$hits" ] || [ -n "$root_parked" ]; then
+              echo ""
               echo "These will fail in the target repo's CI after delivery. Integration removes"
               echo "the template's app routes by design; the template's tests still assert them."
-            else
-              echo "None."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

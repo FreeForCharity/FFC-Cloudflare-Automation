@@ -1,0 +1,130 @@
+name: '999. TEMPORARY - vpmin.org host probe (delete before merge)'
+
+# TEMPORARY. Delete before #1226 leaves draft. The 999 prefix is a placeholder
+# that satisfies 722's uniqueness check without squatting a real workflow slot.
+#
+# One question, measured rather than argued:
+#
+# The capture of viewpointministriesinternational.org failed 247 of 590 page
+# fetches and 822 of 823 asset downloads. Every one of those failures is a
+# vpmin.org URL returning 404 — and those URLs come from the SOURCE site's own
+# inventory: its sitemap.xml and its wp/v2 `link` fields name vpmin.org as the
+# canonical host for its own pages and its own /wp-content/uploads/.
+#
+# So the site's WordPress Site Address disagrees with the host actually serving
+# it. Two readings, with opposite remedies:
+#
+#   A. The paths exist on the long domain and only the hostname is wrong. Then
+#      normalizing vpmin.org -> the capture domain recovers 247 pages and 822
+#      assets, and DROPPING them silently discards most of the site.
+#   B. The paths do not exist anywhere. Then they are dead references, dropping
+#      is right, and normalizing would fabricate URLs that 404 twice.
+#
+# Reading (A) off "the alias run reduced failures" is not enough: fewer failures
+# is consistent with either, since a normalized URL that happens to 200 on some
+# OTHER page's path would also reduce the count. This probe asks the only
+# question that separates them — does THIS path serve content on the long
+# domain? — and prints the status codes rather than a verdict.
+
+on:
+  push:
+    branches: ['claude/wordpress-migration-scraping-qpzewr']
+    paths:
+      - '.github/workflows/999-temp-host-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Does the long domain serve the paths the sitemap puts on vpmin.org?
+        run: |
+          node -e '
+            const SRC = "viewpointministriesinternational.org";
+            const paths = [
+              "/ministries/", "/newsletter/", "/viewpoint-radio/",
+              "/museumofthebible/", "/volunteers/", "/letstalkaboutjesus/",
+              "/schooloutreachministry/", "/bibletractsministry/",
+              "/wp-content/uploads/2026/08/Aug-18.png",
+              "/wp-content/uploads/2026/07/0710.mp3",
+              "/wp-content/uploads/2026/07/Copy-of-July-collection-2026.png"
+            ];
+            const head = async (u) => {
+              try {
+                const r = await fetch(u, { redirect: "manual" });
+                return `${r.status}${r.headers.get("location") ? " -> " + r.headers.get("location") : ""}`;
+              } catch (e) { return "ERR " + e.message; }
+            };
+            (async () => {
+              let srcOk = 0, vpOk = 0;
+              console.log("path".padEnd(58), "vpmin.org".padEnd(22), SRC);
+              for (const p of paths) {
+                const [v, s] = await Promise.all([
+                  head("https://vpmin.org" + p),
+                  head("https://" + SRC + p),
+                ]);
+                if (/^2/.test(s)) srcOk++;
+                if (/^2/.test(v)) vpOk++;
+                console.log(p.padEnd(58), String(v).padEnd(22), s);
+                await new Promise((r) => setTimeout(r, 250));
+              }
+              console.log("");
+              console.log(`200 on vpmin.org: ${vpOk}/${paths.length}`);
+              console.log(`200 on ${SRC}: ${srcOk}/${paths.length}`);
+              console.log(
+                srcOk === paths.length
+                  ? "READING A: the paths are real on the long domain; only the hostname is wrong."
+                  : srcOk === 0
+                    ? "READING B: the paths exist nowhere; these are dead references."
+                    : "MIXED: neither reading holds cleanly — see the per-path table above."
+              );
+            })();
+          '
+
+      # The sitemap is where the bad hostnames enter the inventory, so measure
+      # the split directly instead of inferring it from the failure count.
+      - name: How much of the source sitemap is on the wrong host?
+        run: |
+          node -e '
+            (async () => {
+              const r = await fetch("https://viewpointministriesinternational.org/sitemap.xml");
+              console.log("sitemap.xml:", r.status, r.headers.get("content-type"));
+              const xml = await r.text();
+              const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map((m) => m[1].trim());
+              const byHost = {};
+              for (const l of locs) {
+                try { const h = new URL(l).hostname; byHost[h] = (byHost[h] ?? 0) + 1; } catch {}
+              }
+              console.log("entries:", locs.length);
+              console.log("by host:", JSON.stringify(byHost, null, 2));
+              console.log("first 5:", JSON.stringify(locs.slice(0, 5), null, 2));
+            })();
+          '
+
+      - name: What host does the REST API report for its own pages?
+        run: |
+          node -e '
+            (async () => {
+              const u = "https://viewpointministriesinternational.org/wp-json/wp/v2/pages?per_page=20&_fields=id,link,slug";
+              const r = await fetch(u);
+              console.log("wp/v2/pages:", r.status, "X-WP-Total:", r.headers.get("x-wp-total"));
+              const j = await r.json();
+              const byHost = {};
+              for (const p of j) {
+                try { const h = new URL(p.link).hostname; byHost[h] = (byHost[h] ?? 0) + 1; } catch {}
+              }
+              console.log("link hosts:", JSON.stringify(byHost, null, 2));
+              console.log(JSON.stringify(j.slice(0, 6).map((p) => p.link), null, 2));
+              const home = await fetch("https://viewpointministriesinternational.org/wp-json/");
+              const idx = await home.json();
+              console.log("REST index url:", idx.url, "| home:", idx.home, "| name:", idx.name);
+            })();
+          '

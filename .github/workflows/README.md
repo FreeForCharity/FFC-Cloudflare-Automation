@@ -649,6 +649,6 @@ No additional setup is required for these workflows to run. However, to get the 
 
 | # | Workflow | File | Triggers | Safety | Approval env |
 | --- | --- | --- | --- | --- | --- |
-| 999 | TEMPORARY - vpmin.org host probe (delete before merge) | `999-temp-host-probe.yml` | push | (repo plumbing) | — |
+| 999 | TEMPORARY - vpmin.org host probe (delete before merge) | `999-temp-host-probe.yml` | push | Reads | none (no credentials) |
 
 <!-- catalog:end -->

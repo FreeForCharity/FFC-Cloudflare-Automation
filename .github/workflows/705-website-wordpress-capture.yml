@@ -65,6 +65,24 @@ on:
         required: false
         type: boolean
         default: false
+      alias_domains:
+        description: >-
+          Comma-separated OTHER hostnames this same site emits its own asset URLs under. Assets on
+          these are re-pointed at `domain` before fetching. Use when a site has been part-configured
+          for a new short domain that does not serve its files yet — e.g. capturing
+          viewpointministriesinternational.org with alias_domains=vpmin.org.
+        required: false
+        type: string
+        default: ''
+
+  # TEMPORARY (this branch only): runs the alias-corrected capture of the real
+  # source site so the migration PR carries a passing artifact. Removed before
+  # merge — the permanent trigger is the dispatch above.
+  push:
+    branches: ['claude/wordpress-migration-scraping-qpzewr']
+    paths:
+      - 'scripts/capture-wordpress-api.mjs'
+      - '.github/workflows/705-website-wordpress-capture.yml'
 
 permissions:
   contents: read
@@ -82,6 +100,7 @@ jobs:
       max: ${{ steps.resolve.outputs.max }}
       delay: ${{ steps.resolve.outputs.delay }}
       posts: ${{ steps.resolve.outputs.posts }}
+      aliases: ${{ steps.resolve.outputs.aliases }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
@@ -109,6 +128,12 @@ jobs:
           INPUT_MAX: ${{ inputs.max_items }}
           INPUT_DELAY: ${{ inputs.delay_ms }}
           INPUT_POSTS: ${{ inputs.include_posts }}
+          INPUT_ALIASES: ${{ inputs.alias_domains }}
+          # TEMPORARY, removed with the push trigger above.
+          EVIDENCE_DOMAIN: viewpointministriesinternational.org
+          EVIDENCE_MODE: capture
+          EVIDENCE_POSTS: 'true'
+          EVIDENCE_ALIASES: vpmin.org
         shell: bash
         run: |
           set -euo pipefail
@@ -119,6 +144,7 @@ jobs:
           # capture job keys on this output, so normalising here is also what
           # makes "serialize per domain" actually hold.
           domain="$(printf '%s' "${INPUT_DOMAIN:-}" | tr '[:upper:]' '[:lower:]')"
+          if [ -z "$domain" ]; then domain="${EVIDENCE_DOMAIN:-}"; fi
           domain="${domain#www.}"
 
           # `domain` is a required dispatch input, so an empty value here means
@@ -138,7 +164,7 @@ jobs:
           fi
 
           mode="${INPUT_MODE:-}"
-          if [ -z "$mode" ]; then mode="inspect"; fi
+          if [ -z "$mode" ]; then mode="${EVIDENCE_MODE:-inspect}"; fi
           case "$mode" in
             inspect|capture) ;;
             *) echo "::error::mode must be 'inspect' or 'capture' (got '$mode')."; exit 1 ;;
@@ -163,7 +189,14 @@ jobs:
             exit 1
           fi
           posts="${INPUT_POSTS:-}"
-          if [ -z "$posts" ]; then posts="false"; fi
+          if [ -z "$posts" ]; then posts="${EVIDENCE_POSTS:-false}"; fi
+
+          aliases="$(printf '%s' "${INPUT_ALIASES:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          if [ -z "$aliases" ]; then aliases="${EVIDENCE_ALIASES:-}"; fi
+          if [ -n "$aliases" ] && ! printf '%s' "$aliases" | grep -qE '^[a-z0-9.,-]+$'; then
+            echo "::error::alias_domains must be a comma-separated list of bare hostnames (got '$aliases')."
+            exit 1
+          fi
 
           {
             echo "domain=$domain"
@@ -171,6 +204,7 @@ jobs:
             echo "max=$max"
             echo "delay=$delay"
             echo "posts=$posts"
+            echo "aliases=$aliases"
           } >> "$GITHUB_OUTPUT"
 
           echo "Resolved: domain=$domain mode=$mode max=$max delay=$delay posts=$posts"
@@ -227,11 +261,13 @@ jobs:
           MAX: ${{ needs.resolve.outputs.max }}
           DELAY: ${{ needs.resolve.outputs.delay }}
           POSTS: ${{ needs.resolve.outputs.posts }}
+          ALIASES: ${{ needs.resolve.outputs.aliases }}
         shell: bash
         run: |
           set -euo pipefail
           args=(--domain "$DOMAIN" --out _capture/site --max "$MAX" --delay "$DELAY")
           if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
+          if [ -n "$ALIASES" ]; then args+=(--alias-domains "$ALIASES"); fi
           node scripts/capture-wordpress-api.mjs "${args[@]}"
 
       - name: Upload capture artifact

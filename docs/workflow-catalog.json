@@ -1625,6 +1625,7 @@
       ],
       "file": "705-website-wordpress-capture.yml",
       "triggers": [
+        "push",
         "workflow_dispatch"
       ],
       "environments": [],

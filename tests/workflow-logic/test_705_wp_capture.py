@@ -48,6 +48,14 @@ def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]
             INPUT_MAX="",
             INPUT_DELAY="",
             INPUT_POSTS="",
+            INPUT_ALIASES="",
+            # Cleared explicitly: these exist only for this branch's evidence
+            # run, and a test that silently inherited one would be asserting
+            # against a different step than a dispatch actually executes.
+            EVIDENCE_DOMAIN="",
+            EVIDENCE_MODE="",
+            EVIDENCE_POSTS="",
+            EVIDENCE_ALIASES="",
         )
         env.update(env_overrides)
         proc = subprocess.run(
@@ -253,6 +261,29 @@ def test_concurrency_group_keys_on_the_normalized_domain():
     assert wf["jobs"]["capture"]["concurrency"]["cancel-in-progress"] is False
     # A workflow-level group would reintroduce the raw input.
     assert "concurrency" not in wf, wf.get("concurrency")
+
+
+
+def test_alias_domains_are_lowercased_and_passed_through():
+    """vpmin.org hosts nothing, so the source site's asset URLs on it are its
+    own files under the wrong hostname; the capture re-points them."""
+    proc, outputs = run_resolve(
+        INPUT_DOMAIN="viewpointministriesinternational.org", INPUT_ALIASES="VPMin.org"
+    )
+    assert proc.returncode == 0, proc.stdout
+    assert "aliases=vpmin.org" in outputs, outputs
+
+
+def test_alias_domains_reject_a_pasted_url():
+    proc, _ = run_resolve(INPUT_DOMAIN="vpmi.org", INPUT_ALIASES="https://vpmin.org/")
+    assert proc.returncode != 0, proc.stdout
+    assert "alias_domains must be" in proc.stdout, proc.stdout
+
+
+def test_alias_domains_default_to_empty():
+    proc, outputs = run_resolve(INPUT_DOMAIN="vpmi.org")
+    assert proc.returncode == 0, proc.stdout
+    assert "aliases=" in outputs, outputs
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

@@ -258,7 +258,12 @@ export function collectAssetUrls(html) {
   const urls = new Set();
   const push = (u) => {
     if (!u) return;
-    const t = u.trim();
+    // `&amp;` is how a multi-parameter URL is spelled in an HTML attribute, so
+    // the real URL is the decoded one. Fetching the literal `&amp;` asks the
+    // origin for a query string it does not have — measured on this migration:
+    // `bilmur.min.js?i=17&amp;m=202636` was requested, and reported, with the
+    // entity still in it. WordPress emits the numeric form as well.
+    const t = u.trim().replace(/&(?:amp|#0*38|#x0*26);/gi, '&');
     if (
       !t ||
       t.startsWith('data:') ||
@@ -288,6 +293,35 @@ export function collectAssetUrls(html) {
   for (const m of html.matchAll(/\b(?:srcset|imagesrcset|data-srcset)\s*=\s*["']([^"']+)["']/gi)) {
     for (const cand of m[1].split(/,(?=\s*[^\s,]+\s*(?:[\d.]+[wx])?\s*(?:,|$))/)) {
       push(cand.trim().split(/\s+/)[0]);
+    }
+  }
+
+  // URLs inside inline <script> config blocks, which live in no attribute and
+  // which every attribute-based scan therefore misses. WordPress emits
+  //
+  //   window._wpemojiSettings = {"source":{"concatemoji":"https:\/\/site\/wp-includes\/js\/wp-emoji-release.min.js?ver=…"}}
+  //
+  // and the browser loads that file at runtime. Measured on the fourth delivery
+  // of viewpointministriesinternational.org: it was the ONE asset the source
+  // still served (HTTP 200) that the clone had lost — the self-containment gate
+  // caught it on 2 of 120 pages, which is exactly the class of defect the gate
+  // exists for and no attribute scan can see.
+  //
+  // Restricted to strings that look like an asset reference, so a script's
+  // ordinary string literals are not dragged in as URLs.
+  for (const m of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const body = m[1];
+    if (!body) continue;
+    for (const lit of body.matchAll(/["'`]([^"'`\s\\]*(?:\\.[^"'`\s\\]*)*)["'`]/g)) {
+      // JSON inside HTML escapes its slashes: "https:\/\/host\/path".
+      const raw = lit[1].replace(/\\\//g, '/');
+      if (
+        /\.(?:css|js|mjs|png|jpe?g|gif|svg|webp|avif|ico|woff2?|ttf|eot|mp4|webm)(?:[?#]|$)/i.test(
+          raw,
+        )
+      ) {
+        push(raw);
+      }
     }
   }
 
@@ -627,6 +661,97 @@ export function detectForms(html) {
 }
 
 /**
+ * Decode Cloudflare's email obfuscation back into real addresses.
+ *
+ * Cloudflare rewrites `mailto:` links at the edge into
+ * `/cdn-cgi/l/email-protection#<hex>` plus a `<span class="__cf_email__"
+ * data-cfemail="<hex>">` placeholder, and ships `email-decode.min.js` from
+ * `/cdn-cgi/` to undo it in the browser. That script is edge-served, so after
+ * migration it 404s and every obfuscated address on the site renders as hex.
+ *
+ * Decoding here is what makes `stripEdgeInjectedTags` safe: without it,
+ * removing the decoder would leave the placeholders permanently broken. The
+ * cipher is a documented XOR against the first byte.
+ */
+export function decodeCloudflareEmails(html) {
+  const decode = (hex) => {
+    if (!/^[0-9a-f]+$/i.test(hex) || hex.length < 4 || hex.length % 2) return null;
+    const key = parseInt(hex.slice(0, 2), 16);
+    let out = '';
+    for (let i = 2; i < hex.length; i += 2) {
+      out += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16) ^ key);
+    }
+    // Only accept a plausible address. A failed decode must leave the markup
+    // alone rather than write nonsense into the page.
+    return /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/.test(out) ? out : null;
+  };
+
+  let decoded = 0;
+  let out = html.replace(
+    /<span\b[^>]*\bdata-cfemail\s*=\s*["']([0-9a-fA-F]+)["'][^>]*>[\s\S]*?<\/span>/gi,
+    (whole, hex) => {
+      const addr = decode(hex);
+      if (!addr) return whole;
+      decoded++;
+      return addr;
+    },
+  );
+  out = out.replace(
+    /(href\s*=\s*["'])(?:https?:\/\/[^"']*)?\/cdn-cgi\/l\/email-protection#([0-9a-fA-F]+)(["'])/gi,
+    (whole, pre, hex, post) => {
+      const addr = decode(hex);
+      if (!addr) return whole;
+      decoded++;
+      return `${pre}mailto:${addr}${post}`;
+    },
+  );
+  return { html: out, decoded };
+}
+
+/**
+ * Remove instrumentation the CDN injected at the edge, which is not the
+ * charity's content and cannot survive the migration.
+ *
+ * Measured on the first delivery of viewpointministriesinternational.org: every
+ * one of 120 pages failed the self-containment gate on a same-origin request to
+ * `/cdn-cgi/rum?`. Nothing in the captured HTML referenced that URL — the
+ * capture's own asset inventory never saw it — because it is fabricated at
+ * runtime by Cloudflare's beacon script. Only removing the requester stops it.
+ *
+ * These are edge endpoints, not origin files: `/cdn-cgi/*` is answered by
+ * Cloudflare itself and exists on no origin, so no capture of any kind could
+ * mirror it. Left in place, the exported site would go on trying to report
+ * analytics to a CDN account it is no longer behind.
+ *
+ * Deliberately narrow: only script tags, and only the two Cloudflare surfaces.
+ * Site content served through the CDN is untouched.
+ */
+export function stripEdgeInjectedTags(html) {
+  const removed = [];
+  const out = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>|<script\b[^>]*\/>/gi, (tag) => {
+    const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? '';
+    // Cloudflare Web Analytics / Speed RUM. The loader is third-party, but the
+    // beacon it starts POSTs to the SAME-ORIGIN /cdn-cgi/rum, which is what the
+    // gate sees. `data-cf-beacon` catches the inline-config variant too.
+    if (
+      /(^|\/\/|\.)static\.cloudflareinsights\.com\//i.test(src) ||
+      /\bdata-cf-beacon\b/i.test(tag)
+    ) {
+      removed.push(src || 'inline cf-beacon');
+      return '';
+    }
+    // Rocket Loader, email-decode and friends: same-origin /cdn-cgi/ scripts
+    // that the origin never served and a static host cannot serve.
+    if (/(?:^|\/\/[^/]*)\/cdn-cgi\//i.test(src)) {
+      removed.push(src);
+      return '';
+    }
+    return tag;
+  });
+  return { html: out, removed };
+}
+
+/**
  * Local filename for an asset URL, namespaced by host so two providers cannot
  * collide on `/style.css`, and carrying the query string so `?ver=6.4` variants
  * stay distinct (WordPress cache-busts nearly every enqueued asset this way —
@@ -635,7 +760,33 @@ export function detectForms(html) {
 export function assetLocalName(absUrl) {
   const u = new URL(absUrl);
   const host = u.hostname.replace(/^www\./, '');
-  let p = u.pathname.replace(/^\/+/, '');
+  // `u.pathname` is percent-ENCODED. Writing that verbatim produces a file whose
+  // NAME literally contains `%C3%97`, while every request for it is
+  // percent-DECODED before the filesystem lookup — so the server goes looking
+  // for `×` and 404s on a file that is sitting right there. Measured on this
+  // migration: an upload named `…-2160-×-1080-px.jpg` was unreachable in the
+  // export, and would have been unreachable on GitHub Pages too. Any non-ASCII
+  // filename hits this, which on a charity site means any upload named by a
+  // human. Decoding here makes the round trip close.
+  let p = u.pathname;
+  try {
+    const decoded = decodeURIComponent(p);
+    // Decode ONLY where it cannot change the shape of the path. `new URL()`
+    // normalises a real `../` away, so any `..` still present is percent-encoded
+    // — an inert literal directory name that decoding would turn into genuine
+    // traversal. Same for a NUL, which would truncate the write. Those fall back
+    // to the encoded form, which is what this function always used to emit and
+    // is provably safe; everything else — the accented and multi-byte filenames
+    // this exists for — decodes.
+    const segments = decoded.split('/');
+    if (!segments.includes('..') && !segments.includes('.') && !decoded.includes('\0')) {
+      p = decoded;
+    }
+  } catch {
+    // A malformed escape is not decodable; keep it literal rather than throwing
+    // and losing the asset entirely.
+  }
+  p = p.replace(/^\/+/, '');
   if (p === '' || p.endsWith('/')) p += 'index';
   let ext = extname(p);
   if (u.search) {
@@ -1142,6 +1293,183 @@ function selfTest() {
     ['info@vpmi.org'],
   );
   eq('detectForms reports nothing on a plain page', detectForms('<p>hi</p>').forms, 0);
+
+  // --- Edge-injected CDN instrumentation -----------------------------------
+  // Every page of the first live delivery failed the self-containment gate on
+  // /cdn-cgi/rum?, a URL that appears in no attribute anywhere: the beacon
+  // script fabricates it at runtime, so only removing the script stops it.
+  const CF_BEACON =
+    '<p>hi</p><script defer src="https://static.cloudflareinsights.com/beacon.min.js" ' +
+    'data-cf-beacon=\'{"token":"abc"}\'></script>';
+  eq('the Cloudflare beacon script is removed', stripEdgeInjectedTags(CF_BEACON).html, '<p>hi</p>');
+  eq('removal is reported, not silent', stripEdgeInjectedTags(CF_BEACON).removed, [
+    'https://static.cloudflareinsights.com/beacon.min.js',
+  ]);
+  eq(
+    'a same-origin /cdn-cgi/ script is removed',
+    stripEdgeInjectedTags(
+      '<script src="/cdn-cgi/scripts/7d0fa10a/cloudflare-static/rocket-loader.min.js"></script>a',
+    ).html,
+    'a',
+  );
+  eq(
+    'an absolute /cdn-cgi/ script is removed too',
+    stripEdgeInjectedTags(
+      '<script src="https://x.org/cdn-cgi/scripts/x/email-decode.min.js"></script>b',
+    ).html,
+    'b',
+  );
+  // The narrowness IS the property. A blanket "drop third-party scripts" would
+  // strip the site's own analytics, embeds and player code.
+  eq(
+    "the site's own scripts survive",
+    stripEdgeInjectedTags(
+      '<script src="/wp-content/themes/divi/js/custom.js"></script>' +
+        '<script src="https://www.googletagmanager.com/gtag/js?id=G-1"></script>',
+    ).removed.length,
+    0,
+  );
+  eq(
+    'a host merely CONTAINING the beacon name is not stripped',
+    stripEdgeInjectedTags(
+      '<script src="https://notstatic.cloudflareinsights.com.evil.test/a.js"></script>',
+    ).removed.length,
+    0,
+  );
+  eq(
+    'a link or image mentioning cdn-cgi is left alone — only scripts are removed',
+    stripEdgeInjectedTags('<img src="/cdn-cgi/image/w=80/logo.png">').html,
+    '<img src="/cdn-cgi/image/w=80/logo.png">',
+  );
+
+  // --- Cloudflare email obfuscation ----------------------------------------
+  // Decoding is what makes the strip above safe: remove the decoder without
+  // this and every obfuscated address renders as hex forever.
+  // "info@vpmi.org" XOR-encoded against key 0x2a, per Cloudflare's scheme.
+  const cfHex = (addr, key = 0x2a) =>
+    key.toString(16).padStart(2, '0') +
+    [...addr].map((c) => (c.charCodeAt(0) ^ key).toString(16).padStart(2, '0')).join('');
+  const enc = cfHex('info@vpmi.org');
+  eq(
+    'an obfuscated address span decodes to the real address',
+    decodeCloudflareEmails(
+      `<span class="__cf_email__" data-cfemail="${enc}">[email&#160;protected]</span>`,
+    ).html,
+    'info@vpmi.org',
+  );
+  eq(
+    'an email-protection href becomes a real mailto',
+    decodeCloudflareEmails(`<a href="/cdn-cgi/l/email-protection#${enc}">write</a>`).html,
+    '<a href="mailto:info@vpmi.org">write</a>',
+  );
+  eq(
+    'a decode that does not yield an address leaves the markup untouched',
+    decodeCloudflareEmails('<span data-cfemail="2a2a2a2a">x</span>').html,
+    '<span data-cfemail="2a2a2a2a">x</span>',
+  );
+  eq(
+    'non-hex is refused rather than decoded into nonsense',
+    decodeCloudflareEmails('<a href="/cdn-cgi/l/email-protection#zzzz">w</a>').html,
+    '<a href="/cdn-cgi/l/email-protection#zzzz">w</a>',
+  );
+  eq('a page with no obfuscation is unchanged', decodeCloudflareEmails('<p>a@b.co</p>').decoded, 0);
+
+  // --- Delivery attempt 4: the two defects the gate caught at 118/120 -------
+  // 1. A percent-encoded filename was written to disk verbatim, so the file was
+  //    named `…%C3%97…` while every request for it decodes to `…×…`. The asset
+  //    was unreachable in the export and would have been on GitHub Pages too.
+  eq(
+    'a non-ASCII filename is stored decoded, so the request round-trips',
+    assetLocalName('https://h.org/wp-content/uploads/Digest-2160-%C3%97-1080-px.jpg'),
+    'h.org/wp-content/uploads/Digest-2160-×-1080-px.jpg',
+  );
+  eq(
+    'the round trip actually closes: what a browser asks for is what is on disk',
+    decodeURIComponent(encodeURI(assetLocalName('https://h.org/a/Digest-2160-%C3%97-1080-px.jpg'))),
+    assetLocalName('https://h.org/a/Digest-2160-%C3%97-1080-px.jpg'),
+  );
+  eq(
+    'an accented upload decodes too',
+    assetLocalName('https://h.org/uploads/Cr%C3%A8che.png'),
+    'h.org/uploads/Crèche.png',
+  );
+  // The safety property the decode must not cost. `new URL()` normalises a real
+  // `../` away, so a surviving `..` is percent-encoded — decoding it would turn
+  // an inert literal into genuine traversal.
+  eq(
+    'encoded traversal is NOT decoded into real traversal',
+    assetLocalName('https://h.org/..%2f..%2fetc/x.png'),
+    'h.org/..%2f..%2fetc/x.png',
+  );
+  // Three forms, and they are defended in two different places — worth stating
+  // because only the third is this decode's responsibility.
+  eq(
+    'encoded DOTS with a real slash are normalised away by the URL parser',
+    assetLocalName('https://h.org/a/%2e%2e/x.png'),
+    'h.org/x.png',
+  );
+  eq(
+    'a fully-encoded ../ stays literal, uppercase included',
+    assetLocalName('https://h.org/a/%2E%2E%2Fx.png'),
+    'h.org/a/%2E%2E%2Fx.png',
+  );
+  eq(
+    'a malformed escape keeps the asset rather than throwing',
+    assetLocalName('https://h.org/a/100%.png'),
+    'h.org/a/100%.png',
+  );
+
+  // 2. An asset referenced ONLY inside an inline <script> config blob. This was
+  //    the one URL the source still served (HTTP 200) that the clone had lost.
+  const EMOJI =
+    '<script>window._wpemojiSettings = {"source":{"concatemoji":' +
+    '"https:\\/\\/h.org\\/wp-includes\\/js\\/wp-emoji-release.min.js?ver=7.1"}};</script>';
+  eq(
+    'a URL inside an inline script blob is collected',
+    [...collectAssetUrls(EMOJI)],
+    ['https://h.org/wp-includes/js/wp-emoji-release.min.js?ver=7.1'],
+  );
+  eq(
+    "a script's ordinary string literals are not dragged in as assets",
+    [...collectAssetUrls('<script>var a="hello world";var b="/api/v1/thing";</script>')],
+    [],
+  );
+  eq(
+    'a single-quoted script URL is collected too',
+    [...collectAssetUrls("<script>load('/wp-content/x.js')</script>")],
+    ['/wp-content/x.js'],
+  );
+
+  // 3. `&amp;` is how a multi-parameter URL is spelled in an attribute. Fetching
+  //    the literal entity asks the origin for a query string it does not have.
+  eq(
+    'an &amp; in an attribute URL is decoded before fetching',
+    [...collectAssetUrls('<script src="/wp-content/js/bilmur.min.js?i=17&amp;m=202636"></script>')],
+    ['/wp-content/js/bilmur.min.js?i=17&m=202636'],
+  );
+  eq(
+    'the numeric entity form is decoded as well',
+    [...collectAssetUrls('<img src="/a.png?x=1&#038;y=2">')],
+    ['/a.png?x=1&y=2'],
+  );
+  // EXACTLY once, and a doubly-escaped entity is the case that proves it.
+  // An HTML serializer escapes an attribute value once, so one pass recovers
+  // the text the browser sees — and the browser then requests that text
+  // verbatim. Measured on this migration: the page carried `?i=17&amp;m=…`
+  // and Playwright requested `?i=17&m=…`. If a page really carries
+  // `&amp;amp;`, the browser requests a parameter literally named `amp;m`,
+  // and the capture must fetch the same thing or it is mirroring a URL the
+  // live site never serves.
+  //
+  // Decoding "until stable" would also make the number of passes depend on
+  // the CONTENT rather than on the known encoding layers, which is the
+  // double-decode anti-pattern: a query value that legitimately contains the
+  // text `&amp;` would be silently rewritten.
+  eq(
+    'a doubly-escaped entity is decoded ONCE, matching what a browser requests',
+    [...collectAssetUrls('<img src="/a.png?x=1&amp;amp;y=2">')],
+    ['/a.png?x=1&amp;y=2'],
+  );
 
   // Never fetch into a private network on a page's say-so.
   eq('isPrivateHost blocks localhost', isPrivateHost('localhost'), true);
@@ -1986,6 +2314,11 @@ async function capture() {
   // 2. SCRAPE the rendered markup for each inventoried URL.
   const rendered = new Map(); // localPath -> html
   const pageFailures = [];
+  // Edge-injected instrumentation removed, and Cloudflare-obfuscated addresses
+  // restored, across the whole scrape. Counted so a run reports what it did
+  // rather than silently editing the charity's markup.
+  let cfEmailsDecoded = 0;
+  const edgeTagsRemoved = [];
   // Paths that would have escaped the output directory. Expected to stay empty;
   // recorded rather than merely skipped so an empty list is evidence.
   const escapedPaths = [];
@@ -2011,12 +2344,28 @@ async function capture() {
       await sleep(delayMs);
       continue;
     }
+    // Strip the CDN's edge-injected instrumentation BEFORE anything else reads
+    // this HTML, so the removed tags never reach the asset inventory either.
+    const mail = decodeCloudflareEmails(html);
+    const edge = stripEdgeInjectedTags(mail.html);
+    html = edge.html;
+    cfEmailsDecoded += mail.decoded;
+    for (const r of edge.removed) edgeTagsRemoved.push(r);
     rendered.set(e.localPath, html);
     e.bytes = html.length;
     await sleep(delayMs);
   }
   const pageTally = tallyFailures(pageFailures);
   console.error(`[capture] rendered ${rendered.size} page(s), ${pageTally.total} failure(s)`);
+  if (edgeTagsRemoved.length) {
+    const kinds = [...new Set(edgeTagsRemoved)].slice(0, 5).join(', ');
+    console.error(
+      `[capture] removed ${edgeTagsRemoved.length} edge-injected script tag(s) the CDN added and a static host cannot serve: ${kinds}`,
+    );
+  }
+  if (cfEmailsDecoded) {
+    console.error(`[capture] decoded ${cfEmailsDecoded} Cloudflare-obfuscated email address(es)`);
+  }
   if (pageTally.total) console.error(`[capture] pages: ${describeFailures(pageTally, domain)}`);
 
   // 3. Localize assets, following CSS one level deep so @font-face and

@@ -231,10 +231,21 @@ stay.
   always-fatal behaviour.
 - **A URL that lives only inside an inline `<script>` config blob is invisible to every attribute
   scan.** WordPress emits
-  `window._wpemojiSettings = {"source":{"concatemoji":"…\/wp-includes\/js\/ wp-emoji-release.min.js?ver=…"}}`
+
+  ```html
+  <script>
+    window._wpemojiSettings = {
+      source: {
+        concatemoji: 'https:\/\/example.org\/wp-includes\/js\/wp-emoji-release.min.js?ver=6.7',
+      },
+    };
+  </script>
+  ```
+
   — no `src`, no `href`, JSON-escaped slashes. On viewpointministriesinternational.org it was the
   ONE asset the source still served (HTTP 200) that the clone had lost, and the self-containment
   gate caught it on 2 of 120 pages. 705 now scans inline script bodies for asset-extension strings.
+
 - **A non-ASCII upload filename breaks unless the local name is percent-DECODED.**
   `new URL().pathname` is encoded, so writing it verbatim produces a file literally named `…%C3%97…`
   while every request for it is decoded before the filesystem lookup — the asset 404s in the export

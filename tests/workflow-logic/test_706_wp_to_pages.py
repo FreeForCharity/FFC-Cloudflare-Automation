@@ -53,6 +53,7 @@ def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]
             INPUT_POSTS="",
             INPUT_IGNORE="",
             INPUT_PUBLISH="",
+            INPUT_MINPCT="",
         )
         env.update(env_overrides)
         proc = subprocess.run(
@@ -651,6 +652,142 @@ def test_a_derived_destination_domain_must_be_a_hostname():
     proc, _ = run_resolve(INPUT_REPO="FFC-EX-my_repo")
     assert proc.returncode != 0, proc.stdout
     assert "is not a bare hostname" in proc.stdout, proc.stdout
+
+
+# --- completeness gates delivery; a site's own dead links do not -------------
+
+
+def _run_capture_gate(
+    captured: int, expected: int, problems: list[str], min_pct: str = "98", rc: int = 1
+):
+    """EXECUTE the capture step's assessment half against a synthetic report."""
+    import json
+    import os
+
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    frag = run[run.index('report="$RUNNER_TEMP') :]
+    with tempfile.TemporaryDirectory() as td:
+        site = pathlib.Path(td, "capture", "site")
+        site.mkdir(parents=True)
+        (site / "wp-capture-report.json").write_text(
+            json.dumps(
+                {
+                    "captured": {"total": captured},
+                    "entries": [{"i": i} for i in range(expected)],
+                    "verdict": {"ok": not problems, "problems": problems},
+                }
+            ),
+            encoding="utf-8",
+        )
+        summary = pathlib.Path(td, "summary.md")
+        summary.touch()
+        env = dict(
+            os.environ,
+            RUNNER_TEMP=td,
+            MIN_PERCENT=min_pct,
+            GITHUB_STEP_SUMMARY=str(summary),
+        )
+        return subprocess.run(
+            ["bash", "-c", f"set -uo pipefail\nrc={rc}\n" + frag],
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+
+
+# The live site's own broken links, from the first real delivery attempt.
+REAL_PROBLEMS = [
+    "captured 589 of 590 inventory entries (REST collections + sitemap union)",
+    "unlocalized asset hosts: myviewletstalkaboutjesus.files.wordpress.com",
+    "assets: 15 failed (11×HTTP 404, 4×HTTP 410); 11 of them on viewpointministriesinternational.org",
+]
+
+
+def test_a_sites_own_dead_links_do_not_block_the_conversion():
+    """The first live delivery failed here. The capture had reached 589 of 590
+    entries with ZERO page-fetch failures, and was rejected over 15 assets that
+    return 404/410 on the LIVE site too. Gating on that means FFC can never
+    migrate a site with one dead image, which is most real charity sites — the
+    clone reproduces those links faithfully rather than introducing them."""
+    proc = _run_capture_gate(589, 590, REAL_PROBLEMS)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_losing_content_still_blocks_the_conversion():
+    """The other half: completeness is the property that must not regress, and
+    relaxing the asset gate must not relax this one."""
+    proc = _run_capture_gate(2, 587, ["captured 2 of 587"])
+    assert proc.returncode != 0, proc.stdout
+    assert "below the 98% completeness floor" in proc.stderr, proc.stderr
+
+
+def test_the_completeness_floor_is_enforced_near_the_boundary():
+    """95.9% must fail while 99.8% passes — otherwise the floor is decorative."""
+    assert _run_capture_gate(566, 590, REAL_PROBLEMS).returncode != 0
+    assert _run_capture_gate(589, 590, REAL_PROBLEMS).returncode == 0
+
+
+def test_an_empty_inventory_is_a_failure_not_a_vacuous_pass():
+    """0 captured of 0 expected is 0/0. Treated as a ratio it is NaN or 1.0
+    depending on how it is written, and one of those reads as a perfect
+    capture of a site with no pages."""
+    proc = _run_capture_gate(0, 0, ["nothing"])
+    assert proc.returncode != 0, proc.stdout
+    assert "no inventory entries at all" in (proc.stdout + proc.stderr), proc.stderr
+
+
+def test_the_floor_is_operator_controllable():
+    proc = _run_capture_gate(589, 590, REAL_PROBLEMS, min_pct="100")
+    assert proc.returncode != 0, proc.stdout
+    assert "below the 100% completeness floor" in proc.stderr, proc.stderr
+
+
+def test_a_missing_report_is_a_failure_not_an_assumed_pass():
+    """If the capture died before writing its report there is nothing to assess,
+    and `node -e` reading a non-existent file throws — which is a failure, but
+    one whose message names fs and not the migration. The explicit guard is
+    what makes the run say why it stopped."""
+    import os
+
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    frag = run[run.index('report="$RUNNER_TEMP') :]
+    with tempfile.TemporaryDirectory() as td:
+        summary = pathlib.Path(td, "summary.md")
+        summary.touch()
+        env = dict(os.environ, RUNNER_TEMP=td, MIN_PERCENT="98", GITHUB_STEP_SUMMARY=str(summary))
+        proc = subprocess.run(
+            ["bash", "-c", "set -uo pipefail\nrc=1\n" + frag],
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+    assert proc.returncode != 0, proc.stdout
+    assert "produced no report" in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+
+
+def test_a_crash_is_not_assessed_as_a_gate_result():
+    """The capture exits 2 for a usage error or a crash, and 1 for an unmet
+    gate. Assessing a crash against the completeness floor would let a run that
+    never really executed pass on whatever half-written report it left behind —
+    the same shape as a search that never ran reading as "nothing to do"."""
+    proc = _run_capture_gate(589, 590, [], rc=2)
+    assert proc.returncode != 0, proc.stdout
+    # Shell `echo` writes to stdout; the node assessment writes to stderr. The
+    # first version of this assertion checked only stderr and failed against
+    # correct code — a test that reads the wrong stream indicts the wrong side.
+    assert "usage error or crash, not a gate result" in (proc.stdout + proc.stderr), (
+        proc.stdout + proc.stderr
+    )
+
+
+def test_min_capture_percent_is_validated():
+    proc, _ = run_resolve(INPUT_MINPCT="abc")
+    assert proc.returncode != 0, proc.stdout
+    assert "must be a whole number between 1 and 100" in proc.stdout, proc.stdout
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

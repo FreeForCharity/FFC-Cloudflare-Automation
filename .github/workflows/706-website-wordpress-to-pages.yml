@@ -81,6 +81,16 @@ on:
         type: choice
         options: [convert, deliver]
         default: convert
+      min_capture_percent:
+        description: >-
+          Fail the conversion if fewer than this percentage of the merged inventory (REST + sitemap)
+          was captured. This is the completeness gate — the migration must not LOSE content. It is
+          deliberately NOT a gate on asset failures: a live site's own broken links are reproduced
+          faithfully, and refusing to migrate a site because it already has a dead image would
+          disqualify most real charity sites.
+        required: false
+        type: string
+        default: '98'
       max_items:
         description: 'Maximum inventory entries to capture.'
         required: false
@@ -121,6 +131,7 @@ jobs:
       publish_domain: ${{ steps.resolve.outputs.publish_domain }}
       cname_domain: ${{ steps.resolve.outputs.cname_domain }}
       mode: ${{ steps.resolve.outputs.mode }}
+      min_percent: ${{ steps.resolve.outputs.min_percent }}
       max: ${{ steps.resolve.outputs.max }}
       delay: ${{ steps.resolve.outputs.delay }}
       posts: ${{ steps.resolve.outputs.posts }}
@@ -139,6 +150,7 @@ jobs:
           INPUT_EMAIL: ${{ inputs.contact_email }}
           INPUT_PUBLISH: ${{ inputs.publish_domain }}
           INPUT_MODE: ${{ inputs.mode }}
+          INPUT_MINPCT: ${{ inputs.min_capture_percent }}
           INPUT_MAX: ${{ inputs.max_items }}
           INPUT_DELAY: ${{ inputs.delay_ms }}
           INPUT_POSTS: ${{ inputs.include_posts }}
@@ -288,6 +300,13 @@ jobs:
           # parseInt-style parsing accepts '12abc' as 12 and yields NaN for
           # 'abc', which then propagates into a fetch loop as an unbounded or
           # zero-length run. Refuse anything that is not wholly digits.
+          min_percent="$(trim "${INPUT_MINPCT:-}")"
+          if [ -z "$min_percent" ]; then min_percent="98"; fi
+          if ! printf '%s' "$min_percent" | grep -qE '^[0-9]+$' || [ "$min_percent" -lt 1 ] || [ "$min_percent" -gt 100 ]; then
+            echo "::error::min_capture_percent '$min_percent' must be a whole number between 1 and 100."
+            exit 1
+          fi
+
           max="$(trim "${INPUT_MAX:-}")"
           if [ -z "$max" ]; then max="800"; fi
           if ! printf '%s' "$max" | grep -qE '^[0-9]+$' || [ "$max" -lt 1 ] || [ "$max" -gt 5000 ]; then
@@ -344,6 +363,7 @@ jobs:
             echo "publish_domain=$publish"
             echo "cname_domain=$cname_domain"
             echo "mode=$mode"
+            echo "min_percent=$min_percent"
             echo "max=$max"
             echo "delay=$delay"
             echo "posts=$posts"
@@ -388,16 +408,78 @@ jobs:
         env:
           DOMAIN: ${{ needs.resolve.outputs.domain }}
           MAX: ${{ needs.resolve.outputs.max }}
+          MIN_PERCENT: ${{ needs.resolve.outputs.min_percent }}
           DELAY: ${{ needs.resolve.outputs.delay }}
           POSTS: ${{ needs.resolve.outputs.posts }}
           IGNORE_HOSTS: ${{ needs.resolve.outputs.ignore_hosts }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           args=(--domain "$DOMAIN" --out "$RUNNER_TEMP/capture/site" --max "$MAX" --delay "$DELAY")
           if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
           if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
+
+          set +e
           node scripts/capture-wordpress-api.mjs "${args[@]}"
+          rc=$?
+          set -e
+
+          # The capture exits 1 for ANY unmet gate, which conflates two things
+          # that deserve opposite treatment:
+          #
+          #   COMPLETENESS — did we get the site? Losing pages is a migration
+          #   defect and must stop the run.
+          #
+          #   ASSET HEALTH — are there dead references? A live site's own broken
+          #   links are reproduced FAITHFULLY. Failing on them would mean FFC
+          #   can never migrate a site that has one dead image, which is most
+          #   real charity sites. Measured on the first live delivery: 15 failed
+          #   assets, all of them 404/410 on the live site too, blocked a
+          #   capture that had reached 589 of 590 entries with ZERO page-fetch
+          #   failures.
+          #
+          # So completeness is enforced here, on the report's own numbers, and
+          # asset health is reported. `verify-no-legacy` remains the hard gate
+          # on whether the exported site actually stands alone.
+          report="$RUNNER_TEMP/capture/site/wp-capture-report.json"
+          if [ ! -f "$report" ]; then
+            echo "::error::The capture produced no report at $report (exit $rc). Nothing to assess."
+            exit 1
+          fi
+          if [ "$rc" -ge 2 ]; then
+            echo "::error::capture-wordpress-api.mjs exited $rc — usage error or crash, not a gate result."
+            exit 1
+          fi
+
+          node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const captured = r.captured?.total ?? 0;
+            const expected = Array.isArray(r.entries) ? r.entries.length : 0;
+            const minPct = Number(process.argv[2]);
+            const pct = expected ? (captured / expected) * 100 : 0;
+            const line = `${captured} of ${expected} inventory entries (${pct.toFixed(1)}%)`;
+            const problems = r.verdict?.problems ?? [];
+            const out = [];
+            out.push(`- Captured **${line}**; completeness floor is ${minPct}%`);
+            if (r.declaredSelfHost) {
+              out.push(`- ⚠️ The live site declares its home as **${r.declaredSelfHost}** — its own URLs were rewritten onto the serving host for this capture. The LIVE site still has this bug.`);
+            }
+            for (const p of problems) out.push(`- capture verdict: ${p}`);
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n### Capture\n\n" + out.join("\n") + "\n");
+            console.log(out.join("\n"));
+            if (!expected) {
+              console.error("::error::The capture report lists no inventory entries at all.");
+              process.exit(1);
+            }
+            if (pct < minPct) {
+              console.error(`::error::Captured ${line}, below the ${minPct}% completeness floor. The migration would lose content — refusing to continue.`);
+              process.exit(1);
+            }
+            if (problems.length) {
+              console.error("::warning::The capture reported problems that are NOT completeness failures (see the job summary). A live site\u2019s own dead references are reproduced faithfully; verify-no-legacy is the gate on whether the export stands alone.");
+            }
+          ' "$report" "$MIN_PERCENT"
 
       # Runs BEFORE integration, so the forms are dead in the artifact too and
       # a later stage cannot accidentally publish the un-neutralized capture.

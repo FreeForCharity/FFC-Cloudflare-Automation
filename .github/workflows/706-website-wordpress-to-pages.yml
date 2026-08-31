@@ -322,6 +322,12 @@ jobs:
             --dir "$site" --email "$EMAIL" --subject "Website enquiry from $DOMAIN"
           echo "replaced=$found" >> "$GITHUB_OUTPUT"
 
+      # Deliberately unauthenticated: this job is the ungated lane, and giving it
+      # the cross-repo PAT would mean a read-only conversion carried a
+      # credential that can write to every repo in the org. The cost is that a
+      # PRIVATE target repo fails here with "repository not found" — the whole
+      # FFC-EX fleet is public, and the day one is not, the fix is to gate this
+      # job too rather than to hand it the token.
       - name: Check out the target FFC-EX repo (read-only)
         uses: actions/checkout@v7.0.1
         with:

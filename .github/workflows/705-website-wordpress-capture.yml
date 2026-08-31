@@ -203,9 +203,11 @@ jobs:
           raw_ignore="$(trim "${INPUT_IGNORE:-}" | tr '[:upper:]' '[:lower:]')"
           ignore_hosts=""
           if [ -n "$raw_ignore" ]; then
-            # Word-splitting on spaces rather than a heredoc: a heredoc
-            # terminator must sit at column 0, which would end this YAML block
-            # scalar. Commas are turned into spaces, and since raw_ignore is
+            # Word-splitting on commas-turned-spaces. (An earlier note here said
+            # a heredoc was impossible, because its terminator must sit at column 0
+            # and that would end this YAML block scalar. Wrong, and measured so:
+            # YAML strips the block indent, so a terminator at the block's base
+            # indentation reaches the shell at column 0 exactly as required.) Commas are turned into spaces, and since raw_ignore is
             # only TRIMMED, whitespace already present is a separator too —
             # `a.org b.org` is two entries. Empty entries (a trailing comma)
             # simply vanish. This comment used to say whitespace had been

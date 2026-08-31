@@ -256,6 +256,14 @@ jobs:
               echo "::error::target_repo '$repo' carries no domain after the FFC-EX- prefix, so no destination domain can be derived. Expected e.g. 'FFC-EX-example.org', or set publish_domain explicitly."
               exit 1
             fi
+            # Held to the SAME hostname rule as an explicit publish_domain.
+            # Guarding only emptiness was half a fix: target_repo legitimately
+            # allows `_` and needs no dot, so `FFC-EX-my_repo` derives to
+            # `my_repo` — non-empty, not a hostname, and bound for public/CNAME.
+            if ! printf '%s' "$cname_domain" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+              echo "::error::target_repo '$repo' derives the destination domain '$cname_domain', which is not a bare hostname. Rename the repo to FFC-EX-<domain>, or set publish_domain explicitly."
+              exit 1
+            fi
           fi
 
           mode="${INPUT_MODE:-}"
@@ -308,8 +316,12 @@ jobs:
           raw_ignore="$(trim "${INPUT_IGNORE:-}" | tr '[:upper:]' '[:lower:]')"
           ignore_hosts=""
           if [ -n "$raw_ignore" ]; then
-            # Word-splitting rather than a heredoc: a heredoc terminator must
-            # sit at column 0, which would end this YAML block scalar.
+            # Word-splitting on commas-turned-spaces. (An earlier note here
+            # claimed a heredoc was impossible, because its terminator must sit
+            # at column 0 and that would end this YAML block scalar. Wrong, and
+            # measured so: YAML strips the block indent, so a terminator at the
+            # block's base indentation reaches the shell at column 0 exactly as
+            # required. The PR body below uses one.)
             # Globbing off so an entry like `*.org` cannot expand to filenames.
             set -f
             for entry in $(printf '%s' "$raw_ignore" | tr ',' ' '); do

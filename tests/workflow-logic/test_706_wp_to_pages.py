@@ -624,6 +624,35 @@ def test_a_repo_that_is_only_the_prefix_is_refused():
     assert "carries no domain" in proc.stdout, proc.stdout
 
 
+def test_the_delivered_pr_body_renders_as_markdown_not_a_code_block():
+    """Reported as a defect (an inline --body carrying YAML indentation into
+    the argument, so 4+ leading spaces make a Markdown code block). MEASURED,
+    and it does not reproduce: the continuation lines sit at the block's base
+    indent, which YAML strips, so the shell receives them at column 0.
+
+    Kept because the property is worth holding rather than the finding: the
+    body IS assembled inside a YAML block scalar, and one line indented deeper
+    than the rest would silently become preformatted text on the PR a human is
+    asked to review. Executed, since the failure is in the rendered bytes."""
+    import os
+
+    run = step_run(WORKFLOW, "deliver", "Commit and open a draft PR on the FFC-EX repo")
+    frag = run[run.index('--body "Automated') :]
+    body = frag[len('--body "') :]
+    body = body[: body.rindex('"')]
+    indented = [l for l in body.splitlines() if l.startswith("    ") and l.strip()]
+    assert not indented, "these would render as a code block:\n" + "\n".join(indented)
+
+
+def test_a_derived_destination_domain_must_be_a_hostname():
+    """target_repo legitimately allows `_` and needs no dot, so `FFC-EX-my_repo`
+    derives to `my_repo` — non-empty, not a hostname, and bound for
+    public/CNAME. Guarding only emptiness was half a fix."""
+    proc, _ = run_resolve(INPUT_REPO="FFC-EX-my_repo")
+    assert proc.returncode != 0, proc.stdout
+    assert "is not a bare hostname" in proc.stdout, proc.stdout
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

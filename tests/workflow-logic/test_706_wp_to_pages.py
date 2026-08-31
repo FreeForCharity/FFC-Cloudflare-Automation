@@ -326,10 +326,82 @@ def test_forms_without_a_contact_address_fail_the_run():
     assert "exit 1" in run, run
 
 
-def test_a_form_free_site_does_not_require_a_contact_address():
-    """Failing unconditionally would block every site that has no form."""
+def _run_forms_step(files: dict[str, str], email: str = "") -> subprocess.CompletedProcess:
+    """EXECUTE the form-detection step against a real tree.
+
+    The earlier version of this test asserted the branch's TEXT was present in
+    the step. That is a proxy, and it passed while the branch was unreachable:
+    grep exits 1 on "no match", `set -euo pipefail` turned that into an abort,
+    and every form-free site failed the conversion at a step whose entire job
+    was to notice there was nothing to do. Text-matching cannot see control
+    flow — so this runs the thing.
+    """
+    script = step_run(WORKFLOW, "convert", "Replace forms with a mailto: block")
+    with tempfile.TemporaryDirectory() as td:
+        tdp = pathlib.Path(td)
+        site = tdp / "capture" / "site"
+        site.mkdir(parents=True)
+        for name, body in files.items():
+            f = site / name
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(body, encoding="utf-8")
+        outputs = tdp / "out.txt"
+        summary = tdp / "summary.md"
+        outputs.touch()
+        summary.touch()
+        env = child_env(
+            HARNESS_DIR,
+            HOME=str(tdp),
+            RUNNER_TEMP=str(tdp),
+            GITHUB_OUTPUT=str(outputs),
+            GITHUB_STEP_SUMMARY=str(summary),
+            EMAIL=email,
+            DOMAIN="example.org",
+        )
+        proc = subprocess.run(
+            ["bash", "-c", script],
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=120,
+            cwd=str(REPO_ROOT),
+        )
+        proc.outputs = outputs.read_text(encoding="utf-8")  # type: ignore[attr-defined]
+        return proc
+
+
+def test_a_form_free_site_completes_instead_of_aborting():
+    """The regression Copilot caught: with no forms, grep exits 1, pipefail
+    propagates it, and the step dies before the `found -eq 0` branch it exists
+    to reach."""
+    proc = _run_forms_step({"index.html": "<h1>no forms here</h1>"})
+    assert proc.returncode == 0, f"form-free site aborted:\n{proc.stdout}\n{proc.stderr}"
+    assert "pages_with_forms=0" in proc.outputs, proc.outputs  # type: ignore[attr-defined]
+
+
+def test_a_form_bearing_site_without_a_contact_address_fails_closed():
+    """A form on a static export accepts a visitor's message and drops it."""
+    proc = _run_forms_step({"contact/index.html": '<form action="/x"><input></form>'})
+    assert proc.returncode != 0, proc.stdout
+    assert "contact_email was not set" in proc.stdout, proc.stdout
+
+
+def test_forms_are_actually_replaced_when_an_address_is_given():
+    proc = _run_forms_step(
+        {"contact/index.html": '<form action="/x"><input></form>'}, email="info@example.org"
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "pages_with_forms=1" in proc.outputs, proc.outputs  # type: ignore[attr-defined]
+
+
+def test_a_failed_search_is_not_reported_as_no_forms():
+    """grep exits >1 on a real error. Collapsing that to "no forms found" is
+    how a search that never ran becomes "nothing to replace" and ships live,
+    dead forms — strictly worse than the abort this replaced."""
     run = step_run(WORKFLOW, "convert", "Replace forms with a mailto: block")
-    assert 'if [ "$found" -eq 0 ]; then' in run, run
+    assert '[ "$rc" -gt 1 ]' in run, run
+    assert "Refusing to treat a failed search as 'no forms'" in run, run
 
 
 def test_the_capture_output_path_is_the_path_every_later_step_reads():

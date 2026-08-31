@@ -307,7 +307,28 @@ jobs:
           # Count first: an absent contact_email is only a problem if the site
           # actually has forms, and failing on it unconditionally would block
           # every form-free site for no reason.
-          found="$(grep -rlIE '<form[[:space:]/>]' "$site" --include='*.html' --include='*.htm' 2>/dev/null | wc -l | tr -d ' ')"
+          # grep exits 1 on "no match", and under `set -euo pipefail` that
+          # aborts the step — so the form-free branch below was unreachable in
+          # exactly the case it exists for, and every site without a form
+          # failed the conversion.
+          #
+          # `|| true` alone would fix that and introduce a worse bug: grep exits
+          # >1 on a REAL error (unreadable directory, bad regex), and collapsing
+          # that to "no forms found" is how a search that never ran becomes
+          # "nothing to replace" and ships live, dead forms. The three cases are
+          # kept apart.
+          set +e
+          matches="$(grep -rlIE '<form[[:space:]/>]' "$site" --include='*.html' --include='*.htm')"
+          rc=$?
+          set -e
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::Searching $site for forms failed (grep exit $rc). Refusing to treat a failed search as 'no forms'."
+            exit 1
+          fi
+          found=0
+          if [ -n "$matches" ]; then
+            found="$(printf '%s\n' "$matches" | wc -l | tr -d ' ')"
+          fi
           echo "Pages carrying a form tag: $found"
           if [ "$found" -eq 0 ]; then
             echo "pages_with_forms=0" >> "$GITHUB_OUTPUT"

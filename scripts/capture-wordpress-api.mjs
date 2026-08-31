@@ -627,6 +627,97 @@ export function detectForms(html) {
 }
 
 /**
+ * Decode Cloudflare's email obfuscation back into real addresses.
+ *
+ * Cloudflare rewrites `mailto:` links at the edge into
+ * `/cdn-cgi/l/email-protection#<hex>` plus a `<span class="__cf_email__"
+ * data-cfemail="<hex>">` placeholder, and ships `email-decode.min.js` from
+ * `/cdn-cgi/` to undo it in the browser. That script is edge-served, so after
+ * migration it 404s and every obfuscated address on the site renders as hex.
+ *
+ * Decoding here is what makes `stripEdgeInjectedTags` safe: without it,
+ * removing the decoder would leave the placeholders permanently broken. The
+ * cipher is a documented XOR against the first byte.
+ */
+export function decodeCloudflareEmails(html) {
+  const decode = (hex) => {
+    if (!/^[0-9a-f]+$/i.test(hex) || hex.length < 4 || hex.length % 2) return null;
+    const key = parseInt(hex.slice(0, 2), 16);
+    let out = '';
+    for (let i = 2; i < hex.length; i += 2) {
+      out += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16) ^ key);
+    }
+    // Only accept a plausible address. A failed decode must leave the markup
+    // alone rather than write nonsense into the page.
+    return /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/.test(out) ? out : null;
+  };
+
+  let decoded = 0;
+  let out = html.replace(
+    /<span\b[^>]*\bdata-cfemail\s*=\s*["']([0-9a-fA-F]+)["'][^>]*>[\s\S]*?<\/span>/gi,
+    (whole, hex) => {
+      const addr = decode(hex);
+      if (!addr) return whole;
+      decoded++;
+      return addr;
+    },
+  );
+  out = out.replace(
+    /(href\s*=\s*["'])(?:https?:\/\/[^"']*)?\/cdn-cgi\/l\/email-protection#([0-9a-fA-F]+)(["'])/gi,
+    (whole, pre, hex, post) => {
+      const addr = decode(hex);
+      if (!addr) return whole;
+      decoded++;
+      return `${pre}mailto:${addr}${post}`;
+    },
+  );
+  return { html: out, decoded };
+}
+
+/**
+ * Remove instrumentation the CDN injected at the edge, which is not the
+ * charity's content and cannot survive the migration.
+ *
+ * Measured on the first delivery of viewpointministriesinternational.org: every
+ * one of 120 pages failed the self-containment gate on a same-origin request to
+ * `/cdn-cgi/rum?`. Nothing in the captured HTML referenced that URL — the
+ * capture's own asset inventory never saw it — because it is fabricated at
+ * runtime by Cloudflare's beacon script. Only removing the requester stops it.
+ *
+ * These are edge endpoints, not origin files: `/cdn-cgi/*` is answered by
+ * Cloudflare itself and exists on no origin, so no capture of any kind could
+ * mirror it. Left in place, the exported site would go on trying to report
+ * analytics to a CDN account it is no longer behind.
+ *
+ * Deliberately narrow: only script tags, and only the two Cloudflare surfaces.
+ * Site content served through the CDN is untouched.
+ */
+export function stripEdgeInjectedTags(html) {
+  const removed = [];
+  const out = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>|<script\b[^>]*\/>/gi, (tag) => {
+    const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? '';
+    // Cloudflare Web Analytics / Speed RUM. The loader is third-party, but the
+    // beacon it starts POSTs to the SAME-ORIGIN /cdn-cgi/rum, which is what the
+    // gate sees. `data-cf-beacon` catches the inline-config variant too.
+    if (
+      /(^|\/\/|\.)static\.cloudflareinsights\.com\//i.test(src) ||
+      /\bdata-cf-beacon\b/i.test(tag)
+    ) {
+      removed.push(src || 'inline cf-beacon');
+      return '';
+    }
+    // Rocket Loader, email-decode and friends: same-origin /cdn-cgi/ scripts
+    // that the origin never served and a static host cannot serve.
+    if (/(?:^|\/\/[^/]*)\/cdn-cgi\//i.test(src)) {
+      removed.push(src);
+      return '';
+    }
+    return tag;
+  });
+  return { html: out, removed };
+}
+
+/**
  * Local filename for an asset URL, namespaced by host so two providers cannot
  * collide on `/style.css`, and carrying the query string so `?ver=6.4` variants
  * stay distinct (WordPress cache-busts nearly every enqueued asset this way —
@@ -1142,6 +1233,86 @@ function selfTest() {
     ['info@vpmi.org'],
   );
   eq('detectForms reports nothing on a plain page', detectForms('<p>hi</p>').forms, 0);
+
+  // --- Edge-injected CDN instrumentation -----------------------------------
+  // Every page of the first live delivery failed the self-containment gate on
+  // /cdn-cgi/rum?, a URL that appears in no attribute anywhere: the beacon
+  // script fabricates it at runtime, so only removing the script stops it.
+  const CF_BEACON =
+    '<p>hi</p><script defer src="https://static.cloudflareinsights.com/beacon.min.js" ' +
+    'data-cf-beacon=\'{"token":"abc"}\'></script>';
+  eq('the Cloudflare beacon script is removed', stripEdgeInjectedTags(CF_BEACON).html, '<p>hi</p>');
+  eq('removal is reported, not silent', stripEdgeInjectedTags(CF_BEACON).removed, [
+    'https://static.cloudflareinsights.com/beacon.min.js',
+  ]);
+  eq(
+    'a same-origin /cdn-cgi/ script is removed',
+    stripEdgeInjectedTags(
+      '<script src="/cdn-cgi/scripts/7d0fa10a/cloudflare-static/rocket-loader.min.js"></script>a',
+    ).html,
+    'a',
+  );
+  eq(
+    'an absolute /cdn-cgi/ script is removed too',
+    stripEdgeInjectedTags(
+      '<script src="https://x.org/cdn-cgi/scripts/x/email-decode.min.js"></script>b',
+    ).html,
+    'b',
+  );
+  // The narrowness IS the property. A blanket "drop third-party scripts" would
+  // strip the site's own analytics, embeds and player code.
+  eq(
+    "the site's own scripts survive",
+    stripEdgeInjectedTags(
+      '<script src="/wp-content/themes/divi/js/custom.js"></script>' +
+        '<script src="https://www.googletagmanager.com/gtag/js?id=G-1"></script>',
+    ).removed.length,
+    0,
+  );
+  eq(
+    'a host merely CONTAINING the beacon name is not stripped',
+    stripEdgeInjectedTags(
+      '<script src="https://notstatic.cloudflareinsights.com.evil.test/a.js"></script>',
+    ).removed.length,
+    0,
+  );
+  eq(
+    'a link or image mentioning cdn-cgi is left alone — only scripts are removed',
+    stripEdgeInjectedTags('<img src="/cdn-cgi/image/w=80/logo.png">').html,
+    '<img src="/cdn-cgi/image/w=80/logo.png">',
+  );
+
+  // --- Cloudflare email obfuscation ----------------------------------------
+  // Decoding is what makes the strip above safe: remove the decoder without
+  // this and every obfuscated address renders as hex forever.
+  // "info@vpmi.org" XOR-encoded against key 0x2a, per Cloudflare's scheme.
+  const cfHex = (addr, key = 0x2a) =>
+    key.toString(16).padStart(2, '0') +
+    [...addr].map((c) => (c.charCodeAt(0) ^ key).toString(16).padStart(2, '0')).join('');
+  const enc = cfHex('info@vpmi.org');
+  eq(
+    'an obfuscated address span decodes to the real address',
+    decodeCloudflareEmails(
+      `<span class="__cf_email__" data-cfemail="${enc}">[email&#160;protected]</span>`,
+    ).html,
+    'info@vpmi.org',
+  );
+  eq(
+    'an email-protection href becomes a real mailto',
+    decodeCloudflareEmails(`<a href="/cdn-cgi/l/email-protection#${enc}">write</a>`).html,
+    '<a href="mailto:info@vpmi.org">write</a>',
+  );
+  eq(
+    'a decode that does not yield an address leaves the markup untouched',
+    decodeCloudflareEmails('<span data-cfemail="2a2a2a2a">x</span>').html,
+    '<span data-cfemail="2a2a2a2a">x</span>',
+  );
+  eq(
+    'non-hex is refused rather than decoded into nonsense',
+    decodeCloudflareEmails('<a href="/cdn-cgi/l/email-protection#zzzz">w</a>').html,
+    '<a href="/cdn-cgi/l/email-protection#zzzz">w</a>',
+  );
+  eq('a page with no obfuscation is unchanged', decodeCloudflareEmails('<p>a@b.co</p>').decoded, 0);
 
   // Never fetch into a private network on a page's say-so.
   eq('isPrivateHost blocks localhost', isPrivateHost('localhost'), true);
@@ -1986,6 +2157,11 @@ async function capture() {
   // 2. SCRAPE the rendered markup for each inventoried URL.
   const rendered = new Map(); // localPath -> html
   const pageFailures = [];
+  // Edge-injected instrumentation removed, and Cloudflare-obfuscated addresses
+  // restored, across the whole scrape. Counted so a run reports what it did
+  // rather than silently editing the charity's markup.
+  let cfEmailsDecoded = 0;
+  const edgeTagsRemoved = [];
   // Paths that would have escaped the output directory. Expected to stay empty;
   // recorded rather than merely skipped so an empty list is evidence.
   const escapedPaths = [];
@@ -2011,12 +2187,28 @@ async function capture() {
       await sleep(delayMs);
       continue;
     }
+    // Strip the CDN's edge-injected instrumentation BEFORE anything else reads
+    // this HTML, so the removed tags never reach the asset inventory either.
+    const mail = decodeCloudflareEmails(html);
+    const edge = stripEdgeInjectedTags(mail.html);
+    html = edge.html;
+    cfEmailsDecoded += mail.decoded;
+    for (const r of edge.removed) edgeTagsRemoved.push(r);
     rendered.set(e.localPath, html);
     e.bytes = html.length;
     await sleep(delayMs);
   }
   const pageTally = tallyFailures(pageFailures);
   console.error(`[capture] rendered ${rendered.size} page(s), ${pageTally.total} failure(s)`);
+  if (edgeTagsRemoved.length) {
+    const kinds = [...new Set(edgeTagsRemoved)].slice(0, 5).join(', ');
+    console.error(
+      `[capture] removed ${edgeTagsRemoved.length} edge-injected script tag(s) the CDN added and a static host cannot serve: ${kinds}`,
+    );
+  }
+  if (cfEmailsDecoded) {
+    console.error(`[capture] decoded ${cfEmailsDecoded} Cloudflare-obfuscated email address(es)`);
+  }
   if (pageTally.total) console.error(`[capture] pages: ${describeFailures(pageTally, domain)}`);
 
   // 3. Localize assets, following CSS one level deep so @font-face and

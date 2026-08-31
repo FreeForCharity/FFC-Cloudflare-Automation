@@ -285,6 +285,56 @@ def test_hooks_present_but_no_bash_matcher_is_not_wired():
 # --------------------------------------------------------------------------
 
 
+def test_an_msys_path_becomes_a_windows_path_on_windows():
+    """git-bash `$PWD` is `/c/...`, and native Windows Python misreads it.
+
+    Windows treats a leading `/c/` as DRIVE-RELATIVE, so `/c/Users/x` resolves to
+    `C:\\c\\Users\\x` -- a directory that does not exist. CLAUDE.md records this
+    trap, and the Conductor's shell is git-bash, so `$PWD` is the value this
+    script is most likely to be handed on the one host it exists for.
+
+    Reported by Copilot on #1223, in three places at once (the script and both
+    doc snippets). The consequence is not only a false NOT WIRED: with --render
+    it creates `C:/c/Users/.../.claude/` and writes the settings THERE, then
+    reports success for a config the real session will never read.
+    """
+    f = _vch().from_msys_path
+    assert f("/c/Users/clark/Claude_AI_OS_Routine", windows=True) == "C:/Users/clark/Claude_AI_OS_Routine"
+    assert f("/d/repos/hub", windows=True) == "D:/repos/hub"
+    assert f("/c", windows=True) == "C:/"
+
+
+def test_an_msys_looking_path_is_left_alone_off_windows():
+    """Polarity control, and the reason the translation is platform-gated.
+
+    `/c/data` is an ordinary absolute directory on Linux. A fix that rewrote the
+    prefix unconditionally would satisfy the test above while corrupting every
+    POSIX path starting with a single-letter directory -- so the Linux branch is
+    a real behaviour with its own assertion, not an untested default.
+    """
+    f = _vch().from_msys_path
+    assert f("/c/Users/clark/ws", windows=False) == "/c/Users/clark/ws"
+    assert f("/d/repos/hub", windows=False) == "/d/repos/hub"
+
+
+def test_a_path_that_is_not_msys_survives_either_platform():
+    """Only the `/<single letter>/` shape is touched, on either branch."""
+    f = _vch().from_msys_path
+    for value in ("/home/user", "C:/Users/x", "rel/path", "/usr/local/bin", ""):
+        for windows in (True, False):
+            assert f(value, windows=windows) == value, (value, windows)
+
+
+def test_the_platform_default_matches_an_explicit_call_for_this_host():
+    """The `windows=None` default must agree with the host it actually runs on.
+
+    Without this, the injectable parameter that makes both branches testable
+    could drift from the real behaviour and every test above would still pass.
+    """
+    f = _vch().from_msys_path
+    assert f("/c/x") == f("/c/x", windows=sys.platform == "win32")
+
+
 def test_the_template_is_tracked_and_valid_json():
     # AC1: the answer to "where does the Conductor's hook config live" has to be
     # a file a PR can review. An untracked local settings.json is not one.

@@ -96,6 +96,45 @@ PROBE_BLOCK = 'python3 scripts/audit-agentic-os-board.py | tail -45; echo "EXIT=
 # blocks step 0 of every run, which is a failure mode as real as an absent guard.
 PROBE_ALLOW = "git status --porcelain"
 
+# git-bash hands out MSYS paths (`/c/Users/...`). Native Windows Python does not
+# know the MSYS mount table, so it reads a leading `/c/` as DRIVE-RELATIVE and
+# resolves `/c/Users/x` to `C:\\c\\Users\\x` -- a directory that does not exist.
+# CLAUDE.md records this as its own trap ("Python on this host cannot open a
+# git-bash /c/... path"), and the Conductor's shell is git-bash, so `$PWD` is
+# exactly the value this script is most likely to be handed.
+_MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(/.*)?$")
+
+
+def from_msys_path(raw: str, *, windows: bool | None = None) -> str:
+    """Translate a git-bash `/c/...` path to `C:/...`, on Windows only.
+
+    Gated on the platform because the same string means two different things:
+    `/c/data` is an ordinary absolute directory on Linux and an MSYS drive
+    reference under git-bash. Rewriting it everywhere would corrupt a legitimate
+    POSIX path, so the Linux branch is a real behaviour and has its own test, not
+    an untested default.
+
+    `windows` is a parameter rather than a read of `sys.platform` at the call
+    site so both branches are exercisable from either host. This matters here
+    more than usual: the defect is invisible on the platform CI runs on, and a
+    Linux sandbox cannot otherwise test the branch that only ever executes on
+    the Conductor's box -- the #944 asymmetry.
+
+    Not verified end to end on Windows from this sandbox: the mapping below is
+    unit-tested as a pure function, but the `pathlib` resolution it feeds has
+    only been reasoned about, not measured, on win32.
+    """
+    if windows is None:
+        windows = sys.platform == "win32"
+    if not windows:
+        return raw
+    match = _MSYS_DRIVE_RE.match(raw)
+    if not match:
+        return raw
+    drive, rest = match.group(1), match.group(2) or "/"
+    return f"{drive.upper()}:{rest}"
+
+
 _QUOTED_PY = re.compile(r"""["']([^"']+?\.py)["']""")
 _BARE_PY = re.compile(r"""(?:[A-Za-z]:)?[^\s"';|&]+\.py""")
 
@@ -372,8 +411,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", dest="as_json", help="machine-readable report")
     args = parser.parse_args(argv)
 
-    workspace = pathlib.Path(args.workspace).expanduser().resolve()
-    hub_clone = pathlib.Path(args.hub_clone).expanduser().resolve()
+    workspace = pathlib.Path(from_msys_path(args.workspace)).expanduser().resolve()
+    hub_clone = pathlib.Path(from_msys_path(args.hub_clone)).expanduser().resolve()
 
     if args.render:
         rc = render(workspace, hub_clone, args.force)

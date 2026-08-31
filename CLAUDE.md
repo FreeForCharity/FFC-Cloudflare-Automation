@@ -1041,6 +1041,13 @@ python3 scripts/verify-conductor-hooks.py --workspace "$PWD"          # bootstra
 python3 scripts/verify-conductor-hooks.py --render --workspace <ws>   # one-time wiring
 ```
 
+`$PWD` is safe here even though git-bash spells it `/c/...`: the script translates an MSYS
+`/<drive>/` prefix to `C:/` **on Windows only**. That translation is not cosmetic — native Windows
+Python reads a leading `/c/` as _drive-relative_ and resolves `/c/Users/x` to `C:\c\Users\x`, so
+without it a correctly-wired workspace reports NOT WIRED, and `--render` writes the settings into a
+directory the real session never reads while reporting success. Same trap as the `/c/...` note
+above, reached through an operator's `$PWD` rather than through a heredoc.
+
 Full reasoning, and why option (c) — moving the Conductor's project root to the hub clone — was left
 to @clarkemoyer rather than taken: `docs/runbooks/conductor-hook-wiring.md`. That option changes how
 the privileged session is launched, and a misconfigured guard there blocks the Conductor mid-run

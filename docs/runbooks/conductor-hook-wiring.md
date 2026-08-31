@@ -60,6 +60,11 @@ python3 repos/FFC-Cloudflare-Automation/scripts/verify-conductor-hooks.py \
   --workspace "$PWD"
 ```
 
+`$PWD` is git-bash's MSYS spelling (`/c/...`), and that is accepted: the script maps a `/<drive>/`
+prefix to `C:/` on Windows before building any `Path`. It has to — native Windows Python treats a
+leading `/c/` as drive-relative and resolves it to `C:\c\...`, which would report a correctly-wired
+workspace as NOT WIRED and, under `--render`, write the settings somewhere the session never looks.
+
 ```
 HOOKS: wired -- …/.claude/hooks/guard_bash.py blocks the L50 shape and allows `git status --porcelain` (verify-conductor-hooks.py, exit 0)
 HOOKS: NOT WIRED -- this run is unguarded (#1042). <what is wrong>

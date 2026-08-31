@@ -38,12 +38,59 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7
         with:
           node-version: '20'
+
+      - name: Offline self-tests
+        run: node scripts/capture-wordpress-api.mjs --self-test
+
+      # The confirmation run. Before self-reference normalization this capture
+      # took 343 of 590 entries with 823 asset failures; the claim under test
+      # is that correcting siteurl/home recovers the rest. A claim about a live
+      # site is only settled by running against it.
+      - name: Re-capture with self-reference normalization
+        run: |
+          set +e
+          node scripts/capture-wordpress-api.mjs \
+            --domain viewpointministriesinternational.org \
+            --out _capture/site --max 800 --delay 250 --include-posts \
+            > cap.out 2> cap.err
+          echo "capture rc=$?"
+          tail -25 cap.err
+
+      - name: Before / after
+        if: always()
+        run: |
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync("_capture/site/wp-capture-report.json","utf8"));
+            const row = (k, before, now) => console.log(k.padEnd(28), String(before).padEnd(12), now);
+            console.log("metric".padEnd(28), "before".padEnd(12), "after");
+            row("entries captured", "343 / 590", `${r.captured?.total ?? "?"} / ${r.entries?.length ?? r.inventoryTotal ?? "?"}`);
+            row("page fetch failures", 247, r.pageFetch?.failed);
+            row("asset failures", 823, r.assets?.failed);
+            row("assets downloaded", 177, r.assets?.downloaded);
+            row("pages captured / reported", "1 / 19", `${r.pages?.captured} / ${r.pages?.reported}`);
+            console.log("");
+            console.log("declaredSelfHost =", JSON.stringify(r.declaredSelfHost));
+            console.log("page failures byHost =", JSON.stringify(r.pageFetch?.failures?.byHost));
+            console.log("asset failures byHost =", JSON.stringify(r.assets?.failures?.byHost));
+            console.log("asset failures byStatus =", JSON.stringify(r.assets?.failures?.byStatus));
+            console.log("asset sample =", JSON.stringify(r.assets?.failures?.sample?.slice(0,5), null, 1));
+            console.log("remaining external =", JSON.stringify(r.remainingExternalHosts));
+            console.log("verdict =", JSON.stringify(r.verdict, null, 1));
+          '
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp-normalized-report
+          path: _capture/site/wp-capture-report.json
+          if-no-files-found: warn
 
       - name: Does the long domain serve the paths the sitemap puts on vpmin.org?
         run: |

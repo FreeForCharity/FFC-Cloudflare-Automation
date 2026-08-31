@@ -229,6 +229,32 @@ stay.
   404/410 (or a soft 404 — HTML served for a `.css`) is reported, anything the source still serves
   stays fatal, and a probe that could not run stays fatal. `--no-source-probe` restores the old
   always-fatal behaviour.
+- **A URL that lives only inside an inline `<script>` config blob is invisible to every attribute
+  scan.** WordPress emits
+
+  ```html
+  <script>
+    window._wpemojiSettings = {
+      source: {
+        concatemoji: 'https:\/\/example.org\/wp-includes\/js\/wp-emoji-release.min.js?ver=6.7',
+      },
+    };
+  </script>
+  ```
+
+  — no `src`, no `href`, JSON-escaped slashes. On viewpointministriesinternational.org it was the
+  ONE asset the source still served (HTTP 200) that the clone had lost, and the self-containment
+  gate caught it on 2 of 120 pages. 705 now scans inline script bodies for asset-extension strings.
+
+- **A non-ASCII upload filename breaks unless the local name is percent-DECODED.**
+  `new URL().pathname` is encoded, so writing it verbatim produces a file literally named `…%C3%97…`
+  while every request for it is decoded before the filesystem lookup — the asset 404s in the export
+  and on GitHub Pages alike. Any upload a human named (`Digest-2160-×-1080-px.jpg`, `Crèche.png`)
+  hits this. Decode, but ONLY where it cannot change the path's shape: `..%2f` decodes into real
+  traversal, so a decoded form containing a `..` segment falls back to the encoded one.
+- **`&amp;` in an attribute URL must be decoded before fetching.** It is how a multi-parameter URL
+  is spelled in HTML; requesting the literal entity asks the origin for a query string it does not
+  have.
 - **A site that moved off WordPress.com carries its old host's scripts.** This one still requests
   `remote-login.php`, `rlt-proxy.js`, `bilmur.min.js`, `actionbar.js` and `_static/??-eJx…`
   concatenated CSS — all 404 on the live site. Expect a handful of permanent asset failures and read

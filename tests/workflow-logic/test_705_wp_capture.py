@@ -311,6 +311,37 @@ def test_capture_passes_the_ignore_list_through_to_the_script():
     assert "$IGNORE_HOSTS" in run, run
 
 
+# --- whitespace must be rejected or separate, never deleted ------------------
+#
+# 706 was fixed for this first and 705 was left with the identical code — the
+# partial fix is the thing worth guarding against, so both now carry the tests.
+
+
+def test_whitespace_separates_ignore_hosts_rather_than_vanishing():
+    """`a.org b.org` must become two validated entries. Deleting the space
+    yields the single host `a.orgb.org`, which PASSES the hostname pattern,
+    matches nothing during the capture, and so produces exactly the silent
+    no-op that this input's per-entry validation exists to prevent."""
+    proc, outputs = run_resolve(INPUT_DOMAIN="vpmi.org", INPUT_IGNORE="a.org b.org")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ignore_hosts=a.org,b.org" in outputs, outputs
+    assert "a.orgb.org" not in outputs, (
+        "whitespace was deleted rather than treated as a separator:\n" + outputs
+    )
+
+
+def test_surrounding_whitespace_in_the_domain_is_trimmed():
+    proc, outputs = run_resolve(INPUT_DOMAIN="  example.org\n")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "domain=example.org" in outputs, outputs
+
+
+def test_internal_whitespace_in_the_domain_still_fails_closed():
+    proc, outputs = run_resolve(INPUT_DOMAIN="example.org attacker.com")
+    assert proc.returncode != 0, f"accepted a two-token domain:\n{outputs}"
+    assert "example.orgattacker.com" not in outputs, outputs
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

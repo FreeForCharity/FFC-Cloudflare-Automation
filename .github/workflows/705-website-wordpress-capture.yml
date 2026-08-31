@@ -130,7 +130,19 @@ jobs:
           # from the canonical form only in case. The concurrency group on the
           # capture job keys on this output, so normalising here is also what
           # makes "serialize per domain" actually hold.
-          domain="$(printf '%s' "${INPUT_DOMAIN:-}" | tr '[:upper:]' '[:lower:]')"
+          # Trim surrounding whitespace ONLY, never delete it from inside a
+          # value: deleting turns an invalid input into a different VALID one
+          # that the guards below then accept. Measured on 706's identical
+          # inputs — 'example.org attacker.com' collapses to
+          # 'example.orgattacker.com', which matches the hostname pattern and
+          # points a live capture at a host nobody typed.
+          trim() {
+            local v="$1"
+            v="${v#"${v%%[![:space:]]*}"}"
+            printf '%s' "${v%"${v##*[![:space:]]}"}"
+          }
+
+          domain="$(trim "${INPUT_DOMAIN:-}" | tr '[:upper:]' '[:lower:]')"
           domain="${domain#www.}"
 
           # `domain` is a required dispatch input, so an empty value here means
@@ -183,7 +195,12 @@ jobs:
           # that match nothing. An ignore list that matches nothing does not
           # fail loudly — the capture just goes on reporting the 404s the list
           # was added to suppress, which reads as "the fix did not work".
-          raw_ignore="$(printf '%s' "${INPUT_IGNORE:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          # Whitespace is a SEPARATOR here, not noise to delete. `a.org b.org`
+          # must become two entries that are each validated, never the single
+          # bogus host `a.orgb.org` — which passes the hostname pattern, matches
+          # nothing, and so produces exactly the silent no-op this input's
+          # per-entry validation exists to prevent.
+          raw_ignore="$(trim "${INPUT_IGNORE:-}" | tr '[:upper:]' '[:lower:]')"
           ignore_hosts=""
           if [ -n "$raw_ignore" ]; then
             # Word-splitting on spaces rather than a heredoc: a heredoc

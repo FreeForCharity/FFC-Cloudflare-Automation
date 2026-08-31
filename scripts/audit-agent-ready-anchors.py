@@ -336,10 +336,31 @@ class Tree:
         return (self.root / path).is_file()
 
     def read(self, path):
+        """`path`'s current content.
+
+        An OSError here is an ENVIRONMENT failure, never an answer. `read` is
+        only ever reached for a path `exists()` has already confirmed, so an
+        unreadable file is a permission or filesystem fault rather than a
+        premise that left the tree. Returning '' for it makes every anchor in
+        that file read as absent, and the issue is then reported as
+        PREMISE MAY BE GONE -- a finding manufactured by the sweep's own
+        inability to look, pointing a reader at a premise that is still there.
+
+        Note the direction, because it is the opposite of the two aborts above
+        and of the review that found it: those failed toward a clean backlog,
+        this one fails toward a false finding. Both are the same defect -- an
+        inability to read reported as a fact about the tree -- and the same
+        split applies: the environment aborts, while a real answer about one
+        object (a path that is simply absent) stays a quiet negative."""
         try:
             return (self.root / path).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return ""
+        except OSError as exc:
+            raise SystemExit(
+                f"error: cannot read {self.root / path} ({exc.strerror or exc}), "
+                "though it exists. Refusing to continue: every anchor in an unreadable "
+                "file reads as absent, so the issue citing it would be reported as a "
+                "premise that is gone."
+            )
 
     def content_at(self, path, when):
         """`path`'s content at the last commit before `when`, or None.
@@ -561,7 +582,13 @@ def normalize(text):
 
 
 def audit_issue(issue, tree):
-    """Classify ONE issue. Returns ``(premise_findings, path_findings, had_anchor)``."""
+    """Classify ONE issue. Returns ``(premise_findings, path_findings, usable)``.
+
+    `usable` is "this issue cited a path that exists AND quoted an anchor", i.e.
+    the sweep had something it could check -- NOT "the sweep said something".
+    The two come apart on the path-only branch, which is why `audit()` tests all
+    three values before counting an issue as invisible rather than `usable`
+    alone; see the comment at that call site."""
     body = issue.get("body") or ""
     number = issue.get("number")
     title = issue.get("title") or ""

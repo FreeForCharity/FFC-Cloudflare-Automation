@@ -510,6 +510,56 @@ def test_an_absent_object_is_a_quiet_negative_and_never_an_abort():
     assert tree.content_at("tests/workflow-logic/run_all.py", now)
 
 
+def test_an_unreadable_file_aborts_instead_of_reporting_its_premise_as_gone():
+    # Copilot round 4. `Tree.read` used to swallow OSError and return "", and
+    # `read` is only reached for a path `exists()` already confirmed -- so an
+    # unreadable file is an environment fault, and every anchor in it read as
+    # absent. Same defect as the two aborts above, opposite direction: those
+    # manufactured a clean backlog, this manufactures a finding.
+    with tempfile.TemporaryDirectory() as td:
+        target = pathlib.Path(td) / "unreadable.py"
+        target.write_text("the anchor string is right here\n", encoding="utf-8")
+        tree = M.Tree(td)
+        assert tree.exists("unreadable.py"), "precondition: exists() must say yes"
+
+        real = pathlib.Path.read_text
+
+        def denied(self, *a, **k):
+            raise PermissionError(13, "Permission denied")
+
+        pathlib.Path.read_text = denied
+        try:
+            tree.read("unreadable.py")
+        except SystemExit as exc:
+            assert "cannot read" in str(exc), exc
+        else:
+            raise AssertionError(
+                "an unreadable file that exists must abort, not read as empty content"
+            )
+        finally:
+            pathlib.Path.read_text = real
+
+
+def test_a_readable_file_is_still_read_verbatim():
+    # The polarity control. A "fix" that aborted on every read, or that stopped
+    # reading the working tree at all, satisfies the test above and destroys the
+    # sweep -- every anchor would then be absent for a different reason.
+    #
+    # It ASSERTS the abort rather than letting it propagate: `SystemExit` is not
+    # an `AssertionError`, so an over-broad fix would escape the module runner
+    # and end the module with no named FAIL at all -- non-zero, but reading as a
+    # crash rather than a detection (L82, and the reason L203 says to match on
+    # the finding rather than on the exit code). Measured: before this catch, the
+    # over-broad mutant flipped an empty set.
+    with tempfile.TemporaryDirectory() as td:
+        (pathlib.Path(td) / "readable.py").write_text("anchor here\n", encoding="utf-8")
+        try:
+            got = M.Tree(td).read("readable.py")
+        except SystemExit as exc:
+            raise AssertionError(f"a readable file must not abort, but did: {exc}")
+        assert got == "anchor here\n", got
+
+
 def test_a_cited_directory_is_not_reported_as_path_gone():
     # `docs/data` has git history (its children do) but no content of its own.
     # The first live run reported it as PATH GONE against issue #859.

@@ -478,6 +478,66 @@ def test_a_parked_root_route_is_reported_rather_than_skipped():
     assert "the home page" in run, run
 
 
+# --- whitespace must be rejected, never deleted ------------------------------
+
+
+def test_internal_whitespace_in_the_domain_fails_closed():
+    """`tr -d '[:space:]'` read as extra safety and was a fail-OPEN: deleting
+    internal whitespace turns an invalid value into a different VALID one, so
+    the hostname guard then accepts it and a live capture is pointed at a host
+    the operator never typed."""
+    proc, outputs = run_resolve(INPUT_DOMAIN="example.org attacker.com")
+    assert proc.returncode != 0, f"accepted a two-token domain:\n{outputs}"
+    assert "example.orgattacker.com" not in outputs, (
+        "whitespace was deleted rather than rejected, fabricating a host:\n" + outputs
+    )
+
+
+def test_surrounding_whitespace_in_the_domain_is_still_trimmed():
+    """Rejecting internal whitespace must not start rejecting a pasted value
+    with a stray leading space — that would be a different, annoying failure."""
+    proc, outputs = run_resolve(INPUT_DOMAIN="  example.org\n")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "domain=example.org" in outputs, outputs
+
+
+def test_internal_whitespace_in_the_contact_email_fails_closed():
+    """`info @example.org` deleted to `info@example.org` is a published contact
+    address the operator never typed — and the only channel the static site
+    has."""
+    proc, outputs = run_resolve(INPUT_EMAIL="info @example.org")
+    assert proc.returncode != 0, f"accepted a spaced address:\n{outputs}"
+
+
+def test_internal_whitespace_in_the_target_repo_fails_closed():
+    proc, outputs = run_resolve(INPUT_REPO="FFC-EX-a.org evil")
+    assert proc.returncode != 0, f"accepted a two-token repo:\n{outputs}"
+
+
+def test_a_pasted_repo_url_with_git_or_trailing_slash_is_normalized():
+    for raw in (
+        "https://github.com/FreeForCharity/FFC-EX-a.org/",
+        "https://github.com/FreeForCharity/FFC-EX-a.org.git",
+    ):
+        proc, outputs = run_resolve(INPUT_REPO=raw)
+        assert proc.returncode == 0, f"{raw}: {proc.stdout}{proc.stderr}"
+        assert "repo=FFC-EX-a.org" in outputs, f"{raw}: {outputs}"
+
+
+def test_whitespace_separates_ignore_hosts_rather_than_vanishing():
+    """`a.org b.org` must become two validated entries, never the single bogus
+    host `a.orgb.org` that deleting the space would produce."""
+    proc, outputs = run_resolve(INPUT_IGNORE="a.org b.org")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ignore_hosts=a.org,b.org" in outputs, outputs
+
+
+def test_internal_whitespace_in_a_numeric_input_fails_closed():
+    """`1 2` deleted to `12` is a bound the operator never set."""
+    proc, outputs = run_resolve(INPUT_MAX="1 2")
+    assert proc.returncode != 0, f"accepted a spaced number:\n{outputs}"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

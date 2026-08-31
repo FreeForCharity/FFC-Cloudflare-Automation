@@ -144,23 +144,35 @@ export function replaceForms(html, email, subject) {
   return { html: out, replaced: spans.length, unclosed: unclosed.length };
 }
 
-/** Every .html/.htm file under root, depth-first. */
+/**
+ * Every .html/.htm file under root, depth-first.
+ *
+ * A directory this cannot read is a HARD ERROR, not an empty result. Swallowing
+ * it returns [], the caller replaces nothing, and the run reports success —
+ * which is the same shape as the grep bug this script's workflow step already
+ * had: a search that never ran reading as "nothing to do", ending in a
+ * published page with a live-looking dead form on it. A wrong --dir, a
+ * permission problem and a genuinely form-free site must not look alike.
+ */
 export function htmlFilesUnder(root) {
   const out = [];
   const walk = (dir) => {
     let entries;
     try {
       entries = readdirSync(dir);
-    } catch {
-      return;
+    } catch (err) {
+      throw new Error(`cannot read directory ${dir}: ${err.message}`, { cause: err });
     }
     for (const e of entries) {
       const p = join(dir, e);
       let st;
       try {
         st = statSync(p);
-      } catch {
-        continue;
+      } catch (err) {
+        // An entry readdir just listed that stat cannot see is a race, not a
+        // tree we failed to read — but it still means one file went unscanned,
+        // so it is surfaced rather than silently dropped.
+        throw new Error(`cannot stat ${p}: ${err.message}`, { cause: err });
       }
       if (st.isDirectory()) walk(p);
       else if (/^\.html?$/i.test(extname(e))) out.push(p);
@@ -317,6 +329,19 @@ function selfTest() {
     ['about/index.html', 'index.html', 'legacy.htm'],
   );
 
+  eq(
+    'htmlFilesUnder throws on an unreadable tree instead of returning nothing',
+    (() => {
+      try {
+        htmlFilesUnder(join(tmpdir(), `ffc-does-not-exist-${Date.now()}`));
+        return 'returned normally';
+      } catch (err) {
+        return /cannot read directory/.test(err.message) ? 'threw' : `wrong error: ${err.message}`;
+      }
+    })(),
+    'threw',
+  );
+
   if (failed) {
     console.error(`\n${failed} self-test failure(s)`);
     process.exit(2);
@@ -355,11 +380,31 @@ if (isMain) {
       process.exit(64);
     }
 
+    let htmlFiles;
+    try {
+      htmlFiles = htmlFilesUnder(dir);
+    } catch (err) {
+      console.error(
+        `::error::${err.message}. Refusing to report "no forms" for a tree that could not be read.`,
+      );
+      process.exit(66);
+    }
+    // Zero HTML files under a directory we were asked to rewrite is a wrong
+    // --dir, not a form-free site: the caller only invokes this after finding
+    // forms. Exiting 0 here would report success for a run that examined
+    // nothing.
+    if (htmlFiles.length === 0) {
+      console.error(
+        `::error::no .html/.htm files under ${dir}. Nothing was scanned, so "no forms found" would be a false negative.`,
+      );
+      process.exit(66);
+    }
+
     let files = 0;
     let replaced = 0;
     let unclosed = 0;
     const unclosedFiles = [];
-    for (const f of htmlFilesUnder(dir)) {
+    for (const f of htmlFiles) {
       const src = readFileSync(f, 'utf8');
       const r = replaceForms(src, email, subject);
       if (r.unclosed) {

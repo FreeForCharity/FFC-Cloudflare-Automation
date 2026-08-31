@@ -135,12 +135,31 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Trim surrounding whitespace ONLY. `tr -d '[:space:]'` was wrong in a
+          # way that reads as extra safety: deleting INTERNAL whitespace turns an
+          # invalid value into a different VALID one, so the guard below accepts
+          # it. Measured:
+          #
+          #   'example.org attacker.com' --tr -d--> 'example.orgattacker.com'
+          #     -> matches the hostname regex, so a live capture is pointed at a
+          #        host the operator never typed
+          #   'info @example.org'        --tr -d--> 'info@example.org'
+          #     -> a published contact address the operator never typed
+          #
+          # With whitespace merely trimmed, the existing patterns reject both,
+          # because whitespace is in none of their character classes.
+          trim() {
+            local v="$1"
+            v="${v#"${v%%[![:space:]]*}"}"
+            printf '%s' "${v%"${v##*[![:space:]]}"}"
+          }
+
           # The domain is the one value that becomes a network call, and the
           # natural way to type it is wrong: an operator pastes
           # `https://example.org/`, which threads into the REST candidates as
           # `https://https://example.org//wp-json/` and fails hundreds of lines
           # later as an unhelpful DNS error.
-          domain="$(printf '%s' "${INPUT_DOMAIN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          domain="$(trim "${INPUT_DOMAIN:-}" | tr '[:upper:]' '[:lower:]')"
           domain="${domain#https://}"
           domain="${domain#http://}"
           domain="${domain#www.}"
@@ -156,9 +175,12 @@ jobs:
 
           # Repo name only — an owner prefix or a URL would be interpolated into
           # a checkout path and a gh --repo argument.
-          repo="$(printf '%s' "${INPUT_REPO:-}" | tr -d '[:space:]')"
+          repo="$(trim "${INPUT_REPO:-}")"
           repo="${repo#https://github.com/}"
           repo="${repo#FreeForCharity/}"
+          # A pasted repo URL usually carries one of these; both are unambiguous.
+          repo="${repo%.git}"
+          repo="${repo%/}"
           if [ -z "$repo" ]; then
             echo "::error::target_repo is required."
             exit 1
@@ -179,7 +201,7 @@ jobs:
           # is written into published markup as the charity's only contact
           # channel; a typo does not degrade the page, it silently ends every
           # conversation, and nothing downstream would notice.
-          email="$(printf '%s' "${INPUT_EMAIL:-}" | tr -d '[:space:]')"
+          email="$(trim "${INPUT_EMAIL:-}")"
           if [ -n "$email" ]; then
             if ! printf '%s' "$email" | grep -qE '^[A-Za-z0-9._%+-]+@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$'; then
               echo "::error::contact_email '$email' is not a plausible address."
@@ -190,14 +212,14 @@ jobs:
           # parseInt-style parsing accepts '12abc' as 12 and yields NaN for
           # 'abc', which then propagates into a fetch loop as an unbounded or
           # zero-length run. Refuse anything that is not wholly digits.
-          max="${INPUT_MAX:-}"
+          max="$(trim "${INPUT_MAX:-}")"
           if [ -z "$max" ]; then max="800"; fi
           if ! printf '%s' "$max" | grep -qE '^[0-9]+$' || [ "$max" -lt 1 ] || [ "$max" -gt 5000 ]; then
             echo "::error::max_items '$max' must be a whole number between 1 and 5000."
             exit 1
           fi
 
-          delay="${INPUT_DELAY:-}"
+          delay="$(trim "${INPUT_DELAY:-}")"
           if [ -z "$delay" ]; then delay="250"; fi
           if ! printf '%s' "$delay" | grep -qE '^[0-9]+$' || [ "$delay" -gt 60000 ]; then
             echo "::error::delay_ms '$delay' must be a whole number of milliseconds, at most 60000."
@@ -212,7 +234,10 @@ jobs:
           # typo into two entries that match nothing — and an ignore list that
           # matches nothing fails SILENTLY: the run goes on reporting the very
           # failures the list was added to drop.
-          raw_ignore="$(printf '%s' "${INPUT_IGNORE:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          # Whitespace is a SEPARATOR here, not noise to delete: `a.org b.org`
+          # must become two entries that are each validated, never the single
+          # bogus host `a.orgb.org` that deleting the space would produce.
+          raw_ignore="$(trim "${INPUT_IGNORE:-}" | tr '[:upper:]' '[:lower:]')"
           ignore_hosts=""
           if [ -n "$raw_ignore" ]; then
             # Word-splitting rather than a heredoc: a heredoc terminator must

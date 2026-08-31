@@ -45,17 +45,47 @@
  *   1  at least one page has a surviving legacy dependency or a missing asset
  *   2  invalid usage / could not start
  *
- * A same-origin asset the clone cannot serve is fatal ONLY when the source site
- * still serves it. One that is 404 on the source as well was dead before the
- * migration, is reproduced faithfully rather than introduced, and is reported
- * instead. Pass --no-source-probe to skip that check, which makes every missing
- * asset fatal again.
+ * A same-origin asset the clone cannot serve is excused ONLY when the source
+ * answers 404 or 410 for it — dead before the migration, reproduced faithfully
+ * rather than introduced. Everything else stays fatal: an asset the source
+ * serves, a path the clone itself builds (`/_next/`, `/_ffc-assets/`), and any
+ * answer that merely means the origin would not talk to us (401/403/429/5xx).
+ * Pass --no-source-probe to skip the check, which makes every missing asset
+ * fatal again.
  */
 
 import { createServer } from 'node:http';
 import { readFile, mkdir, readdir } from 'node:fs/promises';
 import { join, extname, relative, resolve, isAbsolute, sep } from 'node:path';
 import { existsSync } from 'node:fs';
+
+/**
+ * Paths the CLONE owns, which the source cannot speak to.
+ *
+ * A Next.js chunk under `/_next/` and a localized asset under `/_ffc-assets/`
+ * exist only because this pipeline created them. Asking a WordPress origin for
+ * one gets a 404 that means "that was never a URL here" — not "the file is
+ * absent", which is what the excuse below is built on. Probing them would let a
+ * genuinely broken export pass: a missing Next.js chunk is exactly the defect
+ * this gate was written to catch (slopestohope.org's frozen counter), and it
+ * would be excused by the source's 404 on a path the source never had.
+ *
+ * An explicit list, not a heuristic. The tempting rule — "a leading-underscore
+ * segment is ours" — is wrong on this very migration: the source site really
+ * serves `/_static/??-eJx…` concatenated CSS, a WordPress.com path that must
+ * stay excusable.
+ */
+export const CLONE_OWNED_PREFIXES = ['/_next/', '/_ffc-assets/'];
+
+export function isCloneOwned(url, prefixes = CLONE_OWNED_PREFIXES) {
+  let path;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    path = url.split('#')[0].split('?')[0];
+  }
+  return prefixes.some((prefix) => path.startsWith(prefix));
+}
 
 /**
  * Decide whether a same-origin request the mirror could not satisfy is a clone
@@ -81,9 +111,25 @@ import { existsSync } from 'node:fs';
  * Returns { fatal, reason }.
  */
 export function classifyMissing({ status = 0, contentType = '', error = null, url = '' } = {}) {
+  if (isCloneOwned(url))
+    return {
+      fatal: true,
+      reason: 'this path is built by the clone, so the source cannot excuse it',
+    };
   if (error) return { fatal: true, reason: `could not check the source site (${error})` };
-  if (status >= 400)
+  // Only these two prove the origin does not HAVE the file. A 401 or 403 (a WAF
+  // blocking the runner — FFC has migrated a site in exactly that state), a 429,
+  // or a 5xx says the origin would not answer us, which is a different claim.
+  // Reading them as "absent" is the fail-open this function exists to avoid, and
+  // it fails open across the whole site at once: one WAF and every missing asset
+  // is excused.
+  if (status === 404 || status === 410)
     return { fatal: false, reason: `dead on the source site too (HTTP ${status})` };
+  if (status >= 400)
+    return {
+      fatal: true,
+      reason: `the source site would not answer (HTTP ${status}); that does not prove the file is absent`,
+    };
   if (status === 0) return { fatal: true, reason: 'the source site was never checked' };
 
   // A soft 404: WordPress answers an unknown path with a themed error PAGE at
@@ -213,6 +259,79 @@ if (process.argv.includes('--self-test')) {
       'a real stylesheet served as CSS is not a soft 404',
       classifyMissing({ url: 'https://x.org/a.css', status: 200, contentType: 'text/css' }).fatal,
       true,
+    ],
+    // --- Copilot #1229: a non-404 error code does not prove absence ---------
+    // The whole excuse rests on "the origin does not have this file". A WAF
+    // blocking the runner says nothing of the kind — and it fails open across
+    // the entire site at once, since one WAF excuses every missing asset.
+    [
+      'a 403 does not excuse anything — a WAF is not proof of absence',
+      classifyMissing({ url: 'https://x.org/a.css', status: 403 }).fatal,
+      true,
+    ],
+    ['a 401 stays fatal', classifyMissing({ url: 'https://x.org/a.css', status: 401 }).fatal, true],
+    ['a 429 stays fatal', classifyMissing({ url: 'https://x.org/a.css', status: 429 }).fatal, true],
+    [
+      'a 500 stays fatal — the origin erroring is not the file being gone',
+      classifyMissing({ url: 'https://x.org/a.css', status: 500 }).fatal,
+      true,
+    ],
+    [
+      'a 405 stays fatal — method-not-allowed means the path EXISTS',
+      classifyMissing({ url: 'https://x.org/cdn-cgi/rum', status: 405 }).fatal,
+      true,
+    ],
+    [
+      'the reason for an unanswerable probe says it did not prove absence',
+      /does not prove the file is absent/.test(
+        classifyMissing({ url: 'https://x.org/a.css', status: 403 }).reason,
+      ),
+      true,
+    ],
+
+    // --- Copilot #1229: the clone's own build paths ------------------------
+    // A missing Next.js chunk is the exact defect this gate was written for.
+    // The source 404s /_next/ because it was never a WordPress URL, so probing
+    // would excuse a genuinely broken export.
+    [
+      'a missing Next.js chunk is NEVER excused by the source 404ing it',
+      classifyMissing({ url: 'https://x.org/_next/static/chunks/main-abc.js', status: 404 }).fatal,
+      true,
+    ],
+    [
+      'a missing localized asset is not excused either',
+      classifyMissing({ url: 'https://x.org/_ffc-assets/x.org__logo.png', status: 404 }).fatal,
+      true,
+    ],
+    [
+      'a clone-owned path stays fatal even when the source SERVES something there',
+      classifyMissing({
+        url: 'https://x.org/_next/static/chunks/main-abc.js',
+        status: 200,
+        contentType: 'text/javascript',
+      }).fatal,
+      true,
+    ],
+    ['/_next/ is clone-owned', isCloneOwned('https://x.org/_next/a.js'), true],
+    ['/_ffc-assets/ is clone-owned', isCloneOwned('https://x.org/_ffc-assets/a.png'), true],
+    // The heuristic that would have been wrong: this source really serves
+    // /_static/??-eJx… concatenated CSS, and it must stay excusable.
+    [
+      'a leading-underscore SOURCE path is not treated as ours',
+      isCloneOwned('https://x.org/_static/??-eJx7kA.css'),
+      false,
+    ],
+    [
+      'and it is still excused when the source 404s it',
+      classifyMissing({ url: 'https://x.org/_static/??-eJx7kA.css', status: 404 }).fatal,
+      false,
+    ],
+    ['an ordinary path is not clone-owned', isCloneOwned('https://x.org/wp-content/a.png'), false],
+    // A prefix test, not a substring test: a real page could mention the name.
+    [
+      'the prefix is anchored at the path root',
+      isCloneOwned('https://x.org/blog/_next/story/'),
+      false,
     ],
     [
       'the reason names the status so a log reader can check the call',
@@ -468,7 +587,14 @@ async function main() {
   // Probed once per distinct URL, and only for URLs that actually went missing,
   // so a clean run makes no network calls at all.
   const verdictFor = new Map(); // url -> { fatal, reason }
-  let distinctMissing = [...new Set(results.flatMap((r) => r.localMissing.map((m) => m.url)))];
+  const allMissing = [...new Set(results.flatMap((r) => r.localMissing.map((m) => m.url)))];
+  // Settle the clone's own build paths without a request: the source has no
+  // opinion on them, and asking would send a charity's server a burst of
+  // guaranteed 404s for URLs it never had.
+  for (const url of allMissing.filter((u) => isCloneOwned(u))) {
+    verdictFor.set(url, classifyMissing({ url }));
+  }
+  let distinctMissing = allMissing.filter((u) => !isCloneOwned(u));
   // A badly broken clone could name hundreds of distinct URLs, and probing them
   // all would mean pointing a burst of traffic at a charity's live site to
   // diagnose our own export. Cap it; anything past the cap stays FATAL, so the

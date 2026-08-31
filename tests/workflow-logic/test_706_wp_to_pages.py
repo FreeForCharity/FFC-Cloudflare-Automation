@@ -274,6 +274,30 @@ def test_the_self_containment_gate_probes_the_source_site():
     assert "--dir" in run, run
 
 
+def test_the_gate_and_the_capture_agree_on_the_localized_asset_dir():
+    """`verify-no-legacy` refuses to let the source excuse a missing file under
+    the clone's own directories, and it names `_ffc-assets/` as one of them.
+    That name is chosen by the capture. If either side is renamed alone the
+    guard silently stops matching, and a dropped localized asset goes back to
+    being excused by the source's 404 on a path it never had — the failure is
+    invisible because nothing errors, the gate just gets quieter."""
+    capture = (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+    gate = (REPO_ROOT / "scripts" / "verify-no-legacy.mjs").read_text(encoding="utf-8")
+
+    m = re.search(r"assetsDirName\s*=\s*['\"]([^'\"]+)['\"]", capture)
+    assert m, "the capture no longer declares assetsDirName"
+    assets_dir = m.group(1)
+
+    m2 = re.search(r"CLONE_OWNED_PREFIXES\s*=\s*\[([^\]]*)\]", gate)
+    assert m2, "the gate no longer declares CLONE_OWNED_PREFIXES"
+    prefixes = re.findall(r"['\"]([^'\"]+)['\"]", m2.group(1))
+
+    assert f"/{assets_dir}/" in prefixes, (
+        f"the capture writes assets to {assets_dir!r} but the gate guards {prefixes}"
+    )
+    assert "/_next/" in prefixes, f"the Next.js build output is unguarded: {prefixes}"
+
+
 def test_only_deliver_is_gated_and_only_deliver_writes():
     """Two independent drifts, both silent. Gating `convert` makes a read-only
     dry conversion wait on a human; ungating `deliver` lets an unapproved run

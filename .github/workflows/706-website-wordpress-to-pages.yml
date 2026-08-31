@@ -357,10 +357,18 @@ jobs:
       # that still needs the origin fails here, which is the only check that can
       # see a dependency the capture report cannot.
       - name: Gate - the export must be self-contained
+        # verify-no-legacy defaults to --max-pages 40. On a site whose sitemap
+        # runs to hundreds of URLs that is a SAMPLE, not a proof, and the run
+        # says so: it prints how many pages it did not check. Raised to 120 —
+        # enough to cover every distinct template on a typical WordPress site
+        # (the long tail is tag and date archives sharing one layout) while
+        # staying inside the job timeout, since each page is a real browser
+        # load.
         run: |
           node automation/scripts/verify-no-legacy.mjs \
             --domain "${{ needs.resolve.outputs.domain }}" \
-            --dir ffc-ex/out
+            --dir ffc-ex/out \
+            --max-pages 120
 
       # Integration REMOVES the template's app routes — that is its design, and
       # correct: the site is public/ now, and a surviving route would both risk

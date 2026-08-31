@@ -614,6 +614,16 @@ def test_a_lowercase_owner_prefix_is_accepted():
     assert "repo=FFC-EX-a.org" in outputs, outputs
 
 
+def test_a_repo_that_is_only_the_prefix_is_refused():
+    """`FFC-EX-` passes the name pattern AND the prefix gate, then derives to
+    an empty destination domain that integrate rejects as a usage error —
+    after the capture, the build and the self-containment gate have all run.
+    Failing here names the input; failing there does not."""
+    proc, _ = run_resolve(INPUT_REPO="FFC-EX-")
+    assert proc.returncode != 0, proc.stdout
+    assert "carries no domain" in proc.stdout, proc.stdout
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

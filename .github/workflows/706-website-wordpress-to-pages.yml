@@ -247,6 +247,15 @@ jobs:
           cname_domain="$publish"
           if [ -z "$cname_domain" ]; then
             cname_domain="$(printf '%s' "${repo#FFC-EX-}" | tr '[:upper:]' '[:lower:]')"
+            # `FFC-EX-` on its own passes both the name pattern and the prefix
+            # gate above and derives to the empty string, which integrate then
+            # rejects as a usage error — after the capture, the build and the
+            # gate have all run. Caught here, where the input is wrong, rather
+            # than twenty minutes later somewhere that does not name it.
+            if [ -z "$cname_domain" ]; then
+              echo "::error::target_repo '$repo' carries no domain after the FFC-EX- prefix, so no destination domain can be derived. Expected e.g. 'FFC-EX-example.org', or set publish_domain explicitly."
+              exit 1
+            fi
           fi
 
           mode="${INPUT_MODE:-}"

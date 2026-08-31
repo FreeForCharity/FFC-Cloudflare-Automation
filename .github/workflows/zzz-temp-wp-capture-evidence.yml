@@ -1,0 +1,86 @@
+name: 'TEMPORARY - WP capture evidence (delete before merge)'
+
+# TEMPORARY. Delete this file before #1226 leaves draft.
+#
+# `workflow_dispatch` is only offered for workflows that exist on the DEFAULT
+# branch, so 705 and 706 cannot be dispatched until they merge — and they should
+# not merge on offline tests alone. This file exists solely to run the capture
+# against the real source site from a branch, so the numbers in the PR are
+# measured rather than asserted.
+#
+# Read-only: it fetches a public site and writes nothing outside the runner.
+
+on:
+  push:
+    branches: ['claude/wordpress-migration-scraping-qpzewr']
+    paths:
+      - '.github/workflows/zzz-temp-wp-capture-evidence.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Offline self-tests
+        run: |
+          node scripts/capture-wordpress-api.mjs --self-test
+          node scripts/replace-forms-with-mailto.mjs --self-test
+
+      - name: Inspect the source site
+        run: |
+          node scripts/capture-wordpress-api.mjs \
+            --domain viewpointministriesinternational.org \
+            --inspect --json-out inspect.json || true
+          cat inspect.json
+
+      - name: Capture the source site
+        id: cap
+        run: |
+          set +e
+          node scripts/capture-wordpress-api.mjs \
+            --domain viewpointministriesinternational.org \
+            --out _capture --max 800 --delay 250 --include-posts \
+            > capture.out 2> capture.err
+          echo "capture_rc=$?" >> "$GITHUB_OUTPUT"
+          tail -60 capture.err
+          echo "----- stdout tail"
+          tail -20 capture.out
+
+      # The whole point of the run. The tally records status and host for every
+      # failed page fetch; without printing it the failures are just a count,
+      # which is what left 247 of them unattributed.
+      - name: Page-fetch failure breakdown
+        if: always()
+        run: |
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync("_capture/capture-report.json","utf8"));
+            const p = r.pageFetch || {};
+            console.log("pageFetch.failed =", p.failed);
+            console.log("byStatus =", JSON.stringify(p.failures?.byStatus, null, 2));
+            console.log("byHost   =", JSON.stringify(p.failures?.byHost, null, 2));
+            console.log("sample   =", JSON.stringify(p.failures?.sample, null, 2));
+            console.log("assets   =", JSON.stringify(r.assets, null, 2));
+            console.log("pages    =", JSON.stringify(r.pages, null, 2));
+            console.log("verdict  =", JSON.stringify(r.verdict, null, 2));
+            console.log("external =", JSON.stringify(r.remainingExternalHosts, null, 2));
+            console.log("forms    =", JSON.stringify(r.forms?.pageCount) + " pages, contacts " + JSON.stringify(r.forms?.contactEmailsFound));
+          '
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp-evidence-report
+          path: |
+            inspect.json
+            _capture/capture-report.json
+            capture.err
+          if-no-files-found: warn

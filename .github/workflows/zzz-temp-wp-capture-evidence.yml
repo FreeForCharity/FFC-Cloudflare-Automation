@@ -47,7 +47,7 @@ jobs:
           set +e
           node scripts/capture-wordpress-api.mjs \
             --domain viewpointministriesinternational.org \
-            --out _capture --max 800 --delay 250 --include-posts \
+            --out _capture/site --max 800 --delay 250 --include-posts \
             > capture.out 2> capture.err
           echo "capture_rc=$?" >> "$GITHUB_OUTPUT"
           tail -60 capture.err
@@ -61,7 +61,7 @@ jobs:
         if: always()
         run: |
           node -e '
-            const r = JSON.parse(require("fs").readFileSync("_capture/capture-report.json","utf8"));
+            const r = JSON.parse(require("fs").readFileSync("_capture/site/wp-capture-report.json","utf8"));
             const p = r.pageFetch || {};
             console.log("pageFetch.failed =", p.failed);
             console.log("byStatus =", JSON.stringify(p.failures?.byStatus, null, 2));
@@ -81,6 +81,6 @@ jobs:
           name: wp-evidence-report
           path: |
             inspect.json
-            _capture/capture-report.json
+            _capture/site/wp-capture-report.json
             capture.err
           if-no-files-found: warn

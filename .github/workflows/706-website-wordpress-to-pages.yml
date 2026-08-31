@@ -280,7 +280,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          args=(--domain "$DOMAIN" --out "$RUNNER_TEMP/capture" --max "$MAX" --delay "$DELAY")
+          args=(--domain "$DOMAIN" --out "$RUNNER_TEMP/capture/site" --max "$MAX" --delay "$DELAY")
           if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
           if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
           node scripts/capture-wordpress-api.mjs "${args[@]}"

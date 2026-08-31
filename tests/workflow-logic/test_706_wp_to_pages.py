@@ -332,6 +332,47 @@ def test_a_form_free_site_does_not_require_a_contact_address():
     assert 'if [ "$found" -eq 0 ]; then' in run, run
 
 
+def test_the_capture_output_path_is_the_path_every_later_step_reads():
+    """`--out` IS the site root — the script writes pages directly into it, not
+    into an `out/site/` subdirectory. Passing `--out .../capture` and then
+    reading `.../capture/site` produces an empty clone, and integration against
+    an empty clone succeeds: it parks the template routes and copies nothing,
+    so the build passes and publishes a blank site. Nothing downstream fails.
+
+    So the value is asserted to agree across every step that names it, in both
+    jobs, rather than being read as correct four times."""
+    wf = load_workflow(WORKFLOW)
+    out_paths, clone_paths, site_vars = set(), set(), set()
+    for job in ("convert", "deliver"):
+        for step in wf["jobs"][job]["steps"]:
+            run = step.get("run", "")
+            for line in run.splitlines():
+                line = line.strip()
+                if "--out " in line:
+                    out_paths.add(line.split("--out ", 1)[1].split()[0].strip('"'))
+                if "--clone " in line:
+                    clone_paths.add(line.split("--clone ", 1)[1].split()[0].strip('"'))
+                if line.startswith("site="):
+                    site_vars.add(line.split("=", 1)[1].strip('"'))
+
+    assert len(out_paths) == 1, f"capture writes to more than one path: {out_paths}"
+    assert clone_paths == out_paths, f"integration reads {clone_paths}, capture writes {out_paths}"
+    assert site_vars == out_paths, f"form/verify steps read {site_vars}, capture writes {out_paths}"
+
+
+def test_the_report_filename_matches_what_the_script_writes():
+    """A workflow that reads `capture-report.json` when the script writes
+    `wp-capture-report.json` fails at the step that reads it — which is
+    usually the reporting step, i.e. after the expensive part, and with an
+    error naming the reader rather than the mismatch."""
+    script = (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+    assert "'wp-capture-report.json'" in script, "the script's report filename moved"
+    wf_text = (REPO_ROOT / ".github" / "workflows" / WORKFLOW).read_text(encoding="utf-8")
+    for line in wf_text.splitlines():
+        if "capture-report.json" in line:
+            assert "wp-capture-report.json" in line, line
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

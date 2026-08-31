@@ -528,6 +528,73 @@ export function parsePositiveInt(raw, { min = 0, max = Number.MAX_SAFE_INTEGER }
  * many references it ignored and on which host, so an ignore list that is
  * quietly swallowing something real stays visible.
  */
+/**
+ * The host a WordPress declares as its OWN home, when that is not the host
+ * actually serving it.
+ *
+ * WordPress writes `siteurl`/`home` into every self-referential URL it emits:
+ * `wp/v2` `link` fields, sitemap entries, and the `/wp-content/uploads/` paths
+ * in rendered markup. If those options still name a domain that no longer
+ * serves the site — a rename, a staging-to-production move, a domain bought
+ * ahead of a migration — the CMS keeps insisting it lives somewhere it does
+ * not, and every URL it hands out 404s.
+ *
+ * This is not an "alias" and not a second site to capture. It is one site with
+ * a stale self-reference, and it is diagnosable from the REST index rather
+ * than from an operator's guess, which is why nothing here takes a parameter
+ * naming the wrong host.
+ *
+ * Measured on viewpointministriesinternational.org (2026-08-31): the REST
+ * index reports `url` and `home` as `https://vpmin.org`, all 19 `wp/v2/pages`
+ * links are on vpmin.org, and every one of them 404s there while the same path
+ * returns 200 on the serving domain — 11/11 probed, pages and uploads alike.
+ * Left uncorrected that cost 247 of 590 pages and 822 of 823 assets.
+ *
+ * Returns null when the declared home agrees with the capture domain, which is
+ * the normal case and must stay a no-op.
+ */
+export function declaredSelfHost(restIndex, domain) {
+  for (const field of ['home', 'url']) {
+    const value = restIndex?.[field];
+    if (typeof value !== 'string' || !value) continue;
+    let host;
+    try {
+      host = new URL(value).hostname.replace(/^www\./, '');
+    } catch {
+      continue;
+    }
+    if (!host) continue;
+    if (host === domain || host.endsWith(`.${domain}`)) continue;
+    return host;
+  }
+  return null;
+}
+
+/**
+ * Rewrite a stale self-reference onto the host that actually serves the site.
+ *
+ * Only `selfHost` is rewritten, and only ever TO `domain` — the one host the
+ * operator named. So this can never widen what the run fetches: a page cannot
+ * steer the capture at a third party by declaring one, and the worst case for
+ * a site whose declared home is genuinely a different system is the 404 it was
+ * already getting.
+ */
+export function normalizeSelfHost(absUrl, selfHost, domain) {
+  // A fast path, not the guard: with selfHost null the hostname comparison
+  // below can never match, so correctness does not depend on this line.
+  if (!selfHost) return absUrl;
+  let u;
+  try {
+    u = new URL(absUrl);
+  } catch {
+    return absUrl;
+  }
+  if (u.hostname.replace(/^www\./, '') !== selfHost) return absUrl;
+  u.hostname = domain;
+  u.port = '';
+  return u.toString();
+}
+
 export function isIgnoredHost(absUrl, ignoreHosts = []) {
   if (!ignoreHosts.length) return false;
   let u;
@@ -902,6 +969,106 @@ function selfTest() {
     assetLocalName('https://h.org/..%2f..%2fetc/x.png'),
     'h.org/..%2f..%2fetc/x.png',
   );
+  // A stale WordPress self-reference: siteurl/home naming a host that no longer
+  // serves the site. Measured live on 2026-08-31 — see declaredSelfHost.
+  eq(
+    'declaredSelfHost reports a home that disagrees with the capture domain',
+    declaredSelfHost({ url: 'https://old.org', home: 'https://old.org' }, 'new.org'),
+    'old.org',
+  );
+  eq(
+    'declaredSelfHost prefers home over url',
+    declaredSelfHost({ url: 'https://a.org', home: 'https://b.org' }, 'new.org'),
+    'b.org',
+  );
+  eq(
+    'declaredSelfHost falls back to url when home is absent',
+    declaredSelfHost({ url: 'https://a.org' }, 'new.org'),
+    'a.org',
+  );
+  eq(
+    'declaredSelfHost is null when the home AGREES — the normal case must be a no-op',
+    declaredSelfHost({ url: 'https://new.org', home: 'https://new.org' }, 'new.org'),
+    null,
+  );
+  eq(
+    'declaredSelfHost ignores a leading www. on the declared home',
+    declaredSelfHost({ home: 'https://www.new.org' }, 'new.org'),
+    null,
+  );
+  // The case above is decided by the SUBDOMAIN rule ('www.new.org' ends with
+  // '.new.org'), not by the www strip — so it passes with the strip removed.
+  // This one is decided by the strip alone, and it matters: normalizeSelfHost
+  // compares a www-stripped hostname against selfHost, so a selfHost that kept
+  // its 'www.' would match nothing and normalization would silently do nothing
+  // at all on a site whose home is declared with www.
+  eq(
+    'declaredSelfHost strips www. from a STALE home, so normalizeSelfHost can match it',
+    declaredSelfHost({ home: 'https://www.old.org' }, 'new.org'),
+    'old.org',
+  );
+  eq(
+    'the two functions agree end to end on a www-declared stale home',
+    (() => {
+      const h = declaredSelfHost({ home: 'https://www.old.org' }, 'new.org');
+      return [
+        normalizeSelfHost('https://old.org/a/', h, 'new.org'),
+        normalizeSelfHost('https://www.old.org/a/', h, 'new.org'),
+      ];
+    })(),
+    ['https://new.org/a/', 'https://new.org/a/'],
+  );
+  eq(
+    'declaredSelfHost treats a subdomain of the capture domain as the same site',
+    declaredSelfHost({ home: 'https://cdn.new.org' }, 'new.org'),
+    null,
+  );
+  eq('declaredSelfHost tolerates a missing index', declaredSelfHost(null, 'new.org'), null);
+  eq(
+    'declaredSelfHost tolerates a non-URL home',
+    declaredSelfHost({ home: 'not a url', url: '' }, 'new.org'),
+    null,
+  );
+
+  eq(
+    'normalizeSelfHost moves a stale page URL onto the serving host',
+    normalizeSelfHost('https://old.org/ministries/', 'old.org', 'new.org'),
+    'https://new.org/ministries/',
+  );
+  eq(
+    'normalizeSelfHost keeps the path, query and fragment intact',
+    normalizeSelfHost('https://old.org/wp-content/a.png?ver=2#x', 'old.org', 'new.org'),
+    'https://new.org/wp-content/a.png?ver=2#x',
+  );
+  eq(
+    'normalizeSelfHost rewrites a www. form of the stale host too',
+    normalizeSelfHost('https://www.old.org/a/', 'old.org', 'new.org'),
+    'https://new.org/a/',
+  );
+  // The containment property that makes this safe to do automatically: a page
+  // cannot steer the capture at a third party, because the ONLY host ever
+  // rewritten is the one the REST index declared, and the only destination is
+  // the domain the operator named.
+  eq(
+    'normalizeSelfHost leaves every other host alone',
+    [
+      normalizeSelfHost('https://cdn.example.net/a.png', 'old.org', 'new.org'),
+      normalizeSelfHost('https://new.org/a.png', 'old.org', 'new.org'),
+      normalizeSelfHost('https://notold.org/a.png', 'old.org', 'new.org'),
+    ],
+    ['https://cdn.example.net/a.png', 'https://new.org/a.png', 'https://notold.org/a.png'],
+  );
+  eq(
+    'normalizeSelfHost is a no-op when no stale host was detected',
+    normalizeSelfHost('https://old.org/a/', null, 'new.org'),
+    'https://old.org/a/',
+  );
+  eq(
+    'normalizeSelfHost tolerates a malformed reference',
+    normalizeSelfHost('not a url', 'old.org', 'new.org'),
+    'not a url',
+  );
+
   // Ignored hosts: a host the source site emits references to that serves
   // nothing we want. Such a reference is not an asset — do not fetch it, do not
   // count it as a failure, and do not let it hold the "zero external hosts"
@@ -1705,6 +1872,19 @@ async function capture() {
   }
   console.error(`[capture] REST root: ${rest.indexUrl} (flavor: ${rest.kind})`);
 
+  // Does this WordPress agree with itself about where it lives? If siteurl/home
+  // still name a host that no longer serves the site, every URL the CMS emits
+  // — page links, sitemap entries, /wp-content/uploads/ references — points at
+  // that host and 404s. Detected here, from the site's own REST index, so no
+  // operator has to notice it and name the wrong host by hand.
+  const selfHost = declaredSelfHost(rest.index, domain);
+  if (selfHost) {
+    console.error(
+      `[capture] the site declares its home as ${selfHost}, not ${domain}. ` +
+        `Its own URLs point at a host that does not serve it; rewriting self-references onto ${domain}.`,
+    );
+  }
+
   // 1. INVENTORY from the CMS.
   const pages = await fetchCollection(rest, 'pages', { status: 'publish' });
   console.error(`[capture] pages: ${pages.items.length} of ${pages.total} reported`);
@@ -1744,6 +1924,11 @@ async function capture() {
       source: 'rest',
       localPath: localPathForLink(it.link, domain),
     }))
+    // localPathForLink maps by PATHNAME, so a stale-host link still yields a
+    // correct local path — the entry looks fine and only the fetch fails. That
+    // is why this normalization is easy to omit and expensive to omit: the
+    // inventory count stays right while a quarter of the site 404s.
+    .map((e) => ({ ...e, link: normalizeSelfHost(e.link, selfHost, domain) }))
     .filter((e) => e.localPath);
 
   // 1b. SECOND INVENTORY: the sitemap. Anything it advertises that the REST
@@ -1754,7 +1939,8 @@ async function capture() {
   const sm = await collectSitemapUrls();
   const known = new Set(entries.map((e) => e.localPath));
   let fromSitemap = 0;
-  for (const url of sm.urls) {
+  for (const raw of sm.urls) {
+    const url = normalizeSelfHost(raw, selfHost, domain);
     const localPath = localPathForLink(url, domain);
     if (!localPath || known.has(localPath)) continue;
     known.add(localPath);
@@ -1840,7 +2026,14 @@ async function capture() {
   const downloaded = new Map(); // absolute URL -> local name (or null on failure)
   const assetFailures = [];
 
-  async function localizeAsset(absUrl) {
+  async function localizeAsset(rawUrl) {
+    // Normalized HERE rather than at each call site: assets arrive from three
+    // independent paths (the page loop, the CSS-to-CSS recursion, and the
+    // media pre-pull), and a fix applied to only some of them looks like it
+    // worked — the failure count drops and the remainder reads as a different
+    // problem. Doing it at the choke point also keeps assetLocalName's
+    // host-namespacing consistent, so one file cannot land under two names.
+    const absUrl = normalizeSelfHost(rawUrl, selfHost, domain);
     if (downloaded.has(absUrl)) return downloaded.get(absUrl);
     downloaded.set(absUrl, null); // claim it first so a cycle cannot recurse forever
     const res = await request(absUrl);
@@ -1873,7 +2066,7 @@ async function capture() {
       let css = buf.toString('utf8');
       const cssReps = new Map();
       for (const ref of collectCssUrls(css)) {
-        const abs = absolutize(ref, res.url || absUrl);
+        const abs = normalizeSelfHost(absolutize(ref, res.url || absUrl), selfHost, domain);
         if (!abs || !shouldLocalize(abs, domain, ignoreHosts)) continue;
         // This path needs the same ignore-list filtering as the page loop, and
         // it is easy to miss: stylesheets reference other stylesheets, so a
@@ -1904,14 +2097,15 @@ async function capture() {
   // reference (a gallery behind a builder widget, for instance).
   for (const m of media.items) {
     if (!m?.source_url) continue;
-    if (shouldLocalize(m.source_url, domain, ignoreHosts)) await localizeAsset(m.source_url);
+    const src = normalizeSelfHost(m.source_url, selfHost, domain);
+    if (shouldLocalize(src, domain, ignoreHosts)) await localizeAsset(src);
   }
 
   for (const [localPath, html] of rendered) {
     const pageUrl = entries.find((e) => e.localPath === localPath)?.link ?? origin;
     const reps = new Map();
     for (const ref of collectAssetUrls(html)) {
-      const abs = absolutize(ref, pageUrl);
+      const abs = normalizeSelfHost(absolutize(ref, pageUrl), selfHost, domain);
       if (!abs || !shouldLocalize(abs, domain, ignoreHosts)) continue;
       // Fetch from the canonical host; the replacement still keys on `ref`,
       // the string that actually appears in this page's markup.
@@ -2020,6 +2214,12 @@ async function capture() {
       failures: assetTally,
     },
     pageFetch: { failed: pageTally.total, failures: pageTally },
+    // Recorded even when the correction worked. A capture that silently fixes
+    // the site's own broken self-reference hides a real defect in the LIVE
+    // site: every one of these URLs is 404ing for actual visitors right now,
+    // and whoever owns that WordPress should be told rather than have it
+    // quietly papered over by the migration.
+    declaredSelfHost: selfHost,
     remainingExternalHosts: [...externalHosts],
     escapedPaths,
     ignoreHosts,
@@ -2068,6 +2268,13 @@ async function capture() {
         (assetFailureNote ? ` — ${assetFailureNote}` : ' (0 failed)'),
       ...(pageTally.total ? [`- Page fetches: ${describeFailures(pageTally, domain)}`] : []),
       `- Remaining external asset hosts: ${externalHosts.size ? [...externalHosts].join(', ') : 'none'}`,
+      ...(selfHost
+        ? [
+            `- ⚠️ The live site declares its home as **${selfHost}**, not ${domain}. Its own page` +
+              ` links, sitemap entries and /wp-content/uploads/ references point at a host that` +
+              ` 404s — rewritten onto ${domain} for this capture. The LIVE site still has this bug.`,
+          ]
+        : []),
       ...(ignoreHosts.length
         ? [`- Ignored hosts (references dropped): ${ignoreHosts.join(', ')}`]
         : []),

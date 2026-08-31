@@ -53,7 +53,7 @@ MASK_LINE = 'echo "::add-mask::$token"'
 # The census is asserted, not assumed. A helper that quietly returns [] makes
 # every "for every step ..." test below pass over nothing -- the reassuring
 # direction, and the shape L47 warns about one layer down in the harness.
-EXPECTED_STEPS = 16
+EXPECTED_STEPS = 17
 
 BASH = shutil.which("bash")
 CURL = shutil.which("curl")
@@ -128,7 +128,7 @@ def probe_block(body: str) -> str:
 
 
 def test_step_inventory_is_complete():
-    """Positive control for every loop below: the census is 16, and per file it
+    """Positive control for every loop below: the census is 17, and per file it
     matches the number of emptiness guards a grep finds."""
     assert len(STEPS) == EXPECTED_STEPS, f"expected {EXPECTED_STEPS} PAT load steps, found {len(STEPS)}: {[s[:2] for s in STEPS]}"
     per_file: dict[str, int] = {}
@@ -440,7 +440,7 @@ def test_only_the_mask_directive_ever_prints_the_token():
 
 
 def test_every_step_body_fails_closed_on_a_revoked_token():
-    """All 16, not one representative: these bodies were edited in bulk."""
+    """All 17, not one representative: these bodies were edited in bulk."""
     for name, job, secret, body in STEPS:
         proc, gh_env, _ = run_step(body, http_code="401")
         where = f"{name}/{job}"

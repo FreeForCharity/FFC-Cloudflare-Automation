@@ -1,0 +1,311 @@
+name: '705. Website - Capture WordPress Site (REST API + Scrape) [WP]'
+run-name: 'WP capture ${{ inputs.domain }} (mode=${{ inputs.mode }})'
+
+# Captures a live WordPress site from its own REST API plus a rendered-HTML
+# scrape, and uploads the result as an artifact for the FFC-EX migration PR.
+#
+# Why this sits beside 702 rather than replacing it: 702 mirrors with httrack,
+# which discovers pages by following links, so its page count is a property of
+# the theme's navigation. 705 takes the inventory from /wp-json/wp/v2/pages —
+# the CMS's own list, with an X-WP-Total to check it against — and then fetches
+# the rendered markup for each of those URLs. That makes "did we get the whole
+# site?" a question the run can answer and fail on, instead of one nobody can
+# ask. See the header of scripts/capture-wordpress-api.mjs.
+#
+# A cPanel/FTP backup is deliberately not an input. It yields PHP, a database
+# dump and a plugin tree — the inputs to a renderer that will not exist after
+# the migration — rather than the rendered artifact being migrated.
+#
+# Read-only and ungated: it loads no credentials and writes nothing outside the
+# run's own artifact. `mode=inspect` (the default) additionally makes no request
+# beyond a handful of probes, so it is the safe first dispatch for any domain.
+#
+# Two jobs, for one reason: the concurrency group that protects a small charity
+# origin from two simultaneous crawls has to key on the NORMALISED domain, and
+# a workflow-level `concurrency:` can only see the raw dispatch input. Keying on
+# `inputs.domain` would let `VPMin.org` and `vpmin.org` — or `www.` and the apex
+# — run at the same time against the same server, which is precisely what the
+# group exists to prevent. `resolve` normalises and makes no network request;
+# `capture` does every live request and carries the group.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: >-
+          Live apex domain that SERVES THE CONTENT (e.g. viewpointministriesinternational.org). A
+          bare hostname: no scheme and no path. Case is ignored, and a leading `www.` is accepted
+          and stripped. This is the source site, not the FFC-EX repo's name — a charity's new short
+          domain often differs from the one its site is actually on, and capturing the wrong one
+          yields a clean, green artifact of the wrong website.
+        required: true
+        type: string
+      mode:
+        description: >-
+          inspect = probe the REST API and report what a capture would get (read-only, seconds).
+          capture = fetch every page and asset and upload the result as an artifact.
+        required: false
+        type: choice
+        options: [inspect, capture]
+        default: inspect
+      max_items:
+        description: 'Cap on items fetched per REST collection.'
+        required: false
+        type: string
+        default: '500'
+      delay_ms:
+        description: >-
+          Politeness delay between requests, in milliseconds. These are small shared-hosting
+          origins; do not lower this without a reason.
+        required: false
+        type: string
+        default: '250'
+      include_posts:
+        description: 'Also capture blog posts (not just pages).'
+        required: false
+        type: boolean
+        default: false
+      ignore_hosts:
+        description: >-
+          Comma-separated hostnames whose references are DROPPED from the capture: not fetched, not
+          counted as asset failures, and not counted against the "zero external asset hosts" gate.
+          Use for a host the source site links to that serves nothing you want in the clone. Nothing
+          is re-pointed — an ignored reference is simply left alone. Leave empty unless a capture
+          has actually reported failures on a host you have decided to exclude.
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  # Makes no network request, so it is safe to run outside the per-domain
+  # concurrency group — which is the point: the group needs this job's output.
+  resolve:
+    name: Resolve and validate inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      domain: ${{ steps.resolve.outputs.domain }}
+      mode: ${{ steps.resolve.outputs.mode }}
+      max: ${{ steps.resolve.outputs.max }}
+      delay: ${{ steps.resolve.outputs.delay }}
+      posts: ${{ steps.resolve.outputs.posts }}
+      ignore_hosts: ${{ steps.resolve.outputs.ignore_hosts }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      # Gates the whole workflow: `capture` needs this job, so no live request
+      # is made until the pure logic (URL mapping, asset classification, the
+      # rewrite pass, path containment, the verdict) has been exercised. A run
+      # against a real charity's site with broken logic produces a confident,
+      # wrong artifact rather than an error.
+      - name: Self-test the capture logic (offline)
+        run: node scripts/capture-wordpress-api.mjs --self-test
+
+      - name: Resolve inputs
+        id: resolve
+        # Inputs go through the environment rather than into the script body, so
+        # a value carrying shell metacharacters cannot be executed.
+        env:
+          INPUT_DOMAIN: ${{ inputs.domain }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_MAX: ${{ inputs.max_items }}
+          INPUT_DELAY: ${{ inputs.delay_ms }}
+          INPUT_POSTS: ${{ inputs.include_posts }}
+          INPUT_IGNORE: ${{ inputs.ignore_hosts }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Hostnames are case-insensitive and the capture script lowercases
+          # anyway, so normalise here rather than refusing a value that differs
+          # from the canonical form only in case. The concurrency group on the
+          # capture job keys on this output, so normalising here is also what
+          # makes "serialize per domain" actually hold.
+          # Trim surrounding whitespace ONLY, never delete it from inside a
+          # value: deleting turns an invalid input into a different VALID one
+          # that the guards below then accept. Measured on 706's identical
+          # inputs — 'example.org attacker.com' collapses to
+          # 'example.orgattacker.com', which matches the hostname pattern and
+          # points a live capture at a host nobody typed.
+          trim() {
+            local v="$1"
+            v="${v#"${v%%[![:space:]]*}"}"
+            printf '%s' "${v%"${v##*[![:space:]]}"}"
+          }
+
+          domain="$(trim "${INPUT_DOMAIN:-}" | tr '[:upper:]' '[:lower:]')"
+          domain="${domain#www.}"
+
+          # `domain` is a required dispatch input, so an empty value here means
+          # the input did not arrive rather than that a default is wanted. There
+          # is no safe default: substituting some other charity's domain would
+          # point a live capture at a site nobody asked about.
+          if [ -z "$domain" ]; then
+            echo "::error::domain is empty — a required input did not reach this step. Refusing to guess a site to capture."
+            exit 1
+          fi
+          # Reject anything that is not a bare hostname before it reaches the
+          # script, so a pasted URL or a stray argument fails here with a clear
+          # message rather than as a confusing DNS error 200 lines into a run.
+          if ! printf '%s' "$domain" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+            echo "::error::domain must be a bare hostname (got '$domain'). No scheme and no path; a leading 'www.' is accepted and stripped."
+            exit 1
+          fi
+
+          mode="${INPUT_MODE:-}"
+          if [ -z "$mode" ]; then mode="inspect"; fi
+          case "$mode" in
+            inspect|capture) ;;
+            *) echo "::error::mode must be 'inspect' or 'capture' (got '$mode')."; exit 1 ;;
+          esac
+
+          # Validated here, in the job that holds no concurrency slot, so a
+          # typo fails in seconds instead of after queueing behind another
+          # capture. Unvalidated these reach parseInt in the script, where NaN
+          # is silently catastrophic rather than loud: a NaN timeout aborts
+          # every request instantly and a NaN cap paginates zero times, both of
+          # which read as findings about the site.
+          max="${INPUT_MAX:-}"
+          if [ -z "$max" ]; then max="500"; fi
+          delay="${INPUT_DELAY:-}"
+          if [ -z "$delay" ]; then delay="250"; fi
+          if ! printf '%s' "$max" | grep -qE '^[0-9]+$' || [ "$max" -lt 1 ] || [ "$max" -gt 100000 ]; then
+            echo "::error::max_items must be a whole number between 1 and 100000 (got '$max')."
+            exit 1
+          fi
+          if ! printf '%s' "$delay" | grep -qE '^[0-9]+$' || [ "$delay" -gt 60000 ]; then
+            echo "::error::delay_ms must be a whole number of milliseconds between 0 and 60000 (got '$delay'). These are small shared-hosting origins; 250 is the default for a reason."
+            exit 1
+          fi
+          posts="${INPUT_POSTS:-}"
+          if [ -z "$posts" ]; then posts="false"; fi
+
+          # Validated ENTRY BY ENTRY against the same hostname rule as `domain`.
+          # A character-class check over the whole string is not enough: it
+          # accepts `a,org`, which silently becomes two entries (`a` and `org`)
+          # that match nothing. An ignore list that matches nothing does not
+          # fail loudly — the capture just goes on reporting the 404s the list
+          # was added to suppress, which reads as "the fix did not work".
+          # Whitespace is a SEPARATOR here, not noise to delete. `a.org b.org`
+          # must become two entries that are each validated, never the single
+          # bogus host `a.orgb.org` — which passes the hostname pattern, matches
+          # nothing, and so produces exactly the silent no-op this input's
+          # per-entry validation exists to prevent.
+          raw_ignore="$(trim "${INPUT_IGNORE:-}" | tr '[:upper:]' '[:lower:]')"
+          ignore_hosts=""
+          if [ -n "$raw_ignore" ]; then
+            # Word-splitting on commas-turned-spaces. (An earlier note here said
+            # a heredoc was impossible, because its terminator must sit at column 0
+            # and that would end this YAML block scalar. Wrong, and measured so:
+            # YAML strips the block indent, so a terminator at the block's base
+            # indentation reaches the shell at column 0 exactly as required.) Commas are turned into spaces, and since raw_ignore is
+            # only TRIMMED, whitespace already present is a separator too —
+            # `a.org b.org` is two entries. Empty entries (a trailing comma)
+            # simply vanish. This comment used to say whitespace had been
+            # stripped and commas were the only separator; that was true of the
+            # old `tr -d` and is exactly the note that would invite someone to
+            # reintroduce it.
+            # Globbing is off so an entry like `*.org` cannot expand to filenames.
+            set -f
+            for entry in $(printf '%s' "$raw_ignore" | tr ',' ' '); do
+              entry="${entry#www.}"
+              if ! printf '%s' "$entry" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+                set +f
+                echo "::error::ignore_hosts entry '$entry' is not a bare hostname. Expected a comma-separated list like 'a.org' or 'a.org,b.org'."
+                exit 1
+              fi
+              case ",$ignore_hosts," in *",$entry,"*) continue ;; esac
+              ignore_hosts="${ignore_hosts:+$ignore_hosts,}$entry"
+            done
+            set +f
+          fi
+
+          {
+            echo "domain=$domain"
+            echo "mode=$mode"
+            echo "max=$max"
+            echo "delay=$delay"
+            echo "posts=$posts"
+            echo "ignore_hosts=$ignore_hosts"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Resolved: domain=$domain mode=$mode max=$max delay=$delay posts=$posts"
+
+  capture:
+    name: Capture WordPress site
+    needs: resolve
+    runs-on: ubuntu-latest
+    # A real charity site is not the 1-page case. viewpointministriesinternational.org
+    # advertises 587 page URLs in its sitemap, and at the 250ms politeness delay
+    # the page fetches alone are ~10 minutes before any asset is downloaded.
+    # 30 minutes would abort a legitimate capture partway and leave a truncated
+    # artifact that still looks like output.
+    timeout-minutes: 60
+    concurrency:
+      # Keyed on the NORMALISED domain, so two dispatches that differ only in
+      # case or a `www.` prefix serialize instead of crawling the same origin
+      # at once.
+      group: wp-capture-${{ needs.resolve.outputs.domain }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      # Always runs, in both modes. In capture mode it is the preflight: it says
+      # what the REST API reports, which is the number the capture is then
+      # checked against.
+      - name: Inspect the live WordPress REST API
+        id: inspect
+        env:
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _capture
+          set +e
+          node scripts/capture-wordpress-api.mjs --domain "$DOMAIN" --inspect --json-out _capture/inspect.json
+          rc=$?
+          set -e
+          echo "verdict_rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ $rc -ne 0 ]; then
+            echo "::warning::Inspect returned a non-ready verdict (exit $rc). See the job summary for which one."
+          fi
+
+      - name: Capture the site
+        if: needs.resolve.outputs.mode == 'capture'
+        env:
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          MAX: ${{ needs.resolve.outputs.max }}
+          DELAY: ${{ needs.resolve.outputs.delay }}
+          POSTS: ${{ needs.resolve.outputs.posts }}
+          IGNORE_HOSTS: ${{ needs.resolve.outputs.ignore_hosts }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--domain "$DOMAIN" --out _capture/site --max "$MAX" --delay "$DELAY")
+          if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
+          if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
+          node scripts/capture-wordpress-api.mjs "${args[@]}"
+
+      - name: Upload capture artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp-capture-${{ needs.resolve.outputs.domain }}
+          path: _capture/
+          if-no-files-found: warn
+          retention-days: 14

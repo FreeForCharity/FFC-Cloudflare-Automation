@@ -51,7 +51,115 @@ Read alongside:
 
 ## 2. Capture the live site (fully localized)
 
-Two proven capture paths; either is acceptable, the verification gate is the same.
+Three capture paths; the verification gate is the same for all of them. **Start by running the Path
+C inspect** — it is read-only, takes seconds, and tells you which of the three the site can actually
+support before you spend a mirror on it.
+
+> **Not cPanel.** A cPanel/FTP backup is not a starting point for this work, and on a
+> WordPress.com-hosted site there is no cPanel to take one from. A backup yields PHP, a database
+> dump and a plugin tree — the inputs to a rendering engine that will not exist after the migration.
+> What is being migrated is the rendered artifact, and the live site is the only place that exists.
+
+**Path C — WordPress REST API + rendered scrape** (workflow
+**`705. Website - Capture WordPress Site (REST API + Scrape)`**,
+`scripts/capture-wordpress-api.mjs`). Read-only, ungated:
+
+```bash
+# Probe first — read-only, seconds, no capture.
+node scripts/capture-wordpress-api.mjs --domain <domain> --inspect
+# Or dispatch 705 with mode=inspect, then mode=capture.
+```
+
+The other two paths discover pages by **following links**, so their page count is a property of the
+theme's navigation. Path C takes the inventory from the CMS itself (`wp/v2/pages`, with an
+`X-WP-Total` to check it against) and then fetches the rendered markup for each of those URLs — so
+completeness becomes something the run can fail on. It reports:
+
+- **Which REST flavor answers** — `pretty` (`/wp-json/`), `query` (`/?rest_route=/`), or `dotcom`
+  (`public-api.wordpress.com/wp/v2/sites/<domain>/`). **A WordPress.com-hosted site serves 404 on
+  its own `/wp-json/`**, so a probe that only tries the site's own domain reports "not WordPress"
+  for a site whose full inventory is one URL away. Measured 2026-08-30 on vpmin.org, which is a
+  WordPress.com stub.
+- **Which collections are restricted.** The `.com` public API answers per collection — vpmin.org
+  returns 200 for `pages` and **401 for `media`**. A restricted collection is reported, never
+  silently treated as empty, because a collection that returns nothing and a collection that is not
+  readable look identical in the output otherwise.
+- **The plugin/builder fingerprint**, from the REST namespace list. This decides whether the
+  rendered scrape is optional or mandatory (see the Divi note below).
+- **Sitemap vs REST disagreement.** The run cross-checks `sitemap.xml` and captures the **union**,
+  because comparing the REST total against pages fetched from that same REST list is a tautology,
+  not a check. The gap is routinely large: on viewpointministriesinternational.org the sitemap
+  advertises **587** page URLs against `wp/v2/pages`' **19**.
+
+> **Read the two domains apart, and do not treat the new one as part of the site.** A charity often
+> has a long legacy domain and a short new one, and they can be different systems. For Viewpoint
+> Ministries the **capture source** is `viewpointministriesinternational.org` (self-hosted WordPress
+> on WPMU DEV, Divi, 19 pages / 229 posts / 280 media). `vpmin.org` is a **new, empty short domain**
+> parked on a WordPress.com stub, to be pointed at the migrated site later — and the repo is named
+> for that destination, `FFC-EX-vpmin.org`. Capturing the repo's namesake rather than the live site
+> produces a clean, green, 2-page artifact of the wrong website. Confirm which domain actually
+> serves the content before capturing, and do not infer it from the repo name.
+>
+> **But do not then conclude the other domain is irrelevant to the capture — check what the CMS
+> thinks its own address is.** This is the trap that cost the most on this migration, and it looks
+> exactly like the one above. Measured 2026-08-31: `viewpointministriesinternational.org`'s
+> WordPress has `siteurl` **and** `home` set to `https://vpmin.org`, so its REST `link` fields, its
+> sitemap entries and its `/wp-content/uploads/` references all name the empty domain. All 19
+> `wp/v2/pages` links are on vpmin.org; every one 404s there; every one returns 200 on the serving
+> domain (11/11 probed, pages and uploads alike). It is one site with a stale self-reference, not
+> two sites. Correcting it, measured on the same runner:
+>
+> |                        | untreated | normalized    |
+> | ---------------------- | --------- | ------------- |
+> | entries captured       | 343 / 590 | **589 / 590** |
+> | page-fetch failures    | 247       | **0**         |
+> | asset failures         | 823       | **15**        |
+> | assets downloaded      | 177       | **1838**      |
+> | `wp/v2/pages` captured | 1 / 19    | **19 / 19**   |
+>
+> So the two situations are opposites and are told apart by ONE reading, not by reasoning about
+> which domain is "real":
+>
+> ```bash
+> curl -s https://<serving-domain>/wp-json/ | jq '{url, home}'
+> ```
+>
+> If that names a host other than the one serving the site, its self-references are stale and must
+> be **normalized onto the serving host** — 705/706 now derive this automatically
+> (`declaredSelfHost`) and report it, so no operator has to spot it. If it agrees, then a foreign
+> host in the markup really is foreign, and `ignore_hosts` drops it without inventing content.
+>
+> Two corollaries worth carrying:
+>
+> - **A stale self-reference is invisible in the inventory count.** `localPathForLink` maps by
+>   pathname, so a wrong-host link still yields a correct local path: the entry count stays right
+>   while the fetch 404s. The number that looks healthiest is the one that cannot see this.
+> - **It is a live defect, not just a migration obstacle.** Those URLs are 404ing for real visitors
+>   right now. Report it to whoever owns the WordPress; the fix is a search-replace on
+>   `siteurl`/`home`, and it is worth doing whether or not the site is being migrated.
+> - **What survives the correction is what `ignore_hosts` is actually for.** The 15 remaining asset
+>   failures are the genuine article: 11×404 for WordPress.com scaffolding the site still references
+>   but does not serve (`remote-login.php?wpcom_remote_login=validate`,
+>   `wp-content/js/rlt-proxy.js`, `mu-plugins/actionbar/actionbar.js`, a `themes/a8c/…` watermark —
+>   leftovers of an earlier move off WordPress.com), and 4×**410 Gone** on
+>   `myviewletstalkaboutjesus.files.wordpress.com`. A 410 is the origin stating the resource is
+>   deliberately gone. Neither can be recovered by rewriting a hostname, and both 404 for live
+>   visitors too. Drop them with `ignore_hosts`; do not normalize them.
+>
+> Beware near-miss matches when reconciling the inventory: `sites-list/` contains
+> `viewpointnorth.org`, an unrelated organization.
+
+**Divi / page builders make the rendered scrape mandatory, not optional.** When the namespace list
+carries `divi/v1` (or the markup shows Elementor, WPBakery, Fusion/Avada), the real page markup
+lives in postmeta and `content.rendered` is a shortcode husk — a REST-only export of such a site
+reproduces almost nothing. Path C scrapes the rendered URL for exactly this reason.
+
+**Forminator / contact forms** (namespace `forminator/v1`) have no backend after migration. Apply
+the Forms gotcha below: replace with `mailto:` or a preserved external service; never ship a form
+that silently posts to a dead endpoint.
+
+Use Path A or B when the site is not WordPress at all, or when its REST API is blocked (the inspect
+verdict says `API_BLOCKED`).
 
 **Path A — `capture_site.py`** (repo `FFC-Static-Site-Capture-Tools`, local
 `C:\vscode\FFC-Static-Site-Capture-Tools`):

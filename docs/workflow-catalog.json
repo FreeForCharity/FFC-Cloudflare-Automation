@@ -1618,6 +1618,44 @@
       "categoryCode": "GH"
     },
     {
+      "number": 705,
+      "title": "Website - Capture WordPress Site (REST API + Scrape)",
+      "apis": [
+        "WP"
+      ],
+      "file": "705-website-wordpress-capture.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Captures a live WordPress site from its own REST API plus a rendered-HTML scrape, and uploads the result as an artifact for the FFC-EX migration PR.  Why this sits beside 702 rather than replacing it: 702 mirrors with httrack, which discovers pages by following links, so its page count is a property of the theme's navigation. 705 takes the inventory from /wp-json/wp/v2/pages \u2014 the CMS's own list, with an X-WP-Total to check it against \u2014 and then fetches the rendered markup for each of those URLs. That makes \"did we get the whole site?\" a question the run can answer and fail on, instead of one nobody can ask. See the header of scripts/capture-wordpress-api.mjs.  A cPanel/FTP backup is deliberately not an input. It yields PHP, a database dump and a plugin tree \u2014 the inputs to a renderer that will not exist after the migration \u2014 rather than the rendered artifact being migrated.  Read-only and ungated: it loads no credentials and writes nothing outside the run's own artifact. `mode=inspect` (the default) additionally makes no request beyond a handful of probes, so it is the safe first dispatch for any domain.  Two jobs, for one reason: the concurrency group that protects a small charity origin from two simultaneous crawls has to key on the NORMALISED domain, and a workflow-level `concurrency:` can only see the raw dispatch input. Keying on `inputs.domain` would let `VPMin.org` and `vpmin.org` \u2014 or `www.` and the apex \u2014 run at the same time against the same server, which is precisely what the group exists to prevent. `resolve` normalises and makes no network request; `capture` does every live request and carries the group.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "none (no credentials)",
+      "guard": "read-only capture of a public site; `mode=inspect` default (probe only), `capture` writes only the run artifact; politeness delay default 250ms; serialized per domain; offline `--self-test` gates the logic before any live request",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 706,
+      "title": "Website - WordPress to Pages Conversion (end to end)",
+      "apis": [
+        "WP"
+      ],
+      "file": "706-website-wordpress-to-pages.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "The `deliver` job waits at a reviewer gate, and a waiting job has produced no logs \u2014 that is what a gate is. The REST run object exposes no dispatch inputs either, so without this the approver cannot tell WHICH site is being written WHERE. Same reasoning as the dry_run convention (#1107), applied to the inputs that decide this workflow's blast radius.",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 github-prod on the `deliver` job ONLY",
+      "guard": "`resolve` and `convert` are ungated and read-only; `mode=convert` default performs the whole conversion \u2014 capture, integrate, Next.js build, self-containment gate \u2014 and writes nothing, so it needs no approval; only `deliver` is gated and only `deliver` writes. `target_repo` is a required, separately-validated bare repo name (never derived from `domain`), so a capture of one site cannot be delivered to a repo nobody named. Forms are replaced with a `mailto:` block before the artifact is made, and `deliver` re-checks for a surviving `<form>` before committing \u2014 a static export has no form backend, so a surviving form would accept a visitor's message and drop it. `deliver` consumes the artifact the gate passed rather than re-capturing, so the charity's server is read once. Offline `--self-test` of all four scripts gates every live request.",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 720,
       "title": "Repo - Create GitHub Repo",
       "apis": [

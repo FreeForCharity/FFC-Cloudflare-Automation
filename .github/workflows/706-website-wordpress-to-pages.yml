@@ -1,0 +1,839 @@
+name: '706. Website - WordPress to Pages Conversion (end to end) [WP]'
+
+# The `deliver` job waits at a reviewer gate, and a waiting job has produced
+# no logs — that is what a gate is. The REST run object exposes no dispatch
+# inputs either, so without this the approver cannot tell WHICH site is being
+# written WHERE. Same reasoning as the dry_run convention (#1107), applied to
+# the inputs that decide this workflow's blast radius.
+run-name: '706: ${{ inputs.domain }} -> ${{ inputs.target_repo }} (${{ inputs.mode }})'
+
+# Turns a live WordPress site into a static Next.js `output: 'export'` site in an
+# FFC-EX repo, in ONE run: REST inventory + rendered scrape -> asset
+# localization -> form neutralization -> integration -> build -> PR.
+#
+# WHY ONE RUN. The capture is hundreds of megabytes of localized assets. Split
+# across workflows it becomes an artifact an operator (or an agent) has to
+# download and re-upload, and an agent sandboxed to api.github.com cannot
+# download an Actions artifact at all — its blob storage is a different host.
+# Chaining the stages inside a single run removes the handoff entirely: nothing
+# has to leave GitHub for the conversion to complete.
+#
+# WHY NOT cPanel / a database export. A cPanel backup gives PHP, a MySQL dump
+# and wp-content — none of which is the site. Divi and every other page builder
+# keep the real markup in postmeta and assemble it at render time, so what a
+# visitor sees exists only in the rendered response. This workflow takes the
+# INVENTORY from the CMS (wp/v2 + sitemap.xml, cross-checked) and the MARKUP
+# from the rendered pages, which is the only pairing that is both complete and
+# faithful.
+#
+# WHY NOT httrack (workflow 702). 702 discovers pages by following links, so its
+# page count is a property of the theme's navigation: anything not linked from
+# the crawled frontier is silently absent, and the run still reports success.
+# Here the expected set is declared up front by the CMS and the sitemap, so
+# "we captured fewer pages than exist" is a condition the run can FAIL on.
+#
+# SAFETY. capture and convert are read-only against the source site and write
+# nothing outside the runner. Only `deliver` writes, and it is the only job
+# behind the github-prod gate — so a full dry conversion, including the Next.js
+# build and the self-containment gate, runs with no approval at all. That is
+# deliberate: the cheap way to review this is to run it and read the summary.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: >-
+          Apex domain of the LIVE WordPress site to convert, bare (no scheme, no www, no path). This
+          is the site that actually serves the content — NOT the repo's namesake and NOT a new short
+          domain waiting to be pointed at the result.
+        required: true
+        type: string
+      target_repo:
+        description: >-
+          FFC-EX repository to convert into, e.g. `FFC-EX-vpmin.org`. Stated explicitly rather than
+          derived from `domain`: the destination is frequently a NEW short domain that serves
+          nothing, so deriving it from the source would target the wrong repo, and deriving the
+          source from it would capture the wrong site.
+        required: true
+        type: string
+      contact_email:
+        description: >-
+          Address that replaces every form on the captured site. A static site has no form backend,
+          so an un-replaced form accepts a visitor's message and drops it silently. Required
+          whenever the capture finds a form.
+        required: false
+        type: string
+        default: ''
+      publish_domain:
+        description: >-
+          Custom domain to publish the converted site at, bare. Leave EMPTY (the default) to serve
+          on the repository's default Pages URL, which is what "DNS-ready but not cut over" means.
+          This is NOT the source domain: writing the source domain here points the clone's Pages at
+          the host the original site still serves from.
+        required: false
+        type: string
+        default: ''
+      mode:
+        description: >-
+          `convert` = capture, integrate and build on the runner, write nothing (no approval
+          needed). `deliver` = the same, then open a draft PR on the target repo (gated).
+        required: false
+        type: choice
+        options: [convert, deliver]
+        default: convert
+      max_items:
+        description: 'Maximum inventory entries to capture.'
+        required: false
+        type: string
+        default: '800'
+      delay_ms:
+        description: 'Politeness delay between requests to the live site, in milliseconds.'
+        required: false
+        type: string
+        default: '250'
+      include_posts:
+        description: 'Also capture blog posts and their archives, not just pages.'
+        required: false
+        type: boolean
+        default: true
+      ignore_hosts:
+        description: >-
+          Comma-separated hostnames whose references are DROPPED: not fetched, not counted as asset
+          failures, not counted against the external-host gate. Nothing is re-pointed.
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  # Input validation and the offline self-tests, with NO network access of any
+  # kind. Everything downstream depends on this job, so a logic regression in
+  # either script stops the run before it touches a real charity's website.
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      domain: ${{ steps.resolve.outputs.domain }}
+      repo: ${{ steps.resolve.outputs.repo }}
+      email: ${{ steps.resolve.outputs.email }}
+      publish_domain: ${{ steps.resolve.outputs.publish_domain }}
+      cname_domain: ${{ steps.resolve.outputs.cname_domain }}
+      mode: ${{ steps.resolve.outputs.mode }}
+      max: ${{ steps.resolve.outputs.max }}
+      delay: ${{ steps.resolve.outputs.delay }}
+      posts: ${{ steps.resolve.outputs.posts }}
+      ignore_hosts: ${{ steps.resolve.outputs.ignore_hosts }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Resolve inputs
+        id: resolve
+        env:
+          INPUT_DOMAIN: ${{ inputs.domain }}
+          INPUT_REPO: ${{ inputs.target_repo }}
+          INPUT_EMAIL: ${{ inputs.contact_email }}
+          INPUT_PUBLISH: ${{ inputs.publish_domain }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_MAX: ${{ inputs.max_items }}
+          INPUT_DELAY: ${{ inputs.delay_ms }}
+          INPUT_POSTS: ${{ inputs.include_posts }}
+          INPUT_IGNORE: ${{ inputs.ignore_hosts }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Trim surrounding whitespace ONLY. `tr -d '[:space:]'` was wrong in a
+          # way that reads as extra safety: deleting INTERNAL whitespace turns an
+          # invalid value into a different VALID one, so the guard below accepts
+          # it. Measured:
+          #
+          #   'example.org attacker.com' --tr -d--> 'example.orgattacker.com'
+          #     -> matches the hostname regex, so a live capture is pointed at a
+          #        host the operator never typed
+          #   'info @example.org'        --tr -d--> 'info@example.org'
+          #     -> a published contact address the operator never typed
+          #
+          # With whitespace merely trimmed, the existing patterns reject both,
+          # because whitespace is in none of their character classes.
+          trim() {
+            local v="$1"
+            v="${v#"${v%%[![:space:]]*}"}"
+            printf '%s' "${v%"${v##*[![:space:]]}"}"
+          }
+
+          # The domain is the one value that becomes a network call, and the
+          # natural way to type it is wrong: an operator pastes
+          # `https://example.org/`, which threads into the REST candidates as
+          # `https://https://example.org//wp-json/` and fails hundreds of lines
+          # later as an unhelpful DNS error.
+          domain="$(trim "${INPUT_DOMAIN:-}" | tr '[:upper:]' '[:lower:]')"
+          domain="${domain#https://}"
+          domain="${domain#http://}"
+          domain="${domain#www.}"
+          domain="${domain%%/*}"
+          if [ -z "$domain" ]; then
+            echo "::error::domain is required."
+            exit 1
+          fi
+          if ! printf '%s' "$domain" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+            echo "::error::domain '$domain' is not a bare hostname. Expected e.g. 'example.org'."
+            exit 1
+          fi
+
+          # Repo name only — an owner prefix or a URL would be interpolated into
+          # a checkout path and a gh --repo argument.
+          repo="$(trim "${INPUT_REPO:-}")"
+          repo="${repo#https://github.com/}"
+          repo="${repo#http://github.com/}"
+          # Case-insensitively, because GitHub URLs are: a pasted
+          # `github.com/freeforcharity/<repo>` would otherwise keep its slash
+          # and be rejected as "not a bare repository name" — an error that
+          # blames the repo name for a casing difference in the OWNER.
+          case "$repo" in
+            [Ff][Rr][Ee][Ee][Ff][Oo][Rr][Cc][Hh][Aa][Rr][Ii][Tt][Yy]/*) repo="${repo#*/}" ;;
+          esac
+          # A pasted repo URL usually carries one of these; both are unambiguous.
+          repo="${repo%.git}"
+          repo="${repo%/}"
+          if [ -z "$repo" ]; then
+            echo "::error::target_repo is required."
+            exit 1
+          fi
+          if ! printf '%s' "$repo" | grep -qE '^[A-Za-z0-9._-]+$'; then
+            echo "::error::target_repo '$repo' is not a bare repository name. Expected e.g. 'FFC-EX-example.org'."
+            exit 1
+          fi
+          # Fail closed on anything outside the FFC-EX fleet. `deliver` holds an
+          # ORG-WIDE PAT, so a typo here does not fail — it succeeds against a
+          # repo nobody meant to touch, and the integration would replace that
+          # repo's public/ wholesale. The destination is also the one input with
+          # no natural cross-check: the source domain cannot confirm it, by
+          # design. Narrowing to the prefix this workflow is written for costs
+          # nothing, since integrate-clone-into-nextjs targets that template.
+          case "$repo" in
+            FFC-EX-*) ;;
+            *)
+              echo "::error::target_repo '$repo' is not an FFC-EX repository. This workflow replaces the target's public/ wholesale and runs with an org-wide token, so it refuses any repo outside the FFC-EX-* fleet."
+              exit 1
+              ;;
+          esac
+
+          # The CNAME question, which is the one place the two domains are most
+          # dangerous to confuse. integrate-clone-into-nextjs writes
+          # `public/CNAME` as (existing CNAME || --domain), so passing the
+          # SOURCE domain would set the clone's Pages custom domain to the host
+          # the original WordPress still serves from. The destination is derived
+          # from the repo name instead — FFC-EX-vpmin.org -> vpmin.org — and the
+          # source domain is never a candidate.
+          publish="$(trim "${INPUT_PUBLISH:-}" | tr '[:upper:]' '[:lower:]')"
+          publish="${publish#https://}"
+          publish="${publish#http://}"
+          publish="${publish#www.}"
+          publish="${publish%%/*}"
+          if [ -n "$publish" ]; then
+            if ! printf '%s' "$publish" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+              echo "::error::publish_domain '$publish' is not a bare hostname."
+              exit 1
+            fi
+          fi
+          # integrate REQUIRES a --domain, so one is always supplied; when the
+          # operator asked for no custom domain the CNAME it writes is deleted
+          # again after integration (see the integrate step).
+          cname_domain="$publish"
+          if [ -z "$cname_domain" ]; then
+            cname_domain="$(printf '%s' "${repo#FFC-EX-}" | tr '[:upper:]' '[:lower:]')"
+            # `FFC-EX-` on its own passes both the name pattern and the prefix
+            # gate above and derives to the empty string, which integrate then
+            # rejects as a usage error — after the capture, the build and the
+            # gate have all run. Caught here, where the input is wrong, rather
+            # than twenty minutes later somewhere that does not name it.
+            if [ -z "$cname_domain" ]; then
+              echo "::error::target_repo '$repo' carries no domain after the FFC-EX- prefix, so no destination domain can be derived. Expected e.g. 'FFC-EX-example.org', or set publish_domain explicitly."
+              exit 1
+            fi
+            # Held to the SAME hostname rule as an explicit publish_domain.
+            # Guarding only emptiness was half a fix: target_repo legitimately
+            # allows `_` and needs no dot, so `FFC-EX-my_repo` derives to
+            # `my_repo` — non-empty, not a hostname, and bound for public/CNAME.
+            if ! printf '%s' "$cname_domain" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+              echo "::error::target_repo '$repo' derives the destination domain '$cname_domain', which is not a bare hostname. Rename the repo to FFC-EX-<domain>, or set publish_domain explicitly."
+              exit 1
+            fi
+          fi
+
+          mode="${INPUT_MODE:-}"
+          if [ -z "$mode" ]; then mode="convert"; fi
+          case "$mode" in
+            convert|deliver) ;;
+            *) echo "::error::mode '$mode' is not one of: convert, deliver."; exit 1 ;;
+          esac
+
+          # Validated here rather than trusted at the point of use. This value
+          # is written into published markup as the charity's only contact
+          # channel; a typo does not degrade the page, it silently ends every
+          # conversation, and nothing downstream would notice.
+          email="$(trim "${INPUT_EMAIL:-}")"
+          if [ -n "$email" ]; then
+            if ! printf '%s' "$email" | grep -qE '^[A-Za-z0-9._%+-]+@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$'; then
+              echo "::error::contact_email '$email' is not a plausible address."
+              exit 1
+            fi
+          fi
+
+          # parseInt-style parsing accepts '12abc' as 12 and yields NaN for
+          # 'abc', which then propagates into a fetch loop as an unbounded or
+          # zero-length run. Refuse anything that is not wholly digits.
+          max="$(trim "${INPUT_MAX:-}")"
+          if [ -z "$max" ]; then max="800"; fi
+          if ! printf '%s' "$max" | grep -qE '^[0-9]+$' || [ "$max" -lt 1 ] || [ "$max" -gt 5000 ]; then
+            echo "::error::max_items '$max' must be a whole number between 1 and 5000."
+            exit 1
+          fi
+
+          delay="$(trim "${INPUT_DELAY:-}")"
+          if [ -z "$delay" ]; then delay="250"; fi
+          if ! printf '%s' "$delay" | grep -qE '^[0-9]+$' || [ "$delay" -gt 60000 ]; then
+            echo "::error::delay_ms '$delay' must be a whole number of milliseconds, at most 60000."
+            exit 1
+          fi
+
+          posts="${INPUT_POSTS:-}"
+          if [ -z "$posts" ]; then posts="true"; fi
+
+          # Validated ENTRY BY ENTRY against the same hostname rule as `domain`.
+          # A whole-string character-class check accepts `a,org`, turning one
+          # typo into two entries that match nothing — and an ignore list that
+          # matches nothing fails SILENTLY: the run goes on reporting the very
+          # failures the list was added to drop.
+          # Whitespace is a SEPARATOR here, not noise to delete: `a.org b.org`
+          # must become two entries that are each validated, never the single
+          # bogus host `a.orgb.org` that deleting the space would produce.
+          raw_ignore="$(trim "${INPUT_IGNORE:-}" | tr '[:upper:]' '[:lower:]')"
+          ignore_hosts=""
+          if [ -n "$raw_ignore" ]; then
+            # Word-splitting on commas-turned-spaces. (An earlier note here
+            # claimed a heredoc was impossible, because its terminator must sit
+            # at column 0 and that would end this YAML block scalar. Wrong, and
+            # measured so: YAML strips the block indent, so a terminator at the
+            # block's base indentation reaches the shell at column 0 exactly as
+            # required. The PR body below uses one.)
+            # Globbing off so an entry like `*.org` cannot expand to filenames.
+            set -f
+            for entry in $(printf '%s' "$raw_ignore" | tr ',' ' '); do
+              entry="${entry#www.}"
+              if ! printf '%s' "$entry" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+                set +f
+                echo "::error::ignore_hosts entry '$entry' is not a bare hostname."
+                exit 1
+              fi
+              case ",$ignore_hosts," in *",$entry,"*) continue ;; esac
+              ignore_hosts="${ignore_hosts:+$ignore_hosts,}$entry"
+            done
+            set +f
+          fi
+
+          {
+            echo "domain=$domain"
+            echo "repo=$repo"
+            echo "email=$email"
+            echo "publish_domain=$publish"
+            echo "cname_domain=$cname_domain"
+            echo "mode=$mode"
+            echo "max=$max"
+            echo "delay=$delay"
+            echo "posts=$posts"
+            echo "ignore_hosts=$ignore_hosts"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Resolved: domain=$domain repo=$repo mode=$mode max=$max delay=$delay posts=$posts"
+
+      # Placed in `resolve`, which every other job needs, so a broken classifier
+      # cannot reach the live site. Both scripts decide what gets fetched and
+      # what gets written into published markup, so neither runs unverified.
+      - name: Offline self-tests (gate every later job)
+        run: |
+          node scripts/capture-wordpress-api.mjs --self-test
+          node scripts/replace-forms-with-mailto.mjs --self-test
+          node scripts/integrate-clone-into-nextjs.mjs --self-test
+          node scripts/verify-no-legacy.mjs --self-test
+
+  convert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: resolve
+    # Keyed on the NORMALIZED domain, so `https://Example.org/` and
+    # `example.org` share a group. A workflow-level `concurrency:` cannot see a
+    # job output, so it would have to key on the raw input and two spellings of
+    # one site would hammer it in parallel.
+    concurrency:
+      group: wp-convert-${{ needs.resolve.outputs.domain }}
+      cancel-in-progress: false
+    outputs:
+      pages_with_forms: ${{ steps.forms.outputs.pages_with_forms }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          path: automation
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Capture the live WordPress site
+        working-directory: automation
+        env:
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          MAX: ${{ needs.resolve.outputs.max }}
+          DELAY: ${{ needs.resolve.outputs.delay }}
+          POSTS: ${{ needs.resolve.outputs.posts }}
+          IGNORE_HOSTS: ${{ needs.resolve.outputs.ignore_hosts }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--domain "$DOMAIN" --out "$RUNNER_TEMP/capture/site" --max "$MAX" --delay "$DELAY")
+          if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
+          if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
+          node scripts/capture-wordpress-api.mjs "${args[@]}"
+
+      # Runs BEFORE integration, so the forms are dead in the artifact too and
+      # a later stage cannot accidentally publish the un-neutralized capture.
+      - name: 'Replace forms with a mailto: block'
+        id: forms
+        working-directory: automation
+        env:
+          EMAIL: ${{ needs.resolve.outputs.email }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          site="$RUNNER_TEMP/capture/site"
+          # Count first: an absent contact_email is only a problem if the site
+          # actually has forms, and failing on it unconditionally would block
+          # every form-free site for no reason.
+          # grep exits 1 on "no match", and under `set -euo pipefail` that
+          # aborts the step — so the form-free branch below was unreachable in
+          # exactly the case it exists for, and every site without a form
+          # failed the conversion.
+          #
+          # `|| true` alone would fix that and introduce a worse bug: grep exits
+          # >1 on a REAL error (unreadable directory, bad regex), and collapsing
+          # that to "no forms found" is how a search that never ran becomes
+          # "nothing to replace" and ships live, dead forms. The three cases are
+          # kept apart.
+          set +e
+          matches="$(grep -rlIE '<form[[:space:]/>]' "$site" --include='*.html' --include='*.htm')"
+          rc=$?
+          set -e
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::Searching $site for forms failed (grep exit $rc). Refusing to treat a failed search as 'no forms'."
+            exit 1
+          fi
+          found=0
+          if [ -n "$matches" ]; then
+            found="$(printf '%s\n' "$matches" | wc -l | tr -d ' ')"
+          fi
+          echo "Pages carrying a form tag: $found"
+          if [ "$found" -eq 0 ]; then
+            echo "pages_with_forms=0" >> "$GITHUB_OUTPUT"
+            echo "- No forms found; nothing to replace." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -z "$EMAIL" ]; then
+            echo "::error::$found captured page(s) carry a form, but contact_email was not set. A static site has no form backend, so shipping these would accept a visitor's message and drop it. Re-run with contact_email set."
+            exit 1
+          fi
+          node scripts/replace-forms-with-mailto.mjs \
+            --dir "$site" --email "$EMAIL" --subject "Website enquiry from $DOMAIN"
+          echo "pages_with_forms=$found" >> "$GITHUB_OUTPUT"
+
+      # Deliberately unauthenticated: this job is the ungated lane, and giving it
+      # the cross-repo PAT would mean a read-only conversion carried a
+      # credential that can write to every repo in the org. The cost is that a
+      # PRIVATE target repo fails here with "repository not found" — the whole
+      # FFC-EX fleet is public, and the day one is not, the fix is to gate this
+      # job too rather than to hand it the token.
+      - name: Check out the target FFC-EX repo (read-only)
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: 'FreeForCharity/${{ needs.resolve.outputs.repo }}'
+          path: ffc-ex
+          fetch-depth: 0
+
+      - name: Integrate the capture into the Next.js app
+        env:
+          CNAME_DOMAIN: ${{ needs.resolve.outputs.cname_domain }}
+          PUBLISH_DOMAIN: ${{ needs.resolve.outputs.publish_domain }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Whether the repo already had a custom domain decides whether we may
+          # remove the one integration writes. Recorded BEFORE integration,
+          # because integration always creates it.
+          had_cname=no
+          if [ -f ffc-ex/public/CNAME ]; then had_cname=yes; fi
+
+          # Never the source domain — see the resolve step. integrate writes
+          # (existing CNAME || --domain), so an existing custom domain still
+          # wins and is preserved.
+          node automation/scripts/integrate-clone-into-nextjs.mjs \
+            --clone "$RUNNER_TEMP/capture/site" \
+            --repo ffc-ex \
+            --domain "$CNAME_DOMAIN"
+
+          # No custom domain requested and none before: serve on the default
+          # Pages URL. A CNAME file is not inert — Pages switches to the custom
+          # domain and REDIRECTS the default URL to it, so leaving one here
+          # would make the converted site unreachable at the only address that
+          # works before DNS is cut over.
+          if [ -z "$PUBLISH_DOMAIN" ] && [ "$had_cname" = "no" ]; then
+            rm -f ffc-ex/public/CNAME
+            echo "No publish_domain and no pre-existing CNAME: removed public/CNAME so Pages serves the default URL."
+          fi
+
+      - name: Build the static export
+        working-directory: ffc-ex
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f pnpm-lock.yaml ]; then
+            corepack enable
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm install --frozen-lockfile
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm run build
+          else
+            npm ci
+            npm run build
+          fi
+          if [ ! -f out/index.html ]; then
+            echo "::error::Build produced no out/index.html — the export is empty."
+            exit 1
+          fi
+
+      - name: Install Playwright (self-containment gate)
+        run: |
+          npm i --no-save playwright
+          npx playwright install --with-deps chromium
+
+      # The gate that makes this a migration rather than a mirror: it loads
+      # every exported page with all requests to the LIVE host aborted. A page
+      # that still needs the origin fails here, which is the only check that can
+      # see a dependency the capture report cannot.
+      - name: Gate - the export must be self-contained
+        # verify-no-legacy defaults to --max-pages 40. On a site whose sitemap
+        # runs to hundreds of URLs that is a SAMPLE, not a proof, and the run
+        # says so: it prints how many pages it did not check. Raised to 120 —
+        # enough to cover every distinct template on a typical WordPress site
+        # (the long tail is tag and date archives sharing one layout) while
+        # staying inside the job timeout, since each page is a real browser
+        # load.
+        run: |
+          node automation/scripts/verify-no-legacy.mjs \
+            --domain "${{ needs.resolve.outputs.domain }}" \
+            --dir ffc-ex/out \
+            --max-pages 120
+
+      # Integration REMOVES the template's app routes — that is its design, and
+      # correct: the site is public/ now, and a surviving route would both risk
+      # colliding with a captured path and export a stray page. But the target
+      # repo's own unit and e2e tests still assert those routes exist, so the
+      # delivered PR arrives with its CI red for a reason that is not a defect.
+      #
+      # Reported, not fixed, and not fatal: deciding what to do with a
+      # template's test suite belongs to whoever reviews the conversion, and
+      # failing here would block every conversion on a condition that is always
+      # true. What must not happen is the reviewer meeting it as a surprise.
+      - name: Report tests that reference the parked routes
+        working-directory: ffc-ex
+        shell: bash
+        run: |
+          set -uo pipefail
+          parked="_disabled_template_routes"
+          if [ ! -d "$parked" ]; then
+            echo "No template routes were parked."
+            exit 0
+          fi
+          # `%h` for the root route is `$parked` itself with no subpath, which
+          # is why it is mapped to `/` here rather than left to become a grep
+          # for `/_disabled_template_routes`.
+          routes="$(find "$parked" -name 'page.*' -printf '%h\n' 2>/dev/null \
+            | sed -e "s|^$parked$|/|" -e "s|^$parked/||" | sort -u)"
+          echo "Parked routes:"; echo "$routes"
+          hits=""
+          root_parked=""
+          for r in $routes; do
+            [ -n "$r" ] || continue
+            # The root route cannot be searched for the way the others can: a
+            # grep for "/" matches every path in every test file, so it would
+            # report all of them as affected. It is REPORTED SEPARATELY rather
+            # than skipped — skipping it silently prints "None." for the one
+            # route every template has, which reads as "nothing is affected"
+            # when the home page has in fact just been replaced.
+            if [ "$r" = "/" ]; then root_parked="yes"; continue; fi
+            f="$(grep -rlF -- "/$r" __tests__ tests 2>/dev/null | tr '\n' ' ')"
+            if [ -n "$f" ]; then hits="${hits}- \`/$r\` referenced by: $f"$'\n'; fi
+          done
+          {
+            echo ""
+            echo "### Target repo tests referencing parked routes"
+            echo ""
+            if [ -n "$hits" ]; then
+              echo "$hits"
+            else
+              echo "No non-root parked route is referenced by a test."
+            fi
+            if [ -n "$root_parked" ]; then
+              echo ""
+              echo "- \`/\` (the home page) was parked. Not searchable by path — a grep for"
+              echo "  \"/\" matches every test file — so check the target repo's home-page and"
+              echo "  smoke tests by hand."
+            fi
+            if [ -n "$hits" ] || [ -n "$root_parked" ]; then
+              echo ""
+              echo "These will fail in the target repo's CI after delivery. Integration removes"
+              echo "the template's app routes by design; the template's tests still assert them."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report what would be written
+        shell: bash
+        working-directory: ffc-ex
+        run: |
+          set -euo pipefail
+          {
+            echo "## 706 — ${{ needs.resolve.outputs.domain }} → ${{ needs.resolve.outputs.repo }}"
+            echo ""
+            echo "Mode: \`${{ needs.resolve.outputs.mode }}\`"
+            echo ""
+            echo "Changed paths that a delivery would commit: $(git add -A --dry-run | wc -l)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The handoff to `deliver`, and the reason `deliver` does not re-capture.
+      # Re-running the capture would hit a real charity's server a second time
+      # for a result that is supposed to be identical — and if the two runs
+      # DISAGREED (a post published between them, an asset rotated), the
+      # delivered tree would not be the tree the gate above passed. The build
+      # and the self-containment gate are evidence about THIS artifact; a
+      # re-capture would silently discard that evidence.
+      #
+      # Only the capture is carried, not the integrated repo: `deliver` needs a
+      # tokened git checkout to push from, so it re-runs the (offline, local)
+      # integration against its own checkout rather than trying to ship a .git
+      # directory through an artifact.
+      - name: Upload the neutralized capture (handoff to deliver)
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp-capture-${{ github.run_id }}
+          path: ${{ runner.temp }}/capture
+          retention-days: 7
+          include-hidden-files: true
+          if-no-files-found: error
+
+  # The ONLY job that writes anything, and the only one behind the gate. Split
+  # out so the whole conversion above — capture, integrate, build, and the
+  # self-containment gate — runs with no approval: an operator can see exactly
+  # what a delivery would produce before anyone is asked to approve one.
+  deliver:
+    if: needs.resolve.outputs.mode == 'deliver'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: [resolve, convert]
+    # CBM_TOKEN (the cross-repo PAT) lives in this environment.
+    environment: github-prod
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Never
+      # reintroduce a GitHub-environment copy — that drift is exactly what left
+      # the Cloudflare token broken for four months.
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-ffc-copilot-mcp-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          # Liveness, not just presence (#1102). A revoked-but-present PAT clears the
+          # emptiness check above and fails two to four steps later inside a script,
+          # naming the wrong subsystem -- that is how 502's dead credential was read as
+          # a Key Vault RBAC problem for nine days (#848). The two causes have different
+          # remedies (role assignment vs remint), so both checks stay and their messages
+          # stay distinguishable.
+          #
+          # Probe by status code only: the token goes into a request header and never
+          # into output. `-o /dev/null` discards the body; `-D` keeps the RESPONSE
+          # headers, which carry no credential and are what separates a throttled token
+          # from a rejected one below.
+          #
+          # `|| true` is load-bearing, not defensive habit. The runner invokes this body
+          # under `-e`, and `set -euo pipefail` above keeps it: without it a curl that
+          # cannot reach the network aborts the assignment and the step dies before the
+          # branch below ever runs, with no message of ours (L73). With it, curl's own
+          # `000` reaches the check and fails closed.
+          #
+          # A 200 proves the token AUTHENTICATES. It proves nothing about SCOPE -- a
+          # read-scoped PAT answers 200 here and 403 on a write -- so a green probe is
+          # not a licence to assume the later write will work.
+          hdrs="$(mktemp)"
+          code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user || true)"
+          # GitHub answers a PRIMARY rate limit with 403 + `x-ratelimit-remaining: 0`
+          # and a SECONDARY one with 403 + `retry-after`. Either way the credential is
+          # LIVE, so it must not be handed the revoked wording below: prescribing a
+          # remint for a throttled token is the same wrong-subsystem failure this guard
+          # exists to remove. 321 draws the same line for Cloudflare, where a 403 on a
+          # resource endpoint is authenticated-but-unauthorized and never "dead".
+          remaining="$(awk 'tolower($1) == "x-ratelimit-remaining:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          retry_after="$(awk 'tolower($1) == "retry-after:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          rm -f "$hdrs"
+          if [ "$code" = "403" ] && { [ "$remaining" = "0" ] || [ -n "$retry_after" ]; }; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
+            exit 1
+          fi
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
+            exit 1
+          fi
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7.0.1
+        with:
+          path: automation
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      # The exact tree `convert` built, gated and reported on — not a fresh
+      # capture of a site that may have changed since. This is also the only
+      # network read `deliver` performs against anything but GitHub.
+      - name: Download the capture that passed the gate
+        uses: actions/download-artifact@v4
+        with:
+          name: wp-capture-${{ github.run_id }}
+          path: ${{ runner.temp }}/capture
+
+      # An artifact that arrives empty or half-extracted would otherwise commit
+      # as "the site, with pages missing", which reviews as a capture problem
+      # rather than as a transfer problem. Assert the shape before writing.
+      - name: Verify the downloaded capture is intact
+        shell: bash
+        run: |
+          set -euo pipefail
+          site="$RUNNER_TEMP/capture/site"
+          if [ ! -f "$site/index.html" ]; then
+            echo "::error::The downloaded capture has no site/index.html — the artifact did not transfer intact. Refusing to write a partial site."
+            exit 1
+          fi
+          pages="$(find "$site" -name '*.html' | wc -l | tr -d ' ')"
+          echo "Downloaded capture: $pages HTML page(s)"
+          if [ "$pages" -lt 1 ]; then
+            echo "::error::The downloaded capture contains no HTML pages."
+            exit 1
+          fi
+          # Forms were neutralized in `convert`, BEFORE the artifact was made.
+          # Re-check here rather than trust it: this is the last point before a
+          # dead form would become a published page, and the check costs a grep.
+          if grep -rqIE '<form[[:space:]/>]' "$site" --include='*.html' --include='*.htm'; then
+            echo "::error::The downloaded capture still contains a <form> tag. A static export has no form backend, so this would publish a form that accepts a visitor's message and drops it."
+            exit 1
+          fi
+
+      - name: Check out the target FFC-EX repo (writable)
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: 'FreeForCharity/${{ needs.resolve.outputs.repo }}'
+          token: ${{ env.GH_TOKEN }}
+          path: ffc-ex
+          fetch-depth: 0
+
+      - name: Integrate the capture into the Next.js app
+        env:
+          CNAME_DOMAIN: ${{ needs.resolve.outputs.cname_domain }}
+          PUBLISH_DOMAIN: ${{ needs.resolve.outputs.publish_domain }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Whether the repo already had a custom domain decides whether we may
+          # remove the one integration writes. Recorded BEFORE integration,
+          # because integration always creates it.
+          had_cname=no
+          if [ -f ffc-ex/public/CNAME ]; then had_cname=yes; fi
+
+          # Never the source domain — see the resolve step. integrate writes
+          # (existing CNAME || --domain), so an existing custom domain still
+          # wins and is preserved.
+          node automation/scripts/integrate-clone-into-nextjs.mjs \
+            --clone "$RUNNER_TEMP/capture/site" \
+            --repo ffc-ex \
+            --domain "$CNAME_DOMAIN"
+
+          # No custom domain requested and none before: serve on the default
+          # Pages URL. A CNAME file is not inert — Pages switches to the custom
+          # domain and REDIRECTS the default URL to it, so leaving one here
+          # would make the converted site unreachable at the only address that
+          # works before DNS is cut over.
+          if [ -z "$PUBLISH_DOMAIN" ] && [ "$had_cname" = "no" ]; then
+            rm -f ffc-ex/public/CNAME
+            echo "No publish_domain and no pre-existing CNAME: removed public/CNAME so Pages serves the default URL."
+          fi
+
+      - name: Commit and open a draft PR on the FFC-EX repo
+        working-directory: ffc-ex
+        env:
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          REPO: ${{ needs.resolve.outputs.repo }}
+          EMAIL: ${{ needs.resolve.outputs.email }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ffc-clone-bot'
+          git config user.email 'noreply@freeforcharity.org'
+          branch="wp-convert/$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$branch"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "::notice::The conversion produced no change against the target repo's main. Nothing to open a PR for."
+            exit 0
+          fi
+          # --no-verify: the captured WordPress assets (minified CSS/JS, binary
+          # media) must not run through the FFC-EX repo's husky/lint-staged
+          # pre-commit hooks, which would reformat or reject them.
+          git commit --no-verify \
+            -m "Convert live $DOMAIN into the static export" \
+            -m "Generated by automation workflow 706. Inventory from wp/v2 + sitemap.xml (cross-checked), markup from the rendered pages, assets localized. Forms replaced with a mailto: block for ${EMAIL:-n/a} because a static export has no form backend."
+          git push -u origin "$branch"
+          gh pr create --repo "FreeForCharity/$REPO" \
+            --base main --head "$branch" --draft \
+            --title "Convert live $DOMAIN into the static export" \
+            --body "Automated WordPress→Pages conversion by workflow 706.
+
+          **Source of truth for the inventory** is the CMS (\`wp/v2/pages\`, \`wp/v2/posts\`) cross-checked against \`sitemap.xml\`; the markup is the rendered response for each of those URLs, so page-builder content (Divi et al.) is captured as visitors see it. Assets are localized and the export passed the self-containment gate with all requests to the live host aborted.
+
+          **Forms were replaced with a \`mailto:\` block** (\`${EMAIL:-n/a}\`). A static export has no form backend, so the original markup would have accepted a visitor's message and dropped it.
+
+          Review visual fidelity against the live site before merging."

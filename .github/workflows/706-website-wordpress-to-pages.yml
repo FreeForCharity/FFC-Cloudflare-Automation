@@ -1,5 +1,12 @@
 name: '706. Website - WordPress to Pages Conversion (end to end) [WP]'
 
+# The `deliver` job waits at a reviewer gate, and a waiting job has produced
+# no logs — that is what a gate is. The REST run object exposes no dispatch
+# inputs either, so without this the approver cannot tell WHICH site is being
+# written WHERE. Same reasoning as the dry_run convention (#1107), applied to
+# the inputs that decide this workflow's blast radius.
+run-name: '706: ${{ inputs.domain }} -> ${{ inputs.target_repo }} (${{ inputs.mode }})'
+
 # Turns a live WordPress site into a static Next.js `output: 'export'` site in an
 # FFC-EX repo, in ONE run: REST inventory + rendered scrape -> asset
 # localization -> form neutralization -> integration -> build -> PR.

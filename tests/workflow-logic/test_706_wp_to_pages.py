@@ -53,6 +53,7 @@ def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]
             INPUT_POSTS="",
             INPUT_IGNORE="",
             INPUT_PUBLISH="",
+            INPUT_MINPCT="",
         )
         env.update(env_overrides)
         proc = subprocess.run(
@@ -651,6 +652,124 @@ def test_a_derived_destination_domain_must_be_a_hostname():
     proc, _ = run_resolve(INPUT_REPO="FFC-EX-my_repo")
     assert proc.returncode != 0, proc.stdout
     assert "is not a bare hostname" in proc.stdout, proc.stdout
+
+
+# --- completeness gates delivery; a site's own dead links do not -------------
+
+
+def _run_capture_gate(
+    captured: int, expected: int, problems: list[str], min_pct: str = "98", write_report: bool = True
+):
+    """EXECUTE the real assessment script against a synthetic report.
+
+    Runs the shipped binary, not a shell fragment lifted out of the workflow:
+    the logic moved into scripts/assess-capture-completeness.mjs, and a test
+    that kept exercising an inlined copy would pass while the workflow ran
+    something else.
+    """
+    import json
+    import os
+
+    script = REPO_ROOT / "scripts" / "assess-capture-completeness.mjs"
+    with tempfile.TemporaryDirectory() as td:
+        report = pathlib.Path(td) / "wp-capture-report.json"
+        if write_report:
+            report.write_text(
+                json.dumps(
+                    {
+                        "captured": {"total": captured},
+                        "entries": [{"i": i} for i in range(expected)],
+                        "verdict": {"ok": not problems, "problems": problems},
+                    }
+                ),
+                encoding="utf-8",
+            )
+        summary = pathlib.Path(td) / "summary.md"
+        summary.touch()
+        env = dict(os.environ, GITHUB_STEP_SUMMARY=str(summary))
+        return subprocess.run(
+            ["node", str(script), "--report", str(report), "--min-percent", min_pct],
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+
+
+# The live site's own broken links, from the first real delivery attempt.
+REAL_PROBLEMS = [
+    "captured 589 of 590 inventory entries (REST collections + sitemap union)",
+    "unlocalized asset hosts: myviewletstalkaboutjesus.files.wordpress.com",
+    "assets: 15 failed (11×HTTP 404, 4×HTTP 410); 11 of them on viewpointministriesinternational.org",
+]
+
+
+def test_a_sites_own_dead_links_do_not_block_the_conversion():
+    """The first live delivery failed here. The capture had reached 589 of 590
+    entries with ZERO page-fetch failures, and was rejected over 15 assets that
+    return 404/410 on the LIVE site too. Gating on that means FFC can never
+    migrate a site with one dead image, which is most real charity sites — the
+    clone reproduces those links faithfully rather than introducing them."""
+    proc = _run_capture_gate(589, 590, REAL_PROBLEMS)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_losing_content_still_blocks_the_conversion():
+    proc = _run_capture_gate(2, 587, ["captured 2 of 587"])
+    assert proc.returncode != 0, proc.stdout
+    assert "below the 98% completeness floor" in proc.stderr, proc.stderr
+
+
+def test_the_completeness_floor_is_enforced_near_the_boundary():
+    """95.9% must fail while 99.8% passes — otherwise the floor is decorative."""
+    assert _run_capture_gate(566, 590, REAL_PROBLEMS).returncode != 0
+    assert _run_capture_gate(589, 590, REAL_PROBLEMS).returncode == 0
+
+
+def test_an_empty_inventory_is_a_failure_not_a_vacuous_pass():
+    """0 captured of 0 expected is 0/0. As a ratio it is NaN or 1.0 depending
+    on how it is written, and one of those reads as a perfect capture of a site
+    with no pages."""
+    proc = _run_capture_gate(0, 0, ["nothing"])
+    assert proc.returncode != 0, proc.stdout
+    assert "no inventory entries at all" in proc.stderr, proc.stderr
+
+
+def test_an_unreadable_report_is_a_failure_not_an_assumed_pass():
+    """A capture that died mid-write leaves no readable report. Treating that
+    as "no problems found" converts whatever fragment it left behind."""
+    proc = _run_capture_gate(0, 0, [], write_report=False)
+    assert proc.returncode != 0, proc.stdout
+    assert "Cannot read the capture report" in proc.stderr, proc.stderr
+
+
+def test_the_floor_is_operator_controllable():
+    proc = _run_capture_gate(589, 590, REAL_PROBLEMS, min_pct="100")
+    assert proc.returncode != 0, proc.stdout
+    assert "below the 100% completeness floor" in proc.stderr, proc.stderr
+
+
+def test_the_workflow_calls_the_shipped_script_not_an_inline_copy():
+    """The assessment logic lives in a file so it can be self-tested and so it
+    is not a `node -e` single-quoted string whose JS template literals read to
+    shellcheck as shell variables (SC2016 — this failed CI)."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert "assess-capture-completeness.mjs" in run, run
+    # Comments are stripped first: the comment above the call NAMES `node -e`
+    # to explain why it is not used, and a bare substring match flags that as
+    # the very thing it forbids. A check that cannot tell code from prose
+    # reports the explanation as the violation.
+    code = "\n".join(l for l in run.splitlines() if not l.strip().startswith("#"))
+    assert "node -e" not in code, "the assessment was inlined again:\n" + code
+    gate = step_run(WORKFLOW, "resolve", "Offline self-tests (gate every later job)")
+    assert "assess-capture-completeness.mjs --self-test" in gate, gate
+
+
+def test_min_capture_percent_is_validated():
+    proc, _ = run_resolve(INPUT_MINPCT="abc")
+    assert proc.returncode != 0, proc.stdout
+    assert "must be a whole number between 1 and 100" in proc.stdout, proc.stdout
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

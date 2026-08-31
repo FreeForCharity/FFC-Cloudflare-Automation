@@ -8,7 +8,8 @@ rather than left to review.
    markup is validated in `resolve` before any of it is used. The natural way
    to type several of these is wrong in a way that fails late and unhelpfully.
 
-2. The offline self-tests of all four scripts gate every later job. A
+2. The offline self-tests of every script the workflow runs gate every later
+   job. A
    classification regression must stop the run before it touches a real
    charity's website, not after.
 
@@ -21,12 +22,13 @@ rather than left to review.
 from __future__ import annotations
 
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, load_workflow, step_run
+from wf_extract import WORKFLOWS, child_env, load_workflow, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -225,21 +227,51 @@ def test_ignore_hosts_normalize_and_dedupe():
 
 
 def test_self_tests_gate_every_later_job():
-    """All four scripts decide either what gets fetched from a live site or
-    what gets written into published markup. The gate lives in `resolve`, which
-    both other jobs need, so a regression cannot reach the network."""
+    """Every script this workflow runs decides either what gets fetched from a
+    live site or what gets written into published markup. The gate lives in
+    `resolve`, which both other jobs need, so a regression cannot reach the
+    network.
+
+    The population is DERIVED from the workflow, not listed here. An earlier
+    version named four scripts in a tuple; a fifth was added to `convert` and
+    the test went on passing, because a hardcoded list can only check the
+    scripts someone remembered to add to it. The question worth asking is
+    "is anything this workflow runs ungated?", and only the workflow knows the
+    left-hand side of that.
+    """
     run = step_run(WORKFLOW, "resolve", "Offline self-tests (gate every later job)")
-    for script in (
-        "capture-wordpress-api.mjs",
-        "replace-forms-with-mailto.mjs",
-        "integrate-clone-into-nextjs.mjs",
-        "verify-no-legacy.mjs",
-    ):
-        assert f"{script} --self-test" in run, f"{script} not gated:\n{run}"
+    gated = set(re.findall(r"scripts/([\w.-]+\.mjs) --self-test", run))
+    invoked = set(re.findall(r"scripts/([\w.-]+\.mjs)", (WORKFLOWS / WORKFLOW).read_text(encoding="utf-8")))
+
+    ungated = invoked - gated
+    assert not ungated, f"invoked but not self-test gated: {sorted(ungated)}"
+    # A derived population can collapse to zero if the extraction breaks, and an
+    # empty set satisfies the assertion above vacuously — which is the same
+    # failure the hardcoded tuple had, just harder to see. Floor it.
+    assert len(gated) >= 5, f"only {len(gated)} script(s) gated: {sorted(gated)}"
 
     wf = load_workflow(WORKFLOW)
     assert wf["jobs"]["convert"]["needs"] == "resolve", wf["jobs"]["convert"].get("needs")
     assert "resolve" in wf["jobs"]["deliver"]["needs"], wf["jobs"]["deliver"].get("needs")
+
+
+def test_the_self_containment_gate_probes_the_source_site():
+    """A same-origin 404 is only a clone defect if the SOURCE still serves the
+    file. The first delivery of this workflow failed all 120 pages on
+    `/dist/widgets.css?v=2110` and `/cdn-cgi/rum?` — a leftover WordPress.com
+    reference and a Cloudflare beacon endpoint, neither of which exists on the
+    origin, so no capture could ever mirror them.
+
+    `--no-source-probe` restores the old always-fatal behaviour, so its presence
+    here would silently reinstate the failure this fixes.
+    """
+    run = step_run(WORKFLOW, "convert", "Gate - the export must be self-contained")
+    assert "verify-no-legacy.mjs" in run, run
+    assert "--no-source-probe" not in run, (
+        "the gate must ask the source site whether it serves a missing asset:\n" + run
+    )
+    # Probing is only meaningful against a local export; --dir is what selects it.
+    assert "--dir" in run, run
 
 
 def test_only_deliver_is_gated_and_only_deliver_writes():

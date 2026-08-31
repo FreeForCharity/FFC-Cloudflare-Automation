@@ -216,6 +216,23 @@ stay.
   gated content (bucktownbullsbaseball precedent).
 - **Suspended/parked sites** — don't clone a suspension page; ship a minimal "Under Development"
   placeholder instead (amargraves precedent).
+- **CDN-injected instrumentation is not the site's content, and no capture can mirror it.**
+  Cloudflare's beacon fabricates a request to the same-origin `/cdn-cgi/rum` at runtime — it appears
+  in no attribute, so the asset inventory never sees it, and `/cdn-cgi/*` is answered by the edge,
+  so it exists on no origin. Measured on viewpointministriesinternational.org: **every one of 120
+  pages** failed the self-containment gate on it. 705 now strips the beacon and any `/cdn-cgi/`
+  script — and decodes Cloudflare's `email-protection` obfuscation first, because removing the
+  decoder without that leaves every obfuscated address rendered as hex.
+- **A reference that is already dead on the source is not a clone defect.** The same run failed on
+  `/dist/widgets.css?v=2110`, fabricated at runtime by a leftover WordPress.com script and 404 on
+  the live site too. `verify-no-legacy` now asks the source whether it serves a missing asset:
+  404/410 (or a soft 404 — HTML served for a `.css`) is reported, anything the source still serves
+  stays fatal, and a probe that could not run stays fatal. `--no-source-probe` restores the old
+  always-fatal behaviour.
+- **A site that moved off WordPress.com carries its old host's scripts.** This one still requests
+  `remote-login.php`, `rlt-proxy.js`, `bilmur.min.js`, `actionbar.js` and `_static/??-eJx…`
+  concatenated CSS — all 404 on the live site. Expect a handful of permanent asset failures and read
+  them as the source's history, not the capture's failure.
 
 ## 3. Repo: `FFC-EX-<domain>`, proven scaffold, CI green
 

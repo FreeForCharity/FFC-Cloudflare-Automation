@@ -623,6 +623,96 @@ def test_an_empty_file_that_existed_is_not_confused_with_one_that_never_did():
         assert [r["path"] for r in result["path_gone"]] == ["scripts/empty.py"], result["path_gone"]
 
 
+def test_an_undecodable_byte_cannot_fabricate_or_hide_a_finding():
+    """Copilot round 7 argued `errors="replace"` in `Tree.read` allows false
+    positives and negatives. Measured, it does not — and this test is the
+    measurement, kept so the reasoning cannot rot.
+
+    Two facts make replacement safe here, and BOTH are pinned below:
+
+      * an anchor always arrives from an issue body over the API, so it is
+        valid UTF-8 and never contains U+FFFD — replacement can only ever
+        remove a match, never invent one;
+      * the current and historical sides decode with the SAME policy, so an
+        undecodable byte reads identically in both halves and cancels.
+
+    The second is load-bearing and was undocumented until this round: change one
+    side's error policy alone and the comparison skews silently. That is the
+    real fragility the review surfaced, even though its stated conclusion — that
+    the sweep should abort on a decode — does not hold. Aborting would turn one
+    stray byte in any cited file into a total outage.
+    """
+    import os as _os
+    import subprocess as _sp
+    import tempfile as _tf
+
+    needle = "helper(timeout=30, retries=2)"
+    bad = b"# stray bytes: \xff\xfe\n"
+
+    def run(at_bytes, now_bytes):
+        with _tf.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+
+            def git(*args, when=None):
+                env = dict(_os.environ)
+                if when:
+                    env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = when
+                _sp.run(["git", "-C", str(root), *args], check=True, env=env,
+                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+
+            git("init", "-q")
+            git("config", "user.email", "t@t")
+            git("config", "user.name", "t")
+            (root / "scripts").mkdir()
+            f = root / "scripts" / "a.py"
+            f.write_bytes(at_bytes)
+            git("add", "-A")
+            git("commit", "-q", "-m", "a", when="2026-08-01T00:00:00")
+            f.write_bytes(now_bytes)
+            git("add", "-A")
+            git("commit", "-q", "-m", "b", "--allow-empty", when="2026-08-20T00:00:00")
+            body = f"`scripts/a.py` calls `{needle}` on every tick."
+            filed = "2026-08-10T00:00:00Z"
+            res = M.audit([issue(1, body, created=filed)], M.Tree(root))
+            return [r["anchor"] for r in res["premise_may_be_gone"]]
+
+    # Undecodable bytes throughout, anchor untouched -> no fabricated finding.
+    assert run(bad + needle.encode() + b"\n", bad + needle.encode() + b"\n") == []
+    # Undecodable bytes throughout, anchor genuinely gone -> still detected.
+    assert run(bad + needle.encode() + b"\n", bad + b"other()\n") == [needle]
+
+    # No anchor can carry a replacement char, which is what makes the above hold.
+    assert not any("\ufffd" in a for a in M.extract_anchors(f"`{needle}` in `scripts/a.py`"))
+
+    # And the two decode policies must stay identical, or the halves stop
+    # cancelling. Asserted per FUNCTION, not over the whole source: a file-wide
+    # count of the literal also matches prose about it, so it reported 3 and
+    # failed the moment the docstring above explained the invariant.
+    import ast as _ast
+    import inspect as _inspect
+    import re as _re
+    import textwrap as _tw
+
+    for fn in (M.Tree.read, M._run_git):
+        # The DOCSTRING has to come out, not just comments. It explains this very
+        # invariant and therefore contains the literal being searched for — with
+        # it left in, mutating the real keyword to errors="ignore" still passed.
+        # Same shape as the ledger's citation guard and the file-wide count this
+        # replaced: prose satisfying a check meant for code.
+        tree_ = _ast.parse(_tw.dedent(_inspect.getsource(fn)))
+        fn_node = tree_.body[0]
+        if (fn_node.body and isinstance(fn_node.body[0], _ast.Expr)
+                and isinstance(fn_node.body[0].value, _ast.Constant)
+                and isinstance(fn_node.body[0].value.value, str)):
+            fn_node.body = fn_node.body[1:]
+        code = _ast.unparse(fn_node)
+        assert _re.search(r"""errors\s*=\s*['"]replace['"]""", code), (
+            f"{fn.__qualname__} no longer decodes with errors=\"replace\"; the current "
+            "and historical sides must share one policy or an undecodable byte stops "
+            "cancelling between them"
+        )
+
+
 def test_a_cited_directory_is_not_reported_as_path_gone():
     # `docs/data` has git history (its children do) but no content of its own.
     # The first live run reported it as PATH GONE against issue #859.

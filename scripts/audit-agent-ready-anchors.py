@@ -351,7 +351,22 @@ class Tree:
         this one fails toward a false finding. Both are the same defect -- an
         inability to read reported as a fact about the tree -- and the same
         split applies: the environment aborts, while a real answer about one
-        object (a path that is simply absent) stays a quiet negative."""
+        object (a path that is simply absent) stays a quiet negative.
+
+        `errors="replace"` is deliberate and is NOT that same defect, though it
+        reads like it. An anchor always arrives from an issue body over the API,
+        so it is valid UTF-8 and can never contain U+FFFD; replacement can
+        therefore only ever *remove* a match, never invent one. And the
+        historical side decodes with the same policy (`_run_git`), so an
+        undecodable byte reads identically in both halves of the comparison and
+        cancels out. Aborting on a decode instead would turn one stray byte in
+        any cited file into a total outage of the sweep.
+
+        The symmetry is load-bearing: change either side's error policy alone
+        and the two halves stop being comparable, silently.
+        `test_an_undecodable_byte_cannot_fabricate_or_hide_a_finding` pins the
+        behaviour in both directions and pins that the two policies still
+        match."""
         try:
             return (self.root / path).read_text(encoding="utf-8", errors="replace")
         except OSError as exc:

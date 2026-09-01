@@ -462,6 +462,98 @@ def test_a_failed_search_is_not_reported_as_no_forms():
     assert "Refusing to treat a failed search as 'no forms'" in run, run
 
 
+def _run_parked_routes_step(*, referencing_test: str | None, test_dirs=("__tests__", "tests"),
+                            grep_stub_rc: int | None = None):
+    """EXECUTE the parked-routes reporting step against a real fixture tree.
+
+    Asserted by running it, not by grepping its source. An earlier version of
+    the sibling forms test asserted that the branch TEXT was present, which
+    passes just as happily when the branch is unreachable.
+    """
+    import os
+
+    run = step_run(WORKFLOW, "convert", "Report tests that reference the parked routes")
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        parked = root / "_disabled_template_routes"
+        (parked / "cookie-policy").mkdir(parents=True)
+        (parked / "page.tsx").write_text("", encoding="utf-8")
+        (parked / "cookie-policy" / "page.tsx").write_text("", encoding="utf-8")
+        for d in test_dirs:
+            (root / d).mkdir(exist_ok=True)
+        if referencing_test:
+            (root / test_dirs[0] / "a.test.ts").write_text(referencing_test, encoding="utf-8")
+
+        script = root / "step.sh"
+        script.write_text(run, encoding="utf-8")
+        summary = root / "summary.md"
+        summary.touch()
+
+        env = dict(os.environ, GITHUB_STEP_SUMMARY=str(summary))
+        if grep_stub_rc is not None:
+            shim = root / "shim"
+            shim.mkdir()
+            (shim / "grep").write_text(f"#!/bin/sh\nexit {grep_stub_rc}\n", encoding="utf-8")
+            (shim / "grep").chmod(0o755)
+            env["PATH"] = f"{shim}{os.pathsep}{env['PATH']}"
+
+        proc = subprocess.run(
+            ["bash", "-e", "-o", "pipefail", str(script)],
+            cwd=str(root), env=env, capture_output=True, text=True,
+            encoding="utf-8", timeout=60,
+        )
+        return proc, summary.read_text(encoding="utf-8")
+
+
+def test_a_parked_route_no_test_mentions_does_not_abort_the_conversion():
+    """This killed delivery attempt 5 AFTER the self-containment gate passed.
+
+    `shell: bash` runs with -e, grep exits 1 for "no match" — the normal answer
+    here — and with pipefail that 1 propagates out of the pipeline and through
+    the assignment, ending the step on the first route no test referenced. The
+    identical bug had already been found and fixed in the forms search fifteen
+    lines earlier in the same file; fixing one site and leaving its twin is the
+    failure this workflow keeps repeating, so both are now executed by tests."""
+    proc, summary = _run_parked_routes_step(referencing_test="import x\n")
+    assert proc.returncode == 0, f"a route no test mentions aborted the step:\n{proc.stdout}{proc.stderr}"
+    assert "No non-root parked route is referenced by a test." in summary, summary
+
+
+def test_a_referencing_test_is_still_reported():
+    """The permissive fix must not cost the finding the step exists to make."""
+    proc, summary = _run_parked_routes_step(referencing_test="fetch('/cookie-policy')\n")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/cookie-policy` referenced by" in summary, summary
+
+
+def test_a_failed_search_still_stops_the_run():
+    """grep >1 is a real error. Reporting "no references" for a search that
+    never ran is the fail-open this guard exists to prevent — and the reason
+    the fix is not a blanket `|| true`."""
+    proc, summary = _run_parked_routes_step(referencing_test=None, grep_stub_rc=2)
+    assert proc.returncode != 0, f"a failed search was treated as 'no references':\n{summary}"
+    assert "Refusing to treat a failed search as 'no references'" in proc.stdout + proc.stderr
+
+
+def test_a_target_repo_with_no_test_directories_says_so():
+    """grep exits 2 for a missing path, which the guard above treats as a real
+    error — so a repo carrying only one of the two conventional test directories
+    would fail for no reason. Absence is reported as absence, not as a clean
+    bill of health."""
+    proc, summary = _run_parked_routes_step(referencing_test=None, test_dirs=())
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "no `__tests__` or `tests` directory" in summary, summary
+    # And the home-page note survives. The first version of this test asserted
+    # only the message it had just added, so it passed while the `searched`
+    # guard — placed before the root-route check — silently dropped the one
+    # note that matters most: that the template home page was replaced. A test
+    # that checks only the behaviour you added cannot see what you broke.
+    # Caught in review on #1231.
+    assert "the home page) was parked" in summary, (
+        "the root-parked note vanished when the repo has no test dirs:\n" + summary
+    )
+
+
 def test_the_capture_output_path_is_the_path_every_later_step_reads():
     """`--out` IS the site root — the script writes pages directly into it, not
     into an `out/site/` subdirectory. Passing `--out .../capture` and then

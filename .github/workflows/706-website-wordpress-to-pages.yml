@@ -622,8 +622,15 @@ jobs:
           routes="$(find "$parked" -name 'page.*' -printf '%h\n' 2>/dev/null \
             | sed -e "s|^$parked$|/|" -e "s|^$parked/||" | sort -u)"
           echo "Parked routes:"; echo "$routes"
+          # Only search directories that exist. grep exits 2 for a missing path,
+          # which the rc check below treats as a real error — so a target repo
+          # with only one of these would fail here for no reason.
+          dirs=()
+          for d in __tests__ tests; do [ -d "$d" ] && dirs+=("$d"); done
           hits=""
           root_parked=""
+          searched="yes"
+          if [ ${#dirs[@]} -eq 0 ]; then searched=""; fi
           for r in $routes; do
             [ -n "$r" ] || continue
             # The root route cannot be searched for the way the others can: a
@@ -632,8 +639,33 @@ jobs:
             # than skipped — skipping it silently prints "None." for the one
             # route every template has, which reads as "nothing is affected"
             # when the home page has in fact just been replaced.
+            #
+            # This check must come BEFORE the no-test-directories guard below:
+            # noting that the home page was replaced does not depend on there
+            # being tests to search. Ordering it the other way silently dropped
+            # the note on a repo with no test dirs — caught in review on #1231.
             if [ "$r" = "/" ]; then root_parked="yes"; continue; fi
-            f="$(grep -rlF -- "/$r" __tests__ tests 2>/dev/null | tr '\n' ' ')"
+            # Nothing to search against, so the per-route greps are skipped —
+            # but the root note above is still reported.
+            [ -n "$searched" ] || continue
+            # grep exits 1 for "no match", which is the NORMAL answer here and
+            # must not end the step; `shell: bash` runs with -e, and with
+            # pipefail that 1 propagates out of the pipeline and through the
+            # assignment. This killed delivery attempt 5 on the first route no
+            # test referenced, AFTER the self-containment gate had passed.
+            #
+            # The forms search 15 lines up already handles this exactly right.
+            # Fixing one site of a bug and leaving its twin is the failure mode
+            # this whole workflow keeps hitting, so the two now match:
+            # 0 = matches, 1 = no matches, >1 = a real error worth stopping for.
+            set +e
+            f="$(grep -rlF -- "/$r" "${dirs[@]}" | tr '\n' ' ')"
+            rc=$?
+            set -e
+            if [ "$rc" -gt 1 ]; then
+              echo "::error::Searching the target repo's tests for /$r failed (grep exit $rc). Refusing to treat a failed search as 'no references'."
+              exit 1
+            fi
             if [ -n "$f" ]; then hits="${hits}- \`/$r\` referenced by: $f"$'\n'; fi
           done
           {
@@ -642,6 +674,8 @@ jobs:
             echo ""
             if [ -n "$hits" ]; then
               echo "$hits"
+            elif [ -z "$searched" ]; then
+              echo "The target repo has no \`__tests__\` or \`tests\` directory, so nothing was searched."
             else
               echo "No non-root parked route is referenced by a test."
             fi

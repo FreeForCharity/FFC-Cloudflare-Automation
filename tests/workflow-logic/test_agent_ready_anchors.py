@@ -713,6 +713,36 @@ def test_an_undecodable_byte_cannot_fabricate_or_hide_a_finding():
         )
 
 
+def test_the_module_runner_reports_a_SystemExit_instead_of_being_ended_by_it():
+    # Copilot round 8. The runner caught `Exception`, and `SystemExit` is not
+    # one — so a test that exits ends the MODULE: everything after it silently
+    # never runs and nothing names the culprit. It bit this PR already, in the
+    # round-5 mutation proof (`rc=1 flipped=[]`, non-zero and unattributable).
+    #
+    # Testable only because the loop is now a function; a test cannot observe
+    # the runner that is running it.
+    import io as _io
+
+    def test_ok():
+        pass
+
+    def test_exits():
+        raise SystemExit("aborting")
+
+    def test_after():
+        pass
+
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        failures = run_module_tests([test_ok, test_exits, test_after])
+    out = buf.getvalue()
+
+    assert failures == 1, f"the SystemExit must count as one failure, got {failures}"
+    assert "FAIL test_exits: unexpected SystemExit: aborting" in out, out
+    assert "PASS test_after" in out, "tests after the exit must still run: " + out
+    assert out.count("PASS") == 2, out
+
+
 def test_a_cited_directory_is_not_reported_as_path_gone():
     # `docs/data` has git history (its children do) but no content of its own.
     # The first live run reported it as PATH GONE against issue #859.
@@ -794,18 +824,39 @@ def test_the_script_issues_no_write_of_any_kind():
     assert "urlopen" in SOURCE, "sanity: the transport is still urllib"
 
 
-TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+def run_module_tests(tests):
+    """Run every test, report each, and return the failure count.
 
-if __name__ == "__main__":
+    Extracted from `__main__` so the runner's own contract can be tested — the
+    defect below is invisible from inside a test that the runner is running.
+
+    `SystemExit` is the case that matters and it is NOT an `Exception`, so the
+    previous `except Exception` let it end the module: the tests after it never
+    ran, and nothing named the one that exited. That is not hypothetical here —
+    a mutant making `Tree.read` abort on every read came back `rc=1 flipped=[]`
+    during this PR's round-5 proof: non-zero and unattributable, reading as a
+    crash rather than a detection, which is the L82 shape the roster guard in
+    `run_all.py` exists to catch one level up.
+
+    `KeyboardInterrupt` is re-raised: a human stopping the run is not a failing
+    test, and swallowing it would make Ctrl-C take one interrupt per test."""
     failures = 0
-    for t in TESTS:
+    for t in tests:
         try:
             t()
             print(f"  PASS {t.__name__}")
         except AssertionError as e:
             failures += 1
             print(f"  FAIL {t.__name__}: {str(e)[:2000]}")
-        except Exception as e:  # never truncate the module: report and continue
+        except KeyboardInterrupt:
+            raise
+        except BaseException as e:  # SystemExit is not an Exception
             failures += 1
             print(f"  FAIL {t.__name__}: unexpected {type(e).__name__}: {str(e)[:2000]}")
-    sys.exit(1 if failures else 0)
+    return failures
+
+
+TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+
+if __name__ == "__main__":
+    sys.exit(1 if run_module_tests(TESTS) else 0)

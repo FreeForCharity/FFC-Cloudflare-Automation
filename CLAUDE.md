@@ -1016,9 +1016,42 @@ Two things follow, and they are easy to collapse into one:
    the file that would fix it is on the operator's workstation and in no repository.
 
 The fix is a `hooks` block in the Conductor workspace's own settings pointing at a clone's
-`.claude/hooks/`. It is @clarkemoyer's call — it changes how the privileged session behaves, and a
-misconfigured guard there blocks the Conductor mid-run rather than an agent mid-task. Ledger
-**L218**.
+`.claude/hooks/`. Ledger **L218**.
+
+### The hub now ships that block, and a way to prove it loaded (#1042)
+
+The config is no longer an untracked file on one workstation. Two artifacts, both reviewable:
+
+- **`.claude/conductor/settings.template.json`** — the workspace's `hooks` block, with the clone's
+  path as a `__HUB_CLONE__` placeholder. It is deliberately **absolute**, not `$CLAUDE_PROJECT_DIR`:
+  that variable is the _session's_ project root, which for the Conductor is the workspace, so
+  copying the hub's own `settings.json` across produces valid JSON with a real `hooks` block that
+  resolves to nothing. That near-miss is the one to remember — it passes every check that stops at
+  config presence.
+- **`scripts/verify-conductor-hooks.py`** — renders the template (`--render`) and, every bootstrap,
+  **probes the guard the config points at**: one command that must be blocked (the run-134 L50
+  shape) and one that must be allowed (`git status --porcelain`). Both verdicts have to land, so
+  neither an `exit 0` stub nor an `exit 2` stub passes; any other exit code is reported as
+  _crashed_, never as a detection. Exit 0/1, and it prints a `HOOKS: …` line in **both** directions
+  for the run's START comment — a verifier that only speaks on failure leaves "guarded" and "the
+  check never ran" identical in the record.
+
+```bash
+python3 scripts/verify-conductor-hooks.py --workspace "$PWD"          # bootstrap check
+python3 scripts/verify-conductor-hooks.py --render --workspace <ws>   # one-time wiring
+```
+
+`$PWD` is safe here even though git-bash spells it `/c/...`: the script translates an MSYS
+`/<drive>/` prefix to `C:/` **on Windows only**. That translation is not cosmetic — native Windows
+Python reads a leading `/c/` as _drive-relative_ and resolves `/c/Users/x` to `C:\c\Users\x`, so
+without it a correctly-wired workspace reports NOT WIRED, and `--render` writes the settings into a
+directory the real session never reads while reporting success. Same trap as the `/c/...` note
+above, reached through an operator's `$PWD` rather than through a heredoc.
+
+Full reasoning, and why option (c) — moving the Conductor's project root to the hub clone — was left
+to @clarkemoyer rather than taken: `docs/runbooks/conductor-hook-wiring.md`. That option changes how
+the privileged session is launched, and a misconfigured guard there blocks the Conductor mid-run
+rather than an agent mid-task.
 
 ## Review threads are GraphQL-only — `--json reviewThreads` is not a field (validated 2026-07-30)
 

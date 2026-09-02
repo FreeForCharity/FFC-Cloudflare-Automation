@@ -109,6 +109,24 @@ jobs:
           }
 
           $d = $env:IN_DOMAIN.Trim().ToLowerInvariant().Trim('.')
+
+          # Reject a line break before publishing (output injection). `.Trim()` strips
+          # LEADING and TRAILING whitespace only — an INTERIOR CR/LF survives, and
+          # `"domain=$d"` is the single-line `name=value` form, so one write becomes
+          # several. Measured on this exact body with
+          # IN_DOMAIN = "example.org\nns1=evil.ns.example\nfound=true": the file
+          # received three `key=value` lines from one statement, at exit 0.
+          #
+          # That is this PR's own subject reached through a different channel — the
+          # dispatcher's text becoming structured data a later job trusts — so it is
+          # refused here rather than sanitized, for the same reason the rest of the
+          # workflow refuses a blank: a domain with a line break in it is not a
+          # domain, and guessing which half was meant is worse than stopping.
+          if ($d -match '[\r\n]') {
+            Write-Output '::error::IN_DOMAIN contains a line break. A multi-line value written to GITHUB_OUTPUT in the name=value form injects additional outputs that later jobs read as trusted. Refusing to publish it.'
+            exit 1
+          }
+
           "domain=$d" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       # THE STEP OUTPUT IS THE SAME INPUT, ONE HOP LATER (#1080).
@@ -198,6 +216,17 @@ jobs:
             echo "::error::Neither IN_DOMAIN_UPSTREAM nor IN_DOMAIN carries a domain: a step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain."
             exit 1
           fi
+          # Reject a line break before publishing (output injection). `xargs` collapses
+          # interior whitespace but a CR can still ride through, and this step writes
+          # `domain`, `ns1` and `ns2` to the same GITHUB_OUTPUT in the single-line
+          # `name=value` form — so an injected line lands beside outputs a later job
+          # trusts. Refused rather than sanitized: see the pwsh Metadata step.
+          case "$d" in
+            *[$'\r\n']*)
+              echo "::error::The resolved domain contains a line break. A multi-line value written to GITHUB_OUTPUT in the name=value form injects additional outputs that later jobs read as trusted. Refusing to publish it."
+              exit 1
+              ;;
+          esac
           echo "domain=$d" >> "$GITHUB_OUTPUT"
 
           # Custom account nameservers (preferred): set FFC_CUSTOM_NAMESERVER_1/2 as
@@ -289,6 +318,17 @@ jobs:
             echo "::error::Neither IN_DOMAIN_UPSTREAM nor IN_DOMAIN carries a domain: a step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain."
             exit 1
           fi
+          # Reject a line break before publishing (output injection). `xargs` collapses
+          # interior whitespace but a CR can still ride through, and this step writes
+          # `domain`, `ns1` and `ns2` to the same GITHUB_OUTPUT in the single-line
+          # `name=value` form — so an injected line lands beside outputs a later job
+          # trusts. Refused rather than sanitized: see the pwsh Metadata step.
+          case "$d" in
+            *[$'\r\n']*)
+              echo "::error::The resolved domain contains a line break. A multi-line value written to GITHUB_OUTPUT in the name=value form injects additional outputs that later jobs read as trusted. Refusing to publish it."
+              exit 1
+              ;;
+          esac
           echo "domain=$d" >> "$GITHUB_OUTPUT"
 
           # Nameservers as resolved by `cloudflare_preflight` and passed through this

@@ -787,6 +787,85 @@ def test_the_bash_body_fails_closed_when_neither_source_supplies_a_domain():
 
 
 # --------------------------------------------------------------------------
+# behavioural — output injection through GITHUB_OUTPUT
+#
+# The laundering hop again, from the other end. `env:` stops the value being
+# CODE; it does nothing to stop it being extra STRUCTURE. `"domain=$d"` is the
+# single-line `name=value` form, and `.Trim()` strips leading and trailing
+# whitespace only — so an INTERIOR line break turns one write into several
+# `key=value` lines that later jobs read through `steps.*` / `needs.*` as
+# trusted. Raised by Copilot on #1234 and confirmed reachable.
+# --------------------------------------------------------------------------
+
+
+def test_a_line_break_in_the_domain_is_refused_before_publishing():
+    body = _render(_body(_step("whmcs_preflight", "Metadata")), {})
+    for label, payload in (
+        ("LF", "example.org\nns1=evil.ns.example\nfound=true"),
+        ("bare CR", "example.org\rns1=evil.ns.example"),
+    ):
+        r = _run_pwsh(body, IN_DOMAIN=payload)
+        assert r.rc != 0, f"{label}: published anyway; gho={r.gho!r}"
+        assert "contains a line break" in r.out, (
+            f"{label}: refused for the wrong reason — a non-zero exit alone cannot "
+            f"tell this guard from the emptiness guard next to it. Got {r.out!r}"
+        )
+        assert r.gho.strip() == "", f"{label}: wrote to GITHUB_OUTPUT anyway: {r.gho!r}"
+
+    ok = _run_pwsh(body, IN_DOMAIN="  ExAmple.ORG.  ")
+    assert ok.rc == 0 and ok.gho.strip() == "domain=example.org", (
+        f"the guard must leave an ordinary domain alone, normalisation included; "
+        f"rc={ok.rc} gho={ok.gho!r}"
+    )
+
+
+def test_the_bash_upstream_branch_refuses_a_line_break():
+    """`d="$IN_DOMAIN_UPSTREAM"` is raw — no `tr`, no `xargs` — so this is the
+    branch where the injection is actually reachable in the bash steps."""
+    for job in ("cloudflare_preflight", "cloudflare_zone_create"):
+        body = _render(_body(_step(job, "Metadata")), {})
+        out, _, rc, gho = _run_bash(
+            body,
+            IN_DOMAIN="",
+            IN_DOMAIN_UPSTREAM="example.org\nns1=evil.ns.example",
+            IN_NS1="ns1.example.org",
+            IN_NS2="ns2.example.org",
+        )
+        assert rc != 0, f"{job}: published anyway; gho={gho!r}"
+        assert "contains a line break" in out, f"{job}: wrong reason: {out!r}"
+        assert gho.strip() == "", f"{job}: wrote anyway: {gho!r}"
+
+
+def test_the_bash_input_branch_is_already_flattened_by_xargs():
+    """The other half of the finding, which did NOT hold — pinned so it stays true.
+
+    `echo "$IN_DOMAIN" | tr … | xargs` collapses a newline to a SPACE, so the value
+    is single-line before it is ever published and no extra key can appear. The
+    CR/LF guard correctly does not fire here. Asserted rather than assumed in either
+    direction: if someone drops the `xargs`, this branch silently becomes injectable
+    and only this case says so.
+    """
+    for job in ("cloudflare_preflight", "cloudflare_zone_create"):
+        body = _render(_body(_step(job, "Metadata")), {})
+        out, _, rc, gho = _run_bash(
+            body,
+            IN_DOMAIN="example.org\nns1=evil.ns.example\nfound=true",
+            IN_DOMAIN_UPSTREAM="",
+            IN_NS1="ns1.example.org",
+            IN_NS2="ns2.example.org",
+        )
+        assert rc == 0, f"{job}: rc={rc} out={out!r}"
+        lines = gho.strip().splitlines()
+        assert len(lines) == 3, (
+            f"{job}: expected exactly domain/ns1/ns2 — a fourth line is an injected "
+            f"output key. Got {gho!r}"
+        )
+        assert not [ln for ln in lines if ln.startswith("ns1=evil")], (
+            f"{job}: an injected `ns1=` key reached GITHUB_OUTPUT: {gho!r}"
+        )
+
+
+# --------------------------------------------------------------------------
 # behavioural — github-script
 # --------------------------------------------------------------------------
 
@@ -896,6 +975,7 @@ NEEDS_PWSH = {
     "test_the_shipped_downstream_body_binds_the_laundered_payload_as_data",
     "test_an_empty_domain_fails_closed_and_says_so",
     "test_an_unset_domain_fails_closed_and_says_so",
+    "test_a_line_break_in_the_domain_is_refused_before_publishing",
 }
 NEEDS_NODE = {
     "test_the_pre_fix_github_script_body_executed_the_payload",

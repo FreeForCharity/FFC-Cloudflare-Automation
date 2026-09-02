@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "_comment": [
+    "Conductor workspace hook wiring (#1042). Render this template into the",
+    "Conductor's OWN .claude/settings.json with:",
+    "    python3 scripts/verify-conductor-hooks.py --render --workspace <workspace>",
+    "Every __HUB_CLONE__ is replaced by the absolute path of the hub clone.",
+    "Do NOT hand-edit the rendered copy: it is a build product, and the reason",
+    "this template is tracked at all is that an untracked local settings.json is",
+    "a config no PR can review and no run can verify (#1042 AC1).",
+    "The paths are absolute ON PURPOSE. $CLAUDE_PROJECT_DIR resolves to the",
+    "SESSION's project root, which for the Conductor is the workspace, not the",
+    "clone -- that mismatch is the whole of L218."
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"__HUB_CLONE__/.claude/hooks/session_start.py\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"__HUB_CLONE__/.claude/hooks/scan_prompt.py\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"__HUB_CLONE__/.claude/hooks/guard_bash.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"__HUB_CLONE__/.claude/hooks/guard_edit.py\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"__HUB_CLONE__/.claude/hooks/post_edit.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

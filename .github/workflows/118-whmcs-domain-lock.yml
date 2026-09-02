@@ -51,11 +51,51 @@ jobs:
 
       - name: Run registrar lock/unlock
         shell: pwsh
+        # `domain` is a free-text dispatch input. Interpolated into this body it was
+        # not an argument — it was source text pasted into the program GitHub then
+        # runs, holding the WHMCS API credential the APPROVER spent, against a
+        # registrar lock on a production domain (#1080). The credential is named in
+        # no `env:` block in this file: the preceding `whmcs-secrets-from-kv` step
+        # exports WHMCS_API_IDENTIFIER / _SECRET / _APIM_SUBSCRIPTION_KEY through
+        # GITHUB_ENV, so a reader who checks this step's own `env:` (ledger L213) and
+        # a `secrets.` grep of the file (#1141) both score it as holding nothing. Run
+        # `python3 scripts/check-workflow-input-interpolation.py --reachability
+        # 118-whmcs-domain-lock.yml` for the arrival path (#1188).
+        #
+        # The input sat in SINGLE quotes, where PowerShell expands nothing — so the
+        # `$( )` payload the double-quoted lanes used is inert here and reports the
+        # pre-fix body as harmless (ledger L243). Closing the quote is not inert, and
+        # `tests/workflow-logic/test_118_domain_lock_wiring.py` measures both rather
+        # than asserting this.
+        #
+        # `action` (choice) and `dry_run` (boolean) stay interpolated on purpose:
+        # GitHub generates both from the declared options, so neither can carry a
+        # payload.
         env:
           WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $params = @{ Domain = '${{ inputs.domain }}' }
+
+          # Fail closed on an empty or unset mapping (#1150, ledger L214) — and here
+          # that guard is load-bearing for a second reason, measured on this body.
+          # `& pwsh -File … @params` splats a HASHTABLE onto a NATIVE command, and a
+          # hashtable has no defined enumeration order: a blank `Domain` is dropped
+          # from the rendered argument list, so `-Domain` binds the NEXT token and
+          # every later parameter shifts one position left. Because the order varies
+          # per process, the SAME dispatch produces different argument sets run to
+          # run — measured 3 of 8 runs on the pre-fix body as
+          # `Domain=[-DryRun:True] DryRun=[False]`, i.e. a run dispatched with
+          # dry_run=true silently losing its `-DryRun` switch, and the other 5 as a
+          # loud `missing mandatory parameters: Domain`. `IsNullOrWhiteSpace` refuses
+          # the blank before either outcome can happen, which is what makes this step
+          # deterministic as well as uninjectable.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call whmcs-domain-lock.ps1 with an empty -Domain.'
+            exit 1
+          }
+
+          $params = @{ Domain = $env:IN_DOMAIN }
           if ('${{ inputs.action }}' -eq 'lock') { $params.Lock = $true }
           if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun = $true }
 

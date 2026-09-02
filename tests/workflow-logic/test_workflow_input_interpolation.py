@@ -344,6 +344,7 @@ BURNED_DOWN = (
     "119-bulk-staging-cname-github-pages.yml",
     "205-whmcs-ticket-open.yml",
     "101-domain-status.yml",
+    "118-whmcs-domain-lock.yml",
 )
 
 
@@ -532,6 +533,25 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                the callee was then handed a legal domain, and the step exited 0.
                Filed as #1208; ledger L248.
       = 23 / 8
+      -118     burned down: `domain` moved to step-level `env:` (IN_DOMAIN). It
+               runs on whmcs-prod and CHANGES a registrar lock on a production
+               domain, with the WHMCS credential arriving through GITHUB_ENV
+               from `whmcs-secrets-from-kv` — the workflow's only credential,
+               invisible to both the L213 `env:` read and the #1141 `secrets.`
+               grep, as 205's was. Its injection point sat in SINGLE quotes, so
+               the `$( )` payload is inert and the control had to close the
+               quote and the hashtable and re-open both. Measured: the WHMCS
+               secret was written to a file, the callee was then handed a legal
+               domain, and the step exited 0. It is the first lane where the
+               fail-closed guard fixes a defect the interpolation was HIDING
+               rather than one the remedy introduced: the body splats a
+               hashtable onto a native `pwsh -File`, hashtable order is
+               undefined, and a blank `Domain` was dropped so `-Domain`
+               swallowed the next token — 3 of 8 runs bound
+               `Domain=[-DryRun:True]` with `DryRun=[False]` at exit 0, the
+               other 5 failed loudly. Ledger L254. `action` (choice) and
+               `dry_run` (boolean) stay interpolated and are not findings.
+      = 22 / 7
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just

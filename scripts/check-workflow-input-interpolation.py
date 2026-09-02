@@ -908,7 +908,21 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     ),
     "116-domain-transfer-epp-probe.yml": ("domain",),
     "117-domain-transfer-verify.yml": ("domain",),
-    "118-whmcs-domain-lock.yml": ("domain",),
+    # 118-whmcs-domain-lock.yml burned down: `domain` now reaches the one pwsh body
+    # through step-level `env:` (IN_DOMAIN). It runs on whmcs-prod and changes a
+    # registrar lock on a production domain; the WHMCS credential in reach of the
+    # injection point is the workflow's ONLY credential and arrives through
+    # GITHUB_ENV from `whmcs-secrets-from-kv`, so neither an L213 `env:` read nor a
+    # `secrets.` grep of the file sees it.
+    #
+    # Its fail-closed guard closes a SECOND defect the burn-down surfaced rather
+    # than one it created: the body splats a HASHTABLE onto a native `pwsh -File`,
+    # and hashtable enumeration order is undefined, so a blank `Domain` was dropped
+    # from the rendered arguments and `-Domain` swallowed the next token. Measured
+    # on the pre-fix body with the dispatch box blanked, 3 of 8 runs bound
+    # `Domain=[-DryRun:True]` with `DryRun=[False]` and exited 0; the other 5 failed
+    # loudly on the mandatory parameter. Same input, same commit, two outcomes.
+    # Ledger L254.
     # 119-bulk-staging-cname-github-pages.yml burned down: `domains` / `target` now
     # reach the pwsh body through step-level `env:`. It writes `staging.<domain>` in
     # every FFC-EX zone across both Cloudflare accounts on cloudflare-prod-write,

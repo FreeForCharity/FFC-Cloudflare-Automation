@@ -345,6 +345,7 @@ BURNED_DOWN = (
     "205-whmcs-ticket-open.yml",
     "101-domain-status.yml",
     "118-whmcs-domain-lock.yml",
+    "102-domain-add-ffc-cloudflare-and-whmcs.yml",
 )
 
 
@@ -552,6 +553,31 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                other 5 failed loudly. Ledger L254. `action` (choice) and
                `dry_run` (boolean) stay interpolated and are not findings.
       = 22 / 7
+      -102     burned down: `domain` moved to step-level `env:` in both pwsh and
+               both bash bodies, `domain` + `issue_number` in the
+               `github-script` body. FOUR jobs, THREE environments —
+               whmcs-prod twice, cloudflare-prod-write twice,
+               cloudflare-prod-read once — so one payload ran under two
+               production credential families on one approval, with both the
+               WHMCS and the Cloudflare credentials arriving through GITHUB_ENV
+               and so invisible to the L213 `env:` read and the #1141
+               `secrets.` grep alike.
+
+               It is the lane that showed a freeze entry is not the whole call
+               site. The four `inputs.` sites this list named are the FIRST hop:
+               `inputs.domain` is published as a step output and
+               re-interpolated into SEVEN more script bodies, and
+               `.Trim().ToLowerInvariant().Trim('.')` removes nothing that
+               matters. Measured — with `Metadata` remedied the house way, the
+               payload arrived as data THERE, went verbatim into GITHUB_OUTPUT,
+               and executed one step later at
+               `$domain = "${{ steps.meta.outputs.domain }}"`: WHMCS secret
+               stolen, `-Domain` still bound to a legal `example.org`, exit 0.
+               So a lane fixing only what this guard can see would have removed
+               the entry, gone green, and left the injection working. The guard
+               is defined over `inputs.X` and cannot see the laundering; filed
+               as #1233 rather than absorbed here. Ledger L255.
+      = 21 / 6
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just

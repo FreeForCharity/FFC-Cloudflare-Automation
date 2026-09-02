@@ -855,7 +855,30 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # the whole of what makes it safe, so
     # test_101_domain_status_wiring.py pins the declaration rather than
     # leaving it as a reading of this comment.
-    "102-domain-add-ffc-cloudflare-and-whmcs.yml": ("domain", "issue_number"),
+    # 102-domain-add-ffc-cloudflare-and-whmcs.yml burned down: `domain` reaches both
+    # pwsh and both bash bodies through step-level `env:`, and `domain` +
+    # `issue_number` reach the `github-script` body through it too. It spans FOUR
+    # jobs under THREE environments -- whmcs-prod twice, cloudflare-prod-write
+    # twice, cloudflare-prod-read once -- so one payload in one dispatch ran under
+    # two production credential families on a single approval.
+    #
+    # It is the lane that showed the freeze entry is not the whole call site. The
+    # four `inputs.` sites this list named are the FIRST hop; `inputs.domain` is
+    # then published as a step output and re-interpolated into SEVEN more script
+    # bodies, and `.Trim().ToLowerInvariant().Trim('.')` removes nothing that
+    # matters. Measured: with the `Metadata` step remedied the house way, the
+    # payload correctly arrived as data there, was written verbatim into
+    # GITHUB_OUTPUT, and executed one step later at
+    # `$domain = "${{ steps.meta.outputs.domain }}"` -- WHMCS secret stolen,
+    # `-Domain` still bound to a legal `example.org`, step exited 0. A lane that
+    # fixed only the sites THIS GUARD can see would have removed the entry, gone
+    # green, and left the injection working. Every hop therefore travels through
+    # `env:`. The guard is defined over `inputs.X` and is blind to the laundering by
+    # construction: filed as #1233, not papered over here. Ledger L255.
+    #
+    # `zone_type` (choice) and `jump_start` / `enforce_dry_run` /
+    # `dmarc_mgmt_debug` / `update_whmcs_nameservers` / `require_whmcs_domain`
+    # (boolean) stay interpolated and are NOT findings.
     # 103-enforce-domain-standard.yml burned down: `domain` now reaches all four
     # pwsh bodies through step-level `env:`, and `domain` + `issue_number` reach
     # the `github-script` body through it too. It is the WIDEST entry in the

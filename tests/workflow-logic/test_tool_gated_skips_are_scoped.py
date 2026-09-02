@@ -929,6 +929,29 @@ def test_the_detector_still_fires_through_an_aliased_import():
     )
 
 
+def test_the_detector_still_fires_on_a_helper_local_import():
+    assert _detect(
+        "import sys\n"
+        "def _require_tools():\n"
+        "    import shutil as sh\n"
+        "    if sh.which('pwsh') is None:\n"
+        "        print('  SKIP all')\n"
+        "        sys.exit(0)\n"
+        "def test_static():\n"
+        "    assert True\n"
+        "if __name__ == '__main__':\n"
+        "    _require_tools()\n"
+    ), (
+        "`which_bindings` walks imports at ANY depth, and this is the case that "
+        "holds it there: the only import at module top level is `sys`, so a "
+        "collector narrowed to `tree.body` sees no shutil binding, and the gate "
+        "in `_require_tools` -- which skips every case in the module -- goes "
+        "unflagged. That is a false NEGATIVE, the direction this module exists "
+        "to prevent. Reported by Copilot on #1232 as an untested claim in the "
+        "docstring; the behaviour was already correct, the coverage was not"
+    )
+
+
 def test_the_detector_does_not_fire_on_an_unrelated_which_method():
     assert not _detect(
         "import sys\n"

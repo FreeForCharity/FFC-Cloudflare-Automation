@@ -443,7 +443,13 @@ const github = {
 
 
 def _run_github_script(body: str, **env_overrides: str):
-    """Run a `github-script` body under a recording harness. Returns (calls, out)."""
+    """Run a `github-script` body under a recording harness.
+
+    Returns (calls, sentinel_contents_or_None, output). `calls` is what the body
+    asked the harness to do — every `core.setFailed` and `github.rest.*` call, in
+    order; the sentinel is how a payload that ESCAPED the body reports itself, and
+    is checked by the caller, which owns its path.
+    """
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         art = tmp / "artifacts" / "domain-add" / "cloudflare"

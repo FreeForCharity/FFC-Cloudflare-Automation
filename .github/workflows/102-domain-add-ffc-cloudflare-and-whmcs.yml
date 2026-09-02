@@ -200,7 +200,12 @@ jobs:
           fi
           echo "domain=$d" >> "$GITHUB_OUTPUT"
 
-          # Custom account nameservers (preferred): store as variables on the cloudflare-prod environment.
+          # Custom account nameservers (preferred): set FFC_CUSTOM_NAMESERVER_1/2 as
+          # REPOSITORY Variables, or as Variables on this job's own environment
+          # (`cloudflare-prod-read`) — those are the only two scopes `vars.*` resolves
+          # from here. There is no `cloudflare-prod` environment in this repo, only
+          # `-read` and `-write`; a Variable set on that name resolves to the empty
+          # string and the run silently takes the fallback below.
           # Fallback: use the known FFC custom nameservers.
           ns1="$IN_NS1"
           ns2="$IN_NS2"
@@ -286,7 +291,9 @@ jobs:
           fi
           echo "domain=$d" >> "$GITHUB_OUTPUT"
 
-          # Custom account nameservers (preferred): store as variables on the cloudflare-prod environment.
+          # Nameservers as resolved by `cloudflare_preflight` and passed through this
+          # job's `env:`. This job reads no Variable of its own: set
+          # FFC_CUSTOM_NAMESERVER_1/2 where THAT job can see them (see its comment).
           # Fallback: use the known FFC custom nameservers.
           ns1="$IN_NS1"
           ns2="$IN_NS2"

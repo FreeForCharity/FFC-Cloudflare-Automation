@@ -856,6 +856,36 @@ def run_module_tests(tests):
     return failures
 
 
+def test_a_repo_root_mismatch_warns_at_run_time():
+    # The two tests below pin the DOCS. This pins the behaviour, for the reader
+    # who never sees the docstring: `--root` defaults to this checkout, so a
+    # non-default `--repo` alone sweeps one repo's issues against another repo's
+    # files, and every cited path simply resolves somewhere else.
+    saved = os.environ.get("GH_TOKEN")
+    os.environ["GH_TOKEN"] = "x"
+    real_list, real_tree = M.list_agent_ready_issues, M.Tree
+    M.list_agent_ready_issues = lambda repo, token, _request_fn=None: []
+    M.Tree = lambda root: FakeTree({})
+    try:
+        mismatch, agreed = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(mismatch):
+            M.main(["--repo", "FreeForCharity/FFC-IN-ffcadmin.org"])  # no --root
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(agreed):
+            M.main([])  # defaults agree
+    finally:
+        M.list_agent_ready_issues, M.Tree = real_list, real_tree
+        if saved is None:
+            os.environ.pop("GH_TOKEN", None)
+        else:
+            os.environ["GH_TOKEN"] = saved
+
+    assert "warning:" in mismatch.getvalue(), mismatch.getvalue()
+    assert "--root" in mismatch.getvalue(), mismatch.getvalue()
+    # Polarity control: a warning that always fires is noise, not a check, and
+    # would satisfy the assertion above.
+    assert "warning:" not in agreed.getvalue(), agreed.getvalue()
+
+
 def test_every_cross_repo_example_also_passes_root():
     # Copilot round 8: the multi-repo example named `--repo` and not `--root`.
     # `--root` defaults to REPO_ROOT independently of `--repo`, so following

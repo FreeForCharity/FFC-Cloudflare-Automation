@@ -787,6 +787,20 @@ def main(argv=None):
     )
     args = ap.parse_args(argv)
 
+    # --repo and --root describe ONE project but are set independently, so they
+    # can disagree, and the failure is silent: every cited path resolves against
+    # the wrong tree, so anchors read as absent or match by coincidence. The
+    # example now shows both flags, but that only helps someone who reads it.
+    # A sweep whose contract is "never report from an inability to look" should
+    # not quietly look at the wrong thing. stderr, so stdout stays silent-when-clean.
+    if args.repo != DEFAULT_REPO and pathlib.Path(args.root).resolve() == REPO_ROOT.resolve():
+        print(
+            f"warning: --repo is {args.repo} but --root is this checkout ({REPO_ROOT}). "
+            "Anchors will be checked against the wrong project's files. Pass --root "
+            "pointing at that repo's working tree.",
+            file=sys.stderr,
+        )
+
     token = _token()
     issues = list_agent_ready_issues(args.repo, token)
     result = audit(issues, Tree(args.root))

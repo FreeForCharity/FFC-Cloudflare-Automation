@@ -79,7 +79,7 @@ Authentication is a single environment variable, ``GH_TOKEN`` (also accepts
 Examples:
   GH_TOKEN=... python3 scripts/audit-agent-ready-anchors.py
   GH_TOKEN=... python3 scripts/audit-agent-ready-anchors.py --json
-  GH_TOKEN=... python3 scripts/audit-agent-ready-anchors.py --repo FreeForCharity/FFC-IN-ffcadmin.org
+  GH_TOKEN=... python3 scripts/audit-agent-ready-anchors.py --repo FreeForCharity/FFC-IN-ffcadmin.org --root ../FFC-IN-ffcadmin.org
 
 Exit codes:
   0  nothing to report. The prose mode prints NOTHING on stdout in this case
@@ -779,7 +779,11 @@ def main(argv=None):
     ap.add_argument(
         "--root",
         default=str(REPO_ROOT),
-        help="Working tree to check anchors against (default: this checkout)",
+        help=(
+            "Working tree to check anchors against (default: this checkout). "
+            "This does NOT follow --repo: pass both when sweeping another "
+            "repository, or anchors are checked against the wrong tree."
+        ),
     )
     args = ap.parse_args(argv)
 

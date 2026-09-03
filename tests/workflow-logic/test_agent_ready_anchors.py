@@ -856,6 +856,38 @@ def run_module_tests(tests):
     return failures
 
 
+def test_every_cross_repo_example_also_passes_root():
+    # Copilot round 8: the multi-repo example named `--repo` and not `--root`.
+    # `--root` defaults to REPO_ROOT independently of `--repo`, so following
+    # that example lists another repo's issues and resolves their cited paths
+    # against THIS checkout, where they do not exist. An absent path with no
+    # history here is classified as a proposed new file and skipped in
+    # silence, so the sweep exits 0 having verified nothing -- a wrong example
+    # that fails in the quiet direction.
+    doc = M.__doc__ or ""
+    examples = [l.strip() for l in doc.splitlines() if "audit-agent-ready-anchors.py --" in l]
+    cross = [l for l in examples if "--repo" in l]
+    assert cross, "no cross-repo example found -- has the docstring been rewritten?"
+    for line in cross:
+        assert "--root" in line, f"cross-repo example omits --root: {line}"
+
+
+def test_the_root_help_says_it_does_not_follow_repo():
+    # The default is what makes the omission above silent rather than an
+    # error, so `--help` has to say so where an operator will actually read
+    # it. Asserted on rendered `--help` output rather than on the source, so
+    # a comment mentioning the phrase cannot satisfy it.
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            M.main(["--help"])
+    except SystemExit:
+        pass
+    text = out.getvalue()
+    assert "--root" in text, text
+    assert "does not follow --repo" in text.lower(), text
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

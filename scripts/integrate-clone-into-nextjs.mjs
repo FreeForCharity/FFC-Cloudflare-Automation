@@ -65,12 +65,19 @@ const PAGE = /^page\.(tsx|ts|jsx|js)$/;
  * Kept as a named list rather than a filter so that what survives is legible
  * and testable, instead of being an emergent property of the copy order.
  */
-export const PRESERVED_PUBLIC_FILES = [
-  'CNAME',
-  '_headers',
-  'security.txt',
-  join('.well-known', 'security.txt'),
-];
+// Forward-slash literals, not `join()`: these are Map keys and appear in the
+// report and in test output, and `join` would spell the last one
+// `.well-known\\security.txt` on Windows — where this repo's own Conductor runs.
+// `join(publicDir, rel)` at the filesystem boundary accepts either separator,
+// so the portable spelling costs nothing.
+//
+// CNAME is deliberately ABSENT. It is carried across the wipe by its own step,
+// which then writes `keptCname || domain` unconditionally — so listing it here
+// would make the "clone wins on a collision" rule below false for exactly one
+// entry. That is the right behaviour for CNAME (the published domain is an FFC
+// deployment decision, not content captured from the source site), and the
+// wrong thing to express through a mechanism that promises the opposite.
+export const PRESERVED_PUBLIC_FILES = ['_headers', 'security.txt', '.well-known/security.txt'];
 
 /** Read the preserved files before the wipe. Missing ones are simply absent. */
 export function readPreservedPublicFiles(publicDir) {
@@ -276,20 +283,40 @@ function ensureEslintIgnoresPublic(repo) {
   const src = readFileSync(configPath, 'utf8');
   if (/["'`]public\/\*\*["'`]/.test(src)) return; // already excluded
 
-  const anchor = /ignores:\s*\[/;
-  if (!anchor.test(src)) {
-    throw new Error(
-      `${configPath} has no \`ignores: [\` array to extend, so the WordPress mirror under ` +
-        `public/ would be linted as source. Add "public/**" to its ignores and re-run — ` +
-        `refusing to write an ignore file ESLint 9 does not read.`,
+  // Extend an existing ignores array where there is one.
+  const extend = /ignores:\s*\[/;
+  if (extend.test(src)) {
+    writeFileSync(
+      configPath,
+      src.replace(
+        extend,
+        "ignores: [\n      // Static WordPress clone assets (not source), added by workflow 706.\n      'public/**',",
+      ),
     );
+    return;
   }
-  writeFileSync(
-    configPath,
-    src.replace(
-      anchor,
-      "ignores: [\n      // Static WordPress clone assets (not source), added by workflow 706.\n      'public/**',",
-    ),
+  // A flat config with no `ignores` at all is still perfectly valid, and
+  // refusing it would break a conversion for a repo that has done nothing
+  // wrong. A leading ignores-only element is the documented way to add global
+  // ignores, and inserting one after `export default [` needs no
+  // understanding of what follows.
+  const prepend = /export\s+default\s*\[/;
+  if (prepend.test(src)) {
+    writeFileSync(
+      configPath,
+      src.replace(
+        prepend,
+        (m) =>
+          `${m}\n  // Static WordPress clone assets (not source), added by workflow 706.\n  { ignores: ['public/**'] },`,
+      ),
+    );
+    return;
+  }
+  throw new Error(
+    `${configPath} has neither an \`ignores: [\` array to extend nor an \`export default [\` ` +
+      `to prepend to, so the WordPress mirror under public/ would be linted as source. Add ` +
+      `"public/**" to its ignores and re-run — refusing to write an ignore file ESLint 9 ` +
+      `does not read.`,
   );
 }
 
@@ -400,6 +427,9 @@ function selfTest() {
   // …and a clone that ships its own file at one preserved path, to prove the
   // captured site is not overwritten by the template.
   writeFileSync(join(clone, '_headers'), '/*\n  X-From: from-the-clone\n');
+  // …and its own CNAME, which must NOT win: the published domain is an FFC
+  // deployment decision, not content captured from the source site.
+  writeFileSync(join(clone, 'CNAME'), 'from-the-clone.example\n');
 
   const report = integrate({ clone, repo, domain: 'fallback.example' });
 
@@ -429,6 +459,18 @@ function selfTest() {
     readFileSync(join(repo, 'public', 'CNAME'), 'utf8').trim() === 'kept.example' &&
       report.cname === 'kept.example',
   );
+  // The exception PRESERVED_PUBLIC_FILES documents, asserted as behaviour.
+  // Removing CNAME from that list is behaviour-neutral on its own — the
+  // explicit write overwrites either way — so only this pins the rule that
+  // actually governs it, and distinguishes CNAME from `_headers` above.
+  check(
+    'the CNAME the repo already published beats one shipped by the clone',
+    readFileSync(join(repo, 'public', 'CNAME'), 'utf8').trim() === 'kept.example',
+  );
+  check(
+    'CNAME is governed by its own step, not by the preserved-file mechanism',
+    !PRESERVED_PUBLIC_FILES.includes('CNAME'),
+  );
   check(
     'public/ is excluded from Prettier',
     readFileSync(join(repo, '.prettierignore'), 'utf8').includes('public/'),
@@ -453,16 +495,48 @@ function selfTest() {
   // unignored — which is precisely how the .eslintignore version shipped broken.
   // Without this case the guard is untestable: every other fixture has the
   // anchor, so deleting the check changes nothing and the mutation survives.
+  // A config with no `ignores` is still a valid config, and refusing it would
+  // break a conversion for a repo that has done nothing wrong. `export default
+  // [` takes a leading ignores-only element — the documented way to declare
+  // global ignores — which needs no understanding of what follows it.
   check(
-    'a flat config with no ignores array is a hard error, not a silent no-op',
+    'a flat config with no ignores array gets an ignores-only element prepended',
     (() => {
-      const odd = mkdtempSync(join(tmpdir(), 'integrate-noanchor-'));
-      writeFileSync(join(odd, 'eslint.config.mjs'), 'export default []\n');
+      const bare = mkdtempSync(join(tmpdir(), 'integrate-noanchor-'));
+      const cfg = join(bare, 'eslint.config.mjs');
+      writeFileSync(cfg, 'export default [\n  { rules: {} },\n]\n');
+      // Caught rather than allowed to escape: without this the prepend path
+      // is still "detected" if it regresses, but as a crashed self-test
+      // reporting zero failures, which reads as a passing suite that died.
+      try {
+        ensureEslintIgnoresPublic(bare);
+      } catch {
+        return false;
+      }
+      const after = readFileSync(cfg, 'utf8');
+      return (
+        after.includes("{ ignores: ['public/**'] }") &&
+        spawnSync(process.execPath, ['--check', cfg], { encoding: 'utf8' }).status === 0
+      );
+    })(),
+  );
+  // …but a shape neither anchor recognises is still LOUD rather than silently
+  // unignored, which is precisely how the .eslintignore version shipped broken.
+  // Without this case that guard is untestable: every other fixture matches an
+  // anchor, so deleting the throw changes nothing and the mutation survives.
+  check(
+    'a flat config matching neither anchor is a hard error, not a silent no-op',
+    (() => {
+      const odd = mkdtempSync(join(tmpdir(), 'integrate-unknown-'));
+      writeFileSync(
+        join(odd, 'eslint.config.mjs'),
+        'const c = [{ rules: {} }]\nexport default c\n',
+      );
       try {
         ensureEslintIgnoresPublic(odd);
         return false; // it returned quietly: the mirror would be linted as source
       } catch (err) {
-        return /no .*ignores.* array|public\/\*\*/.test(err.message);
+        return /ignores|public\/\*\*/.test(err.message);
       }
     })(),
   );

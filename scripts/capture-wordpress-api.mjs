@@ -2925,10 +2925,11 @@ async function capture() {
   const assetFailureNote = describeFailures(assetTally, domain);
   if (assetFailureNote) console.error(`[capture] assets: ${assetFailureNote}`);
 
-  // `index.html` is what a static host serves at `/`. Derived from what was
-  // actually written rather than from the inventory, so an entry that was
-  // listed and then refused counts as missing.
-  const frontPageCaptured = rendered.has('index.html');
+  // `index.html` is what a static host serves at `/`. Read from what was
+  // actually WRITTEN, not from what was fetched: a page can be rendered and
+  // then refused at the write (path containment), and the comment here used to
+  // claim the stronger property while the code checked the weaker one.
+  const frontPageCaptured = writtenPages.has('index.html');
   const staleNav = selfHost ? (strandedNav.get(selfHost) ?? { pages: 0, links: 0 }) : null;
   const verdict = captureVerdict({
     expected: entries.length,

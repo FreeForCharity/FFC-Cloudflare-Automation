@@ -64,6 +64,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -149,21 +150,31 @@ LEGAL_DOMAIN = "example.org"
 
 @contextlib.contextmanager
 def _sentinel():
-    """An all-lowercase sentinel path. Not fussiness — a measured constraint.
+    """A sentinel path that survives the laundering hop's `.ToLowerInvariant()`.
 
-    The laundering hop runs `.ToLowerInvariant()` over the WHOLE value, the payload
-    included, so a sentinel path carrying an uppercase character is written to a
-    DIFFERENT file than the one the test then checks. That reads as "the laundered
-    payload did not execute", i.e. as evidence the wider fix was unnecessary — the
-    flattering direction, and it cost a debugging round here before it was pinned.
-    `tempfile.mkdtemp` can and does return mixed case, so the name is built rather
-    than borrowed.
+    The hop lowercases the WHOLE value, the payload included, so the file the payload
+    writes to is named by the LOWERCASED form of the path this test then reads. A
+    sentinel that does not survive that round trip is written somewhere the assertion
+    never looks, which reads as "the laundered payload did not execute", i.e. as
+    evidence the wider fix was unnecessary — the flattering direction, and it cost a
+    debugging round here before it was pinned.
+
+    The leaf is ours and is built lowercase rather than borrowed (`mkdtemp` can and
+    does return mixed case). The ANCESTOR is the host's and often is not:
+    `tempfile.gettempdir()` is `C:\\Users\\<user>\\AppData\\Local\\Temp` on Windows.
+    That is harmless exactly when the filesystem resolves the lowercased path to the
+    same directory, so this measures the round trip rather than asserting a spelling.
+    An all-lowercase check instead aborts the whole module on every Windows host —
+    including the Conductor's, which is where this repo's local suite runs — over a
+    path that would have worked there.
     """
     base = pathlib.Path(tempfile.gettempdir()) / ("ffc102-" + uuid.uuid4().hex)
     base.mkdir()
-    assert str(base) == str(base).lower(), (
-        f"sentinel directory {base} is not all-lowercase; the laundering hop would "
-        f"write to a different path than the assertion reads."
+    lowered = str(base).lower()
+    assert os.path.exists(lowered) and os.path.samefile(lowered, base), (
+        f"sentinel directory {base} does not survive lowercasing on this filesystem: "
+        f"{lowered} names a different directory, or none. The laundering hop would "
+        f"write to that path while the assertion reads this one."
     )
     try:
         yield base / SENTINEL
@@ -961,6 +972,30 @@ def test_the_github_script_body_fails_closed_on_an_empty_domain():
         f"body would post a report naming no domain. Calls: {calls!r}"
     )
     assert "IN_DOMAIN_RESOLVED is empty" in failed[0]["message"]
+
+
+def test_the_sentinel_path_survives_the_laundering_hops_lowercasing():
+    """The property the pwsh cases depend on, asserted on the host that will run them.
+
+    Deliberately not a spelling check: whether the temp ancestor is lowercase is the
+    host's business, and only the round trip distinguishes a mixed-case ancestor on a
+    case-insensitive filesystem (fine — every Windows host) from one on a
+    case-sensitive filesystem (fatal — the sentinel is written where nothing reads).
+    Needs neither pwsh nor node, so the constraint is checked even where the cases it
+    protects skip.
+    """
+    with _sentinel() as sentinel:
+        assert sentinel.name == sentinel.name.lower(), (
+            f"the sentinel FILENAME is ours to choose and must be lowercase; "
+            f"{sentinel.name!r} is not."
+        )
+        sentinel.write_text("written by the payload", encoding="utf-8")
+        lowered = pathlib.Path(str(sentinel).lower())
+        assert lowered.is_file() and os.path.samefile(lowered, sentinel), (
+            f"the payload writes to {lowered} and this module reads {sentinel}; on "
+            f"this host those are different files, so a successful injection would "
+            f"read as a clean run."
+        )
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

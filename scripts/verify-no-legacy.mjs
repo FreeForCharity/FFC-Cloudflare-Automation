@@ -77,6 +77,44 @@ import { existsSync } from 'node:fs';
  */
 export const CLONE_OWNED_PREFIXES = ['/_next/', '/_ffc-assets/'];
 
+/**
+ * WordPress PHP entry points. A static export cannot serve these by
+ * construction — there is no PHP — so their absence is a property of the
+ * migration, not a defect in it.
+ *
+ * They need naming explicitly because the source-probe cannot distinguish
+ * them: `admin-ajax.php` answers **HTTP 200 to almost anything**, so "the
+ * source serves this, the clone lost it" is literally true and completely
+ * unactionable. Measured on the first clean conversion of
+ * viewpointministriesinternational.org, where the Hustle plugin fires
+ * `admin-ajax.php?action=hustle_module_viewed` from the front page and took
+ * the gate to 118/120 — a site whose only remaining fault was that it is
+ * static.
+ *
+ * Deliberately narrow: PHP endpoints only, matched on the path. `/wp-json/`
+ * is NOT here — a page fetching the REST API at runtime has lost real
+ * function, and that deserves a human's attention rather than an excuse.
+ */
+export const DYNAMIC_WP_ENDPOINTS = [
+  '/wp-admin/admin-ajax.php',
+  '/wp-admin/admin-post.php',
+  '/wp-comments-post.php',
+  '/wp-cron.php',
+  '/wp-login.php',
+  '/xmlrpc.php',
+];
+
+/** Is this one of the PHP endpoints no static host can answer? */
+export function isDynamicWordPressEndpoint(url, endpoints = DYNAMIC_WP_ENDPOINTS) {
+  let path;
+  try {
+    path = new URL(url, 'http://x.invalid').pathname;
+  } catch {
+    return false;
+  }
+  return endpoints.some((e) => path === e || path.endsWith(e));
+}
+
 export function isCloneOwned(url, prefixes = CLONE_OWNED_PREFIXES) {
   let path;
   try {
@@ -115,6 +153,14 @@ export function classifyMissing({ status = 0, contentType = '', error = null, ur
     return {
       fatal: true,
       reason: 'this path is built by the clone, so the source cannot excuse it',
+    };
+  // Before the source probe, because the probe cannot answer this question:
+  // `admin-ajax.php` returns 200 for almost any request, so the source ALWAYS
+  // appears to serve it and every such reference would be fatal forever.
+  if (isDynamicWordPressEndpoint(url))
+    return {
+      fatal: false,
+      reason: 'a WordPress PHP endpoint; a static export cannot serve it by construction',
     };
   if (error) return { fatal: true, reason: `could not check the source site (${error})` };
   // Only these two prove the origin does not HAVE the file. A 401 or 403 (a WAF
@@ -338,6 +384,53 @@ if (process.argv.includes('--self-test')) {
       /HTTP 404/.test(classifyMissing({ url: 'https://x.org/a.css', status: 404 }).reason),
       true,
     ],
+
+    // A WordPress PHP endpoint cannot exist on a static host. The source probe
+    // cannot tell us that — admin-ajax.php answers 200 to almost anything — so
+    // without this the gate calls it "the source serves it, the clone lost it",
+    // which is true and unactionable, and no site using Hustle, Contact Form 7
+    // or WooCommerce could ever be migrated.
+    [
+      'a WordPress PHP endpoint is excused — a static export cannot serve it',
+      classifyMissing({
+        url: 'https://x.org/wp-admin/admin-ajax.php?action=hustle_module_viewed',
+        status: 200,
+      }).fatal,
+      false,
+    ],
+    [
+      'the excuse holds against a 200, which is what admin-ajax always returns',
+      /cannot serve it by construction/.test(
+        classifyMissing({ url: 'https://x.org/wp-admin/admin-ajax.php', status: 200 }).reason,
+      ),
+      true,
+    ],
+    [
+      'an ordinary asset the source serves is still FATAL — this is not a blanket',
+      classifyMissing({ url: 'https://x.org/wp-content/t.js', status: 200 }).fatal,
+      true,
+    ],
+    [
+      '/wp-json/ is deliberately NOT excused — a lost REST call is lost function',
+      classifyMissing({ url: 'https://x.org/wp-json/wp/v2/posts', status: 200 }).fatal,
+      true,
+    ],
+    [
+      'clone-owned still wins: /_next/wp-login.php is ours, not WordPress',
+      classifyMissing({ url: 'https://x.org/_next/wp-login.php', status: 200 }).fatal,
+      true,
+    ],
+    [
+      'the endpoint match ignores the query string',
+      isDynamicWordPressEndpoint('https://x.org/xmlrpc.php?rsd'),
+      true,
+    ],
+    [
+      'a path that merely CONTAINS an endpoint name is not one',
+      isDynamicWordPressEndpoint('https://x.org/wp-content/xmlrpc.php.txt'),
+      false,
+    ],
+    ['a malformed url is not an endpoint', isDynamicWordPressEndpoint('not a url at all'), false],
   ];
   let failed = 0;
   for (const [name, got, want] of cases) {
@@ -594,7 +687,11 @@ async function main() {
   for (const url of allMissing.filter((u) => isCloneOwned(u))) {
     verdictFor.set(url, classifyMissing({ url }));
   }
-  let distinctMissing = allMissing.filter((u) => !isCloneOwned(u));
+  // Neither clone-owned paths nor WordPress PHP endpoints need a probe: the
+  // verdict for both is decided without asking the charity's live site.
+  let distinctMissing = allMissing.filter(
+    (u) => !isCloneOwned(u) && !isDynamicWordPressEndpoint(u),
+  );
   // A badly broken clone could name hundreds of distinct URLs, and probing them
   // all would mean pointing a burst of traffic at a charity's live site to
   // diagnose our own export. Cap it; anything past the cap stays FATAL, so the

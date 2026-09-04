@@ -530,6 +530,26 @@
       "categoryCode": "CF"
     },
     {
+      "number": 126,
+      "title": "Domain - Redirect Forensics (Read-only)",
+      "apis": [
+        "CF"
+      ],
+      "file": "126-domain-redirect-forensics.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "cloudflare-prod-read"
+      ],
+      "description": "READ-ONLY: answers \"why is this domain redirecting, and who configured it?\" It walks every HTTP hop manually (never `-L`), then reads the zone's DNS records, dynamic-redirect rulesets and legacy Page Rules from Cloudflare. Wraps scripts/domain-redirect-forensics.mjs. Changes nothing.  WHY IT EXISTS. On 2026-09-04 a live charity site was found forwarding to a replacement domain that did not serve a site yet, and neither existing tool could locate the redirect:  - 121 follows redirects and reports only the FINAL status, so `301 -> elsewhere -> 200` reads as a healthy `200`. It reported HTTP 200 for a domain that was not serving its own content. - 101 writes its Cloudflare audit to an ARTIFACT, and an agent session restricted to api.github.com cannot download one (artifact blob storage is a different host). The only report naming the zone's rules was unreadable by the party trying to read it.  So this workflow prints EVERYTHING to the job log and uploads no artifact. That is the point, not an oversight: a job log is readable through the REST API without general network egress. Do not \"improve\" this by moving the output into an artifact or a step summary only.  SAFETY. Every call is a GET \u2014 against the live domain and the Cloudflare API. It runs on the ungated `cloudflare-prod-read` lane, so diagnosing an outage never waits on a deployment approval. The Cloudflare half self-skips with a printed notice when no token is present, so the HTTP half still runs.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "cloudflare-prod-read",
+      "guard": "read-only; walks every HTTP hop manually (never follows redirects) and reads DNS, dynamic-redirect rulesets and legacy Page Rules; prints to the job log, never an artifact, so an egress-restricted caller can read it",
+      "category": "Cloudflare / DNS / Domain",
+      "categoryCode": "CF"
+    },
+    {
       "number": 201,
       "title": "WHMCS - Export Domains (Report)",
       "apis": [

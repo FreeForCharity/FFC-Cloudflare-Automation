@@ -46,6 +46,10 @@
 const CF_API = 'https://api.cloudflare.com/client/v4';
 const MAX_HOPS = 10;
 const HOP_TIMEOUT_MS = 15000;
+// The API clamps an over-cap page size silently and returns page one, so asking
+// for a big page TRUNCATES the collection while looking like a complete read.
+// Page properly instead. Guarded repo-wide by tests/workflow-logic/test_api_page_size_cap.py.
+const PAGE_SIZE = 100;
 
 // ---------------------------------------------------------------------------
 // Pure helpers (covered by --self-test)
@@ -242,6 +246,19 @@ function printChain(label, hops, startHost) {
 // Cloudflare reads (all GET)
 // ---------------------------------------------------------------------------
 
+/**
+ * Is there another page to fetch? Pure so the stop condition is testable without
+ * an API — an off-by-one here silently under-reports, which is the same failure
+ * class this whole tool exists to expose.
+ */
+export function hasMorePages(resultInfo, fetchedCount) {
+  if (!resultInfo) return false;
+  const { page, total_pages: totalPages, total_count: totalCount } = resultInfo;
+  if (Number.isFinite(page) && Number.isFinite(totalPages)) return page < totalPages;
+  if (Number.isFinite(totalCount)) return fetchedCount < totalCount;
+  return false;
+}
+
 async function cfGet(token, path) {
   const res = await fetch(`${CF_API}${path}`, { headers: { authorization: `Bearer ${token}` } });
   const body = await res.json().catch(() => ({}));
@@ -250,6 +267,24 @@ async function cfGet(token, path) {
     throw new Error(msg);
   }
   return body.result;
+}
+
+/** GET every page of a collection endpoint, never a single over-cap page. */
+async function cfGetAll(token, path) {
+  const sep = path.includes('?') ? '&' : '?';
+  const out = [];
+  for (let page = 1; ; page++) {
+    const res = await fetch(`${CF_API}${path}${sep}page=${page}&per_page=${PAGE_SIZE}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body?.success === false) {
+      const msg = (body?.errors || []).map((e) => e.message).join('; ') || `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+    out.push(...(body.result || []));
+    if (!hasMorePages(body.result_info, out.length)) return out;
+  }
 }
 
 async function inspectZone(domain, accounts) {
@@ -275,7 +310,7 @@ async function inspectZone(domain, accounts) {
 
     // --- DNS records: where does the traffic actually go? ---
     try {
-      const recs = await cfGet(token, `/zones/${zone.id}/dns_records?per_page=200`);
+      const recs = await cfGetAll(token, `/zones/${zone.id}/dns_records`);
       const interesting = recs.filter((r) => ['A', 'AAAA', 'CNAME'].includes(r.type));
       console.log(`  [${label}] DNS (${interesting.length} A/AAAA/CNAME of ${recs.length} total):`);
       for (const r of interesting) {
@@ -393,6 +428,15 @@ function selfTest() {
     'page rule forwarding rendered',
     describePageRuleForwarding(pr).includes('https://b.org/$1'),
   );
+  check('paging stops on the last page', hasMorePages({ page: 3, total_pages: 3 }, 300) === false);
+  check('paging continues mid-collection', hasMorePages({ page: 1, total_pages: 3 }, 100) === true);
+  check(
+    'paging falls back to total_count',
+    hasMorePages({ total_count: 250 }, 100) === true &&
+      hasMorePages({ total_count: 250 }, 250) === false,
+  );
+  check('paging stops when the API says nothing', hasMorePages(undefined, 0) === false);
+
   check(
     'non-forwarding page rule ignored',
     describePageRuleForwarding({ actions: [{ id: 'cache_level' }] }) === null,

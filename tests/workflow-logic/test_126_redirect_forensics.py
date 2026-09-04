@@ -109,6 +109,26 @@ def test_the_cloudflare_hop_degrades_instead_of_losing_the_chain():
     assert step.get("continue-on-error") is True, step
 
 
+def test_the_dns_read_pages_instead_of_asking_for_one_big_page():
+    """An over-cap page size is clamped silently, truncating the collection.
+
+    CI caught the first revision of this script asking for a page of 200
+    against the 100 cap, via tests/workflow-logic/test_api_page_size_cap.py.
+    (That value is spelled out in prose rather than as a literal query
+    parameter, because the guard scans the whole tree as text and would flag
+    this docstring itself — it did, on the first attempt at this test.) The
+    failure mode is the one this whole tool exists to expose: a report that
+    under-reports while looking complete. Pinned here as well as in the
+    repo-wide guard, because the guard checks a number and this checks the
+    shape — a future edit could satisfy one and not the other.
+    """
+    src = SCRIPT.read_text(encoding="utf-8")
+    assert "cfGetAll(token, `/zones/${zone.id}/dns_records`)" in src, (
+        "the DNS read must paginate via cfGetAll, not request a single large page"
+    )
+    assert "hasMorePages" in src, "the paging stop condition must be a named, testable predicate"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

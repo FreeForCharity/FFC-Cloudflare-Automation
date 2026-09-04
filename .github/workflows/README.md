@@ -535,6 +535,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 123 | Domain - Inbound Transfer Preflight (Report) | `123-domain-inbound-transfer-preflight.yml` | workflow_dispatch | Reads | none (no credentials) |
 | 124 | Cloudflare - Cache Purge (Admin) [CF] | `124-cloudflare-cache-purge.yml` | workflow_dispatch | Writes (dry-run default) | cloudflare-prod-read / ✅ cloudflare-prod-write |
 | 125 | Cloudflare - Cache Rules Audit (Read-only) [CF] | `125-cloudflare-cache-rules-audit.yml` | workflow_dispatch | Reads | cloudflare-prod-read |
+| 126 | Domain - Redirect Forensics (Read-only) [CF] | `126-domain-redirect-forensics.yml` | workflow_dispatch | Reads | cloudflare-prod-read |
 ### 2xx — WHMCS
 
 | # | Workflow | File | Triggers | Safety | Approval env |

@@ -32,6 +32,9 @@
 //                             page — the 105-workflow truncation from #843
 //   TEST_WORKFLOW_RUNS_FILE   JSON map of workflow id (as a string) -> array of run objects
 //                             returned by actions.listWorkflowRuns; a missing id yields none
+//   TEST_SUCCESS_RUNS_THROW   JSON array of workflow ids (as strings) whose listWorkflowRuns
+//                             throws ONLY for the `status: 'success'` query, leaving the
+//                             ordinary poll readable
 //   TEST_RUNS_THROW           JSON array of workflow ids (as strings) whose listWorkflowRuns
 //                             call rejects, to prove an unreadable run list is not read as green
 //   TEST_SEARCH_THROWS        when "1", the search mock rejects — proves the
@@ -89,6 +92,9 @@ const repoWorkflows = process.env.TEST_REPO_WORKFLOWS_FILE
 const workflowRuns = process.env.TEST_WORKFLOW_RUNS_FILE
   ? JSON.parse(readFileSync(process.env.TEST_WORKFLOW_RUNS_FILE, 'utf8'))
   : {};
+const successRunsThrow = process.env.TEST_SUCCESS_RUNS_THROW
+  ? JSON.parse(process.env.TEST_SUCCESS_RUNS_THROW).map(String)
+  : [];
 const runsThrow = process.env.TEST_RUNS_THROW
   ? JSON.parse(process.env.TEST_RUNS_THROW).map(String)
   : [];
@@ -170,7 +176,20 @@ const github = {
         if (runsThrow.includes(String(args.workflow_id))) {
           throw new Error('simulated runs API failure');
         }
-        const runs = workflowRuns[String(args.workflow_id)] || [];
+        // Throwing ONLY on the success query. Without this a test that means "the
+        // success-history lookup is unreadable" can only make the whole runs API throw,
+        // which kills the poll first and never reaches the lookup at all — a test that
+        // passes while exercising nothing.
+        if (args.status === 'success' && successRunsThrow.includes(String(args.workflow_id))) {
+          throw new Error('simulated success-history API failure');
+        }
+        // The real endpoint filters server-side, and `status: 'success'` filters on the
+        // CONCLUSION. Honouring it here lets one fixture list carry both a red latest run
+        // and an older green one, so a caller asking "what is the newest run?" and one
+        // asking "when did this last go green?" each see what GitHub would return.
+        const all = workflowRuns[String(args.workflow_id)] || [];
+        const runs =
+          args.status === 'success' ? all.filter((r) => r.conclusion === 'success') : all;
         return {
           data: {
             total_count: runs.length,

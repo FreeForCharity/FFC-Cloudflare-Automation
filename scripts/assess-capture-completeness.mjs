@@ -66,6 +66,48 @@ export function assessCapture(report, minPercent) {
     };
   }
 
+  // Two defects a percentage cannot express. Both were measured on delivery
+  // attempt 6, which scored 99.8% and shipped a clone that was not the
+  // charity's site.
+  //
+  // The front page is not one entry among many: losing it costs 1 of 590,
+  // inside any sane floor, while being the page every visitor sees first. That
+  // run delivered `public/index.html` as a parked WordPress.com landing page
+  // for a domain the operator had excluded, because the source's root
+  // redirected off-site and a 200 says nothing about whose page came back.
+  if (report?.frontPageCaptured === false) {
+    return {
+      ok: false,
+      captured,
+      expected,
+      percent: (captured / expected) * 100,
+      lines,
+      error:
+        "The site's front page was not captured, so the clone would serve 404 at its root. " +
+        'Completeness percentage cannot express this — it is one entry. See the capture log for ' +
+        'the URL the root redirected to.',
+    };
+  }
+  // Navigation that never came home. The self-containment gate cannot see this:
+  // it loads each page with the source blocked, which exercises subresources,
+  // and a nav href is fetched only when a visitor clicks it. Attempt 6 shipped
+  // 562 of 589 pages whose every menu link left the site, all gates green.
+  const staleHost = report?.declaredSelfHost ?? null;
+  const stranded = staleHost ? (report?.strandedNav?.[staleHost] ?? null) : null;
+  if (stranded && stranded.links > 0) {
+    return {
+      ok: false,
+      captured,
+      expected,
+      percent: (captured / expected) * 100,
+      lines,
+      error:
+        `${stranded.links} navigation link(s) across ${stranded.pages} page(s) still point at ` +
+        `${staleHost}, which does not serve this site. Every menu click would leave the clone ` +
+        'for a dead domain.',
+    };
+  }
+
   const percent = (captured / expected) * 100;
   lines.push(
     `- Captured **${captured} of ${expected}** inventory entries (${percent.toFixed(1)}%); completeness floor is ${minPercent}%`,
@@ -119,6 +161,52 @@ function selfTest() {
   eq(
     "a site's own dead links do not block a complete capture",
     assessCapture(report(589, 590, REAL), 98).ok,
+    true,
+  );
+  eq(
+    'a missing front page blocks the conversion even at 99.8%',
+    assessCapture({ ...report(589, 590, REAL), frontPageCaptured: false }, 98).ok,
+    false,
+  );
+  eq(
+    'the front-page refusal says what happened, not just that a count was short',
+    assessCapture({ ...report(589, 590, REAL), frontPageCaptured: false }, 98).error.includes(
+      'front page',
+    ),
+    true,
+  );
+  eq(
+    'a captured front page is not a problem',
+    assessCapture({ ...report(590, 590), frontPageCaptured: true }, 98).ok,
+    true,
+  );
+  eq(
+    'navigation still pointing at the stale host blocks a 100% capture',
+    assessCapture(
+      {
+        ...report(590, 590),
+        declaredSelfHost: 'old.org',
+        strandedNav: { 'old.org': { pages: 562, links: 24728 } },
+      },
+      98,
+    ).ok,
+    false,
+  );
+  eq(
+    'links to the SERVING domain do not block — /feed/ and /wp-json/ have no local copy',
+    assessCapture(
+      {
+        ...report(590, 590),
+        declaredSelfHost: 'old.org',
+        strandedNav: { 'new.org': { pages: 590, links: 590 } },
+      },
+      98,
+    ).ok,
+    true,
+  );
+  eq(
+    'a report from a site with no stale host at all is unaffected',
+    assessCapture({ ...report(590, 590), strandedNav: {} }, 98).ok,
     true,
   );
   eq(

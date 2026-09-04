@@ -2829,7 +2829,13 @@ async function capture() {
     if (shouldLocalize(src, domain, ignoreHosts)) await localizeAsset(src);
   }
 
-  const writtenPages = new Map(); // localPath -> final HTML as written to disk
+  // Paths actually written, and the stranded-navigation tally accumulated as
+  // each page is written. Deliberately NOT a map of localPath -> HTML: this
+  // site is 589 Divi documents and `rendered` already holds all of them, so
+  // retaining the rewritten copies too doubles peak memory for a tally that
+  // can be computed one page at a time and thrown away.
+  const writtenPages = new Set(); // localPath
+  const strandedNav = new Map(); // host -> { pages, links }
   for (const [localPath, html] of rendered) {
     const pageUrl = entries.find((e) => e.localPath === localPath)?.link ?? origin;
     const reps = new Map();
@@ -2866,22 +2872,20 @@ async function capture() {
     const dest = join(outDir, localPath);
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, out, { encoding: 'utf8' });
-    writtenPages.set(localPath, out);
-  }
-
-  // 4. Gates.
-  let externalHosts = new Set();
-  // Navigation that never came home. Computed from what was WRITTEN, not from
-  // what was fetched, so it measures the artifact the charity would receive.
-  const strandedNav = new Map(); // host -> { pages, links }
-  for (const [, outHtml] of writtenPages) {
-    for (const [host, n] of remainingSelfHostLinks(outHtml, domain, selfHost)) {
+    writtenPages.add(localPath);
+    for (const [host, n] of remainingSelfHostLinks(out, domain, selfHost)) {
       const cur = strandedNav.get(host) ?? { pages: 0, links: 0 };
       cur.pages += 1;
       cur.links += n;
       strandedNav.set(host, cur);
     }
   }
+
+  // 4. Gates.
+  let externalHosts = new Set();
+  // Navigation that never came home — tallied above, as each page was written,
+  // so it measures the artifact the charity would receive rather than what was
+  // fetched.
   if (strandedNav.size) {
     console.error(
       '[capture] navigation still points off the clone — every one of these links leaves the' +

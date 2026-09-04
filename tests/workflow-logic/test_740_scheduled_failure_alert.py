@@ -56,6 +56,7 @@ Refs #843, #832, #752 (process assurance), AGENTS.md §"Adding or changing a wor
 
 from __future__ import annotations
 
+import datetime
 import json
 import pathlib
 import shutil
@@ -116,6 +117,8 @@ def _run(
     head_branch="main",
     jobs=None,
     jobs_throw=False,
+    last_green=None,
+    success_runs_throw=None,
     watched=None,
     registered=None,
     filler_workflows=0,
@@ -134,6 +137,11 @@ def _run(
     caller that fails to paginate cannot resolve them. `registered` is the set of
     names the repo actually declares — pass a narrower list than `watched` to
     model a workflow that was renamed out from under the watch list.
+
+    `last_green` is how many days ago this workflow last SUCCEEDED, appended to
+    its run list behind the latest run (the API returns newest first). `None`
+    means it has never gone green. It is what separates a gate declined once from
+    a gate nobody has answered in weeks.
     """
     script = step_github_script(WORKFLOW, JOB, STEP)
     watched = _watched() if watched is None else watched
@@ -162,6 +170,21 @@ def _run(
                 "html_url": "https://github.com/x/y/actions/runs/999",
             }
         ]
+        if last_green is not None:
+            green_at = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+                days=last_green
+            )
+            runs[str(ids[name])].append(
+                {
+                    "id": 30116960000,
+                    "name": RUN_DISPLAY_NAME,
+                    "conclusion": "success",
+                    "run_number": 41,
+                    "head_branch": head_branch,
+                    "updated_at": green_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "html_url": "https://github.com/x/y/actions/runs/998",
+                }
+            )
     if jobs is None:
         jobs = [{"name": "audit", "conclusion": "failure"}]
 
@@ -184,6 +207,10 @@ def _run(
             env["TEST_JOBS_THROW"] = "1"
         if runs_throw:
             env["TEST_RUNS_THROW"] = json.dumps([str(ids[n]) for n in runs_throw])
+        if success_runs_throw:
+            env["TEST_SUCCESS_RUNS_THROW"] = json.dumps(
+                [str(ids[n]) for n in success_runs_throw]
+            )
         proc = subprocess.run(
             [NODE, str(HARNESS)],
             env=env,
@@ -473,7 +500,9 @@ def _declined_gate_jobs():
 
 
 def test_declined_gate_does_not_alert():
-    r = _run("failure", open_issues=[], jobs=_declined_gate_jobs())
+    # `last_green=3`: the workflow succeeded three days ago, so this really is a
+    # one-off decline and the carve-out must hold.
+    r = _run("failure", open_issues=[], jobs=_declined_gate_jobs(), last_green=3)
     assert r["threw"] is None, r
     assert r["created"] == [], r
     assert r["comments"] == [], r
@@ -482,12 +511,108 @@ def test_declined_gate_does_not_alert():
     assert any("Not alerting" in n for n in r["notices"]), r
 
 
-def test_abandoned_gate_does_not_alert_even_with_an_alert_already_open():
+def test_declined_gate_does_not_alert_even_with_an_alert_already_open():
     # An open alert for this workflow must not collect gate-decline noise either.
-    r = _run("failure", open_issues=[_alert_issue(7)], jobs=_declined_gate_jobs())
+    r = _run(
+        "failure",
+        open_issues=[_alert_issue(7)],
+        jobs=_declined_gate_jobs(),
+        last_green=3,
+    )
     assert r["threw"] is None, r
     assert r["comments"] == [], r
     assert r["created"] == [], r
+
+
+# --- ...but an ABANDONED gate is an outage (the six-week silence) ------------
+#
+# The carve-out above was written for a gate a human DECLINES. Nothing declined
+# 703: its weekly run sits in `github-prod` waiting for an approval a cron cannot
+# give itself, and 734 (Stale Waiting-Run Janitor) reaps it after 7 days exactly
+# as designed. What 734 leaves behind — run `cancelled`, jobs `cancelled`, no job
+# `failure` — is byte-for-byte the shape above. Every scheduled run from
+# 2026-07-27 to 2026-08-31 died that way, the published sites list froze at its
+# 2026-07-25 snapshot, and the alerter stayed quiet for six weeks by design.
+#
+# Recurrence is the discriminator: a decline is followed by a green run next
+# cycle, an abandoned gate never is.
+
+
+def test_abandoned_gate_alerts_once_it_stops_recovering():
+    # Same job shape as a decline, but nothing green in ~6 weeks — the real 703.
+    r = _run("cancelled", open_issues=[], jobs=_declined_gate_jobs(), last_green=41)
+    assert r["threw"] is None, r
+    assert len(r["created"]) == 1, r
+
+
+def test_a_never_green_gated_workflow_alerts():
+    # No successful run at all is at least as bad as a stale one; it must not read
+    # as "recently healthy" just because the lookup came back empty.
+    r = _run("cancelled", open_issues=[], jobs=_declined_gate_jobs(), last_green=None)
+    assert r["threw"] is None, r
+    assert len(r["created"]) == 1, r
+    assert "never had a successful" in r["created"][0]["body"], r
+
+
+def test_the_abandoned_gate_alert_says_it_needs_an_approval_not_a_debug_session():
+    # The remedy differs from a failing job, so the issue must name the shape.
+    # Nobody needs to debug 703; somebody needs to approve it or move it off the
+    # gate. An alert that reads like a code fault sends the reader to the wrong
+    # place, which is most of what this fix is for.
+    r = _run("cancelled", open_issues=[], jobs=_declined_gate_jobs(), last_green=41)
+    # Assert before indexing: this module's runner catches AssertionError only, so a
+    # bare `[0]` on an empty list raises IndexError and takes the whole suite down
+    # with it — every test sorting after this one then silently never runs.
+    assert len(r["created"]) == 1, r
+    body = r["created"][0]["body"]
+    assert "approval gate nobody answered" in body, body
+    assert "not a debug session" in body, body
+
+
+def test_the_suppression_boundary_holds_on_both_sides():
+    # A threshold that only ever gets tested from one side is a threshold nobody
+    # knows the position of.
+    quiet = _run("cancelled", open_issues=[], jobs=_declined_gate_jobs(), last_green=20)
+    assert quiet["created"] == [], quiet
+    loud = _run("cancelled", open_issues=[], jobs=_declined_gate_jobs(), last_green=22)
+    assert len(loud["created"]) == 1, loud
+
+
+def test_an_unreadable_success_history_alerts_rather_than_suppressing():
+    # Fail loud, never silent — the same stance the job-list catch already takes.
+    # An unreadable history must not be able to buy a workflow permanent quiet.
+    #
+    # `success_runs_throw` breaks ONLY the success lookup. Making the whole runs
+    # API throw would kill the poll first and never reach this code, so the test
+    # would pass while exercising nothing.
+    r = _run(
+        "cancelled",
+        open_issues=[],
+        jobs=_declined_gate_jobs(),
+        last_green=3,  # recent green — it would be SUPPRESSED if the lookup worked
+        success_runs_throw=[WATCHED_NAME],
+    )
+    assert r["threw"] is None, r
+    assert len(r["created"]) == 1, r
+    assert "could not be read" in r["created"][0]["body"], r
+    assert any("success history" in w for w in r["warnings"]), r
+
+
+def test_the_success_lookup_is_only_spent_on_the_suppression_path():
+    # It is one extra REST call against a 5,000/hr pool shared with every other
+    # agent, 48 sweeps a day. It must cost nothing on the ordinary paths.
+    green = _run("success", open_issues=[_alert_issue(7)])
+    assert [c for c in green["listWorkflowRunsCalls"] if c["status"] == "success"] == [], green
+    failed = _run("failure", open_issues=[])  # a real job failure
+    assert [c for c in failed["listWorkflowRunsCalls"] if c["status"] == "success"] == [], failed
+
+
+def test_the_success_lookup_is_scoped_like_the_poll():
+    r = _run("cancelled", open_issues=[], jobs=_declined_gate_jobs(), last_green=41)
+    calls = [c for c in r["listWorkflowRunsCalls"] if c["status"] == "success"]
+    assert len(calls) == 1, r
+    assert calls[0]["branch"] == "main", calls
+    assert calls[0]["per_page"] == 1, calls
 
 
 def test_a_real_job_failure_still_alerts_the_negative_control():

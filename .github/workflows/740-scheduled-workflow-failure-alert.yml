@@ -107,6 +107,39 @@ jobs:
             // Only the default branch matters: a red run on a feature branch is the PR
             // author's problem, not a fleet-wide alert.
             const defaultBranch = (context.payload.repository || {}).default_branch || 'main';
+            // A DECLINE IS A DECISION; AN ABANDONED GATE IS AN OUTAGE. Both arrive here
+            // wearing the same clothes (see the suppression below), so recurrence is what
+            // tells them apart: a declined gate is followed by a green run next cycle, an
+            // abandoned one never is. Every watched workflow runs daily or weekly, so three
+            // missed weekly cycles is unambiguous while a one-off decline never trips it.
+            const STALE_SUCCESS_DAYS = 21;
+
+            // Age, in whole days, of the newest SUCCESSFUL default-branch run. Returns
+            // Infinity when there is none and when the lookup fails, so both escalate: this
+            // workflow's standing rule is that an unreadable history reads as an outage, not
+            // as health (same stance as the job-list catch below). `why` carries the honest
+            // reason into the alert so a reader is never told "never succeeded" about a
+            // workflow whose history merely could not be read.
+            const greenAge = async (workflowId, wfName) => {
+              try {
+                const res = await github.rest.actions.listWorkflowRuns({
+                  owner, repo, workflow_id: workflowId,
+                  branch: defaultBranch, status: 'success', per_page: 1,
+                });
+                const last = (((res.data || {}).workflow_runs) || [])[0];
+                if (!last) {
+                  return { days: Infinity, why: `it has never had a successful ${defaultBranch} run` };
+                }
+                const at = Date.parse(last.updated_at || last.created_at || '');
+                if (Number.isNaN(at)) {
+                  return { days: Infinity, why: `its last successful run carried no readable timestamp` };
+                }
+                return { days: Math.floor((Date.now() - at) / 86400000), at: last.updated_at || last.created_at };
+              } catch (e) {
+                core.warning(`Could not read the success history for ${wfName} (${e.message}); treating it as never-green.`);
+                return { days: Infinity, why: `its run history could not be read (${e.message})` };
+              }
+            };
             const WATCHED = [...new Set(
               (process.env.WATCHED_WORKFLOWS || '').split('\n').map(s => s.trim()).filter(Boolean)
             )];
@@ -185,7 +218,7 @@ jobs:
             // `wfName` is the WORKFLOW's name, never `run.name`: for a workflow that sets
             // `run-name:` the run object carries the rendered run title instead, which would
             // scatter the marker across a different key on every run.
-            const evaluate = async (wfName, run) => {
+            const evaluate = async (wfName, workflowId, run) => {
               // Keyed by workflow name: one rolling issue per watched workflow, so a success
               // only ever closes the alert for the workflow that actually recovered.
               const marker = `<!-- scheduled-workflow-failure-alert:${wfName} -->`;
@@ -211,7 +244,22 @@ jobs:
               // this alerter would be "a human said no", and an alerter that cries wolf in
               // its first week is one nobody reads by its second (#834, #837).
               // Discriminator: no job `failure` + at least one job `cancelled` ⇒ a declined
-              // or abandoned gate, or a `cancel-in-progress` supersession. Neither is a fault.
+              // gate, an abandoned one, or a `cancel-in-progress` supersession.
+              //
+              // TWO OF THOSE THREE ARE NOT FAULTS. The third is, and suppressing it cost six
+              // weeks of silence: 703's weekly run sits in `github-prod` waiting for an
+              // approval a cron cannot give itself, 734 (Stale Waiting-Run Janitor) reaps it
+              // after 7 days exactly as designed, and the corpse it leaves — run `cancelled`,
+              // jobs `cancelled`, no job `failure` — is byte-for-byte the signature this
+              // check was written to ignore. Every scheduled run from 2026-07-27 to
+              // 2026-08-31 died that way, the published sites list froze at its 2026-07-25
+              // snapshot, and nothing said a word, because one workflow mechanically
+              // manufactures the exact shape another is configured to stay quiet about.
+              // Neither is individually wrong; the silence is emergent, which is why it was
+              // invisible to a reading of either one.
+              // So keep the suppression, but bound it: it holds only while the workflow is
+              // still actually succeeding (see STALE_SUCCESS_DAYS above).
+              let gateNote = '';
               if (run.conclusion !== 'success') {
                 let jobs = null;
                 try {
@@ -228,8 +276,21 @@ jobs:
                   const failed = jobs.filter(j => j.conclusion === 'failure');
                   const cancelled = jobs.filter(j => j.conclusion === 'cancelled');
                   if (failed.length === 0 && cancelled.length > 0) {
-                    core.notice(`Not alerting on ${wfName}: no job failed and ${cancelled.length} were cancelled (declined/abandoned approval gate, or a superseded run). ${run.html_url}`);
-                    return;
+                    const green = await greenAge(workflowId, wfName);
+                    if (green.days <= STALE_SUCCESS_DAYS) {
+                      core.notice(`Not alerting on ${wfName}: no job failed and ${cancelled.length} were cancelled (declined approval gate, or a superseded run), and it last succeeded ${green.days}d ago. ${run.html_url}`);
+                      return;
+                    }
+                    // Still the gate shape — but it has stopped recovering, so it is an
+                    // outage now. Say which shape it is, because the remedy differs from a
+                    // failing job: nobody needs to debug 703, somebody needs to sign off on
+                    // it (or move it off a gate a schedule cannot answer). Deliberately not
+                    // spelled with the verb this file's own guard forbids — the alerter must
+                    // never call a gate-approval API, and that guard is a substring scan of
+                    // the whole script, comments included.
+                    gateNote = green.why
+                      ? ` — no job failed and ${cancelled.length} were cancelled, which is the signature of an approval gate nobody answered, and ${green.why}. This needs an approval or a gate change, not a debug session.`
+                      : ` — no job failed and ${cancelled.length} were cancelled, which is the signature of an approval gate nobody answered, and it has not succeeded in ${green.days} days (last green ${green.at}). This needs an approval or a gate change, not a debug session.`;
                   }
                 }
               }
@@ -250,7 +311,7 @@ jobs:
                 }
                 return;
               }
-              const line = `- ${new Date().toISOString()} — **${wfName}** [run ${run.run_number}](${run.html_url}) → ${run.conclusion}`;
+              const line = `- ${new Date().toISOString()} — **${wfName}** [run ${run.run_number}](${run.html_url}) → ${run.conclusion}${gateNote}`;
               if (existing) {
                 // ONE COMMENT PER FAILING RUN, NOT ONE PER SWEEP. The event-driven version saw
                 // each run once, so appending on every observation was the same thing. A poll
@@ -299,7 +360,7 @@ jobs:
                 core.info(`No completed ${defaultBranch} run for ${wfName} yet.`);
                 continue;
               }
-              await evaluate(wfName, runs[0]);
+              await evaluate(wfName, wf.id, runs[0]);
             }
 
             if (unresolved.length) {

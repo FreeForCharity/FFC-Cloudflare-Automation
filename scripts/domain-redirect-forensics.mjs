@@ -212,6 +212,35 @@ export function describePageRuleForwarding(pageRule) {
   return `[${enabled}] ${status} ${targets || '(no target)'} -> ${to}`;
 }
 
+/**
+ * Wording for an 'absent' verdict, given which accounts were actually queried.
+ *
+ * A token missing from the environment means that account was never CHECKED —
+ * which is not the same as the zone being absent from it. Saying "NEITHER FFC
+ * nor CM" after querying one of them is a confident claim about evidence that
+ * was never gathered, and the "third-party Cloudflare account" guidance that
+ * follows would send a responder hunting for something that may sit in the
+ * account we simply could not read. Third instance of this same root cause on
+ * this file; the message must never outrun the lookups.
+ */
+export function describeAbsence(checkedLabels, allLabels = ['FFC', 'CM']) {
+  const checked = allLabels.filter((l) => checkedLabels.includes(l));
+  const missing = allLabels.filter((l) => !checkedLabels.includes(l));
+  if (!missing.length) {
+    return [
+      `is in NEITHER ${allLabels.join(' nor ')} Cloudflare.`,
+      'If the live probes above show a Cloudflare edge, the zone is in a',
+      'THIRD-PARTY Cloudflare account and FFC cannot read or change its rules.',
+    ];
+  }
+  return [
+    `was not found in ${checked.join(', ') || '(no)'} Cloudflare.`,
+    `NOT checked: ${missing.join(', ')} — no token for that account in this run.`,
+    'This is NOT evidence the zone is absent from Cloudflare overall, and the',
+    'third-party-account conclusion does NOT follow. Re-run with both tokens.',
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Live probes
 // ---------------------------------------------------------------------------
@@ -495,6 +524,20 @@ function selfTest() {
   check('paging stops when the API says nothing', hasMorePages(undefined, 0) === false);
 
   check(
+    'both accounts checked keeps the third-party conclusion',
+    describeAbsence(['FFC', 'CM']).join(' ').includes('THIRD-PARTY'),
+  );
+  check(
+    'one account checked drops the third-party conclusion',
+    !describeAbsence(['FFC']).join(' ').includes('THIRD-PARTY'),
+  );
+  check('one account checked names what was skipped', describeAbsence(['FFC'])[1].includes('CM'));
+  check(
+    'one account checked does not claim NEITHER',
+    !describeAbsence(['CM']).join(' ').includes('NEITHER'),
+  );
+
+  check(
     'non-forwarding page rule ignored',
     describePageRuleForwarding({ actions: [{ id: 'cache_level' }] }) === null,
   );
@@ -566,9 +609,9 @@ async function main() {
     } else {
       const zoneVerdict = await inspectZone(domain, accounts);
       if (zoneVerdict === 'absent') {
-        console.log(`  ${domain} is in NEITHER FFC nor CM Cloudflare.`);
-        console.log('  If the live probes above show a Cloudflare edge, the zone is in a');
-        console.log('  THIRD-PARTY Cloudflare account and FFC cannot read or change its rules.');
+        const lines = describeAbsence(accounts.map((a) => a.label));
+        console.log(`  ${domain} ${lines[0]}`);
+        for (const line of lines.slice(1)) console.log(`  ${line}`);
       } else if (zoneVerdict === 'unknown') {
         console.log(`::warning::${domain}: at least one Cloudflare lookup FAILED, so whether`);
         console.log('  FFC holds this zone is UNKNOWN. Do not read this as "not in Cloudflare" —');

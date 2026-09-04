@@ -168,6 +168,31 @@ def test_multi_label_public_suffixes_are_handled():
     assert a != b, f"two different .org.au orgs must not compare equal ({a} vs {b})"
 
 
+def test_absence_is_scoped_to_the_accounts_actually_queried():
+    """Copilot finding #3, same root cause as #2 one step further out.
+
+    A token missing from the environment means that account was never CHECKED.
+    Reporting "NEITHER FFC nor CM" after querying one of them is a confident
+    claim about evidence never gathered, and the third-party-account guidance
+    that follows would send a responder hunting for a zone that may sit in the
+    account we simply could not read.
+    """
+    proc = subprocess.run(
+        ["node", "--input-type=module", "-e",
+         "import {describeAbsence} from './scripts/domain-redirect-forensics.mjs';"
+         "console.log(JSON.stringify({both:describeAbsence(['FFC','CM']),one:describeAbsence(['FFC'])}));"],
+        capture_output=True, text=True, encoding="utf-8", cwd=str(REPO_ROOT),
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    import json as _json
+    out = _json.loads(proc.stdout)
+    both, one = " ".join(out["both"]), " ".join(out["one"])
+    assert "THIRD-PARTY" in both, both
+    assert "THIRD-PARTY" not in one, one
+    assert "NEITHER" not in one, one
+    assert "CM" in one, "the unchecked account must be named"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

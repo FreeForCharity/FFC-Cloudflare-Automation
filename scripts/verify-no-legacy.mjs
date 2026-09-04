@@ -148,6 +148,37 @@ export function isCloneOwned(url, prefixes = CLONE_OWNED_PREFIXES) {
  *
  * Returns { fatal, reason }.
  */
+/**
+ * Split the missing URLs into "already decided" and "must ask the source".
+ *
+ * ONE pass decides both, and that is the point. These used to be two
+ * expressions — a loop that seeded verdicts for clone-owned paths, and a
+ * filter that chose what to probe — and adding WordPress PHP endpoints to the
+ * filter without adding them to the loop left them with no verdict at all.
+ * Downstream, a URL absent from the map defaults to FATAL, so the skip
+ * silently re-created the exact failure the excuse was written to remove.
+ *
+ * Caught in review before it shipped, on a run that was already in flight.
+ * Deriving both halves from one predicate makes that class of mistake
+ * unrepresentable rather than merely fixed.
+ */
+export function planProbes(allMissing) {
+  const decided = new Map();
+  const toProbe = [];
+  for (const url of allMissing) {
+    // Settled without a request: the source has no opinion on the clone's own
+    // build paths, and it cannot give a useful answer about its PHP endpoints.
+    // Asking either would point a burst of guaranteed-useless traffic at a
+    // charity's live server.
+    if (isCloneOwned(url) || isDynamicWordPressEndpoint(url)) {
+      decided.set(url, classifyMissing({ url }));
+    } else {
+      toProbe.push(url);
+    }
+  }
+  return { decided, toProbe };
+}
+
 export function classifyMissing({ status = 0, contentType = '', error = null, url = '' } = {}) {
   if (isCloneOwned(url))
     return {
@@ -431,6 +462,67 @@ if (process.argv.includes('--self-test')) {
       false,
     ],
     ['a malformed url is not an endpoint', isDynamicWordPressEndpoint('not a url at all'), false],
+
+    // The wiring, not just the predicate. Downstream, a URL with NO entry in
+    // the verdict map defaults to fatal — so anything skipped from probing
+    // must also be decided here, or the skip silently re-creates the failure.
+    // Reviewed into existence: the first version skipped the endpoints from
+    // probing and seeded nothing, which read as correct and gated as broken.
+    [
+      'every url skipped from probing still gets a verdict',
+      (() => {
+        const all = [
+          'https://x.org/wp-admin/admin-ajax.php?action=hustle_module_viewed',
+          'https://x.org/_next/chunk.js',
+          'https://x.org/wp-content/real.js',
+        ];
+        const { decided, toProbe } = planProbes(all);
+        return all.every((u) => decided.has(u) || toProbe.includes(u));
+      })(),
+      true,
+    ],
+    // `?? 'ABSENT'` rather than `.fatal` directly: a regression that leaves the
+    // url undecided must read as a NAMED failure. Written the obvious way, the
+    // map lookup returns undefined and the assertion throws, so the mutation
+    // that reproduces the real bug was detected only by a crashed self-test
+    // reporting zero failures — the weak signal this repo keeps meeting.
+    [
+      'a WordPress endpoint is decided as EXCUSED without a probe',
+      planProbes(['https://x.org/wp-admin/admin-ajax.php']).decided.get(
+        'https://x.org/wp-admin/admin-ajax.php',
+      )?.fatal ?? 'ABSENT',
+      false,
+    ],
+    [
+      'a clone-owned path is decided as FATAL without a probe',
+      planProbes(['https://x.org/_next/chunk.js']).decided.get('https://x.org/_next/chunk.js')
+        ?.fatal ?? 'ABSENT',
+      true,
+    ],
+    [
+      // Joined to a string on purpose: this harness compares with !==, so an
+      // array literal is compared by reference and can never match.
+      'an ordinary asset is left to be probed, not decided',
+      planProbes(['https://x.org/wp-content/real.js']).toProbe.join(','),
+      'https://x.org/wp-content/real.js',
+    ],
+    [
+      'and it is NOT pre-decided, so the probe still gets to speak',
+      planProbes(['https://x.org/wp-content/real.js']).decided.size,
+      0,
+    ],
+    [
+      'nothing is both decided and probed',
+      (() => {
+        const { decided, toProbe } = planProbes([
+          'https://x.org/wp-admin/admin-ajax.php',
+          'https://x.org/_next/c.js',
+          'https://x.org/a.css',
+        ]);
+        return toProbe.some((u) => decided.has(u));
+      })(),
+      false,
+    ],
   ];
   let failed = 0;
   for (const [name, got, want] of cases) {
@@ -679,19 +771,10 @@ async function main() {
   //
   // Probed once per distinct URL, and only for URLs that actually went missing,
   // so a clean run makes no network calls at all.
-  const verdictFor = new Map(); // url -> { fatal, reason }
   const allMissing = [...new Set(results.flatMap((r) => r.localMissing.map((m) => m.url)))];
-  // Settle the clone's own build paths without a request: the source has no
-  // opinion on them, and asking would send a charity's server a burst of
-  // guaranteed 404s for URLs it never had.
-  for (const url of allMissing.filter((u) => isCloneOwned(u))) {
-    verdictFor.set(url, classifyMissing({ url }));
-  }
-  // Neither clone-owned paths nor WordPress PHP endpoints need a probe: the
-  // verdict for both is decided without asking the charity's live site.
-  let distinctMissing = allMissing.filter(
-    (u) => !isCloneOwned(u) && !isDynamicWordPressEndpoint(u),
-  );
+  const plan = planProbes(allMissing);
+  const verdictFor = plan.decided; // url -> { fatal, reason }
+  let distinctMissing = plan.toProbe;
   // A badly broken clone could name hundreds of distinct URLs, and probing them
   // all would mean pointing a burst of traffic at a charity's live site to
   // diagnose our own export. Cap it; anything past the cap stays FATAL, so the

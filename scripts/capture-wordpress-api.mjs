@@ -629,6 +629,91 @@ export function normalizeSelfHost(absUrl, selfHost, domain) {
   return u.toString();
 }
 
+/**
+ * Is this URL served by the site being captured?
+ *
+ * `redirect: 'follow'` means a 200 says nothing about WHOSE page came back. A
+ * WordPress whose `home` option names a domain it does not serve answers its
+ * own root with a canonical redirect to that domain — and if something else
+ * lives there, the capture stores a stranger's page under the charity's URL
+ * with every gate green. Measured on this repo's first real conversion: the
+ * source's `/` redirected off-site and `public/index.html` shipped as a parked
+ * WordPress.com landing page while 588 other pages were correct.
+ *
+ * `www.` is folded and subdomains count, matching `declaredSelfHost`.
+ */
+export function isSiteHost(absUrl, domain) {
+  let u;
+  try {
+    u = new URL(absUrl);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  const host = u.hostname.replace(/^www\./, '');
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+/**
+ * What the scrape loop should do with one page response.
+ *
+ * Extracted so the decision is testable on its own: the loop that used to hold
+ * it inline stored anything with `status === 200`, and the one case that
+ * mattered — a 200 belonging to a different site — is invisible to every
+ * status check. Mirrors `classifyMissing` in verify-no-legacy.mjs.
+ */
+export function classifyPageResponse({ status = 0, finalUrl = '', requestUrl = '', domain = '' }) {
+  if (status !== 200) return { action: 'skip', status, reason: `HTTP ${status}` };
+  const landed = finalUrl || requestUrl;
+  if (!isSiteHost(landed, domain))
+    return {
+      action: 'skip',
+      status: -2,
+      offSite: true,
+      finalUrl: landed,
+      reason: `followed off-site to ${landed}`,
+    };
+  return { action: 'store', status: 200 };
+}
+
+/** A same-site link key: absolute, stale-host normalized, trailing slash dropped. */
+export function linkKey(absUrl) {
+  if (typeof absUrl !== 'string' || !absUrl) return null;
+  return absUrl.endsWith('/') ? absUrl.slice(0, -1) : absUrl;
+}
+
+/**
+ * This page's hrefs, indexed by the canonical URL each one resolves to.
+ *
+ * The rewrite that keeps navigation inside the clone used to compare an
+ * entry's link against the page's raw href STRINGS. Those two are written in
+ * different alphabets whenever the site declares a stale `home`: the entry
+ * list is normalized onto the serving host, while the markup still says the
+ * stale one, so `present.has(e.link)` was false for every link on the site and
+ * not one was rewritten. 562 of 589 delivered pages navigated to the dead
+ * domain, and no gate could see it — the links resolve today, and a nav href
+ * is not a subresource, so nothing fetches it at page load.
+ *
+ * Indexing by the RESOLVED url compares like with like, and folds in the two
+ * other spellings of the same destination for free: a relative href, and a
+ * root-absolute one (which would otherwise survive into a project-pages
+ * deploy, where the site is mounted under a prefix and `/about-us/` is a 404).
+ * The value is the set of raw strings to key replacements on, because those
+ * are what actually appear in the document.
+ */
+export function normalizedLinkIndex(html, pageUrl, selfHost, domain) {
+  const index = new Map();
+  for (const raw of collectPageLinks(html)) {
+    const abs = absolutize(raw, pageUrl);
+    if (!abs) continue;
+    const key = linkKey(normalizeSelfHost(abs, selfHost, domain));
+    if (!key) continue;
+    if (!index.has(key)) index.set(key, new Set());
+    index.get(key).add(raw);
+  }
+  return index;
+}
+
 export function isIgnoredHost(absUrl, ignoreHosts = []) {
   if (!ignoreHosts.length) return false;
   let u;
@@ -856,6 +941,39 @@ export function remainingExternalAssetHosts(html, domain, ignoreHosts = []) {
  * FETCHED rather than the pages actually RENDERED, so a post whose page failed
  * to download still counted as captured.
  */
+/**
+ * Same-site navigation links that survived the rewrite, by host.
+ *
+ * The self-containment gate loads each page with the source host blocked, so
+ * it sees SUBRESOURCES. A nav `href` is fetched only when a visitor clicks it,
+ * which is never during a gate run — so a clone whose every menu item points
+ * at the domain being decommissioned passes cleanly. That is exactly what
+ * shipped: 562 of 589 pages, all green.
+ *
+ * Reported by host so the operator sees which domain the clone still leans on,
+ * and counted per page so "one stray link" and "the whole navigation" are not
+ * the same finding.
+ */
+export function remainingSelfHostLinks(html, domain, selfHost) {
+  const hosts = new Map();
+  for (const raw of collectPageLinks(html)) {
+    if (!/^https?:\/\//i.test(raw)) continue;
+    let host;
+    try {
+      host = new URL(raw).hostname.replace(/^www\./, '');
+    } catch {
+      continue;
+    }
+    // The site's own two names are the ones that must have been rewritten to
+    // local paths. Any other host is a genuine outbound link and is left alone.
+    const isSelf = host === domain || host.endsWith(`.${domain}`);
+    const isStale = selfHost && (host === selfHost || host.endsWith(`.${selfHost}`));
+    if (!isSelf && !isStale) continue;
+    hosts.set(host, (hosts.get(host) ?? 0) + 1);
+  }
+  return hosts;
+}
+
 export function summarizeCaptured(entries, renderedPaths) {
   const byType = {};
   const bySource = {};
@@ -934,13 +1052,33 @@ export function captureVerdict({
   externalHosts,
   failedAssets,
   assetFailureNote,
+  frontPageCaptured = true,
+  strandedStaleLinks = 0,
+  strandedStalePages = 0,
+  staleHost = null,
 }) {
   const problems = [];
+  // The front page is not one entry among many. A percentage floor cannot
+  // express that: losing it costs 1 of 590 — 99.8%, comfortably inside any
+  // sane threshold — while being the one page every visitor sees first.
+  if (!frontPageCaptured)
+    problems.push(
+      "the site's front page was not captured; a clone with no index.html serves 404 at its root",
+    );
   if (expected > 0 && captured < expected)
     problems.push(
       `captured ${captured} of ${expected} inventory entries (REST collections + sitemap union)`,
     );
   if (externalHosts.length) problems.push(`unlocalized asset hosts: ${externalHosts.join(', ')}`);
+  // Only the STALE host is fatal. A link to the serving domain may have no
+  // local equivalent — /feed/, /wp-json/, wp-admin — and gating on those would
+  // refuse every real WordPress site. A link to a host the site does not serve
+  // is broken for visitors today, whatever happens to DNS later.
+  if (strandedStaleLinks > 0)
+    problems.push(
+      `${strandedStaleLinks} navigation link(s) across ${strandedStalePages} page(s) still point at ` +
+        `${staleHost ?? 'the stale host'}, which does not serve this site`,
+    );
   // Prefer the diagnostic sentence when one is available: "823 asset
   // download(s) failed" is a count, and the operator's next question is always
   // "failed how, and where?".
@@ -1491,6 +1629,221 @@ function selfTest() {
   );
 
   // The rewrite must only touch links the page actually contains.
+  // -- isSiteHost: a 200 does not prove the body came from the site ----------
+  eq(
+    'isSiteHost accepts the domain, its www form and a subdomain',
+    [
+      isSiteHost('https://new.org/a/', 'new.org'),
+      isSiteHost('https://www.new.org/a/', 'new.org'),
+      isSiteHost('https://cdn.new.org/a/', 'new.org'),
+    ],
+    [true, true, true],
+  );
+  eq(
+    'isSiteHost REFUSES the stale home host — the parked-page case',
+    isSiteHost('https://old.org/', 'new.org'),
+    false,
+  );
+  eq(
+    'isSiteHost is not fooled by a domain that merely ends with the name',
+    isSiteHost('https://notnew.org/a/', 'new.org'),
+    false,
+  );
+  eq(
+    'isSiteHost refuses a non-http scheme and a malformed url',
+    [isSiteHost('data:text/html,x', 'new.org'), isSiteHost('not a url', 'new.org')],
+    [false, false],
+  );
+
+  // -- classifyPageResponse: the decision the scrape loop dispatches on -----
+  eq(
+    'classifyPageResponse stores a 200 that stayed on the site',
+    classifyPageResponse({
+      status: 200,
+      finalUrl: 'https://new.org/about-us/',
+      requestUrl: 'https://new.org/about-us/',
+      domain: 'new.org',
+    }).action,
+    'store',
+  );
+  eq(
+    'classifyPageResponse REFUSES a 200 that redirected to the stale home host',
+    classifyPageResponse({
+      status: 200,
+      finalUrl: 'https://old.org/',
+      requestUrl: 'https://new.org/',
+      domain: 'new.org',
+    }),
+    {
+      action: 'skip',
+      status: -2,
+      offSite: true,
+      finalUrl: 'https://old.org/',
+      reason: 'followed off-site to https://old.org/',
+    },
+  );
+  eq(
+    'classifyPageResponse skips a non-200 without calling it off-site',
+    classifyPageResponse({ status: 404, requestUrl: 'https://new.org/x/', domain: 'new.org' }),
+    { action: 'skip', status: 404, reason: 'HTTP 404' },
+  );
+  eq(
+    'classifyPageResponse treats an absent final url as the requested one',
+    classifyPageResponse({
+      status: 200,
+      finalUrl: '',
+      requestUrl: 'https://new.org/a/',
+      domain: 'new.org',
+    }).action,
+    'store',
+  );
+  eq(
+    'classifyPageResponse refuses an unreachable response rather than storing it',
+    classifyPageResponse({ status: 0, requestUrl: 'https://new.org/a/', domain: 'new.org' }).action,
+    'skip',
+  );
+
+  // -- normalizedLinkIndex: the bug that shipped 562 pages of off-site nav ---
+  // The entry list is normalized onto the serving host; the markup still says
+  // the stale one. Comparing the two as strings finds nothing.
+  {
+    const html =
+      '<a href="https://old.org/about-us/">A</a>' +
+      '<a href="https://old.org/donate/">D</a>' +
+      '<a href="https://elsewhere.net/x/">X</a>';
+    const idx = normalizedLinkIndex(html, 'https://new.org/', 'old.org', 'new.org');
+    eq(
+      'normalizedLinkIndex resolves a STALE-host href onto the entry key',
+      [...(idx.get('https://new.org/about-us') ?? [])],
+      ['https://old.org/about-us/'],
+    );
+    eq(
+      'normalizedLinkIndex leaves a genuinely third-party link on its own key',
+      idx.get('https://new.org/x'),
+      undefined,
+    );
+    // The regression this replaced: a raw-string comparison against the
+    // normalized entry link.
+    eq(
+      'the old string comparison would have matched nothing',
+      collectPageLinks(html).has('https://new.org/about-us/'),
+      false,
+    );
+  }
+  {
+    // All three spellings of one destination collapse onto one key. The
+    // root-absolute form matters on project pages, where the site is mounted
+    // under a prefix and `/about-us/` resolves outside it.
+    const html =
+      '<a href="https://new.org/about-us/">abs</a>' +
+      '<a href="/about-us/">root</a>' +
+      '<a href="../about-us/">rel</a>';
+    const idx = normalizedLinkIndex(html, 'https://new.org/ministries/', null, 'new.org');
+    eq(
+      'normalizedLinkIndex folds absolute, root-absolute and relative spellings together',
+      [...(idx.get('https://new.org/about-us') ?? [])].sort(),
+      ['../about-us/', '/about-us/', 'https://new.org/about-us/'],
+    );
+  }
+  eq(
+    'linkKey folds the trailing slash so /a/ and /a share one key',
+    [linkKey('https://x.org/a/'), linkKey('https://x.org/a')],
+    ['https://x.org/a', 'https://x.org/a'],
+  );
+
+  // -- remainingSelfHostLinks: the gate's blind spot, closed ----------------
+  {
+    const page =
+      '<a href="https://old.org/about-us/">nav</a>' +
+      '<a href="https://old.org/donate/">nav</a>' +
+      '<a href="https://new.org/feed/">feed</a>' +
+      '<a href="https://example.net/partner/">outbound</a>' +
+      '<a href="../contact/">local</a>';
+    const found = remainingSelfHostLinks(page, 'new.org', 'old.org');
+    eq(
+      'remainingSelfHostLinks counts the stale host and the serving host apart',
+      [...found.entries()].sort(),
+      [
+        ['new.org', 1],
+        ['old.org', 2],
+      ],
+    );
+    eq(
+      'remainingSelfHostLinks leaves genuine outbound links alone',
+      found.has('example.net'),
+      false,
+    );
+    eq(
+      'remainingSelfHostLinks reports nothing once the links are local',
+      [...remainingSelfHostLinks('<a href="../about-us/">a</a>', 'new.org', 'old.org').keys()],
+      [],
+    );
+  }
+  eq(
+    'captureVerdict fails a clone whose navigation still points at the stale host',
+    captureVerdict({
+      expected: 5,
+      captured: 5,
+      externalHosts: [],
+      failedAssets: 0,
+      strandedStaleLinks: 44,
+      strandedStalePages: 562,
+      staleHost: 'old.org',
+    }).problems.filter((s) => s.includes('old.org')).length,
+    1,
+  );
+  eq(
+    'captureVerdict does NOT fail on links to the serving domain — /feed/ has no local copy',
+    captureVerdict({
+      expected: 5,
+      captured: 5,
+      externalHosts: [],
+      failedAssets: 0,
+      strandedStaleLinks: 0,
+      staleHost: 'old.org',
+    }).ok,
+    true,
+  );
+
+  // -- the front page is not one entry among many ---------------------------
+  // Asserted on the PROBLEM TEXT, not on `ok`. At 589/590 the completeness
+  // term fails too, so `ok === false` stays false with this rule deleted — the
+  // first draft of this test passed a mutation that removed the thing it was
+  // written to pin.
+  eq(
+    'captureVerdict names the front page as its own problem, not just a count',
+    captureVerdict({
+      expected: 590,
+      captured: 589,
+      externalHosts: [],
+      failedAssets: 0,
+      frontPageCaptured: false,
+    }).problems.filter((s) => s.includes('front page')).length,
+    1,
+  );
+  eq(
+    'captureVerdict fails on a missing front page even when nothing else is wrong',
+    captureVerdict({
+      expected: 590,
+      captured: 590,
+      externalHosts: [],
+      failedAssets: 0,
+      frontPageCaptured: false,
+    }).ok,
+    false,
+  );
+  eq(
+    'captureVerdict stays silent about the front page when it was captured',
+    captureVerdict({
+      expected: 590,
+      captured: 590,
+      externalHosts: [],
+      failedAssets: 0,
+      frontPageCaptured: true,
+    }).problems,
+    [],
+  );
+
   eq(
     'collectPageLinks reads hrefs',
     [...collectPageLinks('<a href="https://x.org/a/">A</a><a href=\'/b\'>B</a>')].sort(),
@@ -2322,6 +2675,10 @@ async function capture() {
   // Paths that would have escaped the output directory. Expected to stay empty;
   // recorded rather than merely skipped so an empty list is evidence.
   const escapedPaths = [];
+  // Pages whose fetch left the site entirely. Recorded separately from an HTTP
+  // failure because the response was a perfectly good 200 — of somebody else's
+  // page. See isSiteHost.
+  const offSiteRedirects = [];
   // Per-failure lines are capped. The first real capture printed 823 of them,
   // which pushed the actual diagnosis off the readable end of the log and made
   // a one-cause failure look like 823 unrelated ones. The tally below reports
@@ -2329,10 +2686,22 @@ async function capture() {
   const LOG_CAP = 20;
   for (const e of entries) {
     const res = await request(e.link, { accept: 'text/html' });
-    if (!res || res.status !== 200) {
+    // A 200 is not enough: `redirect: 'follow'` will happily deliver another
+    // site's page under this URL. Refusing it is deliberate — writing a
+    // stranger's markup into a charity's repository is worse than a gap,
+    // because a gap is visible and a substitution is not.
+    const verdictForPage = classifyPageResponse({
+      status: res?.status ?? 0,
+      finalUrl: res?.url ?? '',
+      requestUrl: e.link,
+      domain,
+    });
+    if (verdictForPage.action !== 'store') {
       if (pageFailures.length < LOG_CAP)
-        console.error(`[scrape] ${e.link}: HTTP ${res?.status ?? 0} — skipped`);
-      pageFailures.push({ url: e.link, status: res?.status ?? 0 });
+        console.error(`[scrape] ${e.link}: ${verdictForPage.reason} — skipped`);
+      if (verdictForPage.offSite)
+        offSiteRedirects.push({ url: e.link, finalUrl: verdictForPage.finalUrl });
+      pageFailures.push({ url: e.link, status: verdictForPage.status });
       await sleep(delayMs);
       continue;
     }
@@ -2357,6 +2726,16 @@ async function capture() {
   }
   const pageTally = tallyFailures(pageFailures);
   console.error(`[capture] rendered ${rendered.size} page(s), ${pageTally.total} failure(s)`);
+  if (offSiteRedirects.length) {
+    console.error(
+      `[capture] ${offSiteRedirects.length} page(s) redirected off ${domain} and were refused.` +
+        ' This is what a stale WordPress `home`/`siteurl` does: the CMS sends its own visitors' +
+        ' to a domain it does not serve. Fix it at the source with a search-replace on those' +
+        ' two options.',
+    );
+    for (const r of offSiteRedirects.slice(0, LOG_CAP))
+      console.error(`        ${r.url} -> ${r.finalUrl}`);
+  }
   if (edgeTagsRemoved.length) {
     const kinds = [...new Set(edgeTagsRemoved)].slice(0, 5).join(', ');
     console.error(
@@ -2450,6 +2829,7 @@ async function capture() {
     if (shouldLocalize(src, domain, ignoreHosts)) await localizeAsset(src);
   }
 
+  const writtenPages = new Map(); // localPath -> final HTML as written to disk
   for (const [localPath, html] of rendered) {
     const pageUrl = entries.find((e) => e.localPath === localPath)?.link ?? origin;
     const reps = new Map();
@@ -2469,16 +2849,13 @@ async function capture() {
     // entry made the rewrite quadratic in the size of the site: rewriteRefs
     // does a full-document split/join per pair, so a 590-entry inventory meant
     // ~1,180 passes over every one of 590 documents.
-    const present = collectPageLinks(html);
+    const linkIndex = normalizedLinkIndex(html, pageUrl, selfHost, domain);
     for (const e of entries) {
       if (e.localPath === localPath) continue;
-      const bare = e.link.endsWith('/') ? e.link.slice(0, -1) : null;
-      const hasFull = present.has(e.link);
-      const hasBare = bare !== null && present.has(bare);
-      if (!hasFull && !hasBare) continue;
+      const raws = linkIndex.get(linkKey(e.link));
+      if (!raws) continue;
       const target = `${relativePrefix(localPath)}${e.localPath.replace(/index\.html$/, '')}`;
-      if (hasFull) reps.set(e.link, target || './');
-      if (hasBare) reps.set(bare, target || './');
+      for (const raw of raws) reps.set(raw, target || './');
     }
     const out = rewriteRefs(html, reps);
     if (!isContainedPath(outDir, localPath)) {
@@ -2489,10 +2866,30 @@ async function capture() {
     const dest = join(outDir, localPath);
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, out, { encoding: 'utf8' });
+    writtenPages.set(localPath, out);
   }
 
   // 4. Gates.
   let externalHosts = new Set();
+  // Navigation that never came home. Computed from what was WRITTEN, not from
+  // what was fetched, so it measures the artifact the charity would receive.
+  const strandedNav = new Map(); // host -> { pages, links }
+  for (const [, outHtml] of writtenPages) {
+    for (const [host, n] of remainingSelfHostLinks(outHtml, domain, selfHost)) {
+      const cur = strandedNav.get(host) ?? { pages: 0, links: 0 };
+      cur.pages += 1;
+      cur.links += n;
+      strandedNav.set(host, cur);
+    }
+  }
+  if (strandedNav.size) {
+    console.error(
+      '[capture] navigation still points off the clone — every one of these links leaves the' +
+        ' static site for a host that is being decommissioned:',
+    );
+    for (const [host, s] of strandedNav)
+      console.error(`        ${host}: ${s.links} link(s) across ${s.pages} page(s)`);
+  }
   for (const localPath of rendered.keys()) {
     const dest = join(outDir, localPath);
     if (!existsSync(dest)) continue;
@@ -2528,12 +2925,21 @@ async function capture() {
   const assetFailureNote = describeFailures(assetTally, domain);
   if (assetFailureNote) console.error(`[capture] assets: ${assetFailureNote}`);
 
+  // `index.html` is what a static host serves at `/`. Derived from what was
+  // actually written rather than from the inventory, so an entry that was
+  // listed and then refused counts as missing.
+  const frontPageCaptured = rendered.has('index.html');
+  const staleNav = selfHost ? (strandedNav.get(selfHost) ?? { pages: 0, links: 0 }) : null;
   const verdict = captureVerdict({
     expected: entries.length,
     captured: rendered.size,
     externalHosts: [...externalHosts],
     failedAssets: assetTally.total,
     assetFailureNote,
+    frontPageCaptured,
+    strandedStaleLinks: staleNav?.links ?? 0,
+    strandedStalePages: staleNav?.pages ?? 0,
+    staleHost: selfHost,
   });
 
   const report = {
@@ -2550,6 +2956,9 @@ async function capture() {
       merged: entries.length,
     },
     captured: captureSummary,
+    frontPageCaptured,
+    offSiteRedirects,
+    strandedNav: Object.fromEntries(strandedNav),
     pages: { captured: captureSummary.byType.page ?? 0, reported: pages.total },
     posts: { captured: captureSummary.byType.post ?? 0, reported: posts.total },
     media: {

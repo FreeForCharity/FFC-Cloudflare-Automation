@@ -162,6 +162,36 @@ export function isCloneOwned(url, prefixes = CLONE_OWNED_PREFIXES) {
  * Deriving both halves from one predicate makes that class of mistake
  * unrepresentable rather than merely fixed.
  */
+/**
+ * Split one page's findings into fatal and excused, by the source's verdict.
+ *
+ * Missing local assets and legacy hits ask the SAME question — is this the
+ * clone's fault, or is the reference already dead on the source? — so they get
+ * the same answer here rather than two rules that drift apart.
+ *
+ * A legacy hit used to be fatal unconditionally, which is wrong for the case
+ * that actually occurs: the front page of this repo's first real conversion
+ * referenced two uploads the source itself 404s. No capture could localize
+ * them, so the reference stayed absolute, and the gate failed the migration
+ * over two images that are equally broken on the live site. Failing on that
+ * means FFC can never migrate a site carrying one dead image.
+ *
+ * A legacy hit the source SERVES is still fatal: we had the chance to localize
+ * it and did not. And the default is fail-closed — a url with no verdict at
+ * all (never probed, probe errored, past the cap) counts as fatal.
+ */
+export function splitFindings(result, verdictFor) {
+  const isFatal = (url) => (verdictFor.get(url) ?? { fatal: true }).fatal;
+  const localMissing = result?.localMissing ?? [];
+  const legacyHits = result?.legacyHits ?? [];
+  return {
+    fatalMissing: localMissing.filter((m) => isFatal(m.url)),
+    excusedMissing: localMissing.filter((m) => !isFatal(m.url)),
+    fatalLegacy: legacyHits.filter((u) => isFatal(u)),
+    excusedLegacy: legacyHits.filter((u) => !isFatal(u)),
+  };
+}
+
 export function planProbes(allMissing) {
   const decided = new Map();
   const toProbe = [];
@@ -463,6 +493,71 @@ if (process.argv.includes('--self-test')) {
     ],
     ['a malformed url is not an endpoint', isDynamicWordPressEndpoint('not a url at all'), false],
 
+    // A legacy hit gets the SAME verdict rule as a missing asset. The front
+    // page of the first real conversion referenced two uploads the source
+    // itself 404s; no capture could localize them, and failing there means no
+    // site with one dead image can ever be migrated.
+    [
+      'a legacy hit the source 404s is excused, not fatal',
+      splitFindings(
+        { legacyHits: ['https://x.org/wp-content/uploads/gone.png'], localMissing: [] },
+        new Map([['https://x.org/wp-content/uploads/gone.png', { fatal: false }]]),
+      ).fatalLegacy.length,
+      0,
+    ],
+    [
+      'a legacy hit the source SERVES stays fatal — we could have localized it',
+      splitFindings(
+        { legacyHits: ['https://x.org/wp-content/uploads/live.png'], localMissing: [] },
+        new Map([['https://x.org/wp-content/uploads/live.png', { fatal: true }]]),
+      ).fatalLegacy.length,
+      1,
+    ],
+    [
+      'a legacy hit with NO verdict fails closed',
+      splitFindings({ legacyHits: ['https://x.org/a.png'], localMissing: [] }, new Map())
+        .fatalLegacy.length,
+      1,
+    ],
+    [
+      'the excused legacy hit is still reported, not silently dropped',
+      splitFindings(
+        { legacyHits: ['https://x.org/gone.png'], localMissing: [] },
+        new Map([['https://x.org/gone.png', { fatal: false }]]),
+      ).excusedLegacy.join(','),
+      'https://x.org/gone.png',
+    ],
+    [
+      'missing assets are split by the same rule, and the two do not cross over',
+      (() => {
+        const out = splitFindings(
+          {
+            legacyHits: ['https://x.org/dead.png'],
+            localMissing: [{ url: 'https://x.org/chunk.js' }],
+          },
+          new Map([
+            ['https://x.org/dead.png', { fatal: false }],
+            ['https://x.org/chunk.js', { fatal: true }],
+          ]),
+        );
+        return `${out.fatalMissing.length}${out.excusedMissing.length}${out.fatalLegacy.length}${out.excusedLegacy.length}`;
+      })(),
+      '1001',
+    ],
+    [
+      'a page with no findings at all yields four empty lists',
+      (() => {
+        const o = splitFindings({}, new Map());
+        return (
+          o.fatalMissing.length +
+          o.excusedMissing.length +
+          o.fatalLegacy.length +
+          o.excusedLegacy.length
+        );
+      })(),
+      0,
+    ],
+
     // The wiring, not just the predicate. Downstream, a URL with NO entry in
     // the verdict map defaults to fatal — so anything skipped from probing
     // must also be decided here, or the skip silently re-creates the failure.
@@ -756,9 +851,14 @@ async function main() {
       problems.push(`navigation error: ${err.message}`);
     }
 
-    if (legacyHits.length) problems.push(`${legacyHits.length} request(s) to ${domain}`);
-    // The missing-asset problem is added AFTER the source probe below: whether
-    // a same-origin 404 is a clone defect depends on what the source serves.
+    // NEITHER the legacy-hit nor the missing-asset problem is added here. Both
+    // are added AFTER the source probe below, because both ask the same
+    // question — is this the clone's fault, or is the reference already dead
+    // on the source? A reference the source 404s could not have been localized
+    // by any capture: the visitor gets the same broken image either way, and
+    // failing on it means FFC can never migrate a site carrying one dead
+    // image, which is most real charity sites. A reference the source SERVES
+    // is a genuine defect and stays fatal.
 
     results.push({ path, problems, legacyHits, localMissing, thirdPartyFailed });
     await ctx.close();
@@ -771,7 +871,13 @@ async function main() {
   //
   // Probed once per distinct URL, and only for URLs that actually went missing,
   // so a clean run makes no network calls at all.
-  const allMissing = [...new Set(results.flatMap((r) => r.localMissing.map((m) => m.url)))];
+  // Legacy hits are probed alongside missing assets, and by the same rule.
+  const allMissing = [
+    ...new Set([
+      ...results.flatMap((r) => r.localMissing.map((m) => m.url)),
+      ...results.flatMap((r) => r.legacyHits),
+    ]),
+  ];
   const plan = planProbes(allMissing);
   const verdictFor = plan.decided; // url -> { fatal, reason }
   let distinctMissing = plan.toProbe;
@@ -817,11 +923,10 @@ async function main() {
   }
 
   for (const r of results) {
-    r.fatalMissing = r.localMissing.filter((m) => (verdictFor.get(m.url) ?? { fatal: true }).fatal);
-    r.excusedMissing = r.localMissing.filter(
-      (m) => !(verdictFor.get(m.url) ?? { fatal: true }).fatal,
-    );
+    Object.assign(r, splitFindings(r, verdictFor));
     if (r.fatalMissing.length) r.problems.push(`${r.fatalMissing.length} missing local asset(s)`);
+    if (r.fatalLegacy.length)
+      r.problems.push(`${r.fatalLegacy.length} request(s) to ${domain} the source still serves`);
   }
 
   console.log(`\nVerified ${results.length} page(s) of ${domain} against ${origin}\n`);
@@ -831,7 +936,9 @@ async function main() {
     if (!ok) failures++;
     console.log(`${ok ? 'PASS' : 'FAIL'}  ${r.path}`);
     for (const p of r.problems) console.log(`        ! ${p}`);
-    for (const u of [...new Set(r.legacyHits)].slice(0, 8)) console.log(`        legacy: ${u}`);
+    for (const u of [...new Set(r.fatalLegacy)].slice(0, 8)) console.log(`        legacy: ${u}`);
+    for (const u of [...new Set(r.excusedLegacy)].slice(0, 3))
+      console.log(`        legacy but dead on the source too (not fatal): ${u}`);
     for (const u of [...new Set(r.fatalMissing.map((m) => `${m.url} (${m.why})`))].slice(0, 8))
       console.log(`        MISSING LOCAL: ${u}`);
     for (const u of [...new Set(r.excusedMissing.map((m) => m.url))].slice(0, 3)) {

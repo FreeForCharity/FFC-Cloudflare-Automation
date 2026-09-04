@@ -540,6 +540,25 @@ export function collectPageLinks(html) {
  * paginate zero times and report an empty site as complete. Both look like
  * findings about the site rather than about the arguments.
  */
+/**
+ * How long to wait between ASSET downloads.
+ *
+ * This used to be `Math.min(delayMs, 100)` — a cap that quietly took the
+ * politeness control away from the operator for most of the crawl. Assets are
+ * the bulk of the traffic (1,838 of ~2,430 requests on this repo's first real
+ * conversion), so `--delay 750` still hammered the origin at 10 requests a
+ * second and the setting could not be used to slow anything down.
+ *
+ * Measured consequence: three full crawls of a charity's site inside an hour
+ * got the runner blocked by the site's own security plugin (REST index
+ * answering 401/403/429), which is a live-site effect caused entirely by our
+ * request rate. The delay the operator asks for is now the delay they get.
+ */
+export function assetSleepMs(delayMs) {
+  const n = Number(delayMs);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 export function parsePositiveInt(raw, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
   if (raw === undefined || raw === null || String(raw).trim() === '') return null;
   if (!/^\d+$/.test(String(raw).trim())) return null;
@@ -1211,6 +1230,16 @@ function selfTest() {
   eq('localPath file keeps name', localPathForLink('https://x.org/feed.xml', 'x.org'), 'feed.xml');
   eq('localPath rejects garbage', localPathForLink('not a url', 'x.org'), null);
 
+  // The politeness delay must apply to ASSETS too — they are the bulk of the
+  // crawl. A cap here meant `--delay` could not slow the run down at all, and
+  // that got the runner blocked by a charity's security plugin.
+  eq('assetSleepMs honours the operator delay rather than capping it', assetSleepMs(750), 750);
+  eq('assetSleepMs passes the default through', assetSleepMs(250), 250);
+  eq(
+    'assetSleepMs tolerates junk without becoming a busy loop or NaN',
+    [assetSleepMs(0), assetSleepMs(-5), assetSleepMs('abc'), assetSleepMs(undefined)],
+    [0, 0, 0, 0],
+  );
   eq('relativePrefix root', relativePrefix('index.html'), './');
   eq('relativePrefix nested', relativePrefix('a/b/index.html'), '../../');
 
@@ -2816,7 +2845,7 @@ async function capture() {
       writeFileSync(dest, buf);
     }
     downloaded.set(absUrl, name);
-    await sleep(Math.min(delayMs, 100));
+    await sleep(assetSleepMs(delayMs));
     return name;
   }
 

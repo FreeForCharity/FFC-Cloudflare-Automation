@@ -215,8 +215,27 @@ function ensurePublicIgnored(repo) {
   ensureEslintIgnoresPublic(repo);
 }
 
-/** Flat-config files ESLint 9 actually reads, in resolution order. */
-const ESLINT_FLAT_CONFIGS = ['eslint.config.mjs', 'eslint.config.js', 'eslint.config.cjs'];
+/**
+ * Flat-config filenames in ESLint's own resolution order, highest priority
+ * first.
+ *
+ * Copied from `lib/config/config-loader.js` in the shipped package rather than
+ * from memory, and verified against eslint 10.1.0 — the first draft of this
+ * list put `.mjs` ahead of `.js` and omitted the three TypeScript variants
+ * outright. Both errors have the same consequence as the bug this function
+ * exists to fix: a repo carrying `eslint.config.js` alongside `.mjs` would
+ * have had the ignore written to the file ESLint does not read, and a repo
+ * using `eslint.config.ts` would have fallen through to the `.eslintignore`
+ * branch, which ESLint 9+ ignores. Silent, in both cases.
+ */
+const ESLINT_FLAT_CONFIGS = [
+  'eslint.config.js',
+  'eslint.config.mjs',
+  'eslint.config.cjs',
+  'eslint.config.ts',
+  'eslint.config.mts',
+  'eslint.config.cts',
+];
 
 /**
  * Exclude the mirror from ESLint.
@@ -505,6 +524,53 @@ function selfTest() {
   check(
     'a page in a private folder is not counted as a route, but a route group is',
     countRoutablePages(routeFixture) === 3,
+  );
+
+  // -- flat-config precedence, measured against ESLint's own loader ---------
+  // Writing the ignore into a config ESLint does not read is the SAME failure
+  // this function was written to fix, one layer over — and it is silent, so
+  // only an explicit case catches it.
+  {
+    const both = join(root, 'eslint-precedence');
+    mkdirSync(both, { recursive: true });
+    const shape = (marker) =>
+      `const c = [\n  {\n    ignores: [\n      '${marker}/**',\n    ],\n  },\n]\n\nexport default c\n`;
+    writeFileSync(join(both, 'eslint.config.js'), shape('from-js'));
+    writeFileSync(join(both, 'eslint.config.mjs'), shape('from-mjs'));
+    ensureEslintIgnoresPublic(both);
+    check(
+      'with both .js and .mjs present the ignore goes into .js, which ESLint prefers',
+      readFileSync(join(both, 'eslint.config.js'), 'utf8').includes("'public/**'") &&
+        !readFileSync(join(both, 'eslint.config.mjs'), 'utf8').includes("'public/**'"),
+    );
+  }
+  {
+    // A TypeScript flat config is a config, not an absent one. Omitting these
+    // sent such a repo down the .eslintignore branch, which ESLint 9+ ignores.
+    const ts = join(root, 'eslint-ts');
+    mkdirSync(ts, { recursive: true });
+    writeFileSync(
+      join(ts, 'eslint.config.ts'),
+      "const c = [\n  {\n    ignores: [\n      'node_modules/**',\n    ],\n  },\n]\n\nexport default c\n",
+    );
+    ensureEslintIgnoresPublic(ts);
+    check(
+      'an eslint.config.ts is edited rather than falling through to .eslintignore',
+      readFileSync(join(ts, 'eslint.config.ts'), 'utf8').includes("'public/**'") &&
+        !existsSync(join(ts, '.eslintignore')),
+    );
+  }
+  check(
+    "the filename list matches ESLint's documented resolution order exactly",
+    JSON.stringify(ESLINT_FLAT_CONFIGS) ===
+      JSON.stringify([
+        'eslint.config.js',
+        'eslint.config.mjs',
+        'eslint.config.cjs',
+        'eslint.config.ts',
+        'eslint.config.mts',
+        'eslint.config.cts',
+      ]),
   );
 
   rmSync(root, { recursive: true, force: true });

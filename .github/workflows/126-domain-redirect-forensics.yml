@@ -1,0 +1,100 @@
+name: '126. Domain - Redirect Forensics (Read-only) [CF]'
+run-name: 'Redirect forensics: ${{ inputs.domains }}'
+
+# READ-ONLY: answers "why is this domain redirecting, and who configured it?"
+# It walks every HTTP hop manually (never `-L`), then reads the zone's DNS
+# records, dynamic-redirect rulesets and legacy Page Rules from Cloudflare.
+# Wraps scripts/domain-redirect-forensics.mjs. Changes nothing.
+#
+# WHY IT EXISTS. On 2026-09-04 a live charity site was found forwarding to a
+# replacement domain that did not serve a site yet, and neither existing tool
+# could locate the redirect:
+#
+#   - 121 follows redirects and reports only the FINAL status, so
+#     `301 -> elsewhere -> 200` reads as a healthy `200`. It reported HTTP 200
+#     for a domain that was not serving its own content.
+#   - 101 writes its Cloudflare audit to an ARTIFACT, and an agent session
+#     restricted to api.github.com cannot download one (artifact blob storage is
+#     a different host). The only report naming the zone's rules was unreadable
+#     by the party trying to read it.
+#
+# So this workflow prints EVERYTHING to the job log and uploads no artifact.
+# That is the point, not an oversight: a job log is readable through the REST
+# API without general network egress. Do not "improve" this by moving the
+# output into an artifact or a step summary only.
+#
+# SAFETY. Every call is a GET — against the live domain and the Cloudflare API.
+# It runs on the ungated `cloudflare-prod-read` lane, so diagnosing an outage
+# never waits on a deployment approval. The Cloudflare half self-skips with a
+# printed notice when no token is present, so the HTTP half still runs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      domains:
+        description: >-
+          Comma-separated bare apex domains to investigate, e.g. `example.org,shortname.org`. Both
+          the apex and `www.` are probed over https and http. No scheme, no path.
+        required: true
+        type: string
+      skip_cloudflare:
+        description: >-
+          Probe HTTP only and read nothing from Cloudflare. Use when the domain is known to be in a
+          third-party Cloudflare account.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  forensics:
+    name: Redirect chain + Cloudflare rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: cloudflare-prod-read
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      # Read-scoped Cloudflare tokens from Key Vault via OIDC. continue-on-error
+      # so a Key Vault or OIDC problem degrades this to an HTTP-only report
+      # rather than losing the redirect chain too — which is the half that
+      # matters most during an outage.
+      - name: Load Cloudflare read tokens (cloudflare-tokens-from-kv)
+        uses: ./.github/actions/cloudflare-tokens-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
+        continue-on-error: true
+
+      - name: Run redirect forensics
+        # Inputs reach the script through the environment, never through `${{ }}`
+        # inside `run:`. The runner substitutes an expression into the script
+        # TEXT before bash parses it, so a value carrying a quote would close the
+        # literal and execute the remainder. See ledger L28.
+        env:
+          INPUT_DOMAINS: ${{ inputs.domains }}
+          INPUT_SKIP_CLOUDFLARE: ${{ inputs.skip_cloudflare }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${INPUT_DOMAINS:-}" ]; then
+            echo "::error::domains is empty — refusing to run with no target."
+            exit 1
+          fi
+
+          args=("--domains=${INPUT_DOMAINS}")
+          if [ "${INPUT_SKIP_CLOUDFLARE:-false}" = "true" ]; then
+            args+=("--skip-cloudflare")
+          fi
+
+          node scripts/domain-redirect-forensics.mjs "${args[@]}"

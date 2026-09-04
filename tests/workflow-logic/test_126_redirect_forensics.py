@@ -129,6 +129,45 @@ def test_the_dns_read_pages_instead_of_asking_for_one_big_page():
     assert "hasMorePages" in src, "the paging stop condition must be a named, testable predicate"
 
 
+def test_a_failed_zone_lookup_is_not_reported_as_absent():
+    """Copilot finding: an errored lookup must not become a confident negative.
+
+    `inspectZone()` returning a bare false conflated "no zone in either
+    account" with "both lookups failed". The first sends a responder to hunt
+    for a third-party Cloudflare account; the second means we simply do not
+    know. Turning an unknown into a confident absence is the exact failure
+    class this tool was written to stop committing.
+    """
+    src = SCRIPT.read_text(encoding="utf-8")
+    assert "'unknown'" in src and "'absent'" in src, (
+        "inspectZone must distinguish absent from unknown, not return a boolean"
+    )
+    assert "anyLookupFailed" in src, "a failed lookup must be tracked, not swallowed by `continue`"
+    assert "zoneVerdict === 'absent'" in src, (
+        "the NEITHER-account message must be gated on 'absent', never on a falsy value"
+    )
+
+
+def test_multi_label_public_suffixes_are_handled():
+    """Copilot finding, verified against sites_list.csv: jsbt.org.au is real.
+
+    Taking the last two labels unconditionally maps every Australian domain to
+    `org.au`, so a redirect between two different orgs compares equal and is
+    reported as a benign same-site hop — failing in the flattering direction on
+    the one signal this tool exists to raise.
+    """
+    proc = subprocess.run(
+        ["node", "--input-type=module", "-e",
+         "import {registrableDomain} from './scripts/domain-redirect-forensics.mjs';"
+         "console.log(registrableDomain('jsbt.org.au'), registrableDomain('other.org.au'));"],
+        capture_output=True, text=True, encoding="utf-8", cwd=str(REPO_ROOT),
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    a, b = proc.stdout.split()
+    assert a == "jsbt.org.au", a
+    assert a != b, f"two different .org.au orgs must not compare equal ({a} vs {b})"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

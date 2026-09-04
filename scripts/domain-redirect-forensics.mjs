@@ -124,7 +124,41 @@ export function classifyChain(hops, startHost) {
   };
 }
 
-/** Naive eTLD+1. Sufficient here: FFC domains are all single-label public suffixes. */
+/**
+ * Two-label public suffixes that appear in, or plausibly reach, the FFC fleet.
+ *
+ * NOT a full Public Suffix List, deliberately — vendoring one for a diagnostic
+ * is not worth the maintenance. But taking the last two labels unconditionally
+ * is wrong in the direction that matters: `jsbt.org.au` (a real row in
+ * sites-list/sites_list.csv) reduces to `org.au`, and so does every other
+ * Australian domain — so a genuine redirect from one org to another would
+ * compare EQUAL and be reported as a benign same-site hop. The classification
+ * would fail flattering, hiding exactly the signal this tool exists to raise.
+ *
+ * Add a suffix here when the fleet gains one; an unknown two-label suffix
+ * degrades to the old behaviour rather than crashing.
+ */
+const MULTI_LABEL_SUFFIXES = new Set([
+  'org.au',
+  'com.au',
+  'net.au',
+  'edu.au',
+  'asn.au',
+  'co.uk',
+  'org.uk',
+  'me.uk',
+  'ac.uk',
+  'co.nz',
+  'org.nz',
+  'co.za',
+  'org.za',
+  'com.br',
+  'com.mx',
+  'co.in',
+  'org.in',
+]);
+
+/** eTLD+1, honouring the two-label suffixes above. */
 export function registrableDomain(host) {
   const parts = String(host || '')
     .toLowerCase()
@@ -132,7 +166,9 @@ export function registrableDomain(host) {
     .split('.')
     .filter(Boolean);
   if (parts.length <= 2) return parts.join('.');
-  return parts.slice(-2).join('.');
+  const lastTwo = parts.slice(-2).join('.');
+  if (MULTI_LABEL_SUFFIXES.has(lastTwo)) return parts.slice(-3).join('.');
+  return lastTwo;
 }
 
 function safeHost(url) {
@@ -287,13 +323,24 @@ async function cfGetAll(token, path) {
   }
 }
 
+/**
+ * Look the zone up in each account.
+ *
+ * Returns 'found' | 'absent' | 'unknown'. The third value is the point: a
+ * lookup that ERRORED (auth, rate limit, API outage) is not evidence the zone
+ * is missing, and reporting it as absent would send a responder to hunt for a
+ * third-party Cloudflare account that does not exist. Turning an unknown into
+ * a confident negative is the failure this tool was written to stop doing.
+ */
 async function inspectZone(domain, accounts) {
+  let anyLookupFailed = false;
   for (const { label, token } of accounts) {
     let zones;
     try {
       zones = await cfGet(token, `/zones?name=${encodeURIComponent(domain)}`);
     } catch (e) {
-      console.log(`  [${label}] zone lookup failed: ${e.message}`);
+      console.log(`  [${label}] zone lookup FAILED (not the same as 'no zone'): ${e.message}`);
+      anyLookupFailed = true;
       continue;
     }
     if (!zones?.length) {
@@ -352,9 +399,9 @@ async function inspectZone(domain, accounts) {
       console.log(`  [${label}] page rule read failed: ${e.message}`);
     }
 
-    return true;
+    return 'found';
   }
-  return false;
+  return anyLookupFailed ? 'unknown' : 'absent';
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +426,16 @@ function selfTest() {
 
   check('registrable domain of www', registrableDomain('www.example.org') === 'example.org');
   check('registrable domain of apex', registrableDomain('example.org') === 'example.org');
+  check('two-label suffix keeps the org label', registrableDomain('jsbt.org.au') === 'jsbt.org.au');
+  check(
+    'two-label suffix distinguishes different orgs',
+    registrableDomain('jsbt.org.au') !== registrableDomain('other.org.au'),
+  );
+  check('www under a two-label suffix', registrableDomain('www.jsbt.org.au') === 'jsbt.org.au');
+  check(
+    'unknown two-label suffix still resolves',
+    registrableDomain('a.b.example.org') === 'example.org',
+  );
 
   const direct = [{ url: 'https://a.org/', status: 200, location: null }];
   check('direct 200 is no-redirect', classifyChain(direct, 'a.org').verdict === 'no-redirect');
@@ -507,11 +564,15 @@ async function main() {
         '  (skipped: no CLOUDFLARE_API_TOKEN_FFC / CLOUDFLARE_API_TOKEN_CM in the environment)',
       );
     } else {
-      const found = await inspectZone(domain, accounts);
-      if (!found) {
+      const zoneVerdict = await inspectZone(domain, accounts);
+      if (zoneVerdict === 'absent') {
         console.log(`  ${domain} is in NEITHER FFC nor CM Cloudflare.`);
         console.log('  If the live probes above show a Cloudflare edge, the zone is in a');
         console.log('  THIRD-PARTY Cloudflare account and FFC cannot read or change its rules.');
+      } else if (zoneVerdict === 'unknown') {
+        console.log(`::warning::${domain}: at least one Cloudflare lookup FAILED, so whether`);
+        console.log('  FFC holds this zone is UNKNOWN. Do not read this as "not in Cloudflare" —');
+        console.log('  re-run once the errors above are resolved.');
       }
     }
     console.log('');

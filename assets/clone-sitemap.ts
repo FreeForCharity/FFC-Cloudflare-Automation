@@ -13,6 +13,7 @@
 // what is published — becomes structural here, because there is no second copy
 // of the truth to drift from.
 import { readdirSync } from 'node:fs'
+import type { Dirent } from 'node:fs'
 import { join } from 'node:path'
 import type { MetadataRoute } from 'next'
 import { siteUrl } from '@/lib/site.config'
@@ -38,7 +39,12 @@ const NOT_A_PAGE_DIR = /^[._]/
  * path a static host serves it at ('/', '/about-us', '/a/b').
  */
 export function discoverExportedPages(dir: string = PUBLIC_DIR, prefix = ''): string[] {
-  let entries
+  // Typed explicitly rather than left to inference. TypeScript's evolving-`any`
+  // analysis does resolve this correctly — `tsc --noEmit` under `strict: true`
+  // reports nothing here, which was measured before changing it — but an
+  // uninitialised `let` in a file that ships into every FFC-EX repo is worth
+  // spelling out. Raised in review on FFC-EX-vpmin.org#26.
+  let entries: Dirent[]
   try {
     entries = readdirSync(dir, { withFileTypes: true })
   } catch {

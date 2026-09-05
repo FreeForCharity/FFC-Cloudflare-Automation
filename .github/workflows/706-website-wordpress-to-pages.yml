@@ -382,6 +382,8 @@ jobs:
           node scripts/integrate-clone-into-nextjs.mjs --self-test
           node scripts/verify-no-legacy.mjs --self-test
           node scripts/assess-capture-completeness.mjs --self-test
+          node scripts/clone-to-routes-lib.mjs --self-test
+          node scripts/convert-clone-to-routes.mjs --self-test
 
   convert:
     runs-on: ubuntu-latest
@@ -567,6 +569,32 @@ jobs:
             rm -f ffc-ex/public/CNAME
             echo "No publish_domain and no pre-existing CNAME: removed public/CNAME so Pages serves the default URL."
           fi
+
+      - name: Convert the capture into real app routes
+        env:
+          SOURCE_DOMAIN: ${{ needs.resolve.outputs.domain }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The integration above lands the capture in `public/`, which deploys
+          # — `output: 'export'` copies that directory verbatim — and leaves the
+          # repo in a shape no production FFC-EX site uses. There are no app
+          # routes, so the template's per-page canonicals, its <main> landmark,
+          # its skip-link target and its one-h1-per-page build check have
+          # nothing to act on, and every captured page is a file the Next.js
+          # toolchain cannot see.
+          #
+          # This turns each captured page into `src/app/<slug>/page.tsx` plus a
+          # `src/clone-content/<slug>.html` fragment, and applies the
+          # corrections that need the whole site in view: one h1 per page with
+          # no skipped level (Divi's per-module CSS carried across so nothing
+          # is restyled), a description on every page with words of its own, an
+          # accessible name on every link and embed, and the source's dead
+          # cookie-consent banner removed. It fails rather than warns if any
+          # captured page did not become a route.
+          node automation/scripts/convert-clone-to-routes.mjs \
+            --repo ffc-ex \
+            --site-name "$SOURCE_DOMAIN"
 
       - name: Build the static export
         working-directory: ffc-ex
@@ -909,6 +937,32 @@ jobs:
             rm -f ffc-ex/public/CNAME
             echo "No publish_domain and no pre-existing CNAME: removed public/CNAME so Pages serves the default URL."
           fi
+
+      - name: Convert the capture into real app routes
+        env:
+          SOURCE_DOMAIN: ${{ needs.resolve.outputs.domain }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The integration above lands the capture in `public/`, which deploys
+          # — `output: 'export'` copies that directory verbatim — and leaves the
+          # repo in a shape no production FFC-EX site uses. There are no app
+          # routes, so the template's per-page canonicals, its <main> landmark,
+          # its skip-link target and its one-h1-per-page build check have
+          # nothing to act on, and every captured page is a file the Next.js
+          # toolchain cannot see.
+          #
+          # This turns each captured page into `src/app/<slug>/page.tsx` plus a
+          # `src/clone-content/<slug>.html` fragment, and applies the
+          # corrections that need the whole site in view: one h1 per page with
+          # no skipped level (Divi's per-module CSS carried across so nothing
+          # is restyled), a description on every page with words of its own, an
+          # accessible name on every link and embed, and the source's dead
+          # cookie-consent banner removed. It fails rather than warns if any
+          # captured page did not become a route.
+          node automation/scripts/convert-clone-to-routes.mjs \
+            --repo ffc-ex \
+            --site-name "$SOURCE_DOMAIN"
 
       - name: Commit and open a draft PR on the FFC-EX repo
         working-directory: ffc-ex

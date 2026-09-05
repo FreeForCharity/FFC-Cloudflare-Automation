@@ -1,0 +1,67 @@
+/* --- FFC attribution footer (added by workflow 706) ----------------------
+   Written below the cloned page chrome, so it must not inherit the clone's
+   theme variables. Colors are stated outright and meet WCAG AA against the
+   stated background (#f5f5f5 / #1a1a1a: 15.9:1; link #1a4f8b on #f5f5f5:
+   7.3:1). */
+.ffc-footer {
+  background: #f5f5f5;
+  border-top: 1px solid #d8d8d8;
+  color: #1a1a1a;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  padding: 2rem 1rem;
+}
+.ffc-footer__inner {
+  margin: 0 auto;
+  max-width: 68rem;
+  text-align: center;
+}
+.ffc-footer p {
+  margin: 0 0 0.75rem;
+}
+.ffc-footer a {
+  color: #1a4f8b;
+  text-decoration: underline;
+}
+.ffc-footer a:hover,
+.ffc-footer a:focus-visible {
+  color: #10305a;
+}
+.ffc-footer__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  justify-content: center;
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+}
+.ffc-footer__identity {
+  font-weight: 600;
+}
+.ffc-footer__legal {
+  color: #3d3d3d;
+  font-size: 0.85rem;
+}
+
+/* Text that exists for a screen reader and a crawler, not for a sighted
+   reader: the destination appended to a "Read More" link. Clipped rather than
+   `display:none` so it stays in the accessibility tree and in the rendered
+   text — Lighthouse's link-text audit reads the latter, and an aria-label
+   would satisfy neither it nor voice control. */
+.ffc-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

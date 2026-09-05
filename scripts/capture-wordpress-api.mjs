@@ -3327,8 +3327,26 @@ async function capture() {
   // Edge-injected instrumentation removed, and Cloudflare-obfuscated addresses
   // restored, across the whole scrape. Counted so a run reports what it did
   // rather than silently editing the charity's markup.
+  // Every tally this function reports on is declared HERE, before the first
+  // pass runs, rather than beside the pass that fills it in. That is not tidying:
+  // `imageRecode` was declared beside the asset loop and reported on in the
+  // page-loop's summary, which is earlier in the same function — a temporal
+  // dead zone that `node --check` cannot see, the self-tests never reach
+  // (they do not call `capture()`), and which therefore surfaced as a
+  // ReferenceError six minutes into a live crawl of a charity's site. One
+  // declaration site removes the whole class.
   let cfEmailsDecoded = 0;
   const edgeTagsRemoved = [];
+  const usedAssetNames = new Set(); // guards the .png -> .webp rename against collisions
+  const imageRecode = {
+    recoded: 0,
+    declined: 0,
+    collisions: [],
+    stillOverBudget: 0,
+    bytesBefore: 0,
+    bytesAfter: 0,
+    available: null,
+  };
   const cmsScriptsRemoved = [];
   let cmsInlineScriptsRemoved = 0;
   let waypointRulesRemoved = 0;
@@ -3440,30 +3458,6 @@ async function capture() {
         ' content in, check a written page renders with scripting off before shipping.',
     );
   }
-  if (imageRecode.recoded) {
-    const mb = (n) => (n / 1048576).toFixed(1);
-    console.error(
-      `[capture] re-encoded ${imageRecode.recoded} oversized image(s) to WebP:` +
-        ` ${mb(imageRecode.bytesBefore)} MB -> ${mb(imageRecode.bytesAfter)} MB` +
-        ` (${(100 - (imageRecode.bytesAfter / imageRecode.bytesBefore) * 100).toFixed(1)}% smaller).` +
-        ' Every reference was rewritten with the rename.',
-    );
-    if (imageRecode.stillOverBudget)
-      console.error(
-        `[capture] ${imageRecode.stillOverBudget} of them are still over the` +
-          ` ${Math.round(maxImageBytes / 1024)} KB budget at the lowest quality tried.`,
-      );
-  }
-  if (imageRecode.declined)
-    console.error(
-      `[capture] ${imageRecode.declined} oversized image(s) shipped as captured —` +
-        ' re-encoding them would not have been meaningfully smaller.',
-    );
-  if (imageRecode.collisions.length)
-    console.error(
-      `[capture] ${imageRecode.collisions.length} image(s) kept their original encoding because` +
-        ` the .webp name was already taken: ${imageRecode.collisions.slice(0, 5).join(', ')}`,
-    );
   if (cmsHeadLinksRemoved) {
     console.error(
       `[capture] removed ${cmsHeadLinksRemoved} head link(s) advertising the CMS backend` +
@@ -3478,17 +3472,7 @@ async function capture() {
   //    the page's CSS downloads fine and every font it names still 404s.
   const assetsRoot = join(outDir, assetsDirName);
   const downloaded = new Map(); // absolute URL -> local name (or null on failure)
-  const usedAssetNames = new Set(); // guards the .png -> .webp rename against collisions
   const assetFailures = [];
-  const imageRecode = {
-    recoded: 0,
-    declined: 0,
-    collisions: [],
-    stillOverBudget: 0,
-    bytesBefore: 0,
-    bytesAfter: 0,
-    available: null,
-  };
 
   /**
    * Re-encode one raster image to WebP, walking a quality ladder.
@@ -3784,6 +3768,35 @@ async function capture() {
   // Measured against the MERGED inventory, not the REST total. Comparing the
   // REST total against pages fetched from the REST list is a tautology; the
   // union with the sitemap is the only figure that can be short.
+  // Reported HERE, after the asset pass that fills these in — not in the
+  // page-loop summary above, where every number would read zero. The first
+  // draft put it there and crashed on the temporal dead zone instead, which
+  // was the loud version of the same mistake; a report that merely printed
+  // `re-encoded 0 image(s)` would have been the quiet one.
+  if (imageRecode.recoded) {
+    const mb = (n) => (n / 1048576).toFixed(1);
+    console.error(
+      `[capture] re-encoded ${imageRecode.recoded} oversized image(s) to WebP:` +
+        ` ${mb(imageRecode.bytesBefore)} MB -> ${mb(imageRecode.bytesAfter)} MB` +
+        ` (${(100 - (imageRecode.bytesAfter / imageRecode.bytesBefore) * 100).toFixed(1)}% smaller).` +
+        ' Every reference was rewritten with the rename.',
+    );
+    if (imageRecode.stillOverBudget)
+      console.error(
+        `[capture] ${imageRecode.stillOverBudget} of them are still over the` +
+          ` ${Math.round(maxImageBytes / 1024)} KB budget at the lowest quality tried.`,
+      );
+  }
+  if (imageRecode.declined)
+    console.error(
+      `[capture] ${imageRecode.declined} oversized image(s) shipped as captured —` +
+        ' re-encoding them would not have been meaningfully smaller.',
+    );
+  if (imageRecode.collisions.length)
+    console.error(
+      `[capture] ${imageRecode.collisions.length} image(s) kept their original encoding because` +
+        ` the .webp name was already taken: ${imageRecode.collisions.slice(0, 5).join(', ')}`,
+    );
   const assetTally = tallyFailures(assetFailures);
   const assetFailureNote = describeFailures(assetTally, domain);
   if (assetFailureNote) console.error(`[capture] assets: ${assetFailureNote}`);

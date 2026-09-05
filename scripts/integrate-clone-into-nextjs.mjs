@@ -354,9 +354,16 @@ function ensureEslintIgnoresPublic(repo) {
   // A flat config with no `ignores` at all is still perfectly valid, and
   // refusing it would break a conversion for a repo that has done nothing
   // wrong. A leading ignores-only element is the documented way to add global
-  // ignores, and inserting one after `export default [` needs no
+  // ignores, and inserting one after the array's opening bracket needs no
   // understanding of what follows.
-  const prepend = /export\s+default\s*\[/;
+  //
+  // Both module systems, because this list carries `.cjs` and `.cts` and a
+  // plain `.js` is CommonJS in any package without `"type": "module"` — which
+  // is the default. Matching only `export default [` meant every one of those
+  // fell through to the throw below and failed a conversion for a repo whose
+  // config is perfectly valid. Caught in review on #1235; the filename list
+  // said the shapes were supported and the code only handled one of them.
+  const prepend = /(?:export\s+default|module\.exports\s*=)\s*\[/;
   if (prepend.test(src)) {
     writeFileSync(
       configPath,
@@ -370,7 +377,8 @@ function ensureEslintIgnoresPublic(repo) {
   }
   throw new Error(
     `${configPath} has neither an \`ignores: [\` array to extend nor an \`export default [\` ` +
-      `to prepend to, so the WordPress mirror under public/ would be linted as source. Add ` +
+      `or \`module.exports = [\` to prepend to, so the WordPress mirror under public/ would ` +
+      `be linted as source. Add ` +
       `"public/**" to its ignores and re-run — refusing to write an ignore file ESLint 9 ` +
       `does not read.`,
   );
@@ -681,6 +689,43 @@ function selfTest() {
       }
     })(),
   );
+  // A CommonJS flat config. `eslint.config.cjs` and `.cts` are in the filename
+  // list, and a plain `eslint.config.js` is CommonJS in any package without
+  // `"type": "module"` — the default — so this is the common shape, not an
+  // exotic one. It matched neither branch and fell through to the throw,
+  // failing a conversion for a repo whose config is perfectly valid.
+  {
+    const cjs = join(root, 'cjs-repo');
+    mkdirSync(join(cjs, 'src', 'app'), { recursive: true });
+    mkdirSync(join(cjs, 'public'), { recursive: true });
+    writeFileSync(join(cjs, 'eslint.config.cjs'), 'module.exports = [\n  { rules: {} },\n]\n');
+    const cjsClone = join(root, 'cjs-clone');
+    mkdirSync(cjsClone, { recursive: true });
+    writeFileSync(join(cjsClone, 'index.html'), '<html>home</html>');
+    let threw = '';
+    try {
+      integrate({ clone: cjsClone, repo: cjs, domain: 'x.example' });
+    } catch (err) {
+      threw = err?.message ?? String(err);
+    }
+    const after = existsSync(join(cjs, 'eslint.config.cjs'))
+      ? readFileSync(join(cjs, 'eslint.config.cjs'), 'utf8')
+      : '';
+    check(
+      'a CommonJS flat config is prepended to rather than rejected',
+      threw === '' && after.includes("{ ignores: ['public/**'] }"),
+    );
+    check(
+      'and the prepend lands inside the array, not before module.exports',
+      after.indexOf('module.exports = [') < after.indexOf("{ ignores: ['public/**'] }"),
+    );
+    // The legacy file ESLint 9 does not read must NOT be the fallback here.
+    check(
+      'no .eslintignore is written for a repo that has a flat config',
+      !existsSync(join(cjs, '.eslintignore')),
+    );
+  }
+
   check(
     'a repo with no flat config still gets the legacy .eslintignore',
     (() => {

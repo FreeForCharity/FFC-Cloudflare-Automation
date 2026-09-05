@@ -395,6 +395,60 @@ def test_the_capture_decodes_obfuscated_addresses_before_dropping_the_decoder():
         assert f"ok   {case}" in out, f"coverage for {case!r} is gone:\n{out[-1500:]}"
 
 
+def test_the_capture_refuses_a_page_that_redirected_off_the_site():
+    """Delivery attempt 6 shipped `public/index.html` as a parked WordPress.com
+    landing page for a domain the operator had explicitly excluded, while the
+    other 588 pages were correct.
+
+    `redirect: 'follow'` means a 200 says nothing about whose page came back.
+    The source's WordPress declares `home` as a domain it does not serve, so it
+    answered its own root with a canonical redirect off-site and the capture
+    stored the stranger's page under the charity's URL. Every gate was green:
+    the page loaded, its assets resolved, and nothing about a 200 is suspicious.
+
+    A gap is visible; a substitution is not. Hence refuse, and say so.
+    """
+    proc = _self_test("capture-wordpress-api.mjs")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out = proc.stdout + proc.stderr
+    for case in (
+        "isSiteHost REFUSES the stale home host \u2014 the parked-page case",
+        "classifyPageResponse REFUSES a 200 that redirected to the stale home host",
+        "classifyPageResponse skips a non-200 without calling it off-site",
+    ):
+        assert f"ok   {case}" in out, f"coverage for {case!r} is gone:\n{out[-1500:]}"
+
+
+def test_the_capture_brings_navigation_home_and_gates_on_what_it_missed():
+    """562 of 589 delivered pages navigated to the decommissioned domain.
+
+    The rewrite compared an entry's link against the page's raw href STRINGS,
+    and those are written in different alphabets whenever a site declares a
+    stale `home`: entries are normalized onto the serving host, the markup
+    still says the stale one. `present.has(e.link)` was false for every link on
+    the site, so not one was rewritten.
+
+    No gate could see it. The self-containment gate loads each page with the
+    source blocked, which exercises subresources; a nav href is fetched only on
+    a click, so a clone whose entire menu points off-site passes cleanly. The
+    front page is gated separately for the same reason a percentage cannot
+    express it \u2014 losing it costs 1 of 590 and every visitor sees it first.
+    """
+    proc = _self_test("capture-wordpress-api.mjs")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out = proc.stdout + proc.stderr
+    for case in (
+        "normalizedLinkIndex resolves a STALE-host href onto the entry key",
+        "the old string comparison would have matched nothing",
+        "normalizedLinkIndex folds absolute, root-absolute and relative spellings together",
+        "captureVerdict fails a clone whose navigation still points at the stale host",
+        "captureVerdict does NOT fail on links to the serving domain \u2014 /feed/ has no local copy",
+        "captureVerdict names the front page as its own problem, not just a count",
+        "captureVerdict fails on a missing front page even when nothing else is wrong",
+    ):
+        assert f"ok   {case}" in out, f"coverage for {case!r} is gone:\n{out[-1500:]}"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

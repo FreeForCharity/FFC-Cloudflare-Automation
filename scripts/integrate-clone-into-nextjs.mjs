@@ -35,8 +35,9 @@ import {
   writeFileSync,
   readFileSync,
 } from 'node:fs';
-import { join, relative, dirname } from 'node:path';
+import { join, relative, dirname, sep } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 function arg(name, def) {
@@ -153,6 +154,61 @@ function removeDeadSentinel(appDir, backupDir) {
     }
   }
   return removed;
+}
+
+/**
+ * Templates written verbatim into the charity repo, and where they land.
+ *
+ * They live as real files rather than string literals so they are reviewable,
+ * type-checked by the receiving repo's own CI, and formatted in that repo's
+ * Prettier style (no semicolons) — which is why `.prettierignore` here excludes
+ * them from this repo's own formatter.
+ */
+const CLONE_SOURCE_FILES = [
+  ['clone-sitemap.ts', join('src', 'app', 'sitemap.ts')],
+  ['clone-sitemap.test.ts', join('__tests__', 'app', 'sitemap.test.ts')],
+];
+
+/**
+ * Replace the template's route-derived sitemap with one derived from the clone.
+ *
+ * The FFC template builds `/sitemap.xml` from a hand-maintained list of
+ * `src/app/**` routes, and guards it with a unit test that diffs that list
+ * against the filesystem. Both are correct for a repo whose pages are app
+ * routes, and both are wrong the moment this script runs: every template route
+ * is moved into `_disabled_template_routes/` precisely so the captured pages do
+ * not collide with them, so the sitemap ends up advertising eight routes that
+ * no longer exist and none of the several hundred pages that do — and its test
+ * fails comparing that list against an empty directory.
+ *
+ * The replacement derives the list from `public/` at build time. Note this is
+ * not "delete the failing test": the module under test is replaced in the same
+ * step, the test is replaced with one asserting the same property (the sitemap
+ * cannot silently fall behind what is published) against where the pages now
+ * live, and it covers every captured page rather than eight template ones.
+ *
+ * Skipped entirely on a repo that has no `src/app/sitemap.ts` — an FFC-EX repo
+ * that does not carry the template's sitemap has nothing here to correct, and
+ * writing one in would be inventing a route it never asked for.
+ */
+function installCloneSitemap(repo, assetsDir) {
+  const target = join(repo, 'src', 'app', 'sitemap.ts');
+  if (!existsSync(target)) return [];
+  const written = [];
+  for (const [src, rel] of CLONE_SOURCE_FILES) {
+    const from = join(assetsDir, src);
+    if (!existsSync(from)) {
+      throw new Error(
+        `${from} is missing from this checkout. It is written into the charity repo verbatim, ` +
+          'so refusing to deliver a clone whose sitemap would describe routes that no longer exist.',
+      );
+    }
+    const dest = join(repo, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(from, dest);
+    written.push(rel.split(sep).join('/'));
+  }
+  return written;
 }
 
 /** Move template app page routes aside so they don't collide with the clone. */
@@ -327,7 +383,10 @@ function countFiles(d) {
   return n;
 }
 
-function integrate({ clone, repo, domain }) {
+/** This checkout's assets/ directory, resolved from the script rather than the cwd. */
+const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets');
+
+function integrate({ clone, repo, domain, assetsDir = ASSETS_DIR }) {
   cleanCloneCruft(clone);
 
   // Replace public/ with the clone, carrying the template's own files across.
@@ -345,6 +404,13 @@ function integrate({ clone, repo, domain }) {
 
   const removedSentinels = removeDeadSentinel(appDir, backupDir);
   const movedRoutes = disableTemplatePages(appDir, backupDir);
+  // Order-independent of the two lines above, deliberately: the sitemap this
+  // installs reads `public/` at build time and never looks at `src/app`, and
+  // `disableTemplatePages` moves only `page.*` files, so neither step can see
+  // the other's work. Said explicitly because the first draft of this line
+  // claimed the opposite, and a mutation that swapped the order proved the
+  // claim untestable — which is the tell that it was not true.
+  const sitemapFiles = installCloneSitemap(repo, assetsDir);
 
   // Ensure CNAME (apex) is present for GitHub Pages.
   writeFileSync(cnamePath, (keptCname || domain) + '\n');
@@ -355,6 +421,7 @@ function integrate({ clone, repo, domain }) {
     domain,
     publicFiles: countFiles(publicDir),
     disabledTemplateRoutes: movedRoutes,
+    cloneSourceFilesWritten: sitemapFiles,
     removedDeadSentinels: removedSentinels.map((p) => relative(repo, p)),
     appRoutesRemaining: countRoutablePages(appDir),
     cname: keptCname || domain,
@@ -431,7 +498,81 @@ function selfTest() {
   // deployment decision, not content captured from the source site.
   writeFileSync(join(clone, 'CNAME'), 'from-the-clone.example\n');
 
+  // The template's route-derived sitemap and the unit test that guards it.
+  mkdirSync(join(repo, '__tests__', 'app'), { recursive: true });
+  writeFileSync(
+    join(appDir, 'sitemap.ts'),
+    "export const routes = [{ path: '/privacy-policy' }]\n",
+  );
+  writeFileSync(
+    join(repo, '__tests__', 'app', 'sitemap.test.ts'),
+    "import { routes } from '../../src/app/sitemap'\n",
+  );
+
   const report = integrate({ clone, repo, domain: 'fallback.example' });
+
+  // --- The sitemap follows the routes ---------------------------------------
+  // Both files are replaced together. Replacing only the test would be
+  // quarantining a failure; replacing only the module would leave a test
+  // importing symbols that no longer exist. The property the template's test
+  // protected — the sitemap cannot silently fall behind what is published — is
+  // kept and retargeted at public/, where the pages now are.
+  check(
+    'the route-derived sitemap is replaced with the clone-derived one',
+    readFileSync(join(appDir, 'sitemap.ts'), 'utf8').includes('discoverExportedPages'),
+  );
+  check(
+    'and its test is replaced in the same step, not deleted',
+    readFileSync(join(repo, '__tests__', 'app', 'sitemap.test.ts'), 'utf8').includes(
+      'lists every exported page exactly once',
+    ),
+  );
+  check(
+    'both replacements are reported rather than done silently',
+    JSON.stringify(report.cloneSourceFilesWritten) ===
+      JSON.stringify(['src/app/sitemap.ts', '__tests__/app/sitemap.test.ts']),
+  );
+  // A repo that never carried the template's sitemap has nothing to correct,
+  // and writing one in would invent a route it never asked for.
+  {
+    const bare = join(root, 'no-sitemap-repo');
+    mkdirSync(join(bare, 'src', 'app'), { recursive: true });
+    mkdirSync(join(bare, 'public'), { recursive: true });
+    const bareClone = join(root, 'no-sitemap-clone');
+    mkdirSync(bareClone, { recursive: true });
+    writeFileSync(join(bareClone, 'index.html'), '<html>home</html>');
+    const r = integrate({ clone: bareClone, repo: bare, domain: 'x.example' });
+    check(
+      'a repo with no template sitemap is left alone',
+      r.cloneSourceFilesWritten.length === 0 && !existsSync(join(bare, 'src', 'app', 'sitemap.ts')),
+    );
+  }
+  // The templates are delivered verbatim, so a checkout missing one must stop
+  // the run rather than ship a sitemap describing routes that no longer exist.
+  {
+    const orphan = join(root, 'orphan-repo');
+    mkdirSync(join(orphan, 'src', 'app'), { recursive: true });
+    mkdirSync(join(orphan, 'public'), { recursive: true });
+    writeFileSync(join(orphan, 'src', 'app', 'sitemap.ts'), 'export const routes = []\n');
+    const orphanClone = join(root, 'orphan-clone');
+    mkdirSync(orphanClone, { recursive: true });
+    writeFileSync(join(orphanClone, 'index.html'), '<html>home</html>');
+    let threw = '';
+    try {
+      integrate({
+        clone: orphanClone,
+        repo: orphan,
+        domain: 'x.example',
+        assetsDir: join(root, 'nowhere'),
+      });
+    } catch (err) {
+      threw = err?.message ?? '';
+    }
+    check(
+      'a missing template stops the run and names the file',
+      threw.includes('clone-sitemap.ts') && threw.includes('missing'),
+    );
+  }
 
   check(
     'the `_clone-host` sentinel is deleted, not filed into the backup',

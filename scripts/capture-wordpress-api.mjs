@@ -1144,6 +1144,51 @@ export function assetLocalName(absUrl) {
 }
 
 /**
+ * Formats worth re-encoding, and the one they are re-encoded to.
+ *
+ * GIF is excluded because it may be animated and a still WebP would silently
+ * drop the animation; SVG because it is not raster; WebP and AVIF because they
+ * are already the destination format.
+ */
+const RECODABLE = /\.(png|jpe?g)(\?|$)/i;
+
+/** Quality ladder: the first rung that lands under budget wins. */
+export const IMAGE_QUALITY_LADDER = [85, 78, 70];
+
+/**
+ * Decide whether a re-encoded image is worth keeping.
+ *
+ * Two independent conditions, and both matter. It must actually be smaller —
+ * re-encoding an already-optimised JPEG routinely produces a LARGER file, and
+ * shipping that would make the site heavier while reporting an optimisation.
+ * And the saving must be worth a format change: a 5% win is not worth renaming
+ * a file and rewriting every reference to it, because each rewrite is a chance
+ * to strand a reference.
+ */
+export function worthReencoding(originalBytes, encodedBytes, minSavingRatio = 0.25) {
+  if (!Number.isFinite(originalBytes) || !Number.isFinite(encodedBytes)) return false;
+  if (encodedBytes <= 0 || originalBytes <= 0) return false;
+  return encodedBytes <= originalBytes * (1 - minSavingRatio);
+}
+
+/** The local name an image takes once re-encoded to WebP. */
+export function webpName(name) {
+  return name.replace(/\.[^./]+$/, '') + '.webp';
+}
+
+/**
+ * Whether this asset is a candidate for re-encoding at all.
+ *
+ * Size is part of the predicate, not a separate check: an image already under
+ * budget is left byte-identical to what the charity uploaded. Only the ones
+ * that would be a problem for a visitor are touched.
+ */
+export function shouldReencodeImage(absUrl, bytes, maxBytes) {
+  if (!RECODABLE.test(absUrl)) return false;
+  return Number.isFinite(bytes) && Number.isFinite(maxBytes) && bytes > maxBytes;
+}
+
+/**
  * Rewrite every reference in `html` that we localized.
  *
  * Longest-first is load-bearing: a plain global replace of the short URL would
@@ -1747,6 +1792,67 @@ function selfTest() {
     'a link or image mentioning cdn-cgi is left alone — only scripts are removed',
     stripEdgeInjectedTags('<img src="/cdn-cgi/image/w=80/logo.png">').html,
     '<img src="/cdn-cgi/image/w=80/logo.png">',
+  );
+
+  // --- Oversized image re-encoding -----------------------------------------
+  // 194 of 335 captured images were over the receiving repo's 400 KB per-file
+  // budget and accounted for 186 MB of the 205 MB the clone shipped. They are
+  // photographic event flyers exported as PNG, which is the wrong container for
+  // them; the cost lands on a visitor's phone connection.
+  eq(
+    'an oversized PNG is a re-encode candidate',
+    shouldReencodeImage('https://x.org/a/flyer.png', 900_000, 400 * 1024),
+    true,
+  );
+  eq(
+    'a PNG already under budget is left byte-identical to what was uploaded',
+    shouldReencodeImage('https://x.org/a/logo.png', 12_000, 400 * 1024),
+    false,
+  );
+  eq(
+    'a JPEG is a candidate too — WordPress ships oversized ones as readily',
+    shouldReencodeImage('https://x.org/a/hero.JPEG?ver=2', 900_000, 400 * 1024),
+    true,
+  );
+  // A still WebP would silently drop an animation, and an SVG is not raster.
+  eq(
+    'a GIF is never re-encoded',
+    shouldReencodeImage('https://x.org/a/spinner.gif', 900_000, 400 * 1024),
+    false,
+  );
+  eq(
+    'an SVG is never re-encoded',
+    shouldReencodeImage('https://x.org/a/icon.svg', 900_000, 400 * 1024),
+    false,
+  );
+  eq(
+    'an image already in the destination format is not re-encoded',
+    shouldReencodeImage('https://x.org/a/photo.webp', 900_000, 400 * 1024),
+    false,
+  );
+  // Re-encoding an already-optimised JPEG routinely produces a LARGER file.
+  // Shipping that would make the site heavier while reporting an optimisation.
+  eq('a larger result is refused', worthReencoding(100_000, 120_000), false);
+  eq('an equal result is refused', worthReencoding(100_000, 100_000), false);
+  // A marginal win is not worth a rename, because every rename is a chance to
+  // strand a reference.
+  eq('a 10% saving is not worth the rename', worthReencoding(100_000, 90_000), false);
+  eq('an 87% saving is', worthReencoding(2_297_000, 305_000), true);
+  eq(
+    'a zero-byte encode is refused rather than treated as a perfect win',
+    worthReencoding(100_000, 0),
+    false,
+  );
+  eq(
+    'webpName replaces the extension rather than appending',
+    webpName('x/a/flyer.png'),
+    'x/a/flyer.webp',
+  );
+  eq('webpName leaves a dotted directory alone', webpName('x/v1.2/flyer.png'), 'x/v1.2/flyer.webp');
+  eq(
+    'webpName handles the query-suffixed names assetLocalName produces',
+    webpName('x/a/flyer__ver-2.png'),
+    'x/a/flyer__ver-2.webp',
   );
 
   // --- De-WordPressing: the CMS script payload -----------------------------
@@ -2715,6 +2821,10 @@ const numericOptions = [
   ['max', arg('max', '500'), { min: 1, max: 100000 }],
   ['delay', arg('delay', '250'), { min: 0, max: 60000 }],
   ['timeout', arg('timeout', '30'), { min: 1, max: 600 }],
+  // Matches the per-file image budget the FFC-EX repos enforce in
+  // `__tests__/assets/image-weight.test.ts`. Kept as an option rather than a
+  // constant so a repo that raises its own budget can say so here.
+  ['max-image-kb', arg('max-image-kb', '400'), { min: 16, max: 100000 }],
 ];
 const parsedOptions = {};
 const badOptions = [];
@@ -2728,6 +2838,12 @@ const maxItems = parsedOptions.max;
 const delayMs = parsedOptions.delay;
 const timeoutMs = parsedOptions.timeout * 1000;
 const includePosts = flag('include-posts');
+// On by default: an oversized upload is a cost the visitor pays on every view,
+// and the receiving repo fails CI on it. `--no-optimize-images` ships the
+// captured bytes verbatim, which is the right choice only when the originals
+// are themselves the deliverable.
+const optimizeImages = !flag('no-optimize-images');
+const maxImageBytes = parsedOptions['max-image-kb'] * 1024;
 const jsonOut = arg('json-out', '');
 // Hosts whose references are dropped from the capture entirely: not fetched,
 // not counted as failures, not counted against the "zero external asset hosts"
@@ -2742,6 +2858,7 @@ if (isMain && (!domain || (!inspectOnly && !outDir))) {
     'Usage:\n' +
       '  --domain <domain> --inspect [--json-out <file>]\n' +
       '  --domain <domain> --out <dir> [--max 500] [--delay 250] [--include-posts] [--timeout 30]\n' +
+      '      [--no-optimize-images] [--max-image-kb 400]\n' +
       '  --self-test',
   );
   process.exit(2);
@@ -3323,6 +3440,30 @@ async function capture() {
         ' content in, check a written page renders with scripting off before shipping.',
     );
   }
+  if (imageRecode.recoded) {
+    const mb = (n) => (n / 1048576).toFixed(1);
+    console.error(
+      `[capture] re-encoded ${imageRecode.recoded} oversized image(s) to WebP:` +
+        ` ${mb(imageRecode.bytesBefore)} MB -> ${mb(imageRecode.bytesAfter)} MB` +
+        ` (${(100 - (imageRecode.bytesAfter / imageRecode.bytesBefore) * 100).toFixed(1)}% smaller).` +
+        ' Every reference was rewritten with the rename.',
+    );
+    if (imageRecode.stillOverBudget)
+      console.error(
+        `[capture] ${imageRecode.stillOverBudget} of them are still over the` +
+          ` ${Math.round(maxImageBytes / 1024)} KB budget at the lowest quality tried.`,
+      );
+  }
+  if (imageRecode.declined)
+    console.error(
+      `[capture] ${imageRecode.declined} oversized image(s) shipped as captured —` +
+        ' re-encoding them would not have been meaningfully smaller.',
+    );
+  if (imageRecode.collisions.length)
+    console.error(
+      `[capture] ${imageRecode.collisions.length} image(s) kept their original encoding because` +
+        ` the .webp name was already taken: ${imageRecode.collisions.slice(0, 5).join(', ')}`,
+    );
   if (cmsHeadLinksRemoved) {
     console.error(
       `[capture] removed ${cmsHeadLinksRemoved} head link(s) advertising the CMS backend` +
@@ -3337,7 +3478,64 @@ async function capture() {
   //    the page's CSS downloads fine and every font it names still 404s.
   const assetsRoot = join(outDir, assetsDirName);
   const downloaded = new Map(); // absolute URL -> local name (or null on failure)
+  const usedAssetNames = new Set(); // guards the .png -> .webp rename against collisions
   const assetFailures = [];
+  const imageRecode = {
+    recoded: 0,
+    declined: 0,
+    collisions: [],
+    stillOverBudget: 0,
+    bytesBefore: 0,
+    bytesAfter: 0,
+    available: null,
+  };
+
+  /**
+   * Re-encode one raster image to WebP, walking a quality ladder.
+   *
+   * `sharp` is imported dynamically so this repo stays dependency-free — the
+   * same arrangement `sync-runtime-assets.mjs` uses for Playwright. When it is
+   * absent the capture says so once and ships the originals, which is a
+   * heavier site but never a broken one.
+   *
+   * The ladder exists so the result lands under the budget the receiving repo
+   * enforces rather than merely near it. It stops at the first rung that fits,
+   * so most images are encoded once and only a genuinely heavy one pays for
+   * three attempts.
+   */
+  let sharpModule;
+  async function encodeWebp(buf, budget) {
+    if (imageRecode.available === false) return null;
+    if (!sharpModule) {
+      try {
+        sharpModule = (await import('sharp')).default;
+        imageRecode.available = true;
+      } catch {
+        imageRecode.available = false;
+        console.error(
+          '[asset] sharp is not installed, so oversized images ship as captured.' +
+            ' Install it before the capture step to re-encode them.',
+        );
+        return null;
+      }
+    }
+    let best = null;
+    for (const quality of IMAGE_QUALITY_LADDER) {
+      let out;
+      try {
+        out = await sharpModule(buf).webp({ quality, effort: 6 }).toBuffer();
+      } catch {
+        // An image sharp cannot decode is not a failure of the capture; the
+        // original is already downloaded and gets shipped unchanged.
+        return null;
+      }
+      if (!best || out.length < best.length) best = out;
+      if (out.length <= budget) return { buffer: out, quality };
+    }
+    return best
+      ? { buffer: best, quality: IMAGE_QUALITY_LADDER[IMAGE_QUALITY_LADDER.length - 1] }
+      : null;
+  }
 
   async function localizeAsset(rawUrl) {
     // Normalized HERE rather than at each call site: assets arrive from three
@@ -3363,7 +3561,51 @@ async function capture() {
       assetFailures.push({ url: absUrl, status: -1 });
       return null;
     }
-    const name = assetLocalName(absUrl);
+    let name = assetLocalName(absUrl);
+
+    // Re-encode oversized raster uploads.
+    //
+    // Measured on this migration: 194 of 335 images are over the 400 KB budget
+    // the charity's own repository enforces, and they account for 186 MB of the
+    // 205 MB the clone ships. 165 of them are the same shape — 1366x768, 8-bit
+    // RGB(A), about 2 bytes per pixel — which is a photograph, not a diagram.
+    // They are event flyers: portraits composited on a gradient, exported from
+    // a design tool at browser-window size and saved as PNG. PNG is simply the
+    // wrong container for that, and the cost lands on the visitor: a 2.2 MB
+    // poster on a phone connection, on a site whose audience is largely on
+    // phone connections.
+    //
+    // Re-encoded rather than merely recompressed: a lossless PNG pass on that
+    // same file gives 2243 KB -> 658 KB, which is a real 71% win and still over
+    // budget, while WebP q=85 gives 298 KB with no visible difference in the
+    // text, the faces or the gradient.
+    //
+    // The rename is what makes this safe to do here rather than in a later
+    // pass: `localizeAsset` returns the local name, and every reference — in
+    // markup, in srcset, in CSS — is rewritten from that return value, so a
+    // renamed file cannot leave a stale reference behind.
+    if (optimizeImages && shouldReencodeImage(absUrl, buf.length, maxImageBytes)) {
+      const target = webpName(name);
+      // A collision would silently overwrite a real .webp the site already
+      // ships, so the original encoding is kept instead.
+      if (usedAssetNames.has(target) && target !== name) {
+        imageRecode.collisions.push(name);
+      } else {
+        const encoded = await encodeWebp(buf, maxImageBytes);
+        if (encoded && worthReencoding(buf.length, encoded.buffer.length)) {
+          imageRecode.recoded += 1;
+          imageRecode.bytesBefore += buf.length;
+          imageRecode.bytesAfter += encoded.buffer.length;
+          if (encoded.buffer.length > maxImageBytes) imageRecode.stillOverBudget += 1;
+          buf = encoded.buffer;
+          name = target;
+        } else {
+          imageRecode.declined += 1;
+        }
+      }
+    }
+    usedAssetNames.add(name);
+
     if (!isContainedPath(assetsRoot, name)) {
       console.error(`[asset] refusing to write outside the assets dir: ${name}`);
       escapedPaths.push(name);
@@ -3610,6 +3852,17 @@ async function capture() {
       inlineScriptsRemoved: cmsInlineScriptsRemoved,
       waypointHidingRulesRemoved: waypointRulesRemoved,
       headLinksRemoved: cmsHeadLinksRemoved,
+    },
+    imageOptimization: {
+      enabled: optimizeImages,
+      encoderAvailable: imageRecode.available,
+      maxImageKb: Math.round(maxImageBytes / 1024),
+      recoded: imageRecode.recoded,
+      declined: imageRecode.declined,
+      stillOverBudget: imageRecode.stillOverBudget,
+      collisions: imageRecode.collisions.length,
+      bytesBefore: imageRecode.bytesBefore,
+      bytesAfter: imageRecode.bytesAfter,
     },
     remainingExternalHosts: [...externalHosts],
     escapedPaths,

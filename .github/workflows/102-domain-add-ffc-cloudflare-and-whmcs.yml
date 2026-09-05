@@ -78,21 +78,85 @@ jobs:
           azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
 
+      # `domain` is a free-text dispatch input. Interpolated into this body it was
+      # not an argument — it was source text pasted into the program GitHub then
+      # runs, in a step holding the WHMCS API credential the APPROVER spent
+      # (#1080). The credential is named in no `env:` block in this file: the
+      # preceding `whmcs-secrets-from-kv` step exports WHMCS_API_IDENTIFIER /
+      # _SECRET / _APIM_SUBSCRIPTION_KEY through GITHUB_ENV, so a reader who checks
+      # this step's own `env:` (ledger L213) and a `secrets.` grep of the file
+      # (#1141) both score it as holding nothing. Run `python3
+      # scripts/check-workflow-input-interpolation.py --reachability
+      # 102-domain-add-ffc-cloudflare-and-whmcs.yml` for the arrival path (#1188).
+      #
+      # The injection point sat in DOUBLE quotes, where pwsh expands `$( )`.
+      # Measured against the body as it shipped: `WHMCS_API_SECRET` was written to
+      # a sentinel file, the step then emitted a wholly ordinary
+      # `domain=example.org`, and it exited 0.
       - name: Metadata
         id: meta
         shell: pwsh
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
-          $d = "${{ inputs.domain }}".Trim().ToLowerInvariant().Trim('.')
+          # Fail closed on an empty or unset mapping (#1150, ledger L214). `domain`
+          # is `required: true`, but the dispatch API accepts an empty string for a
+          # required input, and an unset mapping would make `.Trim()` throw on
+          # $null with a message naming neither the input nor the cause.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to publish an empty domain to the job outputs.'
+            exit 1
+          }
+
+          $d = $env:IN_DOMAIN.Trim().ToLowerInvariant().Trim('.')
+
+          # Reject a line break before publishing (output injection). `.Trim()` strips
+          # LEADING and TRAILING whitespace only — an INTERIOR CR/LF survives, and
+          # `"domain=$d"` is the single-line `name=value` form, so one write becomes
+          # several. Measured on this exact body with
+          # IN_DOMAIN = "example.org\nns1=evil.ns.example\nfound=true": the file
+          # received three `key=value` lines from one statement, at exit 0.
+          #
+          # That is this PR's own subject reached through a different channel — the
+          # dispatcher's text becoming structured data a later job trusts — so it is
+          # refused here rather than sanitized, for the same reason the rest of the
+          # workflow refuses a blank: a domain with a line break in it is not a
+          # domain, and guessing which half was meant is worse than stopping.
+          if ($d -match '[\r\n]') {
+            Write-Output '::error::IN_DOMAIN contains a line break. A multi-line value written to GITHUB_OUTPUT in the name=value form injects additional outputs that later jobs read as trusted. Refusing to publish it.'
+            exit 1
+          }
+
           "domain=$d" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+      # THE STEP OUTPUT IS THE SAME INPUT, ONE HOP LATER (#1080).
+      # `steps.meta.outputs.domain` is `inputs.domain` with three string methods
+      # applied to it, and none of them removes a `$( )`. Moving the input into
+      # `env:` above stops it executing THERE and does nothing to stop it here —
+      # measured: the remedied Metadata step wrote the payload verbatim into
+      # GITHUB_OUTPUT, this body interpolated it into a double-quoted pwsh string,
+      # the WHMCS secret was stolen, `-Domain` still bound the legitimate
+      # `example.org`, and the step exited 0. Lowercasing is not a mitigation: the
+      # job is `runs-on: windows-latest`, where `$env:` lookup is case-insensitive.
+      #
+      # So every hop of this value travels through `env:`, not only the hops the
+      # guard can see. The guard tracks `inputs.X` and is blind to the laundering
+      # by construction — filed as #1233, not left as this comment. Ledger L255.
       - name: Check domain exists in WHMCS (smoke test)
         id: check
         shell: pwsh
         env:
           WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          IN_DOMAIN_RESOLVED: ${{ steps.meta.outputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ steps.meta.outputs.domain }}"
+
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN_RESOLVED)) {
+            Write-Output '::error::IN_DOMAIN_RESOLVED is empty: the step-level env: mapping is missing or misnamed, or the Metadata step published no domain. Refusing to call whmcs-domain-exists.ps1 with an empty -Domain.'
+            exit 1
+          }
+
+          $domain = $env:IN_DOMAIN_RESOLVED
 
           $json = & pwsh -NoProfile -File .\scripts\whmcs-domain-exists.ps1 -Domain $domain
           if ($LASTEXITCODE -ne 0) {
@@ -125,18 +189,55 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
+      # Both the dispatch input and the upstream job output reach this body through
+      # step-level `env:` (#1080). `$( )` runs inside double quotes in bash exactly
+      # as it does in pwsh, so `d=$(echo "${{ inputs.domain }}" | …)` was a second
+      # injection point in a second language, and the `needs.` fallback is the same
+      # value one job later — see the note in `whmcs_preflight`.
       - name: Metadata
         id: meta
         shell: bash
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
+          IN_DOMAIN_UPSTREAM: ${{ needs.whmcs_preflight.outputs.domain }}
+          # Not dispatcher-controlled — see the note on IN_NS1 / IN_NS2 in
+          # `whmcs_update_nameservers`. Mapped for consistency with the rest of the
+          # file, so that "no expression reaches a script body here" is a property a
+          # reader can check at a glance rather than a per-line judgement.
+          IN_NS1: ${{ vars.FFC_CUSTOM_NAMESERVER_1 }}
+          IN_NS2: ${{ vars.FFC_CUSTOM_NAMESERVER_2 }}
         run: |
-          d="${{ needs.whmcs_preflight.outputs.domain }}"
-          if [ -z "$d" ]; then d=$(echo "${{ inputs.domain }}" | tr '[:upper:]' '[:lower:]' | xargs); fi
+          d="$IN_DOMAIN_UPSTREAM"
+          if [ -z "$d" ]; then d=$(echo "$IN_DOMAIN" | tr '[:upper:]' '[:lower:]' | xargs); fi
+          # Fail closed: neither source supplied a domain (#1150, ledger L214). Without
+          # this the job publishes `domain=` and every consumer downstream calls its
+          # script with an empty -Domain.
+          if [ -z "$d" ]; then
+            echo "::error::Neither IN_DOMAIN_UPSTREAM nor IN_DOMAIN carries a domain: a step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain."
+            exit 1
+          fi
+          # Reject a line break before publishing (output injection). `xargs` collapses
+          # interior whitespace but a CR can still ride through, and this step writes
+          # `domain`, `ns1` and `ns2` to the same GITHUB_OUTPUT in the single-line
+          # `name=value` form — so an injected line lands beside outputs a later job
+          # trusts. Refused rather than sanitized: see the pwsh Metadata step.
+          case "$d" in
+            *[$'\r\n']*)
+              echo "::error::The resolved domain contains a line break. A multi-line value written to GITHUB_OUTPUT in the name=value form injects additional outputs that later jobs read as trusted. Refusing to publish it."
+              exit 1
+              ;;
+          esac
           echo "domain=$d" >> "$GITHUB_OUTPUT"
 
-          # Custom account nameservers (preferred): store as variables on the cloudflare-prod environment.
+          # Custom account nameservers (preferred): set FFC_CUSTOM_NAMESERVER_1/2 as
+          # REPOSITORY Variables, or as Variables on this job's own environment
+          # (`cloudflare-prod-read`) — those are the only two scopes `vars.*` resolves
+          # from here. There is no `cloudflare-prod` environment in this repo, only
+          # `-read` and `-write`; a Variable set on that name resolves to the empty
+          # string and the run silently takes the fallback below.
           # Fallback: use the known FFC custom nameservers.
-          ns1="${{ vars.FFC_CUSTOM_NAMESERVER_1 }}"
-          ns2="${{ vars.FFC_CUSTOM_NAMESERVER_2 }}"
+          ns1="$IN_NS1"
+          ns2="$IN_NS2"
           if [ -z "$ns1" ]; then ns1='ns1.freeforcharity.org'; fi
           if [ -z "$ns2" ]; then ns2='ns2.freeforcharity.org'; fi
           echo "ns1=$ns1" >> "$GITHUB_OUTPUT"
@@ -150,11 +251,21 @@ jobs:
           azure-client-id: ${{ secrets.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.READ_ALL_FFC_AZURE_TENANT_ID }}
 
+      # The resolved domain reaches this body through `env:` (#1080) — same hop as
+      # in `whmcs_preflight`, with the read-scoped Cloudflare tokens in reach.
       - name: Check zone exists in Cloudflare (smoke test)
         shell: pwsh
+        env:
+          IN_DOMAIN_RESOLVED: ${{ steps.meta.outputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ steps.meta.outputs.domain }}"
+
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN_RESOLVED)) {
+            Write-Output '::error::IN_DOMAIN_RESOLVED is empty: the step-level env: mapping is missing or misnamed, or the Metadata step published no domain. Refusing to call cloudflare-zone-get.ps1 with an empty -Domain.'
+            exit 1
+          }
+
+          $domain = $env:IN_DOMAIN_RESOLVED
 
           $ffcJson = & pwsh -NoProfile -File scripts/cloudflare-zone-get.ps1 -Domain $domain -Account 'FFC'
           if ($LASTEXITCODE -ne 0) { throw "Cloudflare preflight (FFC) failed (exit $LASTEXITCODE)." }
@@ -189,18 +300,43 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
+      # Same pair of sources, same remedy as `cloudflare_preflight` (#1080) — but
+      # this job is on `cloudflare-prod-write`, so the credential a payload here
+      # would reach is the write-scoped Cloudflare token pair.
       - name: Metadata
         id: meta
         shell: bash
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
+          IN_DOMAIN_UPSTREAM: ${{ needs.cloudflare_preflight.outputs.domain }}
+          IN_NS1: ${{ needs.cloudflare_preflight.outputs.ns1 }}
+          IN_NS2: ${{ needs.cloudflare_preflight.outputs.ns2 }}
         run: |
-          d="${{ needs.cloudflare_preflight.outputs.domain }}"
-          if [ -z "$d" ]; then d=$(echo "${{ inputs.domain }}" | tr '[:upper:]' '[:lower:]' | xargs); fi
+          d="$IN_DOMAIN_UPSTREAM"
+          if [ -z "$d" ]; then d=$(echo "$IN_DOMAIN" | tr '[:upper:]' '[:lower:]' | xargs); fi
+          if [ -z "$d" ]; then
+            echo "::error::Neither IN_DOMAIN_UPSTREAM nor IN_DOMAIN carries a domain: a step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain."
+            exit 1
+          fi
+          # Reject a line break before publishing (output injection). `xargs` collapses
+          # interior whitespace but a CR can still ride through, and this step writes
+          # `domain`, `ns1` and `ns2` to the same GITHUB_OUTPUT in the single-line
+          # `name=value` form — so an injected line lands beside outputs a later job
+          # trusts. Refused rather than sanitized: see the pwsh Metadata step.
+          case "$d" in
+            *[$'\r\n']*)
+              echo "::error::The resolved domain contains a line break. A multi-line value written to GITHUB_OUTPUT in the name=value form injects additional outputs that later jobs read as trusted. Refusing to publish it."
+              exit 1
+              ;;
+          esac
           echo "domain=$d" >> "$GITHUB_OUTPUT"
 
-          # Custom account nameservers (preferred): store as variables on the cloudflare-prod environment.
+          # Nameservers as resolved by `cloudflare_preflight` and passed through this
+          # job's `env:`. This job reads no Variable of its own: set
+          # FFC_CUSTOM_NAMESERVER_1/2 where THAT job can see them (see its comment).
           # Fallback: use the known FFC custom nameservers.
-          ns1="${{ needs.cloudflare_preflight.outputs.ns1 }}"
-          ns2="${{ needs.cloudflare_preflight.outputs.ns2 }}"
+          ns1="$IN_NS1"
+          ns2="$IN_NS2"
           if [ -z "$ns1" ]; then ns1='ns1.freeforcharity.org'; fi
           if [ -z "$ns2" ]; then ns2='ns2.freeforcharity.org'; fi
           echo "ns1=$ns1" >> "$GITHUB_OUTPUT"
@@ -213,11 +349,23 @@ jobs:
           azure-client-id: ${{ secrets.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.WR_ALL_FFC_AZURE_TENANT_ID }}
 
+      # The resolved domain reaches this body through `env:` (#1080). `zone_type`
+      # (choice) and `jump_start` (boolean) stay interpolated and are NOT findings:
+      # GitHub generates both from the declared options, so neither can carry a
+      # payload.
       - name: Create zone (FFC)
         shell: pwsh
+        env:
+          IN_DOMAIN_RESOLVED: ${{ steps.meta.outputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ steps.meta.outputs.domain }}"
+
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN_RESOLVED)) {
+            Write-Output '::error::IN_DOMAIN_RESOLVED is empty: the step-level env: mapping is missing or misnamed, or the Metadata step published no domain. Refusing to call cloudflare-zone-create.ps1 with an empty -Domain.'
+            exit 1
+          }
+
+          $domain = $env:IN_DOMAIN_RESOLVED
 
           if ('${{ inputs.jump_start }}' -eq 'true') {
             pwsh -NoProfile -File scripts/cloudflare-zone-create.ps1 `
@@ -258,9 +406,21 @@ jobs:
         shell: pwsh
         env:
           FFC_CF_DMARCMGMT_DEBUG: ${{ inputs.dmarc_mgmt_debug && '1' || '0' }}
+          # Third hop of the same dispatch value, now a JOB output rather than a
+          # step output (#1080). This is the step that actually writes DNS on
+          # `cloudflare-prod-write`, so it is the one where a payload would run
+          # holding the write-scoped tokens `cloudflare-tokens-from-kv` loads
+          # through GITHUB_ENV.
+          IN_DOMAIN_RESOLVED: ${{ needs.cloudflare_zone_create.outputs.domain }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ needs.cloudflare_zone_create.outputs.domain }}"
+
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN_RESOLVED)) {
+            Write-Output '::error::IN_DOMAIN_RESOLVED is empty: the step-level env: mapping is missing or misnamed, or cloudflare_zone_create published no domain. Refusing to run Update-CloudflareDns.ps1 with an empty -Zone.'
+            exit 1
+          }
+
+          $domain = $env:IN_DOMAIN_RESOLVED
 
           $outDir = Join-Path $env:RUNNER_TEMP 'domain-add-cloudflare'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -319,16 +479,39 @@ jobs:
         shell: pwsh
         env:
           WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          # Fourth and last hop of the dispatch value (#1080), back under
+          # `whmcs-prod` and beside the WHMCS credential again — this is the step
+          # that CHANGES a production domain's nameservers.
+          IN_DOMAIN_RESOLVED: ${{ needs.cloudflare_zone_create.outputs.domain }}
+          # `ns1` / `ns2` derive from `vars.FFC_CUSTOM_NAMESERVER_*`, not from any
+          # dispatch input, so they are outside #1080's threat model: setting a
+          # repository/environment Variable needs the same write access as editing
+          # this file, and the approver is not being shown one thing and given
+          # another. They are moved anyway because they are interpolated into the
+          # same pwsh body and the cost is a line each.
+          IN_NS1: ${{ needs.cloudflare_zone_create.outputs.ns1 }}
+          IN_NS2: ${{ needs.cloudflare_zone_create.outputs.ns2 }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $domain = "${{ needs.cloudflare_zone_create.outputs.domain }}"
+
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN_RESOLVED)) {
+            Write-Output '::error::IN_DOMAIN_RESOLVED is empty: the step-level env: mapping is missing or misnamed, or cloudflare_zone_create published no domain. Refusing to call whmcs-domain-nameservers-update.ps1 with an empty -Domain.'
+            exit 1
+          }
+
+          $domain = $env:IN_DOMAIN_RESOLVED
 
           if ("${{ needs.whmcs_preflight.outputs.found }}" -ne 'true') {
             throw "WHMCS preflight indicates domain '$domain' is not present. Add it in WHMCS first (or rerun with update_whmcs_nameservers=false)."
           }
 
-          $ns1 = "${{ needs.cloudflare_zone_create.outputs.ns1 }}"
-          $ns2 = "${{ needs.cloudflare_zone_create.outputs.ns2 }}"
+          if ([string]::IsNullOrWhiteSpace($env:IN_NS1) -or [string]::IsNullOrWhiteSpace($env:IN_NS2)) {
+            Write-Output '::error::IN_NS1 or IN_NS2 is empty: a step-level env: mapping is missing or misnamed, or cloudflare_zone_create published no nameservers. Refusing to set an empty nameserver on a production domain.'
+            exit 1
+          }
+
+          $ns1 = $env:IN_NS1
+          $ns2 = $env:IN_NS2
 
           & pwsh -NoProfile -File .\scripts\whmcs-domain-nameservers-update.ps1 -Domain $domain -NameServer1 $ns1 -NameServer2 $ns2
 
@@ -348,14 +531,45 @@ jobs:
           name: domain-add-cloudflare
           path: artifacts/domain-add/cloudflare
 
+      # A `github-script` `script:` block is substituted exactly like a `run:` body
+      # — GitHub renders `${{ }}` into the JS SOURCE before node parses it — so
+      # `'${{ … }}'` is a string literal only for as long as the value contains no
+      # apostrophe. Same defect, third language, and the runtime is not a lesser
+      # one: a payload would run inside the `github` client already authenticated
+      # with a token carrying `issues: write`.
+      #
+      # `issue_number` is `type: number`, and that is NOT a constrained type.
+      # GitHub validates `boolean` and `choice` only; a `number` input renders as a
+      # free text box and is substituted verbatim, so it is exactly as injectable
+      # as `domain`. `enforce_dry_run` (boolean) stays interpolated because it IS
+      # constrained.
       - name: Comment results back to issue
         uses: actions/github-script@v9
+        env:
+          IN_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          IN_DOMAIN_RESOLVED: ${{ needs.cloudflare_zone_create.outputs.domain }}
         with:
           script: |
             const fs = require('fs');
 
-            const issueNumber = Number('${{ inputs.issue_number }}');
-            const domain = '${{ needs.cloudflare_zone_create.outputs.domain }}';
+            // Fail closed on a missing mapping (ledger L202/L220). The pwsh sites
+            // get one refusal for free — an unset mapping is dropped and the binder
+            // rejects the call by name. JS refuses nothing: an unmapped env var is
+            // `undefined`, `Number(undefined)` is NaN, and createComment would post
+            // to a nonsense issue number, or post a report naming no domain at all.
+            // Every case has to be caught here in the body.
+            const domain = process.env.IN_DOMAIN_RESOLVED;
+            if (!domain || !domain.trim()) {
+              core.setFailed('IN_DOMAIN_RESOLVED is empty: the step-level env: mapping is missing or misnamed, or cloudflare_zone_create published no domain.');
+              return;
+            }
+
+            const issueNumber = Number(process.env.IN_ISSUE_NUMBER);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed(`IN_ISSUE_NUMBER is not a positive integer (got ${JSON.stringify(process.env.IN_ISSUE_NUMBER)}): the step-level env: mapping is missing or misnamed, or the dispatch supplied a non-numeric issue number.`);
+              return;
+            }
+
             const dryRun = String('${{ inputs.enforce_dry_run }}');
             const cfIssues = Number('${{ needs.cloudflare_enforce_standard.outputs.issues_count }}');
 

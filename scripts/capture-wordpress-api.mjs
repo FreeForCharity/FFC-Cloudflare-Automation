@@ -46,9 +46,9 @@
  *   2  invalid usage / self-test failure / crash
  */
 
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname, extname, resolve as resolvePath, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const UA = 'Mozilla/5.0 (FFC static-capture bot; +https://freeforcharity.org)';
 
@@ -855,6 +855,246 @@ export function stripEdgeInjectedTags(html) {
   return { html: out, removed };
 }
 
+/** The runtime this capture ships in place of the CMS's own script payload. */
+export const CLONE_RUNTIME_NAME = 'clone-enhance.js';
+
+/**
+ * Strip every client script the CMS shipped.
+ *
+ * A captured site is a static export, so the JavaScript a CMS enqueues is at
+ * best inert and at worst actively wrong. Measured on this migration: 1.9 MB
+ * across 37 files — jQuery, jQuery Migrate, Underscore, the Divi theme bundle,
+ * Divi Plus, Swiper, Hustle, MediaElement, a cookie-consent plugin, two
+ * analytics beacons and eight Hummingbird concatenations of the same. What it
+ * serves, counted against the DOM those 589 pages actually contain, is a
+ * hamburger menu and a fade-in.
+ *
+ * Three separate reasons to remove it rather than keep it:
+ *
+ *   - It reports to properties the charity no longer owns. The analytics
+ *     bundles beacon to the decommissioned site's Google property, and the
+ *     consent banner exists to collect permission for exactly those beacons.
+ *   - It calls endpoints a static host cannot answer: every Divi and Hustle
+ *     bundle posts to `admin-ajax.php`, which is PHP and is gone.
+ *   - Minified vendor bundles dominate any static analysis of the result. The
+ *     charity's repository inherits every finding in jQuery 3.x and a page
+ *     builder, on code nobody there can patch.
+ *
+ * `application/ld+json` is deliberately kept: it is the site's structured-data
+ * block, it is parsed as data and never executed, and dropping it would cost
+ * real search visibility for no security gain.
+ */
+export function stripClientScripts(html) {
+  const removedSrc = [];
+  let removedInline = 0;
+  const out = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>|<script\b[^>]*\/>/gi, (tag) => {
+    const type = /\btype\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.trim() ?? '';
+    if (/^application\/ld\+json$/i.test(type)) return tag;
+    const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? '';
+    if (src) removedSrc.push(src);
+    else removedInline += 1;
+    return '';
+  });
+  return { html: out, removedSrc, removedInline };
+}
+
+/**
+ * Turn a stylesheet the page injects at runtime into a real `<link>`.
+ *
+ * This must run BEFORE the scripts are stripped, and getting the order wrong is
+ * silent. Divi does not enqueue its per-page "late" stylesheet; it ships an
+ * inline script that builds a `<link>` and inserts it after the inline style
+ * block. Remove that script and the export loses the stylesheet twice over —
+ * the page no longer references it, and the capture's asset inventory, which
+ * reads URLs out of inline script bodies precisely because builders hide them
+ * there, no longer finds it to download. The result is a correct-looking page
+ * with a chunk of its styling missing and nothing in any log to say so.
+ *
+ * Hoisting is also the better artifact: a static `<link>` is discovered by the
+ * preload scanner instead of after a script runs, so the styling arrives
+ * without a flash of unstyled content and without depending on JavaScript.
+ *
+ * Recognised by the injection signature — `document.createElement('link')` —
+ * rather than by "mentions a .css", so a config blob that merely names a
+ * stylesheet does not cause one to be loaded.
+ */
+export function hoistRuntimeStylesheets(html) {
+  const present = new Set();
+  for (const m of html.matchAll(/<link\b[^>]*>/gi)) {
+    const rel = (/\brel\s*=\s*["']([^"']+)["']/i.exec(m[0])?.[1] ?? '').toLowerCase();
+    if (!rel.includes('stylesheet')) continue;
+    const href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(m[0])?.[1];
+    if (href) present.add(href);
+  }
+  const hoisted = [];
+  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+    const type = /\btype\s*=\s*["']([^"']+)["']/i.exec(m[1])?.[1]?.trim() ?? '';
+    if (/^application\/ld\+json$/i.test(type)) continue;
+    if (!/createElement\(\s*["']link["']\s*\)/.test(m[2])) continue;
+    for (const s of m[2].matchAll(/["']([^"']+\.css(?:\?[^"']*)?)["']/g)) {
+      // Builders store these as JSON, where every slash is escaped.
+      const href = s[1].replace(/\\\//g, '/');
+      // The href becomes a double-quoted attribute, so a value that could close
+      // it or open a tag is refused rather than emitted. Nothing legitimate is
+      // lost: a URL carrying these characters is invalid unencoded anyway.
+      if (/["<>]/.test(href)) continue;
+      if (present.has(href) || hoisted.includes(href)) continue;
+      hoisted.push(href);
+    }
+  }
+  if (!hoisted.length) return { html, hoisted };
+  const tags = hoisted.map((h) => `<link rel="stylesheet" href="${h}">`).join('');
+  const i = html.toLowerCase().lastIndexOf('</head>');
+  return {
+    html: i === -1 ? `${tags}${html}` : `${html.slice(0, i)}${tags}${html.slice(i)}`,
+    hoisted,
+  };
+}
+
+/**
+ * Head elements that advertise a WordPress backend which no longer exists.
+ *
+ * These are not decoration. `EditURI` and `wlwmanifest` point at `xmlrpc.php`,
+ * the oEmbed and `api.w.org` links point at `/wp-json/`, and the feed links
+ * point at `/feed/` — all four are PHP routes that a static export cannot
+ * serve, and every one of them was still carrying the ABSOLUTE origin URL, so
+ * they lead a reader (or a crawler) straight back to the host being
+ * decommissioned. `<meta name="generator">` merely announces the stack and its
+ * version to anyone scanning for it.
+ *
+ * Kept narrow on purpose: only these rels, and only a `rel="alternate"` whose
+ * href is a WordPress route — a genuine hreflang or RSS alternate for content
+ * the site still serves is untouched.
+ */
+const WP_PLUMBING_RELS = new Set([
+  'edituri',
+  'wlwmanifest',
+  'https://api.w.org/',
+  'shortlink',
+  'pingback',
+  'profile',
+]);
+const WP_PLUMBING_HREF = /(?:xmlrpc\.php|wlwmanifest|\/wp-json\/|\/feed\/?(?:$|[?#])|osd\.xml)/i;
+
+export function stripWordPressHeadLinks(html) {
+  const removed = [];
+  let out = html.replace(/<link\b[^>]*>/gi, (tag) => {
+    const rel = (/\brel\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? '').trim().toLowerCase();
+    const href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? '';
+    const as = (/\bas\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? '').trim().toLowerCase();
+    // A preload for a script is dead the moment the scripts are stripped, and
+    // it is the one plumbing link that survives a rel-and-href filter: it names
+    // no WordPress route, it just warms a fetch for a bundle nothing imports.
+    // Measured here: 3 pages preloaded @wordpress/interactivity after every
+    // other trace of it was gone.
+    const scriptPreload = rel === 'modulepreload' || (rel === 'preload' && as === 'script');
+    if (
+      WP_PLUMBING_RELS.has(rel) ||
+      scriptPreload ||
+      (rel === 'alternate' && WP_PLUMBING_HREF.test(href))
+    ) {
+      removed.push(rel || href);
+      return '';
+    }
+    return tag;
+  });
+  out = out.replace(/<meta\b[^>]*\bname\s*=\s*["']generator["'][^>]*>/gi, (tag) => {
+    removed.push('generator');
+    return '';
+  });
+  return { html: out, removed };
+}
+
+/**
+ * Remove the rule that makes Divi's content invisible until JavaScript runs.
+ *
+ * This is the single most dangerous line in the whole de-WordPressing pass, and
+ * it is invisible in a diff of the scripts. Divi paints every animated element
+ * at `opacity: 0` and reveals it from a scroll handler in the bundle above.
+ * Measured here: `.et-waypoint:not(.et_pb_counters){opacity:0}` appears in the
+ * inline `<style>` of **589 of 589** captured pages. Remove the bundle and
+ * leave this rule and the export is not a degraded site, it is 589 blank
+ * pages — and every automated check still passes, because the markup, the
+ * titles, the links and the byte counts are all exactly right.
+ *
+ * So visibility stops depending on JavaScript at all: the rule is dropped, the
+ * content paints, and `clone-enhance.js` adds `.et-animated` purely to start
+ * the keyframes the stylesheet already defines.
+ *
+ * Only the `opacity: 0` form is touched. Divi ships many `.et-waypoint … {
+ * opacity: 1 }` rules — the animation-off variants — and those must survive,
+ * which is why this matches on the declaration and not on the selector alone.
+ */
+export function neutralizeWaypointHiding(css) {
+  let removed = 0;
+  const out = css.replace(/([^{}]+)\{\s*opacity\s*:\s*0\s*;?\s*\}/g, (rule, selectors) => {
+    if (!/\.et-waypoint\b/.test(selectors)) return rule;
+    const all = selectors.split(',');
+    const kept = all.filter((s) => !/\.et-waypoint\b/.test(s));
+    removed += all.length - kept.length;
+    // A rule whose ONLY selectors were waypoints disappears; one that also hid
+    // something else keeps that half, or removing the hiding rule for a
+    // waypoint would silently un-hide an unrelated element too.
+    return kept.length ? `${kept.join(',')}{opacity:0}` : '';
+  });
+  return { css: out, removed };
+}
+
+/** Apply `neutralizeWaypointHiding` to each inline `<style>` block. */
+export function neutralizeWaypointHidingInHtml(html) {
+  let removed = 0;
+  const out = html.replace(
+    /(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi,
+    (whole, open, body, close) => {
+      const r = neutralizeWaypointHiding(body);
+      removed += r.removed;
+      return `${open}${r.css}${close}`;
+    },
+  );
+  return { html: out, removed };
+}
+
+/**
+ * Add the clone's own runtime just before `</body>`.
+ *
+ * `defer` rather than `async`: it must not run before the document it wires up
+ * exists, and ordering against nothing else matters. A page with no `</body>`
+ * (a fragment, or truncated markup) gets it appended, so the script is never
+ * silently dropped from a page that is merely malformed.
+ */
+export function injectCloneRuntime(html, href) {
+  const tag = `<script src="${href}" defer></script>`;
+  if (html.includes(tag)) return html;
+  const i = html.toLowerCase().lastIndexOf('</body>');
+  if (i === -1) return `${html}${tag}`;
+  return `${html.slice(0, i)}${tag}${html.slice(i)}`;
+}
+
+/**
+ * The whole de-WordPressing pass, in the order the steps depend on each other.
+ *
+ * Scripts go first so nothing later has to reason about markup inside a script
+ * body. The waypoint rule is neutralized straight after, because between those
+ * two steps the document is in the one state that must never be written to
+ * disk. The runtime is injected last so it is not itself stripped.
+ */
+export function deWordPress(html, { runtimeHref } = {}) {
+  const sheets = hoistRuntimeStylesheets(html);
+  const scripts = stripClientScripts(sheets.html);
+  const waypoints = neutralizeWaypointHidingInHtml(scripts.html);
+  const links = stripWordPressHeadLinks(waypoints.html);
+  const out = runtimeHref ? injectCloneRuntime(links.html, runtimeHref) : links.html;
+  return {
+    html: out,
+    stylesheetsHoisted: sheets.hoisted,
+    scriptsRemoved: scripts.removedSrc.length + scripts.removedInline,
+    scriptSrcRemoved: scripts.removedSrc,
+    inlineScriptsRemoved: scripts.removedInline,
+    waypointRulesRemoved: waypoints.removed,
+    headLinksRemoved: links.removed,
+  };
+}
+
 /**
  * Local filename for an asset URL, namespaced by host so two providers cannot
  * collide on `/style.css`, and carrying the query string so `?ver=6.4` variants
@@ -1507,6 +1747,277 @@ function selfTest() {
     'a link or image mentioning cdn-cgi is left alone — only scripts are removed',
     stripEdgeInjectedTags('<img src="/cdn-cgi/image/w=80/logo.png">').html,
     '<img src="/cdn-cgi/image/w=80/logo.png">',
+  );
+
+  // --- De-WordPressing: the CMS script payload -----------------------------
+  // A static export cannot run PHP, so every bundle that posts to
+  // admin-ajax.php is dead weight; the analytics beacons report to a property
+  // the charity no longer owns; and the vendored minified bundles dominate any
+  // static analysis of the repository the charity inherits. Measured on this
+  // migration: 1.9 MB across 37 files, serving a hamburger and a fade.
+  const WP_PAGE =
+    '<html><head>' +
+    '<script src="/wp-includes/js/jquery/jquery.min.js?ver=3.7.1"></script>' +
+    '<script type="application/ld+json">{"@type":"Organization"}</script>' +
+    '<script>var monsterinsights_frontend = {"js_events_tracking":"true"};</script>' +
+    '</head><body><p>hi</p></body></html>';
+  eq('a vendored CMS bundle is removed', stripClientScripts(WP_PAGE).removedSrc, [
+    '/wp-includes/js/jquery/jquery.min.js?ver=3.7.1',
+  ]);
+  eq('inline CMS config blocks are removed too', stripClientScripts(WP_PAGE).removedInline, 1);
+  eq(
+    'structured data survives — it is parsed as data and never executed',
+    stripClientScripts(WP_PAGE).html.includes('application/ld+json'),
+    true,
+  );
+  eq(
+    'the ld+json PAYLOAD survives, not just its type attribute',
+    stripClientScripts(WP_PAGE).html.includes('{"@type":"Organization"}'),
+    true,
+  );
+  eq('the page content is untouched', stripClientScripts(WP_PAGE).html.includes('<p>hi</p>'), true);
+  eq(
+    'a self-closing script tag is removed rather than left dangling',
+    stripClientScripts('<script src="/a.js"/>x').html,
+    'x',
+  );
+  eq(
+    'ld+json matching is exact — a type merely containing it is still removed',
+    stripClientScripts('<script type="application/ld+json-evil">x</script>').removedInline,
+    1,
+  );
+  eq(
+    'speculationrules is removed: it prefetches /wp-*.php routes that are gone',
+    stripClientScripts('<script type="speculationrules">{"prefetch":[]}</script>').removedInline,
+    1,
+  );
+  eq(
+    'markup inside a script body cannot survive as markup',
+    stripClientScripts('<script>var a="</div><img src=x>";</script>b').html,
+    'b',
+  );
+
+  // --- De-WordPressing: head plumbing --------------------------------------
+  // Every one of these named the ABSOLUTE origin and pointed at a PHP route,
+  // so they lead a reader or a crawler back to the host being decommissioned.
+  const WP_HEAD =
+    '<link rel="EditURI" type="application/rsd+xml" href="https://x.org/xmlrpc.php?rsd" />' +
+    '<link rel="wlwmanifest" href="https://x.org/wlwmanifest.xml" />' +
+    '<link rel="https://api.w.org/" href="https://x.org/wp-json/" />' +
+    '<link rel="alternate" type="application/json+oembed" href="https://x.org/wp-json/oembed/1.0/embed?url=y" />' +
+    '<link rel="shortlink" href="https://x.org/?p=2" />' +
+    '<link rel="canonical" href="https://x.org/about/" />' +
+    '<link rel="stylesheet" href="/style.css" />' +
+    '<meta name="generator" content="WordPress 6.8.1" />';
+  eq('WordPress head plumbing is removed', stripWordPressHeadLinks(WP_HEAD).removed.length, 6);
+  eq(
+    'the canonical link survives — it is the one head link a static export needs',
+    stripWordPressHeadLinks(WP_HEAD).html.includes('rel="canonical"'),
+    true,
+  );
+  eq('the stylesheet survives', stripWordPressHeadLinks(WP_HEAD).html.includes('/style.css'), true);
+  eq(
+    'a modulepreload for a stripped bundle is removed',
+    stripWordPressHeadLinks('<link rel="modulepreload" href="/wp-includes/js/x.js">').removed
+      .length,
+    1,
+  );
+  eq(
+    'so is a rel=preload as=script',
+    stripWordPressHeadLinks('<link rel="preload" as="script" href="/a.js">').removed.length,
+    1,
+  );
+  // The font and stylesheet preloads are what make the page paint quickly and
+  // have nothing to do with the CMS; a blanket "drop preloads" would cost a
+  // visible flash of unstyled text on every page.
+  eq(
+    'a font or style preload survives',
+    stripWordPressHeadLinks(
+      '<link rel="preload" as="font" href="/f.woff2"><link rel="preload" as="style" href="/s.css">',
+    ).removed.length,
+    0,
+  );
+  eq(
+    'a real hreflang alternate is NOT collateral damage',
+    stripWordPressHeadLinks('<link rel="alternate" hreflang="fr" href="/fr/">').removed.length,
+    0,
+  );
+  eq(
+    'an RSS alternate for a feed route IS removed — the route is PHP and is gone',
+    stripWordPressHeadLinks(
+      '<link rel="alternate" type="application/rss+xml" href="https://x.org/feed/">',
+    ).removed.length,
+    1,
+  );
+
+  // --- De-WordPressing: the blank-page trap --------------------------------
+  // The single most dangerous line in this pass, and the one invisible in a
+  // diff of the scripts. Divi paints animated content at opacity 0 and reveals
+  // it from the bundle above; the rule was present in 589 of 589 captured
+  // pages. Strip the bundle, leave the rule, and the export is 589 blank pages
+  // that pass every markup, title, link and byte-count check there is.
+  eq(
+    'the JavaScript-dependent hiding rule is removed',
+    neutralizeWaypointHiding('.et-waypoint:not(.et_pb_counters){opacity:0}').css,
+    '',
+  );
+  eq(
+    'and the removal is counted, not silent',
+    neutralizeWaypointHiding('.et-waypoint:not(.et_pb_counters){opacity:0}').removed,
+    1,
+  );
+  eq(
+    'whitespace variants are caught',
+    neutralizeWaypointHiding('.et-waypoint:not(.et_pb_counters) { opacity: 0; }').css,
+    '',
+  );
+  // Divi ships many `.et-waypoint … {opacity:1}` rules — the animation-off
+  // variants. Matching on the selector alone would delete those too and break
+  // every element whose animation is deliberately disabled.
+  eq(
+    'an opacity:1 waypoint rule is left alone',
+    neutralizeWaypointHiding('.et-waypoint.et_pb_animation_off{opacity:1}').css,
+    '.et-waypoint.et_pb_animation_off{opacity:1}',
+  );
+  eq(
+    'a non-waypoint opacity:0 rule is left alone',
+    neutralizeWaypointHiding('.screen-reader-text{opacity:0}').css,
+    '.screen-reader-text{opacity:0}',
+  );
+  // A shared rule must lose only its waypoint half, or removing the hiding
+  // rule for animated content silently un-hides something unrelated.
+  eq(
+    'a shared selector list keeps its non-waypoint half',
+    neutralizeWaypointHiding('.a,.et-waypoint,.b{opacity:0}').css,
+    '.a,.b{opacity:0}',
+  );
+  eq(
+    'only the inline <style> is rewritten, never the body text',
+    neutralizeWaypointHidingInHtml(
+      '<style>.et-waypoint:not(.et_pb_counters){opacity:0}</style>' +
+        '<p>.et-waypoint:not(.et_pb_counters){opacity:0}</p>',
+    ).html,
+    '<style></style><p>.et-waypoint:not(.et_pb_counters){opacity:0}</p>',
+  );
+
+  // --- De-WordPressing: the stylesheet that is not in the markup -----------
+  // Divi does not enqueue its per-page "late" stylesheet; an inline script
+  // builds the <link> at runtime. Strip that script without hoisting first and
+  // the page loses the stylesheet AND the capture stops downloading it, which
+  // renders as a correct-looking page with a chunk of its styling gone.
+  const LATE_CSS =
+    '<html><head><link rel="stylesheet" href="/main.css"></head><body>' +
+    '<script>(function(){var file=["\\/wp-content\\/et-cache\\/2\\/et-late.css"];' +
+    "var link=document.createElement('link');link.rel='stylesheet';link.href=file;" +
+    '})();</script></body></html>';
+  eq('a runtime-injected stylesheet is hoisted', hoistRuntimeStylesheets(LATE_CSS).hoisted, [
+    '/wp-content/et-cache/2/et-late.css',
+  ]);
+  eq(
+    'and it lands in the head, where the preload scanner can see it',
+    hoistRuntimeStylesheets(LATE_CSS).html.includes(
+      '<link rel="stylesheet" href="/wp-content/et-cache/2/et-late.css"></head>',
+    ),
+    true,
+  );
+  eq(
+    'a stylesheet the page already links is not duplicated',
+    hoistRuntimeStylesheets(
+      '<head><link rel="stylesheet" href="/a.css"></head>' +
+        "<script>var l=document.createElement('link');l.rel='stylesheet';l.href=\"/a.css\";</script>",
+    ).hoisted,
+    [],
+  );
+  // Recognised by the injection signature, not by "mentions a .css" — a config
+  // blob naming a stylesheet must not cause one to be loaded.
+  eq(
+    'a script that merely names a stylesheet injects nothing',
+    hoistRuntimeStylesheets('<script>var cfg={"admin":"/wp-admin/css/edit.css"};</script>').hoisted,
+    [],
+  );
+  eq(
+    'structured data is never treated as an injector',
+    hoistRuntimeStylesheets(
+      '<script type="application/ld+json">{"x":"document.createElement(\'link\') /a.css"}</script>',
+    ).hoisted,
+    [],
+  );
+  // The value becomes a double-quoted attribute. Two things keep that safe and
+  // they are worth separating, because only one of them is a check.
+  //
+  // A quote cannot reach the attribute at all: the extraction matches
+  // `[^"']+`, so a `"` terminates the literal instead of being captured. That
+  // is structural, and this case pins it — a script whose string tries to
+  // break out yields the harmless prefix, never the payload.
+  eq(
+    'a quote terminates the literal instead of escaping into the attribute',
+    hoistRuntimeStylesheets(
+      "<script>document.createElement('link');var f='/a.css\" onload=\"x';</script>",
+    ).hoisted,
+    ['/a.css'],
+  );
+  // Angle brackets CAN survive the extraction, so those are refused explicitly.
+  eq(
+    'an angle-bracket href is refused rather than emitted',
+    hoistRuntimeStylesheets(
+      "<script>document.createElement('link');var f='/a.css?v=<img src=x>';</script>",
+    ).hoisted,
+    [],
+  );
+  eq(
+    'hoisting runs before the strip, so the whole pass keeps the stylesheet',
+    deWordPress(LATE_CSS).html.includes('href="/wp-content/et-cache/2/et-late.css"'),
+    true,
+  );
+
+  // --- De-WordPressing: the replacement runtime ----------------------------
+  eq(
+    'the runtime is injected just inside </body>',
+    injectCloneRuntime('<html><body><p>a</p></body></html>', '../x/clone-enhance.js'),
+    '<html><body><p>a</p><script src="../x/clone-enhance.js" defer></script></body></html>',
+  );
+  eq(
+    'a page with no </body> still gets the runtime rather than silently losing it',
+    injectCloneRuntime('<p>a</p>', './r.js'),
+    '<p>a</p><script src="./r.js" defer></script>',
+  );
+  eq(
+    'injection is idempotent',
+    injectCloneRuntime(injectCloneRuntime('<body>a</body>', './r.js'), './r.js'),
+    '<body>a<script src="./r.js" defer></script></body>',
+  );
+  // The LAST closer, not the first. A captured page can carry a literal
+  // `</body>` before its real one — inside an HTML comment, a <template>, or a
+  // builder shortcode that stored a whole document as text. Injecting at the
+  // first match puts the runtime inside that fragment, where it is inert, and
+  // the page still looks perfectly well-formed.
+  eq(
+    'the runtime goes before the LAST </body>, not a literal one in the markup',
+    injectCloneRuntime('<body>a<!-- </body> --><p>b</p></body>', './r.js'),
+    '<body>a<!-- </body> --><p>b</p><script src="./r.js" defer></script></body>',
+  );
+
+  // --- De-WordPressing: the whole pass -------------------------------------
+  const DEWP = deWordPress(
+    '<html><head><link rel="shortlink" href="https://x.org/?p=2">' +
+      '<style>.et-waypoint:not(.et_pb_counters){opacity:0}</style>' +
+      '<script src="/wp-includes/js/jquery/jquery.min.js"></script></head>' +
+      '<body><p>hi</p></body></html>',
+    { runtimeHref: './_a/clone-enhance.js' },
+  );
+  eq('the pass reports every script it removed', DEWP.scriptsRemoved, 1);
+  eq('the pass reports the hiding rules it removed', DEWP.waypointRulesRemoved, 1);
+  eq('the pass reports the head links it removed', DEWP.headLinksRemoved.length, 1);
+  eq(
+    'the only script left is the clone runtime',
+    [...DEWP.html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0]),
+    ['<script src="./_a/clone-enhance.js" defer>'],
+  );
+  eq('and the content survives all of it', DEWP.html.includes('<p>hi</p>'), true);
+  eq(
+    'without a runtime href the pass injects nothing — the capture adds it per page',
+    deWordPress('<body>a</body>').html.includes('<script'),
+    false,
   );
 
   // --- Cloudflare email obfuscation ----------------------------------------
@@ -2701,6 +3212,10 @@ async function capture() {
   // rather than silently editing the charity's markup.
   let cfEmailsDecoded = 0;
   const edgeTagsRemoved = [];
+  const cmsScriptsRemoved = [];
+  let cmsInlineScriptsRemoved = 0;
+  let waypointRulesRemoved = 0;
+  let cmsHeadLinksRemoved = 0;
   // Paths that would have escaped the output directory. Expected to stay empty;
   // recorded rather than merely skipped so an empty list is evidence.
   const escapedPaths = [];
@@ -2746,9 +3261,21 @@ async function capture() {
     // this HTML, so the removed tags never reach the asset inventory either.
     const mail = decodeCloudflareEmails(html);
     const edge = stripEdgeInjectedTags(mail.html);
-    html = edge.html;
+    // De-WordPress before the asset inventory reads this page. The order is the
+    // point: a script tag removed here is a script never downloaded, so the
+    // 1.9 MB of vendor bundles costs no requests and reaches no artifact.
+    // The runtime that replaces them is injected in the write loop instead,
+    // where the page's own relative prefix is already known — injecting it here
+    // would hand the inventory a reference to a file that exists on no origin,
+    // and it would dutifully go and 404 on it.
+    const wp = deWordPress(edge.html);
+    html = wp.html;
     cfEmailsDecoded += mail.decoded;
     for (const r of edge.removed) edgeTagsRemoved.push(r);
+    for (const r of wp.scriptSrcRemoved) cmsScriptsRemoved.push(r);
+    cmsInlineScriptsRemoved += wp.inlineScriptsRemoved;
+    waypointRulesRemoved += wp.waypointRulesRemoved;
+    cmsHeadLinksRemoved += wp.headLinksRemoved.length;
     rendered.set(e.localPath, html);
     e.bytes = html.length;
     await sleep(delayMs);
@@ -2773,6 +3300,35 @@ async function capture() {
   }
   if (cfEmailsDecoded) {
     console.error(`[capture] decoded ${cfEmailsDecoded} Cloudflare-obfuscated email address(es)`);
+  }
+  if (cmsScriptsRemoved.length || cmsInlineScriptsRemoved) {
+    const distinct = new Set(cmsScriptsRemoved).size;
+    console.error(
+      `[capture] removed the CMS script payload: ${cmsScriptsRemoved.length} tag(s) across` +
+        ` ${distinct} distinct file(s) and ${cmsInlineScriptsRemoved} inline block(s).` +
+        ` They are replaced by ${CLONE_RUNTIME_NAME}, which has no dependencies and` +
+        ' reaches no network. Structured data (application/ld+json) is kept.',
+    );
+  }
+  console.error(
+    `[capture] removed ${waypointRulesRemoved} rule(s) hiding animated content behind` +
+      ' JavaScript, so the export reads with scripting disabled.',
+  );
+  if (!waypointRulesRemoved && cmsScriptsRemoved.length) {
+    // Not fatal — a site with no scroll animations has no such rule — but it is
+    // worth saying out loud, because the failure it guards against (589 blank
+    // pages that pass every markup check) is invisible in any other output.
+    console.error(
+      '[capture] note: no JavaScript-dependent hiding rule was found. If this theme animates' +
+        ' content in, check a written page renders with scripting off before shipping.',
+    );
+  }
+  if (cmsHeadLinksRemoved) {
+    console.error(
+      `[capture] removed ${cmsHeadLinksRemoved} head link(s) advertising the CMS backend` +
+        ' (xmlrpc, wlwmanifest, oEmbed, REST, feeds, generator) — all PHP routes a static' +
+        ' host cannot serve, and all of them still naming the origin being decommissioned.',
+    );
   }
   if (pageTally.total) console.error(`[capture] pages: ${describeFailures(pageTally, domain)}`);
 
@@ -2840,6 +3396,13 @@ async function capture() {
         }
       }
       css = rewriteRefs(css, cssReps);
+      // The hiding rule was measured only in the inline <style> of each page,
+      // but a stylesheet is the natural place for it and a single missed copy
+      // blanks every page that loads that file. Applying the same transform
+      // here costs one pass and removes the possibility.
+      const cssWaypoints = neutralizeWaypointHiding(css);
+      css = cssWaypoints.css;
+      waypointRulesRemoved += cssWaypoints.removed;
       writeFileSync(dest, css, { encoding: 'utf8' });
     } else {
       writeFileSync(dest, buf);
@@ -2863,6 +3426,28 @@ async function capture() {
   // site is 589 Divi documents and `rendered` already holds all of them, so
   // retaining the rewritten copies too doubles peak memory for a tally that
   // can be computed one page at a time and thrown away.
+  // The runtime every page is about to reference. Written before the pages so
+  // a failure to find it stops the capture instead of shipping 589 pages whose
+  // only script 404s — a broken menu that no gate downstream can see, because
+  // every one of them measures markup and this is a missing file.
+  const runtimeSrc = resolvePath(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'assets',
+    CLONE_RUNTIME_NAME,
+  );
+  if (!existsSync(runtimeSrc)) {
+    console.error(
+      `[capture] the clone runtime is missing from this checkout: ${runtimeSrc}.` +
+        ' Every captured page references it, so refusing to write a clone without it.',
+    );
+    process.exit(2);
+  }
+  mkdirSync(assetsRoot, { recursive: true });
+  writeFileSync(join(assetsRoot, CLONE_RUNTIME_NAME), readFileSync(runtimeSrc), {
+    encoding: null,
+  });
+
   const writtenPages = new Set(); // localPath
   const strandedNav = new Map(); // host -> { pages, links }
   for (const [localPath, html] of rendered) {
@@ -2892,7 +3477,10 @@ async function capture() {
       const target = `${relativePrefix(localPath)}${e.localPath.replace(/index\.html$/, '')}`;
       for (const raw of raws) reps.set(raw, target || './');
     }
-    const out = rewriteRefs(html, reps);
+    const out = injectCloneRuntime(
+      rewriteRefs(html, reps),
+      `${relativePrefix(localPath)}${assetsDirName}/${CLONE_RUNTIME_NAME}`,
+    );
     if (!isContainedPath(outDir, localPath)) {
       console.error(`[capture] refusing to write outside the output dir: ${localPath}`);
       escapedPaths.push(localPath);
@@ -3012,6 +3600,17 @@ async function capture() {
     // and whoever owns that WordPress should be told rather than have it
     // quietly papered over by the migration.
     declaredSelfHost: selfHost,
+    // What replaced the CMS's own client payload. Recorded so a reviewer can
+    // see the size of the change without diffing 589 pages, and so a later run
+    // that quietly stops stripping is visible as a number going to zero.
+    deWordPressed: {
+      runtime: CLONE_RUNTIME_NAME,
+      scriptTagsRemoved: cmsScriptsRemoved.length,
+      distinctScriptsRemoved: new Set(cmsScriptsRemoved).size,
+      inlineScriptsRemoved: cmsInlineScriptsRemoved,
+      waypointHidingRulesRemoved: waypointRulesRemoved,
+      headLinksRemoved: cmsHeadLinksRemoved,
+    },
     remainingExternalHosts: [...externalHosts],
     escapedPaths,
     ignoreHosts,

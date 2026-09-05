@@ -225,6 +225,26 @@ def test_a_page_link_to_itself_is_brought_home_too() -> None:
         assert 'href="../about-us/"' in html
 
 
+def test_navigation_to_the_stale_host_is_brought_home() -> None:
+    """The defect the whole migration turned on, end to end for the first time.
+
+    The fixture's menu links to `https://parked.example/` — the host the CMS
+    names in `home` and does not serve. 562 of 589 real pages carried exactly
+    this, and every menu click left the site.
+
+    Worth recording how this case became real: the fixture originally wrote the
+    href WITHOUT a scheme, so it was a relative path and never resolved off-site
+    at all. The test read as coverage of stale-host rewriting and was covering
+    nothing. Caught in review on #1235.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        out = pathlib.Path(td) / "site"
+        run_capture(out)
+        html = (out / "about-us" / "index.html").read_text(encoding="utf-8")
+        assert "parked.example" not in html, "a link to the stale host survived the rewrite"
+        assert 'href="../"' in html, "the stale-host root link should resolve to the clone's root"
+
+
 def _tests() -> list:
     return [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 

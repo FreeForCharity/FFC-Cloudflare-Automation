@@ -116,7 +116,7 @@ function html(entry) {
 </head><body>
 <div id="main-content">
 <div class="et_pb_menu"><div class="et_pb_menu__menu"><nav class="et-menu-nav"><ul id="menu-main" class="et-menu nav">
-<li class="menu-item"><a href="${STALE}/">Home</a></li>
+<li class="menu-item"><a href="https://${STALE}/">Home</a></li>
 <li class="menu-item"><a href="${ORIGIN}/about-us/">About Us</a></li>
 <li class="menu-item"><a href="/contact/">Contact</a></li>
 </ul></nav></div><div class="et_mobile_nav_menu"><div class="mobile_nav closed"><span class="mobile_menu_bar"></span></div></div></div>

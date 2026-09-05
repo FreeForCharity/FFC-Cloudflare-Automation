@@ -29,3 +29,8 @@ data/dependabot-affected-repos.json
 # would guarantee the copy fails CI in the repo that receives it.
 /assets/clone-sitemap.ts
 /assets/clone-sitemap.test.ts
+/assets/clone-routes-sitemap.ts
+/assets/clone-routes-sitemap.test.ts
+/assets/clone-content-lib.ts
+/assets/clone-enhance.tsx
+/assets/ffc-footer.tsx

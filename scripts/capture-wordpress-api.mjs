@@ -3663,9 +3663,11 @@ async function capture() {
     process.exit(2);
   }
   mkdirSync(assetsRoot, { recursive: true });
-  writeFileSync(join(assetsRoot, CLONE_RUNTIME_NAME), readFileSync(runtimeSrc), {
-    encoding: null,
-  });
+  // No `encoding` option: `readFileSync` already returns a Buffer, and
+  // `writeFileSync` writes a Buffer verbatim. (`{ encoding: null }` is also
+  // valid and does not throw — measured on Node 20 in a live run and on 22
+  // here — but it says nothing the Buffer does not already say.)
+  writeFileSync(join(assetsRoot, CLONE_RUNTIME_NAME), readFileSync(runtimeSrc));
 
   const writtenPages = new Set(); // localPath
   const strandedNav = new Map(); // host -> { pages, links }

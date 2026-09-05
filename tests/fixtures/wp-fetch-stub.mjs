@@ -114,7 +114,7 @@ function html(entry) {
 <script src="${ORIGIN}/wp-includes/js/jquery/jquery.min.js"></script>
 <script>var monsterinsights_frontend={"js_events_tracking":"true"};</script>
 </head><body>
-<div id="main-content">
+<div id="main-content" data-role="content">
 <div class="et_pb_menu"><div class="et_pb_menu__menu"><nav class="et-menu-nav"><ul id="menu-main" class="et-menu nav">
 <li class="menu-item"><a href="https://${STALE}/">Home</a></li>
 <li class="menu-item"><a href="${ORIGIN}/about-us/">About Us</a></li>

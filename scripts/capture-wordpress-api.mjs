@@ -1101,7 +1101,13 @@ export function normalizeAccessibility(html) {
     return tag.replace(/\bcontent\s*=\s*["'][^"']*["']/i, `content="${kept.join(', ')}"`);
   });
   out = out.replace(/<div\b([^>]*\bid\s*=\s*["']main-content["'][^>]*)>/i, (tag, attrs) => {
-    if (/\brole\s*=/i.test(attrs)) return tag;
+    // `\brole` is not enough: `-` is a non-word character, so `\b` sits inside
+    // `data-role` and the test matches it. A theme that puts `data-role` on the
+    // main wrapper would silently lose its landmark — the check would report
+    // "already has a role" about an attribute that is not one. Anchored to the
+    // start of the attribute list or a preceding space instead. Caught in
+    // review on #1239.
+    if (/(?:^|\s)role\s*=/i.test(attrs)) return tag;
     fixed.push('main-landmark');
     return `<div${attrs} role="main">`;
   });
@@ -2181,6 +2187,18 @@ function selfTest() {
   eq(
     'an existing role is not overwritten',
     normalizeAccessibility('<div id="main-content" role="region">a</div>').fixed,
+    [],
+  );
+  // `data-role` is not a role. `\b` sits inside it, so the naive check reported
+  // "already has a role" and dropped the landmark.
+  eq(
+    'a data-role attribute does not masquerade as a role',
+    normalizeAccessibility('<div id="main-content" data-role="banner">a</div>').fixed,
+    ['main-landmark'],
+  );
+  eq(
+    'a role attribute at the very start of the attribute list still counts',
+    normalizeAccessibility('<div role="region" id="main-content">a</div>').fixed,
     [],
   );
   eq(

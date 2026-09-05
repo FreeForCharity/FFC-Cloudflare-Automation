@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -204,9 +205,25 @@ def test_the_cms_accessibility_defects_are_corrected() -> None:
         out = pathlib.Path(td) / "site"
         run_capture(out)
         html = (out / "about-us" / "index.html").read_text(encoding="utf-8")
-        assert "user-scalable" not in html, "pinch-zoom must not stay disabled"
-        assert "maximum-scale" not in html, "a zoom cap under 5x is a restriction"
-        assert "width=device-width" in html, "the useful half of the viewport must survive"
+
+        # Assert the CONTRACT, not something stronger than it. Banning the
+        # directives outright would fail a page that legitimately carries
+        # `user-scalable=yes` or a generous cap — both of which the pass
+        # deliberately keeps, because removing them would be its own defect.
+        # Raised in review on #1239: as first written this passed only because
+        # the fixture happens to use the restrictive form.
+        tag = re.search(r"<meta[^>]*name=[\"']viewport[\"'][^>]*>", html)
+        assert tag, "the viewport meta should still be present"
+        content = re.search(r"content=[\"']([^\"']*)[\"']", tag.group(0))
+        assert content, tag.group(0)
+        parts = [p.strip() for p in content.group(1).split(",")]
+
+        for p in parts:
+            assert not re.fullmatch(r"user-scalable\s*=\s*(no|0)", p, re.I), p
+            cap = re.fullmatch(r"maximum-scale\s*=\s*([\d.]+)", p, re.I)
+            if cap:
+                assert float(cap.group(1)) >= 5, f"a cap under 5x is a restriction: {p}"
+        assert "width=device-width" in parts, parts
         assert 'role="main"' in html, "a screen reader needs a skip-to-content target"
 
 

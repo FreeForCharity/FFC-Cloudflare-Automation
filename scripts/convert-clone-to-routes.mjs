@@ -73,6 +73,9 @@ import {
   titleIframes,
   tokenizeAssetPaths,
   tokenizePageLinks,
+  localizeRootAssetRefs,
+  unlinkDeadPageLinks,
+  dropMissingStylesheets,
   routeSource,
 } from './clone-to-routes-lib.mjs';
 
@@ -185,6 +188,8 @@ function main() {
     process.exit(1);
   }
 
+  const resolveCapturedAsset = makeAssetResolver(publicDir, assetsDir);
+
   const { assigned, collisions, duplicates } = assignSlugs(htmlFiles);
   // Link rewriting is keyed on the path the capture actually wrote, because
   // that is what the markup references; the sanitized slug is where the route
@@ -196,9 +201,20 @@ function main() {
     rawToSlug.set(a.raw, a.slug);
     for (const alias of a.aliases) rawToSlug.set(alias, a.slug);
   }
+  const routeSlugs = new Set(assigned.map((a) => a.slug));
 
   const frameHosts = new Set();
+  const deadTargets = new Map();
   const shape = {};
+  // A target is live if it is a captured page (by the path the markup names or
+  // by the slug it became) or a file that ships in public/.
+  const shippedFiles = new Set(files);
+  const isLiveTarget = (target) =>
+    rawToSlug.has(target) ||
+    routeSlugs.has(target) ||
+    shippedFiles.has(target) ||
+    shippedFiles.has(`${target}/index.html`);
+
   const tally = {
     pages: 0,
     h1Fixed: 0,
@@ -214,7 +230,10 @@ function main() {
     consentUiBytes: 0,
     headDropped: 0,
     assetRefs: 0,
+    assetRefsRelinked: 0,
+    deadLinksUnlinked: 0,
     inlineStyles: 0,
+    missingSheetsDropped: 0,
     pageRefs: 0,
   };
 
@@ -270,17 +289,42 @@ function main() {
     const linksTok = tokenizePageLinks(out, rawToSlug);
     out = linksTok.html;
     tally.pageRefs += linksTok.rewritten;
+    // A `wp-content/…` reference the capture downloaded but never rewrote —
+    // WordPress links an upload with a plain <a href>, which is neither a page
+    // nor an asset the capture's rewriter sees.
+    const relinked = localizeRootAssetRefs(out, resolveCapturedAsset);
+    out = relinked.html;
+    tally.assetRefsRelinked += relinked.rewritten;
+    // A relative link left after tokenization points at a page this migration
+    // does not have — a WordPress author archive, archive pagination.
+    //
+    // The predicate is a real lookup, NOT "anything still relative is dead".
+    // That shortcut was written first and was wrong: links carrying a fragment
+    // or a query were not tokenized at the time, so 351 links to live pages
+    // read as dead and were unlinked. The tokenizer now carries those across,
+    // and this asks rather than assumes — the two together, because either
+    // alone still silently breaks working links.
+    const deadLinks = unlinkDeadPageLinks(out, isLiveTarget);
+    out = deadLinks.html;
+    tally.deadLinksUnlinked += deadLinks.unlinked;
+    for (const [target, n] of deadLinks.dead) {
+      deadTargets.set(target, (deadTargets.get(target) ?? 0) + n);
+    }
 
     // 5. The styles the fragment cannot render without.
     const fh = fragmentHead(head);
     tally.headDropped += fh.dropped;
     const fhTok = tokenizeAssetPaths(fh.html, assetsDir);
     tally.assetRefs += fhTok.rewritten;
+    // Divi's per-taxonomy stylesheet is generated at request time, so for the
+    // archive pages it was never fetched for, the link only produces a 404.
+    const sheets = dropMissingStylesheets(fhTok.html, (t) => resolveCapturedAsset(t) !== null);
+    tally.missingSheetsDropped += sheets.dropped;
     // Divi splits its presentation between linked stylesheets and a dozen
     // inline <style> blocks, and both halves have to be treated the same way.
     // Scoping only the files would leave the critical inline CSS — which is the
     // half that renders before anything else — still global.
-    const fragmentCss = transformInlineStyles(fhTok.html);
+    const fragmentCss = transformInlineStyles(sheets.html);
     tally.inlineStyles += fragmentCss.blocks;
     out = transformInlineStyles(out).html;
 
@@ -389,8 +433,14 @@ function main() {
   );
   console.log(`head elements dropped (owned by Next)  ${tally.headDropped}`);
   console.log(`inline <style> blocks scoped  ${tally.inlineStyles}`);
+  console.log(`stylesheet links dropped (file never captured)  ${tally.missingSheetsDropped}`);
   console.log(`asset refs tokenized  ${tally.assetRefs}`);
   console.log(`page links tokenized  ${tally.pageRefs}`);
+  console.log(`references repointed at the captured file  ${tally.assetRefsRelinked}`);
+  console.log(`links to pages the capture does not have, unlinked  ${tally.deadLinksUnlinked}`);
+  for (const [t, n] of [...deadTargets].sort((a, b) => b[1] - a[1]).slice(0, 8)) {
+    console.log(`  ${String(n).padStart(5)}  ${t}`);
+  }
   console.log(
     `stylesheets rewritten ${cssFiles}  (heading twins ${headingRules}, scoped ${bodyRules})`,
   );
@@ -550,6 +600,47 @@ function retargetLighthouseUrls(repo, extraSlugs) {
   config.ci.collect.url = slashed;
   write(path, `${JSON.stringify(config, null, 2)}\n`);
   return { changed: true, urls: slashed };
+}
+
+/**
+ * The localized path for a source-relative asset reference, or null.
+ *
+ * The capture writes assets under `<assetsDir>/<host>/<original path>`, and a
+ * site can reference more than one host, so the lookup tries each host
+ * directory rather than assuming the site's own. Returns the `%%BASE%%` token
+ * form the fragments use, so a hit is usable verbatim.
+ */
+function makeAssetResolver(publicDir, assetsDirName) {
+  let hosts;
+  try {
+    hosts = readdirSync(join(publicDir, assetsDirName), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+  } catch {
+    hosts = [];
+  }
+  return (relPath) => {
+    // A traversal segment would let a reference reach outside the assets tree.
+    if (relPath.split('/').includes('..')) return null;
+    const decoded = safeDecode(relPath);
+    for (const host of hosts) {
+      for (const candidate of new Set([relPath, decoded])) {
+        if (existsSync(join(publicDir, assetsDirName, host, candidate))) {
+          return `%%BASE%%/${assetsDirName}/${host}/${candidate}`;
+        }
+      }
+    }
+    return null;
+  };
+}
+
+/** decodeURIComponent that returns the input rather than throwing on bad input. */
+function safeDecode(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function readJsonIfPresent(path) {

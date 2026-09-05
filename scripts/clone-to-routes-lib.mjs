@@ -898,17 +898,26 @@ export function tokenizePageLinks(html, routes) {
   // slugs (where the two happen to coincide) keeps the simple case simple.
   const known = routes instanceof Map ? routes : new Map([...routes].map((s) => [s, s]));
   let rewritten = 0;
-  const out = html.replace(/\bhref="((?:\.\.\/)+|\.\/)([^"#?]*?)"/g, (whole, prefix, rest) => {
-    const target = rest.replace(/\/+$/, '');
-    if (target === '') {
+  // The query and fragment are captured and carried across rather than
+  // excluded from the match. Excluding them looks harmless and is not: this
+  // capture links to its own posts as `../a-new-heart/#comments` and
+  // `../gossip-about-god/?replytocom=1`, so a pattern that stops at `#` or `?`
+  // leaves 351 links to LIVE pages unrewritten — which then read as links to
+  // pages the capture does not have, and were very nearly unlinked as dead.
+  const out = html.replace(
+    /\bhref="((?:\.\.\/)+|\.\/)([^"#?]*?)([?#][^"]*)?"/g,
+    (whole, prefix, rest, suffix = '') => {
+      const target = rest.replace(/\/+$/, '');
+      if (target === '') {
+        rewritten += 1;
+        return `href="%%BASE%%/${suffix}"`;
+      }
+      if (!known.has(target)) return whole;
+      const slug = known.get(target);
       rewritten += 1;
-      return 'href="%%BASE%%/"';
-    }
-    if (!known.has(target)) return whole;
-    const slug = known.get(target);
-    rewritten += 1;
-    return `href="%%BASE%%/${slug}/"`;
-  });
+      return `href="%%BASE%%/${slug}/${suffix}"`;
+    },
+  );
   return { html: out, rewritten };
 }
 
@@ -925,6 +934,111 @@ export function tsString(value) {
   const json = JSON.stringify(String(value ?? ''));
   const inner = json.slice(1, -1).replace(/\\"/g, '"').replace(/'/g, "\\'");
   return `'${inner}'`;
+}
+
+/**
+ * Point a reference at the copy of the file the capture actually downloaded.
+ *
+ * WordPress links its uploads with an ordinary `<a href>` — a tract PDF, a
+ * flyer — and a PDF is not a page, so the capture's page-link pass has no
+ * inventory entry to rewrite it against, while its asset pass only rewrites
+ * references it fetched THROUGH. The file is downloaded (something else on the
+ * site references it as an asset) and this one reference is left pointing at
+ * `../wp-content/uploads/…`, which resolves to a path the static site does not
+ * serve. Both of this capture's downloadable tracts were dead this way.
+ *
+ * `resolve` is supplied by the caller because only it can see the filesystem:
+ * it takes the source-relative path (`wp-content/uploads/x.pdf`) and returns
+ * the localized path if that file was captured, or null. A reference whose file
+ * was never captured is LEFT ALONE rather than pointed somewhere plausible —
+ * `unlinkDeadPageLinks` deals with it, and inventing a target would turn a
+ * visible 404 into a silently wrong link.
+ */
+export function localizeRootAssetRefs(html, resolve) {
+  let rewritten = 0;
+  let unresolved = 0;
+  const out = html.replace(
+    /(["'(])((?:\.\.\/)+|\.\/)(wp-content\/[^"')\s]+)/g,
+    (whole, open, prefix, rest) => {
+      const target = resolve(rest);
+      if (!target) {
+        unresolved += 1;
+        return whole;
+      }
+      rewritten += 1;
+      return `${open}${target}`;
+    },
+  );
+  return { html: out, rewritten, unresolved };
+}
+
+/**
+ * Turn a link to a page this migration does not have into plain text.
+ *
+ * WordPress fills a theme with navigation to pages that only a database can
+ * produce: an author archive (`/author/admin/`, on the byline of all 817 posts
+ * here) and archive pagination (`/tag/<x>/page/2/`). Neither exists in a static
+ * capture, so every one of them is a 404 for a real visitor and a dead end for
+ * a crawler ranking the site.
+ *
+ * The anchor is unwrapped rather than deleted: the byline still reads
+ * "Viewpoint Ministries", the pager still shows its numbers, and not one word
+ * of the charity's own content is removed — only the promise that clicking it
+ * goes somewhere. Deleting the element would be the tidier-looking change and
+ * would silently drop content this script has no business editing.
+ *
+ * `isLive` is the caller's: a target is live if it is a captured page or a file
+ * that shipped. Only in-clone relative hrefs are considered — an external link,
+ * an anchor, a `mailto:` and an already-rewritten `%%BASE%%` link are all left
+ * exactly as they are.
+ */
+export function unlinkDeadPageLinks(html, isLive) {
+  let unlinked = 0;
+  const dead = new Map();
+  const out = html.replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi, (whole, attrs, inner) => {
+    const href = /\bhref\s*=\s*["']([^"']*)["']/i.exec(attrs)?.[1];
+    if (!href || !/^(?:\.\.\/|\.\/)/.test(href)) return whole;
+    const target = href
+      .split(/[?#]/)[0]
+      .replace(/\/+$/, '')
+      .replace(/^(?:\.\.\/|\.\/)+/, '');
+    if (isLive(target)) return whole;
+    unlinked += 1;
+    dead.set(target, (dead.get(target) ?? 0) + 1);
+    return inner;
+  });
+  return { html: out, unlinked, dead };
+}
+
+/**
+ * Drop a stylesheet link whose file did not ship.
+ *
+ * Divi builds a per-taxonomy stylesheet at request time
+ * (`wp-content/et-cache/taxonomy/post_tag/188/…`), and for ten of this
+ * capture's archive pages that file was never fetched — it exists only when
+ * WordPress generates it. The link survives into the fragment and every visit
+ * to those pages makes a request that 404s.
+ *
+ * Removing it is safe in a way that removing markup usually is not: a
+ * stylesheet that cannot be fetched has never applied a rule, so the page looks
+ * identical with it gone. What changes is a failed request and a console error.
+ *
+ * Only relative in-clone hrefs are considered — a `%%BASE%%` link has already
+ * been resolved against a file that exists, and an external stylesheet is not
+ * this function's business.
+ */
+export function dropMissingStylesheets(html, isShipped) {
+  let dropped = 0;
+  const out = html.replace(/<link\b([^>]*?)\/?>\s*/gi, (whole, attrs) => {
+    if (!/\brel\s*=\s*["']stylesheet["']/i.test(attrs)) return whole;
+    const href = /\bhref\s*=\s*["']([^"']*)["']/i.exec(attrs)?.[1];
+    if (!href || !/^(?:\.\.\/|\.\/)/.test(href)) return whole;
+    const target = href.split(/[?#]/)[0].replace(/^(?:\.\.\/|\.\/)+/, '');
+    if (isShipped(target)) return whole;
+    dropped += 1;
+    return '';
+  });
+  return { html: out, dropped };
 }
 
 /** The `page.tsx` for one route. */
@@ -1369,6 +1483,20 @@ function selfTest() {
     0,
   );
 
+  // 351 links in this capture carry one; a pattern that stops at `#` or `?`
+  // leaves them unrewritten, and they then read as links to pages that do not
+  // exist.
+  eq(
+    'a fragment is carried across rather than stopping the match',
+    tokenizePageLinks('<a href="../a-new-heart/#comments">x</a>', ['a-new-heart']).html,
+    '<a href="%%BASE%%/a-new-heart/#comments">x</a>',
+  );
+  eq(
+    'a query string is carried across too',
+    tokenizePageLinks('<a href="../gossip/?replytocom=1">x</a>', ['gossip']).html,
+    '<a href="%%BASE%%/gossip/?replytocom=1">x</a>',
+  );
+
   eq(
     'a link is rewritten to the slug its target actually became',
     tokenizePageLinks(
@@ -1520,6 +1648,95 @@ function selfTest() {
     tsString('a\nb').includes('\n'),
     false,
   );
+
+  // Both of this capture's downloadable tracts were dead: WordPress links an
+  // upload with a plain <a href>, which is neither a page nor an asset the
+  // capture rewrote, while the file itself was downloaded via another
+  // reference.
+  const relinked = localizeRootAssetRefs(
+    '<a href="../wp-content/uploads/2022/07/Tract.pdf">Read</a>' +
+      '<a href="../wp-content/et-cache/taxonomy/category/1/x.css">Gone</a>',
+    (rel) => (rel.endsWith('Tract.pdf') ? `%%BASE%%/_ffc-assets/site.org/${rel}` : null),
+  );
+  eq(
+    'a reference is pointed at the copy that was captured',
+    relinked.html.includes(
+      'href="%%BASE%%/_ffc-assets/site.org/wp-content/uploads/2022/07/Tract.pdf"',
+    ),
+    true,
+  );
+  // Inventing a target turns a visible 404 into a silently wrong link.
+  eq(
+    'a reference whose file was never captured is left alone',
+    relinked.html.includes('href="../wp-content/et-cache/taxonomy/category/1/x.css"'),
+    true,
+  );
+  eq('both outcomes are counted', [relinked.rewritten, relinked.unresolved], [1, 1]);
+  eq(
+    'a url() in a style attribute is rewritten too, not only an href',
+    localizeRootAssetRefs(
+      '<span style="background:url(./wp-content/a.jpg)">',
+      (r) => `%%BASE%%/${r}`,
+    ).html,
+    '<span style="background:url(%%BASE%%/wp-content/a.jpg)">',
+  );
+
+  // 817 of this capture's posts carry a byline linking to /author/admin/, a
+  // WordPress archive only a database can produce.
+  const live = (t) => t === 'about-us';
+  const unlinked = unlinkDeadPageLinks(
+    '<a href="../../author/admin/">Viewpoint Ministries</a>' +
+      '<a href="../about-us/">About</a>' +
+      '<a href="https://example.org/x">Out</a>' +
+      '<a href="#top">Top</a>' +
+      '<a href="%%BASE%%/podcast/">Podcast</a>',
+    live,
+  );
+  // The byline still reads the same; only the promise that it goes somewhere
+  // is gone. Deleting the element would drop the charity's own words.
+  eq(
+    'a link to a page the capture does not have becomes its own text',
+    unlinked.html.includes('Viewpoint Ministries</a>'),
+    false,
+  );
+  eq('and that text survives', unlinked.html.includes('Viewpoint Ministries'), true);
+  eq('a link to a captured page is untouched', unlinked.html.includes('href="../about-us/"'), true);
+  eq('an external link is untouched', unlinked.html.includes('https://example.org/x'), true);
+  eq('an in-page anchor is untouched', unlinked.html.includes('href="#top"'), true);
+  eq(
+    'an already-rewritten link is untouched',
+    unlinked.html.includes('href="%%BASE%%/podcast/"'),
+    true,
+  );
+  eq('exactly one was unlinked', unlinked.unlinked, 1);
+  eq('and the dead target is reported by name', [...unlinked.dead.keys()], ['author/admin']);
+  // A query string is not part of the target: /resources/page/2/?et_blog is
+  // the same dead page with or without it.
+  eq(
+    'a query string does not hide a dead target',
+    unlinkDeadPageLinks('<a href="../resources/page/2/?et_blog">2</a>', live).unlinked,
+    1,
+  );
+
+  // Divi builds a per-taxonomy stylesheet at request time; for ten of this
+  // capture's archive pages that file was never fetched, so every visit made a
+  // request that 404s. A stylesheet that cannot load has never applied a rule.
+  const sheets = dropMissingStylesheets(
+    '<link rel="stylesheet" href="../../wp-content/et-cache/taxonomy/post_tag/188/x.css">' +
+      '<link rel="stylesheet" href="../shipped.css">' +
+      '<link rel="stylesheet" href="%%BASE%%/_ffc-assets/a.css">' +
+      '<link rel="stylesheet" href="https://fonts.example/x.css">' +
+      '<link rel="preload" as="font" href="../missing.woff2">',
+    (t) => t === 'shipped.css',
+  );
+  eq('a stylesheet that did not ship is dropped', sheets.html.includes('et-cache'), false);
+  eq('one that did is kept', sheets.html.includes('href="../shipped.css"'), true);
+  eq('an already-resolved link is kept', sheets.html.includes('%%BASE%%/_ffc-assets/a.css'), true);
+  eq('an external stylesheet is kept', sheets.html.includes('fonts.example'), true);
+  // Narrow on purpose: a font preload is not a stylesheet, and dropping one
+  // would be a different decision made silently.
+  eq('a non-stylesheet link is kept', sheets.html.includes('missing.woff2'), true);
+  eq('exactly one was dropped', sheets.dropped, 1);
 
   // --- emitted route --------------------------------------------------
   const src = routeSource({ slug: 'about-us', title: 'About Us', description: 'Who we are.' });

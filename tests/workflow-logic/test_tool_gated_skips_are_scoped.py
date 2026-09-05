@@ -188,15 +188,67 @@ def _is_dunder_main(node: ast.stmt) -> bool:
     return "__name__" in names and "__main__" in consts
 
 
-def _references_which(node: ast.AST) -> bool:
-    """True if the subtree calls `shutil.which` (or a bare imported `which`)."""
+class WhichBindings:
+    """The local names that resolve to `shutil` / `shutil.which` in one module.
+
+    Matching `.which(...)` on the ATTRIBUTE NAME alone -- which this file did
+    until #1205 -- makes the detector fire on any unrelated API that happens to
+    expose a `which` method (`resolver.which()`, `db.which(...)`). Matching only
+    the literal text `shutil.which` instead would be worse: it drops
+    `import shutil as sh`, and a false negative here is the exact failure this
+    module exists to prevent -- a whole-module gate that goes unflagged and
+    masks every static case behind it.
+
+    So resolve the binding rather than the spelling, the same transitive shape
+    `toolless_cases.spawns()` already uses for subprocess calls.
+    """
+
+    def __init__(self, modules: frozenset[str], direct: frozenset[str]):
+        self.modules = modules  # names bound to the `shutil` MODULE
+        self.direct = direct  # names bound to `shutil.which` ITSELF
+
+
+def which_bindings(tree: ast.AST) -> WhichBindings:
+    """Resolve `shutil` / `shutil.which` to the local names this module gave them.
+
+    Walked at any depth, not just module top level: an `import shutil` inside
+    the helper that carries the gate binds the name just as effectively, and
+    missing it would be a false negative.
+    """
+    modules: set[str] = set()
+    direct: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "shutil":
+                    modules.add(alias.asname or "shutil")
+                elif alias.name.startswith("shutil.") and alias.asname is None:
+                    # `import shutil.x` binds the top package name too.
+                    modules.add("shutil")
+        elif isinstance(node, ast.ImportFrom):
+            if node.module != "shutil" or node.level:
+                continue
+            for alias in node.names:
+                if alias.name == "which":
+                    direct.add(alias.asname or "which")
+    return WhichBindings(frozenset(modules), frozenset(direct))
+
+
+def _references_which(node: ast.AST, bindings: WhichBindings) -> bool:
+    """True if the subtree calls `shutil.which` under any of its local names.
+
+    `bindings` comes from `which_bindings(tree)` for the module the subtree
+    belongs to. A `which` that the module never imported from `shutil` is
+    somebody else's method, not this gate.
+    """
     for child in ast.walk(node):
         if not isinstance(child, ast.Call):
             continue
         func = child.func
         if isinstance(func, ast.Attribute) and func.attr == "which":
-            return True
-        if isinstance(func, ast.Name) and func.id == "which":
+            if isinstance(func.value, ast.Name) and func.value.id in bindings.modules:
+                return True
+        elif isinstance(func, ast.Name) and func.id in bindings.direct:
             return True
     return False
 
@@ -251,6 +303,7 @@ def whole_module_tool_gate(tree: ast.Module) -> ast.If | None:
         for n in tree.body
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
+    bindings = which_bindings(tree)
 
     def gate_in(nodes: list[ast.stmt], seen: frozenset[str]) -> ast.If | None:
         """A tool-conditioned exit-zero anywhere in these statements."""
@@ -262,13 +315,13 @@ def whole_module_tool_gate(tree: ast.Module) -> ast.If | None:
         for stmt in nodes:
             for node in ast.walk(stmt):
                 if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-                    if not _references_which(node.value):
+                    if not _references_which(node.value, bindings):
                         continue
                     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                     for target in targets:
                         if isinstance(target, ast.Name):
                             tool_names.add(target.id)
-                elif isinstance(node, ast.AugAssign) and _references_which(node.value):
+                elif isinstance(node, ast.AugAssign) and _references_which(node.value, bindings):
                     if isinstance(node.target, ast.Name):
                         tool_names.add(node.target.id)
             # 103's comprehension written as an explicit loop:
@@ -277,7 +330,7 @@ def whole_module_tool_gate(tree: ast.Module) -> ast.If | None:
             # cannot see it -- it is MUTATED inside a block that consults
             # `which`. Which of the two an author types is a coin flip, and
             # the gate that follows is identical.
-            if _references_which(stmt):
+            if _references_which(stmt, bindings):
                 for node in ast.walk(stmt):
                     if not isinstance(node, ast.Call):
                         continue
@@ -292,7 +345,7 @@ def whole_module_tool_gate(tree: ast.Module) -> ast.If | None:
         for stmt in nodes:
             for node in ast.walk(stmt):
                 if isinstance(node, ast.If):
-                    mentions_tool = _references_which(node.test) or any(
+                    mentions_tool = _references_which(node.test, bindings) or any(
                         isinstance(n, ast.Name) and n.id in tool_names
                         for n in ast.walk(node.test)
                     )
@@ -777,6 +830,141 @@ def test_the_detector_ignores_a_per_case_gate():
 
 def test_the_detector_ignores_a_module_with_no_gate():
     assert not _detect(_GOOD_NO_GATE)
+
+
+# --------------------------------------------------------------------------
+# #1205: `which` is resolved from the module's imports, not matched by name
+#
+# The six rows below are the probe from #1205, each as its own case. Three were
+# false positives before the binding resolution landed -- `_references_which`
+# returned True for ANY attribute call named `which`. Row 3 is why the obvious
+# narrowing (match the literal text `shutil.which`) is the wrong fix: it would
+# trade three theoretical false positives for one real false NEGATIVE, and a
+# false negative here is the failure this whole module exists to prevent.
+#
+# These probe the helper directly rather than through `_detect`, because the
+# helper is where the resolution lives and an end-to-end fixture cannot place
+# `self.which(...)` anywhere the detector would look without contorting the
+# fixture into something no author would ever write. The two end-to-end cases
+# that follow cover the wiring.
+# --------------------------------------------------------------------------
+
+
+def _which_verdict(source: str) -> bool:
+    """`_references_which` on the last statement of `source`, with its imports resolved."""
+    tree = ast.parse(source)
+    return _references_which(tree.body[-1], which_bindings(tree))
+
+
+def test_which_resolves_a_plain_shutil_import():
+    assert _which_verdict("import shutil\nshutil.which('pwsh')\n"), (
+        "`import shutil` + `shutil.which(...)` -- the form eight modules on "
+        "main use -- stopped being recognised"
+    )
+
+
+def test_which_resolves_a_bare_from_import():
+    assert _which_verdict("from shutil import which\nwhich('pwsh')\n"), (
+        "`from shutil import which` + a bare `which(...)` call stopped being "
+        "recognised"
+    )
+
+
+def test_which_resolves_an_aliased_module_import():
+    assert _which_verdict("import shutil as sh\nsh.which('pwsh')\n"), (
+        "`import shutil as sh` + `sh.which(...)` is an ordinary spelling and "
+        "must still be recognised. This is the row the narrow fix suggested on "
+        "#1205 would have broken -- a false negative here means a whole-module "
+        "gate goes unflagged and masks every static case behind it"
+    )
+
+
+def test_which_resolves_an_aliased_from_import():
+    assert _which_verdict("from shutil import which as w\nw('pwsh')\n"), (
+        "`from shutil import which as w` binds the function under another "
+        "name; the call is still shutil.which"
+    )
+
+
+def test_which_does_not_match_a_method_on_self():
+    assert not _which_verdict("import sys\nself.which('x')\n"), (
+        "`self.which(...)` is somebody else's method. Matching on the "
+        "attribute NAME alone made every such call look like a tool gate"
+    )
+
+
+def test_which_does_not_match_a_method_on_an_unrelated_object():
+    assert not _which_verdict("import sys\ndb.which('x')\n"), (
+        "`db.which(...)` names an unrelated API and was a false positive"
+    )
+
+
+def test_which_does_not_match_a_zero_argument_method_call():
+    assert not _which_verdict("import sys\nresolver.which()\n"), (
+        "`resolver.which()` takes no tool name and cannot be a shutil.which "
+        "gate; it was a false positive"
+    )
+
+
+def test_which_does_not_match_when_shutil_was_never_imported():
+    assert not _which_verdict("import sys\nwhich('pwsh')\n"), (
+        "a bare `which(...)` in a module that never imported it from shutil "
+        "would NameError at runtime; it is not this gate"
+    )
+
+
+def test_the_detector_still_fires_through_an_aliased_import():
+    assert _detect(
+        "import shutil as sh\n"
+        "import sys\n"
+        "if sh.which('pwsh') is None:\n"
+        "    print('  SKIP all')\n"
+        "    sys.exit(0)\n"
+        "def test_static():\n"
+        "    assert True\n"
+    ), (
+        "end to end: a whole-module gate written with an aliased shutil import "
+        "must still be flagged. The unit rows above can pass while the "
+        "bindings are never threaded into `whole_module_tool_gate`"
+    )
+
+
+def test_the_detector_still_fires_on_a_helper_local_import():
+    assert _detect(
+        "import sys\n"
+        "def _require_tools():\n"
+        "    import shutil as sh\n"
+        "    if sh.which('pwsh') is None:\n"
+        "        print('  SKIP all')\n"
+        "        sys.exit(0)\n"
+        "def test_static():\n"
+        "    assert True\n"
+        "if __name__ == '__main__':\n"
+        "    _require_tools()\n"
+    ), (
+        "`which_bindings` walks imports at ANY depth, and this is the case that "
+        "holds it there: the only import at module top level is `sys`, so a "
+        "collector narrowed to `tree.body` sees no shutil binding, and the gate "
+        "in `_require_tools` -- which skips every case in the module -- goes "
+        "unflagged. That is a false NEGATIVE, the direction this module exists "
+        "to prevent. Reported by Copilot on #1232 as an untested claim in the "
+        "docstring; the behaviour was already correct, the coverage was not"
+    )
+
+
+def test_the_detector_does_not_fire_on_an_unrelated_which_method():
+    assert not _detect(
+        "import sys\n"
+        "from mydb import db\n"
+        "if db.which('x') is None:\n"
+        "    sys.exit(0)\n"
+        "def test_static():\n"
+        "    assert True\n"
+    ), (
+        "end to end: an unrelated `.which()` must not be read as a tool gate. "
+        "Before #1205 this module was flagged, and the failure surfaces as a "
+        "confusing red on a module that has no gate at all"
+    )
 
 
 def test_the_detector_ignores_a_gate_inside_a_string_literal():

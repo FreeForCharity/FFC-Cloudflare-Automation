@@ -1055,6 +1055,60 @@ export function neutralizeWaypointHidingInHtml(html) {
 }
 
 /**
+ * Undo two accessibility defects the CMS emits, neither of which is content.
+ *
+ * **Pinch-zoom.** Divi ships
+ * `<meta name="viewport" content="… maximum-scale=1.0, user-scalable=0">`,
+ * which disables zoom on every page. For a charity whose audience is largely
+ * on phones, that is not a nit — it is the difference between a readable page
+ * and an unreadable one for anyone with low vision, and iOS/Android both honour
+ * it. Lighthouse weights it 10, more than any other accessibility audit failing
+ * on this site, and it is fixed by deleting two declarations that a static
+ * export has no reason to carry.
+ *
+ * **A main landmark.** The document has none, so a screen-reader user has no
+ * "skip to content" target and must tab through the whole header on every page.
+ * `role="main"` is added to Divi's existing `#main-content` wrapper rather than
+ * retagging it to `<main>`: retagging means finding its matching `</div>`
+ * through arbitrarily nested markup, and a mis-balanced close would corrupt
+ * every page. The role satisfies the same requirement with one attribute and
+ * no possibility of that.
+ *
+ * Both are corrections to the CMS's own output, not edits to the charity's
+ * words. What is deliberately NOT touched here is anything that would mean
+ * writing content on their behalf — heading levels, link text, alt text. Those
+ * are the site's, and a migration that silently rewrites them is no longer a
+ * mirror.
+ */
+export function normalizeAccessibility(html) {
+  const fixed = [];
+  let out = html.replace(/<meta\b[^>]*\bname\s*=\s*["']viewport["'][^>]*>/gi, (tag) => {
+    const content = /\bcontent\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1];
+    if (!content) return tag;
+    const kept = content
+      .split(',')
+      .map((p) => p.trim())
+      .filter((p) => {
+        if (/^user-scalable\s*=\s*(no|0)$/i.test(p)) return false;
+        const m = /^maximum-scale\s*=\s*([\d.]+)$/i.exec(p);
+        // Lighthouse's threshold, and the WCAG one: anything under 5x is a
+        // restriction. A larger cap is the author's business.
+        if (m && Number(m[1]) < 5) return false;
+        return true;
+      });
+    if (kept.length === content.split(',').length) return tag;
+    fixed.push('viewport');
+    return tag.replace(/\bcontent\s*=\s*["'][^"']*["']/i, `content="${kept.join(', ')}"`);
+  });
+  out = out.replace(/<div\b([^>]*\bid\s*=\s*["']main-content["'][^>]*)>/i, (tag, attrs) => {
+    if (/\brole\s*=/i.test(attrs)) return tag;
+    fixed.push('main-landmark');
+    return `<div${attrs} role="main">`;
+  });
+  return { html: out, fixed };
+}
+
+/**
  * Add the clone's own runtime just before `</body>`.
  *
  * `defer` rather than `async`: it must not run before the document it wires up
@@ -1083,9 +1137,11 @@ export function deWordPress(html, { runtimeHref } = {}) {
   const scripts = stripClientScripts(sheets.html);
   const waypoints = neutralizeWaypointHidingInHtml(scripts.html);
   const links = stripWordPressHeadLinks(waypoints.html);
-  const out = runtimeHref ? injectCloneRuntime(links.html, runtimeHref) : links.html;
+  const a11y = normalizeAccessibility(links.html);
+  const out = runtimeHref ? injectCloneRuntime(a11y.html, runtimeHref) : a11y.html;
   return {
     html: out,
+    accessibilityFixes: a11y.fixed,
     stylesheetsHoisted: sheets.hoisted,
     scriptsRemoved: scripts.removedSrc.length + scripts.removedInline,
     scriptSrcRemoved: scripts.removedSrc,
@@ -2074,6 +2130,71 @@ function selfTest() {
     'hoisting runs before the strip, so the whole pass keeps the stylesheet',
     deWordPress(LATE_CSS).html.includes('href="/wp-content/et-cache/2/et-late.css"'),
     true,
+  );
+
+  // --- Accessibility defects the CMS emits, which are not the site's words --
+  // Measured with Lighthouse on the real capture: these two carry weights 10
+  // and 3, the largest accessibility failures on the page, and fixing them
+  // moved the score 79 -> 95.
+  eq(
+    'a viewport that disables pinch-zoom is relaxed',
+    normalizeAccessibility(
+      '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">',
+    ).html,
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+  );
+  eq(
+    'the useful half of the viewport survives',
+    normalizeAccessibility('<meta name="viewport" content="width=device-width, user-scalable=no">')
+      .html,
+    '<meta name="viewport" content="width=device-width">',
+  );
+  eq(
+    'user-scalable=yes is left alone — nothing to fix',
+    normalizeAccessibility('<meta name="viewport" content="width=device-width, user-scalable=yes">')
+      .fixed,
+    [],
+  );
+  // 5x is the WCAG/Lighthouse threshold; a larger cap is the author's business.
+  eq(
+    'a zoom cap of 5 or more is the author’s call and is kept',
+    normalizeAccessibility('<meta name="viewport" content="maximum-scale=6.0">').fixed,
+    [],
+  );
+  eq(
+    'a cap under 5 is a restriction and goes',
+    normalizeAccessibility('<meta name="viewport" content="maximum-scale=2">').fixed,
+    ['viewport'],
+  );
+  eq(
+    'a non-viewport meta is untouched',
+    normalizeAccessibility('<meta name="description" content="user-scalable=0">').fixed,
+    [],
+  );
+  eq(
+    'the main wrapper gains a landmark role',
+    normalizeAccessibility('<div id="main-content" class="x">a</div>').html,
+    '<div id="main-content" class="x" role="main">a</div>',
+  );
+  // Retagging to <main> would mean finding the matching </div> through
+  // arbitrarily nested markup, and a mis-balanced close corrupts every page.
+  eq(
+    'an existing role is not overwritten',
+    normalizeAccessibility('<div id="main-content" role="region">a</div>').fixed,
+    [],
+  );
+  eq(
+    'a page with no main wrapper is left alone rather than guessed at',
+    normalizeAccessibility('<div id="content">a</div>').fixed,
+    [],
+  );
+  eq(
+    'both fixes are reported by the whole pass',
+    deWordPress(
+      '<html><head><meta name="viewport" content="width=device-width, user-scalable=no">' +
+        '</head><body><div id="main-content">a</div></body></html>',
+    ).accessibilityFixes,
+    ['viewport', 'main-landmark'],
   );
 
   // --- De-WordPressing: the replacement runtime ----------------------------
@@ -3692,7 +3813,14 @@ async function capture() {
     // ~1,180 passes over every one of 590 documents.
     const linkIndex = normalizedLinkIndex(html, pageUrl, selfHost, domain);
     for (const e of entries) {
-      if (e.localPath === localPath) continue;
+      // A page's link to ITSELF is not exempt. Skipping it left the one link
+      // every page carries — the header logo, which points at the site root —
+      // absolute on the front page, so clicking the logo there left the static
+      // site for the host being decommissioned. It showed only on the front
+      // page, because everywhere else the root is a different entry and was
+      // rewritten normally, which is exactly why it survived the stranded-nav
+      // fix: 588 pages looked right. `relativePrefix` resolves the self case to
+      // `./` or `../<slug>/`, both of which stay inside the clone.
       const raws = linkIndex.get(linkKey(e.link));
       if (!raws) continue;
       const target = `${relativePrefix(localPath)}${e.localPath.replace(/index\.html$/, '')}`;

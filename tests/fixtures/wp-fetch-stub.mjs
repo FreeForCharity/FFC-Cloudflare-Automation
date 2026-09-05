@@ -108,11 +108,13 @@ function html(entry) {
 <link rel="alternate" hreflang="fr" href="${ORIGIN}/fr/">
 <link rel="modulepreload" href="${ORIGIN}/wp-includes/js/interactivity.js">
 <meta name="generator" content="WordPress 6.8.1">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
 <style>.et-waypoint:not(.et_pb_counters){opacity:0}.hero{background:url(${ORIGIN}/wp-content/uploads/bg.png)}</style>
 <script type="application/ld+json">{"@type":"Organization","name":"Fixture"}</script>
 <script src="${ORIGIN}/wp-includes/js/jquery/jquery.min.js"></script>
 <script>var monsterinsights_frontend={"js_events_tracking":"true"};</script>
 </head><body>
+<div id="main-content">
 <div class="et_pb_menu"><div class="et_pb_menu__menu"><nav class="et-menu-nav"><ul id="menu-main" class="et-menu nav">
 <li class="menu-item"><a href="${STALE}/">Home</a></li>
 <li class="menu-item"><a href="${ORIGIN}/about-us/">About Us</a></li>
@@ -125,6 +127,7 @@ function html(entry) {
 <script>(function(){var file=["${ORIGIN}\\/wp-content\\/et-cache\\/${entry.id}\\/late.css"];
 var link=document.createElement('link');link.rel='stylesheet';link.href=file;})();</script>
 <script src="${ORIGIN}/wp-content/themes/Divi/js/scripts.min.js"></script>
+</div>
 </body></html>`.replace(/\n/g, '\n') + `<!-- ${rel} -->`
   );
 }

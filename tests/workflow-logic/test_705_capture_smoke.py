@@ -190,6 +190,41 @@ def test_a_reference_the_origin_404s_is_reproduced_rather_than_gating() -> None:
         assert "gone.png" in html, "the dead reference should survive, not be scrubbed"
 
 
+def test_the_cms_accessibility_defects_are_corrected() -> None:
+    """Zoom and a main landmark. Both are the CMS's output, not the site's words.
+
+    Measured with Lighthouse on the real capture: these two carry weights 10 and
+    3, the largest accessibility failures on the page, and fixing them moved the
+    score 79 -> 95. What stays failing there is `link-name` and `heading-order`,
+    which are the charity's own markup — an `alt=""` on their logo and headings
+    that skip a level. A migration that silently rewrote those would no longer
+    be a mirror, so it does not.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        out = pathlib.Path(td) / "site"
+        run_capture(out)
+        html = (out / "about-us" / "index.html").read_text(encoding="utf-8")
+        assert "user-scalable" not in html, "pinch-zoom must not stay disabled"
+        assert "maximum-scale" not in html, "a zoom cap under 5x is a restriction"
+        assert "width=device-width" in html, "the useful half of the viewport must survive"
+        assert 'role="main"' in html, "a screen reader needs a skip-to-content target"
+
+
+def test_a_page_link_to_itself_is_brought_home_too() -> None:
+    """The header logo points at the site root, so on the FRONT page it is a self-link.
+
+    Skipping self-links left that one absolute, and only on the front page —
+    everywhere else the root is a different entry and was rewritten normally.
+    588 of 589 pages looked right, which is why it survived the stranded-nav fix.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        out = pathlib.Path(td) / "site"
+        run_capture(out)
+        html = (out / "about-us" / "index.html").read_text(encoding="utf-8")
+        assert 'href="https://fixture.test/about-us/"' not in html, html[:400]
+        assert 'href="../about-us/"' in html
+
+
 def _tests() -> list:
     return [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 

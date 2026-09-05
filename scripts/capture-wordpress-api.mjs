@@ -46,9 +46,9 @@
  *   2  invalid usage / self-test failure / crash
  */
 
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname, extname, resolve as resolvePath, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const UA = 'Mozilla/5.0 (FFC static-capture bot; +https://freeforcharity.org)';
 
@@ -540,6 +540,25 @@ export function collectPageLinks(html) {
  * paginate zero times and report an empty site as complete. Both look like
  * findings about the site rather than about the arguments.
  */
+/**
+ * How long to wait between ASSET downloads.
+ *
+ * This used to be `Math.min(delayMs, 100)` — a cap that quietly took the
+ * politeness control away from the operator for most of the crawl. Assets are
+ * the bulk of the traffic (1,838 of ~2,430 requests on this repo's first real
+ * conversion), so `--delay 750` still hammered the origin at 10 requests a
+ * second and the setting could not be used to slow anything down.
+ *
+ * Measured consequence: three full crawls of a charity's site inside an hour
+ * got the runner blocked by the site's own security plugin (REST index
+ * answering 401/403/429), which is a live-site effect caused entirely by our
+ * request rate. The delay the operator asks for is now the delay they get.
+ */
+export function assetSleepMs(delayMs) {
+  const n = Number(delayMs);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 export function parsePositiveInt(raw, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
   if (raw === undefined || raw === null || String(raw).trim() === '') return null;
   if (!/^\d+$/.test(String(raw).trim())) return null;
@@ -627,6 +646,91 @@ export function normalizeSelfHost(absUrl, selfHost, domain) {
   u.hostname = domain;
   u.port = '';
   return u.toString();
+}
+
+/**
+ * Is this URL served by the site being captured?
+ *
+ * `redirect: 'follow'` means a 200 says nothing about WHOSE page came back. A
+ * WordPress whose `home` option names a domain it does not serve answers its
+ * own root with a canonical redirect to that domain — and if something else
+ * lives there, the capture stores a stranger's page under the charity's URL
+ * with every gate green. Measured on this repo's first real conversion: the
+ * source's `/` redirected off-site and `public/index.html` shipped as a parked
+ * WordPress.com landing page while 588 other pages were correct.
+ *
+ * `www.` is folded and subdomains count, matching `declaredSelfHost`.
+ */
+export function isSiteHost(absUrl, domain) {
+  let u;
+  try {
+    u = new URL(absUrl);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  const host = u.hostname.replace(/^www\./, '');
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+/**
+ * What the scrape loop should do with one page response.
+ *
+ * Extracted so the decision is testable on its own: the loop that used to hold
+ * it inline stored anything with `status === 200`, and the one case that
+ * mattered — a 200 belonging to a different site — is invisible to every
+ * status check. Mirrors `classifyMissing` in verify-no-legacy.mjs.
+ */
+export function classifyPageResponse({ status = 0, finalUrl = '', requestUrl = '', domain = '' }) {
+  if (status !== 200) return { action: 'skip', status, reason: `HTTP ${status}` };
+  const landed = finalUrl || requestUrl;
+  if (!isSiteHost(landed, domain))
+    return {
+      action: 'skip',
+      status: -2,
+      offSite: true,
+      finalUrl: landed,
+      reason: `followed off-site to ${landed}`,
+    };
+  return { action: 'store', status: 200 };
+}
+
+/** A same-site link key: absolute, stale-host normalized, trailing slash dropped. */
+export function linkKey(absUrl) {
+  if (typeof absUrl !== 'string' || !absUrl) return null;
+  return absUrl.endsWith('/') ? absUrl.slice(0, -1) : absUrl;
+}
+
+/**
+ * This page's hrefs, indexed by the canonical URL each one resolves to.
+ *
+ * The rewrite that keeps navigation inside the clone used to compare an
+ * entry's link against the page's raw href STRINGS. Those two are written in
+ * different alphabets whenever the site declares a stale `home`: the entry
+ * list is normalized onto the serving host, while the markup still says the
+ * stale one, so `present.has(e.link)` was false for every link on the site and
+ * not one was rewritten. 562 of 589 delivered pages navigated to the dead
+ * domain, and no gate could see it — the links resolve today, and a nav href
+ * is not a subresource, so nothing fetches it at page load.
+ *
+ * Indexing by the RESOLVED url compares like with like, and folds in the two
+ * other spellings of the same destination for free: a relative href, and a
+ * root-absolute one (which would otherwise survive into a project-pages
+ * deploy, where the site is mounted under a prefix and `/about-us/` is a 404).
+ * The value is the set of raw strings to key replacements on, because those
+ * are what actually appear in the document.
+ */
+export function normalizedLinkIndex(html, pageUrl, selfHost, domain) {
+  const index = new Map();
+  for (const raw of collectPageLinks(html)) {
+    const abs = absolutize(raw, pageUrl);
+    if (!abs) continue;
+    const key = linkKey(normalizeSelfHost(abs, selfHost, domain));
+    if (!key) continue;
+    if (!index.has(key)) index.set(key, new Set());
+    index.get(key).add(raw);
+  }
+  return index;
 }
 
 export function isIgnoredHost(absUrl, ignoreHosts = []) {
@@ -751,6 +855,246 @@ export function stripEdgeInjectedTags(html) {
   return { html: out, removed };
 }
 
+/** The runtime this capture ships in place of the CMS's own script payload. */
+export const CLONE_RUNTIME_NAME = 'clone-enhance.js';
+
+/**
+ * Strip every client script the CMS shipped.
+ *
+ * A captured site is a static export, so the JavaScript a CMS enqueues is at
+ * best inert and at worst actively wrong. Measured on this migration: 1.9 MB
+ * across 37 files — jQuery, jQuery Migrate, Underscore, the Divi theme bundle,
+ * Divi Plus, Swiper, Hustle, MediaElement, a cookie-consent plugin, two
+ * analytics beacons and eight Hummingbird concatenations of the same. What it
+ * serves, counted against the DOM those 589 pages actually contain, is a
+ * hamburger menu and a fade-in.
+ *
+ * Three separate reasons to remove it rather than keep it:
+ *
+ *   - It reports to properties the charity no longer owns. The analytics
+ *     bundles beacon to the decommissioned site's Google property, and the
+ *     consent banner exists to collect permission for exactly those beacons.
+ *   - It calls endpoints a static host cannot answer: every Divi and Hustle
+ *     bundle posts to `admin-ajax.php`, which is PHP and is gone.
+ *   - Minified vendor bundles dominate any static analysis of the result. The
+ *     charity's repository inherits every finding in jQuery 3.x and a page
+ *     builder, on code nobody there can patch.
+ *
+ * `application/ld+json` is deliberately kept: it is the site's structured-data
+ * block, it is parsed as data and never executed, and dropping it would cost
+ * real search visibility for no security gain.
+ */
+export function stripClientScripts(html) {
+  const removedSrc = [];
+  let removedInline = 0;
+  const out = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>|<script\b[^>]*\/>/gi, (tag) => {
+    const type = /\btype\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.trim() ?? '';
+    if (/^application\/ld\+json$/i.test(type)) return tag;
+    const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? '';
+    if (src) removedSrc.push(src);
+    else removedInline += 1;
+    return '';
+  });
+  return { html: out, removedSrc, removedInline };
+}
+
+/**
+ * Turn a stylesheet the page injects at runtime into a real `<link>`.
+ *
+ * This must run BEFORE the scripts are stripped, and getting the order wrong is
+ * silent. Divi does not enqueue its per-page "late" stylesheet; it ships an
+ * inline script that builds a `<link>` and inserts it after the inline style
+ * block. Remove that script and the export loses the stylesheet twice over —
+ * the page no longer references it, and the capture's asset inventory, which
+ * reads URLs out of inline script bodies precisely because builders hide them
+ * there, no longer finds it to download. The result is a correct-looking page
+ * with a chunk of its styling missing and nothing in any log to say so.
+ *
+ * Hoisting is also the better artifact: a static `<link>` is discovered by the
+ * preload scanner instead of after a script runs, so the styling arrives
+ * without a flash of unstyled content and without depending on JavaScript.
+ *
+ * Recognised by the injection signature — `document.createElement('link')` —
+ * rather than by "mentions a .css", so a config blob that merely names a
+ * stylesheet does not cause one to be loaded.
+ */
+export function hoistRuntimeStylesheets(html) {
+  const present = new Set();
+  for (const m of html.matchAll(/<link\b[^>]*>/gi)) {
+    const rel = (/\brel\s*=\s*["']([^"']+)["']/i.exec(m[0])?.[1] ?? '').toLowerCase();
+    if (!rel.includes('stylesheet')) continue;
+    const href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(m[0])?.[1];
+    if (href) present.add(href);
+  }
+  const hoisted = [];
+  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+    const type = /\btype\s*=\s*["']([^"']+)["']/i.exec(m[1])?.[1]?.trim() ?? '';
+    if (/^application\/ld\+json$/i.test(type)) continue;
+    if (!/createElement\(\s*["']link["']\s*\)/.test(m[2])) continue;
+    for (const s of m[2].matchAll(/["']([^"']+\.css(?:\?[^"']*)?)["']/g)) {
+      // Builders store these as JSON, where every slash is escaped.
+      const href = s[1].replace(/\\\//g, '/');
+      // The href becomes a double-quoted attribute, so a value that could close
+      // it or open a tag is refused rather than emitted. Nothing legitimate is
+      // lost: a URL carrying these characters is invalid unencoded anyway.
+      if (/["<>]/.test(href)) continue;
+      if (present.has(href) || hoisted.includes(href)) continue;
+      hoisted.push(href);
+    }
+  }
+  if (!hoisted.length) return { html, hoisted };
+  const tags = hoisted.map((h) => `<link rel="stylesheet" href="${h}">`).join('');
+  const i = html.toLowerCase().lastIndexOf('</head>');
+  return {
+    html: i === -1 ? `${tags}${html}` : `${html.slice(0, i)}${tags}${html.slice(i)}`,
+    hoisted,
+  };
+}
+
+/**
+ * Head elements that advertise a WordPress backend which no longer exists.
+ *
+ * These are not decoration. `EditURI` and `wlwmanifest` point at `xmlrpc.php`,
+ * the oEmbed and `api.w.org` links point at `/wp-json/`, and the feed links
+ * point at `/feed/` — all four are PHP routes that a static export cannot
+ * serve, and every one of them was still carrying the ABSOLUTE origin URL, so
+ * they lead a reader (or a crawler) straight back to the host being
+ * decommissioned. `<meta name="generator">` merely announces the stack and its
+ * version to anyone scanning for it.
+ *
+ * Kept narrow on purpose: only these rels, and only a `rel="alternate"` whose
+ * href is a WordPress route — a genuine hreflang or RSS alternate for content
+ * the site still serves is untouched.
+ */
+const WP_PLUMBING_RELS = new Set([
+  'edituri',
+  'wlwmanifest',
+  'https://api.w.org/',
+  'shortlink',
+  'pingback',
+  'profile',
+]);
+const WP_PLUMBING_HREF = /(?:xmlrpc\.php|wlwmanifest|\/wp-json\/|\/feed\/?(?:$|[?#])|osd\.xml)/i;
+
+export function stripWordPressHeadLinks(html) {
+  const removed = [];
+  let out = html.replace(/<link\b[^>]*>/gi, (tag) => {
+    const rel = (/\brel\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? '').trim().toLowerCase();
+    const href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? '';
+    const as = (/\bas\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? '').trim().toLowerCase();
+    // A preload for a script is dead the moment the scripts are stripped, and
+    // it is the one plumbing link that survives a rel-and-href filter: it names
+    // no WordPress route, it just warms a fetch for a bundle nothing imports.
+    // Measured here: 3 pages preloaded @wordpress/interactivity after every
+    // other trace of it was gone.
+    const scriptPreload = rel === 'modulepreload' || (rel === 'preload' && as === 'script');
+    if (
+      WP_PLUMBING_RELS.has(rel) ||
+      scriptPreload ||
+      (rel === 'alternate' && WP_PLUMBING_HREF.test(href))
+    ) {
+      removed.push(rel || href);
+      return '';
+    }
+    return tag;
+  });
+  out = out.replace(/<meta\b[^>]*\bname\s*=\s*["']generator["'][^>]*>/gi, (tag) => {
+    removed.push('generator');
+    return '';
+  });
+  return { html: out, removed };
+}
+
+/**
+ * Remove the rule that makes Divi's content invisible until JavaScript runs.
+ *
+ * This is the single most dangerous line in the whole de-WordPressing pass, and
+ * it is invisible in a diff of the scripts. Divi paints every animated element
+ * at `opacity: 0` and reveals it from a scroll handler in the bundle above.
+ * Measured here: `.et-waypoint:not(.et_pb_counters){opacity:0}` appears in the
+ * inline `<style>` of **589 of 589** captured pages. Remove the bundle and
+ * leave this rule and the export is not a degraded site, it is 589 blank
+ * pages — and every automated check still passes, because the markup, the
+ * titles, the links and the byte counts are all exactly right.
+ *
+ * So visibility stops depending on JavaScript at all: the rule is dropped, the
+ * content paints, and `clone-enhance.js` adds `.et-animated` purely to start
+ * the keyframes the stylesheet already defines.
+ *
+ * Only the `opacity: 0` form is touched. Divi ships many `.et-waypoint … {
+ * opacity: 1 }` rules — the animation-off variants — and those must survive,
+ * which is why this matches on the declaration and not on the selector alone.
+ */
+export function neutralizeWaypointHiding(css) {
+  let removed = 0;
+  const out = css.replace(/([^{}]+)\{\s*opacity\s*:\s*0\s*;?\s*\}/g, (rule, selectors) => {
+    if (!/\.et-waypoint\b/.test(selectors)) return rule;
+    const all = selectors.split(',');
+    const kept = all.filter((s) => !/\.et-waypoint\b/.test(s));
+    removed += all.length - kept.length;
+    // A rule whose ONLY selectors were waypoints disappears; one that also hid
+    // something else keeps that half, or removing the hiding rule for a
+    // waypoint would silently un-hide an unrelated element too.
+    return kept.length ? `${kept.join(',')}{opacity:0}` : '';
+  });
+  return { css: out, removed };
+}
+
+/** Apply `neutralizeWaypointHiding` to each inline `<style>` block. */
+export function neutralizeWaypointHidingInHtml(html) {
+  let removed = 0;
+  const out = html.replace(
+    /(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi,
+    (whole, open, body, close) => {
+      const r = neutralizeWaypointHiding(body);
+      removed += r.removed;
+      return `${open}${r.css}${close}`;
+    },
+  );
+  return { html: out, removed };
+}
+
+/**
+ * Add the clone's own runtime just before `</body>`.
+ *
+ * `defer` rather than `async`: it must not run before the document it wires up
+ * exists, and ordering against nothing else matters. A page with no `</body>`
+ * (a fragment, or truncated markup) gets it appended, so the script is never
+ * silently dropped from a page that is merely malformed.
+ */
+export function injectCloneRuntime(html, href) {
+  const tag = `<script src="${href}" defer></script>`;
+  if (html.includes(tag)) return html;
+  const i = html.toLowerCase().lastIndexOf('</body>');
+  if (i === -1) return `${html}${tag}`;
+  return `${html.slice(0, i)}${tag}${html.slice(i)}`;
+}
+
+/**
+ * The whole de-WordPressing pass, in the order the steps depend on each other.
+ *
+ * Scripts go first so nothing later has to reason about markup inside a script
+ * body. The waypoint rule is neutralized straight after, because between those
+ * two steps the document is in the one state that must never be written to
+ * disk. The runtime is injected last so it is not itself stripped.
+ */
+export function deWordPress(html, { runtimeHref } = {}) {
+  const sheets = hoistRuntimeStylesheets(html);
+  const scripts = stripClientScripts(sheets.html);
+  const waypoints = neutralizeWaypointHidingInHtml(scripts.html);
+  const links = stripWordPressHeadLinks(waypoints.html);
+  const out = runtimeHref ? injectCloneRuntime(links.html, runtimeHref) : links.html;
+  return {
+    html: out,
+    stylesheetsHoisted: sheets.hoisted,
+    scriptsRemoved: scripts.removedSrc.length + scripts.removedInline,
+    scriptSrcRemoved: scripts.removedSrc,
+    inlineScriptsRemoved: scripts.removedInline,
+    waypointRulesRemoved: waypoints.removed,
+    headLinksRemoved: links.removed,
+  };
+}
+
 /**
  * Local filename for an asset URL, namespaced by host so two providers cannot
  * collide on `/style.css`, and carrying the query string so `?ver=6.4` variants
@@ -797,6 +1141,51 @@ export function assetLocalName(absUrl) {
   ext = extname(p);
   if (!ext) p += '.bin';
   return `${host}/${p}`.replace(/\/{2,}/g, '/');
+}
+
+/**
+ * Formats worth re-encoding, and the one they are re-encoded to.
+ *
+ * GIF is excluded because it may be animated and a still WebP would silently
+ * drop the animation; SVG because it is not raster; WebP and AVIF because they
+ * are already the destination format.
+ */
+const RECODABLE = /\.(png|jpe?g)(\?|$)/i;
+
+/** Quality ladder: the first rung that lands under budget wins. */
+export const IMAGE_QUALITY_LADDER = [85, 78, 70];
+
+/**
+ * Decide whether a re-encoded image is worth keeping.
+ *
+ * Two independent conditions, and both matter. It must actually be smaller —
+ * re-encoding an already-optimised JPEG routinely produces a LARGER file, and
+ * shipping that would make the site heavier while reporting an optimisation.
+ * And the saving must be worth a format change: a 5% win is not worth renaming
+ * a file and rewriting every reference to it, because each rewrite is a chance
+ * to strand a reference.
+ */
+export function worthReencoding(originalBytes, encodedBytes, minSavingRatio = 0.25) {
+  if (!Number.isFinite(originalBytes) || !Number.isFinite(encodedBytes)) return false;
+  if (encodedBytes <= 0 || originalBytes <= 0) return false;
+  return encodedBytes <= originalBytes * (1 - minSavingRatio);
+}
+
+/** The local name an image takes once re-encoded to WebP. */
+export function webpName(name) {
+  return name.replace(/\.[^./]+$/, '') + '.webp';
+}
+
+/**
+ * Whether this asset is a candidate for re-encoding at all.
+ *
+ * Size is part of the predicate, not a separate check: an image already under
+ * budget is left byte-identical to what the charity uploaded. Only the ones
+ * that would be a problem for a visitor are touched.
+ */
+export function shouldReencodeImage(absUrl, bytes, maxBytes) {
+  if (!RECODABLE.test(absUrl)) return false;
+  return Number.isFinite(bytes) && Number.isFinite(maxBytes) && bytes > maxBytes;
 }
 
 /**
@@ -856,6 +1245,39 @@ export function remainingExternalAssetHosts(html, domain, ignoreHosts = []) {
  * FETCHED rather than the pages actually RENDERED, so a post whose page failed
  * to download still counted as captured.
  */
+/**
+ * Same-site navigation links that survived the rewrite, by host.
+ *
+ * The self-containment gate loads each page with the source host blocked, so
+ * it sees SUBRESOURCES. A nav `href` is fetched only when a visitor clicks it,
+ * which is never during a gate run — so a clone whose every menu item points
+ * at the domain being decommissioned passes cleanly. That is exactly what
+ * shipped: 562 of 589 pages, all green.
+ *
+ * Reported by host so the operator sees which domain the clone still leans on,
+ * and counted per page so "one stray link" and "the whole navigation" are not
+ * the same finding.
+ */
+export function remainingSelfHostLinks(html, domain, selfHost) {
+  const hosts = new Map();
+  for (const raw of collectPageLinks(html)) {
+    if (!/^https?:\/\//i.test(raw)) continue;
+    let host;
+    try {
+      host = new URL(raw).hostname.replace(/^www\./, '');
+    } catch {
+      continue;
+    }
+    // The site's own two names are the ones that must have been rewritten to
+    // local paths. Any other host is a genuine outbound link and is left alone.
+    const isSelf = host === domain || host.endsWith(`.${domain}`);
+    const isStale = selfHost && (host === selfHost || host.endsWith(`.${selfHost}`));
+    if (!isSelf && !isStale) continue;
+    hosts.set(host, (hosts.get(host) ?? 0) + 1);
+  }
+  return hosts;
+}
+
 export function summarizeCaptured(entries, renderedPaths) {
   const byType = {};
   const bySource = {};
@@ -934,13 +1356,33 @@ export function captureVerdict({
   externalHosts,
   failedAssets,
   assetFailureNote,
+  frontPageCaptured = true,
+  strandedStaleLinks = 0,
+  strandedStalePages = 0,
+  staleHost = null,
 }) {
   const problems = [];
+  // The front page is not one entry among many. A percentage floor cannot
+  // express that: losing it costs 1 of 590 — 99.8%, comfortably inside any
+  // sane threshold — while being the one page every visitor sees first.
+  if (!frontPageCaptured)
+    problems.push(
+      "the site's front page was not captured; a clone with no index.html serves 404 at its root",
+    );
   if (expected > 0 && captured < expected)
     problems.push(
       `captured ${captured} of ${expected} inventory entries (REST collections + sitemap union)`,
     );
   if (externalHosts.length) problems.push(`unlocalized asset hosts: ${externalHosts.join(', ')}`);
+  // Only the STALE host is fatal. A link to the serving domain may have no
+  // local equivalent — /feed/, /wp-json/, wp-admin — and gating on those would
+  // refuse every real WordPress site. A link to a host the site does not serve
+  // is broken for visitors today, whatever happens to DNS later.
+  if (strandedStaleLinks > 0)
+    problems.push(
+      `${strandedStaleLinks} navigation link(s) across ${strandedStalePages} page(s) still point at ` +
+        `${staleHost ?? 'the stale host'}, which does not serve this site`,
+    );
   // Prefer the diagnostic sentence when one is available: "823 asset
   // download(s) failed" is a count, and the operator's next question is always
   // "failed how, and where?".
@@ -1073,6 +1515,16 @@ function selfTest() {
   eq('localPath file keeps name', localPathForLink('https://x.org/feed.xml', 'x.org'), 'feed.xml');
   eq('localPath rejects garbage', localPathForLink('not a url', 'x.org'), null);
 
+  // The politeness delay must apply to ASSETS too — they are the bulk of the
+  // crawl. A cap here meant `--delay` could not slow the run down at all, and
+  // that got the runner blocked by a charity's security plugin.
+  eq('assetSleepMs honours the operator delay rather than capping it', assetSleepMs(750), 750);
+  eq('assetSleepMs passes the default through', assetSleepMs(250), 250);
+  eq(
+    'assetSleepMs tolerates junk without becoming a busy loop or NaN',
+    [assetSleepMs(0), assetSleepMs(-5), assetSleepMs('abc'), assetSleepMs(undefined)],
+    [0, 0, 0, 0],
+  );
   eq('relativePrefix root', relativePrefix('index.html'), './');
   eq('relativePrefix nested', relativePrefix('a/b/index.html'), '../../');
 
@@ -1342,6 +1794,338 @@ function selfTest() {
     '<img src="/cdn-cgi/image/w=80/logo.png">',
   );
 
+  // --- Oversized image re-encoding -----------------------------------------
+  // 194 of 335 captured images were over the receiving repo's 400 KB per-file
+  // budget and accounted for 186 MB of the 205 MB the clone shipped. They are
+  // photographic event flyers exported as PNG, which is the wrong container for
+  // them; the cost lands on a visitor's phone connection.
+  eq(
+    'an oversized PNG is a re-encode candidate',
+    shouldReencodeImage('https://x.org/a/flyer.png', 900_000, 400 * 1024),
+    true,
+  );
+  eq(
+    'a PNG already under budget is left byte-identical to what was uploaded',
+    shouldReencodeImage('https://x.org/a/logo.png', 12_000, 400 * 1024),
+    false,
+  );
+  eq(
+    'a JPEG is a candidate too — WordPress ships oversized ones as readily',
+    shouldReencodeImage('https://x.org/a/hero.JPEG?ver=2', 900_000, 400 * 1024),
+    true,
+  );
+  // A still WebP would silently drop an animation, and an SVG is not raster.
+  eq(
+    'a GIF is never re-encoded',
+    shouldReencodeImage('https://x.org/a/spinner.gif', 900_000, 400 * 1024),
+    false,
+  );
+  eq(
+    'an SVG is never re-encoded',
+    shouldReencodeImage('https://x.org/a/icon.svg', 900_000, 400 * 1024),
+    false,
+  );
+  eq(
+    'an image already in the destination format is not re-encoded',
+    shouldReencodeImage('https://x.org/a/photo.webp', 900_000, 400 * 1024),
+    false,
+  );
+  // Re-encoding an already-optimised JPEG routinely produces a LARGER file.
+  // Shipping that would make the site heavier while reporting an optimisation.
+  eq('a larger result is refused', worthReencoding(100_000, 120_000), false);
+  eq('an equal result is refused', worthReencoding(100_000, 100_000), false);
+  // A marginal win is not worth a rename, because every rename is a chance to
+  // strand a reference.
+  eq('a 10% saving is not worth the rename', worthReencoding(100_000, 90_000), false);
+  eq('an 87% saving is', worthReencoding(2_297_000, 305_000), true);
+  eq(
+    'a zero-byte encode is refused rather than treated as a perfect win',
+    worthReencoding(100_000, 0),
+    false,
+  );
+  eq(
+    'webpName replaces the extension rather than appending',
+    webpName('x/a/flyer.png'),
+    'x/a/flyer.webp',
+  );
+  eq('webpName leaves a dotted directory alone', webpName('x/v1.2/flyer.png'), 'x/v1.2/flyer.webp');
+  eq(
+    'webpName handles the query-suffixed names assetLocalName produces',
+    webpName('x/a/flyer__ver-2.png'),
+    'x/a/flyer__ver-2.webp',
+  );
+
+  // --- De-WordPressing: the CMS script payload -----------------------------
+  // A static export cannot run PHP, so every bundle that posts to
+  // admin-ajax.php is dead weight; the analytics beacons report to a property
+  // the charity no longer owns; and the vendored minified bundles dominate any
+  // static analysis of the repository the charity inherits. Measured on this
+  // migration: 1.9 MB across 37 files, serving a hamburger and a fade.
+  const WP_PAGE =
+    '<html><head>' +
+    '<script src="/wp-includes/js/jquery/jquery.min.js?ver=3.7.1"></script>' +
+    '<script type="application/ld+json">{"@type":"Organization"}</script>' +
+    '<script>var monsterinsights_frontend = {"js_events_tracking":"true"};</script>' +
+    '</head><body><p>hi</p></body></html>';
+  eq('a vendored CMS bundle is removed', stripClientScripts(WP_PAGE).removedSrc, [
+    '/wp-includes/js/jquery/jquery.min.js?ver=3.7.1',
+  ]);
+  eq('inline CMS config blocks are removed too', stripClientScripts(WP_PAGE).removedInline, 1);
+  eq(
+    'structured data survives — it is parsed as data and never executed',
+    stripClientScripts(WP_PAGE).html.includes('application/ld+json'),
+    true,
+  );
+  eq(
+    'the ld+json PAYLOAD survives, not just its type attribute',
+    stripClientScripts(WP_PAGE).html.includes('{"@type":"Organization"}'),
+    true,
+  );
+  eq('the page content is untouched', stripClientScripts(WP_PAGE).html.includes('<p>hi</p>'), true);
+  eq(
+    'a self-closing script tag is removed rather than left dangling',
+    stripClientScripts('<script src="/a.js"/>x').html,
+    'x',
+  );
+  eq(
+    'ld+json matching is exact — a type merely containing it is still removed',
+    stripClientScripts('<script type="application/ld+json-evil">x</script>').removedInline,
+    1,
+  );
+  eq(
+    'speculationrules is removed: it prefetches /wp-*.php routes that are gone',
+    stripClientScripts('<script type="speculationrules">{"prefetch":[]}</script>').removedInline,
+    1,
+  );
+  eq(
+    'markup inside a script body cannot survive as markup',
+    stripClientScripts('<script>var a="</div><img src=x>";</script>b').html,
+    'b',
+  );
+
+  // --- De-WordPressing: head plumbing --------------------------------------
+  // Every one of these named the ABSOLUTE origin and pointed at a PHP route,
+  // so they lead a reader or a crawler back to the host being decommissioned.
+  const WP_HEAD =
+    '<link rel="EditURI" type="application/rsd+xml" href="https://x.org/xmlrpc.php?rsd" />' +
+    '<link rel="wlwmanifest" href="https://x.org/wlwmanifest.xml" />' +
+    '<link rel="https://api.w.org/" href="https://x.org/wp-json/" />' +
+    '<link rel="alternate" type="application/json+oembed" href="https://x.org/wp-json/oembed/1.0/embed?url=y" />' +
+    '<link rel="shortlink" href="https://x.org/?p=2" />' +
+    '<link rel="canonical" href="https://x.org/about/" />' +
+    '<link rel="stylesheet" href="/style.css" />' +
+    '<meta name="generator" content="WordPress 6.8.1" />';
+  eq('WordPress head plumbing is removed', stripWordPressHeadLinks(WP_HEAD).removed.length, 6);
+  eq(
+    'the canonical link survives — it is the one head link a static export needs',
+    stripWordPressHeadLinks(WP_HEAD).html.includes('rel="canonical"'),
+    true,
+  );
+  eq('the stylesheet survives', stripWordPressHeadLinks(WP_HEAD).html.includes('/style.css'), true);
+  eq(
+    'a modulepreload for a stripped bundle is removed',
+    stripWordPressHeadLinks('<link rel="modulepreload" href="/wp-includes/js/x.js">').removed
+      .length,
+    1,
+  );
+  eq(
+    'so is a rel=preload as=script',
+    stripWordPressHeadLinks('<link rel="preload" as="script" href="/a.js">').removed.length,
+    1,
+  );
+  // The font and stylesheet preloads are what make the page paint quickly and
+  // have nothing to do with the CMS; a blanket "drop preloads" would cost a
+  // visible flash of unstyled text on every page.
+  eq(
+    'a font or style preload survives',
+    stripWordPressHeadLinks(
+      '<link rel="preload" as="font" href="/f.woff2"><link rel="preload" as="style" href="/s.css">',
+    ).removed.length,
+    0,
+  );
+  eq(
+    'a real hreflang alternate is NOT collateral damage',
+    stripWordPressHeadLinks('<link rel="alternate" hreflang="fr" href="/fr/">').removed.length,
+    0,
+  );
+  eq(
+    'an RSS alternate for a feed route IS removed — the route is PHP and is gone',
+    stripWordPressHeadLinks(
+      '<link rel="alternate" type="application/rss+xml" href="https://x.org/feed/">',
+    ).removed.length,
+    1,
+  );
+
+  // --- De-WordPressing: the blank-page trap --------------------------------
+  // The single most dangerous line in this pass, and the one invisible in a
+  // diff of the scripts. Divi paints animated content at opacity 0 and reveals
+  // it from the bundle above; the rule was present in 589 of 589 captured
+  // pages. Strip the bundle, leave the rule, and the export is 589 blank pages
+  // that pass every markup, title, link and byte-count check there is.
+  eq(
+    'the JavaScript-dependent hiding rule is removed',
+    neutralizeWaypointHiding('.et-waypoint:not(.et_pb_counters){opacity:0}').css,
+    '',
+  );
+  eq(
+    'and the removal is counted, not silent',
+    neutralizeWaypointHiding('.et-waypoint:not(.et_pb_counters){opacity:0}').removed,
+    1,
+  );
+  eq(
+    'whitespace variants are caught',
+    neutralizeWaypointHiding('.et-waypoint:not(.et_pb_counters) { opacity: 0; }').css,
+    '',
+  );
+  // Divi ships many `.et-waypoint … {opacity:1}` rules — the animation-off
+  // variants. Matching on the selector alone would delete those too and break
+  // every element whose animation is deliberately disabled.
+  eq(
+    'an opacity:1 waypoint rule is left alone',
+    neutralizeWaypointHiding('.et-waypoint.et_pb_animation_off{opacity:1}').css,
+    '.et-waypoint.et_pb_animation_off{opacity:1}',
+  );
+  eq(
+    'a non-waypoint opacity:0 rule is left alone',
+    neutralizeWaypointHiding('.screen-reader-text{opacity:0}').css,
+    '.screen-reader-text{opacity:0}',
+  );
+  // A shared rule must lose only its waypoint half, or removing the hiding
+  // rule for animated content silently un-hides something unrelated.
+  eq(
+    'a shared selector list keeps its non-waypoint half',
+    neutralizeWaypointHiding('.a,.et-waypoint,.b{opacity:0}').css,
+    '.a,.b{opacity:0}',
+  );
+  eq(
+    'only the inline <style> is rewritten, never the body text',
+    neutralizeWaypointHidingInHtml(
+      '<style>.et-waypoint:not(.et_pb_counters){opacity:0}</style>' +
+        '<p>.et-waypoint:not(.et_pb_counters){opacity:0}</p>',
+    ).html,
+    '<style></style><p>.et-waypoint:not(.et_pb_counters){opacity:0}</p>',
+  );
+
+  // --- De-WordPressing: the stylesheet that is not in the markup -----------
+  // Divi does not enqueue its per-page "late" stylesheet; an inline script
+  // builds the <link> at runtime. Strip that script without hoisting first and
+  // the page loses the stylesheet AND the capture stops downloading it, which
+  // renders as a correct-looking page with a chunk of its styling gone.
+  const LATE_CSS =
+    '<html><head><link rel="stylesheet" href="/main.css"></head><body>' +
+    '<script>(function(){var file=["\\/wp-content\\/et-cache\\/2\\/et-late.css"];' +
+    "var link=document.createElement('link');link.rel='stylesheet';link.href=file;" +
+    '})();</script></body></html>';
+  eq('a runtime-injected stylesheet is hoisted', hoistRuntimeStylesheets(LATE_CSS).hoisted, [
+    '/wp-content/et-cache/2/et-late.css',
+  ]);
+  eq(
+    'and it lands in the head, where the preload scanner can see it',
+    hoistRuntimeStylesheets(LATE_CSS).html.includes(
+      '<link rel="stylesheet" href="/wp-content/et-cache/2/et-late.css"></head>',
+    ),
+    true,
+  );
+  eq(
+    'a stylesheet the page already links is not duplicated',
+    hoistRuntimeStylesheets(
+      '<head><link rel="stylesheet" href="/a.css"></head>' +
+        "<script>var l=document.createElement('link');l.rel='stylesheet';l.href=\"/a.css\";</script>",
+    ).hoisted,
+    [],
+  );
+  // Recognised by the injection signature, not by "mentions a .css" — a config
+  // blob naming a stylesheet must not cause one to be loaded.
+  eq(
+    'a script that merely names a stylesheet injects nothing',
+    hoistRuntimeStylesheets('<script>var cfg={"admin":"/wp-admin/css/edit.css"};</script>').hoisted,
+    [],
+  );
+  eq(
+    'structured data is never treated as an injector',
+    hoistRuntimeStylesheets(
+      '<script type="application/ld+json">{"x":"document.createElement(\'link\') /a.css"}</script>',
+    ).hoisted,
+    [],
+  );
+  // The value becomes a double-quoted attribute. Two things keep that safe and
+  // they are worth separating, because only one of them is a check.
+  //
+  // A quote cannot reach the attribute at all: the extraction matches
+  // `[^"']+`, so a `"` terminates the literal instead of being captured. That
+  // is structural, and this case pins it — a script whose string tries to
+  // break out yields the harmless prefix, never the payload.
+  eq(
+    'a quote terminates the literal instead of escaping into the attribute',
+    hoistRuntimeStylesheets(
+      "<script>document.createElement('link');var f='/a.css\" onload=\"x';</script>",
+    ).hoisted,
+    ['/a.css'],
+  );
+  // Angle brackets CAN survive the extraction, so those are refused explicitly.
+  eq(
+    'an angle-bracket href is refused rather than emitted',
+    hoistRuntimeStylesheets(
+      "<script>document.createElement('link');var f='/a.css?v=<img src=x>';</script>",
+    ).hoisted,
+    [],
+  );
+  eq(
+    'hoisting runs before the strip, so the whole pass keeps the stylesheet',
+    deWordPress(LATE_CSS).html.includes('href="/wp-content/et-cache/2/et-late.css"'),
+    true,
+  );
+
+  // --- De-WordPressing: the replacement runtime ----------------------------
+  eq(
+    'the runtime is injected just inside </body>',
+    injectCloneRuntime('<html><body><p>a</p></body></html>', '../x/clone-enhance.js'),
+    '<html><body><p>a</p><script src="../x/clone-enhance.js" defer></script></body></html>',
+  );
+  eq(
+    'a page with no </body> still gets the runtime rather than silently losing it',
+    injectCloneRuntime('<p>a</p>', './r.js'),
+    '<p>a</p><script src="./r.js" defer></script>',
+  );
+  eq(
+    'injection is idempotent',
+    injectCloneRuntime(injectCloneRuntime('<body>a</body>', './r.js'), './r.js'),
+    '<body>a<script src="./r.js" defer></script></body>',
+  );
+  // The LAST closer, not the first. A captured page can carry a literal
+  // `</body>` before its real one — inside an HTML comment, a <template>, or a
+  // builder shortcode that stored a whole document as text. Injecting at the
+  // first match puts the runtime inside that fragment, where it is inert, and
+  // the page still looks perfectly well-formed.
+  eq(
+    'the runtime goes before the LAST </body>, not a literal one in the markup',
+    injectCloneRuntime('<body>a<!-- </body> --><p>b</p></body>', './r.js'),
+    '<body>a<!-- </body> --><p>b</p><script src="./r.js" defer></script></body>',
+  );
+
+  // --- De-WordPressing: the whole pass -------------------------------------
+  const DEWP = deWordPress(
+    '<html><head><link rel="shortlink" href="https://x.org/?p=2">' +
+      '<style>.et-waypoint:not(.et_pb_counters){opacity:0}</style>' +
+      '<script src="/wp-includes/js/jquery/jquery.min.js"></script></head>' +
+      '<body><p>hi</p></body></html>',
+    { runtimeHref: './_a/clone-enhance.js' },
+  );
+  eq('the pass reports every script it removed', DEWP.scriptsRemoved, 1);
+  eq('the pass reports the hiding rules it removed', DEWP.waypointRulesRemoved, 1);
+  eq('the pass reports the head links it removed', DEWP.headLinksRemoved.length, 1);
+  eq(
+    'the only script left is the clone runtime',
+    [...DEWP.html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0]),
+    ['<script src="./_a/clone-enhance.js" defer>'],
+  );
+  eq('and the content survives all of it', DEWP.html.includes('<p>hi</p>'), true);
+  eq(
+    'without a runtime href the pass injects nothing — the capture adds it per page',
+    deWordPress('<body>a</body>').html.includes('<script'),
+    false,
+  );
+
   // --- Cloudflare email obfuscation ----------------------------------------
   // Decoding is what makes the strip above safe: remove the decoder without
   // this and every obfuscated address renders as hex forever.
@@ -1491,6 +2275,221 @@ function selfTest() {
   );
 
   // The rewrite must only touch links the page actually contains.
+  // -- isSiteHost: a 200 does not prove the body came from the site ----------
+  eq(
+    'isSiteHost accepts the domain, its www form and a subdomain',
+    [
+      isSiteHost('https://new.org/a/', 'new.org'),
+      isSiteHost('https://www.new.org/a/', 'new.org'),
+      isSiteHost('https://cdn.new.org/a/', 'new.org'),
+    ],
+    [true, true, true],
+  );
+  eq(
+    'isSiteHost REFUSES the stale home host — the parked-page case',
+    isSiteHost('https://old.org/', 'new.org'),
+    false,
+  );
+  eq(
+    'isSiteHost is not fooled by a domain that merely ends with the name',
+    isSiteHost('https://notnew.org/a/', 'new.org'),
+    false,
+  );
+  eq(
+    'isSiteHost refuses a non-http scheme and a malformed url',
+    [isSiteHost('data:text/html,x', 'new.org'), isSiteHost('not a url', 'new.org')],
+    [false, false],
+  );
+
+  // -- classifyPageResponse: the decision the scrape loop dispatches on -----
+  eq(
+    'classifyPageResponse stores a 200 that stayed on the site',
+    classifyPageResponse({
+      status: 200,
+      finalUrl: 'https://new.org/about-us/',
+      requestUrl: 'https://new.org/about-us/',
+      domain: 'new.org',
+    }).action,
+    'store',
+  );
+  eq(
+    'classifyPageResponse REFUSES a 200 that redirected to the stale home host',
+    classifyPageResponse({
+      status: 200,
+      finalUrl: 'https://old.org/',
+      requestUrl: 'https://new.org/',
+      domain: 'new.org',
+    }),
+    {
+      action: 'skip',
+      status: -2,
+      offSite: true,
+      finalUrl: 'https://old.org/',
+      reason: 'followed off-site to https://old.org/',
+    },
+  );
+  eq(
+    'classifyPageResponse skips a non-200 without calling it off-site',
+    classifyPageResponse({ status: 404, requestUrl: 'https://new.org/x/', domain: 'new.org' }),
+    { action: 'skip', status: 404, reason: 'HTTP 404' },
+  );
+  eq(
+    'classifyPageResponse treats an absent final url as the requested one',
+    classifyPageResponse({
+      status: 200,
+      finalUrl: '',
+      requestUrl: 'https://new.org/a/',
+      domain: 'new.org',
+    }).action,
+    'store',
+  );
+  eq(
+    'classifyPageResponse refuses an unreachable response rather than storing it',
+    classifyPageResponse({ status: 0, requestUrl: 'https://new.org/a/', domain: 'new.org' }).action,
+    'skip',
+  );
+
+  // -- normalizedLinkIndex: the bug that shipped 562 pages of off-site nav ---
+  // The entry list is normalized onto the serving host; the markup still says
+  // the stale one. Comparing the two as strings finds nothing.
+  {
+    const html =
+      '<a href="https://old.org/about-us/">A</a>' +
+      '<a href="https://old.org/donate/">D</a>' +
+      '<a href="https://elsewhere.net/x/">X</a>';
+    const idx = normalizedLinkIndex(html, 'https://new.org/', 'old.org', 'new.org');
+    eq(
+      'normalizedLinkIndex resolves a STALE-host href onto the entry key',
+      [...(idx.get('https://new.org/about-us') ?? [])],
+      ['https://old.org/about-us/'],
+    );
+    eq(
+      'normalizedLinkIndex leaves a genuinely third-party link on its own key',
+      idx.get('https://new.org/x'),
+      undefined,
+    );
+    // The regression this replaced: a raw-string comparison against the
+    // normalized entry link.
+    eq(
+      'the old string comparison would have matched nothing',
+      collectPageLinks(html).has('https://new.org/about-us/'),
+      false,
+    );
+  }
+  {
+    // All three spellings of one destination collapse onto one key. The
+    // root-absolute form matters on project pages, where the site is mounted
+    // under a prefix and `/about-us/` resolves outside it.
+    const html =
+      '<a href="https://new.org/about-us/">abs</a>' +
+      '<a href="/about-us/">root</a>' +
+      '<a href="../about-us/">rel</a>';
+    const idx = normalizedLinkIndex(html, 'https://new.org/ministries/', null, 'new.org');
+    eq(
+      'normalizedLinkIndex folds absolute, root-absolute and relative spellings together',
+      [...(idx.get('https://new.org/about-us') ?? [])].sort(),
+      ['../about-us/', '/about-us/', 'https://new.org/about-us/'],
+    );
+  }
+  eq(
+    'linkKey folds the trailing slash so /a/ and /a share one key',
+    [linkKey('https://x.org/a/'), linkKey('https://x.org/a')],
+    ['https://x.org/a', 'https://x.org/a'],
+  );
+
+  // -- remainingSelfHostLinks: the gate's blind spot, closed ----------------
+  {
+    const page =
+      '<a href="https://old.org/about-us/">nav</a>' +
+      '<a href="https://old.org/donate/">nav</a>' +
+      '<a href="https://new.org/feed/">feed</a>' +
+      '<a href="https://example.net/partner/">outbound</a>' +
+      '<a href="../contact/">local</a>';
+    const found = remainingSelfHostLinks(page, 'new.org', 'old.org');
+    eq(
+      'remainingSelfHostLinks counts the stale host and the serving host apart',
+      [...found.entries()].sort(),
+      [
+        ['new.org', 1],
+        ['old.org', 2],
+      ],
+    );
+    eq(
+      'remainingSelfHostLinks leaves genuine outbound links alone',
+      found.has('example.net'),
+      false,
+    );
+    eq(
+      'remainingSelfHostLinks reports nothing once the links are local',
+      [...remainingSelfHostLinks('<a href="../about-us/">a</a>', 'new.org', 'old.org').keys()],
+      [],
+    );
+  }
+  eq(
+    'captureVerdict fails a clone whose navigation still points at the stale host',
+    captureVerdict({
+      expected: 5,
+      captured: 5,
+      externalHosts: [],
+      failedAssets: 0,
+      strandedStaleLinks: 44,
+      strandedStalePages: 562,
+      staleHost: 'old.org',
+    }).problems.filter((s) => s.includes('old.org')).length,
+    1,
+  );
+  eq(
+    'captureVerdict does NOT fail on links to the serving domain — /feed/ has no local copy',
+    captureVerdict({
+      expected: 5,
+      captured: 5,
+      externalHosts: [],
+      failedAssets: 0,
+      strandedStaleLinks: 0,
+      staleHost: 'old.org',
+    }).ok,
+    true,
+  );
+
+  // -- the front page is not one entry among many ---------------------------
+  // Asserted on the PROBLEM TEXT, not on `ok`. At 589/590 the completeness
+  // term fails too, so `ok === false` stays false with this rule deleted — the
+  // first draft of this test passed a mutation that removed the thing it was
+  // written to pin.
+  eq(
+    'captureVerdict names the front page as its own problem, not just a count',
+    captureVerdict({
+      expected: 590,
+      captured: 589,
+      externalHosts: [],
+      failedAssets: 0,
+      frontPageCaptured: false,
+    }).problems.filter((s) => s.includes('front page')).length,
+    1,
+  );
+  eq(
+    'captureVerdict fails on a missing front page even when nothing else is wrong',
+    captureVerdict({
+      expected: 590,
+      captured: 590,
+      externalHosts: [],
+      failedAssets: 0,
+      frontPageCaptured: false,
+    }).ok,
+    false,
+  );
+  eq(
+    'captureVerdict stays silent about the front page when it was captured',
+    captureVerdict({
+      expected: 590,
+      captured: 590,
+      externalHosts: [],
+      failedAssets: 0,
+      frontPageCaptured: true,
+    }).problems,
+    [],
+  );
+
   eq(
     'collectPageLinks reads hrefs',
     [...collectPageLinks('<a href="https://x.org/a/">A</a><a href=\'/b\'>B</a>')].sort(),
@@ -1822,6 +2821,10 @@ const numericOptions = [
   ['max', arg('max', '500'), { min: 1, max: 100000 }],
   ['delay', arg('delay', '250'), { min: 0, max: 60000 }],
   ['timeout', arg('timeout', '30'), { min: 1, max: 600 }],
+  // Matches the per-file image budget the FFC-EX repos enforce in
+  // `__tests__/assets/image-weight.test.ts`. Kept as an option rather than a
+  // constant so a repo that raises its own budget can say so here.
+  ['max-image-kb', arg('max-image-kb', '400'), { min: 16, max: 100000 }],
 ];
 const parsedOptions = {};
 const badOptions = [];
@@ -1835,6 +2838,12 @@ const maxItems = parsedOptions.max;
 const delayMs = parsedOptions.delay;
 const timeoutMs = parsedOptions.timeout * 1000;
 const includePosts = flag('include-posts');
+// On by default: an oversized upload is a cost the visitor pays on every view,
+// and the receiving repo fails CI on it. `--no-optimize-images` ships the
+// captured bytes verbatim, which is the right choice only when the originals
+// are themselves the deliverable.
+const optimizeImages = !flag('no-optimize-images');
+const maxImageBytes = parsedOptions['max-image-kb'] * 1024;
 const jsonOut = arg('json-out', '');
 // Hosts whose references are dropped from the capture entirely: not fetched,
 // not counted as failures, not counted against the "zero external asset hosts"
@@ -1849,6 +2858,7 @@ if (isMain && (!domain || (!inspectOnly && !outDir))) {
     'Usage:\n' +
       '  --domain <domain> --inspect [--json-out <file>]\n' +
       '  --domain <domain> --out <dir> [--max 500] [--delay 250] [--include-posts] [--timeout 30]\n' +
+      '      [--no-optimize-images] [--max-image-kb 400]\n' +
       '  --self-test',
   );
   process.exit(2);
@@ -2317,11 +3327,38 @@ async function capture() {
   // Edge-injected instrumentation removed, and Cloudflare-obfuscated addresses
   // restored, across the whole scrape. Counted so a run reports what it did
   // rather than silently editing the charity's markup.
+  // Every tally this function reports on is declared HERE, before the first
+  // pass runs, rather than beside the pass that fills it in. That is not tidying:
+  // `imageRecode` was declared beside the asset loop and reported on in the
+  // page-loop's summary, which is earlier in the same function — a temporal
+  // dead zone that `node --check` cannot see, the self-tests never reach
+  // (they do not call `capture()`), and which therefore surfaced as a
+  // ReferenceError six minutes into a live crawl of a charity's site. One
+  // declaration site removes the whole class.
   let cfEmailsDecoded = 0;
   const edgeTagsRemoved = [];
+  const usedAssetNames = new Set(); // guards the .png -> .webp rename against collisions
+  const imageRecode = {
+    recoded: 0,
+    declined: 0,
+    skippedNoEncoder: 0,
+    collisions: [],
+    stillOverBudget: 0,
+    bytesBefore: 0,
+    bytesAfter: 0,
+    available: null,
+  };
+  const cmsScriptsRemoved = [];
+  let cmsInlineScriptsRemoved = 0;
+  let waypointRulesRemoved = 0;
+  let cmsHeadLinksRemoved = 0;
   // Paths that would have escaped the output directory. Expected to stay empty;
   // recorded rather than merely skipped so an empty list is evidence.
   const escapedPaths = [];
+  // Pages whose fetch left the site entirely. Recorded separately from an HTTP
+  // failure because the response was a perfectly good 200 — of somebody else's
+  // page. See isSiteHost.
+  const offSiteRedirects = [];
   // Per-failure lines are capped. The first real capture printed 823 of them,
   // which pushed the actual diagnosis off the readable end of the log and made
   // a one-cause failure look like 823 unrelated ones. The tally below reports
@@ -2329,10 +3366,22 @@ async function capture() {
   const LOG_CAP = 20;
   for (const e of entries) {
     const res = await request(e.link, { accept: 'text/html' });
-    if (!res || res.status !== 200) {
+    // A 200 is not enough: `redirect: 'follow'` will happily deliver another
+    // site's page under this URL. Refusing it is deliberate — writing a
+    // stranger's markup into a charity's repository is worse than a gap,
+    // because a gap is visible and a substitution is not.
+    const verdictForPage = classifyPageResponse({
+      status: res?.status ?? 0,
+      finalUrl: res?.url ?? '',
+      requestUrl: e.link,
+      domain,
+    });
+    if (verdictForPage.action !== 'store') {
       if (pageFailures.length < LOG_CAP)
-        console.error(`[scrape] ${e.link}: HTTP ${res?.status ?? 0} — skipped`);
-      pageFailures.push({ url: e.link, status: res?.status ?? 0 });
+        console.error(`[scrape] ${e.link}: ${verdictForPage.reason} — skipped`);
+      if (verdictForPage.offSite)
+        offSiteRedirects.push({ url: e.link, finalUrl: verdictForPage.finalUrl });
+      pageFailures.push({ url: e.link, status: verdictForPage.status });
       await sleep(delayMs);
       continue;
     }
@@ -2348,15 +3397,37 @@ async function capture() {
     // this HTML, so the removed tags never reach the asset inventory either.
     const mail = decodeCloudflareEmails(html);
     const edge = stripEdgeInjectedTags(mail.html);
-    html = edge.html;
+    // De-WordPress before the asset inventory reads this page. The order is the
+    // point: a script tag removed here is a script never downloaded, so the
+    // 1.9 MB of vendor bundles costs no requests and reaches no artifact.
+    // The runtime that replaces them is injected in the write loop instead,
+    // where the page's own relative prefix is already known — injecting it here
+    // would hand the inventory a reference to a file that exists on no origin,
+    // and it would dutifully go and 404 on it.
+    const wp = deWordPress(edge.html);
+    html = wp.html;
     cfEmailsDecoded += mail.decoded;
     for (const r of edge.removed) edgeTagsRemoved.push(r);
+    for (const r of wp.scriptSrcRemoved) cmsScriptsRemoved.push(r);
+    cmsInlineScriptsRemoved += wp.inlineScriptsRemoved;
+    waypointRulesRemoved += wp.waypointRulesRemoved;
+    cmsHeadLinksRemoved += wp.headLinksRemoved.length;
     rendered.set(e.localPath, html);
     e.bytes = html.length;
     await sleep(delayMs);
   }
   const pageTally = tallyFailures(pageFailures);
   console.error(`[capture] rendered ${rendered.size} page(s), ${pageTally.total} failure(s)`);
+  if (offSiteRedirects.length) {
+    console.error(
+      `[capture] ${offSiteRedirects.length} page(s) redirected off ${domain} and were refused.` +
+        ' This is what a stale WordPress `home`/`siteurl` does: the CMS sends its own visitors' +
+        ' to a domain it does not serve. Fix it at the source with a search-replace on those' +
+        ' two options.',
+    );
+    for (const r of offSiteRedirects.slice(0, LOG_CAP))
+      console.error(`        ${r.url} -> ${r.finalUrl}`);
+  }
   if (edgeTagsRemoved.length) {
     const kinds = [...new Set(edgeTagsRemoved)].slice(0, 5).join(', ');
     console.error(
@@ -2366,6 +3437,22 @@ async function capture() {
   if (cfEmailsDecoded) {
     console.error(`[capture] decoded ${cfEmailsDecoded} Cloudflare-obfuscated email address(es)`);
   }
+  if (cmsScriptsRemoved.length || cmsInlineScriptsRemoved) {
+    const distinct = new Set(cmsScriptsRemoved).size;
+    console.error(
+      `[capture] removed the CMS script payload: ${cmsScriptsRemoved.length} tag(s) across` +
+        ` ${distinct} distinct file(s) and ${cmsInlineScriptsRemoved} inline block(s).` +
+        ` They are replaced by ${CLONE_RUNTIME_NAME}, which has no dependencies and` +
+        ' reaches no network. Structured data (application/ld+json) is kept.',
+    );
+  }
+  if (cmsHeadLinksRemoved) {
+    console.error(
+      `[capture] removed ${cmsHeadLinksRemoved} head link(s) advertising the CMS backend` +
+        ' (xmlrpc, wlwmanifest, oEmbed, REST, feeds, generator) — all PHP routes a static' +
+        ' host cannot serve, and all of them still naming the origin being decommissioned.',
+    );
+  }
   if (pageTally.total) console.error(`[capture] pages: ${describeFailures(pageTally, domain)}`);
 
   // 3. Localize assets, following CSS one level deep so @font-face and
@@ -2374,6 +3461,53 @@ async function capture() {
   const assetsRoot = join(outDir, assetsDirName);
   const downloaded = new Map(); // absolute URL -> local name (or null on failure)
   const assetFailures = [];
+
+  /**
+   * Re-encode one raster image to WebP, walking a quality ladder.
+   *
+   * `sharp` is imported dynamically so this repo stays dependency-free — the
+   * same arrangement `sync-runtime-assets.mjs` uses for Playwright. When it is
+   * absent the capture says so once and ships the originals, which is a
+   * heavier site but never a broken one.
+   *
+   * The ladder exists so the result lands under the budget the receiving repo
+   * enforces rather than merely near it. It stops at the first rung that fits,
+   * so most images are encoded once and only a genuinely heavy one pays for
+   * three attempts.
+   */
+  let sharpModule;
+  async function encodeWebp(buf, budget) {
+    if (imageRecode.available === false) return null;
+    if (!sharpModule) {
+      try {
+        sharpModule = (await import('sharp')).default;
+        imageRecode.available = true;
+      } catch {
+        imageRecode.available = false;
+        console.error(
+          '[asset] sharp is not installed, so oversized images ship as captured.' +
+            ' Install it before the capture step to re-encode them.',
+        );
+        return null;
+      }
+    }
+    let best = null;
+    for (const quality of IMAGE_QUALITY_LADDER) {
+      let out;
+      try {
+        out = await sharpModule(buf).webp({ quality, effort: 6 }).toBuffer();
+      } catch {
+        // An image sharp cannot decode is not a failure of the capture; the
+        // original is already downloaded and gets shipped unchanged.
+        return null;
+      }
+      if (!best || out.length < best.length) best = out;
+      if (out.length <= budget) return { buffer: out, quality };
+    }
+    return best
+      ? { buffer: best, quality: IMAGE_QUALITY_LADDER[IMAGE_QUALITY_LADDER.length - 1] }
+      : null;
+  }
 
   async function localizeAsset(rawUrl) {
     // Normalized HERE rather than at each call site: assets arrive from three
@@ -2399,7 +3533,56 @@ async function capture() {
       assetFailures.push({ url: absUrl, status: -1 });
       return null;
     }
-    const name = assetLocalName(absUrl);
+    let name = assetLocalName(absUrl);
+
+    // Re-encode oversized raster uploads.
+    //
+    // Measured on this migration: 194 of 335 images are over the 400 KB budget
+    // the charity's own repository enforces, and they account for 186 MB of the
+    // 205 MB the clone ships. 165 of them are the same shape — 1366x768, 8-bit
+    // RGB(A), about 2 bytes per pixel — which is a photograph, not a diagram.
+    // They are event flyers: portraits composited on a gradient, exported from
+    // a design tool at browser-window size and saved as PNG. PNG is simply the
+    // wrong container for that, and the cost lands on the visitor: a 2.2 MB
+    // poster on a phone connection, on a site whose audience is largely on
+    // phone connections.
+    //
+    // Re-encoded rather than merely recompressed: a lossless PNG pass on that
+    // same file gives 2243 KB -> 658 KB, which is a real 71% win and still over
+    // budget, while WebP q=85 gives 298 KB with no visible difference in the
+    // text, the faces or the gradient.
+    //
+    // The rename is what makes this safe to do here rather than in a later
+    // pass: `localizeAsset` returns the local name, and every reference — in
+    // markup, in srcset, in CSS — is rewritten from that return value, so a
+    // renamed file cannot leave a stale reference behind.
+    if (optimizeImages && shouldReencodeImage(absUrl, buf.length, maxImageBytes)) {
+      const target = webpName(name);
+      // A collision would silently overwrite a real .webp the site already
+      // ships, so the original encoding is kept instead.
+      if (usedAssetNames.has(target) && target !== name) {
+        imageRecode.collisions.push(name);
+      } else {
+        const encoded = await encodeWebp(buf, maxImageBytes);
+        if (encoded && worthReencoding(buf.length, encoded.buffer.length)) {
+          imageRecode.recoded += 1;
+          imageRecode.bytesBefore += buf.length;
+          imageRecode.bytesAfter += encoded.buffer.length;
+          if (encoded.buffer.length > maxImageBytes) imageRecode.stillOverBudget += 1;
+          buf = encoded.buffer;
+          name = target;
+        } else if (imageRecode.available === false) {
+          // Not the same thing as declining on merit, and reporting it as one
+          // is a lie the operator cannot check: "re-encoding would not have
+          // been meaningfully smaller" about an image nothing tried to encode.
+          imageRecode.skippedNoEncoder += 1;
+        } else {
+          imageRecode.declined += 1;
+        }
+      }
+    }
+    usedAssetNames.add(name);
+
     if (!isContainedPath(assetsRoot, name)) {
       console.error(`[asset] refusing to write outside the assets dir: ${name}`);
       escapedPaths.push(name);
@@ -2432,12 +3615,19 @@ async function capture() {
         }
       }
       css = rewriteRefs(css, cssReps);
+      // The hiding rule was measured only in the inline <style> of each page,
+      // but a stylesheet is the natural place for it and a single missed copy
+      // blanks every page that loads that file. Applying the same transform
+      // here costs one pass and removes the possibility.
+      const cssWaypoints = neutralizeWaypointHiding(css);
+      css = cssWaypoints.css;
+      waypointRulesRemoved += cssWaypoints.removed;
       writeFileSync(dest, css, { encoding: 'utf8' });
     } else {
       writeFileSync(dest, buf);
     }
     downloaded.set(absUrl, name);
-    await sleep(Math.min(delayMs, 100));
+    await sleep(assetSleepMs(delayMs));
     return name;
   }
 
@@ -2450,6 +3640,37 @@ async function capture() {
     if (shouldLocalize(src, domain, ignoreHosts)) await localizeAsset(src);
   }
 
+  // Paths actually written, and the stranded-navigation tally accumulated as
+  // each page is written. Deliberately NOT a map of localPath -> HTML: this
+  // site is 589 Divi documents and `rendered` already holds all of them, so
+  // retaining the rewritten copies too doubles peak memory for a tally that
+  // can be computed one page at a time and thrown away.
+  // The runtime every page is about to reference. Written before the pages so
+  // a failure to find it stops the capture instead of shipping 589 pages whose
+  // only script 404s — a broken menu that no gate downstream can see, because
+  // every one of them measures markup and this is a missing file.
+  const runtimeSrc = resolvePath(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'assets',
+    CLONE_RUNTIME_NAME,
+  );
+  if (!existsSync(runtimeSrc)) {
+    console.error(
+      `[capture] the clone runtime is missing from this checkout: ${runtimeSrc}.` +
+        ' Every captured page references it, so refusing to write a clone without it.',
+    );
+    process.exit(2);
+  }
+  mkdirSync(assetsRoot, { recursive: true });
+  // No `encoding` option: `readFileSync` already returns a Buffer, and
+  // `writeFileSync` writes a Buffer verbatim. (`{ encoding: null }` is also
+  // valid and does not throw — measured on Node 20 in a live run and on 22
+  // here — but it says nothing the Buffer does not already say.)
+  writeFileSync(join(assetsRoot, CLONE_RUNTIME_NAME), readFileSync(runtimeSrc));
+
+  const writtenPages = new Set(); // localPath
+  const strandedNav = new Map(); // host -> { pages, links }
   for (const [localPath, html] of rendered) {
     const pageUrl = entries.find((e) => e.localPath === localPath)?.link ?? origin;
     const reps = new Map();
@@ -2469,18 +3690,18 @@ async function capture() {
     // entry made the rewrite quadratic in the size of the site: rewriteRefs
     // does a full-document split/join per pair, so a 590-entry inventory meant
     // ~1,180 passes over every one of 590 documents.
-    const present = collectPageLinks(html);
+    const linkIndex = normalizedLinkIndex(html, pageUrl, selfHost, domain);
     for (const e of entries) {
       if (e.localPath === localPath) continue;
-      const bare = e.link.endsWith('/') ? e.link.slice(0, -1) : null;
-      const hasFull = present.has(e.link);
-      const hasBare = bare !== null && present.has(bare);
-      if (!hasFull && !hasBare) continue;
+      const raws = linkIndex.get(linkKey(e.link));
+      if (!raws) continue;
       const target = `${relativePrefix(localPath)}${e.localPath.replace(/index\.html$/, '')}`;
-      if (hasFull) reps.set(e.link, target || './');
-      if (hasBare) reps.set(bare, target || './');
+      for (const raw of raws) reps.set(raw, target || './');
     }
-    const out = rewriteRefs(html, reps);
+    const out = injectCloneRuntime(
+      rewriteRefs(html, reps),
+      `${relativePrefix(localPath)}${assetsDirName}/${CLONE_RUNTIME_NAME}`,
+    );
     if (!isContainedPath(outDir, localPath)) {
       console.error(`[capture] refusing to write outside the output dir: ${localPath}`);
       escapedPaths.push(localPath);
@@ -2489,10 +3710,28 @@ async function capture() {
     const dest = join(outDir, localPath);
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, out, { encoding: 'utf8' });
+    writtenPages.add(localPath);
+    for (const [host, n] of remainingSelfHostLinks(out, domain, selfHost)) {
+      const cur = strandedNav.get(host) ?? { pages: 0, links: 0 };
+      cur.pages += 1;
+      cur.links += n;
+      strandedNav.set(host, cur);
+    }
   }
 
   // 4. Gates.
   let externalHosts = new Set();
+  // Navigation that never came home — tallied above, as each page was written,
+  // so it measures the artifact the charity would receive rather than what was
+  // fetched.
+  if (strandedNav.size) {
+    console.error(
+      '[capture] navigation still points off the clone — every one of these links leaves the' +
+        ' static site for a host that is being decommissioned:',
+    );
+    for (const [host, s] of strandedNav)
+      console.error(`        ${host}: ${s.links} link(s) across ${s.pages} page(s)`);
+  }
   for (const localPath of rendered.keys()) {
     const dest = join(outDir, localPath);
     if (!existsSync(dest)) continue;
@@ -2524,16 +3763,79 @@ async function capture() {
   // Measured against the MERGED inventory, not the REST total. Comparing the
   // REST total against pages fetched from the REST list is a tautology; the
   // union with the sitemap is the only figure that can be short.
+  // Reported HERE, after the asset pass that fills these in — not in the
+  // page-loop summary above, where every number would read zero. The first
+  // draft put it there and crashed on the temporal dead zone instead, which
+  // was the loud version of the same mistake; a report that merely printed
+  // `re-encoded 0 image(s)` would have been the quiet one.
+  // Down here with the image report, and for the same reason: the CSS pass
+  // strips this rule from stylesheets too, so the count is still climbing
+  // while the page loop's summary prints. The fixture run caught it saying
+  // 3 where the report said 6 — harmless in itself, and the identical
+  // mistake that made the image tally read before it existed.
+  console.error(
+    `[capture] removed ${waypointRulesRemoved} rule(s) hiding animated content behind` +
+      ' JavaScript, so the export reads with scripting disabled.',
+  );
+  if (!waypointRulesRemoved && cmsScriptsRemoved.length) {
+    // Not fatal — a site with no scroll animations has no such rule — but it is
+    // worth saying out loud, because the failure it guards against (589 blank
+    // pages that pass every markup check) is invisible in any other output.
+    console.error(
+      '[capture] note: no JavaScript-dependent hiding rule was found. If this theme animates' +
+        ' content in, check a written page renders with scripting off before shipping.',
+    );
+  }
+  if (imageRecode.recoded) {
+    const mb = (n) => (n / 1048576).toFixed(1);
+    console.error(
+      `[capture] re-encoded ${imageRecode.recoded} oversized image(s) to WebP:` +
+        ` ${mb(imageRecode.bytesBefore)} MB -> ${mb(imageRecode.bytesAfter)} MB` +
+        ` (${(100 - (imageRecode.bytesAfter / imageRecode.bytesBefore) * 100).toFixed(1)}% smaller).` +
+        ' Every reference was rewritten with the rename.',
+    );
+    if (imageRecode.stillOverBudget)
+      console.error(
+        `[capture] ${imageRecode.stillOverBudget} of them are still over the` +
+          ` ${Math.round(maxImageBytes / 1024)} KB budget at the lowest quality tried.`,
+      );
+  }
+  if (imageRecode.declined)
+    console.error(
+      `[capture] ${imageRecode.declined} oversized image(s) shipped as captured —` +
+        ' re-encoding them would not have been meaningfully smaller.',
+    );
+  if (imageRecode.skippedNoEncoder)
+    console.error(
+      `[capture] ${imageRecode.skippedNoEncoder} oversized image(s) shipped as captured because` +
+        ' no encoder was available. This is NOT a judgement that they were already optimal:' +
+        ' nothing tried. Install sharp before the capture step.',
+    );
+  if (imageRecode.collisions.length)
+    console.error(
+      `[capture] ${imageRecode.collisions.length} image(s) kept their original encoding because` +
+        ` the .webp name was already taken: ${imageRecode.collisions.slice(0, 5).join(', ')}`,
+    );
   const assetTally = tallyFailures(assetFailures);
   const assetFailureNote = describeFailures(assetTally, domain);
   if (assetFailureNote) console.error(`[capture] assets: ${assetFailureNote}`);
 
+  // `index.html` is what a static host serves at `/`. Read from what was
+  // actually WRITTEN, not from what was fetched: a page can be rendered and
+  // then refused at the write (path containment), and the comment here used to
+  // claim the stronger property while the code checked the weaker one.
+  const frontPageCaptured = writtenPages.has('index.html');
+  const staleNav = selfHost ? (strandedNav.get(selfHost) ?? { pages: 0, links: 0 }) : null;
   const verdict = captureVerdict({
     expected: entries.length,
     captured: rendered.size,
     externalHosts: [...externalHosts],
     failedAssets: assetTally.total,
     assetFailureNote,
+    frontPageCaptured,
+    strandedStaleLinks: staleNav?.links ?? 0,
+    strandedStalePages: staleNav?.pages ?? 0,
+    staleHost: selfHost,
   });
 
   const report = {
@@ -2550,6 +3852,9 @@ async function capture() {
       merged: entries.length,
     },
     captured: captureSummary,
+    frontPageCaptured,
+    offSiteRedirects,
+    strandedNav: Object.fromEntries(strandedNav),
     pages: { captured: captureSummary.byType.page ?? 0, reported: pages.total },
     posts: { captured: captureSummary.byType.post ?? 0, reported: posts.total },
     media: {
@@ -2569,6 +3874,29 @@ async function capture() {
     // and whoever owns that WordPress should be told rather than have it
     // quietly papered over by the migration.
     declaredSelfHost: selfHost,
+    // What replaced the CMS's own client payload. Recorded so a reviewer can
+    // see the size of the change without diffing 589 pages, and so a later run
+    // that quietly stops stripping is visible as a number going to zero.
+    deWordPressed: {
+      runtime: CLONE_RUNTIME_NAME,
+      scriptTagsRemoved: cmsScriptsRemoved.length,
+      distinctScriptsRemoved: new Set(cmsScriptsRemoved).size,
+      inlineScriptsRemoved: cmsInlineScriptsRemoved,
+      waypointHidingRulesRemoved: waypointRulesRemoved,
+      headLinksRemoved: cmsHeadLinksRemoved,
+    },
+    imageOptimization: {
+      enabled: optimizeImages,
+      encoderAvailable: imageRecode.available,
+      maxImageKb: Math.round(maxImageBytes / 1024),
+      recoded: imageRecode.recoded,
+      declined: imageRecode.declined,
+      skippedNoEncoder: imageRecode.skippedNoEncoder,
+      stillOverBudget: imageRecode.stillOverBudget,
+      collisions: imageRecode.collisions.length,
+      bytesBefore: imageRecode.bytesBefore,
+      bytesAfter: imageRecode.bytesAfter,
+    },
     remainingExternalHosts: [...externalHosts],
     escapedPaths,
     ignoreHosts,

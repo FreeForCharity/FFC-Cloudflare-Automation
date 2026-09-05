@@ -45,6 +45,31 @@ import { pathToFileURL } from 'node:url';
  * lines to report. Nothing here reads the filesystem or exits, so the whole
  * decision is exercised by --self-test.
  */
+/**
+ * Why the front page is missing, from the report rather than from assumption.
+ *
+ * An off-site redirect is only ONE way `frontPageCaptured` goes false — a
+ * non-200, an unreachable origin and a path-containment refusal all land here
+ * too. The first draft of this message asserted the redirect unconditionally,
+ * which reads as a diagnosis and would send an operator hunting for a redirect
+ * that does not exist, during an outage. Where the report does record an
+ * off-site hop for the root, name the destination outright; otherwise say
+ * plainly that the cause is in the failure list.
+ */
+export function explainMissingFrontPage(report) {
+  const hops = Array.isArray(report?.offSiteRedirects) ? report.offSiteRedirects : [];
+  const root = hops.find((r) => {
+    try {
+      return new URL(r?.url ?? '').pathname === '/';
+    } catch {
+      return false;
+    }
+  });
+  if (root?.finalUrl)
+    return `The site root redirected off-site to ${root.finalUrl} and was refused rather than stored.`;
+  return 'The capture wrote no index.html; see the page-failure list in the capture log for the cause.';
+}
+
 export function assessCapture(report, minPercent) {
   const captured = report?.captured?.total ?? 0;
   const expected = Array.isArray(report?.entries) ? report.entries.length : 0;
@@ -63,6 +88,48 @@ export function assessCapture(report, minPercent) {
       lines,
       error:
         'The capture report lists no inventory entries at all, so there is nothing to be complete about.',
+    };
+  }
+
+  // Two defects a percentage cannot express. Both were measured on delivery
+  // attempt 6, which scored 99.8% and shipped a clone that was not the
+  // charity's site.
+  //
+  // The front page is not one entry among many: losing it costs 1 of 590,
+  // inside any sane floor, while being the page every visitor sees first. That
+  // run delivered `public/index.html` as a parked WordPress.com landing page
+  // for a domain the operator had excluded, because the source's root
+  // redirected off-site and a 200 says nothing about whose page came back.
+  if (report?.frontPageCaptured === false) {
+    return {
+      ok: false,
+      captured,
+      expected,
+      percent: (captured / expected) * 100,
+      lines,
+      error:
+        "The site's front page was not captured, so the clone would serve 404 at its root. " +
+        'Completeness percentage cannot express this — it is one entry. ' +
+        explainMissingFrontPage(report),
+    };
+  }
+  // Navigation that never came home. The self-containment gate cannot see this:
+  // it loads each page with the source blocked, which exercises subresources,
+  // and a nav href is fetched only when a visitor clicks it. Attempt 6 shipped
+  // 562 of 589 pages whose every menu link left the site, all gates green.
+  const staleHost = report?.declaredSelfHost ?? null;
+  const stranded = staleHost ? (report?.strandedNav?.[staleHost] ?? null) : null;
+  if (stranded && stranded.links > 0) {
+    return {
+      ok: false,
+      captured,
+      expected,
+      percent: (captured / expected) * 100,
+      lines,
+      error:
+        `${stranded.links} navigation link(s) across ${stranded.pages} page(s) still point at ` +
+        `${staleHost}, which does not serve this site. Every menu click would leave the clone ` +
+        'for a dead domain.',
     };
   }
 
@@ -119,6 +186,90 @@ function selfTest() {
   eq(
     "a site's own dead links do not block a complete capture",
     assessCapture(report(589, 590, REAL), 98).ok,
+    true,
+  );
+  // Called through a catcher: this message is produced DURING an outage, so a
+  // regression that throws must read as a named failure, not as a self-test
+  // that died with zero reported failures. The first mutation run against this
+  // block was detected only by a crash, which is the same weak signal.
+  const explain = (report) => {
+    try {
+      return explainMissingFrontPage(report);
+    } catch (err) {
+      return `THREW: ${err.message}`;
+    }
+  };
+  eq(
+    'the front-page message names the redirect target when the report records one',
+    explain({ offSiteRedirects: [{ url: 'https://new.org/', finalUrl: 'https://old.org/' }] }),
+    'The site root redirected off-site to https://old.org/ and was refused rather than stored.',
+  );
+  eq(
+    'it does NOT assert a redirect when none was recorded — the other failure modes',
+    explain({ offSiteRedirects: [] }),
+    'The capture wrote no index.html; see the page-failure list in the capture log for the cause.',
+  );
+  eq(
+    'a deep-path off-site hop does not get reported as the ROOT redirecting',
+    explain({
+      offSiteRedirects: [{ url: 'https://new.org/about-us/', finalUrl: 'https://old.org/x/' }],
+    }).includes('redirected off-site'),
+    false,
+  );
+  eq(
+    'a report with no offSiteRedirects field at all is tolerated',
+    explain({}).includes('index.html'),
+    true,
+  );
+  eq(
+    'a malformed entry does not take the assessor down mid-outage',
+    explain({ offSiteRedirects: [{ url: 'not a url' }, null] }).startsWith('THREW'),
+    false,
+  );
+  eq(
+    'a missing front page blocks the conversion even at 99.8%',
+    assessCapture({ ...report(589, 590, REAL), frontPageCaptured: false }, 98).ok,
+    false,
+  );
+  eq(
+    'the front-page refusal says what happened, not just that a count was short',
+    assessCapture({ ...report(589, 590, REAL), frontPageCaptured: false }, 98).error.includes(
+      'front page',
+    ),
+    true,
+  );
+  eq(
+    'a captured front page is not a problem',
+    assessCapture({ ...report(590, 590), frontPageCaptured: true }, 98).ok,
+    true,
+  );
+  eq(
+    'navigation still pointing at the stale host blocks a 100% capture',
+    assessCapture(
+      {
+        ...report(590, 590),
+        declaredSelfHost: 'old.org',
+        strandedNav: { 'old.org': { pages: 562, links: 24728 } },
+      },
+      98,
+    ).ok,
+    false,
+  );
+  eq(
+    'links to the SERVING domain do not block — /feed/ and /wp-json/ have no local copy',
+    assessCapture(
+      {
+        ...report(590, 590),
+        declaredSelfHost: 'old.org',
+        strandedNav: { 'new.org': { pages: 590, links: 590 } },
+      },
+      98,
+    ).ok,
+    true,
+  );
+  eq(
+    'a report from a site with no stale host at all is unaffected',
+    assessCapture({ ...report(590, 590), strandedNav: {} }, 98).ok,
     true,
   );
   eq(

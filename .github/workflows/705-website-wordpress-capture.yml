@@ -285,6 +285,14 @@ jobs:
             echo "::warning::Inspect returned a non-ready verdict (exit $rc). See the job summary for which one."
           fi
 
+      # See 706 for why this is installed rather than committed: sharp is a
+      # native module, and the capture imports it dynamically so this repo stays
+      # dependency-free. Without it the capture ships the originals and says so.
+      - name: Install the image encoder
+        if: needs.resolve.outputs.mode == 'capture'
+        shell: bash
+        run: npm install --no-save --no-audit --no-fund sharp@0.34.5
+
       - name: Capture the site
         if: needs.resolve.outputs.mode == 'capture'
         env:

@@ -35,8 +35,10 @@ import {
   writeFileSync,
   readFileSync,
 } from 'node:fs';
-import { join, relative, dirname } from 'node:path';
+import { join, relative, dirname, sep } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 function arg(name, def) {
   const i = process.argv.indexOf(`--${name}`);
@@ -44,6 +46,68 @@ function arg(name, def) {
 }
 
 const PAGE = /^page\.(tsx|ts|jsx|js)$/;
+
+/**
+ * Template files under public/ that must survive the wipe.
+ *
+ * `public/` is replaced wholesale by the clone, and only CNAME used to be
+ * carried across. The first real delivery therefore shipped a PR that failed
+ * the target repo's own drift check:
+ *
+ *   ❌ public/.well-known/security.txt is missing. Restore it from the template.
+ *   ⚠️  public/_headers is missing.
+ *
+ * These are not template decoration. security.txt is the security-contact
+ * artifact FFC requires on every charity site, and it exists at both the
+ * well-known path and the root fallback the drift check looks for. Deleting it
+ * during a migration silently removes a site's way of receiving vulnerability
+ * reports.
+ *
+ * Kept as a named list rather than a filter so that what survives is legible
+ * and testable, instead of being an emergent property of the copy order.
+ */
+// Forward-slash literals, not `join()`: these are Map keys and appear in the
+// report and in test output, and `join` would spell the last one
+// `.well-known\\security.txt` on Windows — where this repo's own Conductor runs.
+// `join(publicDir, rel)` at the filesystem boundary accepts either separator,
+// so the portable spelling costs nothing.
+//
+// CNAME is deliberately ABSENT. It is carried across the wipe by its own step,
+// which then writes `keptCname || domain` unconditionally — so listing it here
+// would make the "clone wins on a collision" rule below false for exactly one
+// entry. That is the right behaviour for CNAME (the published domain is an FFC
+// deployment decision, not content captured from the source site), and the
+// wrong thing to express through a mechanism that promises the opposite.
+export const PRESERVED_PUBLIC_FILES = ['_headers', 'security.txt', '.well-known/security.txt'];
+
+/** Read the preserved files before the wipe. Missing ones are simply absent. */
+export function readPreservedPublicFiles(publicDir) {
+  const kept = new Map();
+  for (const rel of PRESERVED_PUBLIC_FILES) {
+    const p = join(publicDir, rel);
+    if (existsSync(p)) kept.set(rel, readFileSync(p));
+  }
+  return kept;
+}
+
+/**
+ * Put them back after the clone lands.
+ *
+ * The clone wins on a genuine collision: if the captured site shipped its own
+ * file at that path it is the site's content, and overwriting it with the
+ * template's would be the migration editing the charity's site.
+ */
+export function restorePreservedPublicFiles(publicDir, kept) {
+  const restored = [];
+  for (const [rel, buf] of kept) {
+    const dest = join(publicDir, rel);
+    if (existsSync(dest)) continue;
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, buf);
+    restored.push(rel);
+  }
+  return restored;
+}
 
 /** httrack bookkeeping that must not become part of public/. */
 function cleanCloneCruft(clone) {
@@ -90,6 +154,61 @@ function removeDeadSentinel(appDir, backupDir) {
     }
   }
   return removed;
+}
+
+/**
+ * Templates written verbatim into the charity repo, and where they land.
+ *
+ * They live as real files rather than string literals so they are reviewable,
+ * type-checked by the receiving repo's own CI, and formatted in that repo's
+ * Prettier style (no semicolons) — which is why `.prettierignore` here excludes
+ * them from this repo's own formatter.
+ */
+const CLONE_SOURCE_FILES = [
+  ['clone-sitemap.ts', join('src', 'app', 'sitemap.ts')],
+  ['clone-sitemap.test.ts', join('__tests__', 'app', 'sitemap.test.ts')],
+];
+
+/**
+ * Replace the template's route-derived sitemap with one derived from the clone.
+ *
+ * The FFC template builds `/sitemap.xml` from a hand-maintained list of
+ * `src/app/**` routes, and guards it with a unit test that diffs that list
+ * against the filesystem. Both are correct for a repo whose pages are app
+ * routes, and both are wrong the moment this script runs: every template route
+ * is moved into `_disabled_template_routes/` precisely so the captured pages do
+ * not collide with them, so the sitemap ends up advertising eight routes that
+ * no longer exist and none of the several hundred pages that do — and its test
+ * fails comparing that list against an empty directory.
+ *
+ * The replacement derives the list from `public/` at build time. Note this is
+ * not "delete the failing test": the module under test is replaced in the same
+ * step, the test is replaced with one asserting the same property (the sitemap
+ * cannot silently fall behind what is published) against where the pages now
+ * live, and it covers every captured page rather than eight template ones.
+ *
+ * Skipped entirely on a repo that has no `src/app/sitemap.ts` — an FFC-EX repo
+ * that does not carry the template's sitemap has nothing here to correct, and
+ * writing one in would be inventing a route it never asked for.
+ */
+function installCloneSitemap(repo, assetsDir) {
+  const target = join(repo, 'src', 'app', 'sitemap.ts');
+  if (!existsSync(target)) return [];
+  const written = [];
+  for (const [src, rel] of CLONE_SOURCE_FILES) {
+    const from = join(assetsDir, src);
+    if (!existsSync(from)) {
+      throw new Error(
+        `${from} is missing from this checkout. It is written into the charity repo verbatim, ` +
+          'so refusing to deliver a clone whose sitemap would describe routes that no longer exist.',
+      );
+    }
+    const dest = join(repo, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(from, dest);
+    written.push(rel.split(sep).join('/'));
+  }
+  return written;
 }
 
 /** Move template app page routes aside so they don't collide with the clone. */
@@ -146,18 +265,123 @@ function countRoutablePages(dir) {
  * repo's ignore files exclude public/ so its CI (and pre-commit hooks) skip it.
  */
 function ensurePublicIgnored(repo) {
-  for (const ignoreName of ['.prettierignore', '.eslintignore']) {
-    const ignorePath = join(repo, ignoreName);
-    const existing = existsSync(ignorePath) ? readFileSync(ignorePath, 'utf8') : '';
-    const lines = existing.split(/\r?\n/);
-    if (!lines.includes('public/')) {
+  // Prettier still reads .prettierignore, so this half works as written.
+  const ignorePath = join(repo, '.prettierignore');
+  const existing = existsSync(ignorePath) ? readFileSync(ignorePath, 'utf8') : '';
+  if (!existing.split(/\r?\n/).includes('public/')) {
+    const sep = existing && !existing.endsWith('\n') ? '\n' : '';
+    writeFileSync(
+      ignorePath,
+      existing + sep + '# Static WordPress clone assets (not source)\npublic/\n',
+    );
+  }
+  ensureEslintIgnoresPublic(repo);
+}
+
+/**
+ * Flat-config filenames in ESLint's own resolution order, highest priority
+ * first.
+ *
+ * Copied from `lib/config/config-loader.js` in the shipped package rather than
+ * from memory, and verified against eslint 10.1.0 — the first draft of this
+ * list put `.mjs` ahead of `.js` and omitted the three TypeScript variants
+ * outright. Both errors have the same consequence as the bug this function
+ * exists to fix: a repo carrying `eslint.config.js` alongside `.mjs` would
+ * have had the ignore written to the file ESLint does not read, and a repo
+ * using `eslint.config.ts` would have fallen through to the `.eslintignore`
+ * branch, which ESLint 9+ ignores. Silent, in both cases.
+ */
+const ESLINT_FLAT_CONFIGS = [
+  'eslint.config.js',
+  'eslint.config.mjs',
+  'eslint.config.cjs',
+  'eslint.config.ts',
+  'eslint.config.mts',
+  'eslint.config.cts',
+];
+
+/**
+ * Exclude the mirror from ESLint.
+ *
+ * This used to write `public/` into `.eslintignore` and stop there. ESLint 9
+ * flat config IGNORES that file entirely — it says so on stderr and carries on
+ * linting:
+ *
+ *   ESLintIgnoreWarning: The ".eslintignore" file is no longer supported.
+ *   Switch to using the "ignores" property in "eslint.config.js"
+ *
+ * So the exclusion was inert, and the first real delivery linted 1,838 mirrored
+ * WordPress assets and failed on minified plugin bundles:
+ *
+ *   public/_ffc-assets/…/hustle-ui.min.js
+ *     24:18856  error  Component definition is missing display name
+ *
+ * A warning nobody reads is how a "handled" case ships broken. The ignore now
+ * goes where ESLint looks, and a config whose shape we cannot edit is a hard
+ * error rather than another silent no-op.
+ */
+function ensureEslintIgnoresPublic(repo) {
+  const found = ESLINT_FLAT_CONFIGS.map((n) => join(repo, n)).filter((p) => existsSync(p));
+  if (!found.length) {
+    // No flat config: a legacy repo that genuinely still reads .eslintignore.
+    const legacy = join(repo, '.eslintignore');
+    const existing = existsSync(legacy) ? readFileSync(legacy, 'utf8') : '';
+    if (!existing.split(/\r?\n/).includes('public/')) {
       const sep = existing && !existing.endsWith('\n') ? '\n' : '';
       writeFileSync(
-        ignorePath,
+        legacy,
         existing + sep + '# Static WordPress clone assets (not source)\npublic/\n',
       );
     }
+    return;
   }
+  const configPath = found[0];
+  const src = readFileSync(configPath, 'utf8');
+  if (/["'`]public\/\*\*["'`]/.test(src)) return; // already excluded
+
+  // Extend an existing ignores array where there is one.
+  const extend = /ignores:\s*\[/;
+  if (extend.test(src)) {
+    writeFileSync(
+      configPath,
+      src.replace(
+        extend,
+        "ignores: [\n      // Static WordPress clone assets (not source), added by workflow 706.\n      'public/**',",
+      ),
+    );
+    return;
+  }
+  // A flat config with no `ignores` at all is still perfectly valid, and
+  // refusing it would break a conversion for a repo that has done nothing
+  // wrong. A leading ignores-only element is the documented way to add global
+  // ignores, and inserting one after the array's opening bracket needs no
+  // understanding of what follows.
+  //
+  // Both module systems, because this list carries `.cjs` and `.cts` and a
+  // plain `.js` is CommonJS in any package without `"type": "module"` — which
+  // is the default. Matching only `export default [` meant every one of those
+  // fell through to the throw below and failed a conversion for a repo whose
+  // config is perfectly valid. Caught in review on #1235; the filename list
+  // said the shapes were supported and the code only handled one of them.
+  const prepend = /(?:export\s+default|module\.exports\s*=)\s*\[/;
+  if (prepend.test(src)) {
+    writeFileSync(
+      configPath,
+      src.replace(
+        prepend,
+        (m) =>
+          `${m}\n  // Static WordPress clone assets (not source), added by workflow 706.\n  { ignores: ['public/**'] },`,
+      ),
+    );
+    return;
+  }
+  throw new Error(
+    `${configPath} has neither an \`ignores: [\` array to extend nor an \`export default [\` ` +
+      `or \`module.exports = [\` to prepend to, so the WordPress mirror under public/ would ` +
+      `be linted as source. Add ` +
+      `"public/**" to its ignores and re-run — refusing to write an ignore file ESLint 9 ` +
+      `does not read.`,
+  );
 }
 
 function countFiles(d) {
@@ -167,22 +391,34 @@ function countFiles(d) {
   return n;
 }
 
-function integrate({ clone, repo, domain }) {
+/** This checkout's assets/ directory, resolved from the script rather than the cwd. */
+const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets');
+
+function integrate({ clone, repo, domain, assetsDir = ASSETS_DIR }) {
   cleanCloneCruft(clone);
 
-  // Replace public/ with the clone (preserve an existing CNAME if present).
+  // Replace public/ with the clone, carrying the template's own files across.
   const publicDir = join(repo, 'public');
   const cnamePath = join(publicDir, 'CNAME');
   const keptCname = existsSync(cnamePath) ? readFileSync(cnamePath, 'utf8').trim() : '';
+  const carried = readPreservedPublicFiles(publicDir);
   rmSync(publicDir, { recursive: true, force: true });
   mkdirSync(publicDir, { recursive: true });
   cpSync(clone, publicDir, { recursive: true });
+  restorePreservedPublicFiles(publicDir, carried);
 
   const appDir = join(repo, 'src', 'app');
   const backupDir = join(repo, '_disabled_template_routes');
 
   const removedSentinels = removeDeadSentinel(appDir, backupDir);
   const movedRoutes = disableTemplatePages(appDir, backupDir);
+  // Order-independent of the two lines above, deliberately: the sitemap this
+  // installs reads `public/` at build time and never looks at `src/app`, and
+  // `disableTemplatePages` moves only `page.*` files, so neither step can see
+  // the other's work. Said explicitly because the first draft of this line
+  // claimed the opposite, and a mutation that swapped the order proved the
+  // claim untestable — which is the tell that it was not true.
+  const sitemapFiles = installCloneSitemap(repo, assetsDir);
 
   // Ensure CNAME (apex) is present for GitHub Pages.
   writeFileSync(cnamePath, (keptCname || domain) + '\n');
@@ -193,6 +429,7 @@ function integrate({ clone, repo, domain }) {
     domain,
     publicFiles: countFiles(publicDir),
     disabledTemplateRoutes: movedRoutes,
+    cloneSourceFilesWritten: sitemapFiles,
     removedDeadSentinels: removedSentinels.map((p) => relative(repo, p)),
     appRoutesRemaining: countRoutablePages(appDir),
     cname: keptCname || domain,
@@ -243,8 +480,107 @@ function selfTest() {
     'export default function S(){return null}',
   );
   writeFileSync(join(repo, 'public', 'CNAME'), 'kept.example\n');
+  // The template files a real FFC-EX repo carries and its drift check requires.
+  mkdirSync(join(repo, 'public', '.well-known'), { recursive: true });
+  writeFileSync(
+    join(repo, 'public', '.well-known', 'security.txt'),
+    'Contact: mailto:security@freeforcharity.org\n',
+  );
+  writeFileSync(
+    join(repo, 'public', 'security.txt'),
+    'Contact: mailto:security@freeforcharity.org\n',
+  );
+  writeFileSync(
+    join(repo, 'public', '_headers'),
+    '/*\n  Content-Security-Policy: default-src self\n',
+  );
+  // An ESLint 9 flat config, shaped like the real template's.
+  writeFileSync(
+    join(repo, 'eslint.config.mjs'),
+    "const eslintConfig = [\n  {\n    ignores: [\n      'node_modules/**',\n      '.next/**',\n    ],\n  },\n]\n\nexport default eslintConfig\n",
+  );
+  // …and a clone that ships its own file at one preserved path, to prove the
+  // captured site is not overwritten by the template.
+  writeFileSync(join(clone, '_headers'), '/*\n  X-From: from-the-clone\n');
+  // …and its own CNAME, which must NOT win: the published domain is an FFC
+  // deployment decision, not content captured from the source site.
+  writeFileSync(join(clone, 'CNAME'), 'from-the-clone.example\n');
+
+  // The template's route-derived sitemap and the unit test that guards it.
+  mkdirSync(join(repo, '__tests__', 'app'), { recursive: true });
+  writeFileSync(
+    join(appDir, 'sitemap.ts'),
+    "export const routes = [{ path: '/privacy-policy' }]\n",
+  );
+  writeFileSync(
+    join(repo, '__tests__', 'app', 'sitemap.test.ts'),
+    "import { routes } from '../../src/app/sitemap'\n",
+  );
 
   const report = integrate({ clone, repo, domain: 'fallback.example' });
+
+  // --- The sitemap follows the routes ---------------------------------------
+  // Both files are replaced together. Replacing only the test would be
+  // quarantining a failure; replacing only the module would leave a test
+  // importing symbols that no longer exist. The property the template's test
+  // protected — the sitemap cannot silently fall behind what is published — is
+  // kept and retargeted at public/, where the pages now are.
+  check(
+    'the route-derived sitemap is replaced with the clone-derived one',
+    readFileSync(join(appDir, 'sitemap.ts'), 'utf8').includes('discoverExportedPages'),
+  );
+  check(
+    'and its test is replaced in the same step, not deleted',
+    readFileSync(join(repo, '__tests__', 'app', 'sitemap.test.ts'), 'utf8').includes(
+      'lists every exported page exactly once',
+    ),
+  );
+  check(
+    'both replacements are reported rather than done silently',
+    JSON.stringify(report.cloneSourceFilesWritten) ===
+      JSON.stringify(['src/app/sitemap.ts', '__tests__/app/sitemap.test.ts']),
+  );
+  // A repo that never carried the template's sitemap has nothing to correct,
+  // and writing one in would invent a route it never asked for.
+  {
+    const bare = join(root, 'no-sitemap-repo');
+    mkdirSync(join(bare, 'src', 'app'), { recursive: true });
+    mkdirSync(join(bare, 'public'), { recursive: true });
+    const bareClone = join(root, 'no-sitemap-clone');
+    mkdirSync(bareClone, { recursive: true });
+    writeFileSync(join(bareClone, 'index.html'), '<html>home</html>');
+    const r = integrate({ clone: bareClone, repo: bare, domain: 'x.example' });
+    check(
+      'a repo with no template sitemap is left alone',
+      r.cloneSourceFilesWritten.length === 0 && !existsSync(join(bare, 'src', 'app', 'sitemap.ts')),
+    );
+  }
+  // The templates are delivered verbatim, so a checkout missing one must stop
+  // the run rather than ship a sitemap describing routes that no longer exist.
+  {
+    const orphan = join(root, 'orphan-repo');
+    mkdirSync(join(orphan, 'src', 'app'), { recursive: true });
+    mkdirSync(join(orphan, 'public'), { recursive: true });
+    writeFileSync(join(orphan, 'src', 'app', 'sitemap.ts'), 'export const routes = []\n');
+    const orphanClone = join(root, 'orphan-clone');
+    mkdirSync(orphanClone, { recursive: true });
+    writeFileSync(join(orphanClone, 'index.html'), '<html>home</html>');
+    let threw = '';
+    try {
+      integrate({
+        clone: orphanClone,
+        repo: orphan,
+        domain: 'x.example',
+        assetsDir: join(root, 'nowhere'),
+      });
+    } catch (err) {
+      threw = err?.message ?? '';
+    }
+    check(
+      'a missing template stops the run and names the file',
+      threw.includes('clone-sitemap.ts') && threw.includes('missing'),
+    );
+  }
 
   check(
     'the `_clone-host` sentinel is deleted, not filed into the backup',
@@ -272,10 +608,154 @@ function selfTest() {
     readFileSync(join(repo, 'public', 'CNAME'), 'utf8').trim() === 'kept.example' &&
       report.cname === 'kept.example',
   );
+  // The exception PRESERVED_PUBLIC_FILES documents, asserted as behaviour.
+  // Removing CNAME from that list is behaviour-neutral on its own — the
+  // explicit write overwrites either way — so only this pins the rule that
+  // actually governs it, and distinguishes CNAME from `_headers` above.
   check(
-    'public/ is excluded from Prettier and ESLint',
-    readFileSync(join(repo, '.prettierignore'), 'utf8').includes('public/') &&
-      readFileSync(join(repo, '.eslintignore'), 'utf8').includes('public/'),
+    'the CNAME the repo already published beats one shipped by the clone',
+    readFileSync(join(repo, 'public', 'CNAME'), 'utf8').trim() === 'kept.example',
+  );
+  check(
+    'CNAME is governed by its own step, not by the preserved-file mechanism',
+    !PRESERVED_PUBLIC_FILES.includes('CNAME'),
+  );
+  check(
+    'public/ is excluded from Prettier',
+    readFileSync(join(repo, '.prettierignore'), 'utf8').includes('public/'),
+  );
+  // The ESLint half asserted that `.eslintignore` CONTAINED public/ — which it
+  // did, while ESLint 9 ignored that file and linted the mirror anyway. The
+  // assertion has to be about the file ESLint actually reads.
+  check(
+    'public/ is excluded in the flat config ESLint 9 actually reads',
+    readFileSync(join(repo, 'eslint.config.mjs'), 'utf8').includes("'public/**'"),
+  );
+  // A real parse, not a substring match: the ignore is inserted by regex, and a
+  // config this script corrupts would fail ESLint at run time in the charity's
+  // repo rather than here. `node --check` parses without executing.
+  check(
+    'the flat config still parses as an ES module after the edit',
+    spawnSync(process.execPath, ['--check', join(repo, 'eslint.config.mjs')], {
+      encoding: 'utf8',
+    }).status === 0,
+  );
+  // The guard exists so an unrecognised config is LOUD rather than silently
+  // unignored — which is precisely how the .eslintignore version shipped broken.
+  // Without this case the guard is untestable: every other fixture has the
+  // anchor, so deleting the check changes nothing and the mutation survives.
+  // A config with no `ignores` is still a valid config, and refusing it would
+  // break a conversion for a repo that has done nothing wrong. `export default
+  // [` takes a leading ignores-only element — the documented way to declare
+  // global ignores — which needs no understanding of what follows it.
+  check(
+    'a flat config with no ignores array gets an ignores-only element prepended',
+    (() => {
+      const bare = mkdtempSync(join(tmpdir(), 'integrate-noanchor-'));
+      const cfg = join(bare, 'eslint.config.mjs');
+      writeFileSync(cfg, 'export default [\n  { rules: {} },\n]\n');
+      // Caught rather than allowed to escape: without this the prepend path
+      // is still "detected" if it regresses, but as a crashed self-test
+      // reporting zero failures, which reads as a passing suite that died.
+      try {
+        ensureEslintIgnoresPublic(bare);
+      } catch {
+        return false;
+      }
+      const after = readFileSync(cfg, 'utf8');
+      return (
+        after.includes("{ ignores: ['public/**'] }") &&
+        spawnSync(process.execPath, ['--check', cfg], { encoding: 'utf8' }).status === 0
+      );
+    })(),
+  );
+  // …but a shape neither anchor recognises is still LOUD rather than silently
+  // unignored, which is precisely how the .eslintignore version shipped broken.
+  // Without this case that guard is untestable: every other fixture matches an
+  // anchor, so deleting the throw changes nothing and the mutation survives.
+  check(
+    'a flat config matching neither anchor is a hard error, not a silent no-op',
+    (() => {
+      const odd = mkdtempSync(join(tmpdir(), 'integrate-unknown-'));
+      writeFileSync(
+        join(odd, 'eslint.config.mjs'),
+        'const c = [{ rules: {} }]\nexport default c\n',
+      );
+      try {
+        ensureEslintIgnoresPublic(odd);
+        return false; // it returned quietly: the mirror would be linted as source
+      } catch (err) {
+        return /ignores|public\/\*\*/.test(err.message);
+      }
+    })(),
+  );
+  // A CommonJS flat config. `eslint.config.cjs` and `.cts` are in the filename
+  // list, and a plain `eslint.config.js` is CommonJS in any package without
+  // `"type": "module"` — the default — so this is the common shape, not an
+  // exotic one. It matched neither branch and fell through to the throw,
+  // failing a conversion for a repo whose config is perfectly valid.
+  {
+    const cjs = join(root, 'cjs-repo');
+    mkdirSync(join(cjs, 'src', 'app'), { recursive: true });
+    mkdirSync(join(cjs, 'public'), { recursive: true });
+    writeFileSync(join(cjs, 'eslint.config.cjs'), 'module.exports = [\n  { rules: {} },\n]\n');
+    const cjsClone = join(root, 'cjs-clone');
+    mkdirSync(cjsClone, { recursive: true });
+    writeFileSync(join(cjsClone, 'index.html'), '<html>home</html>');
+    let threw = '';
+    try {
+      integrate({ clone: cjsClone, repo: cjs, domain: 'x.example' });
+    } catch (err) {
+      threw = err?.message ?? String(err);
+    }
+    const after = existsSync(join(cjs, 'eslint.config.cjs'))
+      ? readFileSync(join(cjs, 'eslint.config.cjs'), 'utf8')
+      : '';
+    check(
+      'a CommonJS flat config is prepended to rather than rejected',
+      threw === '' && after.includes("{ ignores: ['public/**'] }"),
+    );
+    check(
+      'and the prepend lands inside the array, not before module.exports',
+      after.indexOf('module.exports = [') < after.indexOf("{ ignores: ['public/**'] }"),
+    );
+    // The legacy file ESLint 9 does not read must NOT be the fallback here.
+    check(
+      'no .eslintignore is written for a repo that has a flat config',
+      !existsSync(join(cjs, '.eslintignore')),
+    );
+  }
+
+  check(
+    'a repo with no flat config still gets the legacy .eslintignore',
+    (() => {
+      const legacyRepo = mkdtempSync(join(tmpdir(), 'integrate-legacy-'));
+      ensureEslintIgnoresPublic(legacyRepo);
+      return readFileSync(join(legacyRepo, '.eslintignore'), 'utf8').includes('public/');
+    })(),
+  );
+  check(
+    'the edit keeps the entries that were already there',
+    (() => {
+      const src = readFileSync(join(repo, 'eslint.config.mjs'), 'utf8');
+      return src.includes("'node_modules/**'") && src.includes("'.next/**'");
+    })(),
+  );
+  check(
+    'a template file the drift check requires survives the public/ wipe',
+    existsSync(join(repo, 'public', '.well-known', 'security.txt')) &&
+      readFileSync(join(repo, 'public', '.well-known', 'security.txt'), 'utf8').includes(
+        'Contact:',
+      ),
+  );
+  check(
+    'the root-path security.txt fallback and _headers survive too',
+    existsSync(join(repo, 'public', 'security.txt')) &&
+      existsSync(join(repo, 'public', '_headers')),
+  );
+  check(
+    'the captured site wins where it ships its own file at a preserved path',
+    readFileSync(join(repo, 'public', '_headers'), 'utf8').includes('from-the-clone'),
   );
 
   // Re-clone and integrate again, as a repeat 702 dispatch does: nothing is
@@ -304,6 +784,53 @@ function selfTest() {
   check(
     'a page in a private folder is not counted as a route, but a route group is',
     countRoutablePages(routeFixture) === 3,
+  );
+
+  // -- flat-config precedence, measured against ESLint's own loader ---------
+  // Writing the ignore into a config ESLint does not read is the SAME failure
+  // this function was written to fix, one layer over — and it is silent, so
+  // only an explicit case catches it.
+  {
+    const both = join(root, 'eslint-precedence');
+    mkdirSync(both, { recursive: true });
+    const shape = (marker) =>
+      `const c = [\n  {\n    ignores: [\n      '${marker}/**',\n    ],\n  },\n]\n\nexport default c\n`;
+    writeFileSync(join(both, 'eslint.config.js'), shape('from-js'));
+    writeFileSync(join(both, 'eslint.config.mjs'), shape('from-mjs'));
+    ensureEslintIgnoresPublic(both);
+    check(
+      'with both .js and .mjs present the ignore goes into .js, which ESLint prefers',
+      readFileSync(join(both, 'eslint.config.js'), 'utf8').includes("'public/**'") &&
+        !readFileSync(join(both, 'eslint.config.mjs'), 'utf8').includes("'public/**'"),
+    );
+  }
+  {
+    // A TypeScript flat config is a config, not an absent one. Omitting these
+    // sent such a repo down the .eslintignore branch, which ESLint 9+ ignores.
+    const ts = join(root, 'eslint-ts');
+    mkdirSync(ts, { recursive: true });
+    writeFileSync(
+      join(ts, 'eslint.config.ts'),
+      "const c = [\n  {\n    ignores: [\n      'node_modules/**',\n    ],\n  },\n]\n\nexport default c\n",
+    );
+    ensureEslintIgnoresPublic(ts);
+    check(
+      'an eslint.config.ts is edited rather than falling through to .eslintignore',
+      readFileSync(join(ts, 'eslint.config.ts'), 'utf8').includes("'public/**'") &&
+        !existsSync(join(ts, '.eslintignore')),
+    );
+  }
+  check(
+    "the filename list matches ESLint's documented resolution order exactly",
+    JSON.stringify(ESLINT_FLAT_CONFIGS) ===
+      JSON.stringify([
+        'eslint.config.js',
+        'eslint.config.mjs',
+        'eslint.config.cjs',
+        'eslint.config.ts',
+        'eslint.config.mts',
+        'eslint.config.cts',
+      ]),
   );
 
   rmSync(root, { recursive: true, force: true });

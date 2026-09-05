@@ -404,6 +404,19 @@ jobs:
         with:
           node-version: '20'
 
+      # sharp is imported dynamically by the capture, which keeps this repo
+      # dependency-free. Installed here rather than committed because it is a
+      # native module: the binary that works on this runner is not the one that
+      # works on the Conductor's Windows host, so pinning it in a lockfile here
+      # would break the local self-test rather than help it. Without it the
+      # capture still succeeds and simply ships the originals — it says so, and
+      # the receiving repo's per-file image budget then fails, which is the
+      # visible symptom rather than a silent 200 MB of flyers.
+      - name: Install the image encoder
+        working-directory: automation
+        shell: bash
+        run: npm install --no-save --no-audit --no-fund sharp@0.34.5
+
       - name: Capture the live WordPress site
         working-directory: automation
         env:

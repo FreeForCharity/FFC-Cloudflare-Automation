@@ -228,11 +228,25 @@ def test_the_cms_accessibility_defects_are_corrected() -> None:
 
 
 def test_a_page_link_to_itself_is_brought_home_too() -> None:
-    """The header logo points at the site root, so on the FRONT page it is a self-link.
+    """A page's link to itself is rewritten, asserted here on /about-us/.
 
-    Skipping self-links left that one absolute, and only on the front page —
-    everywhere else the root is a different entry and was rewritten normally.
-    588 of 589 pages looked right, which is why it survived the stranded-nav fix.
+    What is asserted and what motivated it are different pages, deliberately,
+    and the docstring used to describe only the second — flagged in review on
+    #1239.
+
+    The motivating case is the FRONT page: the header logo points at the site
+    root, so there it is a self-link, and skipping self-links left it absolute
+    pointing at the host being decommissioned. Everywhere else the root is a
+    different entry and was rewritten normally, so 588 of 589 pages looked
+    right — which is why it survived the stranded-navigation fix.
+
+    That instance cannot be asserted from this fixture: its front page
+    redirects off-site and is correctly REFUSED, so no `index.html` is written
+    (see `test_a_front_page_that_redirects_off_site_is_refused_not_stored`).
+    The mechanism is the same one, so it is exercised on `/about-us/`'s link to
+    itself instead. Making the fixture serve a well-formed front page purely to
+    assert this would cost the refusal case, which is the more valuable of the
+    two.
     """
     with tempfile.TemporaryDirectory() as td:
         out = pathlib.Path(td) / "site"

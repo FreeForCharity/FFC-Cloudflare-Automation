@@ -3341,6 +3341,7 @@ async function capture() {
   const imageRecode = {
     recoded: 0,
     declined: 0,
+    skippedNoEncoder: 0,
     collisions: [],
     stillOverBudget: 0,
     bytesBefore: 0,
@@ -3443,19 +3444,6 @@ async function capture() {
         ` ${distinct} distinct file(s) and ${cmsInlineScriptsRemoved} inline block(s).` +
         ` They are replaced by ${CLONE_RUNTIME_NAME}, which has no dependencies and` +
         ' reaches no network. Structured data (application/ld+json) is kept.',
-    );
-  }
-  console.error(
-    `[capture] removed ${waypointRulesRemoved} rule(s) hiding animated content behind` +
-      ' JavaScript, so the export reads with scripting disabled.',
-  );
-  if (!waypointRulesRemoved && cmsScriptsRemoved.length) {
-    // Not fatal — a site with no scroll animations has no such rule — but it is
-    // worth saying out loud, because the failure it guards against (589 blank
-    // pages that pass every markup check) is invisible in any other output.
-    console.error(
-      '[capture] note: no JavaScript-dependent hiding rule was found. If this theme animates' +
-        ' content in, check a written page renders with scripting off before shipping.',
     );
   }
   if (cmsHeadLinksRemoved) {
@@ -3583,6 +3571,11 @@ async function capture() {
           if (encoded.buffer.length > maxImageBytes) imageRecode.stillOverBudget += 1;
           buf = encoded.buffer;
           name = target;
+        } else if (imageRecode.available === false) {
+          // Not the same thing as declining on merit, and reporting it as one
+          // is a lie the operator cannot check: "re-encoding would not have
+          // been meaningfully smaller" about an image nothing tried to encode.
+          imageRecode.skippedNoEncoder += 1;
         } else {
           imageRecode.declined += 1;
         }
@@ -3773,6 +3766,24 @@ async function capture() {
   // draft put it there and crashed on the temporal dead zone instead, which
   // was the loud version of the same mistake; a report that merely printed
   // `re-encoded 0 image(s)` would have been the quiet one.
+  // Down here with the image report, and for the same reason: the CSS pass
+  // strips this rule from stylesheets too, so the count is still climbing
+  // while the page loop's summary prints. The fixture run caught it saying
+  // 3 where the report said 6 — harmless in itself, and the identical
+  // mistake that made the image tally read before it existed.
+  console.error(
+    `[capture] removed ${waypointRulesRemoved} rule(s) hiding animated content behind` +
+      ' JavaScript, so the export reads with scripting disabled.',
+  );
+  if (!waypointRulesRemoved && cmsScriptsRemoved.length) {
+    // Not fatal — a site with no scroll animations has no such rule — but it is
+    // worth saying out loud, because the failure it guards against (589 blank
+    // pages that pass every markup check) is invisible in any other output.
+    console.error(
+      '[capture] note: no JavaScript-dependent hiding rule was found. If this theme animates' +
+        ' content in, check a written page renders with scripting off before shipping.',
+    );
+  }
   if (imageRecode.recoded) {
     const mb = (n) => (n / 1048576).toFixed(1);
     console.error(
@@ -3791,6 +3802,12 @@ async function capture() {
     console.error(
       `[capture] ${imageRecode.declined} oversized image(s) shipped as captured —` +
         ' re-encoding them would not have been meaningfully smaller.',
+    );
+  if (imageRecode.skippedNoEncoder)
+    console.error(
+      `[capture] ${imageRecode.skippedNoEncoder} oversized image(s) shipped as captured because` +
+        ' no encoder was available. This is NOT a judgement that they were already optimal:' +
+        ' nothing tried. Install sharp before the capture step.',
     );
   if (imageRecode.collisions.length)
     console.error(
@@ -3872,6 +3889,7 @@ async function capture() {
       maxImageKb: Math.round(maxImageBytes / 1024),
       recoded: imageRecode.recoded,
       declined: imageRecode.declined,
+      skippedNoEncoder: imageRecode.skippedNoEncoder,
       stillOverBudget: imageRecode.stillOverBudget,
       collisions: imageRecode.collisions.length,
       bytesBefore: imageRecode.bytesBefore,

@@ -819,6 +819,23 @@ async function main() {
       const url = r.url();
       if (isLegacy(url)) return;
       const failure = r.failure()?.errorText;
+      // A same-origin ERR_ABORTED for a URL that is itself one of the pages
+      // THIS RUN is checking is a speculative same-page fetch, not a missing
+      // resource: something on the page (measured on ctvip.org: the App
+      // Router prefetching a footer Link) fetched another one of our own
+      // pages in the background and the fetch was cancelled before it
+      // finished. That other page is not going unverified -- it gets its
+      // own independent goto() in its own iteration of this loop, where a
+      // real defect (a 4xx, a navigation error) still fails the gate. Tried
+      // fixing the actual trigger twice (a networkidle wait before
+      // ctx.close(); removing the scroll that was thought to cancel it) and
+      // ctvip.org reproduced the identical failure both times, unchanged --
+      // so this excuses the symptom, deliberately, rather than a JS
+      // mechanism that has not actually been pinned down.
+      if (failure === 'net::ERR_ABORTED' && url.startsWith(origin)) {
+        const p = url.slice(origin.length) || '/';
+        if (pages.includes(p)) return;
+      }
       const entry = `${url} (${failure})`;
       // Same-origin failures mean the mirror is incomplete. Third-party hosts
       // may simply be unreachable from CI, so those are reported, not fatal.

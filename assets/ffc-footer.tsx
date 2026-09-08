@@ -43,7 +43,17 @@ export default function FfcFooter() {
   const ein = rawEin === TEMPLATE_EIN ? '' : rawEin
   const profileUrl = siteConfig.guidestar?.profileUrl
   const candidUrl = profileUrl === TEMPLATE_GUIDESTAR ? '' : profileUrl
-  const taxStatusLabel = siteConfig.taxStatusLabel?.trim() ?? ''
+  // SiteConfig carries no dedicated tax-status field (checked against both
+  // FFC templates' shared shape). The 501(c)(3) status line is a Level-2
+  // footer-standard item, and the skill's own Level 1/Level 2 split is
+  // "both-or-neither" on the EIN line AND the Candid link together -- not
+  // on `ein` alone, which the identity line above already renders on its
+  // own (a repo with a real EIN but a still-template GuideStar URL gets an
+  // unlinked EIN, never a linked one). Match the STRICTER of the two
+  // existing gates -- `ein && candidUrl`, the same condition that decides
+  // whether the identity line above is wrapped in the Candid link -- so
+  // this line can never appear without it (Copilot review, #1257).
+  const taxStatusLabel = ein && candidUrl ? 'a US 501(c)(3) Non-Profit' : ''
   const policyLinks = [
     { name: 'Privacy Policy', href: '/privacy-policy' },
     { name: 'Cookie Policy', href: '/cookie-policy' },

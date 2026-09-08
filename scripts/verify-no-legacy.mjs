@@ -618,6 +618,50 @@ if (process.argv.includes('--self-test')) {
       })(),
       false,
     ],
+
+    // --- matchesCheckedPage --------------------------------------------
+    [
+      'an exact-spelling match is a checked page',
+      matchesCheckedPage('http://x.org/about-us/', 'http://x.org', ['/about-us/']),
+      true,
+    ],
+    [
+      'a missing trailing slash still matches',
+      matchesCheckedPage('http://x.org/about-us', 'http://x.org', ['/about-us/']),
+      true,
+    ],
+    [
+      'an appended query string (a cache-busting prefetch key) still matches',
+      matchesCheckedPage('http://x.org/about-us/?_rsc=abc123', 'http://x.org', ['/about-us/']),
+      true,
+    ],
+    [
+      'the bare root matches "/" regardless of trailing-slash bookkeeping',
+      matchesCheckedPage('http://x.org/', 'http://x.org', ['/']),
+      true,
+    ],
+    [
+      'a path NOT in the checked list does not match',
+      matchesCheckedPage('http://x.org/wp-content/real.js', 'http://x.org', ['/about-us/']),
+      false,
+    ],
+    [
+      'a different origin never matches, even with the same path',
+      matchesCheckedPage('http://evil.example/about-us/', 'http://x.org', ['/about-us/']),
+      false,
+    ],
+    [
+      'a same-PREFIX host is not the same origin (string startsWith would false-match)',
+      matchesCheckedPage('http://x.org.evil/about-us/', 'http://x.org', ['/about-us/']),
+      false,
+    ],
+    [
+      'a same-PREFIX port is not the same origin either',
+      matchesCheckedPage('http://127.0.0.1:12340/about-us/', 'http://127.0.0.1:1234', [
+        '/about-us/',
+      ]),
+      false,
+    ],
   ];
   let failed = 0;
   for (const [name, got, want] of cases) {
@@ -677,6 +721,41 @@ function isLegacy(url) {
   }
   const d = domain.toLowerCase();
   return hostname === d || hostname.endsWith(`.${d}`);
+}
+
+/**
+ * Does this same-origin URL correspond to one of the pages THIS RUN is
+ * already checking, once a query string / hash and a trailing-slash
+ * mismatch are accounted for?
+ *
+ * The `pages` list (from discoverPages, or --pages) spells every entry with
+ * a trailing slash. A background fetch of one of those same pages -- what
+ * this excuses in requestfailed() -- need not match that spelling exactly:
+ * it can append a cache-busting query string, or omit the trailing slash
+ * the crawled list always carries. Dropping search/hash via `new URL().
+ * pathname` and checking both slash forms is what makes the match hold
+ * across those variants instead of silently missing them.
+ */
+export function matchesCheckedPage(url, origin, pages) {
+  // Parsed .origin comparison, not startsWith: a string-prefix test false-
+  // matches a different host or port that merely shares the same leading
+  // characters (`http://127.0.0.1:1234x` starts with `http://127.0.0.1:123`;
+  // `http://x.org.evil` starts with `http://x.org`), which would suppress a
+  // genuine cross-origin failure instead of only the same-origin one this
+  // function is for.
+  let u;
+  let originUrl;
+  try {
+    u = new URL(url);
+    originUrl = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (u.origin !== originUrl.origin) return false;
+  const p = u.pathname || '/';
+  const withSlash = p.endsWith('/') ? p : `${p}/`;
+  const withoutSlash = p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p;
+  return pages.includes(p) || pages.includes(withSlash) || pages.includes(withoutSlash);
 }
 
 const MIME = {
@@ -818,10 +897,25 @@ async function main() {
     tab.on('requestfailed', (r) => {
       const url = r.url();
       if (isLegacy(url)) return;
-      const entry = `${url} (${r.failure()?.errorText})`;
+      const failure = r.failure()?.errorText ?? 'unknown error';
+      // A same-origin ERR_ABORTED for a URL that is itself one of the pages
+      // THIS RUN is checking is a speculative same-page fetch, not a missing
+      // resource: something on the page (measured on ctvip.org: the App
+      // Router prefetching a footer Link) fetched another one of our own
+      // pages in the background and the fetch was cancelled before it
+      // finished. That other page is not going unverified -- it gets its
+      // own independent goto() in its own iteration of this loop, where a
+      // real defect (a 4xx, a navigation error) still fails the gate. Tried
+      // fixing the actual trigger twice (a networkidle wait before
+      // ctx.close(); removing the scroll that was thought to cancel it) and
+      // ctvip.org reproduced the identical failure both times, unchanged --
+      // so this excuses the symptom, deliberately, rather than a JS
+      // mechanism that has not actually been pinned down.
+      if (failure === 'net::ERR_ABORTED' && matchesCheckedPage(url, origin, pages)) return;
+      const entry = `${url} (${failure})`;
       // Same-origin failures mean the mirror is incomplete. Third-party hosts
       // may simply be unreachable from CI, so those are reported, not fatal.
-      if (url.startsWith(origin)) localMissing.push({ url, why: r.failure()?.errorText });
+      if (url.startsWith(origin)) localMissing.push({ url, why: failure });
       else thirdPartyFailed.push(entry);
     });
     tab.on('response', (r) => {
@@ -840,10 +934,29 @@ async function main() {
       // widget that never scrolls into view never reveals a missing handler.
       await tab.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
       await tab.waitForTimeout(2500);
-      await tab.evaluate(() => window.scrollTo(0, 0));
-      await tab.waitForTimeout(800);
 
+      // Deliberately NOT scrolling back to the top here. Bringing the footer's
+      // next/links into view above starts the App Router prefetching those
+      // routes' RSC payload in the background; scrolling back away takes them
+      // back OUT of view, and the router aborts that fetch (net::ERR_ABORTED)
+      // via the same IntersectionObserver that started it -- reported on the
+      // requestfailed listener above as a same-origin MISSING LOCAL asset that
+      // was never actually missing. Measured directly: on ctvip.org this fired
+      // on 40 of 41 pages, always naming the bare origin root. It is not a
+      // teardown-timing race (a networkidle wait before ctx.close() below does
+      // not help -- the abort has already happened by then) and Playwright's
+      // synchronous request.headers() does not expose the Sec-Purpose header
+      // that would otherwise identify it, so detecting it after the fact isn't
+      // reliable either. Simplest fix: never trigger the cancel. The footer
+      // links stay in view for the rest of this page's lifetime, so whatever
+      // they prefetch just finishes normally against loopback with no real
+      // network latency, and ctx.close() below has nothing left in flight.
       if (shots) {
+        // A screenshot alone needs the top-of-page framing, and paying the
+        // same false-positive risk to get it is fine here: --shots is a
+        // manual debugging aid, never part of the default CI gate.
+        await tab.evaluate(() => window.scrollTo(0, 0));
+        await tab.waitForTimeout(800);
         const name = path === '/' ? 'home' : path.replace(/^\/|\/$/g, '').replace(/\//g, '_');
         await tab.screenshot({ path: join(shots, `${name}.png`) });
       }
@@ -860,7 +973,19 @@ async function main() {
     // image, which is most real charity sites. A reference the source SERVES
     // is a genuine defect and stays fatal.
 
-    results.push({ path, problems, legacyHits, localMissing, thirdPartyFailed });
+    // Copy the arrays rather than pushing the live references: they are the
+    // SAME objects the requestfailed/response listeners above keep mutating
+    // for the rest of this tab's life (ctx.close() below, or -- when --shots
+    // is set -- the screenshot's own scroll-to-top), so pushing the
+    // references would let a later event silently rewrite a page's verdict
+    // after it was already decided.
+    results.push({
+      path,
+      problems: [...problems],
+      legacyHits: [...legacyHits],
+      localMissing: [...localMissing],
+      thirdPartyFailed: [...thirdPartyFailed],
+    });
     await ctx.close();
   }
 

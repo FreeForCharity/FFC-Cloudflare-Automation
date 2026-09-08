@@ -61,6 +61,7 @@ jobs:
 
       # Key Vault is the single source of truth for credentials (#844).
       - name: Load the GitHub PAT from Key Vault
+        id: load_pat
         shell: bash
         run: |
           set -euo pipefail
@@ -124,18 +125,34 @@ jobs:
             echo "$token"
             echo "${d}"
           } >> "$GITHUB_ENV"
-      - name: Trigger export workflows and download artifacts
+      - name: Collect export artifacts (dispatch the ungated, reuse the gated)
         env:
           REPO: ${{ github.repository }}
+          # Age past which a reused export is called out rather than used quietly.
+          # Two missed weekly cycles: one skipped approval is routine, three weeks
+          # of stale WPMUDEV membership flags is something to know about.
+          STALE_EXPORT_DAYS: '14'
         run: |
           set -euo pipefail
 
-          # Dispatch the three read-only export workflows by file name.
+          # 201 and 108 are ungated read lanes (`whmcs-prod-read`,
+          # `cloudflare-prod-read`), so dispatching them and waiting costs
+          # nothing but the minute they take.
+          #
+          # 601 is NOT dispatched HERE. It sits on `wpmudev-prod`, which has a
+          # required reviewer, so dispatching it from inside this already-gated
+          # job produced a SECOND approval prompt ~10 minutes after this job's
+          # own was granted — and `gh run watch` below then blocked on a human
+          # who had already walked away, until the step timed out and wasted the
+          # approval spent on this run. This job now reuses 601's most recent
+          # SUCCESSFUL export and dispatches the next one from the LAST step of
+          # the job, so nothing here waits on that second approval.
+          #
           # NOTE: both display names AND file names get renumbered periodically,
-          # so keep these in sync with .github/workflows/ (last synced 2026-07-07).
-          for wf in 201-whmcs-export-domains.yml 108-export-summary.yml 601-wpmudev-export-sites.yml; do
-            echo "Dispatching $wf ..."
-            gh workflow run "$wf" --repo "$REPO"
+          # so keep these in sync with .github/workflows/ (last synced 2026-09-08).
+          for wf in 201-whmcs-export-domains.yml 108-export-summary.yml; do
+            echo "Dispatching $wf on main ..."
+            gh workflow run "$wf" --repo "$REPO" --ref main
           done
 
           # Give the dispatched runs time to register before querying them.
@@ -146,9 +163,18 @@ jobs:
           # membership flags when a source artifact is absent.
           download_latest () {
             local wf="$1" artifact="$2" dir="$3" run_id
-            # Only consider workflow_dispatch runs (the ones we just triggered),
-            # to avoid picking up a concurrent scheduled or older run.
-            run_id=$(gh run list --workflow "$wf" --repo "$REPO" --event workflow_dispatch \
+            # Narrow to workflow_dispatch runs on `main`, which is where the loop
+            # above dispatches. `--event` alone excludes a concurrent scheduled
+            # run but NOT a dispatch from someone's feature branch, so without
+            # `--branch main` this lane had the same defect as the reuse lane
+            # below: feature-branch export data published in the sites list
+            # through a run that looks entirely normal (raised in review, #1255).
+            #
+            # This narrows the window rather than closing it -- `--limit 1` still
+            # takes the newest matching run, which a manual dispatch on `main`
+            # racing this one could win. Both candidates are then main's own
+            # export, so the cost is staleness, not unreviewed data.
+            run_id=$(gh run list --workflow "$wf" --repo "$REPO" --event workflow_dispatch --branch main \
               --limit 1 --json databaseId --jq '.[0].databaseId // empty')
             if [ -z "$run_id" ]; then
               echo "::warning::No workflow_dispatch run found for $wf; continuing without its data."
@@ -163,9 +189,41 @@ jobs:
               || echo "::warning::Could not download artifact '$artifact' from $wf."
           }
 
-          download_latest 201-whmcs-export-domains.yml  whmcs_domains            tmp_data/whmcs_domains
-          download_latest 108-export-summary.yml        domain_summary           tmp_data/domain_summary
-          download_latest 601-wpmudev-export-sites.yml  wpmudev-domain-inventory tmp_data/wpmudev-domain-inventory
+          # Reuse the newest SUCCESSFUL run of a workflow this step does not
+          # dispatch, whatever event produced it. Unlike download_latest above,
+          # "no run" and "an old run" are different outcomes and both are
+          # reported: a silently-absent export would leave the sites list
+          # carrying last week's membership flags with nothing saying so, which
+          # is the failure shape this repo keeps rediscovering.
+          #
+          # `--branch main` is load-bearing, not tidiness (raised in review on
+          # #1255). Without it the lookup spans every branch, so a successful
+          # `workflow_dispatch` of 601 from someone's feature branch becomes the
+          # newest success and its membership data lands in the published sites
+          # list — unreviewed data reaching a public artifact through a run that
+          # looks entirely normal. The dispatch at the end of this job targets
+          # the default branch, so `main` is also where the runs it creates land.
+          download_latest_success () {
+            local wf="$1" artifact="$2" dir="$3" run_id created age_days
+            run_id=$(gh run list --workflow "$wf" --repo "$REPO" --status success --branch main \
+              --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+            if [ -z "$run_id" ]; then
+              echo "::warning::$wf has no successful run to reuse; continuing without its data. If its approval gate has gone unanswered, approve it and re-run this workflow."
+              return 0
+            fi
+            created=$(gh run view "$run_id" --repo "$REPO" --json createdAt --jq '.createdAt')
+            age_days=$(( ( $(date -u +%s) - $(date -u -d "$created" +%s) ) / 86400 ))
+            echo "Reusing $wf run $run_id from $created (${age_days}d old)."
+            if [ "$age_days" -ge "$STALE_EXPORT_DAYS" ]; then
+              echo "::warning::$wf's newest successful run is ${age_days} days old (threshold ${STALE_EXPORT_DAYS}). Its approval gate is likely going unanswered; the sites list is carrying stale data from it."
+            fi
+            gh run download "$run_id" --repo "$REPO" --name "$artifact" --dir "$dir" \
+              || echo "::warning::Could not download artifact '$artifact' from $wf run $run_id."
+          }
+
+          download_latest         201-whmcs-export-domains.yml  whmcs_domains            tmp_data/whmcs_domains
+          download_latest         108-export-summary.yml        domain_summary           tmp_data/domain_summary
+          download_latest_success 601-wpmudev-export-sites.yml  wpmudev-domain-inventory tmp_data/wpmudev-domain-inventory
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -200,3 +258,42 @@ jobs:
             exports plus the curated base list, with refreshed health checks.
 
             Generated by `.github/workflows/sites-list-generate.yml`.
+
+      # Prime next week's WPMUDEV export. Deliberately the LAST step, and
+      # deliberately fire-and-forget.
+      #
+      # 601 is gated on `wpmudev-prod` (a required reviewer this org keeps).
+      # Dispatching it in step 5 and waiting, as this workflow used to, asked an
+      # operator for a second approval while the run was blocked on their
+      # answer; when they had walked away the step timed out and burned the
+      # approval already spent on this run. Dispatching it LAST asks for that
+      # approval at the one moment an operator is provably present — they
+      # approved this job's own gate minutes ago and are still on the Actions
+      # page — while nothing here depends on the answer.
+      #
+      # A cron on 601 would put the two prompts up simultaneously, which is
+      # nicer still, and `test_gated_env_hygiene.py` forbids it: a Reads-level
+      # job on a schedule AND a reviewer gate parks at `waiting` with nobody
+      # watching and is cancelled by its successor or reaped by janitor 734.
+      # That guard has no allowlist for the scheduled case on purpose, and this
+      # arrangement gets the same outcome without weakening it.
+      #
+      # The consequence is that the export this job consumed above is the one
+      # dispatched a week ago. That is the intended trade: WPMUDEV site
+      # membership moves slowly, STALE_EXPORT_DAYS (14) tolerates one missed
+      # cycle and warns on two, and a week-old artifact beats a blocked run.
+      #
+      # `|| true`: a failed dispatch must not fail a run whose data PR is
+      # already open. The warning is the signal, and next week's run re-tries.
+      - name: Dispatch the gated WPMUDEV export for next week's run
+        # `always()` so a failed generation still primes next week's export --
+        # but qualified on the PAT step, because a bare `always()` would run
+        # this after the Key Vault load failed and report "no credential" as
+        # "the dispatch failed" (#899, test_always_steps_are_guarded).
+        if: always() && steps.load_pat.conclusion == 'success'
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          gh workflow run 601-wpmudev-export-sites.yml --repo "$REPO" --ref main \
+            || echo "::warning::Could not dispatch 601-wpmudev-export-sites.yml; next week's run will reuse an older export and report its age."

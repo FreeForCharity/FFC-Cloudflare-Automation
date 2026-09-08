@@ -818,7 +818,7 @@ async function main() {
     tab.on('requestfailed', (r) => {
       const url = r.url();
       if (isLegacy(url)) return;
-      const failure = r.failure()?.errorText;
+      const failure = r.failure()?.errorText ?? 'unknown error';
       // A same-origin ERR_ABORTED for a URL that is itself one of the pages
       // THIS RUN is checking is a speculative same-page fetch, not a missing
       // resource: something on the page (measured on ctvip.org: the App

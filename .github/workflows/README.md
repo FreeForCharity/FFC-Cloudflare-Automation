@@ -627,6 +627,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 729 | Repo - Add Collaborator [Repo] | `729-repo-add-collaborator.yml` | workflow_call, workflow_dispatch | Writes (**live default**) | ✅ github-prod |
 | 730 | Repo - Audit Environment Approval Gates [Repo] | `730-repo-audit-environment-gates.yml` | push, workflow_dispatch | Reads | — |
 | 731 | Repo - Actions Run Metrics (30d per-workflow stats) [GH] | `731-actions-run-metrics.yml` | schedule, workflow_dispatch | Reads | — |
+| 732 | Repo - Bulk Create GitHub Repos [Repo] | `732-bulk-create-repos.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
 | 733 | Repo - Credential Rotation Reminders (quarterly) [GH] | `733-credential-rotation-reminders.yml` | schedule, workflow_dispatch | Writes (issues only) | — |
 | 734 | Repo - Stale Waiting-Run Janitor [Repo] | `734-stale-waiting-run-janitor.yml` | schedule, workflow_dispatch | Writes (cancels runs) | — |
 | 735 | Repo - Dependabot Affected Repos [Org] | `735-repo-dependabot-affected-repos.yml` | schedule, workflow_dispatch | Reads | github-prod-read |
@@ -640,6 +641,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 743 | Website - Fleet Security Header Audit | `743-fleet-security-header-audit.yml` | schedule, workflow_dispatch | Reads | — |
 | 744 | Repo - Public Feed Freshness [GH] | `744-repo-public-feed-freshness.yml` | schedule, workflow_dispatch | Reads | — |
 | 745 | Repo - Agentic OS Board Audit [GH] | `745-agentic-os-board-audit.yml` | schedule, workflow_dispatch | Reads | github-prod-read |
+| 746 | Repo - Bulk Enable GitHub Pages [Repo] | `746-bulk-enable-pages.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

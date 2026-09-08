@@ -50,6 +50,34 @@ case "$cmd" in
           echo '{"workflow_runs":[]}'
         fi
         ;;
+      *actions/workflows/*/dispatches*)
+        # 746 enable-pages: workflow_dispatch a target repo's deploy.yml. A
+        # dedicated case rather than the generic *repos/*) catch-all below, so
+        # a scenario can fail the dispatch independently of the repo-existence
+        # and pages-enable calls the same run makes.
+        if [ "${TEST_DISPATCH_FAIL:-}" = "1" ]; then
+          echo '{"message":"Not Found","status":"404"}'
+          exit 1
+        fi
+        ;;
+      *contents/.github/workflows/deploy.yml*)
+        # 746 preflight: does the target repo carry deploy.yml on its default
+        # branch? Positioned before the generic *contents/*) (738) and
+        # *repos/*) (repo-existence) cases so this check varies independently
+        # of both — TEST_REPO_META alone cannot distinguish "repo exists, no
+        # deploy.yml" from "repo exists, has deploy.yml".
+        if [ "${TEST_DEPLOY_YML_MISSING:-}" = "1" ]; then
+          echo "Not Found (HTTP 404)" >&2
+          exit 1
+        fi
+        # A genuine (non-404) failure on THIS call specifically, distinct from
+        # TEST_DEPLOY_YML_MISSING above -- lets a scenario prove preflight
+        # reports "could not verify" rather than folding it into "missing".
+        if [ "${TEST_DEPLOY_YML_CHECK_FAIL:-}" = "1" ]; then
+          echo '{"message":"Resource not accessible by personal access token","status":"403"}'
+          exit 1
+        fi
+        ;;
       orgs/*/repos\?* | orgs/*/repos\ * | orgs/*/repos)
         # Org repo LISTING for the preflight sibling scans (one name per line).
         # Deliberately does NOT match orgs/<org>/teams/<team>/repos/... — those
@@ -79,7 +107,25 @@ case "$cmd" in
               exit 1
             fi
             ;;
+          "-X POST "*)
+            # 746: the initial build_type=workflow enable call. Separate knob
+            # from PUT/bare-GET so a scenario can fail the enable without
+            # touching 120's existing PUT-based bind/re-bind behavior.
+            if [ "${TEST_PAGES_POST_FAIL:-}" = "1" ]; then
+              echo '{"message":"Validation Failed","status":"422"}'
+              exit 1
+            fi
+            ;;
           *)
+            # 746: "Pages not configured yet" is a real 404, distinct from a
+            # genuine permission/outage failure (403/5xx) -- separate knobs so a
+            # scenario can pick either shape (Copilot review, #1252). Checked
+            # before TEST_PAGES_GET_FAIL so a test can set both without one
+            # silently winning.
+            if [ "${TEST_PAGES_NOT_CONFIGURED:-}" = "1" ]; then
+              echo "Not Found (HTTP 404)" >&2
+              exit 1
+            fi
             if [ "${TEST_PAGES_GET_FAIL:-}" = "1" ]; then
               echo '{"message":"Resource not accessible by personal access token","status":"403"}'
               exit 1
@@ -164,10 +210,17 @@ case "$cmd" in
         fi
         ;;&
       *repos/*)
-        # 736 archive GET: TEST_REPO_META is a JSON blob ("404" = not found).
+        # 736 archive GET: TEST_REPO_META is a JSON blob ("404" = not found,
+        # "error" = a genuine non-404 failure -- 746 preflight distinguishes
+        # the two; other callers of this fixture only ever set "404" or a
+        # blob, so "error" is a safe new sentinel).
         if [ -n "${TEST_REPO_META:-}" ]; then
           if [ "$TEST_REPO_META" = "404" ]; then
             echo "Not Found (HTTP 404)" >&2
+            exit 1
+          fi
+          if [ "$TEST_REPO_META" = "error" ]; then
+            echo '{"message":"Resource not accessible by personal access token","status":"403"}'
             exit 1
           fi
           printf '%s\n' "$TEST_REPO_META"

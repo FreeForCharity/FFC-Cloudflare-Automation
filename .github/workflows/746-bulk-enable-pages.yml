@@ -1,0 +1,337 @@
+name: '746. Repo - Bulk Enable GitHub Pages [Repo]'
+run-name: 'Bulk enable Pages (dry_run=${{ inputs.DryRun }})'
+
+# 732 can create a stub FFC-EX-<domain> repo without GitHub Pages turned on
+# (EnablePages defaults false there, and re-dispatching 732 for an EXISTING repo
+# just gets skipped by its own preflight — it has no "fix up an existing repo"
+# path). This workflow is that follow-up: for each domain, enable Pages on the
+# GitHub-default URL (build_type=workflow, no CNAME, never touches DNS) and
+# dispatch the repo's own deploy.yml so the site actually builds and serves 200.
+# A manual dispatch of deploy.yml is required at all because a repo created via
+# `gh repo create --template` does not fire a push event, so deploy.yml's
+# `workflow_run` trigger (which waits on CI - Build and Test) never fires on its
+# own — its `workflow_dispatch` trigger is the only way in until a real commit
+# lands.
+
+on:
+  workflow_dispatch:
+    inputs:
+      Domains:
+        description: >-
+          Bare apex domains of EXISTING FFC-EX-<domain> repos to enable Pages on — one per line or
+          comma-separated (e.g. "example.org, example2.org"). No scheme, no www., no trailing slash
+          needed; they are stripped automatically. A domain with no matching repo, or whose repo has
+          no deploy.yml on its default branch, is skipped and reported, not failed.
+        required: true
+        type: string
+      DryRun:
+        description:
+          'Dry Run (preflight + preview only — no Pages settings changed, no deploy dispatched)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+# Serialize: two batches must not race the same Pages-enable/dispatch calls.
+concurrency:
+  group: bulk-enable-pages
+  cancel-in-progress: false
+
+jobs:
+  # Ungated: confirm each repo (and its deploy.yml) actually exists BEFORE the
+  # approval gate is spent, mirroring 732's own preflight/create split.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      ready_domains: ${{ steps.check.outputs.ready_domains }}
+      ready_count: ${{ steps.check.outputs.ready_count }}
+      skipped_count: ${{ steps.check.outputs.skipped_count }}
+    steps:
+      - name: Parse and check each requested domain
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IN_DOMAINS: ${{ inputs.Domains }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="FreeForCharity"
+
+          # Normalize: split on comma OR newline, trim, lowercase, strip scheme/www./
+          # trailing slash, drop blanks and duplicates (first occurrence wins). Same
+          # block as 732's preflight (see that file for the case-order rationale).
+          mapfile -t raw < <(printf '%s' "$IN_DOMAINS" | tr ',' '\n')
+          declare -A seen=()
+          domains=()
+          for d in "${raw[@]}"; do
+            d="${d#"${d%%[![:space:]]*}"}"
+            d="${d%"${d##*[![:space:]]}"}"
+            [ -z "$d" ] && continue
+            d="$(printf '%s' "$d" | tr '[:upper:]' '[:lower:]')"
+            d="${d#https://}"; d="${d#http://}"
+            # Truncate at the first /, ?, or # so a pasted URL's path/query/fragment
+            # never survives into the repo name (Copilot review, #1252) -- this also
+            # subsumes the old trailing-slash strip, since a bare trailing slash is
+            # just an empty path segment.
+            d="${d%%[/?#]*}"
+            d="${d#www.}"
+            [ -z "$d" ] && continue
+            if [ -z "${seen[$d]:-}" ]; then
+              seen[$d]=1
+              domains+=("$d")
+            fi
+          done
+
+          if [ ${#domains[@]} -eq 0 ]; then
+            echo "::error::No usable domains parsed from the Domains input."
+            exit 1
+          fi
+          echo "Requested ${#domains[@]} unique domain(s): ${domains[*]}"
+
+          ready=()
+          skipped=0
+          {
+            echo "## Bulk enable-Pages preflight"
+            echo ""
+            echo "| Domain | Repo name | Default branch | deploy.yml | Verdict |"
+            echo "| --- | --- | --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for d in "${domains[@]}"; do
+            name="FFC-EX-$d"
+
+            # Same "HTTP 404 = genuinely not found, anything else = could not
+            # verify" distinction as the enable-pages job's own Pages GET below
+            # (and 732's preflight before it) -- a 403/5xx here is not "no repo",
+            # it is "the check itself failed", and must be reported as such
+            # rather than folded into the same "not found" verdict (Copilot
+            # review, #1252).
+            set +e
+            resp=$(gh api "repos/$owner/$name" 2>&1)
+            rc=$?
+            set -e
+            if [ $rc -ne 0 ]; then
+              if printf '%s' "$resp" | grep -q "HTTP 404"; then
+                echo "| $d | $name | — | — | ⛔ repo not found |" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "| $d | $name | — | — | ⛔ could not verify repo (transient API error) |" >> "$GITHUB_STEP_SUMMARY"
+              fi
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            # The dispatch target must be the repo's OWN default branch, not a
+            # hardcoded 'main' — a repo using a different default would otherwise
+            # pass preflight and still fail to dispatch (Copilot review, #1252).
+            branch=$(printf '%s' "$resp" | jq -r '.default_branch // "main"')
+
+            set +e
+            wf=$(gh api "repos/$owner/$name/contents/.github/workflows/deploy.yml?ref=$branch" 2>&1)
+            wfrc=$?
+            set -e
+            if [ $wfrc -ne 0 ]; then
+              if printf '%s' "$wf" | grep -q "HTTP 404"; then
+                echo "| $d | $name | $branch | ⛔ missing | ⛔ no deploy.yml on default branch |" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "| $d | $name | $branch | ⛔ unverified | ⛔ could not verify deploy.yml (transient API error) |" >> "$GITHUB_STEP_SUMMARY"
+              fi
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            echo "| $d | $name | $branch | ✅ present | ✅ ready |" >> "$GITHUB_STEP_SUMMARY"
+            ready+=("$(jq -n -c --arg d "$d" --arg b "$branch" '{domain: $d, branch: $b}')")
+          done
+
+          ready_json=$(printf '%s\n' "${ready[@]+"${ready[@]}"}" | jq -s -c 'map(select(. != null))')
+          {
+            echo "ready_domains=$ready_json"
+            echo "ready_count=${#ready[@]}"
+            echo "skipped_count=$skipped"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo ""
+            echo "**${#ready[@]} ready, $skipped skipped.**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ ${#ready[@]} -eq 0 ]; then
+            echo "::error::No domains are ready — all $skipped requested domain(s) were skipped (repo not found, or repo has no deploy.yml on its default branch). See the per-domain verdicts in the job summary."
+            exit 1
+          fi
+
+          echo "::notice::Caveat carried from 732: this preflight sees repos visible to the ambient GITHUB_TOKEN (public repos + this repo) only — a PRIVATE FFC-EX-<domain> repo reads as 'not found' here even if it exists, and is skipped rather than reaching the gated job (Copilot review, #1252)."
+
+  enable-pages:
+    needs: preflight
+    # Job-level block: the ungated preflight job keeps the repo default token.
+    # `id-token: write` is required for the Key Vault OIDC exchange (#844).
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    environment: github-prod
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Verbatim
+      # copy of 720's/732's liveness-checked load — see 720 for the full reasoning
+      # on why presence alone (empty-string check) is not enough (#1102, #848).
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show --vault-name kv-ffc-admin-prod-cbm --name wr-all-cbm-github-pat --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          # A 200 proves the token AUTHENTICATES. It proves nothing about SCOPE -- a
+          # read-scoped PAT answers 200 here and 403 on a write -- so a green probe is
+          # not a licence to assume the later write will work.
+          hdrs="$(mktemp)"
+          code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user || true)"
+          remaining="$(awk 'tolower($1) == "x-ratelimit-remaining:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          retry_after="$(awk 'tolower($1) == "retry-after:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          rm -f "$hdrs"
+          if [ "$code" = "403" ] && { [ "$remaining" = "0" ] || [ -n "$retry_after" ]; }; then
+            echo "::error::wr-all-cbm-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
+            exit 1
+          fi
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::wr-all-cbm-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::wr-all-cbm-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
+            exit 1
+          fi
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+
+      - name: Enable Pages + dispatch deploy for each ready domain
+        id: enable
+        shell: bash
+        # IN_READY_DOMAINS is preflight's OUTPUT, itself derived from the free-text
+        # Domains input — the exact hop check-workflow-laundered-input-interpolation.py
+        # exists to catch. Read via env:, never interpolated as `${{ }}` text into
+        # this script body (same rule 732 documents for its own laundered output).
+        env:
+          IN_READY_DOMAINS: ${{ needs.preflight.outputs.ready_domains }}
+          IN_DRY_RUN: ${{ inputs.DryRun }}
+        run: |
+          set -euo pipefail
+          owner="FreeForCharity"
+          fail_count=0
+          {
+            echo "## Bulk enable-Pages results"
+            echo ""
+            echo "| Domain | Pages | Deploy dispatch |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS=$'\t' read -r d branch; do
+            [ -z "$d" ] && continue
+            full="$owner/FFC-EX-$d"
+
+            # Idempotent: GET first, only POST (build_type=workflow, no CNAME — the
+            # GitHub-default URL only) if Pages isn't already configured, so a repo
+            # that already has a live custom domain (set later, by a separate step)
+            # is never touched here. `gh` puts its error body on stdout/stderr with a
+            # non-zero exit (same shape 732's preflight already relies on), so "not
+            # configured yet" (a real 404) is distinguished from a genuine failure
+            # (401/403/5xx) by grepping for it, rather than treating every non-zero
+            # exit as "needs enable" (Copilot review, #1252) -- the latter would
+            # attempt a write against a repo whose Pages state could not even be read.
+            set +e
+            pages_resp=$(gh api "repos/$full/pages" 2>&1)
+            pages_rc=$?
+            set -e
+
+            # Whether it is safe to dispatch a deploy for this domain at all --
+            # cleared on any Pages failure below so a deploy is never fired
+            # against a repo whose Pages state is unknown or unconfigured
+            # (Copilot review, #1252): a "deploy" with Pages still off, or with
+            # Pages in an unverified state, is a confusing, wasted write.
+            pages_ok=1
+
+            if [ $pages_rc -eq 0 ]; then
+              pages_status="already enabled"
+            elif printf '%s' "$pages_resp" | grep -q "HTTP 404"; then
+              if [ "${IN_DRY_RUN:-true}" = "true" ]; then
+                pages_status="[DRY RUN] would enable (build_type=workflow)"
+              else
+                set +e
+                post_resp=$(gh api -X POST "repos/$full/pages" -F "build_type=workflow" 2>&1)
+                prc=$?
+                set -e
+                if [ $prc -eq 0 ]; then
+                  pages_status="enabled (build_type=workflow)"
+                else
+                  # Copilot review (#1252): don't discard the error body -- a
+                  # truncated, pipe-stripped one-liner in the summary plus the
+                  # full text on the job log is enough to diagnose without
+                  # risking a secret (this call carries none) or breaking the
+                  # markdown table.
+                  detail=$(printf '%s' "$post_resp" | tr '\n' ' ' | tr -d '|' | cut -c1-200)
+                  pages_status="❌ enable failed: $detail"
+                  echo "::warning::Pages enable failed for FFC-EX-$d: $post_resp"
+                  fail_count=$((fail_count + 1))
+                  pages_ok=0
+                fi
+              fi
+            else
+              pages_status="❌ could not read Pages state (not a 404 -- see run log)"
+              # Copilot review (#1252): "see run log" was a lie until this line --
+              # the captured body was never actually emitted anywhere.
+              echo "::warning::Could not read Pages state for FFC-EX-$d: $pages_resp"
+              fail_count=$((fail_count + 1))
+              pages_ok=0
+            fi
+
+            if [ "$pages_ok" != "1" ]; then
+              deploy_status="⏭ skipped (Pages not confirmed -- see Pages column)"
+            elif [ "${IN_DRY_RUN:-true}" = "true" ]; then
+              deploy_status="[DRY RUN] would dispatch deploy.yml on $branch"
+            else
+              set +e
+              dispatch_resp=$(gh api -X POST "repos/$full/actions/workflows/deploy.yml/dispatches" -F "ref=$branch" 2>&1)
+              drc=$?
+              set -e
+              if [ $drc -eq 0 ]; then
+                deploy_status="dispatched ($branch)"
+              else
+                detail=$(printf '%s' "$dispatch_resp" | tr '\n' ' ' | tr -d '|' | cut -c1-200)
+                deploy_status="❌ dispatch failed: $detail"
+                echo "::warning::deploy.yml dispatch failed for FFC-EX-$d: $dispatch_resp"
+                fail_count=$((fail_count + 1))
+              fi
+            fi
+
+            echo "| $d | $pages_status | $deploy_status |" >> "$GITHUB_STEP_SUMMARY"
+          done <<<"$(printf '%s' "$IN_READY_DOMAINS" | jq -r '.[] | "\(.domain)\t\(.branch)"')"
+
+          if [ $fail_count -gt 0 ]; then
+            # Fail the STEP (and job), matching 732's own partial-failure fix (#1250
+            # Copilot review): a bulk batch must not report green while some domains
+            # in it failed. Domains already handled above are not rolled back.
+            echo "::error::$fail_count Pages-enable/deploy-dispatch operation(s) failed -- see the job summary for which."
+            exit 1
+          fi

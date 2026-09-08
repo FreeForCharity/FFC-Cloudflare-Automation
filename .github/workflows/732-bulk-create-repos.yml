@@ -1,0 +1,366 @@
+name: '732. Repo - Bulk Create GitHub Repos [Repo]'
+run-name: 'Bulk create repos (template=${{ inputs.TemplateRepo }}, dry_run=${{ inputs.DryRun }})'
+
+# One gated run creates FFC-EX-<domain> for every domain in a list, instead of one
+# github-prod approval per domain (720 stays the single-repo path). Built for the
+# "ensure every charity .org domain has a repo at minimum" pass: default template is
+# the lightweight FFC-IN-Footer_Only_Template, and EnablePages — when turned on —
+# is hardcoded to the github-default URL. This workflow never sets a CNAME and never
+# touches DNS; a live custom domain is a separate, later, per-repo decision.
+#
+# Mirrors 720's preflight (same collision + sibling-domain scan, same reasoning) and
+# reuses scripts/Create-GitHubRepo.ps1 unchanged, just called once per clean domain
+# instead of once per dispatch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      Domains:
+        description: >-
+          Bare apex domains to create FFC-EX-<domain> repos for — one per line or comma-separated
+          (e.g. "example.org, example2.org"). No scheme, no www., no trailing slash needed; they are
+          stripped automatically.
+        required: true
+        type: string
+      TemplateRepo:
+        description: 'Template repository to use for every repo in this batch'
+        required: true
+        default: 'FreeForCharity/FFC-IN-Footer_Only_Template'
+        type: choice
+        options:
+          - FreeForCharity/FFC-IN-Footer_Only_Template
+          - FreeForCharity/FFC_Single_Page_Template
+          - FreeForCharity/FFC-IN-Single_Page_Template_Jekell
+      Visibility:
+        description: 'Visibility (private repos get NO tier-team grants — Option C policy)'
+        required: true
+        default: 'public'
+        type: choice
+        options:
+          - public
+          - private
+      EnableIssues:
+        description: 'Enable Issues on every repo in this batch'
+        required: false
+        default: true
+        type: boolean
+      EnablePages:
+        description: >-
+          Enable GitHub Pages on every repo in this batch, on the GitHub-default URL only. This
+          workflow has no CNAME input and never configures a custom domain — that is a separate,
+          later, per-repo decision (see workflow 720 or the wordpress-to-pages-migration skill).
+        required: false
+        default: false
+        type: boolean
+      Force:
+        description: >-
+          Create even though a sibling repo matches a domain (preflight lists them per-domain in the
+          job summary). Leave false unless you have confirmed none of them is the real site for that
+          domain.
+        required: false
+        default: false
+        type: boolean
+      DryRun:
+        description: 'Dry Run (preflight + preview only, no repos created)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+# Serialize: two bulk batches must not race the same org-repo-list snapshot or
+# collide on an in-flight name. This does NOT serialize against a single 720
+# create — 720 declares no concurrency group of its own, so a 720 dispatch and
+# a 732 batch can still overlap. That gap is bounded, not open: each domain's
+# preflight-to-create window can race a same-named create elsewhere, but the
+# failure mode is a rejected `gh repo create` for that one domain (caught by
+# the per-domain try/catch below and reported in the summary), never a
+# corrupted or duplicated repo — the collision protection that actually
+# matters is GitHub's own uniqueness constraint on the create call.
+concurrency:
+  group: bulk-create-repos
+  cancel-in-progress: false
+
+jobs:
+  # Ungated, like 720's preflight: refuse per-domain BEFORE the approval gate is
+  # spent, so a human approves a batch that is already known to be creatable.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      clean_domains: ${{ steps.check.outputs.clean_domains }}
+      clean_count: ${{ steps.check.outputs.clean_count }}
+      skipped_count: ${{ steps.check.outputs.skipped_count }}
+    steps:
+      - name: Parse and check each requested domain
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IN_DOMAINS: ${{ inputs.Domains }}
+          IN_FORCE: ${{ inputs.Force }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="FreeForCharity"
+
+          # Normalize: split on comma OR newline, trim, lowercase, strip scheme/www./
+          # trailing slash, drop blanks and duplicates (first occurrence wins).
+          mapfile -t raw < <(printf '%s' "$IN_DOMAINS" | tr ',' '\n')
+          declare -A seen=()
+          domains=()
+          for d in "${raw[@]}"; do
+            # Pure bash trim (no xargs/subshell word-splitting quirks on stray quotes).
+            d="${d#"${d%%[![:space:]]*}"}"
+            d="${d%"${d##*[![:space:]]}"}"
+            [ -z "$d" ] && continue
+            # Lowercase FIRST so a case-sensitive scheme/www strip below always matches
+            # (e.g. "HTTPS://Example.org/" would otherwise survive with its scheme intact).
+            d="$(printf '%s' "$d" | tr '[:upper:]' '[:lower:]')"
+            d="${d#https://}"; d="${d#http://}"; d="${d%/}"; d="${d#www.}"
+            [ -z "$d" ] && continue
+            if [ -z "${seen[$d]:-}" ]; then
+              seen[$d]=1
+              domains+=("$d")
+            fi
+          done
+
+          if [ ${#domains[@]} -eq 0 ]; then
+            echo "::error::No usable domains parsed from the Domains input."
+            exit 1
+          fi
+          echo "Requested ${#domains[@]} unique domain(s): ${domains[*]}"
+
+          # One org-repo listing, reused for every sibling scan below (paginated,
+          # same guard as AGENTS.md's per_page-truncation lesson).
+          set +e
+          org_repos=$(gh api "orgs/$owner/repos?per_page=100" --paginate --jq '.[].name' 2>&1)
+          list_rc=$?
+          set -e
+          if [ $list_rc -ne 0 ] && [ "${IN_FORCE:-false}" != "true" ]; then
+            echo "::error::Could not list org repos for the sibling scan (transient API error?). Failing safe rather than guessing. Details: $org_repos"
+            exit 1
+          fi
+
+          clean=()
+          skipped=0
+          {
+            echo "## Bulk create preflight"
+            echo ""
+            echo "| Domain | Repo name | Verdict |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for d in "${domains[@]}"; do
+            name="FFC-EX-$d"
+
+            set +e
+            resp=$(gh api "repos/$owner/$name" 2>&1)
+            rc=$?
+            set -e
+            if [ $rc -eq 0 ]; then
+              canonical=$(printf '%s' "$resp" | jq -r '.full_name // empty' 2>/dev/null || true)
+              echo "| $d | $name | ⛔ already exists as \`${canonical:-$owner/$name}\` |" >> "$GITHUB_STEP_SUMMARY"
+              skipped=$((skipped + 1))
+              continue
+            fi
+            if ! printf '%s' "$resp" | grep -q "HTTP 404"; then
+              echo "| $d | $name | ⛔ could not verify (transient API error) |" >> "$GITHUB_STEP_SUMMARY"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            if [ "${IN_FORCE:-false}" != "true" ]; then
+              # Same sibling-domain heuristic as 720: strip only the literal FFC-EX-
+              # prefix (a hyphenated domain must survive intact) and full-domain-match
+              # (case-insensitive) against every org repo name, excluding this exact name.
+              siblings=$(printf '%s\n' "$org_repos" | grep -iF -- "$d" | grep -ivx -- "$name" || true)
+              if [ -n "$siblings" ]; then
+                echo "| $d | $name | ⛔ sibling repo(s) match: $(printf '%s' "$siblings" | tr '\n' ' ') |" >> "$GITHUB_STEP_SUMMARY"
+                skipped=$((skipped + 1))
+                continue
+              fi
+            fi
+
+            echo "| $d | $name | ✅ free |" >> "$GITHUB_STEP_SUMMARY"
+            clean+=("$d")
+          done
+
+          clean_json=$(printf '%s\n' "${clean[@]+"${clean[@]}"}" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          {
+            echo "clean_domains=$clean_json"
+            echo "clean_count=${#clean[@]}"
+            echo "skipped_count=$skipped"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo ""
+            echo "**${#clean[@]} free, $skipped skipped.**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ ${#clean[@]} -eq 0 ]; then
+            echo "::error::No domains are free to create — all $skipped requested domain(s) were skipped. See the per-domain verdicts in the job summary: each is either an existing repo, a sibling-domain match, or could not be verified (a transient API error, which Force=true does NOT bypass — only the sibling check is skippable)."
+            exit 1
+          fi
+
+          echo "::notice::Force=${IN_FORCE:-false}. Caveat carried from 720: this preflight sees repos visible to GITHUB_TOKEN (public + this repo) only — a PRIVATE name collision passes here and fails loudly at the create step instead."
+
+  create-repos:
+    needs: preflight
+    # Job-level block: the ungated preflight job keeps the repo default token.
+    # `id-token: write` is required for the Key Vault OIDC exchange (#844).
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: windows-latest
+    environment: github-prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Azure login (OIDC)
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Verbatim
+      # copy of 720's liveness-checked load — see that file for the full reasoning
+      # on why presence alone (empty-string check) is not enough (#1102, #848).
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          # A 200 proves the token AUTHENTICATES. It proves nothing about SCOPE -- a
+          # read-scoped PAT answers 200 here and 403 on a write -- so a green probe is
+          # not a licence to assume the later write will work.
+          hdrs="$(mktemp)"
+          code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user || true)"
+          remaining="$(awk 'tolower($1) == "x-ratelimit-remaining:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          retry_after="$(awk 'tolower($1) == "retry-after:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          rm -f "$hdrs"
+          if [ "$code" = "403" ] && { [ "$remaining" = "0" ] || [ -n "$retry_after" ]; }; then
+            echo "::error::wr-all-cbm-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
+            exit 1
+          fi
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::wr-all-cbm-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::wr-all-cbm-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
+            exit 1
+          fi
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+
+      - name: Create each repo from the template
+        id: create
+        shell: pwsh
+        # IN_CLEAN_DOMAINS is preflight's OUTPUT, itself derived from the free-text
+        # Domains input — the exact hop check-workflow-laundered-input-interpolation.py
+        # exists to catch. Read via $env:, never interpolated as `${{ }}` text into
+        # this script body (same rule 720 documents for its own free-text inputs).
+        env:
+          IN_CLEAN_DOMAINS: ${{ needs.preflight.outputs.clean_domains }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $domains = [string]$env:IN_CLEAN_DOMAINS | ConvertFrom-Json
+          $failCount = 0
+          foreach ($d in $domains) {
+            $repoName = "FFC-EX-$d"
+            Write-Host "=== $repoName ===" -ForegroundColor Yellow
+            $params = @{
+              RepoName        = $repoName
+              Description     = 'Created via bulk automation (732) -- stub repo, conversion pending'
+              TemplateRepo    = "${{ inputs.TemplateRepo }}"
+              Visibility      = "${{ inputs.Visibility }}"
+              EnableIssues    = [System.Convert]::ToBoolean("${{ inputs.EnableIssues }}")
+              EnablePages     = [System.Convert]::ToBoolean("${{ inputs.EnablePages }}")
+              PagesDomainType = 'github-default'
+              DryRun          = [System.Convert]::ToBoolean("${{ inputs.DryRun }}")
+            }
+            try {
+              # Seed $LASTEXITCODE per-iteration: in DryRun the script invokes no
+              # native command, so a stale non-zero code from an EARLIER domain's
+              # real failure would otherwise leak into this domain's check (720's
+              # own seeding comment covers the single-run version of this trap).
+              $LASTEXITCODE = 0
+              ./scripts/Create-GitHubRepo.ps1 @params
+              if ($LASTEXITCODE -ne 0) { throw "Create-GitHubRepo.ps1 exited $LASTEXITCODE" }
+              Write-Host "[OK] $repoName" -ForegroundColor Green
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- ✅ $repoName"
+            } catch {
+              $failCount++
+              Write-Host "::warning::$repoName failed: $_"
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- ❌ $repoName -- $_"
+            }
+          }
+          if ($failCount -gt 0) {
+            # Fail the STEP, not just a per-domain warning: 720's single-create throws on a
+            # non-zero exit, and a bulk batch must not report green while some domains in
+            # it failed (Copilot review, #1250). The loop above already ran every domain to
+            # completion before this point, and the successful ones are not rolled back --
+            # this only changes whether the run's own conclusion tells the truth about it.
+            throw "$failCount of $($domains.Count) repo(s) failed to create -- see the job summary for which. Successful ones above are not rolled back."
+          }
+
+      - name: Grant FFC-ORGWIDE-* tier teams (public repos only)
+        # always() so a partial-failure throw in the create step (which fails THIS job)
+        # still lets the teams get granted on whichever repos DID get created -- but
+        # gated on steps.create.outcome so a bare always() doesn't run this against a
+        # never-populated GH_TOKEN when an EARLIER step (Azure login / Key Vault load)
+        # failed and the create step was skipped entirely (#899 -- an unconditional
+        # always() step that authenticates is the exact defect class that issue fixed).
+        if:
+          ${{ always() && steps.create.outcome != 'skipped' && inputs.DryRun != true &&
+          inputs.Visibility == 'public' }}
+        shell: pwsh
+        # Same env-not-interpolation rule as the create step above.
+        env:
+          IN_CLEAN_DOMAINS: ${{ needs.preflight.outputs.clean_domains }}
+        run: |
+          $domains = [string]$env:IN_CLEAN_DOMAINS | ConvertFrom-Json
+          $teams = @(
+            @{ slug = 'ffc-orgwide-admins';      permission = 'admin'    },
+            @{ slug = 'ffc-orgwide-maintainers'; permission = 'maintain' },
+            @{ slug = 'ffc-orgwide-writers';     permission = 'push'     },
+            @{ slug = 'ffc-orgwide-triagers';    permission = 'triage'   },
+            @{ slug = 'ffc-orgwide-readers';     permission = 'pull'     }
+          )
+          $fails = 0
+          foreach ($d in $domains) {
+            $repo = "FFC-EX-$d"
+            foreach ($t in $teams) {
+              try {
+                gh api -X PUT "orgs/FreeForCharity/teams/$($t.slug)/repos/FreeForCharity/$repo" -f "permission=$($t.permission)" | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                  Write-Host "  [OK] $($t.slug) -> $($t.permission) on $repo"
+                } else {
+                  Write-Host "  [WARN] $($t.slug) grant on $repo returned exit $LASTEXITCODE"
+                  $fails++
+                }
+              } catch {
+                Write-Host "  [FAIL] $($t.slug) on $repo : $_"
+                $fails++
+              }
+            }
+          }
+          if ($fails -gt 0) {
+            Write-Host "::warning::$fails team grants failed; drift-audit will catch on next run."
+          }

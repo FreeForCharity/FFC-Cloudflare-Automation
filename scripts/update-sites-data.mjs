@@ -197,6 +197,14 @@ function workTier({ devStatus, status, server, inCloudflare, notes, health, host
   // tiered normally by development activity and hosting.
   if (devStatus === 'Active') return '1 - Active Development';
   if (devStatus === 'Stalled') return '2 - Has Repo, Stalled';
+  // An operator can mark a domain resolved without a migration ever happening —
+  // e.g. an alias/stub that 301-redirects to an already-migrated FFC property
+  // (epic #702, 2026-07-26: thetrendylittlegeek.com/trendylittlegeek.com ->
+  // aprilhansen.com, legion-in-the-woods.org -> legioninthewoods.org). The
+  // domain's own hosting doesn't change, so `Server In Use` stays accurate.
+  // Checked after dev-status so it only overrides the Tier-3/5 defaults below,
+  // never a domain with real repo activity (Tier 1/2).
+  if (/no migration needed/i.test(notes || '')) return '4 - Done / Stable';
   if (ghPages) return '4 - Done / Stable';
   if (legacy) return '3 - Needs Migration';
   // Demote genuinely-parked + unreachable domains out of triage (effectively dead).

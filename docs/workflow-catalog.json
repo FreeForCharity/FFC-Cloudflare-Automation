@@ -1916,6 +1916,26 @@
       "categoryCode": "GH"
     },
     {
+      "number": 732,
+      "title": "Repo - Bulk Create GitHub Repos",
+      "apis": [
+        "Repo"
+      ],
+      "file": "732-bulk-create-repos.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "One gated run creates FFC-EX-<domain> for every domain in a list, instead of one github-prod approval per domain (720 stays the single-repo path). Built for the \"ensure every charity .org domain has a repo at minimum\" pass: default template is the lightweight FFC-IN-Footer_Only_Template, and EnablePages \u2014 when turned on \u2014 is hardcoded to the github-default URL. This workflow never sets a CNAME and never touches DNS; a live custom domain is a separate, later, per-repo decision.  Mirrors 720's preflight (same collision + sibling-domain scan, same reasoning) and reuses scripts/Create-GitHubRepo.ps1 unchanged, just called once per clean domain instead of once per dispatch.",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 github-prod",
+      "guard": "dispatch-only; creates FFC-EX-\\<domain\\> for every domain in a list under ONE approval instead of one-per-domain (720 stays the single-repo path); ungated preflight refuses per-domain on name collision or sibling-domain match before the gate is spent; no CNAME input and never touches DNS; `dry_run` default true",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 733,
       "title": "Repo - Credential Rotation Reminders (quarterly)",
       "apis": [
@@ -2164,6 +2184,26 @@
       "safetyLevel": "Reads",
       "approvalEnv": "github-prod-read",
       "guard": "daily audit of the public Agentic OS board (org project #9) against the real backlog, running `scripts/audit-agentic-os-board.py` \u2014 which #968 shipped and nothing invoked, making it assurance only when a human remembered (#969); the board has NO auto-add so every card and Status is placed by hand and the audit is the compensating control, which on a manual process has to be automatic or it inherits the same failure mode; reports the three sets (missing from board / no Status / closed-or-merged but not `Done`) to the Conductor Log and is SILENT when clean, following 734; a run that could not read one of its two sides is reported as INCOMPLETE and never as clean, since the script exits 1 for both findings and enumeration failure and the exit code alone cannot tell them apart; read-only against GitHub (adds no card, sets no Status, closes nothing), Key Vault PAT on the reader identity for the org-level ProjectsV2 read the ambient token cannot do, ambient GITHUB_TOKEN for the issue comment, ungated",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 746,
+      "title": "Repo - Bulk Enable GitHub Pages",
+      "apis": [
+        "Repo"
+      ],
+      "file": "746-bulk-enable-pages.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "732 can create a stub FFC-EX-<domain> repo without GitHub Pages turned on (EnablePages defaults false there, and re-dispatching 732 for an EXISTING repo just gets skipped by its own preflight \u2014 it has no \"fix up an existing repo\" path). This workflow is that follow-up: for each domain, enable Pages on the GitHub-default URL (build_type=workflow, no CNAME, never touches DNS) and dispatch the repo's own deploy.yml so the site actually builds and serves 200. A manual dispatch of deploy.yml is required at all because a repo created via `gh repo create --template` does not fire a push event, so deploy.yml's `workflow_run` trigger (which waits on CI - Build and Test) never fires on its own \u2014 its `workflow_dispatch` trigger is the only way in until a real commit lands.",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 github-prod",
+      "guard": "dispatch-only follow-up to 732: enables Pages (build_type=workflow, GitHub-default URL only, no CNAME/DNS) and dispatches deploy.yml on EXISTING FFC-EX-\\<domain\\> repos under ONE approval; 732 can only set Pages at creation time and its own preflight skips a domain whose repo already exists, so this is the only automated path to turn Pages on afterward; ungated preflight skips a domain with no matching repo or no deploy.yml on the default branch, without failing the rest of the batch; idempotent Pages-enable (GET before POST, never touches an already-configured \u2014 possibly custom-domain \u2014 repo); `dry_run` default true",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

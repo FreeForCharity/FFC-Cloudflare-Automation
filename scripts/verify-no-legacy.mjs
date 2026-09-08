@@ -618,6 +618,38 @@ if (process.argv.includes('--self-test')) {
       })(),
       false,
     ],
+
+    // --- matchesCheckedPage --------------------------------------------
+    [
+      'an exact-spelling match is a checked page',
+      matchesCheckedPage('http://x.org/about-us/', 'http://x.org', ['/about-us/']),
+      true,
+    ],
+    [
+      'a missing trailing slash still matches',
+      matchesCheckedPage('http://x.org/about-us', 'http://x.org', ['/about-us/']),
+      true,
+    ],
+    [
+      'an appended query string (a cache-busting prefetch key) still matches',
+      matchesCheckedPage('http://x.org/about-us/?_rsc=abc123', 'http://x.org', ['/about-us/']),
+      true,
+    ],
+    [
+      'the bare root matches "/" regardless of trailing-slash bookkeeping',
+      matchesCheckedPage('http://x.org/', 'http://x.org', ['/']),
+      true,
+    ],
+    [
+      'a path NOT in the checked list does not match',
+      matchesCheckedPage('http://x.org/wp-content/real.js', 'http://x.org', ['/about-us/']),
+      false,
+    ],
+    [
+      'a different origin never matches, even with the same path',
+      matchesCheckedPage('http://evil.example/about-us/', 'http://x.org', ['/about-us/']),
+      false,
+    ],
   ];
   let failed = 0;
   for (const [name, got, want] of cases) {
@@ -677,6 +709,33 @@ function isLegacy(url) {
   }
   const d = domain.toLowerCase();
   return hostname === d || hostname.endsWith(`.${d}`);
+}
+
+/**
+ * Does this same-origin URL correspond to one of the pages THIS RUN is
+ * already checking, once a query string / hash and a trailing-slash
+ * mismatch are accounted for?
+ *
+ * The `pages` list (from discoverPages, or --pages) spells every entry with
+ * a trailing slash. A background fetch of one of those same pages -- what
+ * this excuses in requestfailed() -- need not match that spelling exactly:
+ * it can append a cache-busting query string, or omit the trailing slash
+ * the crawled list always carries. Dropping search/hash via `new URL().
+ * pathname` and checking both slash forms is what makes the match hold
+ * across those variants instead of silently missing them.
+ */
+export function matchesCheckedPage(url, origin, pages) {
+  if (!url.startsWith(origin)) return false;
+  let p;
+  try {
+    p = new URL(url).pathname;
+  } catch {
+    return false;
+  }
+  if (!p) p = '/';
+  const withSlash = p.endsWith('/') ? p : `${p}/`;
+  const withoutSlash = p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p;
+  return pages.includes(p) || pages.includes(withSlash) || pages.includes(withoutSlash);
 }
 
 const MIME = {
@@ -832,10 +891,7 @@ async function main() {
       // ctvip.org reproduced the identical failure both times, unchanged --
       // so this excuses the symptom, deliberately, rather than a JS
       // mechanism that has not actually been pinned down.
-      if (failure === 'net::ERR_ABORTED' && url.startsWith(origin)) {
-        const p = url.slice(origin.length) || '/';
-        if (pages.includes(p)) return;
-      }
+      if (failure === 'net::ERR_ABORTED' && matchesCheckedPage(url, origin, pages)) return;
       const entry = `${url} (${failure})`;
       // Same-origin failures mean the mirror is incomplete. Third-party hosts
       // may simply be unreachable from CI, so those are reported, not fatal.

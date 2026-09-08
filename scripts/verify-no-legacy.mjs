@@ -650,6 +650,18 @@ if (process.argv.includes('--self-test')) {
       matchesCheckedPage('http://evil.example/about-us/', 'http://x.org', ['/about-us/']),
       false,
     ],
+    [
+      'a same-PREFIX host is not the same origin (string startsWith would false-match)',
+      matchesCheckedPage('http://x.org.evil/about-us/', 'http://x.org', ['/about-us/']),
+      false,
+    ],
+    [
+      'a same-PREFIX port is not the same origin either',
+      matchesCheckedPage('http://127.0.0.1:12340/about-us/', 'http://127.0.0.1:1234', [
+        '/about-us/',
+      ]),
+      false,
+    ],
   ];
   let failed = 0;
   for (const [name, got, want] of cases) {
@@ -725,14 +737,22 @@ function isLegacy(url) {
  * across those variants instead of silently missing them.
  */
 export function matchesCheckedPage(url, origin, pages) {
-  if (!url.startsWith(origin)) return false;
-  let p;
+  // Parsed .origin comparison, not startsWith: a string-prefix test false-
+  // matches a different host or port that merely shares the same leading
+  // characters (`http://127.0.0.1:1234x` starts with `http://127.0.0.1:123`;
+  // `http://x.org.evil` starts with `http://x.org`), which would suppress a
+  // genuine cross-origin failure instead of only the same-origin one this
+  // function is for.
+  let u;
+  let originUrl;
   try {
-    p = new URL(url).pathname;
+    u = new URL(url);
+    originUrl = new URL(origin);
   } catch {
     return false;
   }
-  if (!p) p = '/';
+  if (u.origin !== originUrl.origin) return false;
+  const p = u.pathname || '/';
   const withSlash = p.endsWith('/') ? p : `${p}/`;
   const withoutSlash = p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p;
   return pages.includes(p) || pages.includes(withSlash) || pages.includes(withoutSlash);

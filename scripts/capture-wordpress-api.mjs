@@ -49,6 +49,7 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname, extname, resolve as resolvePath, sep } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const UA = 'Mozilla/5.0 (FFC static-capture bot; +https://freeforcharity.org)';
 
@@ -1205,7 +1206,23 @@ export function assetLocalName(absUrl) {
   if (p === '' || p.endsWith('/')) p += 'index';
   let ext = extname(p);
   if (u.search) {
-    const q = u.search.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
+    let q = u.search.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
+    // The query string becomes part of a FILENAME, and filenames are capped
+    // at 255 bytes on the filesystems this ends up on. WordPress enqueues
+    // Google Fonts as one request naming every family+weight the theme uses;
+    // on a heavy theme that string alone can run past 4,000 characters, so
+    // writing it verbatim doesn't truncate the file -- it crashes the write
+    // with ENAMETOOLONG before any content lands (measured on ksgf.org).
+    // Hash the overflow instead of embedding it raw: keeps a human-legible
+    // prefix for debugging, keeps the mapping deterministic (same URL ->
+    // same file, so re-running the capture doesn't rewrite every reference
+    // to it), and costs nothing on the vast majority of URLs that never hit
+    // the cap.
+    const QUERY_NAME_CAP = 100;
+    if (q.length > QUERY_NAME_CAP) {
+      const hash = createHash('sha256').update(u.search).digest('hex').slice(0, 16);
+      q = `${q.slice(0, QUERY_NAME_CAP)}-${hash}`;
+    }
     // Keep the extension last so content-type sniffing and static hosts behave.
     p = ext ? `${p.slice(0, -ext.length)}__${q}${ext}` : `${p}__${q}`;
   }
@@ -2849,6 +2866,26 @@ function selfTest() {
     assetLocalName('https://x.org/thing'),
     'x.org/thing.bin',
   );
+  {
+    // A Google Fonts request naming dozens of families -- ksgf.org's actually
+    // ran past 4,000 characters -- must not be embedded raw: the filename
+    // (not just the URL) is capped at 255 bytes on the filesystems this ends
+    // up on, and writing it verbatim crashes with ENAMETOOLONG.
+    const longQuery = `?family=${'A'.repeat(500)}`;
+    const longName = assetLocalName(`https://fonts.googleapis.com/css${longQuery}`);
+    const basename = longName.split('/').pop();
+    eq('assetLocalName caps an oversized query-derived filename', basename.length < 200, true);
+    eq(
+      'assetLocalName stays deterministic past the cap (same URL -> same file)',
+      assetLocalName(`https://fonts.googleapis.com/css${longQuery}`),
+      longName,
+    );
+    eq(
+      'assetLocalName still varies past the cap (distinct URLs -> distinct files)',
+      assetLocalName(`https://fonts.googleapis.com/css?family=${'B'.repeat(500)}`) !== longName,
+      true,
+    );
+  }
 
   // Longest-first rewriting: the short URL is a prefix of the long one.
   const reps = new Map([

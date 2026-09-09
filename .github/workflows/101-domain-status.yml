@@ -208,7 +208,14 @@ jobs:
           }
 
           "domain_exists=$exists" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "is_verified=$(if ($d) { $d.isVerified } else { '' })" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # `$false`, not `''`, when Graph returned no domain object (the 404 path).
+          # A domain that does not exist is not verified, so the VALUE is unchanged
+          # downstream — both read as not-verified. What changes is that all three
+          # outputs are now always a real boolean, which is what lets the two report
+          # jobs refuse a value outside {True, False} instead of only refusing an
+          # empty one. An empty here would be indistinguishable from a missing env:
+          # mapping, and the consumer cannot tell those apart from the far end.
+          "is_verified=$(if ($d) { $d.isVerified } else { $false })" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "supports_email=$supportsEmail" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Run repo M365 preflight (read-only)
@@ -323,8 +330,10 @@ jobs:
           $cfChanges = $counts['IN_CF_CHANGES']
 
           foreach ($name in @('IN_M365_EXISTS', 'IN_M365_VERIFIED', 'IN_M365_EMAIL')) {
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              Write-Output "::error::$name is empty: the step-level env: mapping is missing or misnamed, or the m365 job published no value. Refusing to publish a status summary asserting a Microsoft 365 state this run never measured."
+            $raw = [Environment]::GetEnvironmentVariable($name)
+            $normalized = "$raw".Trim().ToLowerInvariant()
+            if ($normalized -ne 'true' -and $normalized -ne 'false') {
+              Write-Output "::error::$name is not a boolean (got '$raw'): the step-level env: mapping is missing or misnamed, or the m365 job published something other than True/False. Refusing to publish a status summary asserting a Microsoft 365 state this run never measured."
               exit 1
             }
           }
@@ -586,8 +595,10 @@ jobs:
           $cfChanges = $counts['IN_CF_CHANGES']
 
           foreach ($name in @('IN_M365_EXISTS', 'IN_M365_VERIFIED', 'IN_M365_EMAIL')) {
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              Write-Output "::error::$name is empty: the step-level env: mapping is missing or misnamed, or the m365 job published no value. Refusing to build an issue comment asserting a Microsoft 365 state this run never measured."
+            $raw = [Environment]::GetEnvironmentVariable($name)
+            $normalized = "$raw".Trim().ToLowerInvariant()
+            if ($normalized -ne 'true' -and $normalized -ne 'false') {
+              Write-Output "::error::$name is not a boolean (got '$raw'): the step-level env: mapping is missing or misnamed, or the m365 job published something other than True/False. Refusing to build an issue comment asserting a Microsoft 365 state this run never measured."
               exit 1
             }
           }

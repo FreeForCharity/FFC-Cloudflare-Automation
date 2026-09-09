@@ -1193,6 +1193,68 @@ def test_an_unset_laundered_mapping_fails_closed_and_says_which_one():
             )
 
 
+def test_a_non_boolean_m365_value_is_refused_rather_than_read_as_false():
+    """Copilot's finding on #1262, plus the defect underneath it.
+
+    A non-empty value outside {True, False} coerces to `false` at
+    `-eq 'True'`, so a mis-wired mapping would publish "not verified" for a
+    domain nobody measured — an emptiness check does not see that at all.
+
+    The 404 path is why this is a value check and not just a stricter emptiness
+    check: `is_verified` used to be published as the EMPTY STRING when Graph
+    returned no domain object, which is a legitimate run, so refusing empty
+    would have failed the step on every nonexistent domain. The publisher now
+    emits `False` there (asserted separately below), which is what makes
+    refusing everything outside the pair safe.
+    """
+    for site in LAUNDERED_SITES:
+        step = _step(site)
+        for name in ("IN_M365_EXISTS", "IN_M365_VERIFIED", "IN_M365_EMAIL"):
+            supplied = dict(LAUNDERED_FIXTURE)
+            supplied[name] = "Maybe"
+            out, _, rc, _ = _run(
+                site, step["run"], **{DOMAIN_VAR: LEGAL_DOMAIN}, **supplied
+            )
+            assert rc == 1, (
+                f"site {site!r}: a NON-BOOLEAN {name} ('Maybe') was expected to "
+                f"refuse with rc 1 — read as 'false' it publishes a state the "
+                f"run never measured. Got rc={rc}: {out[:600]}"
+            )
+            assert name in out, (
+                f"site {site!r}: the refusal for a non-boolean {name} does not "
+                f"name it: {out[:600]}"
+            )
+        # Both spellings the publisher actually emits must still pass.
+        for value in ("True", "false"):
+            supplied = dict(LAUNDERED_FIXTURE)
+            supplied["IN_M365_VERIFIED"] = value
+            _, _, rc, _ = _run(
+                site, step["run"], **{DOMAIN_VAR: LEGAL_DOMAIN}, **supplied
+            )
+            assert rc == 0, (
+                f"site {site!r}: {value!r} is a value the m365 job really "
+                f"publishes and must not be refused. Got rc={rc}"
+            )
+
+
+def test_the_m365_job_never_publishes_an_empty_is_verified():
+    """The publisher half — asserted here because the consumer relies on it.
+
+    `is_verified` is `$d.isVerified` when Graph returned a domain object and
+    must be `$false`, not `''`, when it did not. An empty value at that end is
+    indistinguishable from a missing `env:` mapping at the other, and the
+    consuming step cannot tell them apart.
+    """
+    step = find_step(load_workflow(WORKFLOW), "m365", "M365 domain status (Graph summary)")
+    body = step.get("run", "")
+    assert "is_verified=$(if ($d) { $d.isVerified } else { $false })" in body, (
+        f"the m365 job no longer publishes a real boolean for is_verified on "
+        f"the 404 path. The two report jobs refuse anything outside "
+        f"{{True, False}}, so an empty here fails a run that is merely about a "
+        f"domain that does not exist. Body: {body[:600]!r}"
+    )
+
+
 def test_without_the_guard_an_empty_domain_is_silent():
     """Why the fail-closed block is not decoration, measured at both shapes.
 
@@ -1381,6 +1443,7 @@ PWSH_TESTS = (
     "test_an_unset_mapping_fails_closed_and_says_which_one",
     "test_without_the_guard_an_empty_domain_is_silent",
     "test_an_unset_laundered_mapping_fails_closed_and_says_which_one",
+    "test_a_non_boolean_m365_value_is_refused_rather_than_read_as_false",
 )
 NODE_TESTS = (
     "test_the_pre_fix_script_executed_injected_javascript",

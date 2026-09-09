@@ -413,13 +413,16 @@ jobs:
           # We collect (domain, run_id) pairs then poll sequentially in the
           # next step — the actual wait converges to the slowest single
           # smoke (~20 min worst case for cert provisioning), not N * 20 min.
-          : > /tmp/smoke-dispatched.tsv
+          # RUNNER_TEMP so two local harness runs of this body cannot clobber
+          # each other (#1247); the fallback keeps runner behaviour identical.
+          smoke_tsv="${RUNNER_TEMP:-/tmp}/smoke-dispatched.tsv"
+          : > "$smoke_tsv"
           for d in $domains; do
             repo="FreeForCharity/FFC-EX-${d}"
             echo "Dispatching smoke for $repo ..."
             if ! gh workflow run "Post-Deploy Smoke Test" --repo "$repo" --ref main 2>&1; then
               echo "::warning::Could not dispatch smoke for $repo (workflow may not exist on this repo)"
-              printf '%s\tDISPATCH_FAILED\n' "$d" >> /tmp/smoke-dispatched.tsv
+              printf '%s\tDISPATCH_FAILED\n' "$d" >> "$smoke_tsv"
               continue
             fi
             # Settle a few seconds so the run is registered before we grab its id.
@@ -434,16 +437,16 @@ jobs:
             fi
             if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
               echo "::warning::Could not locate dispatched smoke run for $repo"
-              printf '%s\tNO_RUN_ID\n' "$d" >> /tmp/smoke-dispatched.tsv
+              printf '%s\tNO_RUN_ID\n' "$d" >> "$smoke_tsv"
               continue
             fi
             echo "  -> run $run_id (https://github.com/${repo}/actions/runs/${run_id})"
-            printf '%s\t%s\n' "$d" "$run_id" >> /tmp/smoke-dispatched.tsv
+            printf '%s\t%s\n' "$d" "$run_id" >> "$smoke_tsv"
           done
 
           echo ""
           echo "Dispatched:"
-          cat /tmp/smoke-dispatched.tsv
+          cat "$smoke_tsv"
 
       - name: Poll each smoke to completion
         shell: bash
@@ -465,6 +468,9 @@ jobs:
           # Per-repo deadline matches the smoke'\''s internal cert-retry budget
           # (20 min) plus Playwright install + screenshot (~3 min) plus slack.
           per_repo_deadline_seconds=1500   # 25 min
+
+          # Same path the dispatch step above wrote (#1247).
+          smoke_tsv="${RUNNER_TEMP:-/tmp}/smoke-dispatched.tsv"
 
           fails=0
           dispatched=0
@@ -506,7 +512,7 @@ jobs:
               fails=$(( fails + 1 ))
             fi
             echo "::endgroup::"
-          done < /tmp/smoke-dispatched.tsv
+          done < "$smoke_tsv"
 
           echo ""
           if [ "$fails" -gt 0 ]; then

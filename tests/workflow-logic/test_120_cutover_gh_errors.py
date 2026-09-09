@@ -25,14 +25,22 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, find_step, load_workflow, step_run
+from wf_extract import child_env, find_step, load_workflow, runner_temp, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 WORKFLOW = "120-bulk-cutover-to-github-pages.yml"
 JOB = "post-cutover-smoke"
 DOMAIN = "example.org"
-SMOKE_TSV = pathlib.Path("/tmp/smoke-dispatched.tsv")
+# The dispatch step writes this and the poll step reads it, so it has to
+# outlive a single `run_step` call — hence the per-PROCESS RUNNER_TEMP the
+# harness hands the child, not the per-call TemporaryDirectory below.
+# Hardcoding `/tmp/smoke-dispatched.tsv` here is what kept the module
+# uncontainable even once the workflow was fixed: two concurrent copies
+# read and truncated one file, and the resulting failure lands on
+# whichever side of an L191 treatment/control comparison loses the race
+# (#1247).
+SMOKE_TSV = pathlib.Path(runner_temp()) / "smoke-dispatched.tsv"
 
 
 # Every step that consumes `domains` and the env var it must read it through.

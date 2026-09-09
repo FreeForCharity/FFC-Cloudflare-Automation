@@ -8,9 +8,12 @@ logic without updating the tests fails CI, not production.
 
 from __future__ import annotations
 
+import atexit
 import os
 import pathlib
 import re
+import shutil
+import tempfile
 
 import yaml
 
@@ -37,6 +40,73 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 # platform's own directories stay reachable. The hardcoded `/usr/bin:/bin`
 # tails are dropped rather than translated: on POSIX they are already in the
 # inherited PATH, and on Windows they were never anything but noise.
+# --- RUNNER_TEMP: one scratch directory per test PROCESS (#1247) -------------
+#
+# Seven workflows wrote to fixed `/tmp/<name>` paths in their `run:` bodies, and
+# the harness executes those bodies verbatim. On a GitHub-hosted runner that is
+# invisible — one job per VM, so the paths cannot collide. Locally two copies of
+# the same module clobber each other's state, and the failure never names
+# concurrency: `/tmp/entries.json` is rewritten between a write and a read
+# (`KeyError`) or read mid-truncation (`JSONDecodeError`).
+#
+# That matters beyond a flaky test because the L191 treatment/control comparison
+# in AGENTS.md runs the composed suite and the control suite AT THE SAME TIME.
+# The contamination is nondeterministic about which side it lands on, so it
+# manufactures a difference where none exists — and that difference reads as a
+# regression introduced by the PR under review. Measured on 2026-09-07 composing
+# #1238 + #1245 + #1246: `test_738` failed on the composed side alone, three
+# clean PRs looked like one broken audit, and a serial re-run showed identical
+# failure sets on both sides.
+#
+# The bodies now write under `"${RUNNER_TEMP:-/tmp}"`, so isolation is this
+# variable. It is set per process rather than per test: a step body writes a
+# file that the assertions read AFTER the step returns (120's dispatch TSV,
+# 738's entries.json), so a directory torn down with each invocation would take
+# the evidence with it.
+#
+# It is set UNCONDITIONALLY, not with setdefault. A real runner exports
+# RUNNER_TEMP job-wide, so inheriting it would put every module in one job back
+# in a shared directory — the exact state this removes.
+_RUNNER_TEMP: str | None = None
+
+
+def forward_slashes(path: str) -> str:
+    """`C:\\Users\\x\\Temp\\y` -> `C:/Users/x/Temp/y`; unchanged on POSIX.
+
+    Split out so the rule is testable from any host. On Linux `mkdtemp` never
+    returns a backslash, so a test that only inspects the live value asserts
+    nothing here and would go green against no normalization at all -- which is
+    exactly how a Windows-only defect stays invisible to a Linux CI (#943).
+    """
+    return path.replace("\\", "/")
+
+
+def runner_temp() -> str:
+    """This process's RUNNER_TEMP, created on first use and removed at exit.
+
+    Test modules that need to read a file a step body wrote should build the
+    path from this rather than hardcoding `/tmp/<name>`, which reintroduces the
+    collision on the test side even once the workflow is fixed.
+    """
+    global _RUNNER_TEMP
+    if _RUNNER_TEMP is None:
+        created = tempfile.mkdtemp(prefix="wf-logic-runner-temp-")
+        # Remove the real directory by its NATIVE path; hand out the
+        # forward-slash spelling. On Windows `mkdtemp` returns
+        # `C:\Users\...\Temp\wf-logic-runner-temp-x`, and this value is
+        # exported as RUNNER_TEMP into `bash` step bodies that use it as
+        # `"$tmpd/smoke-body"`. MSYS bash eats a backslash as an escape, so
+        # `C:\Users\...` arrives as `C:Users...` and the redirect writes
+        # somewhere nobody looks -- the same mangling CLAUDE.md records for a
+        # Windows-style path handed to git-bash. `C:/Users/...` is the spelling
+        # both native Python and MSYS bash read the same way, and it is what
+        # this repo already prescribes for any path crossing that boundary.
+        # No-op on POSIX, where `mkdtemp` never returns a backslash.
+        atexit.register(shutil.rmtree, created, ignore_errors=True)
+        _RUNNER_TEMP = forward_slashes(created)
+    return _RUNNER_TEMP
+
+
 def child_env(*prepend_path: str | pathlib.Path, **overrides: str) -> dict[str, str]:
     """The parent environment, with `prepend_path` entries put in front of PATH
     and `overrides` applied on top.
@@ -60,6 +130,9 @@ def child_env(*prepend_path: str | pathlib.Path, **overrides: str) -> dict[str, 
         if inherited:
             parts.append(inherited)
         env["PATH"] = os.pathsep.join(parts)
+    # Before `overrides`, so a caller that wants its own scratch directory can
+    # still say so explicitly.
+    env["RUNNER_TEMP"] = runner_temp()
     env.update(overrides)
     return env
 

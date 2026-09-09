@@ -58,15 +58,20 @@ jobs:
           # `sha256sum`, and two copies differing ONLY in trailing newlines hash
           # identically — precisely the class of difference a byte-identity audit
           # exists to catch (#893).
+          # RUNNER_TEMP, not a fixed /tmp path: the harness executes this body
+          # verbatim, so two concurrent local runs shared these three files and
+          # each read the other's half-written state (#1247).
+          tmpd="${RUNNER_TEMP:-/tmp}"
+
           fetch_hash() {
             local repo="$1" msg
             if ! gh api "repos/${repo}/contents/${SMOKE_PATH}" \
                    -H "Accept: application/vnd.github.raw" \
-                   >/tmp/smoke-body 2>/tmp/smoke-err; then
+                   >"$tmpd/smoke-body" 2>"$tmpd/smoke-err"; then
               # gh reports some failures on stderr and others on stdout (ledger
               # L02), so both streams are searched for the 404 tell. The body file
               # is never hashed on this path.
-              if grep -qi "Not Found" /tmp/smoke-err /tmp/smoke-body; then
+              if grep -qi "Not Found" "$tmpd/smoke-err" "$tmpd/smoke-body"; then
                 echo "ABSENT"
               else
                 # Bounded at the READ, and never `cat … | head`. An error body has
@@ -90,12 +95,12 @@ jobs:
                 # body kills the step before it can report which repo failed.
                 # `head -qc` reads the files directly: the writer never outlives the
                 # reader, so there is no race to reason about in the first place.
-                msg=$(head -qc 200 /tmp/smoke-err /tmp/smoke-body | tr '\n' ' ')
+                msg=$(head -qc 200 "$tmpd/smoke-err" "$tmpd/smoke-body" | tr '\n' ' ')
                 echo "ERROR:${msg:0:200}"
               fi
               return 0
             fi
-            sha256sum /tmp/smoke-body | cut -d' ' -f1
+            sha256sum "$tmpd/smoke-body" | cut -d' ' -f1
           }
 
           canonical_hash=$(fetch_hash "$CANONICAL_REPO")
@@ -117,7 +122,7 @@ jobs:
           )
           echo "Fleet size: ${#repos[@]}"
 
-          entries="/tmp/entries.json"
+          entries="$tmpd/entries.json"
           echo "[]" > "$entries"
           for repo in "${repos[@]}"; do
             [ -z "$repo" ] && continue

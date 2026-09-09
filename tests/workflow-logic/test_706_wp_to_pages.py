@@ -28,7 +28,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import WORKFLOWS, child_env, load_workflow, step_run
+from wf_extract import WORKFLOWS, child_env, forward_slashes, load_workflow, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -410,7 +410,10 @@ def _run_forms_step(files: dict[str, str], email: str = "") -> subprocess.Comple
         env = child_env(
             HARNESS_DIR,
             HOME=str(tdp),
-            RUNNER_TEMP=str(tdp),
+            # Forward slashes: this step body runs under `bash` below, and MSYS
+            # eats a backslash as an escape, so a native `C:\...` from
+            # TemporaryDirectory arrives mangled on the Windows host (#1247).
+            RUNNER_TEMP=forward_slashes(str(tdp)),
             GITHUB_OUTPUT=str(outputs),
             GITHUB_STEP_SUMMARY=str(summary),
             EMAIL=email,

@@ -234,8 +234,8 @@ jobs:
             echo "$PHANTOM_CANDIDATES"
             echo '```'
             echo "</details>"
-          } > /tmp/report.md
-          cat /tmp/report.md >> "$GITHUB_STEP_SUMMARY"
+          } > "${RUNNER_TEMP:-/tmp}/report.md"
+          cat "${RUNNER_TEMP:-/tmp}/report.md" >> "$GITHUB_STEP_SUMMARY"
 
           # Hard-fail if any phantom candidate falls in a critical path, or if the
           # branch is more than 5 commits behind -- either condition alone is

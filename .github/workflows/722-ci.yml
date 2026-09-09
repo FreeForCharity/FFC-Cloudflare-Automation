@@ -307,6 +307,25 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/check-workflow-working-directories.py
 
+      - name: Validate no workflow body names a fixed temp path
+        shell: bash
+        run: |
+          # Seven workflows wrote scratch files to fixed, unqualified temp paths.
+          # The workflow-logic harness executes those bodies verbatim, so two
+          # concurrent test processes shared one file and each read the other's
+          # half-written state. Unreachable on a hosted runner (one job per VM),
+          # so CI can never turn red on it -- and reachable in exactly the place
+          # it does the most damage, because AGENTS.md's L191 treatment/control
+          # recipe starts the composed suite and the control suite at the same
+          # time. The contamination is nondeterministic about which side it lands
+          # on, so it manufactures a difference that reads as a regression by the
+          # PR under review: measured 2026-09-07, three clean PRs looked like one
+          # broken fleet-drift audit until the pair was re-run serially (#1247).
+          # The population is now 0, so this fails on any new instance, on a
+          # stale freeze entry, or on a workflow it cannot parse.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 scripts/check-workflow-fixed-tmp-paths.py
+
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v7
         with:

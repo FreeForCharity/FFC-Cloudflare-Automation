@@ -407,7 +407,12 @@ def test_the_gather_step_hashes_a_file_and_never_a_shell_variable():
         f"byte(s) (#893, ledger L27): {[ln for ln, _ in flagged]}"
     )
     code = "\n".join(code_lines)
-    assert re.search(r"sha256sum\s+(/\S+|\"\$\w+\"|\$\w+)", code), (
+    # A quoted path built from a variable (`sha256sum "$tmpd/smoke-body"`) is
+    # the shape the RUNNER_TEMP fix produces (#1247) and is still a FILE path —
+    # what this assertion exists to require. The pre-#1247 alternation demanded
+    # the closing quote immediately after the variable name, so the fix would
+    # have failed a test about a property it does not change.
+    assert re.search(r"sha256sum\s+(\"[^\"]*/[^\"]*\"|/\S+|\$\w+)", code), (
         "the gather step must hash a file path so the published digest is "
         "reproducible with `sha256sum <file>`"
     )

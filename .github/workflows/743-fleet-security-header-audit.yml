@@ -84,13 +84,14 @@ jobs:
               ? targets.filter((t) => filter.includes(t.domain.toLowerCase()))
               : targets;
             const persistedSkips = filter.length ? [] : skipped;
-            fs.writeFileSync("/tmp/targets.json", JSON.stringify(picked));
-            fs.writeFileSync("/tmp/skipped.json", JSON.stringify(persistedSkips));
-            fs.writeFileSync("/tmp/run-mode.json", JSON.stringify({ filtered: filter.length > 0 }));
+            const tmpd = process.env.RUNNER_TEMP || "/tmp";
+            fs.writeFileSync(tmpd + "/targets.json", JSON.stringify(picked));
+            fs.writeFileSync(tmpd + "/skipped.json", JSON.stringify(persistedSkips));
+            fs.writeFileSync(tmpd + "/run-mode.json", JSON.stringify({ filtered: filter.length > 0 }));
             console.log("targets=" + picked.length + " skipped=" + persistedSkips.length
               + " filtered=" + (filter.length > 0));
           '
-          count=$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync("/tmp/targets.json","utf8")).length))')
+          count=$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync((process.env.RUNNER_TEMP || "/tmp") + "/targets.json","utf8")).length))')
           if [ "$count" -eq 0 ]; then
             echo "::error::No probe targets selected — refusing to report an empty fleet as compliant"
             exit 1
@@ -100,17 +101,21 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          mkdir -p /tmp/probes
+          # RUNNER_TEMP, not a fixed /tmp path: the harness runs these bodies
+          # verbatim, so two concurrent local runs shared every scratch file
+          # here (#1247). The fallback keeps runner behaviour identical.
+          tmpd="${RUNNER_TEMP:-/tmp}"
+          mkdir -p "$tmpd/probes"
           mapfile -t domains < <(node -e '
-            const t = JSON.parse(require("fs").readFileSync("/tmp/targets.json", "utf8"));
+            const t = JSON.parse(require("fs").readFileSync((process.env.RUNNER_TEMP || "/tmp") + "/targets.json", "utf8"));
             for (const x of t) console.log(x.domain);
           ')
           for domain in "${domains[@]}"; do
             [ -z "$domain" ] && continue
             safe="${domain//\//_}"
-            head_file="/tmp/probes/${safe}.head"
-            body_file="/tmp/probes/${safe}.body"
-            err_file="/tmp/probes/${safe}.err"
+            head_file="$tmpd/probes/${safe}.head"
+            body_file="$tmpd/probes/${safe}.body"
+            err_file="$tmpd/probes/${safe}.err"
             : > "$head_file"; : > "$err_file"
 
             # -L so the FINAL response is what gets classified; a domain that
@@ -135,14 +140,15 @@ jobs:
             const fs = require('fs');
             const lib = require('./scripts/fleet-security-header-lib.js');
 
-            const targets = JSON.parse(fs.readFileSync('/tmp/targets.json', 'utf8'));
-            const skipped = JSON.parse(fs.readFileSync('/tmp/skipped.json', 'utf8'));
+            const tmpd = process.env.RUNNER_TEMP || '/tmp';
+            const targets = JSON.parse(fs.readFileSync(`${tmpd}/targets.json`, 'utf8'));
+            const skipped = JSON.parse(fs.readFileSync(`${tmpd}/skipped.json`, 'utf8'));
 
             const entries = targets.map((t) => {
               const safe = t.domain.replace(/\//g, '_');
-              const headPath = `/tmp/probes/${safe}.head`;
-              const bodyPath = `/tmp/probes/${safe}.body`;
-              const errPath = `/tmp/probes/${safe}.err`;
+              const headPath = `${tmpd}/probes/${safe}.head`;
+              const bodyPath = `${tmpd}/probes/${safe}.body`;
+              const errPath = `${tmpd}/probes/${safe}.err`;
               if (!fs.existsSync(headPath) || !fs.readFileSync(headPath, 'utf8').trim()) {
                 const err = fs.existsSync(errPath)
                   ? fs.readFileSync(errPath, 'utf8').trim().slice(0, 200)
@@ -166,7 +172,7 @@ jobs:
             // is decided in the library (unit-tested as a matrix) because every
             // guard here exists for the same reason: a run that knows LESS than
             // the issue must never overwrite it.
-            const { filtered } = JSON.parse(fs.readFileSync('/tmp/run-mode.json', 'utf8'));
+            const { filtered } = JSON.parse(fs.readFileSync(`${tmpd}/run-mode.json`, 'utf8'));
             const action = lib.decideIssueAction({ filtered, analysis });
 
             // A `domains=` dispatch probed a hand-picked subset, so its verdict

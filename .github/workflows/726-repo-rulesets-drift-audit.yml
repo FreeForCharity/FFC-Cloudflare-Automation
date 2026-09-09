@@ -191,7 +191,7 @@ jobs:
                 echo ""
                 echo "Check the Organization Administration permission on the PAT in"
                 echo "\`read-all-cbm-ffc-copilot-mcp-github-pat\`."
-              } > /tmp/drift-report.md
+              } > "${RUNNER_TEMP:-/tmp}/drift-report.md"
               exit 1
             fi
             {
@@ -334,7 +334,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           # Save report for the issue step
-          cp "$REPORT" /tmp/drift-report.md
+          cp "$REPORT" "${RUNNER_TEMP:-/tmp}/drift-report.md"
 
       - name: Open / update tracking issue if drift detected
         # always() so a FAILED audit still delivers a report — the hard-fail path
@@ -368,7 +368,7 @@ jobs:
           set -uo pipefail
           repo=FreeForCharity/FFC-Cloudflare-Automation
           title="Ruleset/settings drift detected"
-          body=$(cat /tmp/drift-report.md 2>/dev/null || echo "drift report missing")
+          body=$(cat "${RUNNER_TEMP:-/tmp}/drift-report.md" 2>/dev/null || echo "drift report missing")
 
           # Find an existing open tracking issue. A LOOKUP failure must not read as
           # "none exists" — that silently opens a duplicate tracking issue on every

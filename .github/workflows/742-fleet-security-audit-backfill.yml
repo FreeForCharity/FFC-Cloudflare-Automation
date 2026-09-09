@@ -136,6 +136,11 @@ jobs:
           # The endpoint is built explicitly rather than by interpolating a
           # possibly-empty $dir: `contents/` with a trailing slash is not the
           # same request as `contents`.
+          # RUNNER_TEMP, not a fixed /tmp path: the harness runs this body
+          # verbatim, so two concurrent local runs shared this error file
+          # (#1247). The fallback keeps runner behaviour identical.
+          tmpd="${RUNNER_TEMP:-/tmp}"
+
           list_dir() {
             local repo="$1" dir="$2" dest="$3" rc path
             if [ -n "$dir" ]; then
@@ -144,13 +149,13 @@ jobs:
               path="repos/${repo}/contents"
             fi
             : > "$dest"
-            gh api "$path" --jq '[.[].name] | join(",")' > "$dest" 2>/tmp/err
+            gh api "$path" --jq '[.[].name] | join(",")' > "$dest" 2>"$tmpd/err"
             rc=$?
             if [ "$rc" -ne 0 ]; then
-              if grep -qi "Not Found" /tmp/err; then
+              if grep -qi "Not Found" "$tmpd/err"; then
                 echo "ABSENT"
               else
-                echo "ERROR:$(head -c 200 /tmp/err | tr '\n' ' ')"
+                echo "ERROR:$(head -c 200 "$tmpd/err" | tr '\n' ' ')"
               fi
               return 0
             fi
@@ -257,8 +262,8 @@ jobs:
             # question: is the audit:high script declared? Parsed, not grepped —
             # a bare mention of the name elsewhere must not read as covered.
             if ! gh api "repos/${full}/contents/package.json" \
-              -H "Accept: application/vnd.github.raw" > pkg.json 2>/tmp/err; then
-              jq --arg r "$full" --arg e "$(head -c 200 /tmp/err | tr '\n' ' ')" \
+              -H "Accept: application/vnd.github.raw" > pkg.json 2>"$tmpd/err"; then
+              jq --arg r "$full" --arg e "$(head -c 200 "$tmpd/err" | tr '\n' ' ')" \
                 '. += [{"repo":$r,"error":$e}]' "$candidates" > "$candidates.tmp" \
                 && mv "$candidates.tmp" "$candidates"
               echo "::warning::$full package.json fetch failed"

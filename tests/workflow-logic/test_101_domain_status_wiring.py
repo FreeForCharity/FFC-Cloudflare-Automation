@@ -476,9 +476,25 @@ def _payload(site: str) -> str:
 def _run(
     site: str, body: str, wrap: bool = True, **env_overrides: str
 ) -> tuple[str, str | None, int, str]:
+    """The four-value view of `_run_full`, which is what most tests want."""
+    result = _run_full(site, body, wrap=wrap, **env_overrides)
+    return result["out"], result["stolen"], result["rc"], result["calls"]
+
+
+def _run_full(
+    site: str, body: str, wrap: bool = True, **env_overrides: str
+) -> dict:
     """Run a pwsh body the way the RUNNER runs it, in a temp cwd holding stubs.
 
-    Returns (output, sentinel_contents_or_None, rc, call_log).
+    Returns a dict: `out`, `stolen`, `rc`, `calls`, and `report`.
+
+    `report` is what the step RENDERED — `$GITHUB_STEP_SUMMARY` for the summary
+    site, the post-back comment file for the comment site — read before the temp
+    directory is torn down. It is separate from `out` on purpose: these bodies
+    write their verdict to a file and print nothing, so a value the step got
+    wrong is invisible to a stdout assertion, and folding it into `out` would
+    let an unrelated test match a variable name that only appears in the
+    rendered markdown.
 
     The sentinel's CONTENTS, not merely its existence: a file written from an
     unset variable would score the same as one written from the live credential,
@@ -545,7 +561,17 @@ def _run(
         contents = stolen.read_text(encoding="utf-8") if stolen.exists() else None
         call_log = tmp / "CALLS.txt"
         calls = call_log.read_text(encoding="utf-8") if call_log.exists() else ""
-        return proc.stdout + proc.stderr, contents, proc.returncode, calls
+        report = ""
+        for rendered_path in (tmp / "step-summary.md", tmp / "post-back-comment.md"):
+            if rendered_path.exists():
+                report += rendered_path.read_text(encoding="utf-8")
+        return {
+            "out": proc.stdout + proc.stderr,
+            "stolen": contents,
+            "rc": proc.returncode,
+            "calls": calls,
+            "report": report,
+        }
 
 
 def _pre_fix(site: str, domain: str) -> str:
@@ -671,8 +697,9 @@ def _run_js(script_body: str, *, map_comment_path: bool = True, **env_overrides:
     the body decided to send and under whose issue number.
 
     `map_comment_path=False` runs the body with `IN_COMMENT_PATH` genuinely
-    unset — the case the workflow's own `env:` block supplies on every real run,
-    and therefore the one only this harness can produce.
+    unset — the misnamed-or-missing `env:` mapping. On a real run the workflow's
+    own `env:` block always supplies it, so that case cannot be reached from a
+    dispatch at all; this flag is the only way to produce it.
     """
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
@@ -1237,6 +1264,50 @@ def test_a_non_boolean_m365_value_is_refused_rather_than_read_as_false():
             )
 
 
+def test_an_accepted_m365_value_is_coerced_from_what_the_check_accepted():
+    """Copilot's second finding on #1262: validation and coercion must agree.
+
+    The check normalizes (`Trim().ToLowerInvariant()`), so `TRUE` and ` True `
+    pass it. If the coercion below reads the RAW value back at `-eq 'True'`,
+    those same values then read as **false** — validated and still misreported,
+    which is the exact failure the check was added to prevent. A value check
+    that accepts a wider set than the conversion honours is worse than no check,
+    because it reads as a fail-closed contract while widening the silent path.
+
+    Measured on the rendered status rather than on the exit code: both bodies
+    print `exists=<bool>`, so a wrong coercion is visible in the output instead
+    of only in a variable nothing asserts.
+    """
+    for site in LAUNDERED_SITES:
+        step = _step(site)
+        for spelling in ("True", "TRUE", " true ", "tRuE"):
+            supplied = dict(LAUNDERED_FIXTURE)
+            supplied["IN_M365_EXISTS"] = spelling
+            result = _run_full(
+                site, step["run"], **{DOMAIN_VAR: LEGAL_DOMAIN}, **supplied
+            )
+            assert result["rc"] == 0, (
+                f"site {site!r}: {spelling!r} normalizes to 'true' and must be "
+                f"accepted. Got rc={result['rc']}: {result['out'][:600]}"
+            )
+            assert "exists=True" in result["report"], (
+                f"site {site!r}: {spelling!r} passed validation but was coerced "
+                f"to False — the check accepts a wider set than the conversion "
+                f"honours, so a run publishes a state it did not measure while "
+                f"every guard reads green. Rendered: {result['report'][:600]}"
+            )
+        # And the false direction, so this cannot pass by coercing everything true.
+        supplied = dict(LAUNDERED_FIXTURE)
+        supplied["IN_M365_EXISTS"] = "FALSE"
+        result = _run_full(
+            site, step["run"], **{DOMAIN_VAR: LEGAL_DOMAIN}, **supplied
+        )
+        assert result["rc"] == 0 and "exists=False" in result["report"], (
+            f"site {site!r}: 'FALSE' must normalize to false, not be refused or "
+            f"read as true. Got rc={result['rc']}: {result['report'][:600]}"
+        )
+
+
 def test_the_m365_job_never_publishes_an_empty_is_verified():
     """The publisher half — asserted here because the consumer relies on it.
 
@@ -1444,6 +1515,7 @@ PWSH_TESTS = (
     "test_without_the_guard_an_empty_domain_is_silent",
     "test_an_unset_laundered_mapping_fails_closed_and_says_which_one",
     "test_a_non_boolean_m365_value_is_refused_rather_than_read_as_false",
+    "test_an_accepted_m365_value_is_coerced_from_what_the_check_accepted",
 )
 NODE_TESTS = (
     "test_the_pre_fix_script_executed_injected_javascript",

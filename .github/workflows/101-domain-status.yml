@@ -329,6 +329,7 @@ jobs:
           $cfSevere = $counts['IN_CF_SEVERE']
           $cfChanges = $counts['IN_CF_CHANGES']
 
+          $m365Bool = @{}
           foreach ($name in @('IN_M365_EXISTS', 'IN_M365_VERIFIED', 'IN_M365_EMAIL')) {
             $raw = [Environment]::GetEnvironmentVariable($name)
             $normalized = "$raw".Trim().ToLowerInvariant()
@@ -336,14 +337,15 @@ jobs:
               Write-Output "::error::$name is not a boolean (got '$raw'): the step-level env: mapping is missing or misnamed, or the m365 job published something other than True/False. Refusing to publish a status summary asserting a Microsoft 365 state this run never measured."
               exit 1
             }
+            # Coerce from the SAME normalized value the check just accepted. Reading
+            # the raw one back would let `TRUE` or ` True ` pass validation and then
+            # read as false at `-eq 'True'` — validated and still misreported, which
+            # is the failure the check was added to prevent.
+            $m365Bool[$name] = ($normalized -eq 'true')
           }
-          $m365Exists = $env:IN_M365_EXISTS
-          $m365Verified = $env:IN_M365_VERIFIED
-          $m365Email = $env:IN_M365_EMAIL
-
-          $m365ExistsBool = ($m365Exists -eq 'True' -or $m365Exists -eq 'true')
-          $m365VerifiedBool = ($m365Verified -eq 'True' -or $m365Verified -eq 'true')
-          $m365EmailBool = ($m365Email -eq 'True' -or $m365Email -eq 'true')
+          $m365ExistsBool = $m365Bool['IN_M365_EXISTS']
+          $m365VerifiedBool = $m365Bool['IN_M365_VERIFIED']
+          $m365EmailBool = $m365Bool['IN_M365_EMAIL']
 
           $m365Status = if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }
           $cfStatus = if ($cfIssues -eq 0) { 'PASS' } elseif ($cfSevere -gt 0) { 'FAIL' } else { 'PARTIAL' }
@@ -594,6 +596,7 @@ jobs:
           $cfSevere = $counts['IN_CF_SEVERE']
           $cfChanges = $counts['IN_CF_CHANGES']
 
+          $m365Bool = @{}
           foreach ($name in @('IN_M365_EXISTS', 'IN_M365_VERIFIED', 'IN_M365_EMAIL')) {
             $raw = [Environment]::GetEnvironmentVariable($name)
             $normalized = "$raw".Trim().ToLowerInvariant()
@@ -601,14 +604,15 @@ jobs:
               Write-Output "::error::$name is not a boolean (got '$raw'): the step-level env: mapping is missing or misnamed, or the m365 job published something other than True/False. Refusing to build an issue comment asserting a Microsoft 365 state this run never measured."
               exit 1
             }
+            # Coerce from the SAME normalized value the check just accepted. Reading
+            # the raw one back would let `TRUE` or ` True ` pass validation and then
+            # read as false at `-eq 'True'` — validated and still misreported, which
+            # is the failure the check was added to prevent.
+            $m365Bool[$name] = ($normalized -eq 'true')
           }
-          $m365Exists = $env:IN_M365_EXISTS
-          $m365Verified = $env:IN_M365_VERIFIED
-          $m365Email = $env:IN_M365_EMAIL
-
-          $m365ExistsBool = ($m365Exists -eq 'True' -or $m365Exists -eq 'true')
-          $m365VerifiedBool = ($m365Verified -eq 'True' -or $m365Verified -eq 'true')
-          $m365EmailBool = ($m365Email -eq 'True' -or $m365Email -eq 'true')
+          $m365ExistsBool = $m365Bool['IN_M365_EXISTS']
+          $m365VerifiedBool = $m365Bool['IN_M365_VERIFIED']
+          $m365EmailBool = $m365Bool['IN_M365_EMAIL']
 
           $m365Status = if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }
           $cfStatus = if ($cfIssues -eq 0) { 'PASS' } elseif ($cfSevere -gt 0) { 'FAIL' } else { 'PARTIAL' }

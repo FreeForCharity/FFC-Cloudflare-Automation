@@ -218,8 +218,11 @@ jobs:
           # Measured on 102 with the remedy applied: the $( ) payload arrives at
           # the first step as inert data, is written VERBATIM to GITHUB_OUTPUT,
           # and EXECUTES at the downstream double-quoted site while the step
-          # exits 0. Four of the five workflows this freezes are absent from the
-          # first guard's list entirely.
+          # exits 0. Four of the five workflows frozen at the 2026-09-05
+          # measurement were absent from the first guard's list entirely; the
+          # #1241 burn-down has since closed 702 and 706, the two live ones, so
+          # the freeze now pins three workflows of over-approximated hops. The
+          # guard prints its own counts — do not read this comment as current.
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/check-workflow-laundered-input-interpolation.py
 

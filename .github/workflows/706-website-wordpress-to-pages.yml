@@ -631,9 +631,27 @@ jobs:
         # (the long tail is tag and date archives sharing one layout) while
         # staying inside the job timeout, since each page is a real browser
         # load.
+        shell: bash
+        env:
+          # `domain` is the `domain` dispatch input normalised by the `resolve`
+          # job and republished as a job output. Read through `env:` it arrives
+          # as DATA; interpolated into the body it would be substituted as
+          # script TEXT, and `$( )` executes inside a double-quoted bash
+          # argument (#1241, #1233). The normalisation in `resolve` is a
+          # mitigation at the WRITE end, which is not the remedy.
+          SOURCE_DOMAIN: ${{ needs.resolve.outputs.domain }}
         run: |
+          set -euo pipefail
+          # Fail closed on empty: `--domain ""` makes the gate compare every
+          # request against an empty host, so nothing is recognised as legacy
+          # and the one check that can see a live-origin dependency passes
+          # vacuously.
+          if [ -z "${SOURCE_DOMAIN:-}" ]; then
+            echo "::error::SOURCE_DOMAIN is empty — the resolve job published no domain. Refusing to run the self-containment gate against an unset host."
+            exit 1
+          fi
           node automation/scripts/verify-no-legacy.mjs \
-            --domain "${{ needs.resolve.outputs.domain }}" \
+            --domain "$SOURCE_DOMAIN" \
             --dir ffc-ex/out \
             --max-pages 120
 
@@ -736,12 +754,27 @@ jobs:
       - name: Report what would be written
         shell: bash
         working-directory: ffc-ex
+        env:
+          # All three carry a dispatch input one hop on and all three are read
+          # here inside a double-quoted `echo`, where `$( )` executes (#1241).
+          # `mode` is checked against a fixed set in `resolve`, but that is a
+          # mitigation at the write end; the remedy is applied at the READ.
+          SOURCE_DOMAIN: ${{ needs.resolve.outputs.domain }}
+          TARGET_REPO: ${{ needs.resolve.outputs.repo }}
+          RUN_MODE: ${{ needs.resolve.outputs.mode }}
         run: |
           set -euo pipefail
+          # Fail closed on empty: this summary is the only artifact a `preview`
+          # run leaves behind, and a blank domain or repo turns it into a report
+          # about an unnamed site that reads as a successful conversion.
+          if [ -z "${SOURCE_DOMAIN:-}" ] || [ -z "${TARGET_REPO:-}" ] || [ -z "${RUN_MODE:-}" ]; then
+            echo "::error::SOURCE_DOMAIN / TARGET_REPO / RUN_MODE is empty — the resolve job published nothing for it."
+            exit 1
+          fi
           {
-            echo "## 706 — ${{ needs.resolve.outputs.domain }} → ${{ needs.resolve.outputs.repo }}"
+            echo "## 706 — $SOURCE_DOMAIN → $TARGET_REPO"
             echo ""
-            echo "Mode: \`${{ needs.resolve.outputs.mode }}\`"
+            echo "Mode: \`$RUN_MODE\`"
             echo ""
             echo "Changed paths that a delivery would commit: $(git add -A --dry-run | wc -l)"
           } >> "$GITHUB_STEP_SUMMARY"

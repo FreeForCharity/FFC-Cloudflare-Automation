@@ -134,8 +134,19 @@ def test_the_taint_engine_finds_real_taint():
     hops, _unreadable, _scanned = guard.scan_all()
     assert hops, "the tree carries laundering hops; finding none means the engine died"
     workflows = guard.current_map(hops)
-    assert "706-website-wordpress-to-pages.yml" in workflows, (
-        f"706 is the canonical #1233 shape and must be found; got {sorted(workflows)}"
+    # Derived from the freeze rather than pinned to one workflow. It used to
+    # name 706 — the canonical #1233 shape — and that made this control a file
+    # every burn-down lane had to edit, which is the coupling #1210 objects to
+    # in #1080's own freeze. Derived, a lane touches only its own entries.
+    #
+    # When the burn-down finishes, `KNOWN_LAUNDERED` is empty, the real tree
+    # carries no hop, and `assert hops` above fails LOUDLY. That is the intended
+    # end state, not a regression: retire this control then and let the
+    # synthetic `LAUNDERING` sample carry the engine's positive evidence — do
+    # not weaken the assertion to make an empty tree pass.
+    assert set(workflows) == set(guard.KNOWN_LAUNDERED), (
+        "the engine must find exactly the frozen workflows; got "
+        f"{sorted(workflows)} against {sorted(guard.KNOWN_LAUNDERED)}"
     )
 
 
@@ -598,13 +609,21 @@ def test_the_convergence_bound_scales_with_the_workflow():
 
 
 def test_a_new_hop_in_an_already_frozen_workflow_fails():
-    """Per-reference, not per-file — otherwise a frozen file is a free pass."""
-    workflow = "706-website-wordpress-to-pages.yml"
+    """Per-reference, not per-file — otherwise a frozen file is a free pass.
+
+    The frozen workflow is taken from the freeze rather than named, for the
+    reason given on the positive control above: a lane that burns down the
+    named file should not have to edit this test to land.
+    """
+    assert guard.KNOWN_LAUNDERED, "nothing is frozen; this test has no subject"
+    workflow = sorted(guard.KNOWN_LAUNDERED)[0]
+    invented = "needs.invented.outputs.not_frozen"
+    assert invented not in guard.KNOWN_LAUNDERED[workflow]
     current = {workflow: tuple(sorted(
-        set(guard.KNOWN_LAUNDERED[workflow]) | {"needs.resolve.outputs.email"}
+        set(guard.KNOWN_LAUNDERED[workflow]) | {invented}
     ))}
     new, _stale = guard.compare(current)
-    assert any("email" in item for item in new), (
+    assert new == [f"{workflow}: {invented}"], (
         f"a new reference in a frozen workflow must be reported, got {new}"
     )
 

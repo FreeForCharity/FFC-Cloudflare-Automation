@@ -483,8 +483,11 @@ def current_map(hops: list[Hop]) -> dict[str, tuple[str, ...]]:
 # Burn-down since that measurement, kept here so the dated line above stays a
 # measurement rather than turning into a wrong description of the dict below it:
 # 702 fixed and removed 2026-09-07 (#1241 lane 1), leaving 4 workflows / 23 call
-# sites / 16 distinct references. Do not restate the original figures as
-# current — the guard prints both counts on every invocation.
+# sites / 16 distinct references; 706 fixed and removed 2026-09-07 (#1241 lane
+# 2), leaving 3 workflows / 19 call sites / 13 distinct references — and with it
+# the last LIVE hop, so what remains is the three over-approximated files. Do
+# not restate the original figures as current — the guard prints both counts on
+# every invocation.
 #
 # Burn-down is tracked separately, ordered by environment, the way #1080 orders
 # its own. An entry here is not an endorsement.
@@ -546,21 +549,15 @@ KNOWN_LAUNDERED: dict[str, dict[str, str]] = {
     # so no `${{ … }}` for them is substituted into script text. The job entered
     # `github-prod` with the Key Vault PAT already exported to `GITHUB_ENV`,
     # which is the credential an injected body would have held.
-    "706-website-wordpress-to-pages.yml": {
-        "needs.resolve.outputs.domain":
-            "LIVE. `resolve` takes `inputs.domain` through step-level `env:` — "
-            "the remedy — normalises it, writes it to GITHUB_OUTPUT, and two "
-            "later bash bodies read it back double-quoted. This is #1233's "
-            "shape exactly, and the sibling guard reads 706 as clean.",
-        "needs.resolve.outputs.repo":
-            "LIVE. `inputs.target_repo` by the same path, into a "
-            "double-quoted `echo` inside a `{ … } >> $GITHUB_STEP_SUMMARY` "
-            "block.",
-        "needs.resolve.outputs.mode":
-            "LIVE by the step rule: republished by the same carrying step. "
-            "The value is checked against a fixed set upstream, which is a "
-            "mitigation at the write end and not at the read end.",
-    },
+    # 706-website-wordpress-to-pages.yml was here — burned down in #1241 lane
+    # 2. All three references (`needs.resolve.outputs.{domain,repo,mode}`) now
+    # reach the two `convert` bodies through step-level `env:` with a
+    # fail-closed emptiness check, so no `${{ … }}` for them is substituted
+    # into script text. `convert` declares no environment and holds only the
+    # workflow's `contents: read` token — but it is the job that captures the
+    # live charity site and produces the artifact `deliver` publishes on
+    # `github-prod`, so a body injected here writes the tree a human is later
+    # asked to approve.
 }
 
 

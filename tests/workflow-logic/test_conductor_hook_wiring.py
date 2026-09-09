@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -31,14 +32,40 @@ HUB_SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 PLACEHOLDER = "__HUB_CLONE__"
 
 
-def run(*args: str, cwd: str | None = None) -> subprocess.CompletedProcess:
-    """Invoke the verifier. Full env (never a scrubbed dict -- CLAUDE.md), pinned codec (#945)."""
+def run(
+    *args: str, cwd: str | None = None, project_dir: str | None = None
+) -> subprocess.CompletedProcess:
+    """Invoke the verifier. Full env (never a scrubbed dict -- CLAUDE.md), pinned codec (#945).
+
+    `CLAUDE_PROJECT_DIR` is removed unless a test sets it. It is inherited from
+    whatever session runs the suite, and it decides whether a no-argument call
+    counts as *stated* or *inferred* (#1237) -- so leaving it ambient would make
+    the workspace-provenance tests pass or fail according to who ran them, which
+    is the one thing a test about provenance must not do.
+    """
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         capture_output=True,
         encoding="utf-8",
         errors="replace",
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        # Written as an inline literal, not a prepared dict: the encoding scanner
+        # (#962) reads this call statically and cannot follow a variable, so
+        # `env=env` fails `check-subprocess-encoding.py` even when the pin is
+        # correct.
+        #
+        # `CLAUDE_PROJECT_DIR` is genuinely ABSENT when a test does not set it,
+        # rather than present-but-empty. An earlier version passed `"" `and leaned
+        # on the verifier testing it for truthiness -- which works today and
+        # couples these tests to an implementation detail of the thing they test:
+        # if the verifier ever switched to `"CLAUDE_PROJECT_DIR" in os.environ`,
+        # every provenance test would silently start exercising the `env` branch
+        # while still passing. The comprehension also strips an inherited value,
+        # so a suite run from a rooted session cannot leak one in.
+        env={
+            **{k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"},
+            "PYTHONIOENCODING": "utf-8",
+            **({"CLAUDE_PROJECT_DIR": project_dir} if project_dir is not None else {}),
+        },
         cwd=cwd,
         timeout=120,
     )
@@ -442,6 +469,376 @@ def test_the_runbook_exists_and_states_the_chosen_option():
     text = doc.read_text(encoding="utf-8")
     assert "#1042" in text
     assert "verify-conductor-hooks.py" in text
+
+
+# --------------------------------------------------------------------------
+# The multi-repo cloud worker (#1237). L218 named the Conductor as the only
+# unguarded session and the sandboxed agents as the protected class. A scheduled
+# cloud worker clones five FFC repos side by side and runs with its project root
+# set to their PARENT, so it is in the unguarded population too -- and it is the
+# population that does the issue->PR work.
+#
+# Measured in the session that filed this: project root `/home/user`, no
+# `/home/user/.claude` at all, the hub's `.claude/settings.json` present with all
+# four hook events and never loaded. Running this very script from inside the
+# clone with no arguments printed `HOOKS: wired ... exit 0`.
+# --------------------------------------------------------------------------
+
+WORKER_REPOS = (
+    "FFC-Cloudflare-Automation",
+    "FFC-EX-canary",
+    "FFC-IN-FFC_Single_Page_Template",
+    "FFC-IN-Footer_Only_Template",
+    "FFC-IN-ffcadmin.org",
+)
+
+
+def worker_layout(td: str, *, ship_hooks: bool = True) -> tuple[pathlib.Path, pathlib.Path]:
+    """Build the five-repo sandbox layout. Returns (session_root, hub_clone).
+
+    The hub clone gets a `$CLAUDE_PROJECT_DIR`-spelled settings block and a real
+    two-sided guard, exactly like the tracked `.claude/settings.json`. That is
+    what makes the layout dangerous rather than merely wrong: pointed at the
+    clone, every check the verifier runs genuinely passes.
+    """
+    root = pathlib.Path(td) / "home" / "user"
+    root.mkdir(parents=True)
+    for name in WORKER_REPOS:
+        (root / name / ".git").mkdir(parents=True)
+    hub = root / WORKER_REPOS[0]
+    if ship_hooks:
+        hooks = hub / ".claude" / "hooks"
+        hooks.mkdir(parents=True)
+        behaving_guard(hooks / "guard_bash.py")
+        # Every OTHER hook the template names gets an inert stub, so this fake
+        # clone can stand in as a `--hub-clone` and a render resolves fully.
+        # Derived from the template rather than hard-coded: if the template
+        # gains a hook, the fixture grows one too, instead of the render
+        # silently reporting a missing path that has nothing to do with the
+        # layout under test.
+        for name in sorted(set(re.findall(r"/([A-Za-z_]+\.py)", TEMPLATE.read_text(encoding="utf-8")))):
+            target = hooks / name
+            if not target.exists():
+                target.write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+        write_settings(
+            hub,
+            guard_config("$CLAUDE_PROJECT_DIR/.claude/hooks/guard_bash.py"),
+        )
+    return root, hub
+
+
+def test_a_worker_layout_inferred_from_inside_a_clone_is_not_reported_as_wired():
+    """The #1237 false green, pinned.
+
+    Before the provenance check this printed `HOOKS: wired` and exited 0 in a
+    session that loads no hooks whatsoever. If this test ever goes green again,
+    the verifier has started certifying itself.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        _, hub = worker_layout(td)
+        proc = run(cwd=str(hub))
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "UNVERIFIED" in proc.stdout, proc.stdout
+        assert "HOOKS: wired" not in proc.stdout, proc.stdout
+
+
+def test_the_same_clone_is_still_wired_when_the_workspace_is_stated():
+    """The refusal must key on PROVENANCE, not on the config.
+
+    Same bytes on disk as the test above; the only difference is that the
+    workspace was stated. A refusal that fired here too would just be the
+    verifier refusing to work, which would be indistinguishable from a fix.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        _, hub = worker_layout(td)
+        proc = run("--workspace", str(hub))
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "HOOKS: wired" in proc.stdout, proc.stdout
+
+
+def test_the_worker_session_root_itself_reports_not_wired():
+    """The true answer for the session #1237 was filed from."""
+    with tempfile.TemporaryDirectory() as td:
+        root, _ = worker_layout(td)
+        proc = run("--workspace", str(root))
+        assert proc.returncode == 1, proc.stdout
+        assert "NOT WIRED" in proc.stdout, proc.stdout
+
+
+def test_rendering_into_the_worker_session_root_wires_it():
+    """AC2: the remedy has to actually work for the five-repo layout, not only
+    for the Conductor's single-workspace one."""
+    with tempfile.TemporaryDirectory() as td:
+        root, hub = worker_layout(td)
+        # `--hub-clone` is the fixture's own clone, not REPO_ROOT: pointing at the
+        # real checkout would make this test depend on the repo's live
+        # `.claude/hooks/` and pass or fail for reasons unrelated to the five-repo
+        # layout it is named for. The real template against the real hooks is
+        # already covered by `test_the_rendered_template_is_wired`.
+        proc = run("--render", "--workspace", str(root), "--hub-clone", str(hub))
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "HOOKS: wired" in proc.stdout, proc.stdout
+        assert (root / ".claude" / "settings.json").is_file()
+        # The rendered config must point into the fixture's clone -- if it still
+        # named REPO_ROOT the assertions above would pass while proving nothing
+        # about this layout.
+        assert str(hub) in (root / ".claude" / "settings.json").read_text(encoding="utf-8")
+        # And the five sibling clones are untouched -- the fix belongs to the
+        # session root, never to a repo checkout that a PR would then carry.
+        assert not (hub / ".claude" / "settings.local.json").exists()
+
+
+def test_the_refusal_names_the_session_root_it_detected():
+    """A refusal that does not say what to pass instead just relocates the problem."""
+    with tempfile.TemporaryDirectory() as td:
+        root, hub = worker_layout(td)
+        proc = run("--json", cwd=str(hub))
+        assert proc.returncode == 1, proc.stdout
+        report = json.loads(proc.stdout)
+        assert report["self_certifying"] is True, report
+        assert report["workspace_source"] == "inferred", report
+        assert report["candidate_session_root"] == str(root), report
+        assert "UNVERIFIED" in report["start_line"], report
+
+
+def test_claude_project_dir_counts_as_stated_not_inferred():
+    """The session sets this variable, so it is a statement of the real root.
+
+    Without this branch the check would refuse every session that *is* correctly
+    rooted at the clone -- the false red that would get the whole thing reverted.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        _, hub = worker_layout(td)
+        proc = run(cwd=str(hub), project_dir=str(hub))
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "HOOKS: wired" in proc.stdout, proc.stdout
+
+
+def test_an_inferred_workspace_that_ships_no_hooks_is_still_measured():
+    """Narrow targeting: the hazard is self-certification, not inference itself.
+
+    A workspace whose settings name a guard living somewhere else cannot grade
+    itself, so inferring it is harmless and the verdict must still be computed.
+    Refusing here would make the check a blanket "always pass --workspace" nag.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root, _ = worker_layout(td, ship_hooks=False)
+        elsewhere = pathlib.Path(td) / "guards"
+        elsewhere.mkdir()
+        behaving_guard(elsewhere / "guard_bash.py")
+        ws = root / WORKER_REPOS[0]
+        write_settings(ws, guard_config(str(elsewhere / "guard_bash.py")))
+        proc = run(cwd=str(ws))
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "HOOKS: wired" in proc.stdout, proc.stdout
+
+
+def test_an_empty_hooks_dir_gets_the_missing_path_diagnostics_not_the_refusal():
+    """An empty `.claude/hooks/` cannot self-certify, so refusing on it is wrong twice.
+
+    The refusal's own wording claims the workspace "ships the very
+    `.claude/hooks/`" under test, which is false for an empty directory; and it
+    replaces the strictly more useful report that names each hook path that did
+    not resolve. Nothing can resolve INTO an empty directory, so there is no
+    false green to prevent here.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        ws = pathlib.Path(td) / "clone"
+        (ws / ".claude" / "hooks").mkdir(parents=True)
+        write_settings(ws, guard_config("$CLAUDE_PROJECT_DIR/.claude/hooks/guard_bash.py"))
+        proc = run(cwd=str(ws))
+        assert proc.returncode == 1, proc.stdout
+        assert "UNVERIFIED" not in proc.stdout, proc.stdout
+        assert "NOT WIRED" in proc.stdout, proc.stdout
+        assert "do not exist" in proc.stdout, proc.stdout
+
+
+def test_one_hook_script_is_enough_to_be_self_certifying():
+    """The other side of that line: a populated dir must still be refused.
+
+    Asserted next to the empty case on purpose -- narrowing a safeguard is only
+    safe if the narrowing is pinned in both directions, or the next edit quietly
+    turns "at least one .py" into "the directory exists" or into nothing at all.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        ws = pathlib.Path(td) / "clone"
+        (ws / ".claude" / "hooks").mkdir(parents=True)
+        behaving_guard(ws / ".claude" / "hooks" / "guard_bash.py")
+        write_settings(ws, guard_config("$CLAUDE_PROJECT_DIR/.claude/hooks/guard_bash.py"))
+        proc = run(cwd=str(ws))
+        assert proc.returncode == 1, proc.stdout
+        assert "UNVERIFIED" in proc.stdout, proc.stdout
+
+
+def test_a_lone_clone_with_no_siblings_names_no_session_root():
+    """`candidate_session_root` is a hint, and a wrong hint is worse than none.
+
+    One checkout under a parent says nothing about where the session is rooted,
+    so the parent must not be offered as somewhere to write a settings file.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        lone = pathlib.Path(td) / "solo" / "only-repo"
+        (lone / ".git").mkdir(parents=True)
+        (lone / ".claude" / "hooks").mkdir(parents=True)
+        behaving_guard(lone / ".claude" / "hooks" / "guard_bash.py")
+        write_settings(lone, guard_config("$CLAUDE_PROJECT_DIR/.claude/hooks/guard_bash.py"))
+        proc = run("--json", cwd=str(lone))
+        report = json.loads(proc.stdout)
+        assert report["self_certifying"] is True, report
+        assert report["candidate_session_root"] is None, report
+
+
+def test_a_parent_that_already_has_its_own_claude_is_still_named():
+    """An already-configured parent is the MOST likely session root, not the least.
+
+    An earlier draft excluded it, reasoning that naming it was advice to clobber
+    a config. That is true of a `--render` suggestion and this hint does not feed
+    one -- the refusal's remedy is a read-only re-measure. The exclusion was
+    measured degrading the message on a real box: once `/home/user/.claude`
+    existed, the remedy fell back to a `<session project root>` placeholder at
+    exactly the moment it could have named the answer.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root, hub = worker_layout(td)
+        (root / ".claude").mkdir()
+        proc = run("--json", cwd=str(hub))
+        report = json.loads(proc.stdout)
+        assert report["candidate_session_root"] == str(root), report
+
+
+# --------------------------------------------------------------------------
+# Review round 1 (Copilot on #1253). Four findings, all real; these pin them.
+# --------------------------------------------------------------------------
+
+
+def test_an_empty_workspace_is_a_usage_error_not_an_explicit_statement():
+    """`--workspace ""` reproduced the #1237 false green through the fix's own flag.
+
+    `Path("").resolve()` is the cwd, so an empty value is the inferred fallback
+    wearing the explicit flag's clothes: it scored as `explicit`, skipped the
+    self-certification refusal, and printed `HOOKS: wired ... exit 0` from inside
+    a hook-shipping clone. Measured before the guard existed.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        _, hub = worker_layout(td)
+        for value in ("", "   "):
+            proc = run("--workspace", value, cwd=str(hub))
+            assert proc.returncode == 2, (value, proc.stdout, proc.stderr)
+            assert "HOOKS: wired" not in proc.stdout, (value, proc.stdout)
+            assert "--workspace was empty" in proc.stderr, (value, proc.stderr)
+
+
+def test_a_padded_workspace_is_stripped_before_it_is_resolved():
+    """A LEADING space makes the path relative, so the stated root is not measured.
+
+    Measured: `Path(" /home/user ").resolve()` is `<cwd>/ /home/user `, which does
+    not exist -- so a correctly stated session root reports NOT WIRED. It errs the
+    safe way and is still not harmless, because the remedy then offers `--render`
+    into that junk path and render creates its parents.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        _, hub = worker_layout(td)
+        padded = run("--workspace", f"  {hub}  ")
+        assert padded.returncode == 0, padded.stdout + padded.stderr
+        assert "HOOKS: wired" in padded.stdout, padded.stdout
+        # The verdict must be the same one the unpadded path gets, not merely
+        # non-zero: a bare exit assertion here would pass on a NOT WIRED too.
+        assert padded.stdout == run("--workspace", str(hub)).stdout
+
+
+def test_the_env_branch_is_reached_by_a_real_variable_not_an_empty_one():
+    """The helper must leave `CLAUDE_PROJECT_DIR` absent, not present-and-empty.
+
+    Otherwise every provenance test depends on the verifier reading that variable
+    for truthiness, and would keep passing -- while measuring something else --
+    if it ever switched to an `in os.environ` check.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        _, hub = worker_layout(td)
+        unset = json.loads(run("--json", cwd=str(hub)).stdout)
+        assert unset["workspace_source"] == "inferred", unset
+        given = json.loads(run("--json", cwd=str(hub), project_dir=str(hub)).stdout)
+        assert given["workspace_source"] == "env", given
+
+
+def test_an_unknown_workspace_source_raises_rather_than_certifying():
+    """A free-form string gating a safeguard fails OPEN on a typo.
+
+    `"inferrred"` compares unequal to `SOURCE_INFERRED`, which would skip the
+    refusal and certify the exact case this exists to catch. Raising is the
+    fail-closed choice: an unknown provenance is not a provenance.
+    """
+    vch = _vch()
+    assert vch.SOURCES == frozenset({"explicit", "env", "inferred"}), vch.SOURCES
+    with tempfile.TemporaryDirectory() as td:
+        _, hub = worker_layout(td)
+        try:
+            vch.verify(pathlib.Path(hub), source="inferrred")
+        except ValueError as exc:
+            assert "inferrred" in str(exc), exc
+        else:
+            raise AssertionError("a typo'd source was accepted and the safeguard skipped")
+
+
+def test_verify_refuses_to_run_without_a_stated_provenance():
+    """`source` has no default, so forgetting it cannot silently mean "trusted".
+
+    A default of `SOURCE_EXPLICIT` would give the most-trusting provenance to the
+    caller who thought about it least, which is the wrong way round for a value
+    that gates the refusal. Keyword-only additionally stops a positional call
+    from binding some other string as provenance.
+    """
+    vch = _vch()
+    with tempfile.TemporaryDirectory() as td:
+        _, hub = worker_layout(td)
+        try:
+            vch.verify(pathlib.Path(hub))
+        except TypeError as exc:
+            assert "source" in str(exc), exc
+        else:
+            raise AssertionError("verify() ran with no provenance and did not object")
+        # And positionally, which is the other way a caller could get it wrong.
+        try:
+            vch.verify(pathlib.Path(hub), "inferred")
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("verify() accepted provenance positionally")
+
+
+def test_the_self_certifying_refusal_is_the_only_thing_that_costs_a_parent_scan():
+    """The sibling hint is computed lazily: `null` means "no hint was needed".
+
+    Every non-refusal run would otherwise pay a directory scan of the parent for
+    a string nobody prints.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        _, hub = worker_layout(td)
+        stated = json.loads(run("--json", "--workspace", str(hub)).stdout)
+        assert stated["wired"] is True, stated
+        assert stated["candidate_session_root"] is None, stated
+        inferred = json.loads(run("--json", cwd=str(hub)).stdout)
+        assert inferred["self_certifying"] is True, inferred
+        assert inferred["candidate_session_root"] is not None, inferred
+
+
+def test_the_printed_remedy_quotes_paths_that_contain_spaces():
+    """The remedy is printed to be pasted, and both hosts have spaces in paths.
+
+    Unquoted, `--workspace C:/My Workspace` arrives as two arguments and the
+    remedy fails in a way that reads as the script being broken.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        spaced = pathlib.Path(td) / "My Workspace"
+        spaced.mkdir()
+        proc = run("--workspace", str(spaced))
+        assert proc.returncode == 1, proc.stdout
+        assert "NOT WIRED" in proc.stdout, proc.stdout
+        remedy = [ln for ln in proc.stdout.splitlines() if "--render" in ln]
+        assert remedy, proc.stdout
+        # shlex.quote wraps a spaced path in single quotes; the bare form would
+        # split on the space and silently target `My`.
+        assert f"--workspace '{spaced}'" in remedy[0], remedy[0]
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

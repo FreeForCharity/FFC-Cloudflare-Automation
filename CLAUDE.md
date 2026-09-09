@@ -1018,15 +1018,28 @@ Two runs of gate decisions, merges and open threads existed only in the #719 thr
 treat the local file as corroboration. A local file that is _usually_ current is more dangerous than
 one that is obviously absent, because nothing about reading it feels like a risk.
 
-## The Conductor runs with NONE of this repo's hooks loaded (validated 2026-08-09, run 134)
+## Any session whose project root is not this repo runs with NONE of its hooks loaded (validated 2026-08-09 run 134; corrected 2026-09-08, #1237)
 
-`.claude/hooks/` protects a Claude Code session whose **project root is this repository** — the
-sandboxed agents. The scheduled Conductor's project root is its own workspace
-(`C:\ClaudeCodeDesktop\Claude_AI_OS_Routine`), whose `settings.local.json` carries a `permissions`
-block and **no `hooks` block at all**. It `cd`s into the clone to work; that does not load the
-clone's hooks. So the session with the most write authority in the system — the one that approves
-gates, merges PRs and hand-delivers the public feed — runs with none of the enforcement every other
-agent gets.
+`.claude/hooks/` protects a Claude Code session whose **project root is this repository**. That is
+the whole condition, and the population failing it is **not** the Conductor alone:
+
+- the scheduled **Conductor**, whose project root is its own workspace
+  (`C:\ClaudeCodeDesktop\Claude_AI_OS_Routine`), carrying a `permissions` block and **no `hooks`
+  block at all**. It `cd`s into the clone to work; that does not load the clone's hooks. So the
+  session with the most write authority in the system — the one that approves gates, merges PRs and
+  hand-delivers the public feed — runs with none of the enforcement every other agent gets.
+- the scheduled **multi-repo cloud worker**, which clones five FFC repos side by side and runs with
+  its project root set to their **parent**. Measured 2026-09-08: project root `/home/user`, **no
+  `/home/user/.claude` at all**, and the hub's `.claude/settings.json` present with all four hook
+  events and never loaded.
+
+> **This line used to name the sandboxed agents as the protected class, and that is what expired.**
+> The cloud worker is the population that does the issue→PR work, and it is exempt for exactly the
+> Conductor's reason. So the triage rule below — "we put a hook on it" does not close a finding —
+> applies to **any** finding an unrooted session can hit, not only a Conductor-side one. The
+> Conductor's half is the harder one (its config lives on an operator workstation, in no
+> repository); the worker's half is **FFC-controlled**, because the session's project root is chosen
+> by the environment definition. Ledger **L261**.
 
 This is not theoretical, and the demonstration is worth repeating rather than summarising. Run 134
 ran a board audit as `python3 scripts/audit-agentic-os-board.py 2>&1 | tail -25; echo "AUDIT rc=$?"`
@@ -1038,13 +1051,15 @@ _because_ it kept being violated — and it could not fire.
 
 Two things follow, and they are easy to collapse into one:
 
-1. **"We put a hook on it" does not close a Conductor-side finding.** When triaging a lesson in step
-   7, a hook is the strongest tier _for agents working inside the repo_ and no tier at all for the
-   Conductor. If the mistake is one only the Conductor can make, prose is the real ceiling until the
-   workspace loads hooks — so write it as prose that expects to be re-read, and say in the ledger's
-   tier column why prose is the ceiling.
-2. **Every future hook inherits this hole**, silently. Nothing in the repo can detect it, because
-   the file that would fix it is on the operator's workstation and in no repository.
+1. **"We put a hook on it" does not close a finding for an unrooted session.** When triaging a
+   lesson in step 7, a hook is the strongest tier _for a session rooted at the repo_ and no tier at
+   all for the Conductor or a multi-repo worker. If the mistake is one either can make, prose is the
+   real ceiling until that session loads hooks — so write it as prose that expects to be re-read,
+   and say in the ledger's tier column why prose is the ceiling.
+2. **Every future hook inherits this hole**, silently. For the Conductor nothing in the repo can
+   detect it, because the file that would fix it is on the operator's workstation and in no
+   repository. For the cloud worker the fix _is_ reachable — the session definition, or a
+   `/home/user/.claude/settings.json` rendered from the tracked template at clone time.
 
 The fix is a `hooks` block in the Conductor workspace's own settings pointing at a clone's
 `.claude/hooks/`. Ledger **L218**.
@@ -1071,6 +1086,30 @@ The config is no longer an untracked file on one workstation. Two artifacts, bot
 python3 scripts/verify-conductor-hooks.py --workspace "$PWD"          # bootstrap check
 python3 scripts/verify-conductor-hooks.py --render --workspace <ws>   # one-time wiring
 ```
+
+⚠️ **State `--workspace` when you KNOW the session's project root — and never pass `$PWD` as a
+stand-in for knowing.** The Conductor's bootstrap line above is correct because that session's cwd
+_is_ its project root; the same spelling in any other session is a laundered guess. An agent whose
+cwd is a clone should run the script **bare**, which uses `$CLAUDE_PROJECT_DIR` when the session
+exports it and refuses rather than certifying when it must guess.
+
+The blunt version of this rule ("always state it") shipped in `AGENTS.md` for one commit as
+`--workspace "${CLAUDE_PROJECT_DIR:-$PWD}"`, and in a worker session — where that variable is unset
+— it returned `HOOKS: wired, exit 0` for a session loading nothing: the advice reintroduced the
+defect it was written to prevent. Dropping the flag entirely is what made this script certify itself
+in the first place (#1237), so the two failures bracket the same mistake from opposite sides — the
+flag is not the point, **knowing** is. Run with no arguments from inside the clone, it used to print
+`HOOKS: wired … exit 0` in the five-repo cloud-worker session, whose project root is `/home/user`
+and which loads nothing at all. Nothing about that was dishonest: the guard it found was real, the
+two-sided probe genuinely passed, and every check resolved — against the clone, which was not the
+session. A verifier written to make L218's false green impossible had its own, reached through its
+default argument, and the reassuring direction is the default's.
+
+Since #1237 that case is refused rather than certified: an **inferred** workspace (the cwd fallback,
+never `--workspace` or `$CLAUDE_PROJECT_DIR`) that itself ships `.claude/hooks/` reports
+`HOOKS: UNVERIFIED … exit 1` and names the sibling-clone parent it thinks the real root is. So a
+third wording now exists and there are still only two exit codes — "I could not tell" and "not
+wired" are the same instruction to the run about to start, and only the record needs them apart.
 
 `$PWD` is safe here even though git-bash spells it `/c/...`: the script translates an MSYS
 `/<drive>/` prefix to `C:/` **on Windows only**. That translation is not cosmetic — native Windows

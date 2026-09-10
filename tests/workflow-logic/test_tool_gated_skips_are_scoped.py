@@ -35,9 +35,26 @@ WHAT THIS MODULE IS ABOUT
     has the identical shape and was missed. That is the argument for a guard
     rather than a list -- the shape is easy to add and easy to overlook.
 
-    The table is the `main` baseline. This PR rescopes 103 -- so 103 is NOT in
-    the allowlist below, and `test_103_is_rescoped_and_not_allowlisted` keeps
-    it that way -- and freezes the other nine with their debt measured.
+    The table is the 2026-08-12 baseline, and the burn-down it froze is now
+    finished. 103 was rescoped first (#1195); the seven modules carrying
+    measured debt -- 110, 112, 301, 303, 304, 306 and 704 -- were rescoped
+    together, releasing all 25 remaining masked cases, and their allowlist
+    entries were deleted. Only 228 and 720 remain, and both record 0.
+
+    A rescoped module states a `NEEDS_<TOOL>` roster and gates per case. Two
+    checks below hold those rosters to the same standard as the allowlist they
+    replaced, and it is worth being exact about which two, because a third was
+    written and withdrawn:
+
+      - a roster name that matches no test in its module is a finding, the
+        allowlist's own stale-entry failure one level down;
+      - each rescoped module is RUN with its tool hidden, and must not print
+        `SKIP all`, must exit 0, and must skip exactly its roster.
+
+    The withdrawn one asserted statically that a roster never gates a case
+    spawning nothing. That is unsound -- see
+    `test_every_rescoped_module_still_runs_without_its_tool` for the module it
+    falsely accused and why `toolless_cases` cannot answer the question.
 
 WHY THE GATE IS INVISIBLE TO THE HARNESS THAT SHOULD CATCH IT
     `run_all.py` carries `WHOLE_MODULE_SKIP = "all"`, which stands its roster
@@ -110,9 +127,14 @@ class Exemption:
         self.reason = reason
 
 
-# Every entry here is #1182 acceptance criterion 5: 103 is rescoped in this PR,
-# the rest are frozen with the debt measured so a later PR can burn them down
-# one at a time. Two of them (228, 720) are genuine -- 0 toolless cases.
+# #1182's burn-down is complete: the seven modules that carried measured debt
+# were rescoped and their entries deleted, which is what an entry is FOR --
+# `test_allowlist_carries_no_stale_entry` fails the moment a rescope lands and
+# leaves its exemption behind. What remains is the two genuine cases, where
+# every test really does shell out and there is no static assertion to rescue.
+# `test_no_new_debt_is_frozen_into_the_allowlist` keeps it that way: a NEW
+# entry may record 0, never a debt -- a module with static cases to rescue gets
+# rescoped, not frozen.
 ALLOWLIST: dict[str, Exemption] = {
     "test_228_fraud_review.py": Exemption(
         0,
@@ -124,42 +146,6 @@ ALLOWLIST: dict[str, Exemption] = {
         0,
         "Genuine: all 3 cases run the owner-parsing body under pwsh. Nothing "
         "to rescope.",
-    ),
-    "test_110_zone_create_wiring.py": Exemption(
-        4,
-        "TODO(#1182): 4 of 12 cases spawn nothing and are masked by the pwsh "
-        "gate. Rescope with a NEEDS_PWSH set as 103 now does.",
-    ),
-    "test_112_bulk_replace_wiring.py": Exemption(
-        1,
-        "TODO(#1182): 1 of 7 cases spawns nothing and is masked by the pwsh "
-        "gate. Rescope with a NEEDS_PWSH set as 103 now does.",
-    ),
-    "test_301_preflight_wiring.py": Exemption(
-        4,
-        "TODO(#1182): 4 of 9 cases spawn nothing and are masked by the pwsh "
-        "gate. Rescope with a NEEDS_PWSH set as 103 now does.",
-    ),
-    "test_303_domain_dkim_wiring.py": Exemption(
-        5,
-        "TODO(#1182): 5 of 11 cases spawn nothing and are masked by the pwsh "
-        "gate. Rescope with a NEEDS_PWSH set as 103 now does.",
-    ),
-    "test_304_dkim_wiring.py": Exemption(
-        5,
-        "TODO(#1182): 5 of 12 cases spawn nothing and are masked by the pwsh "
-        "gate. Rescope with a NEEDS_PWSH set as 103 now does.",
-    ),
-    "test_306_uncaptured_comms_wiring.py": Exemption(
-        5,
-        "TODO(#1182): 5 of 12 cases spawn nothing and are masked by the pwsh "
-        "gate. Not in #1182's survey -- found by this guard, which is the "
-        "argument for having it.",
-    ),
-    "test_704_analytics_wire_validation.py": Exemption(
-        1,
-        "TODO(#1182): 1 of 10 cases spawns nothing and is masked by the bash "
-        "gate. Rescope with a NEEDS_BASH set as 103 now does.",
     ),
 }
 
@@ -523,6 +509,455 @@ def test_the_genuine_exemptions_really_have_nothing_to_run():
     assert not wrong, (
         "entries recorded as having nothing to rescue in fact have toolless "
         "cases: " + "; ".join(wrong)
+    )
+
+
+def needs_sets(tree: ast.Module) -> dict[str, list[str]]:
+    """`NEEDS_<TOOL> = {...}` rosters at module level -> the case names in them.
+
+    The house shape for a per-case gate, used by `test_1146`, the rescoped 103
+    and the seven modules #1182's burn-down rescoped. Read as a set literal of
+    string constants; a roster built some other way is simply not seen, which
+    is the safe direction -- this reader adds checks, it is not what forces a
+    module to have a roster (`test_no_unallowlisted_module_skips_itself_wholesale`
+    does that).
+    """
+    rosters: dict[str, list[str]] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or not target.id.startswith("NEEDS_"):
+            continue
+        value = node.value
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+            if value.func.id in ("set", "frozenset") and len(value.args) == 1:
+                value = value.args[0]
+        if not isinstance(value, (ast.Set, ast.List, ast.Tuple)):
+            continue
+        rosters[target.id] = [
+            e.value for e in value.elts
+            if isinstance(e, ast.Constant) and isinstance(e.value, str)
+        ]
+    return rosters
+
+
+def rescoped_modules(directory: pathlib.Path) -> dict[str, ast.Module]:
+    """Modules carrying a `NEEDS_<TOOL>` roster, parsed."""
+    found: dict[str, ast.Module] = {}
+    for path in sorted(directory.glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if needs_sets(tree):
+            found[path.name] = tree
+    return found
+
+
+def test_a_rescoped_roster_names_tests_that_exist():
+    """A stale name in NEEDS_<TOOL> quietly changes what runs.
+
+    Rename a case and its roster entry stops matching, so the case runs on a
+    host without the tool and reports a confusing FAIL. Rename it the other way
+    -- delete a case and leave the name -- and the roster describes a module
+    that no longer exists, which is the ALLOWLIST's own failure mode one level
+    down. 103 asserts this for itself at runtime; this asserts it for every
+    rescoped module from the outside, including the ones whose roster is only
+    ever exercised on a host that lacks the tool.
+    """
+    stale = []
+    for name, tree in sorted(rescoped_modules(HERE).items()):
+        declared = {
+            n.name for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name.startswith("test_")
+        }
+        for roster, cases in sorted(needs_sets(tree).items()):
+            unknown = sorted(set(cases) - declared)
+            if unknown:
+                stale.append(f"{name}:{roster} -> {unknown}")
+    assert not stale, (
+        "per-case tool rosters naming tests that do not exist: "
+        + "; ".join(stale)
+        + ". Update the roster beside the rename, or delete the entry with the "
+        "case."
+    )
+
+
+_PATH_WITHOUT: dict[str, tuple[str, str]] = {}
+
+# In preference order. A farm reproduces PATH minus one program; `entry-drop`
+# removes whole directories and is the last resort, legal only for the real
+# system PATH (see `path_without`).
+_FARM_METHODS = ("symlink-farm", "hardlink-farm", "copy-farm")
+
+
+def _place(source: pathlib.Path, dest: pathlib.Path, method: str) -> None:
+    """Reproduce `source` at `dest` by `method`, raising OSError if it cannot."""
+    import os
+
+    if method == "symlink-farm":
+        os.symlink(source, dest)
+    elif method == "hardlink-farm":
+        os.link(source, dest)
+    else:
+        shutil.copy2(source, dest)
+
+
+def _build_farm(entries: list[str], tool: str, method: str) -> str:
+    """A directory holding every executable on `entries` except `tool`.
+
+    PATH order is preserved by first-match-wins: an earlier entry's `git` keeps
+    the name, exactly as it would have when PATH was consulted directly.
+    """
+    import os
+
+    farm = pathlib.Path(tempfile.mkdtemp(prefix=f"nopath-{tool}-"))
+    linked: set[str] = set()
+    for entry in entries:
+        try:
+            names = sorted(os.listdir(entry))
+        except OSError:
+            continue  # a PATH entry that does not exist is not an error
+        for entry_name in names:
+            # Compare on the STEM so `pwsh.exe` and `pwsh.cmd` are caught
+            # alongside `pwsh`; `shutil.which` would find any of them.
+            if pathlib.Path(entry_name).stem.lower() == tool.lower():
+                continue
+            if entry_name in linked:
+                continue
+            source = pathlib.Path(entry) / entry_name
+            if not source.is_file():
+                continue
+            _place(source, farm / entry_name, method)
+            linked.add(entry_name)
+    return str(farm)
+
+
+def path_without(tool: str, entries: list[str] | None = None) -> tuple[str, str]:
+    """A PATH identical to this process's except that `tool` is unreachable.
+
+    Returns `(path, method)`. Cached per tool when reading the real PATH: the
+    farm costs one directory scan and is reused across every module gated on
+    that tool. Pass `entries` to scrub a synthetic PATH instead; those results
+    are not cached.
+
+    WHY NOT JUST DROP THE PATH ENTRIES THAT CARRY IT
+        Because that hides a directory, not a program, and on Linux the two are
+        wildly different. `pwsh` on `ubuntu-latest` is `/usr/bin/pwsh`, so
+        dropping its entries takes `bash`, `git` and everything else in
+        `/usr/bin` with it. The child is then running on a host without
+        `/usr/bin`, which is not the thing being measured, and a module whose
+        static cases legitimately shell out to `bash` dies with
+        `FileNotFoundError: 'bash'` -- measured on #1264, where
+        `test_102_domain_add_wiring.py` did exactly that in CI while passing in
+        a sandbox whose `pwsh` was absent for real and whose `/usr/bin` was
+        therefore never touched.
+
+        Note which way that error points: the module named in the failure had
+        nothing wrong with it, and the harness looked like the one thing that
+        could not be at fault, because it is the same expression 103's pin had
+        been running green in CI for weeks. It survived there only because
+        103's static cases happen to spawn nothing.
+
+    SO: A FARM, BY WHATEVER MEANS THE HOST ALLOWS
+        One temp directory reproducing every executable reachable on PATH
+        except `tool`. Symlinks where they work, hardlinks where they do not
+        (Windows without developer mode, same volume), and a copy as the last
+        resort -- which is why `entries` callers get a farm on every host: a
+        synthetic fixture is two files, so copying is free, and the
+        neighbour-preservation property must be provable everywhere rather
+        than only where symlinks happen to work.
+
+        For the REAL PATH a copy is not free (`/usr/bin` is hundreds of MB), so
+        if no link method works there it falls back to dropping entries. That
+        is sound on the host where it lands -- Windows keeps `pwsh` in its own
+        `C:/Program Files/PowerShell/7`, co-located with nothing -- and if it
+        ever stops being sound, the bystander assertion below fails loudly
+        rather than handing back a mangled PATH. The method is returned rather
+        than hidden so a failure can say which was used.
+    """
+    cacheable = entries is None
+    if cacheable and tool in _PATH_WITHOUT:
+        return _PATH_WITHOUT[tool]
+
+    import os
+
+    if entries is None:
+        entries = [e for e in os.environ.get("PATH", "").split(os.pathsep) if e]
+
+    # A copy of the real PATH is prohibitively expensive; a copy of a caller's
+    # synthetic fixture is two files. That is the whole difference.
+    candidates = _FARM_METHODS if not cacheable else _FARM_METHODS[:-1]
+
+    scrubbed = ""
+    method = ""
+    for candidate in candidates:
+        try:
+            scrubbed = _build_farm(entries, tool, candidate)
+            method = candidate
+            break
+        except (OSError, NotImplementedError):
+            continue
+    if not method:
+        assert cacheable, (
+            f"no farm method worked for a caller-supplied PATH, and dropping "
+            f"entries cannot preserve a co-located neighbour -- so the property "
+            f"under test would be unprovable rather than false. tool={tool!r}"
+        )
+        method = "entry-drop"
+        # `shutil.which(..., path=entry)` rather than a literal file test:
+        # `which` honours PATHEXT, so this reads `pwsh.exe` on Windows too.
+        scrubbed = os.pathsep.join(
+            entry for entry in entries if shutil.which(tool, path=entry) is None
+        )
+
+    # The control, asserted before any measurement rather than inferred from
+    # one. If the scrub does not actually hide the tool, the child runs every
+    # case and the caller fails on an empty skip list -- a failure that reads
+    # as "the rescope is broken" when the truth is "the harness never removed
+    # the tool". Naming it here is the difference between a diagnosis and a
+    # hunt.
+    assert shutil.which(tool, path=scrubbed) is None, (
+        f"PATH scrub failed ({method}): {tool} is still reachable at "
+        f"{shutil.which(tool, path=scrubbed)!r}. This cannot measure the "
+        f"no-{tool} behaviour it exists to measure -- fix the scrub, do not "
+        f"weaken the assertions."
+    )
+    # The other half of the control, and the one #1264 was missing: the scrub
+    # must remove the tool and NOTHING ELSE. Without this the failure surfaces
+    # as a FileNotFoundError deep inside whichever module first shells out to
+    # a casualty, naming that module rather than this function.
+    parent = os.pathsep.join(entries)
+    for bystander in ("bash", "git", "node", "python3", "_bystander"):
+        if bystander == tool:
+            continue
+        if shutil.which(bystander, path=parent) is None:
+            continue  # not reachable to begin with, so not a casualty
+        assert shutil.which(bystander, path=scrubbed) is not None, (
+            f"the {method} scrub for {tool} also removed {bystander}, which is "
+            f"reachable on the PATH it was given. The child would be running "
+            f"without {bystander} as well, so any failure it reports is about "
+            f"the harness, not about the module."
+        )
+
+    if not cacheable:
+        return scrubbed, method
+    _PATH_WITHOUT[tool] = (scrubbed, method)
+    return _PATH_WITHOUT[tool]
+
+
+def _run_with_tool_hidden(
+    path: pathlib.Path, tool: str
+) -> tuple[str, int, str, str]:
+    """Run a test module in a child that cannot see `tool`, and nothing else.
+
+    The measurement #1182 asks for, made rather than inferred from the source.
+    Shared by the 103 pin and the fleet check below so the scrub logic -- the
+    part that is easy to get subtly wrong and whose failure reads as "the
+    rescope is broken" -- exists once.
+
+    Returns `(stdout, returncode, child_path, stderr)`. Both streams, kept
+    apart rather than merged: the roster is parsed out of stdout, where a
+    stray stderr line carrying `  PASS ` would corrupt the count, while a
+    child that dies does so on stderr -- #1264's `FileNotFoundError: 'bash'`
+    was invisible in a failure message that quoted only stdout, and had to be
+    dug out of the CI log. The PATH comes back too, so a caller can ask what
+    was actually reachable rather than assuming.
+    """
+    import os
+
+    scrubbed, _method = path_without(tool)
+    # Inherit the environment and override only PATH: a scrubbed env dict is
+    # what #943 spent a fortnight on (CLAUDE.md, "never pass a scrubbed env=").
+    env = dict(os.environ)
+    env["PATH"] = scrubbed
+    env["PYTHONIOENCODING"] = "utf-8"
+    proc = subprocess.run(
+        # `-X utf8` rather than an inline `env={**os.environ, ...}`: this call
+        # needs a computed `env` for the PATH scrub, and a computed env is one
+        # `scripts/check-subprocess-encoding.py` cannot read to prove the pin.
+        # The flag pins the child's own output encoding where the scanner (and
+        # a reader) can see it. #962.
+        [sys.executable, "-X", "utf8", str(path)],
+        capture_output=True,
+        text=True,
+        # Pinned, not inherited: text mode otherwise decodes with
+        # locale.getencoding(), which is cp1252 on the Windows host and dies on
+        # the first non-ASCII byte a child emits (scripts/check-subprocess-encoding.py).
+        encoding="utf-8",
+        env=env,
+        cwd=str(HERE),
+        timeout=600,
+    )
+    return proc.stdout, proc.returncode, scrubbed, proc.stderr
+
+
+def test_hiding_a_tool_does_not_hide_its_neighbours():
+    """The regression that cost #1264 a CI cycle, pinned on every host.
+
+    The first form of this scrub dropped whole PATH ENTRIES carrying the tool.
+    That is indistinguishable from hiding the tool right up until the tool
+    shares a directory with something else -- and on `ubuntu-latest` `pwsh` is
+    `/usr/bin/pwsh`, so hiding it took `bash` and `git` with it and
+    `test_102_domain_add_wiring.py` died with `FileNotFoundError: 'bash'`.
+
+    Why it needs to be synthetic rather than left to the assertion inside
+    `path_without`: that assertion can only fire where the tool is REALLY on
+    PATH, so on a host with no PowerShell -- the cloud sandbox where this work
+    is done -- a revert to the entry-drop form produces an empty scrub, harms
+    nothing, and goes unnoticed until CI. Constructing the co-location here
+    makes the property hold everywhere, which is the whole argument of the
+    issue this file belongs to: a check that cannot run is not a check.
+    """
+    import os
+
+    with tempfile.TemporaryDirectory() as tmp:
+        shared = pathlib.Path(tmp) / "shared-bin"
+        shared.mkdir()
+        # On Windows `shutil.which` resolves a bare name only through
+        # PATHEXT (CPython builds `[cmd + ext for ext in PATHEXT]` and does
+        # NOT try the extensionless name), so an extensionless stub is
+        # undiscoverable there and the control assertion below would fail
+        # on a scrub that is perfectly correct.
+        suffix = ".cmd" if sys.platform == "win32" else ""
+        for name in ("faketool", "_bystander"):
+            exe = shared / (name + suffix)
+            exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="")
+            exe.chmod(0o755)  # a no-op on Windows, where PATHEXT decides
+
+        entries = [str(shared)]
+        parent = os.pathsep.join(entries)
+        # The control: both must be reachable before the scrub, or the test
+        # proves nothing about what the scrub removed.
+        assert shutil.which("faketool", path=parent), "fixture tool not reachable"
+        assert shutil.which("_bystander", path=parent), "fixture bystander not reachable"
+
+        scrubbed, method = path_without("faketool", entries=entries)
+        assert method != "entry-drop", (
+            "a caller-supplied PATH must get a farm on every host -- dropping "
+            "entries cannot preserve a co-located neighbour, so this test "
+            "would be unprovable rather than passing"
+        )
+
+        assert shutil.which("faketool", path=scrubbed) is None, (
+            f"the {method} scrub did not hide the tool it was asked to hide"
+        )
+        assert shutil.which("_bystander", path=scrubbed) is not None, (
+            f"the {method} scrub removed `_bystander`, which merely shares a "
+            f"directory with the tool. That is #1264's defect: the child ends "
+            f"up running without a program nobody asked to remove, and the "
+            f"failure surfaces inside whichever module first shells out to it."
+        )
+
+
+def test_every_rescoped_module_still_runs_without_its_tool():
+    """The burn-down, measured on every module it touched, not just on 103.
+
+    For each rescoped module and each tool it gates on, hide that tool and run
+    the module. Three things must hold: no `SKIP all`, a clean exit, and a skip
+    list that is exactly the roster -- so every case the roster does NOT claim
+    actually ran and passed.
+
+    This is what a static reading cannot give you. An earlier form of this check
+    asserted from the AST that a roster never names a case which spawns nothing,
+    on the reasoning that such a case provably cannot need the tool. It fired on
+    `test_1150_empty_input_guard.py`, whose roster is correct: that module reaches
+    pwsh through `guard.scan()` in a checker it loads with `importlib`, and
+    `toolless_cases` only follows the module's OWN top-level helpers. Spawning
+    behind an import is invisible to it, so "spawns nothing" is a lower bound on
+    what could run, never a proof that the tool is unneeded. Running the module
+    settles in one measurement what the AST cannot decide at all.
+    """
+    failures = []
+    for name, tree in sorted(rescoped_modules(HERE).items()):
+        rosters = needs_sets(tree)
+        declared = {
+            n.name
+            for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name.startswith("test_")
+        }
+        for roster_name, cases in sorted(rosters.items()):
+            tool = roster_name[len("NEEDS_") :].lower()
+            # When the tool is already absent on this host the scrub is a
+            # no-op and the module's ordinary run IS the measurement, so the
+            # same call covers both hosts.
+            out, rc, child_path, err = _run_with_tool_hidden(HERE / name, tool)
+            if "SKIP all" in out:
+                failures.append(f"{name} skips wholesale with no {tool}")
+                continue
+            if rc != 0:
+                # stderr first: a child that died says why there, and that is
+                # the line a reader needs. stdout is the roster it got through.
+                failures.append(
+                    f"{name} exited {rc} with no {tool}: "
+                    f"stderr={err[-600:]!r} stdout={out[-400:]!r}"
+                )
+                continue
+            skipped = {
+                line.split()[1] for line in out.splitlines() if line.startswith("  SKIP ")
+            }
+            passed = {
+                line.split()[1] for line in out.splitlines() if line.startswith("  PASS ")
+            }
+            # A module may gate on more than one tool (103 and 102 both do),
+            # and the child skips every roster whose tool IT cannot see -- not
+            # only the one this iteration scrubbed. Ask the child's own PATH
+            # rather than this process's: reading the parent's reports a
+            # correct module as broken on any host lacking the other tool
+            # (this sandbox has no pwsh), and reading the scrubbed roster
+            # alone would have masked #1264's real defect instead of fixing
+            # it -- with the farm above, the two agree by construction, and
+            # asking the child is the spelling that stays true if it stops.
+            gone = {
+                other[len("NEEDS_") :].lower()
+                for other in rosters
+                if shutil.which(other[len("NEEDS_") :].lower(), path=child_path) is None
+            } | {tool}
+            expected_skip = {
+                case
+                for other, names in rosters.items()
+                if other[len("NEEDS_") :].lower() in gone
+                for case in names
+            } & declared
+            if skipped != expected_skip:
+                failures.append(
+                    f"{name} with no {tool}: skipped {sorted(skipped)}, "
+                    f"roster says {sorted(expected_skip)}"
+                )
+            unrun = declared - skipped - passed
+            if unrun:
+                failures.append(
+                    f"{name} with no {tool}: {sorted(unrun)} neither ran nor skipped"
+                )
+    assert not failures, (
+        "rescoped modules that do not actually run without their tool: "
+        + "; ".join(failures)
+        + ". A rescope is only worth anything if the cases it freed really "
+        "execute on a host that lacks the tool."
+    )
+
+
+def test_no_new_debt_is_frozen_into_the_allowlist():
+    """#1182's burn-down is finished; the ratchet is that it stays finished.
+
+    An entry recording 0 is a genuine exemption and stays legal -- a module
+    whose every case shells out has nothing to rescue. An entry recording MORE
+    than 0 is masked static assertions with a number written beside them, and
+    the number is what made the burn-down possible; it is not a licence to add
+    the next one. Rescope instead: `test_1146_empty_input_argument_binding.py`
+    and the rescoped 103 are the two worked examples.
+    """
+    debts = sorted(
+        f"{name} ({e.toolless_cases})"
+        for name, e in ALLOWLIST.items()
+        if e.toolless_cases > 0
+    )
+    assert not debts, (
+        "ALLOWLIST entries carrying toolless-case debt: "
+        + ", ".join(debts)
+        + ". #1182's burn-down cleared all of these; a new one means a module "
+        "was frozen rather than rescoped. Give it a NEEDS_<TOOL> roster and "
+        "drop the entry."
     )
 
 
@@ -1027,56 +1462,25 @@ def test_the_guard_actually_fails_on_a_directory_carrying_the_shape():
 def test_103_runs_its_static_cases_with_no_pwsh_on_path():
     """The measurement #1182 asks for, made rather than asserted from the source.
 
-    Runs 103 in a child with every PATH entry containing a PowerShell host
-    removed, and reads its roster. This is the case the whole issue is about:
-    before the rescope this printed `SKIP all` and exited 0.
+    Runs 103 in a child that cannot see a PowerShell host and reads its
+    roster. This is the case the whole issue is about: before the rescope it
+    printed `SKIP all` and exited 0.
+
+    Kept alongside the fleet check below rather than folded into it. This one
+    is #1182's acceptance criterion 3 and names the numbers that criterion
+    asks for; the fleet check asserts a shape over whatever is rescoped. If
+    103 were ever removed from the fleet set by a bug in `needs_sets`, this
+    would still fail, which is the point of pinning a criterion separately
+    from the general rule that grew out of it.
+
+    It used to carry its own copy of the scrub, which is how #1264 shipped a
+    version that dropped whole PATH directories: green here for weeks because
+    103's static cases spawn nothing, and fatal the moment the fleet check ran
+    the same expression against a module whose static cases shell out to bash.
+    One scrub, one place.
     """
     path = HERE / "test_103_enforce_standard_wiring.py"
-    import os
-
-    # `shutil.which(..., path=entry)` rather than testing for a literal `pwsh`
-    # file: on Windows the host is `pwsh.exe`, and a bare-name existence check
-    # leaves its directory on PATH. `which` honours PATHEXT, so the same
-    # expression scrubs both platforms.
-    scrubbed = os.pathsep.join(
-        entry
-        for entry in os.environ.get("PATH", "").split(os.pathsep)
-        if entry and shutil.which("pwsh", path=entry) is None
-    )
-    # The control, asserted before the measurement rather than inferred from
-    # it. If the scrub does not actually hide pwsh, the child runs all 14 cases
-    # and this test fails below on an empty skip list -- a failure that reads as
-    # "the rescope is broken" when the truth is "the harness never removed the
-    # tool". Naming it here is the difference between a diagnosis and a hunt.
-    assert shutil.which("pwsh", path=scrubbed) is None, (
-        f"PATH scrub failed: pwsh is still reachable at "
-        f"{shutil.which('pwsh', path=scrubbed)!r} after removing every entry "
-        f"that carries it. This test cannot measure the no-pwsh behaviour it "
-        f"exists to measure -- fix the scrub, do not weaken the assertions."
-    )
-    # Inherit the environment and override only PATH: a scrubbed env dict is
-    # what #943 spent a fortnight on (CLAUDE.md, "never pass a scrubbed env=").
-    env = dict(os.environ)
-    env["PATH"] = scrubbed
-    env["PYTHONIOENCODING"] = "utf-8"
-    proc = subprocess.run(
-        # `-X utf8` rather than an inline `env={**os.environ, ...}`: this call
-        # needs a computed `env` for the PATH scrub, and a computed env is one
-        # `scripts/check-subprocess-encoding.py` cannot read to prove the pin.
-        # The flag pins the child's own output encoding where the scanner (and
-        # a reader) can see it. #962.
-        [sys.executable, "-X", "utf8", str(path)],
-        capture_output=True,
-        text=True,
-        # Pinned, not inherited: text mode otherwise decodes with
-        # locale.getencoding(), which is cp1252 on the Windows host and dies on
-        # the first non-ASCII byte a child emits (scripts/check-subprocess-encoding.py).
-        encoding="utf-8",
-        env=env,
-        cwd=str(HERE),
-        timeout=300,
-    )
-    out = proc.stdout
+    out, _rc, _child_path, _err = _run_with_tool_hidden(path, "pwsh")
     assert "SKIP all" not in out, (
         "103 still skips wholesale when pwsh is absent -- the defect #1182 is "
         f"about. Output: {out!r}"

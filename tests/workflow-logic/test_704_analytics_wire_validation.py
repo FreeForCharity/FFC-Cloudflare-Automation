@@ -339,14 +339,39 @@ def test_unset_measurement_mapping_aborts_rather_than_skipping_its_check():
     )
 
 
+# Cases that shell out to bash; everything else is a static assertion over the
+# workflow YAML and must run on a host that has no bash. A whole-module gate
+# here reported green having asserted nothing -- #1182, ledger L246.
+NEEDS_BASH = {
+    "test_a_percent_in_a_rejected_value_is_escaped_first",
+    "test_a_rejected_value_cannot_forge_a_second_workflow_command",
+    "test_injected_payload_arrives_as_data",
+    "test_interpolated_body_is_the_positive_control",
+    "test_malformed_ids_are_rejected",
+    "test_missing_gtm_mapping_aborts_before_validating_an_empty_string",
+    "test_omitted_measurement_id_is_still_optional",
+    "test_unset_measurement_mapping_aborts_rather_than_skipping_its_check",
+    "test_valid_ids_pass",
+}
+TOOL_CASES = {"bash": NEEDS_BASH}
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":
-    if shutil.which("bash") is None:
-        print("  SKIP all (bash not installed in this environment; runs in CI)")
-        sys.exit(0)
+    absent = {tool for tool in TOOL_CASES if shutil.which(tool) is None}
     failures = 0
     for t in TESTS:
+        wanted = sorted(
+            tool
+            for tool, names in TOOL_CASES.items()
+            if t.__name__ in names and tool in absent
+        )
+        if wanted:
+            print(
+                f"  SKIP {t.__name__} ({', '.join(wanted)} not installed in "
+                f"this environment; runs in CI)"
+            )
+            continue
         try:
             t()
             print(f"  PASS {t.__name__}")

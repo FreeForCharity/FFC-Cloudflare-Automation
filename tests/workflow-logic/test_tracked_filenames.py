@@ -40,7 +40,7 @@ assert _spec.loader is not None
 _spec.loader.exec_module(guard)
 
 # The exact name from the incident: U+F022 twice, `ef 80 a2 ef 80 a2` on disk.
-INCIDENT_NAME = ""
+INCIDENT_NAME = "\uf022\uf022"
 
 
 def _scratch_repo(tmpdir: str, filename: str) -> pathlib.Path:
@@ -162,10 +162,10 @@ def test_del_is_a_finding():
 def test_an_ordinary_non_ascii_character_is_a_finding_and_is_labelled_as_such():
     """The broad rule, and the label that distinguishes it from the incident.
 
-    A `café.md` is a different judgement call from a U+F022, and the report has
+    An acute-accented `e` in a path is a different judgement call from a U+F022, and the report has
     to let a reader tell them apart -- one is plausibly deliberate.
     """
-    findings = guard.scan(["docs/café.md"], allowed=())
+    findings = guard.scan(["docs/caf\u00e9.md"], allowed=())
     assert len(findings) == 1, findings
     assert "non-ASCII character U+00E9" in findings[0], findings[0]
     assert "private-use" not in findings[0], findings[0]
@@ -187,7 +187,7 @@ def test_every_offending_character_is_reported_not_just_the_first():
 
 
 def test_every_offending_path_is_reported_not_just_the_first():
-    findings = guard.scan(["a", "b", "c"], allowed=())
+    findings = guard.scan(["a\uf022", "b\uf022", "c\uf022"], allowed=())
     assert len(findings) == 3, findings
 
 
@@ -220,7 +220,7 @@ def test_an_allowlisted_path_is_not_a_finding():
 def test_a_stale_allowlist_entry_is_an_error():
     """The freeze rule every sibling guard applies: an exception nobody prunes
     stops being a list of known exceptions."""
-    errors = guard.stale_allowances(["README.md"], allowed=("docs/gone.md",))
+    errors = guard.stale_allowances(["README.md"], allowed=("docs/gone\uf022.md",))
     assert len(errors) == 1, errors
     assert "not tracked" in errors[0], errors[0]
 
@@ -282,10 +282,29 @@ def test_the_ci_step_is_not_gated_to_one_event():
     """AC4. `722` is a required check and the merge group is where required
     checks are evaluated for a queued PR, so a step that skipped on
     `merge_group` could be satisfied without ever having scanned -- the same
-    false clean the large-blob guard's own comment warns about."""
+    false clean the large-blob guard's own comment warns about.
+
+    Each delimiter is asserted present BEFORE it is used to slice. An
+    `IndexError` out of a bare `split(...)[1]` would not be caught by this
+    module's runner, which handles `AssertionError` only, so a renamed step
+    would abort the module partway and take every later test with it -- a
+    clean-looking list of PASSes with the failures simply never run (L82,
+    `run_all.py`'s truncation guard). Raised by Copilot on #1267.
+    """
     ci = (REPO_ROOT / ".github" / "workflows" / "722-ci.yml").read_text(encoding="utf-8")
-    block = ci.split("Validate tracked filenames are printable ASCII", 1)[1]
-    block = block.split("scripts/check-tracked-filenames.py", 1)[0]
+
+    step_name = "Validate tracked filenames are printable ASCII"
+    invocation = "scripts/check-tracked-filenames.py"
+    assert step_name in ci, f"722-ci.yml no longer has a step named {step_name!r}"
+
+    block = ci.split(step_name, 1)[1]
+    assert invocation in block, (
+        f"the {step_name!r} step no longer invokes {invocation} -- the step and "
+        f"its command have drifted apart, so this test can no longer read the "
+        f"step body it is asserting about"
+    )
+    block = block.split(invocation, 1)[0]
+
     assert "if:" not in block, (
         "the tracked-filename step must carry no event gate, so it runs on "
         f"pull_request, merge_group and push alike; found:\n{block}"
@@ -296,8 +315,69 @@ def test_ci_still_triggers_on_merge_group():
     """The other half of AC4: an ungated step is only everywhere if the workflow
     itself still listens on the merge group."""
     ci = (REPO_ROOT / ".github" / "workflows" / "722-ci.yml").read_text(encoding="utf-8")
+    assert "jobs:" in ci, "722-ci.yml has no `jobs:` key; this file is not what it was"
     header = ci.split("jobs:", 1)[0]
     assert "merge_group:" in header, header
+
+
+def test_the_failure_report_is_pure_ascii():
+    """The printed report must be ASCII, so it cannot die on any console.
+
+    `print()` on a Windows console encodes with the console codepage, and a
+    character it cannot represent raises `UnicodeEncodeError` -- a correct
+    finding becomes a traceback on the host most likely to have produced the
+    file (L35, #945).
+
+    THE OBVIOUS WEAKER ASSERTION DOES NOT WORK, and finding that out is why this
+    test is worth its lines. `report.encode("cp1252")` was the first version. It
+    passes on an em dash (cp1252 0x97) and on an accented letter (0xe9), so it
+    could not tell the guard's original text from its current text at all -- and
+    a mutation putting an em dash back **survived** it. cp1252 fails only on
+    characters outside its 256, an arrow or an emoji among them, which is
+    precisely the class an author is least likely to type by accident. ASCII is
+    therefore the band to assert: it is the only one safe on every console, and
+    it is the one a reviewer can check by eye.
+
+    Measured against the real report rather than read off the source.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = _scratch_repo(tmpdir, INCIDENT_NAME)
+        code, report = _main(["--repo", str(root)])
+        assert code == 1, report
+
+    offenders = sorted({hex(ord(char)) for char in report if not 0x20 <= ord(char) <= 0x7E})
+    # A report is multi-line, so the newline is expected and is not an offender.
+    offenders = [point for point in offenders if point not in ("0xa", "0xd", "0x9")]
+    assert not offenders, (
+        f"the failure report contains non-ASCII character(s) {offenders}; keep "
+        f"the text in `main()` to ASCII so it cannot fail to encode on any "
+        f"console (L35, #945)"
+    )
+
+
+def test_this_module_holds_no_invisible_character_of_its_own():
+    """The file that tests a printable-ASCII rule must itself be printable ASCII.
+
+    Not vanity: writing about an unprintable character is a way of shipping one.
+    Three artifacts in this PR's own authoring picked up real `U+F022`
+    characters, because a `\\u` escape typed into a source file, a PR body and
+    an API call was *resolved* on the way rather than written literally --
+    nothing objects, and in a terminal the character and the escape render
+    identically. Copilot flagged the two in this module; this test is what stops
+    the next one, and it fails loudly with the codepoint and the line, because
+    the diff will not show it.
+    """
+    text = pathlib.Path(__file__).read_text(encoding="utf-8")
+    offenders = [
+        (n, hex(ord(char)), line)
+        for n, line in enumerate(text.split("\n"), 1)
+        for char in line
+        if not (0x20 <= ord(char) <= 0x7E)
+    ]
+    assert not offenders, (
+        "this module contains a character outside printable ASCII; write it as "
+        f"an escape instead so a reader can see it: {offenders[:5]}"
+    )
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

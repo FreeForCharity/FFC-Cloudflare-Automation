@@ -237,16 +237,32 @@ def main(argv: list[str] | None = None) -> int:
         print("::error::tracked path(s) with a non-printable or non-ASCII name\n")
         for error in errors:
             print(f"  {error}")
+        # ASCII ONLY below this line, and the reason is narrower than it first
+        # looks. `print()` on a Windows console encodes with the console
+        # codepage, and a character that codepage cannot represent raises
+        # UnicodeEncodeError -- a correct finding becomes a traceback on the host
+        # most likely to have produced the file (ledger L35, #945). cp1252 does
+        # NOT fail on an em dash or an accented letter (0x97 and 0xe9); it fails
+        # on an arrow, an emoji, a box-drawing rule. So an ASCII rule here is a
+        # policy, not a bug fix: it is the only band safe on every console, and
+        # it costs nothing in a report whose job is to be legible. The docstring
+        # above is never printed and is not bound by it.
         print(
             "\nA name like this is invisible in a diff, renders differently in every "
             "tool, and survives every other check in this repo: the file is usually "
             "zero bytes, so nothing breaks, and `git status --untracked-files=no` "
             "reports clean once it is tracked (#1165). The index above is the "
             "character offset in the path, and the codepoint is what your terminal "
-            "will not show you. To remove it, copy the quoted name printed here — it "
-            "is a Python literal, so it round-trips — and delete it by that name:\n"
+            "will not show you.\n"
             "\n"
-            "    git rm --cached -- \"$(python3 -c 'print(<the quoted name above>)')\"\n"
+            "The quoted name in each finding is a Python literal, so it round-trips: "
+            "copy it verbatim (quotes included) as the single argument below and the "
+            "path is reconstructed exactly, without your shell or your terminal ever "
+            "having to represent the character.\n"
+            "\n"
+            "    python3 -c 'import ast,subprocess,sys; "
+            'subprocess.run(["git","rm","--cached","--",ast.literal_eval(sys.argv[1])])\''
+            " \"<paste the quoted name here>\"\n"
             "\n"
             "If the path is legitimate, add it to ALLOWED_NON_ASCII_PATHS in this "
             "file with a reason beside it."

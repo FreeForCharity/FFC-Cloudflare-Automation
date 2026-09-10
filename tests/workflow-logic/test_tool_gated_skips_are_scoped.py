@@ -584,41 +584,96 @@ def test_a_rescoped_roster_names_tests_that_exist():
 
 _PATH_WITHOUT: dict[str, tuple[str, str]] = {}
 
+# In preference order. A farm reproduces PATH minus one program; `entry-drop`
+# removes whole directories and is the last resort, legal only for the real
+# system PATH (see `path_without`).
+_FARM_METHODS = ("symlink-farm", "hardlink-farm", "copy-farm")
+
+
+def _place(source: pathlib.Path, dest: pathlib.Path, method: str) -> None:
+    """Reproduce `source` at `dest` by `method`, raising OSError if it cannot."""
+    import os
+
+    if method == "symlink-farm":
+        os.symlink(source, dest)
+    elif method == "hardlink-farm":
+        os.link(source, dest)
+    else:
+        shutil.copy2(source, dest)
+
+
+def _build_farm(entries: list[str], tool: str, method: str) -> str:
+    """A directory holding every executable on `entries` except `tool`.
+
+    PATH order is preserved by first-match-wins: an earlier entry's `git` keeps
+    the name, exactly as it would have when PATH was consulted directly.
+    """
+    import os
+
+    farm = pathlib.Path(tempfile.mkdtemp(prefix=f"nopath-{tool}-"))
+    linked: set[str] = set()
+    for entry in entries:
+        try:
+            names = sorted(os.listdir(entry))
+        except OSError:
+            continue  # a PATH entry that does not exist is not an error
+        for entry_name in names:
+            # Compare on the STEM so `pwsh.exe` and `pwsh.cmd` are caught
+            # alongside `pwsh`; `shutil.which` would find any of them.
+            if pathlib.Path(entry_name).stem.lower() == tool.lower():
+                continue
+            if entry_name in linked:
+                continue
+            source = pathlib.Path(entry) / entry_name
+            if not source.is_file():
+                continue
+            _place(source, farm / entry_name, method)
+            linked.add(entry_name)
+    return str(farm)
+
 
 def path_without(tool: str, entries: list[str] | None = None) -> tuple[str, str]:
     """A PATH identical to this process's except that `tool` is unreachable.
 
-    Returns `(path, method)`. Cached per tool: the farm costs one directory
-    scan and is reused across every module gated on that tool.
+    Returns `(path, method)`. Cached per tool when reading the real PATH: the
+    farm costs one directory scan and is reused across every module gated on
+    that tool. Pass `entries` to scrub a synthetic PATH instead; those results
+    are not cached.
 
     WHY NOT JUST DROP THE PATH ENTRIES THAT CARRY IT
-        Because that hides a directory, not a program, and on Linux the two
-        are wildly different. `pwsh` on `ubuntu-latest` is `/usr/bin/pwsh`, so
+        Because that hides a directory, not a program, and on Linux the two are
+        wildly different. `pwsh` on `ubuntu-latest` is `/usr/bin/pwsh`, so
         dropping its entries takes `bash`, `git` and everything else in
         `/usr/bin` with it. The child is then running on a host without
         `/usr/bin`, which is not the thing being measured, and a module whose
         static cases legitimately shell out to `bash` dies with
         `FileNotFoundError: 'bash'` -- measured on #1264, where
-        `test_102_domain_add_wiring.py` did exactly that in CI while passing
-        in a sandbox whose `pwsh` was absent for real and whose `/usr/bin`
-        was therefore never touched.
+        `test_102_domain_add_wiring.py` did exactly that in CI while passing in
+        a sandbox whose `pwsh` was absent for real and whose `/usr/bin` was
+        therefore never touched.
 
         Note which way that error points: the module named in the failure had
         nothing wrong with it, and the harness looked like the one thing that
-        could not be at fault, because it is the same expression 103's pin has
+        could not be at fault, because it is the same expression 103's pin had
         been running green in CI for weeks. It survived there only because
         103's static cases happen to spawn nothing.
 
-    SO: SYMLINK FARM
-        One temp directory holding a link to every executable reachable on
-        PATH except `tool`, in PATH order so first-match-wins is preserved.
-        The child then differs from the parent in exactly one program.
+    SO: A FARM, BY WHATEVER MEANS THE HOST ALLOWS
+        One temp directory reproducing every executable reachable on PATH
+        except `tool`. Symlinks where they work, hardlinks where they do not
+        (Windows without developer mode, same volume), and a copy as the last
+        resort -- which is why `entries` callers get a farm on every host: a
+        synthetic fixture is two files, so copying is free, and the
+        neighbour-preservation property must be provable everywhere rather
+        than only where symlinks happen to work.
 
-        Where symlinks are unavailable (Windows without developer mode) it
-        falls back to dropping the entries, which is sound THERE for the
-        reason it is unsound on Linux: `pwsh` lives in its own
-        `C:/Program Files/PowerShell/7`, co-located with nothing. The method
-        is returned rather than hidden so a failure can say which was used.
+        For the REAL PATH a copy is not free (`/usr/bin` is hundreds of MB), so
+        if no link method works there it falls back to dropping entries. That
+        is sound on the host where it lands -- Windows keeps `pwsh` in its own
+        `C:/Program Files/PowerShell/7`, co-located with nothing -- and if it
+        ever stops being sound, the bystander assertion below fails loudly
+        rather than handing back a mangled PATH. The method is returned rather
+        than hidden so a failure can say which was used.
     """
     cacheable = entries is None
     if cacheable and tool in _PATH_WITHOUT:
@@ -628,28 +683,26 @@ def path_without(tool: str, entries: list[str] | None = None) -> tuple[str, str]
 
     if entries is None:
         entries = [e for e in os.environ.get("PATH", "").split(os.pathsep) if e]
-    farm = pathlib.Path(tempfile.mkdtemp(prefix=f"nopath-{tool}-"))
-    method = "symlink-farm"
-    try:
-        linked: set[str] = set()
-        for entry in entries:
-            try:
-                names = sorted(os.listdir(entry))
-            except OSError:
-                continue  # a PATH entry that does not exist is not an error
-            for entry_name in names:
-                # Compare on the stem so `pwsh.exe` is caught alongside `pwsh`.
-                if pathlib.Path(entry_name).stem.lower() == tool.lower():
-                    continue
-                if entry_name in linked:
-                    continue  # earlier PATH entry wins, as it would have
-                source = pathlib.Path(entry) / entry_name
-                if not source.is_file():
-                    continue
-                os.symlink(source, farm / entry_name)
-                linked.add(entry_name)
-        scrubbed = str(farm)
-    except (OSError, NotImplementedError):
+
+    # A copy of the real PATH is prohibitively expensive; a copy of a caller's
+    # synthetic fixture is two files. That is the whole difference.
+    candidates = _FARM_METHODS if not cacheable else _FARM_METHODS[:-1]
+
+    scrubbed = ""
+    method = ""
+    for candidate in candidates:
+        try:
+            scrubbed = _build_farm(entries, tool, candidate)
+            method = candidate
+            break
+        except (OSError, NotImplementedError):
+            continue
+    if not method:
+        assert cacheable, (
+            f"no farm method worked for a caller-supplied PATH, and dropping "
+            f"entries cannot preserve a co-located neighbour -- so the property "
+            f"under test would be unprovable rather than false. tool={tool!r}"
+        )
         method = "entry-drop"
         # `shutil.which(..., path=entry)` rather than a literal file test:
         # `which` honours PATHEXT, so this reads `pwsh.exe` on Windows too.
@@ -681,9 +734,9 @@ def path_without(tool: str, entries: list[str] | None = None) -> tuple[str, str]
             continue  # not reachable to begin with, so not a casualty
         assert shutil.which(bystander, path=scrubbed) is not None, (
             f"the {method} scrub for {tool} also removed {bystander}, which is "
-            f"on this host's PATH. The child would be running without "
-            f"{bystander} as well, so any failure it reports is about the "
-            f"harness, not about the module."
+            f"reachable on the PATH it was given. The child would be running "
+            f"without {bystander} as well, so any failure it reports is about "
+            f"the harness, not about the module."
         )
 
     if not cacheable:
@@ -692,14 +745,23 @@ def path_without(tool: str, entries: list[str] | None = None) -> tuple[str, str]
     return _PATH_WITHOUT[tool]
 
 
-def _run_with_tool_hidden(path: pathlib.Path, tool: str) -> tuple[str, int, str]:
+def _run_with_tool_hidden(
+    path: pathlib.Path, tool: str
+) -> tuple[str, int, str, str]:
     """Run a test module in a child that cannot see `tool`, and nothing else.
 
     The measurement #1182 asks for, made rather than inferred from the source.
     Shared by the 103 pin and the fleet check below so the scrub logic -- the
     part that is easy to get subtly wrong and whose failure reads as "the
-    rescope is broken" -- exists once. Returns the child's PATH as well, so a
-    caller can ask what was actually reachable rather than assuming.
+    rescope is broken" -- exists once.
+
+    Returns `(stdout, returncode, child_path, stderr)`. Both streams, kept
+    apart rather than merged: the roster is parsed out of stdout, where a
+    stray stderr line carrying `  PASS ` would corrupt the count, while a
+    child that dies does so on stderr -- #1264's `FileNotFoundError: 'bash'`
+    was invisible in a failure message that quoted only stdout, and had to be
+    dug out of the CI log. The PATH comes back too, so a caller can ask what
+    was actually reachable rather than assuming.
     """
     import os
 
@@ -726,7 +788,7 @@ def _run_with_tool_hidden(path: pathlib.Path, tool: str) -> tuple[str, int, str]
         cwd=str(HERE),
         timeout=600,
     )
-    return proc.stdout, proc.returncode, scrubbed
+    return proc.stdout, proc.returncode, scrubbed, proc.stderr
 
 
 def test_hiding_a_tool_does_not_hide_its_neighbours():
@@ -751,10 +813,16 @@ def test_hiding_a_tool_does_not_hide_its_neighbours():
     with tempfile.TemporaryDirectory() as tmp:
         shared = pathlib.Path(tmp) / "shared-bin"
         shared.mkdir()
+        # On Windows `shutil.which` resolves a bare name only through
+        # PATHEXT (CPython builds `[cmd + ext for ext in PATHEXT]` and does
+        # NOT try the extensionless name), so an extensionless stub is
+        # undiscoverable there and the control assertion below would fail
+        # on a scrub that is perfectly correct.
+        suffix = ".cmd" if sys.platform == "win32" else ""
         for name in ("faketool", "_bystander"):
-            exe = shared / name
+            exe = shared / (name + suffix)
             exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="")
-            exe.chmod(0o755)
+            exe.chmod(0o755)  # a no-op on Windows, where PATHEXT decides
 
         entries = [str(shared)]
         parent = os.pathsep.join(entries)
@@ -764,6 +832,11 @@ def test_hiding_a_tool_does_not_hide_its_neighbours():
         assert shutil.which("_bystander", path=parent), "fixture bystander not reachable"
 
         scrubbed, method = path_without("faketool", entries=entries)
+        assert method != "entry-drop", (
+            "a caller-supplied PATH must get a farm on every host -- dropping "
+            "entries cannot preserve a co-located neighbour, so this test "
+            "would be unprovable rather than passing"
+        )
 
         assert shutil.which("faketool", path=scrubbed) is None, (
             f"the {method} scrub did not hide the tool it was asked to hide"
@@ -808,12 +881,17 @@ def test_every_rescoped_module_still_runs_without_its_tool():
             # When the tool is already absent on this host the scrub is a
             # no-op and the module's ordinary run IS the measurement, so the
             # same call covers both hosts.
-            out, rc, child_path = _run_with_tool_hidden(HERE / name, tool)
+            out, rc, child_path, err = _run_with_tool_hidden(HERE / name, tool)
             if "SKIP all" in out:
                 failures.append(f"{name} skips wholesale with no {tool}")
                 continue
             if rc != 0:
-                failures.append(f"{name} exited {rc} with no {tool}: {out[-400:]!r}")
+                # stderr first: a child that died says why there, and that is
+                # the line a reader needs. stdout is the roster it got through.
+                failures.append(
+                    f"{name} exited {rc} with no {tool}: "
+                    f"stderr={err[-600:]!r} stdout={out[-400:]!r}"
+                )
                 continue
             skipped = {
                 line.split()[1] for line in out.splitlines() if line.startswith("  SKIP ")
@@ -1402,7 +1480,7 @@ def test_103_runs_its_static_cases_with_no_pwsh_on_path():
     One scrub, one place.
     """
     path = HERE / "test_103_enforce_standard_wiring.py"
-    out, _rc, _child_path = _run_with_tool_hidden(path, "pwsh")
+    out, _rc, _child_path, _err = _run_with_tool_hidden(path, "pwsh")
     assert "SKIP all" not in out, (
         "103 still skips wholesale when pwsh is absent -- the defect #1182 is "
         f"about. Output: {out!r}"

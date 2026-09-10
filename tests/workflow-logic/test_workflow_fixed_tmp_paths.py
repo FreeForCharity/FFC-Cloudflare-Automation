@@ -12,6 +12,14 @@ That second one is unusual for this suite -- it measures behaviour rather than
 text -- and it is here because AC4 of #1247 asks for the fix to be shown failing
 under the old path. A guard whose premise cannot be reproduced is a guard nobody
 will believe the next time it is inconvenient.
+
+#1260 added a third load-bearing pair, for the same reason one level down:
+`test_the_bare_directory_assigned_into_a_variable_is_a_finding` and
+`test_the_shipped_738_form_of_that_same_body_is_clean` are the same body one
+character apart, and they must disagree. The guard shipped matching only
+`/tmp/`, so `tmpd=/tmp` with the use sites untouched read as clean with the
+freeze at 0 -- a defect spelling the rule could not see, in the exact module the
+rule was written for.
 """
 
 from __future__ import annotations
@@ -133,10 +141,77 @@ def test_a_trailing_comment_on_a_line_of_code_is_still_scanned():
     assert _scan("          cat /tmp/x  # the old path\n"), "trailing-comment line skipped"
 
 
-def test_a_bare_tmp_with_no_segment_is_not_a_finding():
-    """`TMPDIR=/tmp` names the directory, not a shared file, and the accepted
-    RUNNER_TEMP fallbacks end exactly there."""
-    assert _scan('          export TMPDIR=/tmp\n') == [], _scan('          export TMPDIR=/tmp\n')
+def test_a_near_miss_runner_temp_spelling_is_still_a_finding():
+    """The allowance is a strip, not an exception list, and this is the case
+    that distinguishes them (#1260).
+
+    `${RUNNER_TEMP:-/tmp/x}` is one character from the accepted form. An
+    exception matched against the finding would excuse it; stripping the
+    accepted spelling leaves this one untouched, because it is not that
+    spelling.
+    """
+    hits = [text for _, text in _scan('          tmpd="${RUNNER_TEMP:-/tmp/x}"\n')]
+    assert hits == ["/tmp/x}"], hits
+    node = '            const t = process.env.RUNNER_TEMP || "/tmp/x";\n'
+    assert [text for _, text in _scan(node)] == ["/tmp/x"], _scan(node)
+
+
+# --- the bare directory: the spelling #1260 found the guard blind to ---------
+
+
+def test_the_bare_directory_assigned_into_a_variable_is_a_finding():
+    """The exact #1247 collision, spelled without a trailing segment.
+
+    This is 738's `audit` job with the USE SITES UNTOUCHED: `"$tmpd/smoke-body"`
+    now resolves to `/tmp/smoke-body`. The guard shipped reading this as clean
+    while reporting the freeze at 0 entries.
+    """
+    body = (
+        "          tmpd=/tmp\n"
+        '          : > "$tmpd/smoke-body"\n'
+        '          entries="$tmpd/entries.json"\n'
+    )
+    assert [text for _, text in _scan(body)] == ["/tmp"], _scan(body)
+
+
+def test_the_shipped_738_form_of_that_same_body_is_clean():
+    """The control for the test above: one character apart, opposite verdicts.
+
+    Stated as a pair so neither direction can be satisfied by a scanner that
+    returns everything or nothing.
+    """
+    body = (
+        '          tmpd="${RUNNER_TEMP:-/tmp}"\n'
+        '          : > "$tmpd/smoke-body"\n'
+        '          entries="$tmpd/entries.json"\n'
+    )
+    assert _scan(body) == [], _scan(body)
+
+
+def test_other_bare_directory_spellings_are_findings():
+    """`cd /tmp`, `>/tmp` and `TMPDIR=/tmp` all name the shared directory."""
+    for line in (
+        "          cd /tmp\n",
+        "          echo hi >/tmp\n",
+        "          export TMPDIR=/tmp\n",
+    ):
+        assert [text for _, text in _scan(line)] == ["/tmp"], (line, _scan(line))
+
+
+def test_a_different_name_beginning_with_tmp_is_not_a_finding():
+    """The boundary, asserted rather than inspected (#1260 AC3).
+
+    `/tmpfs` and `/tmp_old` are different directories. Without the lookahead the
+    bare-directory rule would swallow both, and a guard that reports unrelated
+    paths is one nobody reads.
+    """
+    for line in (
+        "          df -h /tmpfs\n",
+        "          ls /tmp_old\n",
+        "          cat /tmpdir/x\n",
+        "          echo /tmp2\n",
+    ):
+        assert _scan(line) == [], (line, _scan(line))
 
 
 # --- the population, and the freeze ----------------------------------------
@@ -147,6 +222,28 @@ def test_the_tree_is_clean():
     assert not errors, errors
     assert not findings, [str(f) for f in findings]
     assert scanned > 100, f"only {scanned} files scanned — the walk found almost nothing"
+
+
+def test_the_tree_really_does_exercise_the_accepted_spellings():
+    """`test_the_tree_is_clean` is only worth something if the remedy is present.
+
+    Since #1260 the rule matches a bare `/tmp`, so every accepted spelling in
+    the tree is now a line the guard has to actively exonerate rather than one
+    it never looked at. A refactor that removed the last `${RUNNER_TEMP:-/tmp}`
+    would leave the clean-tree test passing while nothing tested the allowance
+    at all — the L62 shape, where an absence is read as evidence about a step
+    that had no input. Counted, not asserted equal to 15: the population is
+    expected to grow.
+    """
+    accepted = 0
+    for path in sorted(guard.WORKFLOWS.glob("*.yml")):
+        text = path.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if line.strip().startswith(guard.COMMENT_PREFIXES):
+                continue
+            if guard.mask_accepted(line) != line:
+                accepted += 1
+    assert accepted >= 15, f"only {accepted} accepted RUNNER_TEMP spellings found in the tree"
 
 
 def test_the_scan_reads_real_bodies_and_not_an_empty_set():

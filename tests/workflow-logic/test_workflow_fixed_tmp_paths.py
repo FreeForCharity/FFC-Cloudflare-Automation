@@ -151,9 +151,41 @@ def test_a_near_miss_runner_temp_spelling_is_still_a_finding():
     spelling.
     """
     hits = [text for _, text in _scan('          tmpd="${RUNNER_TEMP:-/tmp/x}"\n')]
-    assert hits == ["/tmp/x}"], hits
+    assert hits == ["/tmp/x"], hits
     node = '            const t = process.env.RUNNER_TEMP || "/tmp/x";\n'
     assert [text for _, text in _scan(node)] == ["/tmp/x"], _scan(node)
+
+
+def test_the_finding_text_is_the_path_and_not_the_surrounding_syntax():
+    """A trailing `}` is kept or dropped by where its `${` opened (#1263).
+
+    These two must disagree, and the reason they are one test is that the
+    tempting fix for the first — adding `}` to the terminator set — silently
+    breaks the second, turning `/tmp/probes/${safe}.head` into
+    `/tmp/probes/${safe`. Measured, not assumed: that is what the one-character
+    change to `FIXED_TMP_RE` actually produces.
+    """
+    # opened BEFORE the match -> syntax, dropped
+    outside = '          tmpd="${RUNNER_TEMP:-/tmp/x}"\n'
+    assert [t for _, t in _scan(outside)] == ["/tmp/x"], _scan(outside)
+    # opened INSIDE the match -> part of the path, kept
+    inside = "              const headPath = `/tmp/probes/${safe}.head`;\n"
+    assert [t for _, t in _scan(inside)] == ["/tmp/probes/${safe}.head"], _scan(inside)
+    # and a path that IS an expansion keeps its own closer
+    whole = '          cat "/tmp/${name}"\n'
+    assert [t for _, t in _scan(whole)] == ["/tmp/${name}"], _scan(whole)
+
+
+def test_trimming_a_closer_never_changes_whether_something_is_a_finding():
+    """The trim is cosmetic on the finding text, never on the verdict.
+
+    Stated because a post-processing step that can empty a match would be a way
+    to lose a real finding — the failure this guard exists to prevent, one layer
+    up. `/tmp}` must still be a finding, reported as `/tmp`.
+    """
+    assert guard.trim_unbalanced_closers("/tmp}") == "/tmp"
+    assert guard.trim_unbalanced_closers("/tmp}}}") == "/tmp"
+    assert [t for _, t in _scan('          cd "${d:-/tmp}"\n')] == ["/tmp"]
 
 
 # --- the bare directory: the spelling #1260 found the guard blind to ---------

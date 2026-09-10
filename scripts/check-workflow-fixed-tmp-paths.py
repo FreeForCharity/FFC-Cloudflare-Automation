@@ -216,6 +216,30 @@ def mask_accepted(line: str) -> str:
     return masked
 
 
+def trim_unbalanced_closers(text: str) -> str:
+    """Drop a trailing `}` that closes an expansion opened BEFORE the match.
+
+    `${RUNNER_TEMP:-/tmp/x}` is matched from the `/tmp`, so the `}` closing the
+    expansion rides along and the finding reads `/tmp/x}` -- path plus syntax,
+    which is harder to read and would force a freeze entry to carry the
+    punctuation. Raised by Copilot on #1263.
+
+    The obvious remedy -- adding `}` to `FIXED_TMP_RE`'s terminator set -- is
+    wrong, and measurably so: it truncates `/tmp/probes/${safe}.head` to
+    `/tmp/probes/${safe`, which is not the path either, and that exact string is
+    pinned by `test_the_scanner_flags_a_fixed_path_in_a_github_script_body`
+    because #1256 already fixed a version of this bug (a template literal's own
+    closing backtick riding along).
+
+    The two cases differ by where the expansion OPENS, so that is what is
+    tested: a `}` whose `${` is inside the matched text is part of the path and
+    stays; one whose `${` opened before the match is syntax and goes.
+    """
+    while text.endswith("}") and text.count("${") < text.count("}"):
+        text = text[:-1]
+    return text
+
+
 def scan_body(body: str) -> list[tuple[int, str]]:
     """(line number within the body, matched text) for each fixed temp path."""
     hits: list[tuple[int, str]] = []
@@ -224,7 +248,7 @@ def scan_body(body: str) -> list[tuple[int, str]]:
         if stripped.startswith(COMMENT_PREFIXES):
             continue
         for match in FIXED_TMP_RE.finditer(mask_accepted(raw)):
-            hits.append((offset, match.group(0)))
+            hits.append((offset, trim_unbalanced_closers(match.group(0))))
     return hits
 
 

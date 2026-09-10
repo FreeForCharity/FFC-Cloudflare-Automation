@@ -27,9 +27,28 @@ WHY IT IS WORTH A GUARD RATHER THAN A ONE-TIME CLEANUP
     author, which is the direction a reviewer is least likely to double-check.
 
 WHAT COUNTS AS A VIOLATION
-    Any `/tmp/` followed by a path segment, in code a runner will execute: a
-    step's `run:` body, or the `script:` of an `actions/github-script` step, in
-    a workflow or in a composite action.
+    A `/tmp` whose next character cannot continue a directory name -- that is,
+    anything but a letter, a digit, `_`, `-` or `.` -- in code a runner will
+    execute: a step's `run:` body, or the `script:` of an
+    `actions/github-script` step, in a workflow or in a composite action. That
+    is `/tmp/entries.json`, and it is also the bare directory -- `tmpd=/tmp`,
+    `cd /tmp`, `>/tmp`. `/tmpfs`, `/tmp_old`, `/tmp-build` and `/tmp.d` are
+    different directories and are not findings; the boundary is asserted by a
+    test, not by inspection, and it is stated as the exact character set
+    because the first version of this sentence said "not continued into a
+    different name" while the pattern excluded only `[A-Za-z0-9_]` -- so
+    `/tmp-build` was a finding and the docstring said it was not. Raised by
+    Copilot on #1263.
+
+    THE BARE DIRECTORY IS THE SAME DEFECT (#1260). This guard shipped matching
+    the two-character sequence `/tmp/`, which is exactly right about the REMEDY
+    -- neither accepted spelling produces it -- and that is a different question
+    from whether every DEFECT spelling matches. One did not: assigning the bare
+    directory into a variable and appending the segments later.
+    `tmpd=/tmp` with `"$tmpd/smoke-body"` downstream is the identical
+    collision, and it was measured passing on a mutant of 738 with the freeze
+    still reporting 0 entries. Found by getting a mutation wrong and reading the
+    green as a result rather than as a failed experiment.
 
     Reads are findings too, not just writes. A read is how the collision
     SURFACES -- 738 died on `json.loads` of a file another process was
@@ -42,10 +61,14 @@ WHAT COUNTS AS A VIOLATION
         tmpd="${RUNNER_TEMP:-/tmp}"                 # bash
         const tmpd = process.env.RUNNER_TEMP || "/tmp";   # github-script / node
 
-    Neither spelling produces the two-character sequence `/tmp/`, so the
-    accepted form is not a special case in the pattern below -- it simply does
-    not match. That is deliberate: an allowance written as an exception is one
-    a near-miss spelling can slip through.
+    Both spellings end at a bare `/tmp`, which the rule above does match, so
+    they are STRIPPED FROM THE LINE before it is scanned rather than listed as
+    exceptions. The distinction is not cosmetic: an exception list is matched
+    against the finding, so `${RUNNER_TEMP:-/tmp/x}` would be excused by an
+    entry for `${RUNNER_TEMP:-/tmp}`, whereas stripping leaves the `/x` behind
+    and it is reported. A guard that flagged the remedy it prescribes is how a
+    guard earns being switched off (#1019) -- all 15 remedy sites in the tree
+    are clean, and that is pinned by a test rather than assumed.
 
     COMMENT LINES ARE EXCLUDED. A `#`- or `//`-led line is prose, it executes
     nothing, and #1019 records four separate guards in 48h that flagged text
@@ -78,15 +101,39 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 ACTIONS = REPO_ROOT / ".github" / "actions"
 
-# `/tmp/` plus at least one path character. `${RUNNER_TEMP:-/tmp}` and
-# `process.env.RUNNER_TEMP || "/tmp"` end at the `/tmp`, so neither matches.
+# The two accepted remedy spellings, stripped from a line BEFORE it is matched
+# (see `scan_body`). They are removed rather than excepted so that the allowance
+# stays "these exact forms do not survive to be matched": an exception list is
+# something a near-miss spelling slips through, and `${RUNNER_TEMP:-/tmp/x}` is
+# a near-miss that must still be a finding.
+ACCEPTED_RUNNER_TEMP = (
+    re.compile(r"\$\{RUNNER_TEMP:-/tmp\}"),
+    re.compile(r"""process\.env\.RUNNER_TEMP\s*\|\|\s*['"]/tmp['"]"""),
+)
+
+# `/tmp` not continued into a longer directory name, plus whatever path follows.
 #
-# The backtick is in the terminator set because a JS template literal is one of
-# the two spellings this guard has to read: without it, `` `/tmp/probes/x.head` ``
-# captures its own closing backtick into the finding text, so the reported
-# snippet is not the path and a freeze entry would have to carry the
-# punctuation to match. Raised by Copilot on #1256.
-FIXED_TMP_RE = re.compile(r"/tmp/[^\s\"'`);:,]*")
+# The negative lookahead is the boundary: `/tmp` and `/tmp/entries.json` match,
+# `/tmpfs`, `/tmp_old`, `/tmp-build` and `/tmp.d` do not. The class is every
+# character that can continue a name, NOT just the identifier characters --
+# `-` and `.` are legal in a directory name and were missing at first, which
+# made `/tmp-build` a finding (Copilot, #1263). Nothing is lost by excluding
+# them: this guard is about the SHARED `/tmp`, and a path one character longer
+# is a different directory, so flagging it is the #1019 shape.
+#
+# Matching the bare directory is what #1260 added -- `tmpd=/tmp` with
+# `"$tmpd/entries.json"` downstream is the identical collision, spelled without
+# a trailing segment, and the `/tmp/` rule read it as clean while reporting the
+# freeze at 0.
+#
+# The trailing class keeps the whole path in the finding text, so a report still
+# names the file and not just the directory. The backtick is in the terminator
+# set because a JS template literal is one of the two spellings this guard has
+# to read: without it, `` `/tmp/probes/x.head` `` captures its own closing
+# backtick into the finding text, so the reported snippet is not the path and a
+# freeze entry would have to carry the punctuation to match. Raised by Copilot
+# on #1256.
+FIXED_TMP_RE = re.compile(r"/tmp(?![A-Za-z0-9_.-])[^\s\"'`);:,]*")
 
 # Leading tokens that make a line prose rather than code, in the two languages a
 # workflow body is written in.
@@ -156,6 +203,43 @@ def executable_bodies(doc: dict) -> list[tuple[str, str, str]]:
     return bodies
 
 
+def mask_accepted(line: str) -> str:
+    """The line with the accepted RUNNER_TEMP spellings blanked out.
+
+    Blanked to spaces of the same width rather than deleted, so that removing
+    one form can never join its neighbours into a `/tmp` that was not written
+    (and so a column offset would still line up, should a caller ever want one).
+    """
+    masked = line
+    for pattern in ACCEPTED_RUNNER_TEMP:
+        masked = pattern.sub(lambda match: " " * len(match.group(0)), masked)
+    return masked
+
+
+def trim_unbalanced_closers(text: str) -> str:
+    """Drop a trailing `}` that closes an expansion opened BEFORE the match.
+
+    `${RUNNER_TEMP:-/tmp/x}` is matched from the `/tmp`, so the `}` closing the
+    expansion rides along and the finding reads `/tmp/x}` -- path plus syntax,
+    which is harder to read and would force a freeze entry to carry the
+    punctuation. Raised by Copilot on #1263.
+
+    The obvious remedy -- adding `}` to `FIXED_TMP_RE`'s terminator set -- is
+    wrong, and measurably so: it truncates `/tmp/probes/${safe}.head` to
+    `/tmp/probes/${safe`, which is not the path either, and that exact string is
+    pinned by `test_the_scanner_flags_a_fixed_path_in_a_github_script_body`
+    because #1256 already fixed a version of this bug (a template literal's own
+    closing backtick riding along).
+
+    The two cases differ by where the expansion OPENS, so that is what is
+    tested: a `}` whose `${` is inside the matched text is part of the path and
+    stays; one whose `${` opened before the match is syntax and goes.
+    """
+    while text.endswith("}") and text.count("${") < text.count("}"):
+        text = text[:-1]
+    return text
+
+
 def scan_body(body: str) -> list[tuple[int, str]]:
     """(line number within the body, matched text) for each fixed temp path."""
     hits: list[tuple[int, str]] = []
@@ -163,8 +247,8 @@ def scan_body(body: str) -> list[tuple[int, str]]:
         stripped = raw.strip()
         if stripped.startswith(COMMENT_PREFIXES):
             continue
-        for match in FIXED_TMP_RE.finditer(raw):
-            hits.append((offset, match.group(0)))
+        for match in FIXED_TMP_RE.finditer(mask_accepted(raw)):
+            hits.append((offset, trim_unbalanced_closers(match.group(0))))
     return hits
 
 
@@ -298,6 +382,9 @@ def main(argv: list[str] | None = None) -> int:
             "\nThe workflow-logic harness executes these bodies verbatim, so a fixed "
             "/tmp path is shared state between concurrent test processes — and the "
             "L191 treatment/control comparison in AGENTS.md runs two suites at once. "
+            "The bare directory counts: `tmpd=/tmp` with `\"$tmpd/entries.json\"` "
+            "downstream is the same collision, spelled without a trailing segment "
+            "(#1260). "
             'Write under `tmpd="${RUNNER_TEMP:-/tmp}"` (bash) or '
             '`process.env.RUNNER_TEMP || "/tmp"` (github-script), which is what every '
             "runner already sets per job (#1247)."

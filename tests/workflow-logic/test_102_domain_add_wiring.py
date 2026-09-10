@@ -127,6 +127,21 @@ LAUNDERED_REFS = (
     "steps.meta.outputs.ns2",
 )
 
+# The three references #1241 lane 4 burned down, and the reason they are a
+# SEPARATE constant from LAUNDERED_REFS above: none of them carries the dispatch
+# domain. They are a $RUNNER_TEMP path, a WHMCS lookup result and an array
+# length, frozen in `KNOWN_LAUNDERED` because the laundering guard tracks taint
+# per STEP and the steps publishing them also hold the resolved domain. Folding
+# them into LAUNDERED_REFS would make that tuple's docstring false; leaving them
+# unpinned would let the shapes come back. `found` and `issues_count` are the
+# ones worth the line — a pwsh double-quoted interpolation in the step that
+# changes a production domain's nameservers, and a SINGLE-quoted JS literal.
+LANE4_REFS = (
+    "steps.enforce.outputs.out_dir",
+    "needs.whmcs_preflight.outputs.found",
+    "needs.cloudflare_enforce_standard.outputs.issues_count",
+)
+
 CREDENTIAL_VARS = (
     "WHMCS_API_SECRET",
     "WHMCS_API_IDENTIFIER",
@@ -232,6 +247,22 @@ Set-Content -Path 'bound.txt' -Value $Domain -NoNewline
 Write-Output '{"found":true,"domainId":"1"}'
 """
 
+# The callee of the step that CHANGES a production domain's nameservers. Records
+# its binding out of band for the same reason as the stub above, and to a
+# different file, so a test can tell "the body refused before calling" from "the
+# body called and the callee did nothing".
+STUB_NAMESERVERS_UPDATE = """[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$Domain,
+    [Parameter(Mandatory = $true)]
+    [string]$NameServer1,
+    [Parameter(Mandatory = $true)]
+    [string]$NameServer2
+)
+Set-Content -Path 'ns-bound.txt' -Value "$Domain|$NameServer1|$NameServer2" -NoNewline
+"""
+
 
 # --------------------------------------------------------------------------
 # extraction helpers
@@ -319,6 +350,11 @@ class PwshRun(typing.NamedTuple):
     rc: int
     gho: str
     bound: str | None
+    # What the nameserver-update stub recorded, or None if it was never called.
+    # Separate from `bound` so a test can distinguish "the body refused before the
+    # production write" from "the write happened and the callee did nothing" — a
+    # refusal that still reaches the callee is decoration.
+    ns_bound: str | None = None
 
 
 def _run_pwsh(body: str, **env_overrides: str) -> PwshRun:
@@ -342,6 +378,9 @@ def _run_pwsh(body: str, **env_overrides: str) -> PwshRun:
         (tmp / "scripts" / "whmcs-domain-exists.ps1").write_text(
             STUB_DOMAIN_EXISTS, encoding="utf-8"
         )
+        (tmp / "scripts" / "whmcs-domain-nameservers-update.ps1").write_text(
+            STUB_NAMESERVERS_UPDATE, encoding="utf-8"
+        )
         script = tmp / "step.ps1"
         script.write_text(PWSH_PREAMBLE + body + PWSH_EPILOGUE, encoding="utf-8")
         gho = tmp / "github-output.txt"
@@ -359,7 +398,14 @@ def _run_pwsh(body: str, **env_overrides: str) -> PwshRun:
         )
         # Only what the test sets may be visible: an inherited IN_DOMAIN would make
         # the fail-closed cases pass for the wrong reason.
-        for var in ("IN_DOMAIN", "IN_DOMAIN_RESOLVED"):
+        for var in (
+            "IN_DOMAIN",
+            "IN_DOMAIN_RESOLVED",
+            "IN_WHMCS_FOUND",
+            "IN_OUT_DIR",
+            "IN_NS1",
+            "IN_NS2",
+        ):
             if var not in env_overrides:
                 env.pop(var, None)
         proc = subprocess.run(
@@ -376,11 +422,18 @@ def _run_pwsh(body: str, **env_overrides: str) -> PwshRun:
         bound = (
             bound_path.read_text(encoding="utf-8") if bound_path.exists() else None
         )
+        ns_bound_path = tmp / "ns-bound.txt"
+        ns_bound = (
+            ns_bound_path.read_text(encoding="utf-8")
+            if ns_bound_path.exists()
+            else None
+        )
         return PwshRun(
             out=proc.stdout + proc.stderr,
             rc=proc.returncode,
             gho=gho.read_text(encoding="utf-8"),
             bound=bound,
+            ns_bound=ns_bound,
         )
 
 
@@ -472,7 +525,7 @@ def _run_github_script(body: str, **env_overrides: str):
         script = tmp / "step.js"
         script.write_text(NODE_HARNESS.replace("__BODY__", indented), encoding="utf-8")
         env = child_env(CALLS_PATH=str(calls_path), **env_overrides)
-        for var in ("IN_ISSUE_NUMBER", "IN_DOMAIN_RESOLVED"):
+        for var in ("IN_ISSUE_NUMBER", "IN_DOMAIN_RESOLVED", "IN_CF_ISSUES_COUNT"):
             if var not in env_overrides:
                 env.pop(var, None)
         proc = subprocess.run(
@@ -537,6 +590,32 @@ def test_no_derived_domain_expression_reaches_any_script_body():
         f"it — the output carries the payload verbatim and executes at the next "
         f"double-quoted site. See test_the_laundered_output_executes_at_the_"
         f"downstream_site for the measurement."
+    )
+
+
+def test_no_frozen_laundered_reference_reaches_any_script_body():
+    """#1241 lane 4, criterion 1's other half — asserted here, not only in the guard.
+
+    The guard's freeze is exact in both directions, so deleting 102's block makes a
+    reintroduced reference fail CI as a NEW hop. That is the mechanical half. This
+    is the readable one: it names the three references and the sink shape each had,
+    so a future edit that puts one back fails against a test that says why it
+    mattered rather than against a dict entry that no longer exists.
+    """
+    offenders = {}
+    for job, name in SCRIPT_STEPS:
+        body = _body(_step(job, name))
+        hit = sorted(
+            {ref for ref in LANE4_REFS for e in _expressions(body) if ref in e}
+        )
+        if hit:
+            offenders[f"{job}/{name}"] = hit
+    assert not offenders, (
+        f"a reference #1241 lane 4 moved into `env:` is interpolated back into a "
+        f"script body: {offenders}. These do not carry the dispatch domain, but "
+        f"`found` sinks into a pwsh double-quoted string in the step that changes "
+        f"a production domain's nameservers on whmcs-prod, and `issues_count` into "
+        f"a single-quoted JS literal — the shapes the burn-down removes."
     )
 
 
@@ -939,15 +1018,12 @@ def test_the_shipped_github_script_body_binds_the_payload_as_data():
 def test_the_shipped_github_script_body_posts_on_the_ordinary_path():
     """The refusal cases above are only meaningful if the happy path still works."""
     step = _step("post_back", "Comment results back to issue")
-    body = _render(
-        _body(step),
-        {
-            "inputs.enforce_dry_run": "true",
-            "needs.cloudflare_enforce_standard.outputs.issues_count": "0",
-        },
-    )
+    body = _render(_body(step), {"inputs.enforce_dry_run": "true"})
     calls, _, out = _run_github_script(
-        body, IN_ISSUE_NUMBER="1203", IN_DOMAIN_RESOLVED=LEGAL_DOMAIN
+        body,
+        IN_ISSUE_NUMBER="1203",
+        IN_DOMAIN_RESOLVED=LEGAL_DOMAIN,
+        IN_CF_ISSUES_COUNT="0",
     )
     posted = [c for c in calls if c["fn"] == "createComment"]
     assert posted, f"expected a comment on the ordinary path. Calls: {calls!r} {out!r}"
@@ -958,20 +1034,167 @@ def test_the_shipped_github_script_body_posts_on_the_ordinary_path():
 
 def test_the_github_script_body_fails_closed_on_an_empty_domain():
     step = _step("post_back", "Comment results back to issue")
-    body = _render(
-        _body(step),
-        {
-            "inputs.enforce_dry_run": "false",
-            "needs.cloudflare_enforce_standard.outputs.issues_count": "0",
-        },
+    body = _render(_body(step), {"inputs.enforce_dry_run": "false"})
+    calls, _, _ = _run_github_script(
+        body, IN_ISSUE_NUMBER="1203", IN_CF_ISSUES_COUNT="0"
     )
-    calls, _, _ = _run_github_script(body, IN_ISSUE_NUMBER="1203")
     failed = [c for c in calls if c["fn"] == "setFailed"]
     assert failed, (
         f"JS refuses nothing on its own: an unmapped env var is `undefined` and the "
         f"body would post a report naming no domain. Calls: {calls!r}"
     )
     assert "IN_DOMAIN_RESOLVED is empty" in failed[0]["message"]
+
+
+def test_the_github_script_body_refuses_an_empty_issue_count():
+    """The `Number('') === 0` trap: the reassuring direction, so it needs its own case.
+
+    An unset or misnamed mapping does NOT produce NaN here — `Number('')` and
+    `Number(undefined)` differ, and only the second is caught by a numeric check.
+    Without the explicit empty refusal this body posts "Cloudflare post-audit
+    issues: 0" onto a charity's issue thread for a run that measured nothing, which
+    reads exactly like a clean audit.
+    """
+    step = _step("post_back", "Comment results back to issue")
+    body = _render(_body(step), {"inputs.enforce_dry_run": "false"})
+    calls, _, _ = _run_github_script(
+        body,
+        IN_ISSUE_NUMBER="1203",
+        IN_DOMAIN_RESOLVED=LEGAL_DOMAIN,
+        IN_CF_ISSUES_COUNT="",
+    )
+    posted = [c for c in calls if c["fn"] == "createComment"]
+    assert not posted, (
+        f"the body posted a report on an empty count. `Number('')` is 0, so this "
+        f"comment claims a clean post-audit for a run that measured nothing: "
+        f"{posted!r}"
+    )
+    failed = [c for c in calls if c["fn"] == "setFailed"]
+    assert failed, f"expected a refusal, got: {calls!r}"
+    assert "IN_CF_ISSUES_COUNT is empty" in failed[0]["message"]
+
+
+def test_the_github_script_body_refuses_a_non_numeric_issue_count():
+    step = _step("post_back", "Comment results back to issue")
+    body = _render(_body(step), {"inputs.enforce_dry_run": "false"})
+    calls, _, _ = _run_github_script(
+        body,
+        IN_ISSUE_NUMBER="1203",
+        IN_DOMAIN_RESOLVED=LEGAL_DOMAIN,
+        IN_CF_ISSUES_COUNT="several",
+    )
+    assert not [c for c in calls if c["fn"] == "createComment"], calls
+    failed = [c for c in calls if c["fn"] == "setFailed"]
+    assert failed, f"expected a refusal, got: {calls!r}"
+    assert "not a non-negative integer" in failed[0]["message"]
+
+
+def test_the_summary_body_fails_closed_on_an_empty_out_dir():
+    """An enforce step that died before its last line publishes no `out_dir`."""
+    step = _step("cloudflare_enforce_standard", "Summarize Cloudflare post-audit")
+    run = _run_pwsh(_body(step), IN_OUT_DIR="")
+    assert run.rc != 0, f"expected a refusal, got rc=0. Output: {run.out!r}"
+    assert "IN_OUT_DIR is empty" in run.out, run.out
+    assert "issues_count=" not in run.gho, (
+        f"the step published a count after refusing: {run.gho!r}"
+    )
+
+
+def test_the_summary_body_publishes_a_count_on_the_ordinary_path():
+    """Control for the refusal above: without it, `rc != 0` proves nothing.
+
+    A body that cannot run at all also exits non-zero (CLAUDE.md: a test asserting
+    a failure exit code must assert on the output, and needs a green counterpart).
+    """
+    with tempfile.TemporaryDirectory() as td:
+        out_dir = pathlib.Path(td)
+        (out_dir / "cloudflare-audit-after.txt").write_text(
+            "[MISSING] www CNAME\n[OK] apex A\n[DIFFERS] MX\n", encoding="utf-8"
+        )
+        step = _step("cloudflare_enforce_standard", "Summarize Cloudflare post-audit")
+        run = _run_pwsh(_body(step), IN_OUT_DIR=str(out_dir))
+    assert run.rc == 0, f"the ordinary path failed: {run.out!r}"
+    assert "issues_count=2" in run.gho, (
+        f"expected the two flagged lines to be counted, got: {run.gho!r}"
+    )
+
+
+def test_the_nameserver_body_accepts_the_capitalised_boolean_the_publisher_emits():
+    """The publisher emits `True`, not `true` — the ordinary path must survive it.
+
+    `whmcs_preflight` writes `"found=$found"` from a `[bool]`, and PowerShell
+    stringifies that as `True`. A fail-closed check written against the lowercase
+    literal the old comparison NAMED would refuse every ordinary run of the step
+    that updates nameservers. This is the case that catches it.
+    """
+    step = _step("whmcs_update_nameservers", "Update WHMCS nameservers")
+    run = _run_pwsh(
+        _body(step),
+        IN_DOMAIN_RESOLVED=LEGAL_DOMAIN,
+        IN_NS1="ns1.example.net",
+        IN_NS2="ns2.example.net",
+        IN_WHMCS_FOUND="True",
+    )
+    assert run.rc == 0, f"the ordinary path was refused: {run.out!r}"
+    assert run.ns_bound == f"{LEGAL_DOMAIN}|ns1.example.net|ns2.example.net", (
+        f"the nameserver update was not called with the expected binding: "
+        f"{run.ns_bound!r}. Output: {run.out!r}"
+    )
+
+
+def test_the_nameserver_body_refuses_a_preflight_that_did_not_find_the_domain():
+    step = _step("whmcs_update_nameservers", "Update WHMCS nameservers")
+    run = _run_pwsh(
+        _body(step),
+        IN_DOMAIN_RESOLVED=LEGAL_DOMAIN,
+        IN_NS1="ns1.example.net",
+        IN_NS2="ns2.example.net",
+        IN_WHMCS_FOUND="False",
+    )
+    assert run.rc != 0, f"expected a refusal, got rc=0. Output: {run.out!r}"
+    assert "is not present" in run.out, run.out
+    assert run.ns_bound is None, (
+        f"the nameserver update ran anyway, bound to {run.ns_bound!r} — the "
+        f"refusal is decoration if the production write still happens."
+    )
+
+
+def test_the_nameserver_body_refuses_a_found_value_outside_the_boolean_pair():
+    """A non-empty non-boolean must not coerce silently to "not found" — or to found.
+
+    Checking only for emptiness would let `Maybe` through to the `-ne 'true'`
+    comparison, which reads it as not-found and throws a message naming WHMCS —
+    a real cause reported as a different one. Refusing the value names the actual
+    fault instead.
+    """
+    step = _step("whmcs_update_nameservers", "Update WHMCS nameservers")
+    for value in ("Maybe", ""):
+        run = _run_pwsh(
+            _body(step),
+            IN_DOMAIN_RESOLVED=LEGAL_DOMAIN,
+            IN_NS1="ns1.example.net",
+            IN_NS2="ns2.example.net",
+            IN_WHMCS_FOUND=value,
+        )
+        assert run.rc != 0, f"{value!r} was accepted. Output: {run.out!r}"
+        assert "IN_WHMCS_FOUND is not a boolean" in run.out, (
+            f"{value!r} was refused for the wrong reason: {run.out!r}"
+        )
+        assert run.ns_bound is None, run.ns_bound
+
+
+def test_the_nameserver_body_refuses_an_unset_found_mapping():
+    """A misnamed `env:` key is the L202 shape, and it must not read as found."""
+    step = _step("whmcs_update_nameservers", "Update WHMCS nameservers")
+    run = _run_pwsh(
+        _body(step),
+        IN_DOMAIN_RESOLVED=LEGAL_DOMAIN,
+        IN_NS1="ns1.example.net",
+        IN_NS2="ns2.example.net",
+    )
+    assert run.rc != 0, f"an unset mapping was accepted. Output: {run.out!r}"
+    assert "IN_WHMCS_FOUND is not a boolean" in run.out, run.out
+    assert run.ns_bound is None, run.ns_bound
 
 
 def test_the_sentinel_path_survives_the_laundering_hops_lowercasing():
@@ -1011,12 +1234,20 @@ NEEDS_PWSH = {
     "test_an_empty_domain_fails_closed_and_says_so",
     "test_an_unset_domain_fails_closed_and_says_so",
     "test_a_line_break_in_the_domain_is_refused_before_publishing",
+    "test_the_summary_body_fails_closed_on_an_empty_out_dir",
+    "test_the_summary_body_publishes_a_count_on_the_ordinary_path",
+    "test_the_nameserver_body_accepts_the_capitalised_boolean_the_publisher_emits",
+    "test_the_nameserver_body_refuses_a_preflight_that_did_not_find_the_domain",
+    "test_the_nameserver_body_refuses_a_found_value_outside_the_boolean_pair",
+    "test_the_nameserver_body_refuses_an_unset_found_mapping",
 }
 NEEDS_NODE = {
     "test_the_pre_fix_github_script_body_executed_the_payload",
     "test_the_shipped_github_script_body_binds_the_payload_as_data",
     "test_the_shipped_github_script_body_posts_on_the_ordinary_path",
     "test_the_github_script_body_fails_closed_on_an_empty_domain",
+    "test_the_github_script_body_refuses_an_empty_issue_count",
+    "test_the_github_script_body_refuses_a_non_numeric_issue_count",
 }
 
 if __name__ == "__main__":

@@ -443,9 +443,25 @@ jobs:
       - name: Summarize Cloudflare post-audit
         id: summary
         shell: pwsh
+        env:
+          # #1241 lane 4. `out_dir` is a `$RUNNER_TEMP` path the enforce step
+          # composes itself, not the dispatch domain — but the step that
+          # publishes it holds the resolved domain, so the laundering guard
+          # treats every name it exports as carrying one, and reading it through
+          # `env:` costs a line. The fail-closed check below is not decoration
+          # either: the publisher writes `out_dir` on its last line, so an
+          # enforce step that died after the audit but before that write leaves
+          # this one reading `Join-Path '' 'cloudflare-audit-after.txt'`.
+          IN_OUT_DIR: ${{ steps.enforce.outputs.out_dir }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $dir = "${{ steps.enforce.outputs.out_dir }}"
+
+          if ([string]::IsNullOrWhiteSpace($env:IN_OUT_DIR)) {
+            Write-Output '::error::IN_OUT_DIR is empty: the step-level env: mapping is missing or misnamed, or the enforce step published no out_dir. Refusing to summarize a post-audit read from an unknown directory.'
+            exit 1
+          }
+
+          $dir = $env:IN_OUT_DIR
           $auditLines = @(Get-Content -Path (Join-Path $dir 'cloudflare-audit-after.txt') -ErrorAction Stop)
           $issues = @($auditLines | Where-Object { $_ -match '^[[](?:MISSING|MISSING/PARTIAL|DIFFERS)[]]' })
           "issues_count=$($issues.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -491,6 +507,12 @@ jobs:
           # same pwsh body and the cost is a line each.
           IN_NS1: ${{ needs.cloudflare_zone_create.outputs.ns1 }}
           IN_NS2: ${{ needs.cloudflare_zone_create.outputs.ns2 }}
+          # #1241 lane 4. `found` is a WHMCS lookup result rather than the
+          # dispatch text, but its SINK was a double-quoted pwsh interpolation
+          # in the one step that changes a production domain's nameservers —
+          # the shape this whole burn-down exists to remove, one value-change
+          # from live.
+          IN_WHMCS_FOUND: ${{ needs.whmcs_preflight.outputs.found }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -501,7 +523,24 @@ jobs:
 
           $domain = $env:IN_DOMAIN_RESOLVED
 
-          if ("${{ needs.whmcs_preflight.outputs.found }}" -ne 'true') {
+          # The publisher is `$found = [bool]$r.found` / `"found=$found"`, so what
+          # arrives is PowerShell's stringification of a bool — `True` or `False`,
+          # capitalised — never `true`/`false`. The old site got away with
+          # comparing to lowercase `'true'` only because pwsh `-ne` is
+          # case-insensitive; a check written against the literal it LOOKS like it
+          # receives would refuse every ordinary run. Normalise, then refuse
+          # anything outside the pair, then coerce from the SAME normalised value
+          # (#1241 lane 3): reading the raw one back would let `TRUE` pass the
+          # check and then read as not-found — validated and still wrong, which is
+          # the failure the check is here to prevent.
+          $foundRaw = $env:IN_WHMCS_FOUND
+          $foundNormalized = "$foundRaw".Trim().ToLowerInvariant()
+          if ($foundNormalized -ne 'true' -and $foundNormalized -ne 'false') {
+            Write-Output "::error::IN_WHMCS_FOUND is not a boolean (got '$foundRaw'): the step-level env: mapping is missing or misnamed, or whmcs_preflight published something other than True/False. Refusing to change a production domain's nameservers on a preflight result this run never measured."
+            exit 1
+          }
+
+          if ($foundNormalized -ne 'true') {
             throw "WHMCS preflight indicates domain '$domain' is not present. Add it in WHMCS first (or rerun with update_whmcs_nameservers=false)."
           }
 
@@ -548,6 +587,11 @@ jobs:
         env:
           IN_ISSUE_NUMBER: ${{ inputs.issue_number }}
           IN_DOMAIN_RESOLVED: ${{ needs.cloudflare_zone_create.outputs.domain }}
+          # #1241 lane 4. An audit-derived count, not the dispatch text — but it
+          # was interpolated into a SINGLE-quoted JS literal, whose safety rested
+          # on the value never containing an apostrophe rather than on the value
+          # being data (#1080's `101` shape).
+          IN_CF_ISSUES_COUNT: ${{ needs.cloudflare_enforce_standard.outputs.issues_count }}
         with:
           script: |
             const fs = require('fs');
@@ -571,7 +615,23 @@ jobs:
             }
 
             const dryRun = String('${{ inputs.enforce_dry_run }}');
-            const cfIssues = Number('${{ needs.cloudflare_enforce_standard.outputs.issues_count }}');
+
+            // `Number('')` is 0, not NaN, so an unset or misnamed mapping would
+            // sail through `Number.isInteger` and post "Cloudflare post-audit
+            // issues: 0" — a clean bill of health for a run that measured
+            // nothing, which is the reassuring direction. Refuse the empty
+            // string explicitly before the numeric check rather than relying on
+            // the coercion to catch it.
+            const cfIssuesRaw = process.env.IN_CF_ISSUES_COUNT;
+            if (!cfIssuesRaw || !cfIssuesRaw.trim()) {
+              core.setFailed('IN_CF_ISSUES_COUNT is empty: the step-level env: mapping is missing or misnamed, or cloudflare_enforce_standard published no count. Refusing to report a post-audit issue count this run never measured.');
+              return;
+            }
+            const cfIssues = Number(cfIssuesRaw);
+            if (!Number.isInteger(cfIssues) || cfIssues < 0) {
+              core.setFailed(`IN_CF_ISSUES_COUNT is not a non-negative integer (got ${JSON.stringify(cfIssuesRaw)}): cloudflare_enforce_standard publishes it as an array length, so anything else means the summary step changed shape.`);
+              return;
+            }
 
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 

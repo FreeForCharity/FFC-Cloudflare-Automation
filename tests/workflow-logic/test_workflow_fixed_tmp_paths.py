@@ -201,17 +201,42 @@ def test_other_bare_directory_spellings_are_findings():
 def test_a_different_name_beginning_with_tmp_is_not_a_finding():
     """The boundary, asserted rather than inspected (#1260 AC3).
 
-    `/tmpfs` and `/tmp_old` are different directories. Without the lookahead the
-    bare-directory rule would swallow both, and a guard that reports unrelated
-    paths is one nobody reads.
+    These are different directories. Without the lookahead the bare-directory
+    rule would swallow every one of them, and a guard that reports unrelated
+    paths is one nobody reads (#1019).
+
+    `-` and `.` are here because they were MISSING from the first version of
+    the class, which excluded only `[A-Za-z0-9_]`: `/tmp-build` was a finding
+    while the docstring three lines up said it was not. Raised by Copilot on
+    #1263 — a boundary stated in prose and a boundary in a character class are
+    two claims, and only one of them runs.
     """
     for line in (
         "          df -h /tmpfs\n",
         "          ls /tmp_old\n",
         "          cat /tmpdir/x\n",
         "          echo /tmp2\n",
+        "          ls /tmp-build\n",
+        "          ls /tmp.d/x\n",
+        "          rm -rf /tmp-1234/scratch\n",
     ):
         assert _scan(line) == [], (line, _scan(line))
+
+
+def test_the_boundary_class_is_every_name_character_not_just_identifier_ones():
+    """The docstring's claim, executed.
+
+    Stated over the class itself rather than over a handful of examples, so a
+    future narrowing of `FIXED_TMP_RE` fails here by name instead of waiting
+    for someone to write the one spelling the examples happen to miss.
+    """
+    for char in "abzABZ09_-.":
+        line = f"          ls /tmp{char}x\n"
+        assert _scan(line) == [], (char, _scan(line))
+    # …and a character that cannot continue a name still terminates it.
+    for char in "/ \"'`);:,":
+        line = f"          ls /tmp{char}\n"
+        assert _scan(line), (char, "a bare /tmp before a terminator was not flagged")
 
 
 # --- the population, and the freeze ----------------------------------------

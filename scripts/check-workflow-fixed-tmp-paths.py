@@ -27,12 +27,18 @@ WHY IT IS WORTH A GUARD RATHER THAN A ONE-TIME CLEANUP
     author, which is the direction a reviewer is least likely to double-check.
 
 WHAT COUNTS AS A VIOLATION
-    Any `/tmp` that is not continued into a different name, in code a runner
-    will execute: a step's `run:` body, or the `script:` of an
+    A `/tmp` whose next character cannot continue a directory name -- that is,
+    anything but a letter, a digit, `_`, `-` or `.` -- in code a runner will
+    execute: a step's `run:` body, or the `script:` of an
     `actions/github-script` step, in a workflow or in a composite action. That
     is `/tmp/entries.json`, and it is also the bare directory -- `tmpd=/tmp`,
-    `cd /tmp`, `>/tmp`. `/tmpfs` and `/tmp_old` are different names and are not
-    findings; the boundary is asserted by a test, not by inspection.
+    `cd /tmp`, `>/tmp`. `/tmpfs`, `/tmp_old`, `/tmp-build` and `/tmp.d` are
+    different directories and are not findings; the boundary is asserted by a
+    test, not by inspection, and it is stated as the exact character set
+    because the first version of this sentence said "not continued into a
+    different name" while the pattern excluded only `[A-Za-z0-9_]` -- so
+    `/tmp-build` was a finding and the docstring said it was not. Raised by
+    Copilot on #1263.
 
     THE BARE DIRECTORY IS THE SAME DEFECT (#1260). This guard shipped matching
     the two-character sequence `/tmp/`, which is exactly right about the REMEDY
@@ -105,13 +111,20 @@ ACCEPTED_RUNNER_TEMP = (
     re.compile(r"""process\.env\.RUNNER_TEMP\s*\|\|\s*['"]/tmp['"]"""),
 )
 
-# `/tmp` not continued into a different name, plus whatever path follows it.
+# `/tmp` not continued into a longer directory name, plus whatever path follows.
 #
 # The negative lookahead is the boundary: `/tmp` and `/tmp/entries.json` match,
-# `/tmpfs` and `/tmp_old` do not. Matching the bare directory is what #1260
-# added -- `tmpd=/tmp` with `"$tmpd/entries.json"` downstream is the identical
-# collision, spelled without a trailing segment, and the `/tmp/` rule read it as
-# clean while reporting the freeze at 0.
+# `/tmpfs`, `/tmp_old`, `/tmp-build` and `/tmp.d` do not. The class is every
+# character that can continue a name, NOT just the identifier characters --
+# `-` and `.` are legal in a directory name and were missing at first, which
+# made `/tmp-build` a finding (Copilot, #1263). Nothing is lost by excluding
+# them: this guard is about the SHARED `/tmp`, and a path one character longer
+# is a different directory, so flagging it is the #1019 shape.
+#
+# Matching the bare directory is what #1260 added -- `tmpd=/tmp` with
+# `"$tmpd/entries.json"` downstream is the identical collision, spelled without
+# a trailing segment, and the `/tmp/` rule read it as clean while reporting the
+# freeze at 0.
 #
 # The trailing class keeps the whole path in the finding text, so a report still
 # names the file and not just the directory. The backtick is in the terminator
@@ -120,7 +133,7 @@ ACCEPTED_RUNNER_TEMP = (
 # backtick into the finding text, so the reported snippet is not the path and a
 # freeze entry would have to carry the punctuation to match. Raised by Copilot
 # on #1256.
-FIXED_TMP_RE = re.compile(r"/tmp(?![A-Za-z0-9_])[^\s\"'`);:,]*")
+FIXED_TMP_RE = re.compile(r"/tmp(?![A-Za-z0-9_.-])[^\s\"'`);:,]*")
 
 # Leading tokens that make a line prose rather than code, in the two languages a
 # workflow body is written in.

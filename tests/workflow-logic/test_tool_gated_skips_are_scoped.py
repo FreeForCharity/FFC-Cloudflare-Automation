@@ -634,8 +634,22 @@ def _build_farm(entries: list[str], tool: str, method: str) -> str:
         # the next method. Drop it now rather than at exit, so a host that
         # falls through symlink -> hardlink -> copy leaves one directory, not
         # three.
-        shutil.rmtree(farm, ignore_errors=True)
-        _FARMS.remove(farm)
+        #
+        # Nothing in here may raise. An exception from cleanup REPLACES the
+        # real failure, and the damage is not only a lost message: the
+        # candidate loop in `path_without` catches `(OSError,
+        # NotImplementedError)` to try the next method, so a `ValueError` from
+        # `list.remove` would escape that loop entirely and take the whole
+        # call down instead of falling back to hardlink or copy -- turning a
+        # recoverable "symlinks unavailable" into a crash on precisely the
+        # host the fallback exists for. Pinned by
+        # `test_a_failed_farm_build_reports_its_own_failure`.
+        try:
+            shutil.rmtree(farm, ignore_errors=True)
+            if farm in _FARMS:
+                _FARMS.remove(farm)
+        except Exception:
+            pass  # best effort; the original failure below is what matters
         raise
     return str(farm)
 
@@ -838,6 +852,51 @@ def _run_with_tool_hidden(
         timeout=600,
     )
     return proc.stdout, proc.returncode, scrubbed, proc.stderr
+
+
+def test_a_failed_farm_build_reports_its_own_failure():
+    """Cleanup must not replace the exception that triggered it.
+
+    `_build_farm` removes its half-built directory and de-registers it when
+    the fill fails. If that bookkeeping raises, the real failure is gone --
+    and `path_without`'s candidate loop only catches
+    `(OSError, NotImplementedError)`, so a stray `ValueError` would escape the
+    loop and crash instead of falling through to hardlink or copy. The
+    fallback chain is exactly the cross-platform mechanism #1264 added, so
+    this would break it on the host it was written for.
+
+    Forces the pathological case rather than arguing it cannot happen: the
+    fill clears `_FARMS` (the "list mutated unexpectedly" the finding names)
+    and then raises. The original `OSError` must come out.
+    """
+    global _fill_farm
+
+    original = _fill_farm
+    snapshot = list(_FARMS)
+
+    def exploding(farm, entries, tool, method):
+        _FARMS.clear()  # the unexpected mutation
+        raise OSError("the real failure")
+
+    _fill_farm = exploding
+    try:
+        try:
+            _build_farm([], "faketool", "symlink-farm")
+        except OSError as exc:
+            assert "the real failure" in str(exc), (
+                f"expected the fill's own OSError, got {exc!r}"
+            )
+        except Exception as exc:
+            raise AssertionError(
+                f"cleanup masked the real failure with {exc!r} -- and this "
+                f"class escapes path_without's candidate loop, so the "
+                f"symlink -> hardlink -> copy fallback would never run"
+            )
+        else:
+            raise AssertionError("expected _build_farm to propagate the failure")
+    finally:
+        _fill_farm = original
+        _FARMS[:] = snapshot
 
 
 def test_an_absent_tool_is_not_farmed():

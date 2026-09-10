@@ -108,9 +108,23 @@ jobs:
       - name: Summarize Cloudflare results
         id: summary
         shell: pwsh
+        env:
+          IN_OUT_DIR: ${{ steps.run.outputs.out_dir }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $dir = "${{ steps.run.outputs.out_dir }}"
+
+          # The audit step that published `out_dir` also holds the dispatch domain, so
+          # every name it writes is treated as carrying that value (#1241 lane 3). The
+          # path reaches this body through env: rather than as substituted text, so
+          # nothing it could ever carry is read as pwsh source. Fail closed on an unset
+          # mapping (ledger L202/L220): an empty $dir makes Join-Path build a relative
+          # path and Get-Content fail against the workspace root, which reads as "the
+          # audit produced no file" rather than "the mapping is missing".
+          if ([string]::IsNullOrWhiteSpace($env:IN_OUT_DIR)) {
+            Write-Output '::error::IN_OUT_DIR is empty: the step-level env: mapping is missing or misnamed, or the audit step published no out_dir. Refusing to summarize an output directory that was never named.'
+            exit 1
+          }
+          $dir = $env:IN_OUT_DIR
 
           $auditLinesRaw = @(Get-Content -Path (Join-Path $dir 'cloudflare-audit.txt') -ErrorAction Stop)
           $auditLines = @($auditLinesRaw | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' })
@@ -194,7 +208,14 @@ jobs:
           }
 
           "domain_exists=$exists" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "is_verified=$(if ($d) { $d.isVerified } else { '' })" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # `$false`, not `''`, when Graph returned no domain object (the 404 path).
+          # A domain that does not exist is not verified, so the VALUE is unchanged
+          # downstream — both read as not-verified. What changes is that all three
+          # outputs are now always a real boolean, which is what lets the two report
+          # jobs refuse a value outside {True, False} instead of only refusing an
+          # empty one. An empty here would be indistinguishable from a missing env:
+          # mapping, and the consumer cannot tell those apart from the far end.
+          "is_verified=$(if ($d) { $d.isVerified } else { $false })" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "supports_email=$supportsEmail" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Run repo M365 preflight (read-only)
@@ -268,6 +289,12 @@ jobs:
         shell: pwsh
         env:
           IN_DOMAIN: ${{ inputs.domain }}
+          IN_CF_ISSUES: ${{ needs.cloudflare.outputs.issues_count }}
+          IN_CF_SEVERE: ${{ needs.cloudflare.outputs.severe_issues_count }}
+          IN_CF_CHANGES: ${{ needs.cloudflare.outputs.changes_count }}
+          IN_M365_EXISTS: ${{ needs.m365.outputs.domain_exists }}
+          IN_M365_VERIFIED: ${{ needs.m365.outputs.is_verified }}
+          IN_M365_EMAIL: ${{ needs.m365.outputs.supports_email }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -281,17 +308,44 @@ jobs:
           }
           $domain = $env:IN_DOMAIN
 
-          $cfIssues = [int]"${{ needs.cloudflare.outputs.issues_count }}"
-          $cfSevere = [int]"${{ needs.cloudflare.outputs.severe_issues_count }}"
-          $cfChanges = [int]"${{ needs.cloudflare.outputs.changes_count }}"
+          # The upstream counts and Graph booleans reach this body through env: too
+          # (#1241 lane 3). They are computed by the audit rather than taken from the
+          # dispatch, but the steps that publish them also hold the domain, so the
+          # laundering guard treats them as carrying it — and the fix costs nothing.
+          # Each is checked rather than coerced: [int]'' throws a conversion error that
+          # names no cause, and an unset boolean silently reads as 'not verified',
+          # publishing a headline for a state this run never measured.
+          $counts = @{}
+          foreach ($name in @('IN_CF_ISSUES', 'IN_CF_SEVERE', 'IN_CF_CHANGES')) {
+            $raw = [Environment]::GetEnvironmentVariable($name)
+            $parsed = 0
+            if (-not [int]::TryParse($raw, [ref]$parsed)) {
+              Write-Output "::error::$name is not an integer (got '$raw'): the step-level env: mapping is missing or misnamed, or the cloudflare job published no count."
+              exit 1
+            }
+            $counts[$name] = $parsed
+          }
+          $cfIssues = $counts['IN_CF_ISSUES']
+          $cfSevere = $counts['IN_CF_SEVERE']
+          $cfChanges = $counts['IN_CF_CHANGES']
 
-          $m365Exists = "${{ needs.m365.outputs.domain_exists }}"
-          $m365Verified = "${{ needs.m365.outputs.is_verified }}"
-          $m365Email = "${{ needs.m365.outputs.supports_email }}"
-
-          $m365ExistsBool = ($m365Exists -eq 'True' -or $m365Exists -eq 'true')
-          $m365VerifiedBool = ($m365Verified -eq 'True' -or $m365Verified -eq 'true')
-          $m365EmailBool = ($m365Email -eq 'True' -or $m365Email -eq 'true')
+          $m365Bool = @{}
+          foreach ($name in @('IN_M365_EXISTS', 'IN_M365_VERIFIED', 'IN_M365_EMAIL')) {
+            $raw = [Environment]::GetEnvironmentVariable($name)
+            $normalized = "$raw".Trim().ToLowerInvariant()
+            if ($normalized -ne 'true' -and $normalized -ne 'false') {
+              Write-Output "::error::$name is not a boolean (got '$raw'): the step-level env: mapping is missing or misnamed, or the m365 job published something other than True/False. Refusing to publish a status summary asserting a Microsoft 365 state this run never measured."
+              exit 1
+            }
+            # Coerce from the SAME normalized value the check just accepted. Reading
+            # the raw one back would let `TRUE` or ` True ` pass validation and then
+            # read as false at `-eq 'True'` — validated and still misreported, which
+            # is the failure the check was added to prevent.
+            $m365Bool[$name] = ($normalized -eq 'true')
+          }
+          $m365ExistsBool = $m365Bool['IN_M365_EXISTS']
+          $m365VerifiedBool = $m365Bool['IN_M365_VERIFIED']
+          $m365EmailBool = $m365Bool['IN_M365_EMAIL']
 
           $m365Status = if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }
           $cfStatus = if ($cfIssues -eq 0) { 'PASS' } elseif ($cfSevere -gt 0) { 'FAIL' } else { 'PARTIAL' }
@@ -501,6 +555,12 @@ jobs:
         shell: pwsh
         env:
           IN_DOMAIN: ${{ inputs.domain }}
+          IN_CF_ISSUES: ${{ needs.cloudflare.outputs.issues_count }}
+          IN_CF_SEVERE: ${{ needs.cloudflare.outputs.severe_issues_count }}
+          IN_CF_CHANGES: ${{ needs.cloudflare.outputs.changes_count }}
+          IN_M365_EXISTS: ${{ needs.m365.outputs.domain_exists }}
+          IN_M365_VERIFIED: ${{ needs.m365.outputs.is_verified }}
+          IN_M365_EMAIL: ${{ needs.m365.outputs.supports_email }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -514,17 +574,45 @@ jobs:
           }
           $domain = $env:IN_DOMAIN
 
-          $cfIssues = [int]"${{ needs.cloudflare.outputs.issues_count }}"
-          $cfSevere = [int]"${{ needs.cloudflare.outputs.severe_issues_count }}"
-          $cfChanges = [int]"${{ needs.cloudflare.outputs.changes_count }}"
+          # The upstream counts and Graph booleans reach this body through env: too
+          # (#1241 lane 3). They are computed by the audit rather than taken from the
+          # dispatch, but the steps that publish them also hold the domain, so the
+          # laundering guard treats them as carrying it — and the fix costs nothing.
+          # Each is checked rather than coerced: [int]'' throws a conversion error that
+          # names no cause, and an unset boolean silently reads as 'not verified' — and
+          # what this body renders is POSTED to a charity's issue thread, so an
+          # unmeasured state would be published under FFC's name.
+          $counts = @{}
+          foreach ($name in @('IN_CF_ISSUES', 'IN_CF_SEVERE', 'IN_CF_CHANGES')) {
+            $raw = [Environment]::GetEnvironmentVariable($name)
+            $parsed = 0
+            if (-not [int]::TryParse($raw, [ref]$parsed)) {
+              Write-Output "::error::$name is not an integer (got '$raw'): the step-level env: mapping is missing or misnamed, or the cloudflare job published no count."
+              exit 1
+            }
+            $counts[$name] = $parsed
+          }
+          $cfIssues = $counts['IN_CF_ISSUES']
+          $cfSevere = $counts['IN_CF_SEVERE']
+          $cfChanges = $counts['IN_CF_CHANGES']
 
-          $m365Exists = "${{ needs.m365.outputs.domain_exists }}"
-          $m365Verified = "${{ needs.m365.outputs.is_verified }}"
-          $m365Email = "${{ needs.m365.outputs.supports_email }}"
-
-          $m365ExistsBool = ($m365Exists -eq 'True' -or $m365Exists -eq 'true')
-          $m365VerifiedBool = ($m365Verified -eq 'True' -or $m365Verified -eq 'true')
-          $m365EmailBool = ($m365Email -eq 'True' -or $m365Email -eq 'true')
+          $m365Bool = @{}
+          foreach ($name in @('IN_M365_EXISTS', 'IN_M365_VERIFIED', 'IN_M365_EMAIL')) {
+            $raw = [Environment]::GetEnvironmentVariable($name)
+            $normalized = "$raw".Trim().ToLowerInvariant()
+            if ($normalized -ne 'true' -and $normalized -ne 'false') {
+              Write-Output "::error::$name is not a boolean (got '$raw'): the step-level env: mapping is missing or misnamed, or the m365 job published something other than True/False. Refusing to build an issue comment asserting a Microsoft 365 state this run never measured."
+              exit 1
+            }
+            # Coerce from the SAME normalized value the check just accepted. Reading
+            # the raw one back would let `TRUE` or ` True ` pass validation and then
+            # read as false at `-eq 'True'` — validated and still misreported, which
+            # is the failure the check was added to prevent.
+            $m365Bool[$name] = ($normalized -eq 'true')
+          }
+          $m365ExistsBool = $m365Bool['IN_M365_EXISTS']
+          $m365VerifiedBool = $m365Bool['IN_M365_VERIFIED']
+          $m365EmailBool = $m365Bool['IN_M365_EMAIL']
 
           $m365Status = if (-not $m365ExistsBool) { 'FAIL' } elseif ($m365VerifiedBool) { 'PASS' } else { 'PARTIAL' }
           $cfStatus = if ($cfIssues -eq 0) { 'PASS' } elseif ($cfSevere -gt 0) { 'FAIL' } else { 'PARTIAL' }
@@ -727,6 +815,7 @@ jobs:
         uses: actions/github-script@v9
         env:
           IN_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          IN_COMMENT_PATH: ${{ steps.comment.outputs.comment_path }}
         with:
           github-token: ${{ github.token }}
           script: |
@@ -742,7 +831,17 @@ jobs:
               core.setFailed(`IN_ISSUE_NUMBER is not a positive integer (got ${JSON.stringify(process.env.IN_ISSUE_NUMBER)}): the step-level env: mapping is missing or misnamed, or the dispatch supplied a non-numeric issue number.`);
               return;
             }
-            const commentPath = '${{ steps.comment.outputs.comment_path }}';
+            // Same treatment for the comment path (#1241 lane 3). It was a SINGLE-quoted
+            // JS literal, which is the 101 shape #1080 calls out: one apostrophe in the
+            // interpolated text ends the literal and the rest is parsed as source. The
+            // path is a $GITHUB_WORKSPACE constant today, but it is published by a step
+            // that also holds the dispatch domain, so the guarantee came from the value
+            // rather than from the shape. Reading it from env: makes it data.
+            const commentPath = process.env.IN_COMMENT_PATH;
+            if (!commentPath) {
+              core.setFailed('IN_COMMENT_PATH is empty: the step-level env: mapping is missing or misnamed, or the markdown step published no comment_path. Refusing to read a comment body from an unnamed path.');
+              return;
+            }
             const body = fs.readFileSync(commentPath, 'utf8');
 
             try {

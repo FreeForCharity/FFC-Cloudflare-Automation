@@ -492,35 +492,19 @@ def current_map(hops: list[Hop]) -> dict[str, tuple[str, ...]]:
 # Burn-down is tracked separately, ordered by environment, the way #1080 orders
 # its own. An entry here is not an endorsement.
 KNOWN_LAUNDERED: dict[str, dict[str, str]] = {
-    "101-domain-status.yml": {
-        "steps.run.outputs.out_dir":
-            "a $RUNNER_TEMP path, constant; tainted because the writing step "
-            "also holds the domain (PRECISION). Sink is a bash double-quoted "
-            "assignment, so the shape would execute if the value ever derived "
-            "from the input.",
-        "steps.comment.outputs.comment_path":
-            "a $RUNNER_TEMP path, constant; same over-approximation. Sink is a "
-            "SINGLE-quoted JS literal in github-script, where an apostrophe "
-            "would end the literal (the 101 shape #1080 already calls out).",
-        "needs.cloudflare.outputs.issues_count":
-            "a count computed from the Cloudflare audit, not from the input; "
-            "same over-approximation.",
-        "needs.cloudflare.outputs.severe_issues_count":
-            "a count computed from the Cloudflare audit, not from the input; "
-            "same over-approximation.",
-        "needs.cloudflare.outputs.changes_count":
-            "a count computed from the Cloudflare audit, not from the input; "
-            "same over-approximation.",
-        "needs.m365.outputs.domain_exists":
-            "a boolean from a Graph lookup, not the input; same "
-            "over-approximation.",
-        "needs.m365.outputs.is_verified":
-            "a boolean from a Graph lookup, not the input; same "
-            "over-approximation.",
-        "needs.m365.outputs.supports_email":
-            "a boolean from a Graph lookup, not the input; same "
-            "over-approximation.",
-    },
+    # 101-domain-status.yml was here — burned down in #1241 lane 3. All eight
+    # references (`steps.run.outputs.out_dir`,
+    # `steps.comment.outputs.comment_path`, the three
+    # `needs.cloudflare.outputs.*_count`s and the three `needs.m365.outputs.*`
+    # booleans) now reach their bodies through step-level `env:` with a
+    # fail-closed check at each consuming step, so no `${{ … }}` for them is
+    # substituted into script text. Every entry was an over-approximation —
+    # constants and audit-derived counts, not the domain itself — so this lane
+    # bought shape rather than a live fix: the `comment_path` sink was the
+    # SINGLE-quoted JS literal #1080 names, whose safety rested on the value
+    # never containing an apostrophe rather than on the value being data.
+    # `m365` enters `m365-prod`; `cloudflare` enters `cloudflare-prod-read`;
+    # `post_back` holds `issues: write` on the ambient token.
     "102-domain-add-ffc-cloudflare-and-whmcs.yml": {
         "steps.enforce.outputs.out_dir":
             "a $RUNNER_TEMP path, constant; tainted because the enforce step "

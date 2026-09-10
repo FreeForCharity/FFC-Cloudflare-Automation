@@ -141,6 +141,36 @@ DOMAIN_EXPRESSION = "${{ inputs.domain }}"
 ISSUE_VAR = "IN_ISSUE_NUMBER"
 ISSUE_EXPRESSION = "${{ inputs.issue_number }}"
 
+COMMENT_PATH_VAR = "IN_COMMENT_PATH"
+COMMENT_PATH_EXPRESSION = "${{ steps.comment.outputs.comment_path }}"
+OUT_DIR_VAR = "IN_OUT_DIR"
+OUT_DIR_EXPRESSION = "${{ steps.run.outputs.out_dir }}"
+
+# The values #1241 lane 3 moved out of the two report bodies and into their
+# `env:` blocks: variable -> (the expression it must be mapped to, a fixture
+# value for the behavioural runs). None of these carries the dispatch domain —
+# they are audit counts and Graph booleans — but the steps that publish them
+# hold it, so the laundering guard treats every name those steps write as
+# carrying it, and the remedy is the same either way.
+#
+# One table drives three things that must not drift apart: the wiring
+# assertions, the env the harness supplies, and the list a burn-down would have
+# to edit. It is NOT derived from the workflow: a table read out of the file
+# under test asserts only that the file agrees with itself (ledger L199).
+LAUNDERED_ENV = {
+    "IN_CF_ISSUES": ("${{ needs.cloudflare.outputs.issues_count }}", "0"),
+    "IN_CF_SEVERE": ("${{ needs.cloudflare.outputs.severe_issues_count }}", "0"),
+    "IN_CF_CHANGES": ("${{ needs.cloudflare.outputs.changes_count }}", "0"),
+    "IN_M365_EXISTS": ("${{ needs.m365.outputs.domain_exists }}", "True"),
+    "IN_M365_VERIFIED": ("${{ needs.m365.outputs.is_verified }}", "True"),
+    "IN_M365_EMAIL": ("${{ needs.m365.outputs.supports_email }}", "True"),
+}
+
+# The two report steps read all six; the other three call sites read none.
+LAUNDERED_SITES = ("summary", "comment")
+
+LAUNDERED_FIXTURE = {name: value for name, (_, value) in LAUNDERED_ENV.items()}
+
 CF_TOKEN_VAR = "CLOUDFLARE_API_TOKEN_FFC"
 
 # Deliberately NOT shaped like the credentials they stand in for. A JWT-shaped
@@ -259,7 +289,7 @@ CALL_SITES = {
         "credential_value": None,
         "refusal": "Refusing to publish a status summary naming no domain.",
         "called": None,
-        "extra": {},
+        "extra": dict(LAUNDERED_FIXTURE),
     },
     "comment": {
         "job": "post_back",
@@ -271,7 +301,7 @@ CALL_SITES = {
         "credential_value": None,
         "refusal": "Refusing to build an issue comment naming no domain.",
         "called": None,
-        "extra": {},
+        "extra": dict(LAUNDERED_FIXTURE),
     },
 }
 
@@ -285,10 +315,12 @@ JS_SENTINEL = "STOLEN-101-js.txt"
 CONTROLLED_VARS = (
     DOMAIN_VAR,
     ISSUE_VAR,
+    COMMENT_PATH_VAR,
+    OUT_DIR_VAR,
     CF_TOKEN_VAR,
     "CLOUDFLARE_API_TOKEN_CM",
     "FFC_CF_DMARCMGMT_DEBUG",
-)
+) + tuple(LAUNDERED_ENV)
 
 # GitHub substitutes EVERY `${{ }}` before the body reaches pwsh, so a harness
 # that substitutes only the input under test hands the shell a syntax error and
@@ -296,13 +328,12 @@ CONTROLLED_VARS = (
 # bodies read six `needs.*` outputs and three `github.*` values; the three sites
 # above read none. Values are chosen to exercise the rendering path rather than
 # to be realistic — every branch below them is asserted elsewhere.
+#
+# The six `needs.*` outputs are DELIBERATELY absent since #1241 lane 3: they no
+# longer appear in any body, so a fixture for them would be dead — and worse,
+# it would quietly absorb a regression that put them back. With no fixture,
+# `_render`'s leftover assertion fires by name on the first run.
 EXPRESSION_FIXTURES = {
-    "${{ needs.cloudflare.outputs.issues_count }}": "0",
-    "${{ needs.cloudflare.outputs.severe_issues_count }}": "0",
-    "${{ needs.cloudflare.outputs.changes_count }}": "0",
-    "${{ needs.m365.outputs.domain_exists }}": "True",
-    "${{ needs.m365.outputs.is_verified }}": "True",
-    "${{ needs.m365.outputs.supports_email }}": "True",
     "${{ github.server_url }}": "https://github.com",
     "${{ github.repository }}": "FreeForCharity/FFC-Cloudflare-Automation",
     "${{ github.run_id }}": "1",
@@ -393,6 +424,26 @@ def _assert_wiring(site: str, step: dict) -> None:
         f"{load_workflow(WORKFLOW)['jobs'][job].get('environment')!r} that is "
         f"dispatcher text executed after the approval. Body: {body[:400]!r}"
     )
+    if site not in LAUNDERED_SITES:
+        return
+    # The #1241 lane-3 half. Same three-part assertion, one level out: these
+    # values are not `inputs.X` but outputs of steps that hold it, which is the
+    # hop the sibling guard cannot see.
+    for variable, (expression, _) in LAUNDERED_ENV.items():
+        assert env.get(variable) == expression, (
+            f"step {name!r} in job {job!r} must map {variable} to "
+            f"{expression} (#1241 lane 3) — its env: mapping is {env!r}"
+        )
+        assert f"$env:{variable}" in body or variable in body, (
+            f"step {name!r} in job {job!r} maps {variable} but never reads "
+            f"it, so the env: block is decoration. Body: {body[:400]!r}"
+        )
+        assert expression not in body, (
+            f"step {name!r} in job {job!r} interpolates {expression} into its "
+            f"script body again (#1241 lane 3): the value is published by a "
+            f"step that also holds the dispatch domain, so it reaches pwsh as "
+            f"source rather than as data. Body: {body[:400]!r}"
+        )
 
 
 def _payload(site: str) -> str:
@@ -425,9 +476,25 @@ def _payload(site: str) -> str:
 def _run(
     site: str, body: str, wrap: bool = True, **env_overrides: str
 ) -> tuple[str, str | None, int, str]:
+    """The four-value view of `_run_full`, which is what most tests want."""
+    result = _run_full(site, body, wrap=wrap, **env_overrides)
+    return result["out"], result["stolen"], result["rc"], result["calls"]
+
+
+def _run_full(
+    site: str, body: str, wrap: bool = True, **env_overrides: str
+) -> dict:
     """Run a pwsh body the way the RUNNER runs it, in a temp cwd holding stubs.
 
-    Returns (output, sentinel_contents_or_None, rc, call_log).
+    Returns a dict: `out`, `stolen`, `rc`, `calls`, and `report`.
+
+    `report` is what the step RENDERED — `$GITHUB_STEP_SUMMARY` for the summary
+    site, the post-back comment file for the comment site — read before the temp
+    directory is torn down. It is separate from `out` on purpose: these bodies
+    write their verdict to a file and print nothing, so a value the step got
+    wrong is invisible to a stdout assertion, and folding it into `out` would
+    let an unrelated test match a variable name that only appears in the
+    rendered markdown.
 
     The sentinel's CONTENTS, not merely its existence: a file written from an
     unset variable would score the same as one written from the live credential,
@@ -494,7 +561,17 @@ def _run(
         contents = stolen.read_text(encoding="utf-8") if stolen.exists() else None
         call_log = tmp / "CALLS.txt"
         calls = call_log.read_text(encoding="utf-8") if call_log.exists() else ""
-        return proc.stdout + proc.stderr, contents, proc.returncode, calls
+        report = ""
+        for rendered_path in (tmp / "step-summary.md", tmp / "post-back-comment.md"):
+            if rendered_path.exists():
+                report += rendered_path.read_text(encoding="utf-8")
+        return {
+            "out": proc.stdout + proc.stderr,
+            "stolen": contents,
+            "rc": proc.returncode,
+            "calls": calls,
+            "report": report,
+        }
 
 
 def _pre_fix(site: str, domain: str) -> str:
@@ -552,6 +629,34 @@ def _strip_guard(body: str) -> str:
     return "".join(out)
 
 
+def _strip_js_comment_path_guard(body: str) -> str:
+    """Remove the `if (!commentPath) { … }` block from the github-script body.
+
+    Same shape and same reason as `_strip_guard`, one runtime over. The `const`
+    line is KEPT: what is under test is the refusal, not the read, and stripping
+    both would leave `commentPath` undefined for a different reason.
+    """
+    lines = body.splitlines(keepends=True)
+    out, i, removed = [], 0, 0
+    while i < len(lines):
+        if "if (!commentPath) {" in lines[i]:
+            depth = 0
+            while i < len(lines):
+                depth += lines[i].count("{") - lines[i].count("}")
+                i += 1
+                if depth <= 0:
+                    break
+            removed += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    assert removed == 1, (
+        f"expected to strip exactly one commentPath guard, stripped {removed} — "
+        f"the mutation below would measure something other than what it claims"
+    )
+    return "".join(out)
+
+
 # --------------------------------------------------------------------------
 # The github-script site runs under node, so it gets its own harness.
 # --------------------------------------------------------------------------
@@ -584,25 +689,37 @@ SCRIPT_BODY_HERE
 """
 
 
-def _run_js(script_body: str, **env_overrides: str) -> dict:
+def _run_js(script_body: str, *, map_comment_path: bool = True, **env_overrides: str) -> dict:
     """Run a github-script body under node with `core`/`github`/`context` stubs.
 
     Returns the recorded outcome. `createComment` is stubbed rather than
     stopped: the question is not whether the network call happens, it is what
     the body decided to send and under whose issue number.
+
+    `map_comment_path=False` runs the body with `IN_COMMENT_PATH` genuinely
+    unset — the misnamed-or-missing `env:` mapping. On a real run the workflow's
+    own `env:` block always supplies it, so that case cannot be reached from a
+    dispatch at all; this flag is the only way to produce it.
     """
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         body_path = tmp / "comment.md"
         body_path.write_text("rendered comment body", encoding="utf-8")
-        source = JS_HARNESS.replace(
-            "SCRIPT_BODY_HERE",
-            script_body.replace(
-                "${{ steps.comment.outputs.comment_path }}", str(body_path)
-            ),
+        # Before #1241 lane 3 the path arrived as a SINGLE-quoted JS literal and
+        # the harness had to substitute it here. It travels in `env:` now, so a
+        # substitution would be dead code that hides a regression putting it
+        # back; assert its absence instead and supply the value the way the
+        # workflow does.
+        assert COMMENT_PATH_EXPRESSION not in script_body, (
+            f"the post-back script interpolates {COMMENT_PATH_EXPRESSION} into "
+            f"its JS source again (#1241 lane 3): it was a SINGLE-quoted "
+            f"literal, which one apostrophe ends. Script: {script_body[:400]!r}"
         )
+        source = JS_HARNESS.replace("SCRIPT_BODY_HERE", script_body)
         script = tmp / "step.js"
         script.write_text(source, encoding="utf-8")
+        if map_comment_path and COMMENT_PATH_VAR not in env_overrides:
+            env_overrides[COMMENT_PATH_VAR] = str(body_path)
         env = child_env(**env_overrides)
         for var in CONTROLLED_VARS:
             if var not in env_overrides:
@@ -664,6 +781,54 @@ def test_the_github_script_site_is_wired_through_env():
         f"the post-back step interpolates inputs.issue_number into its JS "
         f"source again (#1080): it would run inside the authenticated github "
         f"client. Script: {body[:400]!r}"
+    )
+    assert env.get(COMMENT_PATH_VAR) == COMMENT_PATH_EXPRESSION, (
+        f"the post-back step must map {COMMENT_PATH_VAR} to "
+        f"{COMMENT_PATH_EXPRESSION} (#1241 lane 3) — its env: mapping is {env!r}"
+    )
+    assert f"process.env.{COMMENT_PATH_VAR}" in body, (
+        f"the post-back step maps {COMMENT_PATH_VAR} but never reads "
+        f"process.env.{COMMENT_PATH_VAR}, so the env: block is decoration. "
+        f"Script: {body[:400]!r}"
+    )
+    assert COMMENT_PATH_EXPRESSION not in body, (
+        f"the post-back step interpolates {COMMENT_PATH_EXPRESSION} into its "
+        f"JS source again (#1241 lane 3): it was a SINGLE-quoted literal, and "
+        f"one apostrophe in the path ends it. Script: {body[:400]!r}"
+    )
+
+
+def test_the_cloudflare_summarize_step_is_wired_through_env():
+    """The sixth laundered reference, in a step no behavioural site covers.
+
+    `Summarize Cloudflare results` reads the out_dir the audit step published,
+    and the audit step is the one holding the dispatch domain. It is asserted
+    here rather than in `CALL_SITES` because nothing in it calls a repo script
+    or a credential — there is no behaviour to drive, only wiring to hold.
+    """
+    step = find_step(load_workflow(WORKFLOW), "cloudflare", "Summarize Cloudflare results")
+    env = step.get("env") or {}
+    body = step.get("run", "")
+    assert env.get(OUT_DIR_VAR) == OUT_DIR_EXPRESSION, (
+        f"the summarize step must map {OUT_DIR_VAR} to {OUT_DIR_EXPRESSION} "
+        f"(#1241 lane 3) — its env: mapping is {env!r}"
+    )
+    assert f"$env:{OUT_DIR_VAR}" in body, (
+        f"the summarize step maps {OUT_DIR_VAR} but never reads "
+        f"$env:{OUT_DIR_VAR}, so the env: block is decoration. "
+        f"Body: {body[:400]!r}"
+    )
+    assert OUT_DIR_EXPRESSION not in body, (
+        f"the summarize step interpolates {OUT_DIR_EXPRESSION} into its pwsh "
+        f"body again (#1241 lane 3): it lands in a DOUBLE-quoted assignment, "
+        f"where pwsh expands $( ). Body: {body[:400]!r}"
+    )
+    assert f"IsNullOrWhiteSpace($env:{OUT_DIR_VAR})" in body, (
+        f"the summarize step reads {OUT_DIR_VAR} without a fail-closed check: "
+        f"an unset mapping makes Join-Path build a relative path and "
+        f"Get-Content fail against the workspace root, which reads as a "
+        f"missing artifact rather than as missing plumbing (ledger L202/L220). "
+        f"Body: {body[:400]!r}"
     )
 
 
@@ -1026,6 +1191,141 @@ def test_an_unset_mapping_fails_closed_and_says_which_one():
         )
 
 
+def test_an_unset_laundered_mapping_fails_closed_and_says_which_one():
+    """Each of the six #1241 lane-3 mappings, dropped one at a time.
+
+    A behavioural test that supplies every variable proves the body still runs;
+    it says nothing about what happens when one mapping is misnamed, which is
+    the failure a burn-down actually introduces. Dropped one at a time rather
+    than all six at once so the refusal has to name the RIGHT variable — six
+    checks that all fire together are indistinguishable from one.
+    """
+    for site in LAUNDERED_SITES:
+        step = _step(site)
+        _assert_wiring(site, step)
+        for missing in LAUNDERED_ENV:
+            supplied = {k: v for k, v in LAUNDERED_FIXTURE.items() if k != missing}
+            out, _, rc, _ = _run(
+                site, step["run"], **{DOMAIN_VAR: LEGAL_DOMAIN}, **supplied
+            )
+            assert rc == 1, (
+                f"site {site!r}: an UNSET {missing} was expected to refuse with "
+                f"rc 1. Got rc={rc}: {out[:600]}"
+            )
+            assert missing in out, (
+                f"site {site!r}: the refusal for an unset {missing} does not "
+                f"name it, so an operator cannot tell which mapping is broken "
+                f"— and a count silently coerced to 0 publishes a PASS: "
+                f"{out[:600]}"
+            )
+
+
+def test_a_non_boolean_m365_value_is_refused_rather_than_read_as_false():
+    """Copilot's finding on #1262, plus the defect underneath it.
+
+    A non-empty value outside {True, False} coerces to `false` at
+    `-eq 'True'`, so a mis-wired mapping would publish "not verified" for a
+    domain nobody measured — an emptiness check does not see that at all.
+
+    The 404 path is why this is a value check and not just a stricter emptiness
+    check: `is_verified` used to be published as the EMPTY STRING when Graph
+    returned no domain object, which is a legitimate run, so refusing empty
+    would have failed the step on every nonexistent domain. The publisher now
+    emits `False` there (asserted separately below), which is what makes
+    refusing everything outside the pair safe.
+    """
+    for site in LAUNDERED_SITES:
+        step = _step(site)
+        for name in ("IN_M365_EXISTS", "IN_M365_VERIFIED", "IN_M365_EMAIL"):
+            supplied = dict(LAUNDERED_FIXTURE)
+            supplied[name] = "Maybe"
+            out, _, rc, _ = _run(
+                site, step["run"], **{DOMAIN_VAR: LEGAL_DOMAIN}, **supplied
+            )
+            assert rc == 1, (
+                f"site {site!r}: a NON-BOOLEAN {name} ('Maybe') was expected to "
+                f"refuse with rc 1 — read as 'false' it publishes a state the "
+                f"run never measured. Got rc={rc}: {out[:600]}"
+            )
+            assert name in out, (
+                f"site {site!r}: the refusal for a non-boolean {name} does not "
+                f"name it: {out[:600]}"
+            )
+        # Both spellings the publisher actually emits must still pass.
+        for value in ("True", "false"):
+            supplied = dict(LAUNDERED_FIXTURE)
+            supplied["IN_M365_VERIFIED"] = value
+            _, _, rc, _ = _run(
+                site, step["run"], **{DOMAIN_VAR: LEGAL_DOMAIN}, **supplied
+            )
+            assert rc == 0, (
+                f"site {site!r}: {value!r} is a value the m365 job really "
+                f"publishes and must not be refused. Got rc={rc}"
+            )
+
+
+def test_an_accepted_m365_value_is_coerced_from_what_the_check_accepted():
+    """Copilot's second finding on #1262: validation and coercion must agree.
+
+    The check normalizes (`Trim().ToLowerInvariant()`), so `TRUE` and ` True `
+    pass it. If the coercion below reads the RAW value back at `-eq 'True'`,
+    those same values then read as **false** — validated and still misreported,
+    which is the exact failure the check was added to prevent. A value check
+    that accepts a wider set than the conversion honours is worse than no check,
+    because it reads as a fail-closed contract while widening the silent path.
+
+    Measured on the rendered status rather than on the exit code: both bodies
+    print `exists=<bool>`, so a wrong coercion is visible in the output instead
+    of only in a variable nothing asserts.
+    """
+    for site in LAUNDERED_SITES:
+        step = _step(site)
+        for spelling in ("True", "TRUE", " true ", "tRuE"):
+            supplied = dict(LAUNDERED_FIXTURE)
+            supplied["IN_M365_EXISTS"] = spelling
+            result = _run_full(
+                site, step["run"], **{DOMAIN_VAR: LEGAL_DOMAIN}, **supplied
+            )
+            assert result["rc"] == 0, (
+                f"site {site!r}: {spelling!r} normalizes to 'true' and must be "
+                f"accepted. Got rc={result['rc']}: {result['out'][:600]}"
+            )
+            assert "exists=True" in result["report"], (
+                f"site {site!r}: {spelling!r} passed validation but was coerced "
+                f"to False — the check accepts a wider set than the conversion "
+                f"honours, so a run publishes a state it did not measure while "
+                f"every guard reads green. Rendered: {result['report'][:600]}"
+            )
+        # And the false direction, so this cannot pass by coercing everything true.
+        supplied = dict(LAUNDERED_FIXTURE)
+        supplied["IN_M365_EXISTS"] = "FALSE"
+        result = _run_full(
+            site, step["run"], **{DOMAIN_VAR: LEGAL_DOMAIN}, **supplied
+        )
+        assert result["rc"] == 0 and "exists=False" in result["report"], (
+            f"site {site!r}: 'FALSE' must normalize to false, not be refused or "
+            f"read as true. Got rc={result['rc']}: {result['report'][:600]}"
+        )
+
+
+def test_the_m365_job_never_publishes_an_empty_is_verified():
+    """The publisher half — asserted here because the consumer relies on it.
+
+    `is_verified` is `$d.isVerified` when Graph returned a domain object and
+    must be `$false`, not `''`, when it did not. An empty value at that end is
+    indistinguishable from a missing `env:` mapping at the other, and the
+    consuming step cannot tell them apart.
+    """
+    step = find_step(load_workflow(WORKFLOW), "m365", "M365 domain status (Graph summary)")
+    body = step.get("run", "")
+    assert "is_verified=$(if ($d) { $d.isVerified } else { $false })" in body, (
+        f"the m365 job no longer publishes a real boolean for is_verified on "
+        f"the 404 path. The two report jobs refuse anything outside "
+        f"{{True, False}}, so an empty here fails a run that is merely about a "
+        f"domain that does not exist. Body: {body[:600]!r}"
+    )
+
+
 def test_without_the_guard_an_empty_domain_is_silent():
     """Why the fail-closed block is not decoration, measured at both shapes.
 
@@ -1129,6 +1429,59 @@ def test_the_shipped_script_refuses_an_unset_mapping():
     )
 
 
+def test_the_shipped_script_refuses_an_unset_comment_path():
+    """The other half of the JS mapping, asserted in its own direction (#1027).
+
+    `IN_COMMENT_PATH` is new in #1241 lane 3 and its check has to be tested
+    where it can fail, not only where the surrounding test happens to supply the
+    variable. Unset, `readFileSync(undefined)` throws a TypeError naming `path`
+    — a red step whose message says nothing about a missing `env:` mapping, and
+    which reads as a corrupt artifact rather than as broken plumbing.
+    """
+    body = _js_step()["with"]["script"]
+    result = _run_js(body, map_comment_path=False, **{ISSUE_VAR: "719"})
+    outcome = result["outcome"]
+    assert outcome.get("commented") is None, (
+        f"an unset {COMMENT_PATH_VAR} still reached createComment: {outcome!r}"
+    )
+    assert outcome.get("setFailed") and COMMENT_PATH_VAR in outcome["setFailed"], (
+        f"the unset {COMMENT_PATH_VAR} case did not refuse by name — an "
+        f"operator reading this run cannot tell a missing mapping from a "
+        f"missing artifact: {outcome!r}"
+    )
+
+
+def test_without_the_guard_an_unset_comment_path_reads_as_a_corrupt_artifact():
+    """Why that check is not decoration — the same measurement, guard removed.
+
+    The refusal above only means something if the unguarded body behaves
+    differently. It does: node throws out of `readFileSync`, so the step fails
+    with a `path` TypeError and never names the variable.
+    """
+    body = _js_step()["with"]["script"]
+    anchor = f"const commentPath = process.env.{COMMENT_PATH_VAR};"
+    assert anchor in body, (
+        f"the anchor this mutation substitutes is gone, so it would test "
+        f"nothing: {anchor!r} not in {body[:600]!r}"
+    )
+    stripped = _strip_js_comment_path_guard(body)
+    result = _run_js(stripped, map_comment_path=False, **{ISSUE_VAR: "719"})
+    outcome = result["outcome"]
+    assert outcome.get("threw"), (
+        f"with the guard removed the unset case was expected to throw out of "
+        f"readFileSync — if it does not, the guard is stopping nothing and the "
+        f"refusal test above proves nothing: {outcome!r}"
+    )
+    assert outcome.get("commented") is None, (
+        f"with the guard removed a comment was still posted: {outcome!r}"
+    )
+    assert COMMENT_PATH_VAR not in json.dumps(outcome), (
+        f"with the guard removed the body was still expected to fail without "
+        f"naming {COMMENT_PATH_VAR} — if it names it anyway, the assertion "
+        f"above passes for a reason other than the guard: {outcome!r}"
+    )
+
+
 # --------------------------------------------------------------------------
 # The checker agrees
 # --------------------------------------------------------------------------
@@ -1160,12 +1513,17 @@ PWSH_TESTS = (
     "test_an_empty_mapping_fails_closed_and_says_which_one",
     "test_an_unset_mapping_fails_closed_and_says_which_one",
     "test_without_the_guard_an_empty_domain_is_silent",
+    "test_an_unset_laundered_mapping_fails_closed_and_says_which_one",
+    "test_a_non_boolean_m365_value_is_refused_rather_than_read_as_false",
+    "test_an_accepted_m365_value_is_coerced_from_what_the_check_accepted",
 )
 NODE_TESTS = (
     "test_the_pre_fix_script_executed_injected_javascript",
     "test_the_shipped_script_treats_the_issue_number_as_data",
     "test_the_shipped_script_still_comments_on_an_ordinary_issue_number",
     "test_the_shipped_script_refuses_an_unset_mapping",
+    "test_the_shipped_script_refuses_an_unset_comment_path",
+    "test_without_the_guard_an_unset_comment_path_reads_as_a_corrupt_artifact",
 )
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

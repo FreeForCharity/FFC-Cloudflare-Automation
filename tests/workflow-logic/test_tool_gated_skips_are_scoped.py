@@ -35,9 +35,17 @@ WHAT THIS MODULE IS ABOUT
     has the identical shape and was missed. That is the argument for a guard
     rather than a list -- the shape is easy to add and easy to overlook.
 
-    The table is the `main` baseline. This PR rescopes 103 -- so 103 is NOT in
-    the allowlist below, and `test_103_is_rescoped_and_not_allowlisted` keeps
-    it that way -- and freezes the other nine with their debt measured.
+    The table is the 2026-08-12 baseline, and the burn-down it froze is now
+    finished. 103 was rescoped first (#1195); the seven modules carrying
+    measured debt -- 110, 112, 301, 303, 304, 306 and 704 -- were rescoped
+    together, releasing all 25 remaining masked cases, and their allowlist
+    entries were deleted. Only 228 and 720 remain, and both record 0.
+
+    A rescoped module states a `NEEDS_<TOOL>` roster and gates per case. Two
+    checks below hold those rosters to the same standard as the allowlist they
+    replaced: a name that no longer matches a test is a finding, and a roster
+    that gates a case spawning nothing has silently re-masked it -- the same
+    defect this file is about, moved from the module gate into the roster.
 
 WHY THE GATE IS INVISIBLE TO THE HARNESS THAT SHOULD CATCH IT
     `run_all.py` carries `WHOLE_MODULE_SKIP = "all"`, which stands its roster
@@ -110,9 +118,14 @@ class Exemption:
         self.reason = reason
 
 
-# Every entry here is #1182 acceptance criterion 5: 103 is rescoped in this PR,
-# the rest are frozen with the debt measured so a later PR can burn them down
-# one at a time. Two of them (228, 720) are genuine -- 0 toolless cases.
+# #1182's burn-down is complete: the seven modules that carried measured debt
+# were rescoped and their entries deleted, which is what an entry is FOR --
+# `test_allowlist_carries_no_stale_entry` fails the moment a rescope lands and
+# leaves its exemption behind. What remains is the two genuine cases, where
+# every test really does shell out and there is no static assertion to rescue.
+# `test_no_new_debt_is_frozen_into_the_allowlist` keeps it that way: a NEW
+# entry may record 0, never a debt -- a module with static cases to rescue gets
+# rescoped, not frozen.
 ALLOWLIST: dict[str, Exemption] = {
     "test_228_fraud_review.py": Exemption(
         0,
@@ -124,42 +137,6 @@ ALLOWLIST: dict[str, Exemption] = {
         0,
         "Genuine: all 3 cases run the owner-parsing body under pwsh. Nothing "
         "to rescope.",
-    ),
-    "test_110_zone_create_wiring.py": Exemption(
-        4,
-        "TODO(#1182): 4 of 12 cases spawn nothing and are masked by the pwsh "
-        "gate. Rescope with a NEEDS_PWSH set as 103 now does.",
-    ),
-    "test_112_bulk_replace_wiring.py": Exemption(
-        1,
-        "TODO(#1182): 1 of 7 cases spawns nothing and is masked by the pwsh "
-        "gate. Rescope with a NEEDS_PWSH set as 103 now does.",
-    ),
-    "test_301_preflight_wiring.py": Exemption(
-        4,
-        "TODO(#1182): 4 of 9 cases spawn nothing and are masked by the pwsh "
-        "gate. Rescope with a NEEDS_PWSH set as 103 now does.",
-    ),
-    "test_303_domain_dkim_wiring.py": Exemption(
-        5,
-        "TODO(#1182): 5 of 11 cases spawn nothing and are masked by the pwsh "
-        "gate. Rescope with a NEEDS_PWSH set as 103 now does.",
-    ),
-    "test_304_dkim_wiring.py": Exemption(
-        5,
-        "TODO(#1182): 5 of 12 cases spawn nothing and are masked by the pwsh "
-        "gate. Rescope with a NEEDS_PWSH set as 103 now does.",
-    ),
-    "test_306_uncaptured_comms_wiring.py": Exemption(
-        5,
-        "TODO(#1182): 5 of 12 cases spawn nothing and are masked by the pwsh "
-        "gate. Not in #1182's survey -- found by this guard, which is the "
-        "argument for having it.",
-    ),
-    "test_704_analytics_wire_validation.py": Exemption(
-        1,
-        "TODO(#1182): 1 of 10 cases spawns nothing and is masked by the bash "
-        "gate. Rescope with a NEEDS_BASH set as 103 now does.",
     ),
 }
 
@@ -523,6 +500,234 @@ def test_the_genuine_exemptions_really_have_nothing_to_run():
     assert not wrong, (
         "entries recorded as having nothing to rescue in fact have toolless "
         "cases: " + "; ".join(wrong)
+    )
+
+
+def needs_sets(tree: ast.Module) -> dict[str, list[str]]:
+    """`NEEDS_<TOOL> = {...}` rosters at module level -> the case names in them.
+
+    The house shape for a per-case gate, used by `test_1146`, the rescoped 103
+    and the seven modules #1182's burn-down rescoped. Read as a set literal of
+    string constants; a roster built some other way is simply not seen, which
+    is the safe direction -- this reader adds checks, it is not what forces a
+    module to have a roster (`test_no_unallowlisted_module_skips_itself_wholesale`
+    does that).
+    """
+    rosters: dict[str, list[str]] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or not target.id.startswith("NEEDS_"):
+            continue
+        value = node.value
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+            if value.func.id in ("set", "frozenset") and len(value.args) == 1:
+                value = value.args[0]
+        if not isinstance(value, (ast.Set, ast.List, ast.Tuple)):
+            continue
+        rosters[target.id] = [
+            e.value for e in value.elts
+            if isinstance(e, ast.Constant) and isinstance(e.value, str)
+        ]
+    return rosters
+
+
+def rescoped_modules(directory: pathlib.Path) -> dict[str, ast.Module]:
+    """Modules carrying a `NEEDS_<TOOL>` roster, parsed."""
+    found: dict[str, ast.Module] = {}
+    for path in sorted(directory.glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if needs_sets(tree):
+            found[path.name] = tree
+    return found
+
+
+def test_a_rescoped_roster_names_tests_that_exist():
+    """A stale name in NEEDS_<TOOL> quietly changes what runs.
+
+    Rename a case and its roster entry stops matching, so the case runs on a
+    host without the tool and reports a confusing FAIL. Rename it the other way
+    -- delete a case and leave the name -- and the roster describes a module
+    that no longer exists, which is the ALLOWLIST's own failure mode one level
+    down. 103 asserts this for itself at runtime; this asserts it for every
+    rescoped module from the outside, including the ones whose roster is only
+    ever exercised on a host that lacks the tool.
+    """
+    stale = []
+    for name, tree in sorted(rescoped_modules(HERE).items()):
+        declared = {
+            n.name for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name.startswith("test_")
+        }
+        for roster, cases in sorted(needs_sets(tree).items()):
+            unknown = sorted(set(cases) - declared)
+            if unknown:
+                stale.append(f"{name}:{roster} -> {unknown}")
+    assert not stale, (
+        "per-case tool rosters naming tests that do not exist: "
+        + "; ".join(stale)
+        + ". Update the roster beside the rename, or delete the entry with the "
+        "case."
+    )
+
+
+def _run_with_tool_hidden(path: pathlib.Path, tool: str) -> tuple[str, int]:
+    """Run a test module in a child with every PATH entry carrying `tool` removed.
+
+    The measurement #1182 asks for, made rather than inferred from the source.
+    Shared by the 103 pin and the fleet check below so the scrub logic -- the
+    part that is easy to get subtly wrong and whose failure reads as "the
+    rescope is broken" -- exists once.
+    """
+    import os
+
+    # `shutil.which(..., path=entry)` rather than testing for a literal file:
+    # on Windows the host is `pwsh.exe`, and a bare-name existence check leaves
+    # its directory on PATH. `which` honours PATHEXT, so one expression scrubs
+    # both platforms.
+    scrubbed = os.pathsep.join(
+        entry
+        for entry in os.environ.get("PATH", "").split(os.pathsep)
+        if entry and shutil.which(tool, path=entry) is None
+    )
+    # The control, asserted before the measurement rather than inferred from it.
+    # If the scrub does not actually hide the tool, the child runs every case
+    # and the caller fails on an empty skip list -- a failure that reads as "the
+    # rescope is broken" when the truth is "the harness never removed the tool".
+    # Naming it here is the difference between a diagnosis and a hunt.
+    assert shutil.which(tool, path=scrubbed) is None, (
+        f"PATH scrub failed: {tool} is still reachable at "
+        f"{shutil.which(tool, path=scrubbed)!r} after removing every entry that "
+        f"carries it. This cannot measure the no-{tool} behaviour it exists to "
+        f"measure -- fix the scrub, do not weaken the assertions."
+    )
+    # Inherit the environment and override only PATH: a scrubbed env dict is
+    # what #943 spent a fortnight on (CLAUDE.md, "never pass a scrubbed env=").
+    env = dict(os.environ)
+    env["PATH"] = scrubbed
+    env["PYTHONIOENCODING"] = "utf-8"
+    proc = subprocess.run(
+        # `-X utf8` rather than an inline `env={**os.environ, ...}`: this call
+        # needs a computed `env` for the PATH scrub, and a computed env is one
+        # `scripts/check-subprocess-encoding.py` cannot read to prove the pin.
+        # The flag pins the child's own output encoding where the scanner (and
+        # a reader) can see it. #962.
+        [sys.executable, "-X", "utf8", str(path)],
+        capture_output=True,
+        text=True,
+        # Pinned, not inherited: text mode otherwise decodes with
+        # locale.getencoding(), which is cp1252 on the Windows host and dies on
+        # the first non-ASCII byte a child emits (scripts/check-subprocess-encoding.py).
+        encoding="utf-8",
+        env=env,
+        cwd=str(HERE),
+        timeout=600,
+    )
+    return proc.stdout, proc.returncode
+
+
+def test_every_rescoped_module_still_runs_without_its_tool():
+    """The burn-down, measured on every module it touched, not just on 103.
+
+    For each rescoped module and each tool it gates on, hide that tool and run
+    the module. Three things must hold: no `SKIP all`, a clean exit, and a skip
+    list that is exactly the roster -- so every case the roster does NOT claim
+    actually ran and passed.
+
+    This is what a static reading cannot give you. An earlier form of this check
+    asserted from the AST that a roster never names a case which spawns nothing,
+    on the reasoning that such a case provably cannot need the tool. It fired on
+    `test_1150_empty_input_guard.py`, whose roster is correct: that module reaches
+    pwsh through `guard.scan()` in a checker it loads with `importlib`, and
+    `toolless_cases` only follows the module's OWN top-level helpers. Spawning
+    behind an import is invisible to it, so "spawns nothing" is a lower bound on
+    what could run, never a proof that the tool is unneeded. Running the module
+    settles in one measurement what the AST cannot decide at all.
+    """
+    failures = []
+    for name, tree in sorted(rescoped_modules(HERE).items()):
+        rosters = needs_sets(tree)
+        declared = {
+            n.name
+            for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name.startswith("test_")
+        }
+        for roster_name, cases in sorted(rosters.items()):
+            tool = roster_name[len("NEEDS_") :].lower()
+            # When the tool is already absent on this host the scrub is a
+            # no-op and the module's ordinary run IS the measurement, so the
+            # same call covers both hosts.
+            out, rc = _run_with_tool_hidden(HERE / name, tool)
+            if "SKIP all" in out:
+                failures.append(f"{name} skips wholesale with no {tool}")
+                continue
+            if rc != 0:
+                failures.append(f"{name} exited {rc} with no {tool}: {out[-400:]!r}")
+                continue
+            skipped = {
+                line.split()[1] for line in out.splitlines() if line.startswith("  SKIP ")
+            }
+            passed = {
+                line.split()[1] for line in out.splitlines() if line.startswith("  PASS ")
+            }
+            # A module may gate on more than one tool (103 and 102 both do),
+            # and the child skips every roster whose tool it cannot see -- not
+            # only the one this iteration scrubbed. Reading the scrubbed
+            # roster alone reports a correct module as broken on any host
+            # that happens to lack the other tool, which is this sandbox.
+            gone = {tool} | {
+                other[len("NEEDS_") :].lower()
+                for other in rosters
+                if shutil.which(other[len("NEEDS_") :].lower()) is None
+            }
+            expected_skip = {
+                case
+                for other, names in rosters.items()
+                if other[len("NEEDS_") :].lower() in gone
+                for case in names
+            } & declared
+            if skipped != expected_skip:
+                failures.append(
+                    f"{name} with no {tool}: skipped {sorted(skipped)}, "
+                    f"roster says {sorted(expected_skip)}"
+                )
+            unrun = declared - skipped - passed
+            if unrun:
+                failures.append(
+                    f"{name} with no {tool}: {sorted(unrun)} neither ran nor skipped"
+                )
+    assert not failures, (
+        "rescoped modules that do not actually run without their tool: "
+        + "; ".join(failures)
+        + ". A rescope is only worth anything if the cases it freed really "
+        "execute on a host that lacks the tool."
+    )
+
+
+def test_no_new_debt_is_frozen_into_the_allowlist():
+    """#1182's burn-down is finished; the ratchet is that it stays finished.
+
+    An entry recording 0 is a genuine exemption and stays legal -- a module
+    whose every case shells out has nothing to rescue. An entry recording MORE
+    than 0 is masked static assertions with a number written beside them, and
+    the number is what made the burn-down possible; it is not a licence to add
+    the next one. Rescope instead: `test_1146_empty_input_argument_binding.py`
+    and the rescoped 103 are the two worked examples.
+    """
+    debts = sorted(
+        f"{name} ({e.toolless_cases})"
+        for name, e in ALLOWLIST.items()
+        if e.toolless_cases > 0
+    )
+    assert not debts, (
+        "ALLOWLIST entries carrying toolless-case debt: "
+        + ", ".join(debts)
+        + ". #1182's burn-down cleared all of these; a new one means a module "
+        "was frozen rather than rescoped. Give it a NEEDS_<TOOL> roster and "
+        "drop the entry."
     )
 
 

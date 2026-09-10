@@ -250,14 +250,36 @@ def test_dry_run_false_omits_the_switch():
     assert "DryRun=[False]" in out, out
 
 
+# Cases that shell out to pwsh; everything else is a static assertion over the
+# workflow YAML and must run on a host that has no pwsh. A whole-module gate
+# here reported green having asserted nothing -- #1182, ledger L246.
+NEEDS_PWSH = {
+    "test_dry_run_false_omits_the_switch",
+    "test_dry_run_true_sets_the_switch",
+    "test_injected_payload_arrives_as_data",
+    "test_interpolated_body_is_the_positive_control",
+    "test_missing_env_mapping_aborts_before_the_script_runs",
+    "test_values_reach_the_script",
+}
+TOOL_CASES = {"pwsh": NEEDS_PWSH}
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":
-    if shutil.which("pwsh") is None:
-        print("  SKIP all (pwsh not installed in this environment; runs in CI)")
-        sys.exit(0)
+    absent = {tool for tool in TOOL_CASES if shutil.which(tool) is None}
     failures = 0
     for t in TESTS:
+        wanted = sorted(
+            tool
+            for tool, names in TOOL_CASES.items()
+            if t.__name__ in names and tool in absent
+        )
+        if wanted:
+            print(
+                f"  SKIP {t.__name__} ({', '.join(wanted)} not installed in "
+                f"this environment; runs in CI)"
+            )
+            continue
         try:
             t()
             print(f"  PASS {t.__name__}")

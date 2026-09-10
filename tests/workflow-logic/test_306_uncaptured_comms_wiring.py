@@ -591,14 +591,37 @@ def test_the_guard_no_longer_reports_this_workflow():
     )
 
 
+# Cases that shell out to pwsh; everything else is a static assertion over the
+# workflow YAML and must run on a host that has no pwsh. A whole-module gate
+# here reported green having asserted nothing -- #1182, ledger L246.
+NEEDS_PWSH = {
+    "test_an_empty_mapping_fails_closed_and_says_which_one",
+    "test_an_unset_mapping_fails_closed_and_says_which_one",
+    "test_the_pre_fix_body_stole_the_graph_token_and_exited_zero",
+    "test_the_shipped_body_binds_the_payload_as_data",
+    "test_the_shipped_body_still_passes_ordinary_inputs_through",
+    "test_the_subexpression_payload_is_inert_in_single_quotes",
+    "test_without_the_guard_empty_binds_and_unset_refuses",
+}
+TOOL_CASES = {"pwsh": NEEDS_PWSH}
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":
-    if shutil.which("pwsh") is None:
-        print("  SKIP all (pwsh not installed in this environment; runs in CI)")
-        sys.exit(0)
+    absent = {tool for tool in TOOL_CASES if shutil.which(tool) is None}
     failures = 0
     for t in TESTS:
+        wanted = sorted(
+            tool
+            for tool, names in TOOL_CASES.items()
+            if t.__name__ in names and tool in absent
+        )
+        if wanted:
+            print(
+                f"  SKIP {t.__name__} ({', '.join(wanted)} not installed in "
+                f"this environment; runs in CI)"
+            )
+            continue
         try:
             t()
             print(f"  PASS {t.__name__}")

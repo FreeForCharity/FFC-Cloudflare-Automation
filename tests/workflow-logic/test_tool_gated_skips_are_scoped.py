@@ -584,6 +584,10 @@ def test_a_rescoped_roster_names_tests_that_exist():
 
 _PATH_WITHOUT: dict[str, tuple[str, str]] = {}
 
+# Every farm directory built in this process, so a test can assert they are
+# accounted for rather than trusting that they are.
+_FARMS: list[pathlib.Path] = []
+
 # In preference order. A farm reproduces PATH minus one program; `entry-drop`
 # removes whole directories and is the last resort, legal only for the real
 # system PATH (see `path_without`).
@@ -607,10 +611,53 @@ def _build_farm(entries: list[str], tool: str, method: str) -> str:
 
     PATH order is preserved by first-match-wins: an earlier entry's `git` keeps
     the name, exactly as it would have when PATH was consulted directly.
+
+    The directory is registered for removal at interpreter exit, and removed
+    immediately if this build does not complete. A farm cannot be a
+    `TemporaryDirectory` context: the caller hands its path to a CHILD process
+    and must outlive the call, and `path_without` caches it for reuse across
+    every module gated on the same tool. So the lifetime really is
+    process-scoped -- but it is a real directory of up to a few thousand
+    links, and a failed candidate leaves one behind on every retry, so
+    "process-scoped" must not quietly mean "forever".
     """
+    import atexit
     import os
 
     farm = pathlib.Path(tempfile.mkdtemp(prefix=f"nopath-{tool}-"))
+    _FARMS.append(farm)
+    atexit.register(shutil.rmtree, farm, True)  # ignore_errors: best effort
+    try:
+        _fill_farm(farm, entries, tool, method)
+    except BaseException:
+        # A half-built farm is useless to anyone and the caller is about to try
+        # the next method. Drop it now rather than at exit, so a host that
+        # falls through symlink -> hardlink -> copy leaves one directory, not
+        # three.
+        #
+        # Nothing in here may raise. An exception from cleanup REPLACES the
+        # real failure, and the damage is not only a lost message: the
+        # candidate loop in `path_without` catches `(OSError,
+        # NotImplementedError)` to try the next method, so a `ValueError` from
+        # `list.remove` would escape that loop entirely and take the whole
+        # call down instead of falling back to hardlink or copy -- turning a
+        # recoverable "symlinks unavailable" into a crash on precisely the
+        # host the fallback exists for. Pinned by
+        # `test_a_failed_farm_build_reports_its_own_failure`.
+        try:
+            shutil.rmtree(farm, ignore_errors=True)
+            if farm in _FARMS:
+                _FARMS.remove(farm)
+        except Exception:
+            pass  # best effort; the original failure below is what matters
+        raise
+    return str(farm)
+
+
+def _fill_farm(farm: pathlib.Path, entries: list[str], tool: str, method: str) -> None:
+    """Populate `farm`; see `_build_farm` for the contract."""
+    import os
+
     linked: set[str] = set()
     for entry in entries:
         try:
@@ -629,7 +676,6 @@ def _build_farm(entries: list[str], tool: str, method: str) -> str:
                 continue
             _place(source, farm / entry_name, method)
             linked.add(entry_name)
-    return str(farm)
 
 
 def path_without(tool: str, entries: list[str] | None = None) -> tuple[str, str]:
@@ -684,6 +730,24 @@ def path_without(tool: str, entries: list[str] | None = None) -> tuple[str, str]
     if entries is None:
         entries = [e for e in os.environ.get("PATH", "").split(os.pathsep) if e]
 
+    parent = os.pathsep.join(entries)
+
+    # If the tool is not reachable to begin with, the PATH already IS the
+    # answer: the child differs from the parent in nothing, which is exactly
+    # the "differs in exactly one program" contract with the program count at
+    # zero. Building a farm here is not wrong, only pointless -- measured at
+    # 1351 links for an absent `pwsh` on the cloud sandbox, in 0.06s, so the
+    # cost is negligible and speed is NOT the argument. The argument is that
+    # the call site says this case is a no-op and the reader deserves that to
+    # be true; a comment describing behaviour the code does not have is the
+    # defect this whole file is about, one level down. Pinned by
+    # `test_an_absent_tool_is_not_farmed`.
+    if shutil.which(tool, path=parent) is None:
+        result = (parent, "already-absent")
+        if cacheable:
+            _PATH_WITHOUT[tool] = result
+        return result
+
     # A copy of the real PATH is prohibitively expensive; a copy of a caller's
     # synthetic fixture is two files. That is the whole difference.
     candidates = _FARM_METHODS if not cacheable else _FARM_METHODS[:-1]
@@ -726,7 +790,6 @@ def path_without(tool: str, entries: list[str] | None = None) -> tuple[str, str]
     # must remove the tool and NOTHING ELSE. Without this the failure surfaces
     # as a FileNotFoundError deep inside whichever module first shells out to
     # a casualty, naming that module rather than this function.
-    parent = os.pathsep.join(entries)
     for bystander in ("bash", "git", "node", "python3", "_bystander"):
         if bystander == tool:
             continue
@@ -789,6 +852,104 @@ def _run_with_tool_hidden(
         timeout=600,
     )
     return proc.stdout, proc.returncode, scrubbed, proc.stderr
+
+
+def test_a_failed_farm_build_reports_its_own_failure():
+    """Cleanup must not replace the exception that triggered it.
+
+    `_build_farm` removes its half-built directory and de-registers it when
+    the fill fails. If that bookkeeping raises, the real failure is gone --
+    and `path_without`'s candidate loop only catches
+    `(OSError, NotImplementedError)`, so a stray `ValueError` would escape the
+    loop and crash instead of falling through to hardlink or copy. The
+    fallback chain is exactly the cross-platform mechanism #1264 added, so
+    this would break it on the host it was written for.
+
+    Forces the pathological case rather than arguing it cannot happen: the
+    fill clears `_FARMS` (the "list mutated unexpectedly" the finding names)
+    and then raises. The original `OSError` must come out.
+    """
+    global _fill_farm
+
+    original = _fill_farm
+    snapshot = list(_FARMS)
+
+    def exploding(farm, entries, tool, method):
+        _FARMS.clear()  # the unexpected mutation
+        raise OSError("the real failure")
+
+    _fill_farm = exploding
+    try:
+        try:
+            _build_farm([], "faketool", "symlink-farm")
+        except OSError as exc:
+            assert "the real failure" in str(exc), (
+                f"expected the fill's own OSError, got {exc!r}"
+            )
+        except Exception as exc:
+            raise AssertionError(
+                f"cleanup masked the real failure with {exc!r} -- and this "
+                f"class escapes path_without's candidate loop, so the "
+                f"symlink -> hardlink -> copy fallback would never run"
+            )
+        else:
+            raise AssertionError("expected _build_farm to propagate the failure")
+    finally:
+        _fill_farm = original
+        _FARMS[:] = snapshot
+
+
+def test_an_absent_tool_is_not_farmed():
+    """The no-op case must actually be a no-op, because the call site says so.
+
+    `test_every_rescoped_module_still_runs_without_its_tool` carries a comment
+    promising that when the host lacks the tool the scrub is a no-op and the
+    module's ordinary run IS the measurement. That was false for one commit:
+    the farm was built regardless, so the child ran on a rebuilt PATH rather
+    than the real one. Harmless in effect and still worth pinning -- an
+    untrue comment in this file is the failure it exists to catch, moved into
+    the prose.
+    """
+    import os
+
+    with tempfile.TemporaryDirectory() as tmp:
+        entries = [tmp]  # empty directory: nothing is reachable
+        scrubbed, method = path_without("faketool", entries=entries)
+        assert method == "already-absent", (
+            f"a tool that was never reachable should need no farm, got "
+            f"method={method!r}"
+        )
+        assert scrubbed == os.pathsep.join(entries), (
+            "the PATH should come back unchanged when there is nothing to hide"
+        )
+
+
+def test_every_farm_this_process_built_is_registered_for_cleanup():
+    """A farm outlives its call by design; it must not outlive the process.
+
+    It cannot be a `TemporaryDirectory` context -- the path is handed to a
+    child and cached for reuse -- so the lifetime is deliberately
+    process-scoped, and the risk is that "process-scoped" silently becomes
+    "left on disk". Asserting the registry is non-empty and every entry is a
+    farm directory keeps the bookkeeping honest; `atexit` does the removal.
+    """
+    # Build one, so this does not pass vacuously on a run that farmed nothing.
+    with tempfile.TemporaryDirectory() as tmp:
+        shared = pathlib.Path(tmp) / "bin"
+        shared.mkdir()
+        exe = shared / ("faketool.cmd" if sys.platform == "win32" else "faketool")
+        exe.write_text("#!/bin/sh\n", encoding="utf-8", newline="")
+        exe.chmod(0o755)
+        before = len(_FARMS)
+        path_without("faketool", entries=[str(shared)])
+        assert len(_FARMS) == before + 1, (
+            "building a farm must register it for cleanup; an unregistered "
+            "farm is a directory nobody will ever remove"
+        )
+    for farm in _FARMS:
+        assert farm.name.startswith("nopath-"), (
+            f"the cleanup registry holds something that is not a farm: {farm}"
+        )
 
 
 def test_hiding_a_tool_does_not_hide_its_neighbours():

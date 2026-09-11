@@ -520,13 +520,24 @@ KNOWN_LAUNDERED: dict[str, dict[str, str]] = {
     # containing an apostrophe. `whmcs_update_nameservers` enters `whmcs-prod`;
     # `cloudflare_enforce_standard` enters `cloudflare-prod-write`; `post_back`
     # declares none and holds `issues: write` on the ambient token.
-    "103-enforce-domain-standard.yml": {
-        "steps.enforce.outputs.out_dir":
-            "a $RUNNER_TEMP path, constant; same over-approximation as 102's.",
-        "needs.cloudflare_enforce.outputs.issues_count":
-            "a count from the audit, not the input; sink is a single-quoted JS "
-            "literal in github-script.",
-    },
+    # 103-enforce-domain-standard.yml was here — burned down in #1241 lane 5,
+    # the LAST one, which is why this dict is now empty. Both references
+    # (`steps.enforce.outputs.out_dir`,
+    # `needs.cloudflare_enforce.outputs.issues_count`) now reach their bodies
+    # through step-level `env:` with a fail-closed check at each consuming step.
+    # Both were over-approximations — a $RUNNER_TEMP path and an array length,
+    # neither the dispatch domain — so, like lanes 3 and 4, this bought shape
+    # rather than a closed injection. `cloudflare_enforce` enters
+    # `cloudflare-prod-write` with the write-scoped Key Vault token already
+    # exported to `GITHUB_ENV`; `post_back` declares no environment and holds
+    # `issues: write` on the ambient token.
+    #
+    # AN EMPTY FREEZE IS THE GOAL STATE, NOT A DISABLED GUARD. `compare()` reads
+    # this dict in BOTH directions, so with it empty every laundering hop the
+    # scanner finds anywhere in the tree is reported as new and fails CI. The
+    # guard is at its STRONGEST here. Do not add an entry back to silence a
+    # finding: the remedy is the `env:` mapping plus a fail-closed check, which
+    # is what all five lanes did.
     # 702-ffc-ex-clone-deploy.yml was here — burned down in #1241 lane 1. All
     # three references (`needs.preflight.outputs.repo_name`,
     # `steps.target.outputs.repo`, `steps.target.outputs.branch`) now reach

@@ -132,9 +132,25 @@ jobs:
       - name: Summarize Cloudflare post-audit
         id: summary
         shell: pwsh
+        env:
+          # #1241 lane 5, the last one. `out_dir` is a `$RUNNER_TEMP` path the
+          # enforce step composes itself, not the dispatch domain — but the step
+          # that publishes it holds the resolved domain, so the laundering guard
+          # treats every name it exports as carrying one, and reading it through
+          # `env:` costs a line. The fail-closed check below is not decoration
+          # either: the publisher writes `out_dir` on its LAST line, so an
+          # enforce step that died after the audit but before that write leaves
+          # this one reading `Join-Path '' 'cloudflare-audit-after.txt'`.
+          IN_OUT_DIR: ${{ steps.enforce.outputs.out_dir }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $dir = "${{ steps.enforce.outputs.out_dir }}"
+
+          if ([string]::IsNullOrWhiteSpace($env:IN_OUT_DIR)) {
+            Write-Output '::error::IN_OUT_DIR is empty: the step-level env: mapping is missing or misnamed, or the enforce step published no out_dir. Refusing to summarize a post-audit read from an unknown directory.'
+            exit 1
+          }
+
+          $dir = $env:IN_OUT_DIR
           $auditLines = @(Get-Content -Path (Join-Path $dir 'cloudflare-audit-after.txt') -ErrorAction Stop)
           $issues = @($auditLines | Where-Object { $_ -match '^[[](?:MISSING|MISSING/PARTIAL|DIFFERS)[]]' })
           "issues_count=$($issues.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -336,6 +352,11 @@ jobs:
         env:
           IN_DOMAIN: ${{ inputs.domain }}
           IN_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          # #1241 lane 5. An audit-derived count, not the dispatch text — but it
+          # was interpolated into a SINGLE-quoted JS literal, whose safety rested
+          # on the value never containing an apostrophe rather than on the value
+          # being data (#1080's `101` shape).
+          IN_CF_ISSUES_COUNT: ${{ needs.cloudflare_enforce.outputs.issues_count }}
         with:
           script: |
             const fs = require('fs');
@@ -361,7 +382,22 @@ jobs:
 
             const dryRun = String('${{ inputs.dry_run }}');
 
-            const cfIssues = Number('${{ needs.cloudflare_enforce.outputs.issues_count }}');
+            // `Number('')` is 0, not NaN, so an unset or misnamed mapping would
+            // sail through `Number.isInteger` and post "Cloudflare post-audit
+            // issues: 0" — a clean bill of health for a run that measured
+            // nothing, which is the reassuring direction. Refuse the empty
+            // string explicitly before the numeric check rather than relying on
+            // the coercion to catch it.
+            const cfIssuesRaw = process.env.IN_CF_ISSUES_COUNT;
+            if (!cfIssuesRaw || !cfIssuesRaw.trim()) {
+              core.setFailed('IN_CF_ISSUES_COUNT is empty: the step-level env: mapping is missing or misnamed, or cloudflare_enforce published no count. Refusing to report a post-audit issue count this run never measured.');
+              return;
+            }
+            const cfIssues = Number(cfIssuesRaw);
+            if (!Number.isInteger(cfIssues) || cfIssues < 0) {
+              core.setFailed(`IN_CF_ISSUES_COUNT is not a non-negative integer (got ${JSON.stringify(cfIssuesRaw)}): cloudflare_enforce publishes it as an array length, so anything else means the summary step changed shape.`);
+              return;
+            }
             const cfStatus = (cfIssues === 0) ? 'PASS' : 'PARTIAL';
 
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;

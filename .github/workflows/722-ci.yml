@@ -326,6 +326,31 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/check-workflow-fixed-tmp-paths.py
 
+      # No `if:` on this step, deliberately. It runs on pull_request, merge_group
+      # and push alike: 722 is a required check, and for a queued PR the merge
+      # group is where the required checks are evaluated, so a step gated to
+      # pull_request could be satisfied without ever having scanned the tree that
+      # actually lands. Same reasoning the large-blob guard above spells out.
+      - name: Validate tracked filenames are printable ASCII
+        shell: bash
+        run: |
+          # A zero-byte file named U+F022 U+F022 reached main via #1162 and had
+          # to be removed by #1164. Nothing caught it: no behaviour changed, the
+          # name renders as "", as \357\200\242\357\200\242, or as nothing
+          # depending on the tool, and `git status --untracked-files=no` reports
+          # clean once the path is tracked. It surfaced only because a `git pull`
+          # happened to print the octal escape in a diffstat.
+          #
+          # A hook could not have caught it -- per L218 the Conductor's session
+          # loads none of this repo's hooks, and that is where the `git add -A`
+          # ran. CI is the tier where the defect is visible from any host.
+          #
+          # The guard reads the index with `git ls-files -z`; the -z is what
+          # stops git handing back the printable ASCII escape, which a codepoint
+          # scan reads as clean. That flag is pinned by a test against a real
+          # scratch repository, not by this comment (#1165).
+          python3 scripts/check-tracked-filenames.py
+
       - name: Setup Go (for actionlint)
         uses: actions/setup-go@v7
         with:

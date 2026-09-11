@@ -351,7 +351,16 @@ jobs:
             echo "::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to clone an unresolved host."
             exit 1
           fi
-          args=(--domain "$IN_DOMAIN" --out "$RUNNER_TEMP/clone" --depth "$IN_DEPTH")
+          args=(--domain "$IN_DOMAIN" --out "$RUNNER_TEMP/clone")
+          # `depth` and `exclude` are optional, so they are omitted when blank
+          # rather than forwarded empty, and read with `:-` so a removed or
+          # misnamed mapping degrades to the callee's documented default instead
+          # of aborting on `set -u` with a bare `unbound variable`. `domain`
+          # above is the opposite case and fails closed: it is `required: true`
+          # and the callee has no default to fall back to.
+          if [ -n "${IN_DEPTH:-}" ]; then
+            args+=(--depth "$IN_DEPTH")
+          fi
           if [ -n "${IN_EXCLUDE:-}" ]; then
             args+=(--exclude "$IN_EXCLUDE")
           fi

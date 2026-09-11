@@ -38,10 +38,39 @@ What it reports
                        fix in hand.
 `PATH GONE`            a cited path that git has history for no longer exists.
                        A different and usually more serious case.
+`UNVERIFIABLE —        the issue was filed before the oldest commit this
+HISTORY HORIZON`       checkout holds, so the was-it-ever-there check below
+                       could not run for it at all. Reported with the remedy,
+                       and counted apart from the backlog's own limits: this is
+                       a fact about the CLONE, not about the issue.
 
 MAY, deliberately. This reports and a human decides. It never closes, labels,
 comments on, or edits anything -- an auto-closer that is wrong re-buries live
 work, and #1077 was closed by a Conductor holding the evidence.
+
+Why the history horizon is a finding and not a footnote
+-------------------------------------------------------
+Every verdict here rests on `content_at`, and `content_at` needs a commit older
+than the issue. On a truncated checkout there is none, so it answers None for
+every path -- and None means "say nothing". `_require_git` already refuses to
+run when git cannot answer *at all*, for exactly this reason; a shallow clone
+reaches the same unverifiable state while every individual answer still looks
+like the ordinary "that was not there then". Measured on a cloud worker's
+truncated checkout (horizon `2026-08-04`, backlog of 55): **24 of 55
+`agent-ready` issues sat behind the horizon** -- the summary line read
+`55 scanned ... 9 with no usable anchor`, which implies 46 were examined when 31
+were.
+
+The sharper half is that the one limit the sweep *did* publish named the wrong
+cause. Of those 9 "no usable anchor" issues, **8 were horizon cases**: the sweep
+had no history for them, reported the failure as a property of their prose, and
+a reader improving those issues' wording would have changed nothing. Correct
+attribution takes that count 9 -> 1. The 24 are also where the oldest and
+least-revisited work orders live, which is where staleness concentrates.
+
+So the horizon is surfaced, listed, and made non-zero. The sweep's contract is
+that it never reports from an inability to look, and the count of issues it
+could not look at belongs in the same sentence as the count it cleared.
 
 The honest limits of the technique
 ----------------------------------
@@ -97,6 +126,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import pathlib
@@ -460,6 +490,111 @@ class Tree:
         )
         return [line.strip() for line in out.splitlines() if line.strip()]
 
+    def history_horizon(self):
+        """ISO-8601 commit date of the OLDEST commit this checkout can read.
+
+        `content_at` needs a commit that predates the issue. `git rev-list -1
+        --before=<t> HEAD` returns nothing when `t` is older than every commit
+        present, so on a truncated checkout it returns None for every path --
+        the same unverifiable state `_require_git` aborts on, reached by having
+        *some* history rather than none, and silent because each individual
+        answer looks like the ordinary "was not there then".
+
+        The earliest reachable commit is necessarily parentless (anything with a
+        parent has an older ancestor), so the boundary set is
+        `--max-parents=0` -- the grafted shallow boundaries on a truncated
+        clone, the real root commit on a complete one. Taking the MINIMUM is
+        what makes this one query correct for both: a full clone's root predates
+        every issue, so nothing is withheld and no special case is needed.
+
+        Returns None only when git answers nothing at all, which
+        `_require_git` has already ruled out."""
+        self._require_git()
+        boundaries = [
+            line.strip()
+            for line in _git(["rev-list", "--max-parents=0", "HEAD"], self.root).splitlines()
+            if line.strip()
+        ]
+        dates = []
+        for rev in boundaries:
+            date = _git(["log", "-1", "--format=%cI", rev], self.root).strip()
+            if date:
+                dates.append(date)
+        return earliest_instant(dates)
+
+    def shallow(self):
+        """True when this checkout is truncated. Advisory: it names the CAUSE in
+        the report, never the verdict -- the horizon comparison stands on its
+        own, so a `--depth` that happens to reach far enough is not reported."""
+        self._require_git()
+        return _git(["rev-parse", "--is-shallow-repository"], self.root).strip() == "true"
+
+
+def _as_instant(iso):
+    """An aware datetime from an ISO-8601 stamp, or None if it will not parse.
+
+    The two clocks compared here are spelled differently and neither is ours:
+    the API renders `created_at` as `2026-08-12T04:20:19Z`, and `git --format=%cI`
+    renders the committer's own offset (`-04:00`). `fromisoformat` rejects the
+    `Z` before Python 3.11, so it is normalised rather than assumed.
+
+    None on anything unparseable, and every caller treats None as "cannot
+    establish" -- the same fail-closed reading the rest of this sweep gives an
+    unanswerable question, never a comparison against a guessed clock."""
+    if not iso:
+        return None
+    text = iso.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    # A naive stamp would raise on comparison against an aware one, which is a
+    # crash rather than a wrong answer -- but only at the moment two differently
+    # -spelled inputs meet, which is not a case any fixture reaches by accident.
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed
+
+
+def earliest_instant(dates):
+    """The earliest of several ISO stamps, compared as INSTANTS not as text.
+
+    Split out of `history_horizon` so it can be pinned without a checkout: the
+    hazard it guards is invisible on any real boundary set that happens to agree
+    either way, which is the case on the checkout this was written against.
+
+    `%cI` renders each committer's own zone, so one `rev-list` carries a mix
+    (`+00:00` and `-04:00` boundaries, measured). A lexical min over those picks
+    by wall clock and can select a LATER instant -- `17:30-04:00` sorts before
+    `20:00+00:00` and is 90 minutes later. Choosing the later one understates
+    the history available, so issues that COULD have been checked get reported
+    as unread: noise, in the direction that erodes trust in the report.
+
+    Unparseable stamps are dropped rather than ordered, and None is returned
+    only when nothing is parseable -- which every caller reads as "cannot
+    establish", never as "no limit"."""
+    usable = [d for d in dates if _as_instant(d) is not None]
+    if not usable:
+        return None
+    return min(usable, key=_as_instant)
+
+
+def predates_horizon(created, horizon):
+    """True when an issue filed at `created` is older than everything git holds.
+
+    Separate from the sweep so a test can pin the comparison without a
+    checkout, and so the fail-closed direction is stated in one place: an
+    unparseable stamp on EITHER side answers False -- "not established" -- so a
+    clock this function cannot read never silently converts a verified issue
+    into an unverifiable one, nor the reverse. The caller's own checks still
+    run either way; this only decides attribution."""
+    left, right = _as_instant(created), _as_instant(horizon)
+    if left is None or right is None:
+        return False
+    return left < right
+
 
 def _git(args, cwd):
     """stdout of one read-only git command ('' when git answers non-zero)."""
@@ -727,11 +862,31 @@ def audit_issue(issue, tree):
 
 def audit(issues, tree):
     """Sweep the backlog. Pure over its inputs -- no network, no globals."""
-    premise, gone, no_anchor = [], [], []
+    premise, gone, no_anchor, unverifiable = [], [], [], []
+    horizon = tree.history_horizon()
+    # `shallow` is read once and only to explain the horizon in the report. The
+    # verdict is the date comparison alone, so a complete clone whose root
+    # predates the backlog withholds nothing and this stays empty.
+    truncated = tree.shallow() if horizon else False
     for issue in issues:
         p, g, usable = audit_issue(issue, tree)
         premise.extend(p)
         gone.extend(g)
+        if horizon and predates_horizon(issue.get("created_at") or "", horizon):
+            # Attribution, not a second bucket for the same fact: every
+            # `content_at` for this issue answered None because the revision is
+            # not here, so "no usable anchor" would name the wrong cause and
+            # `scanned` would imply it was examined. Findings still stand if the
+            # path-only branch produced any -- that branch needs no history.
+            unverifiable.append(
+                {
+                    "issue": issue.get("number"),
+                    "title": issue.get("title") or "",
+                    "url": issue.get("html_url", ""),
+                    "created_at": issue.get("created_at") or "",
+                }
+            )
+            continue
         # "Invisible to this sweep" has to mean the sweep said NOTHING about the
         # issue. `usable` alone is the wrong test: a PATH GONE finding comes from
         # the path-only branch, where every cited path is missing, so `present`
@@ -753,6 +908,9 @@ def audit(issues, tree):
         "premise_may_be_gone": premise,
         "path_gone": gone,
         "no_anchor_extracted": no_anchor,
+        "unverifiable_history": unverifiable,
+        "history_horizon": horizon,
+        "shallow_checkout": truncated,
     }
 
 
@@ -763,8 +921,21 @@ def has_findings(result):
     and would pass against a `main` that returned 0 unconditionally (#912/#927).
 
     `no_anchor_extracted` is deliberately NOT a finding: it is the technique's
-    stated limit, not something wrong with the backlog."""
-    return bool(result["premise_may_be_gone"] or result["path_gone"])
+    stated limit, not something wrong with the backlog.
+
+    `unverifiable_history` IS one, and the asymmetry is the point. An issue with
+    no usable anchor was examined and had nothing checkable in it; an issue
+    behind the history horizon was never examined at all, and the sweep cannot
+    tell a live premise from a dead one for it. `audit-agentic-os-board.py`
+    settles this for the repo -- non-zero on any finding **or any enumeration it
+    could not complete, never 0 on a read it could not finish** -- and
+    `_require_git` already applies it to the total absence of history. This is
+    the same condition reached with a truncated clone instead of no clone."""
+    return bool(
+        result["premise_may_be_gone"]
+        or result["path_gone"]
+        or result.get("unverifiable_history")
+    )
 
 
 def render(result, repo):
@@ -785,6 +956,7 @@ def render(result, repo):
         for commit in row["commits"][:5]:
             lines.append(f"  commit:  {commit}")
         lines.append("")
+    lines.extend(render_horizon(result))
     lines.append(summary_line(result))
     lines.append(
         "MAY, deliberately: this reports, a human closes. Confirm against the commits above "
@@ -793,17 +965,54 @@ def render(result, repo):
     return "\n".join(lines)
 
 
+def render_horizon(result):
+    """The horizon block: what could not be examined, and how to fix it.
+
+    Names the remedy, because this is the one finding in the sweep that is about
+    the CHECKOUT rather than about the backlog -- nobody reading it should have
+    to work out that the issues are fine and the clone is short. Listed rather
+    than merely counted, since which issues are hidden is the part a reader
+    needs in order to go and check them by hand."""
+    rows = result.get("unverifiable_history") or []
+    if not rows:
+        return []
+    horizon = result.get("history_horizon") or "unknown"
+    lines = [
+        f"UNVERIFIABLE — HISTORY HORIZON  {len(rows)} issue(s) filed before this checkout begins",
+        f"  oldest commit here: {horizon}"
+        + ("  (shallow clone)" if result.get("shallow_checkout") else ""),
+        "  For these the was-it-ever-there check cannot run, so a premise that HAS gone is",
+        "  indistinguishable from one still live. They are not cleared -- they are unread.",
+        "  Remedy: `git fetch --unshallow` here, or `fetch-depth: 0` on actions/checkout.",
+    ]
+    for row in rows:
+        lines.append(f"  #{row['issue']} (filed {row['created_at']}) — {row['title']}")
+    lines.append("")
+    return lines
+
+
 def summary_line(result):
     """The denominators. Printed on every run, findings or not -- the count of
     issues this sweep could not see into is the honest limit of the technique
     and must never be hidden."""
-    return (
-        f"{result['scanned']} agent-ready issues scanned; "
+    unverifiable = len(result.get("unverifiable_history") or [])
+    # `scanned` is what was listed, which is not what was read. Before this the
+    # line reported `scanned` against one limit (`no usable anchor`) and so
+    # implied every other issue had been examined -- on a shallow checkout that
+    # overstated the examined set by roughly 3x here, in the reassuring
+    # direction. `examined` is stated because it is the denominator the two
+    # finding counts are actually out of.
+    examined = result["scanned"] - unverifiable
+    line = (
+        f"{result['scanned']} agent-ready issues scanned, {examined} examined; "
         f"{len(result['premise_may_be_gone'])} premise-may-be-gone, "
         f"{len(result['path_gone'])} path-gone, "
         f"{len(result['no_anchor_extracted'])} with no usable anchor "
-        f"(invisible to this sweep)."
+        f"(invisible to this sweep)"
     )
+    if unverifiable:
+        line += f", {unverifiable} UNREAD — filed before this checkout's history begins"
+    return line + "."
 
 
 def main(argv=None):

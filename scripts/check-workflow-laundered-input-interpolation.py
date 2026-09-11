@@ -505,20 +505,21 @@ KNOWN_LAUNDERED: dict[str, dict[str, str]] = {
     # never containing an apostrophe rather than on the value being data.
     # `m365` enters `m365-prod`; `cloudflare` enters `cloudflare-prod-read`;
     # `post_back` holds `issues: write` on the ambient token.
-    "102-domain-add-ffc-cloudflare-and-whmcs.yml": {
-        "steps.enforce.outputs.out_dir":
-            "a $RUNNER_TEMP path, constant; tainted because the enforce step "
-            "holds the resolved domain. #1234 closed 102's real hop — this is "
-            "the residue of the pessimistic rule, not a live one.",
-        "needs.whmcs_preflight.outputs.found":
-            "'true'/'false' from a WHMCS lookup, not the input. Frozen rather "
-            "than waived because the SINK is a pwsh double-quoted "
-            "interpolation on `whmcs-prod`, so the shape is one value-change "
-            "away from live.",
-        "needs.cloudflare_enforce_standard.outputs.issues_count":
-            "a count from the audit, not the input; sink is a single-quoted JS "
-            "literal in github-script.",
-    },
+    # 102-domain-add-ffc-cloudflare-and-whmcs.yml was here — burned down in
+    # #1241 lane 4. All three references (`steps.enforce.outputs.out_dir`,
+    # `needs.whmcs_preflight.outputs.found`,
+    # `needs.cloudflare_enforce_standard.outputs.issues_count`) now reach their
+    # bodies through step-level `env:` with a fail-closed check at each
+    # consuming step. As the issue predicted for lanes 3–5 all three were
+    # over-approximations — a $RUNNER_TEMP path, a WHMCS lookup result and an
+    # array length, none of them the dispatch domain — so the lane bought shape
+    # rather than a closed injection. The shapes were worth buying: `found` sat
+    # in a pwsh double-quoted interpolation inside the step that CHANGES a
+    # production domain's nameservers on `whmcs-prod`, and `issues_count` in a
+    # single-quoted JS literal whose safety rested on the value never
+    # containing an apostrophe. `whmcs_update_nameservers` enters `whmcs-prod`;
+    # `cloudflare_enforce_standard` enters `cloudflare-prod-write`; `post_back`
+    # declares none and holds `issues: write` on the ambient token.
     "103-enforce-domain-standard.yml": {
         "steps.enforce.outputs.out_dir":
             "a $RUNNER_TEMP path, constant; same over-approximation as 102's.",

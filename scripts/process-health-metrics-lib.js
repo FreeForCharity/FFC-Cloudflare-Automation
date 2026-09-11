@@ -742,8 +742,279 @@ function renderReport(metrics, prev, opts) {
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Delivering the silence verdict (#1269)
+// ---------------------------------------------------------------------------
+//
+// The silence check above worked from the day it shipped. It fired on schedule
+// four times across a 30-day outage (2026-08-17, -24, -31, 09-07), named the
+// last run and the hour count, and said in as many words that only a human
+// could fix it. None of that reached anybody, because the only place it was
+// delivered was a comment on #719 — the Conductor log. The one component
+// guaranteed to be down was the sole subscriber to its own outage alarm: four
+// correct alarms, zero addressees, while #1200 sat open for 27.9 days against
+// the downstream symptom.
+//
+// So the verdict gets the rolling-issue treatment 744 already uses for the
+// public feed: an assigned, labelled issue in THIS repository, upserted while
+// the condition holds and closed when it clears. An issue notifies a person and
+// lands on board #9; a comment on a thread nobody reads does neither. The
+// detection is unchanged — this is a delivery path, not a second opinion.
+//
+// The three readings of `silence` stay three readings here, and the one that
+// must not collapse is `assessed: false`. A read that cannot be believed must
+// neither raise an alarm NOR CLEAR one: a monitor that closes a true alarm off
+// a truncated read is worse than no monitor, because the close looks like a
+// recovery. Hence `decideSilenceDelivery` acts only on an explicit boolean.
+const SILENCE_MARKER = '<!-- conductor-silence -->';
+
+// `bug` + `agentic-os` is what every other rolling issue in this repo carries
+// (740, 744, 745), so the board, the public feed and the Conductor's own sweeps
+// pick this up with no special case.
+//
+// Deliberately NOT `agent-ready`. The remedy is restarting a routine on a
+// workstation, which nothing in Actions and no sandboxed agent can do, so an
+// `agent-ready` label here would spend one worker run a week rediscovering that
+// — the #1245 shape, with the label applied on purpose. The body says so too,
+// because a label is not read by whoever opens the issue.
+const SILENCE_ISSUE_LABELS = ['bug', 'agentic-os'];
+
+// The assignment is the substance of #1269, not decoration: it is what produces
+// a notification and a board row, which is exactly what a #719 comment does not
+// do. The Conductor runs on Clarke's workstation, so Clarke is the only person
+// who can restart it.
+const SILENCE_ASSIGNEES = ['clarkemoyer'];
+
+/**
+ * Title for the rolling silence issue.
+ *
+ * Carries the last run number, because "the Conductor stopped" with no number
+ * in it cannot be told apart from the same alarm a week later. The varying hour
+ * count stays in the BODY: the upsert matches on SILENCE_MARKER rather than on
+ * the title, but a title that changed every run would still make the thread
+ * unreadable in a notification list and in board #9.
+ *
+ * `lastRun` legitimately becomes null once the outage outlives the workflow's
+ * own comment-read window — there is then no header anywhere in what was read —
+ * so that case gets its own wording rather than the string `run null`.
+ */
+function silenceIssueTitle(silence) {
+  const run = Number(((silence || {}).lastRun ?? null) === null ? NaN : silence.lastRun);
+  return Number.isFinite(run)
+    ? `🚨 Conductor has not run since run ${run}`
+    : '🚨 Conductor has not run — no run header anywhere in the log window';
+}
+
+/**
+ * Find the open rolling silence issue in an open-issue listing.
+ *
+ * The issues API returns pull requests too, and a PR body quoting the marker
+ * would otherwise be selected and then CLOSED by the recovery path — so PRs are
+ * dropped here, the way 744's `findRollingIssue` learned to (#1179's sibling).
+ * Never hand-roll this match at the call site: whatever this selects is what the
+ * close path will close.
+ *
+ * @param {Array<{body?:string, pull_request?:object}>} items open-issue listing
+ * @returns {object|null}
+ */
+function findSilenceIssue(items) {
+  return (
+    (items || []).find(
+      (i) => i && !i.pull_request && typeof i.body === 'string' && i.body.includes(SILENCE_MARKER),
+    ) || null
+  );
+}
+
+/**
+ * The three-way branch, as a pure decision.
+ *
+ * @param {object|null|undefined} silence  `metrics.conductorRuns.silence`
+ * @param {object|null|undefined} existing the open rolling issue, if any
+ * @returns {{action:'open'|'update'|'close'|'none', reason:string}}
+ *
+ * `none` is returned for every reading that is not an explicit boolean verdict:
+ *
+ *   - the read was truncated or failed (`assessed: false`, `silent: null`);
+ *   - the metrics predate #1215 and carry no `silence` block at all;
+ *   - `silence` is present but malformed (a string, a number, a missing field).
+ *
+ * All three are "we do not know", and the point of collapsing them into `none`
+ * rather than into either branch is that the close path is destructive: an
+ * unknown that closes reads on the issue as "the Conductor came back", which is
+ * the one lie this delivery path could tell that would be worse than the
+ * original defect of telling nobody at all.
+ */
+function decideSilenceDelivery(silence, existing) {
+  const s = silence && typeof silence === 'object' ? silence : null;
+  if (!s) {
+    return {
+      action: 'none',
+      reason: 'no silence block in the metrics (pre-#1215 report, or a malformed one)',
+    };
+  }
+  if (s.assessed !== true || typeof s.silent !== 'boolean') {
+    return {
+      action: 'none',
+      reason:
+        'conductor liveness was not assessed this run — the #' +
+        LOG_ISSUE +
+        ' read failed or hit its page cap, so an open alarm stays open and no new one is raised',
+    };
+  }
+  if (s.silent) {
+    return existing
+      ? { action: 'update', reason: `refreshing rolling issue #${existing.number}` }
+      : { action: 'open', reason: 'no rolling issue open for an active silence' };
+  }
+  return existing
+    ? { action: 'close', reason: `conductor is running again; closing #${existing.number}` }
+    : { action: 'none', reason: 'conductor is running and no rolling issue is open' };
+}
+
+/** One-line summary for `core.notice`, so the run log carries the verdict. */
+function silenceSummary(silence) {
+  const s = (silence && typeof silence === 'object' ? silence : null) || {};
+  return (
+    `assessed=${s.assessed === true} silent=${typeof s.silent === 'boolean' ? s.silent : 'unknown'} ` +
+    `lastRun=${s.lastRun ?? '—'} hours=${s.hours ?? '—'} threshold=${s.thresholdHours ?? '—'}h`
+  );
+}
+
+/**
+ * Body of the rolling silence issue.
+ *
+ * Says what stopped, for how long, what is NOT happening while it is stopped,
+ * why no workflow can fix it, and how the issue closes itself. The last part
+ * matters as much as the alarm: a rolling issue that a reader believes they must
+ * close by hand gets closed while the outage continues.
+ *
+ * @param {object} silence  `metrics.conductorRuns.silence`
+ * @param {{nowIso:string, runUrl?:string}} o
+ */
+function renderSilenceIssueBody(silence, o) {
+  const s = silence || {};
+  const opts = o || {};
+  const lines = [SILENCE_MARKER, ''];
+  lines.push(
+    '🚨 **The Agentic OS Conductor has stopped running.** It supervises every agent in this ' +
+      'system — approving environment gates, draining the merge queue, grooming the backlog and ' +
+      'refreshing the public status feed — and none of that is happening.',
+    '',
+  );
+
+  const runBit =
+    s.lastRun === null || s.lastRun === undefined
+      ? 'no conductor run header appears anywhere in the comments read on #' + LOG_ISSUE
+      : `run ${s.lastRun}${s.lastRunIso ? ` (${s.lastRunIso})` : ''}`;
+  // `hours` is null when the gap outran the read window. Rendering it as `0h`,
+  // or inventing a number from the oldest comment read, would be a fabricated
+  // precision on the one field a reader uses to judge severity.
+  const forBit =
+    s.hours === null || s.hours === undefined
+      ? `at least as long as the comment window this monitor reads (threshold ${s.thresholdHours ?? SILENT_THRESHOLD_HOURS}h)`
+      : `${s.hours}h (threshold ${s.thresholdHours ?? SILENT_THRESHOLD_HOURS}h)`;
+
+  lines.push(`- **Last run seen:** ${runBit}`);
+  lines.push(`- **Silent for:** ${forBit}`);
+  lines.push(`- **Measured:** ${opts.nowIso || '(unknown)'}`);
+  if (opts.runUrl) lines.push(`- **Detected by:** [739 run](${opts.runUrl})`);
+  lines.push('');
+
+  lines.push('## Why this needs a person');
+  lines.push('');
+  lines.push(
+    'The Conductor is a scheduled routine on a workstation, not a GitHub Actions workflow, so ' +
+      '**nothing in this repository can restart it** — and no other metric in the weekly report ' +
+      'can even see that it is down. The dead-run scan counts runs that STARTED, so a supervisor ' +
+      'that stops posting altogether reads `0 of 0`: a clean row.',
+    '',
+    'While it is down, agents keep running and keep escalating to a thread nobody reads: every ' +
+      `"posting this on #${LOG_ISSUE} for the Conductor" is written into the outage.`,
+    '',
+  );
+
+  if (s.lastRun === null || s.lastRun === undefined) {
+    // Two causes, one reading. Naming both is what keeps the alarm actionable:
+    // a reader who checks the thread, sees the Conductor posting, and is told
+    // nothing about the header format learns only that the alarm is wrong.
+    lines.push('## Two things produce this particular reading');
+    lines.push('');
+    lines.push(
+      `Either the Conductor stopped, **or** its run-header format changed and no longer matches ` +
+        '`## Run N — START/END`. Check #' +
+        LOG_ISSUE +
+        ' before concluding which: if headers are being posted, the scan needs fixing and the ' +
+        'routine does not.',
+      '',
+    );
+  }
+
+  lines.push('## What to do');
+  lines.push('');
+  lines.push(
+    '1. Restart the Conductor routine on its host.',
+    `2. Its first run posts a \`## Run N — START\` header on #${LOG_ISSUE}.`,
+    '3. The next 739 run sees that header, comments here naming the run that broke the silence, ' +
+      'and closes this issue. **Do not close it by hand while the Conductor is still down** — ' +
+      'the next run would simply reopen the alarm as a new issue, and the history would read as ' +
+      'two short outages instead of one long one.',
+    '',
+  );
+
+  lines.push('## Not agent-workable');
+  lines.push('');
+  lines.push(
+    'This issue is deliberately **not** labelled `agent-ready`. The remedy is an action on a ' +
+      'workstation; a sandboxed agent picking this up can only spend a run confirming that. It is ' +
+      'assigned rather than escalated for the same reason — assignment is the part that produces ' +
+      'a notification.',
+    '',
+  );
+
+  lines.push(
+    `_Managed by 739. Repo - Process Health Metrics Report (#1269). Refreshed in place on every ` +
+      'run while the silence holds; auto-closed on the first run that sees the Conductor again. A ' +
+      'run that cannot read #' +
+      LOG_ISSUE +
+      ' leaves this issue open and untouched — an unreadable log cannot prove the supervisor ' +
+      'recovered._',
+  );
+  return lines.join('\n');
+}
+
+/**
+ * The comment left when the alarm clears.
+ *
+ * Names the run that broke the silence, because "recovered" with no run number
+ * in it cannot be checked against the log afterwards.
+ */
+function renderSilenceRecoveryComment(silence, o) {
+  const s = silence || {};
+  const opts = o || {};
+  const runBit =
+    s.lastRun === null || s.lastRun === undefined
+      ? 'a conductor run header is present again'
+      : `run ${s.lastRun}${s.lastRunIso ? ` (${s.lastRunIso})` : ''} broke the silence`;
+  const ageBit = s.hours === null || s.hours === undefined ? '' : ` — last header ${s.hours}h ago`;
+  return (
+    `✅ **Conductor is running again:** ${runBit}${ageBit}, inside the ` +
+    `${s.thresholdHours ?? SILENT_THRESHOLD_HOURS}h liveness threshold` +
+    (opts.runUrl ? ` ([739 run](${opts.runUrl}))` : '') +
+    '. Auto-closing.'
+  );
+}
+
 module.exports = {
   MARKER,
+  SILENCE_MARKER,
+  SILENCE_ISSUE_LABELS,
+  SILENCE_ASSIGNEES,
+  silenceIssueTitle,
+  findSilenceIssue,
+  decideSilenceDelivery,
+  silenceSummary,
+  renderSilenceIssueBody,
+  renderSilenceRecoveryComment,
   LOG_ISSUE,
   THROUGHPUT_WINDOW_DAYS,
   PIPELINE_WINDOW_DAYS,

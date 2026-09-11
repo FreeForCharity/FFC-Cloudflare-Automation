@@ -656,17 +656,52 @@ def _frozen(freeze: dict[str, dict[str, str]]):
         guard.KNOWN_LAUNDERED = original
 
 
+# One constant, referenced everywhere below, and deliberately NOT of the form a
+# real workflow filename can take. The first draft used `999-not-a-real-workflow
+# .yml`, which is a collision waiting to happen: `9xx` is RESERVED in this repo's
+# numbering scheme (AGENTS.md § "Picking a workflow"), so a future `999-*.yml` is
+# a plausible file, not a fanciful one. The leak check asserts this exact key is
+# absent from the real freeze — so a collision would report "a synthetic freeze
+# leaked" for a workflow someone had legitimately frozen.
+#
+# That is the same defect M5 found in the leak check itself during this lane's
+# mutation run — a check whose message states a cause that is not the one that
+# fired — reached the second time through the key's SHAPE rather than the
+# assertion's strength. Every workflow in this tree begins with a digit, so a
+# leading `__synthetic__` cannot collide with one. Reported by Copilot on #1271.
+_SYNTHETIC_WORKFLOW = "__synthetic__not-a-real-workflow.yml"
+
 _SYNTHETIC_FREEZE = {
-    "999-not-a-real-workflow.yml": {
+    _SYNTHETIC_WORKFLOW: {
         "needs.resolve.outputs.domain": "synthetic subject for the freeze tests",
         "steps.meta.outputs.repo": "synthetic subject for the freeze tests",
     }
 }
 
 
+def test_the_synthetic_key_cannot_collide_with_a_real_workflow():
+    """Collision-resistance asserted, not just intended.
+
+    The leak check below reads the synthetic key's presence in the real freeze as
+    proof of a leak. That inference is only sound while no real workflow can
+    carry this name, which is a property of the tree rather than of this file —
+    so it is checked here rather than asserted in a comment.
+    """
+    assert not (WORKFLOWS / _SYNTHETIC_WORKFLOW).exists(), (
+        f"{_SYNTHETIC_WORKFLOW} now exists in the tree, so the leak check below "
+        f"can no longer tell a leak from a legitimate freeze entry. Rename the "
+        f"synthetic key."
+    )
+    assert not _SYNTHETIC_WORKFLOW[0].isdigit(), (
+        f"{_SYNTHETIC_WORKFLOW} starts with a digit, which is the shape every "
+        f"real workflow in this repo has (NNN-name.yml). Pick a key a real "
+        f"workflow cannot take."
+    )
+
+
 def test_a_new_hop_in_an_already_frozen_workflow_fails():
     """Per-reference, not per-file — otherwise a frozen file is a free pass."""
-    workflow = "999-not-a-real-workflow.yml"
+    workflow = _SYNTHETIC_WORKFLOW
     invented = "needs.invented.outputs.not_frozen"
     with _frozen(_SYNTHETIC_FREEZE):
         current = {workflow: tuple(sorted(

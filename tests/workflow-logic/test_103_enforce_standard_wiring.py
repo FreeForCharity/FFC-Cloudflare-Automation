@@ -106,6 +106,15 @@ ENV_ISSUE = "IN_ISSUE_NUMBER"
 EXPR_DOMAIN = "${{ inputs.domain }}"
 EXPR_ISSUE = "${{ inputs.issue_number }}"
 
+# #1241 lane 5: the two LAUNDERED references, which reach their bodies through
+# `env:` rather than as `${{ }}` in script text. Neither carries the dispatch
+# domain — one is a `$RUNNER_TEMP` path, the other an array length — so they are
+# named apart from the two inputs above, whose docstrings are about free text.
+ENV_OUT_DIR = "IN_OUT_DIR"
+ENV_CF_COUNT = "IN_CF_ISSUES_COUNT"
+EXPR_OUT_DIR = "${{ steps.enforce.outputs.out_dir }}"
+EXPR_CF_COUNT = "${{ needs.cloudflare_enforce.outputs.issues_count }}"
+
 # A legal domain, so that a payload whose side effect leaves no residue reaches
 # the callee looking exactly like a clean dispatch.
 LEGAL_DOMAIN = "ffcworkingsite1.org"
@@ -125,6 +134,12 @@ FAKE_GH_TOKEN = "gh-issues-write-placeholder-not-a-real-token"
 CONTROLLED_VARS = (
     ENV_DOMAIN,
     ENV_ISSUE,
+    # #1241 lane 5's two mappings. They belong here for the same reason as the
+    # others: a value inherited from the developer's shell would satisfy the
+    # fail-closed cases below without the workflow supplying anything, and both
+    # of those tests assert on an UNSET mapping.
+    ENV_OUT_DIR,
+    ENV_CF_COUNT,
     "CLOUDFLARE_API_TOKEN_FFC",
     "CLOUDFLARE_API_TOKEN_CM",
     "FFC_EXO_CERT_PASSWORD",
@@ -338,11 +353,62 @@ PWSH_SITES = (
 
 # --- the github-script site -------------------------------------------------
 
+SUMMARY_JOB = "cloudflare_enforce"
+SUMMARY_STEP = "Summarize Cloudflare post-audit"
+
+# The `out_dir` half of #1241 lane 5. Deliberately NOT a member of PWSH_SITES:
+# every test over that tuple is about `IN_DOMAIN` and a stub callee, and this
+# step has neither — it reads a file the previous step wrote. It is a PwshSite so
+# it can reuse `_run_pwsh`, which is the only thing in this module that runs a
+# body under the runner's real wrapper.
+#
+# `capture` is what makes the ordinary-path assertion possible: the step's only
+# product is a line in `$GITHUB_OUTPUT`, which the harness would otherwise never
+# read back, so the file is appended to the observed output.
+SUMMARY_SITE = PwshSite(
+    job=SUMMARY_JOB,
+    step=SUMMARY_STEP,
+    environment="cloudflare-prod-write",
+    # Unused by this body — it calls nothing — but PwshSite requires a stub and
+    # writing the real one costs nothing and keeps the temp cwd realistic.
+    stub_path="Update-CloudflareDns.ps1",
+    stub=CF_STUB,
+    credential_var="CLOUDFLARE_API_TOKEN_FFC",
+    fake_credential=FAKE_CF_TOKEN,
+    in_step_env=False,
+    # After the lane the body carries no `${{ }}` at all.
+    render={},
+    pre_fix_body=(
+        "$ErrorActionPreference = 'Stop'\n"
+        '$dir = "${{ steps.enforce.outputs.out_dir }}"\n'
+        "$auditLines = @(Get-Content -Path (Join-Path $dir "
+        "'cloudflare-audit-after.txt') -ErrorAction Stop)\n"
+        "$issues = @($auditLines | Where-Object { $_ -match "
+        "'^[[](?:MISSING|MISSING/PARTIAL|DIFFERS)[]]' })\n"
+        '"issues_count=$($issues.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT '
+        "-Append -Encoding utf8\n"
+    ),
+    extra_env={"GITHUB_OUTPUT": "github-output.txt"},
+    capture=("github-output.txt",),
+)
+
 GH_JOB = "post_back"
 GH_STEP = "Comment results back to issue"
 GH_SENTINEL = "STOLEN-103-post_back.txt"
+# The SHIPPED body's remaining expressions. `issues_count` left this map in
+# #1241 lane 5 — it now arrives through `env:` as IN_CF_ISSUES_COUNT — and
+# `dry_run` stays because it is a `choice`, i.e. genuinely constrained.
 GH_RENDER = {
     "${{ inputs.dry_run }}": "false",
+}
+
+# The PRE-FIX body still interpolates `issues_count`, because that is what it did
+# before the lane; rendering it needs the entry the shipped body no longer has.
+# Kept as a separate map rather than one union so the shipped body's map cannot
+# silently regain an anchor — `_render` asserts each anchor appears exactly once,
+# so a stale entry here fails loudly instead of masking a reintroduced hop.
+GH_PRE_FIX_RENDER = {
+    **GH_RENDER,
     "${{ needs.cloudflare_enforce.outputs.issues_count }}": "0",
 }
 
@@ -680,6 +746,63 @@ def test_every_pwsh_call_site_is_wired_through_env():
         _assert_pwsh_wiring(site)
 
 
+def test_no_laundered_reference_reaches_any_script_body():
+    """#1241 lane 5, criterion 1's other half — asserted here, not only in the guard.
+
+    The guard's freeze is now EMPTY, so a reintroduced reference fails CI as a new
+    hop. That is the mechanical half, and it is deliberately generic: it would say
+    `103-enforce-domain-standard.yml: steps.enforce.outputs.out_dir` and nothing
+    about why that mattered. This is the readable half — it names both references
+    and the sink shape each had, so an edit that puts one back fails against a test
+    that explains the defect rather than against a dict entry that no longer
+    exists.
+
+    Neither reference carries the dispatch domain: one is a `$RUNNER_TEMP` path,
+    the other an array length. The SINKS are what the lane bought — a pwsh
+    double-quoted string, where `$( )` executes, and a single-quoted JS literal,
+    whose safety rested on the value never containing an apostrophe.
+    """
+    doc = load_workflow(WORKFLOW)
+    offenders = {}
+    for job, spec in (doc.get("jobs") or {}).items():
+        for step in spec.get("steps", []) or []:
+            body = step.get("run") or (step.get("with") or {}).get("script") or ""
+            hit = sorted(
+                ref for ref in (EXPR_OUT_DIR, EXPR_CF_COUNT) if ref in str(body)
+            )
+            if hit:
+                offenders[f"{job}/{step.get('name', '<unnamed>')}"] = hit
+    assert not offenders, (
+        f"a reference #1241 lane 5 moved into `env:` is interpolated back into a "
+        f"script body: {offenders}. Route it through a step-level `env:` with a "
+        f"fail-closed check instead — that is what emptied `KNOWN_LAUNDERED`."
+    )
+
+
+def test_the_summary_step_is_wired_through_env():
+    """The `out_dir` half of lane 5: mapped in, read back, and checked."""
+    step = find_step(load_workflow(WORKFLOW), SUMMARY_JOB, SUMMARY_STEP)
+    env = step.get("env") or {}
+    body = step["run"]
+    assert env.get(ENV_OUT_DIR) == EXPR_OUT_DIR, (
+        f"{SUMMARY_JOB} must map {ENV_OUT_DIR} to {EXPR_OUT_DIR} — env: is {env!r}"
+    )
+    assert EXPR_OUT_DIR not in body, (
+        f"{SUMMARY_JOB} interpolates {EXPR_OUT_DIR} into its body again. This is a "
+        f"pwsh DOUBLE-quoted assignment, where `$( )` executes. Body: {body!r}"
+    )
+    assert f"$env:{ENV_OUT_DIR}" in body, (
+        f"{SUMMARY_JOB} never reads $env:{ENV_OUT_DIR}, so the mapping reaches "
+        f"nothing. Body: {body!r}"
+    )
+    assert f"IsNullOrWhiteSpace($env:{ENV_OUT_DIR})" in body, (
+        f"{SUMMARY_JOB} has no fail-closed emptiness check on $env:{ENV_OUT_DIR}. "
+        f"The publisher writes out_dir on its LAST line, so an enforce step that "
+        f"died after the audit leaves this one reading Join-Path '' — which "
+        f"resolves, and reads the wrong file. Body: {body!r}"
+    )
+
+
 def test_the_github_script_site_is_wired_through_env():
     """Both inputs, not just `domain`.
 
@@ -923,7 +1046,7 @@ def test_the_shipped_github_script_binds_both_payloads_as_data():
     domain_payload = _js_payload(LEGAL_DOMAIN, wrapped_in_call=False)
 
     result, stolen, rc = _run_github_script(
-        body, **{ENV_DOMAIN: domain_payload, ENV_ISSUE: "42"}
+        body, **{ENV_DOMAIN: domain_payload, ENV_ISSUE: "42", ENV_CF_COUNT: "0"}
     )
     assert stolen is None, (
         f"the domain payload EXECUTED against the shipped script — the sentinel "
@@ -942,7 +1065,7 @@ def test_the_shipped_github_script_binds_both_payloads_as_data():
     # Same payload in the number position: refused, and refused BEFORE the call.
     issue_payload = _js_payload("1", wrapped_in_call=True)
     result, stolen, rc = _run_github_script(
-        body, **{ENV_DOMAIN: LEGAL_DOMAIN, ENV_ISSUE: issue_payload}
+        body, **{ENV_DOMAIN: LEGAL_DOMAIN, ENV_ISSUE: issue_payload, ENV_CF_COUNT: "0"}
     )
     assert stolen is None, (
         f"the issue_number payload EXECUTED against the shipped script — the "
@@ -969,7 +1092,9 @@ def test_the_pre_fix_github_script_executed_both_payloads():
         ),
     ):
         body = _render(
-            GH_PRE_FIX_BODY, {**GH_RENDER, **mapping}, f"{GH_JOB} (pre-fix, {label})"
+            GH_PRE_FIX_BODY,
+            {**GH_PRE_FIX_RENDER, **mapping},
+            f"{GH_JOB} (pre-fix, {label})",
         )
         result, stolen, rc = _run_github_script(body)
         assert stolen == FAKE_GH_TOKEN, (
@@ -1044,21 +1169,108 @@ def test_an_empty_mapping_fails_closed_at_every_pwsh_site():
             )
 
 
-def test_an_empty_mapping_fails_closed_in_the_github_script():
-    body = _render(step_github_script(WORKFLOW, GH_JOB, GH_STEP), GH_RENDER, GH_JOB)
+def test_the_summary_body_fails_closed_on_an_empty_out_dir():
+    """An enforce step that died before its LAST line publishes no `out_dir`.
+
+    Empty is the case worth the check, and it is not the obvious one. `Join-Path
+    '' 'cloudflare-audit-after.txt'` does not throw — it resolves relative to the
+    cwd — so without the guard this step reads whatever file of that name happens
+    to sit in the workspace, or fails with a path error naming a file nobody
+    recognises. Either way the count it publishes is not the audit's.
+    """
+    body = _render(_step(SUMMARY_SITE)["run"], SUMMARY_SITE.render, SUMMARY_JOB)
     for label, overrides in (
-        ("empty domain", {ENV_DOMAIN: "", ENV_ISSUE: "42"}),
-        ("whitespace domain", {ENV_DOMAIN: "   ", ENV_ISSUE: "42"}),
-        ("unset domain", {ENV_ISSUE: "42"}),
-        ("empty issue", {ENV_DOMAIN: LEGAL_DOMAIN, ENV_ISSUE: ""}),
-        ("unset issue", {ENV_DOMAIN: LEGAL_DOMAIN}),
-        ("zero issue", {ENV_DOMAIN: LEGAL_DOMAIN, ENV_ISSUE: "0"}),
+        ("empty", {ENV_OUT_DIR: ""}),
+        ("whitespace", {ENV_OUT_DIR: "   "}),
+        ("unset", {}),
     ):
-        result, _, _ = _run_github_script(body, **overrides)
+        observed, _, rc = _run_pwsh(
+            SUMMARY_SITE,
+            body,
+            **{SUMMARY_SITE.credential_var: SUMMARY_SITE.fake_credential, **overrides},
+        )
+        assert rc != 0, (
+            f"{label}: the step exited 0 with no out_dir. Output: {observed!r}"
+        )
+        assert ENV_OUT_DIR in observed, (
+            f"{label}: exited {rc} without naming {ENV_OUT_DIR} — that is "
+            f"indistinguishable from the harness failing to start "
+            f"(CLAUDE.md). Output: {observed!r}"
+        )
+        assert "issues_count=" not in observed, (
+            f"{label}: the step published a count after refusing. "
+            f"Output: {observed!r}"
+        )
+
+
+def test_the_summary_body_publishes_a_count_on_the_ordinary_path():
+    """Control for the refusal above: without it, `rc != 0` proves nothing.
+
+    A body that cannot run at all also exits non-zero, so a refusal test needs a
+    green counterpart on the same body to show the refusal is a decision rather
+    than an incapacity.
+    """
+    body = _render(_step(SUMMARY_SITE)["run"], SUMMARY_SITE.render, SUMMARY_JOB)
+    with tempfile.TemporaryDirectory() as td:
+        out_dir = pathlib.Path(td)
+        (out_dir / "cloudflare-audit-after.txt").write_text(
+            "[MISSING] www CNAME\n[OK] apex A\n[DIFFERS] MX\n", encoding="utf-8"
+        )
+        observed, _, rc = _run_pwsh(
+            SUMMARY_SITE,
+            body,
+            **{
+                SUMMARY_SITE.credential_var: SUMMARY_SITE.fake_credential,
+                ENV_OUT_DIR: str(out_dir),
+            },
+        )
+    assert rc == 0, f"the ordinary path failed: {observed!r}"
+    assert "issues_count=2" in observed, (
+        f"expected the two flagged lines ([MISSING], [DIFFERS]) to be counted "
+        f"and published, got: {observed!r}"
+    )
+
+
+def test_an_empty_mapping_fails_closed_in_the_github_script():
+    """Every mapping this body reads, in every shape that reaches it unusable.
+
+    `named` is asserted, not just the refusal: with three mappings now feeding
+    this body, a case that fails for the WRONG reason still satisfies
+    `result["failed"]`, and would keep doing so if the variable under test were
+    dropped entirely. The valid values supplied alongside each case are what
+    makes the attribution real.
+    """
+    body = _render(step_github_script(WORKFLOW, GH_JOB, GH_STEP), GH_RENDER, GH_JOB)
+    ok = {ENV_DOMAIN: LEGAL_DOMAIN, ENV_ISSUE: "42", ENV_CF_COUNT: "0"}
+    for label, overrides, named in (
+        ("empty domain", {ENV_DOMAIN: ""}, ENV_DOMAIN),
+        ("whitespace domain", {ENV_DOMAIN: "   "}, ENV_DOMAIN),
+        ("unset domain", {ENV_DOMAIN: None}, ENV_DOMAIN),
+        ("empty issue", {ENV_ISSUE: ""}, ENV_ISSUE),
+        ("unset issue", {ENV_ISSUE: None}, ENV_ISSUE),
+        ("zero issue", {ENV_ISSUE: "0"}, ENV_ISSUE),
+        # #1241 lane 5. `Number('')` is 0, not NaN, so the empty case would
+        # otherwise sail through a numeric check and post "Cloudflare post-audit
+        # issues: 0" — a clean bill of health for a run that measured nothing.
+        ("empty count", {ENV_CF_COUNT: ""}, ENV_CF_COUNT),
+        ("whitespace count", {ENV_CF_COUNT: "   "}, ENV_CF_COUNT),
+        ("unset count", {ENV_CF_COUNT: None}, ENV_CF_COUNT),
+        ("non-numeric count", {ENV_CF_COUNT: "several"}, ENV_CF_COUNT),
+        ("negative count", {ENV_CF_COUNT: "-1"}, ENV_CF_COUNT),
+    ):
+        merged = {**ok, **overrides}
+        merged = {k: v for k, v in merged.items() if v is not None}
+        result, _, _ = _run_github_script(body, **merged)
         assert result["calls"] == [], (
             f"{label}: createComment was called anyway: {result!r}"
         )
         assert result["failed"], f"{label}: the step did not fail closed: {result!r}"
+        assert named in result["failed"], (
+            f"{label}: the step failed closed but named the wrong mapping — "
+            f"expected {named} in the message, got {result['failed']!r}. A "
+            f"refusal for the wrong reason passes a bare `failed` assertion and "
+            f"would survive deleting the check under test."
+        )
         assert result["threw"] is None, (
             f"{label}: the step THREW rather than failing closed, so the "
             f"diagnosis arrives as a stack trace: {result!r}"
@@ -1191,6 +1403,8 @@ NEEDS_PWSH = {
     "test_an_empty_mapping_fails_closed_at_every_pwsh_site",
     "test_the_pre_fix_pwsh_bodies_executed_the_payload",
     "test_the_shipped_pwsh_bodies_bind_a_payload_as_data",
+    "test_the_summary_body_fails_closed_on_an_empty_out_dir",
+    "test_the_summary_body_publishes_a_count_on_the_ordinary_path",
     "test_the_unguarded_pwsh_bodies_would_have_run_with_no_domain",
 }
 NEEDS_NODE = {

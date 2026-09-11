@@ -32,6 +32,7 @@ same trap on the Conductor's host).
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import pathlib
 import sys
@@ -125,28 +126,46 @@ def test_the_scan_sees_real_workflows():
     assert unreadable == [], f"the tree should parse, got {unreadable}"
 
 
-def test_the_taint_engine_finds_real_taint():
-    """The positive control: the tree really does contain laundering hops.
+# `test_the_taint_engine_finds_real_taint` stood here until #1241 lane 5. It was
+# the positive control over the REAL tree — `assert hops` — and its own docstring
+# named the condition that retires it: "when the burn-down finishes,
+# `KNOWN_LAUNDERED` is empty, the real tree carries no hop, and `assert hops`
+# above fails LOUDLY. That is the intended end state, not a regression: retire
+# this control then and let the synthetic `LAUNDERING` sample carry the engine's
+# positive evidence — do not weaken the assertion to make an empty tree pass."
+#
+# Lane 5 reached that state, so the control is retired rather than weakened. The
+# engine's positive evidence now rests entirely on the synthetic samples, which
+# is stronger than it sounds: `test_the_env_remedied_hop_is_detected` and the
+# mutation tests below feed the engine documents that DO launder and require it
+# to name the reference, so "an engine that computes an empty taint set for
+# everything" — the thing the old control ruled out — still fails them.
 
-    Without this, every assertion below is compatible with an engine that
-    computes an empty taint set for everything.
+
+def test_the_real_tree_is_clean_and_the_freeze_is_empty():
+    """The end state, pinned so it reads as intended rather than as a hole.
+
+    An empty `KNOWN_LAUNDERED` beside a clean tree is the goal of #1241, but it
+    is indistinguishable at a glance from a freeze someone emptied to silence a
+    finding — and from a guard that has stopped detecting. This asserts the two
+    halves AGREE, and the detection half is held up by the synthetic samples
+    rather than by this test.
+
+    If a future lane legitimately re-freezes something, this fails and the
+    author has to say so here. That is the point: the empty dict should cost a
+    sentence to change, not nothing.
     """
-    hops, _unreadable, _scanned = guard.scan_all()
-    assert hops, "the tree carries laundering hops; finding none means the engine died"
-    workflows = guard.current_map(hops)
-    # Derived from the freeze rather than pinned to one workflow. It used to
-    # name 706 — the canonical #1233 shape — and that made this control a file
-    # every burn-down lane had to edit, which is the coupling #1210 objects to
-    # in #1080's own freeze. Derived, a lane touches only its own entries.
-    #
-    # When the burn-down finishes, `KNOWN_LAUNDERED` is empty, the real tree
-    # carries no hop, and `assert hops` above fails LOUDLY. That is the intended
-    # end state, not a regression: retire this control then and let the
-    # synthetic `LAUNDERING` sample carry the engine's positive evidence — do
-    # not weaken the assertion to make an empty tree pass.
-    assert set(workflows) == set(guard.KNOWN_LAUNDERED), (
-        "the engine must find exactly the frozen workflows; got "
-        f"{sorted(workflows)} against {sorted(guard.KNOWN_LAUNDERED)}"
+    hops, unreadable, scanned = guard.scan_all()
+    assert unreadable == [], f"the tree should parse, got {unreadable}"
+    assert scanned > 50, f"expected the real workflow directory, scanned {scanned}"
+    assert guard.KNOWN_LAUNDERED == {}, (
+        "the #1241 burn-down emptied this freeze; an entry is back. That is not "
+        "forbidden, but it must be a deliberate re-freeze with a reason, not a "
+        f"way to silence a finding. Got {sorted(guard.KNOWN_LAUNDERED)}"
+    )
+    assert hops == [], (
+        "the freeze is empty, so every hop the scanner finds is unfrozen and "
+        f"fails CI. Found: {[str(h) for h in hops]}"
     )
 
 
@@ -606,34 +625,93 @@ def test_the_convergence_bound_scales_with_the_workflow():
 
 
 # --- the freeze is exact in BOTH directions --------------------------------
+#
+# These two used to derive their subject from the REAL `KNOWN_LAUNDERED`, so a
+# lane burning down a file never had to edit them (#1210's coupling objection).
+# #1241 lane 5 emptied the freeze, and a dict with nothing in it is no subject at
+# all: the `new` half asserted `guard.KNOWN_LAUNDERED` and failed outright, and
+# the `stale` half degraded to `0 == 0` — a test that passes by inspecting
+# nothing, which is the worse of the two because it stays green.
+#
+# So the subject is now SYNTHETIC, which decouples them permanently: they test
+# the `compare()` contract rather than whatever the burn-down has left behind,
+# and no future lane touches them in either direction.
+
+
+@contextlib.contextmanager
+def _frozen(freeze: dict[str, dict[str, str]]):
+    """Run `compare()` against a synthetic freeze, then restore the real one.
+
+    `compare()` reads the module global rather than taking it as an argument, so
+    the only way to give these tests a stable subject is to swap it. Restored in
+    a `finally` so a failing assertion cannot leak a fake freeze into the tests
+    that run after it — which would be the worst possible failure mode here,
+    since the module's other tests assert on the REAL freeze being empty.
+    """
+    original = guard.KNOWN_LAUNDERED
+    guard.KNOWN_LAUNDERED = freeze
+    try:
+        yield
+    finally:
+        guard.KNOWN_LAUNDERED = original
+
+
+_SYNTHETIC_FREEZE = {
+    "999-not-a-real-workflow.yml": {
+        "needs.resolve.outputs.domain": "synthetic subject for the freeze tests",
+        "steps.meta.outputs.repo": "synthetic subject for the freeze tests",
+    }
+}
 
 
 def test_a_new_hop_in_an_already_frozen_workflow_fails():
-    """Per-reference, not per-file — otherwise a frozen file is a free pass.
-
-    The frozen workflow is taken from the freeze rather than named, for the
-    reason given on the positive control above: a lane that burns down the
-    named file should not have to edit this test to land.
-    """
-    assert guard.KNOWN_LAUNDERED, "nothing is frozen; this test has no subject"
-    workflow = sorted(guard.KNOWN_LAUNDERED)[0]
+    """Per-reference, not per-file — otherwise a frozen file is a free pass."""
+    workflow = "999-not-a-real-workflow.yml"
     invented = "needs.invented.outputs.not_frozen"
-    assert invented not in guard.KNOWN_LAUNDERED[workflow]
-    current = {workflow: tuple(sorted(
-        set(guard.KNOWN_LAUNDERED[workflow]) | {invented}
-    ))}
-    new, _stale = guard.compare(current)
+    with _frozen(_SYNTHETIC_FREEZE):
+        current = {workflow: tuple(sorted(
+            set(_SYNTHETIC_FREEZE[workflow]) | {invented}
+        ))}
+        new, stale = guard.compare(current)
     assert new == [f"{workflow}: {invented}"], (
         f"a new reference in a frozen workflow must be reported, got {new}"
+    )
+    assert stale == [], (
+        f"the two frozen references are still present, so nothing is stale: {stale}"
     )
 
 
 def test_a_hop_that_is_gone_is_reported_stale():
     """A burn-down that does not delete its entry leaves the list lying."""
-    new, stale = guard.compare({})
+    with _frozen(_SYNTHETIC_FREEZE):
+        new, stale = guard.compare({})
     assert new == []
-    assert len(stale) == sum(len(v) for v in guard.KNOWN_LAUNDERED.values()), (
+    assert len(stale) == 2, (
         f"every frozen reference should read stale against an empty tree: {stale}"
+    )
+    assert all("no longer reaches a script body" in s for s in stale), stale
+
+
+def test_the_freeze_tests_restore_the_real_freeze():
+    """The swap above is only safe if it is actually undone.
+
+    Asserted rather than trusted: a leaked synthetic freeze would make
+    `test_the_real_tree_is_clean_and_the_freeze_is_empty` fail with a confusing
+    message about a workflow that does not exist, and the cause would be three
+    tests away.
+
+    The condition is the SYNTHETIC KEY's absence, not an empty dict. Asserting
+    emptiness here would be a second, redundant copy of the end-state test — and
+    a misleading one: a future lane that legitimately re-freezes a workflow would
+    trip this and be told a synthetic freeze had leaked, which is a false
+    diagnosis pointing at the wrong file. Measured while mutation-testing lane 5
+    (re-freezing 103 turned this red with exactly that wrong message).
+    """
+    leaked = sorted(set(_SYNTHETIC_FREEZE) & set(guard.KNOWN_LAUNDERED))
+    assert not leaked, (
+        f"a synthetic freeze leaked out of `_frozen`: {leaked} is in the real "
+        f"KNOWN_LAUNDERED. The restore is in a `finally`, so this means the "
+        f"global was reassigned somewhere else."
     )
 
 

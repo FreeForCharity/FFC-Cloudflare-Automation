@@ -183,6 +183,23 @@ def test_a_not_assessed_read_leaves_an_open_alarm_open():
     assert "not assessed" in d["reason"], d
 
 
+def test_the_unknown_verdict_reason_names_both_causes():
+    """Copilot's finding on #1275: one branch, two very different places to look.
+
+    `core.notice` prints this string and a responder acts on it. `assessed: false`
+    means the #719 read failed or hit its cap — look at the log. A non-boolean
+    `silent` means the metrics object is malformed — look at this workflow. The
+    first draft named only the read, which would send someone to the wrong one.
+    """
+    for silence in (NOT_ASSESSED, {"assessed": True, "silent": "true"}):
+        reason = decide(silence, ISSUE)["reason"]
+        assert "not assessed" in reason, reason
+        assert "malformed" in reason, reason
+        # The observed values, so the notice says WHICH of the two it was.
+        assert f"assessed={silence.get('assessed')}".lower() in reason.lower(), reason
+        assert "silent=" in reason, reason
+
+
 def test_a_not_assessed_read_raises_no_new_alarm():
     assert decide(NOT_ASSESSED, None)["action"] == "none", decide(NOT_ASSESSED, None)
 

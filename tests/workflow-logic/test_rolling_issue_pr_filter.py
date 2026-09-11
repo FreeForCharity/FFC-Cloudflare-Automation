@@ -89,6 +89,18 @@ KNOWN_ROLLING_MONITORS = {
 # rather than widening.
 LIBRARY_SELECTORS = ("findRollingIssue", "findSilenceIssue")
 
+# A call to one of those, with an optional member prefix (`lib.findRollingIssue(`
+# is how all six callers spell it today) and a left boundary so that a different
+# identifier merely ENDING in the name — `myFindSilenceIssue(` — is not a match.
+# An unqualified call is accepted too: rejecting one would be a fail-closed
+# finding rather than a silent pass, but there is no reason to make a legitimate
+# `const { findRollingIssue } = require(…)` into one.
+SELECTOR_CALL = re.compile(
+    r"(?:^|[^\w$.])(?:[A-Za-z_$][\w$]*\s*\.\s*)?(?:"
+    + "|".join(LIBRARY_SELECTORS)
+    + r")\s*\("
+)
+
 
 def closes_an_issue(script: str) -> bool:
     """Does this script close an issue it looked up? (the consequential half)"""
@@ -136,7 +148,18 @@ def scan_script(script: str) -> list[str]:
         for ln in selections
         if not (DROPS_PRS.search(ln) or prefiltered)
     ]
-    if not selections and not any(f"{name}(" in script for name in LIBRARY_SELECTORS):
+    # A CALL to an allow-listed library selector is a selection too — one that is
+    # safe by construction, since `test_every_library_selector_actually_drops_prs`
+    # reads the helper and asserts it negates `.pull_request`. Matched as a call on
+    # a comment-stripped line, not as a substring of the whole script: a mention in
+    # prose ("we used to use findRollingIssue()") must not suppress the fail-closed
+    # branch below, which is the one thing here that cannot be allowed to fail
+    # open. Same line-based limits as the `.find(` scan above, deliberately — a
+    # trailing comment or a string literal on a code line still counts, and making
+    # this stricter than the selection scan would be a second, divergent idea of
+    # what "code" means.
+    library_selections = [ln for ln in lines if SELECTOR_CALL.search(ln)]
+    if not selections and not library_selections:
         # Fail closed: if the marker match moved somewhere this scan cannot see,
         # say so. Failing open here would make every future copy invisible.
         reasons.append(
@@ -362,6 +385,69 @@ def test_a_filter_that_keeps_only_pull_requests_is_still_flagged():
         "const existing = open.find(i => i.body && i.body.includes(marker));",
     ]:
         assert scan_script(_synthetic(selection)), selection
+
+
+def test_a_mentioned_library_selector_does_not_satisfy_the_guard():
+    """Copilot's finding on #1275: a NAME is not a call.
+
+    The allow-list check was a substring test over the whole script, so a comment
+    naming the helper suppressed the fail-closed branch — and that branch is the
+    one thing in this file that must never fail open, since it is what makes a
+    future copy of the pattern visible at all.
+    """
+    for mention in [
+        "// we used to call lib.findRollingIssue(open) here",
+        "// see findSilenceIssue() in process-health-metrics-lib.js",
+        "// TODO: switch to findRollingIssue(open)",
+    ]:
+        script = (
+            "const open = await github.paginate(github.rest.issues.listForRepo, "
+            "{ owner, repo, state: 'open' });\n"
+            + mention
+            + "\nconst existing = pickSomehow(open);\n"
+            + CLOSE_TAIL
+        )
+        assert scan_script(script), mention
+
+
+def test_an_identifier_merely_ending_in_a_selector_name_is_not_a_call():
+    script = (
+        "const open = await github.paginate(github.rest.issues.listForRepo, "
+        "{ owner, repo, state: 'open' });\n"
+        "const existing = myFindSilenceIssue(open);\n" + CLOSE_TAIL
+    )
+    assert scan_script(script), "a lookalike identifier must not satisfy the allow-list"
+
+
+def test_a_real_library_selector_call_satisfies_the_guard():
+    """Both the member form every caller uses and a destructured bare call."""
+    for call in [
+        "const existing = lib.findSilenceIssue(open);",
+        "const existing = lib.findRollingIssue(open);",
+        "const existing = findRollingIssue(open);",
+        "const existing = lib . findSilenceIssue ( open );",
+    ]:
+        script = (
+            "const open = await github.paginate(github.rest.issues.listForRepo, "
+            "{ owner, repo, state: 'open' });\n" + call + "\n" + CLOSE_TAIL
+        )
+        assert scan_script(script) == [], call
+
+
+def test_a_library_call_does_not_excuse_a_second_hand_rolled_match():
+    """The two checks are independent: one safe selection does not bless another.
+
+    A script can call the helper in one place and hand-roll an unguarded match in
+    another, which would reintroduce the defect while the library call made the
+    workflow look fixed.
+    """
+    script = (
+        "const open = await github.paginate(github.rest.issues.listForRepo, "
+        "{ owner, repo, state: 'open' });\n"
+        "const existing = lib.findSilenceIssue(open);\n"
+        "const other = open.find((i) => i.body && i.body.includes(marker));\n" + CLOSE_TAIL
+    )
+    assert scan_script(script), "an unguarded second match must still be reported"
 
 
 def test_a_commented_out_filter_does_not_satisfy_the_guard():

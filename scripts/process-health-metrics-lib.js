@@ -855,10 +855,20 @@ function decideSilenceDelivery(silence, existing) {
   if (s.assessed !== true || typeof s.silent !== 'boolean') {
     return {
       action: 'none',
+      // Names BOTH causes, because this string is what `core.notice` prints and
+      // a responder acts on. `assessed: false` means the #719 read failed or hit
+      // its page cap; a non-boolean `silent` means the metrics object itself is
+      // malformed, which is a defect in this workflow rather than in the log —
+      // opposite places to look, and the first draft of this reason named only
+      // the first (Copilot, #1275).
       reason:
-        'conductor liveness was not assessed this run — the #' +
+        'conductor liveness not assessed this run — either the #' +
         LOG_ISSUE +
-        ' read failed or hit its page cap, so an open alarm stays open and no new one is raised',
+        ' read failed or hit its page cap (assessed=' +
+        String(s.assessed) +
+        '), or the silence verdict is malformed (silent=' +
+        JSON.stringify(s.silent) +
+        ', expected a boolean). Either way an open alarm stays open and no new one is raised',
     };
   }
   if (s.silent) {

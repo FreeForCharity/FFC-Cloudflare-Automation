@@ -113,13 +113,18 @@ CONSTRAINED_TYPES = frozenset({"boolean", "choice"})
 _EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
 
 # A reference to a dispatch input ANYWHERE inside an expression, not only the
-# bare `${{ inputs.x }}` spelling. `702-ffc-ex-clone-deploy.yml:271` is why:
+# bare `${{ inputs.x }}` spelling. `702-ffc-ex-clone-deploy.yml` is why — the
+# shape it carried until its burn-down was:
 #
 #     ${{ inputs.exclude && format('--exclude {0}', inputs.exclude) || '' }}
 #
-# is a free-text input reaching the script text through a `format()`, and a
-# pattern anchored on the bare spelling reads it as clean. #1080's own table
-# missed this call site for exactly that reason.
+# a free-text input reaching the script text through a `format()`, which a
+# pattern anchored on the bare spelling reads as clean. #1080's own table missed
+# that call site for exactly that reason. The example is kept deliberately even
+# though 702 no longer contains it: it is the argument FOR this regex's shape,
+# and deleting it with the call site would leave the widened pattern looking
+# like unexplained generality. Its line number is not cited — the burn-down
+# moved it, and a citation that decays is worse than none (ledger L196).
 #
 # Whitespace is tolerated around the dots because the expression language allows
 # it and a guard that can be evaded with a space is decoration.
@@ -1116,7 +1121,6 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # --- WPMUDEV ------------------------------------------------------------
     "601-wpmudev-export-sites.yml": ("output_file",),
     # --- GitHub -------------------------------------------------------------
-    "702-ffc-ex-clone-deploy.yml": ("depth", "domain", "exclude"),
     # 704-website-analytics-wire.yml burned down: `gtm_id` / `measurement_id` now reach
     # the bash body through step-level `env:`. Its only interpolating step was the one
     # named `Validate inputs` — the step whose purpose is to reject a malformed id,

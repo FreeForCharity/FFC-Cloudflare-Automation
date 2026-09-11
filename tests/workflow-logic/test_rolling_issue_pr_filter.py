@@ -51,13 +51,21 @@ import sys
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import WORKFLOWS  # noqa: E402
+from wf_extract import REPO_ROOT, WORKFLOWS  # noqa: E402
 
 # The six fixed in #980, plus 744 — the one that already selected safely AND
-# closes, so it matches the shape this guard looks for. The other two workflows
-# that drop PRs correctly, 737 and 739, are deliberately absent: they enumerate
-# issues to *report* and never close one, so they do not match "lists and
-# closes" and asserting they do would fail for the wrong reason.
+# closes, so it matches the shape this guard looks for — plus 739 since #1269.
+# 737 is still deliberately absent: it enumerates issues to *report* and never
+# closes one, so it does not match "lists and closes" and asserting it does would
+# fail for the wrong reason.
+#
+# 739 was listed here as an example of that same exemption until #1269 gave its
+# Conductor-silence verdict a rolling issue, which closes on recovery. Worth
+# noting how that reached this file: the exemption was stated as a fact about
+# what 739 does, so when what 739 does changed, the comment became false and the
+# fail-closed branch in `scan_script` is what said so — the guard reported the
+# selection it could no longer see rather than passing. An exemption keyed to a
+# condition the checker still evaluates (L181) behaves exactly like this.
 #
 # Named so a removal is visible: if one of these stops matching the shape, the
 # coverage assertion below fails rather than the file silently dropping out.
@@ -65,11 +73,21 @@ KNOWN_ROLLING_MONITORS = {
     "228-whmcs-fraud-review.yml",
     "321-azure-kv-credential-liveness.yml",
     "738-fleet-smoke-engine-drift-audit.yml",
+    "739-process-health-metrics.yml",
     "740-scheduled-workflow-failure-alert.yml",
     "741-fleet-security-audit-coverage.yml",
     "743-fleet-security-header-audit.yml",
     "744-repo-public-feed-freshness.yml",
 }
+
+# Library helpers a script may use INSTEAD of an inline filter. The scan cannot
+# see inside them, so each name here is a claim — and
+# `test_every_library_selector_actually_drops_prs` below reads every definition
+# of it under `scripts/` and asserts it negates `.pull_request`. Before #1269
+# this was a bare `"findRollingIssue(" not in script` substring test, which
+# trusted the name alone; a second selector made that trust worth checking
+# rather than widening.
+LIBRARY_SELECTORS = ("findRollingIssue", "findSilenceIssue")
 
 
 def closes_an_issue(script: str) -> bool:
@@ -118,7 +136,7 @@ def scan_script(script: str) -> list[str]:
         for ln in selections
         if not (DROPS_PRS.search(ln) or prefiltered)
     ]
-    if not selections and "findRollingIssue(" not in script:
+    if not selections and not any(f"{name}(" in script for name in LIBRARY_SELECTORS):
         # Fail closed: if the marker match moved somewhere this scan cannot see,
         # say so. Failing open here would make every future copy invisible.
         reasons.append(
@@ -161,6 +179,37 @@ def scan_repo() -> dict[str, list[str]]:
 def test_no_workflow_closes_an_issue_it_selected_without_dropping_prs():
     findings = scan_repo()
     assert not findings, findings
+
+
+def test_every_library_selector_actually_drops_prs():
+    """A selector on the allow-list is a claim; this is what checks it.
+
+    `scan_script` accepts `lib.findRollingIssue(open)` without seeing the filter,
+    so the allow-list is the one place this guard trusts a NAME rather than the
+    code in front of it. Every definition of each name is read — five libraries
+    define `findRollingIssue` — because one unfiltered copy is enough to
+    reintroduce the defect while every caller still looks fixed.
+    """
+    checked = 0
+    for name in LIBRARY_SELECTORS:
+        definitions = [
+            (path, path.read_text(encoding="utf-8"))
+            for path in sorted((REPO_ROOT / "scripts").glob("*.js"))
+        ]
+        defining = [(p, t) for p, t in definitions if f"function {name}(" in t]
+        # Anchor first: a rename that moved the helper must fail loudly here
+        # rather than leave a name on the allow-list that guards nothing.
+        assert defining, f"no scripts/*.js defines {name}() — is the allow-list stale?"
+        for path, text in defining:
+            start = text.index(f"function {name}(")
+            end = text.find("\n}", start)
+            assert end != -1, f"could not delimit {name}() in {path.name}"
+            assert DROPS_PRS.search(text[start:end]), (
+                f"{path.name}:{name}() is on the selector allow-list but does not "
+                "negate .pull_request"
+            )
+            checked += 1
+    assert checked >= len(LIBRARY_SELECTORS), checked
 
 
 def test_the_scan_actually_reaches_the_known_rolling_monitors():
@@ -224,6 +273,14 @@ def test_the_scan_flags_the_pre_fix_form_of_a_real_workflow():
             "740-scheduled-workflow-failure-alert.yml",
             "const existing = open.find(i => !i.pull_request && i.body && i.body.includes(marker));",
             "const existing = open.find(i => i.body && i.body.includes(marker));",
+        ),
+        # 739 (#1269) exercises the library-selector path on shipped source: the
+        # scan sees no inline filter at all here, so what must hold is that
+        # replacing the helper with a hand-rolled match is rejected.
+        (
+            "739-process-health-metrics.yml",
+            "const existing = lib.findSilenceIssue(open);",
+            "const existing = open.find((i) => i.body.includes(lib.SILENCE_MARKER));",
         ),
     ]:
         path = WORKFLOWS / name

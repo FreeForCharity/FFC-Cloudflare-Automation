@@ -711,6 +711,19 @@ gh api "repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/$id/run
 Workflow 740 already gets this right (`740-scheduled-workflow-failure-alert.yml:169-170`) — the trap
 is in ad-hoc queries, which nothing guards.
 
+**Read `created_at` BEFORE `conclusion`, and never score a prediction against a tick that predates
+the thing it is about.** The recipe above prints the timestamp first on purpose. A scheduled
+workflow holds its previous verdict between runs — it has no state meaning _"not re-measured yet"_ —
+so a fix that landed after the last tick leaves the monitor showing `failure` in exactly the colour
+it would show if the fix had not worked. On 2026-09-11 run 153 cleared all 17 findings on board #9
+at ~12:2xZ and predicted 745 would go green; 745's newest run was `34576090435` at **07:48:07Z**,
+~3h45m _earlier_, and reading it as a falsification would have sent the next run hunting for a bug
+in `scripts/audit-agentic-os-board.py` that does not exist. If the newest run started before your
+change, the only correct verdict is **not yet evaluable** — log that as a result, not as a deferral,
+so the run after you does not re-score it. When you need the answer sooner than the cron, measure
+directly (most audit scripts run locally with `GH_TOKEN="$(gh auth token)"`) rather than
+reinterpreting a stale run. Ledger **L267**.
+
 ## Key docs
 
 | Doc                                                            | What                                                                                                |

@@ -369,11 +369,17 @@ FIXED_SITES = {
         ("-not [string]::IsNullOrWhiteSpace('${{ inputs.status }}')",
          "'${{ inputs.status }}' -ne ''"),
     ],
+    # 229's two gates now read `$env:` rather than an interpolated input: the
+    # #1080 lane that burned the workflow down moved both values into step-level
+    # `env:` (IN_CLIENT_ID / IN_EMAIL). The mutations follow the spelling, which
+    # is the point of this guard covering BOTH forms — the burn-down changes the
+    # predicate's domain from string to string-or-null, so `-ne ''` becomes wrong
+    # in one MORE case here than it was before the move, not fewer.
     "229-whmcs-client-field-populate.yml": [
-        ("-not [string]::IsNullOrWhiteSpace('${{ inputs.client_id }}')",
-         "'${{ inputs.client_id }}' -ne ''"),
-        ("-not [string]::IsNullOrWhiteSpace('${{ inputs.email }}')",
-         "'${{ inputs.email }}' -ne ''"),
+        ("-not [string]::IsNullOrWhiteSpace($env:IN_CLIENT_ID)",
+         "$env:IN_CLIENT_ID -ne ''"),
+        ("-not [string]::IsNullOrWhiteSpace($env:IN_EMAIL)",
+         "$env:IN_EMAIL -ne ''"),
     ],
 }
 

@@ -348,6 +348,7 @@ BURNED_DOWN = (
     "102-domain-add-ffc-cloudflare-and-whmcs.yml",
     "116-domain-transfer-epp-probe.yml",
     "702-ffc-ex-clone-deploy.yml",
+    "229-whmcs-client-field-populate.yml",
 )
 
 
@@ -670,8 +671,28 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
         f"expected {expected_write} write-environment ones, got {len(write)}: "
         f"{sorted(write)}"
     )
-    for expected in ("229-whmcs-client-field-populate.yml", "115-domain-transfer-preflight.yml"):
-        assert expected in current, f"{expected} must be in the frozen set"
+    # Positive control against the two count assertions above passing over an
+    # EMPTY frozen set: two entries named as literals, independent of
+    # KNOWN_UNGUARDED, so a guard that silently stopped finding anything cannot
+    # satisfy `len(current) == expected_current` by scanning nothing.
+    #
+    # These literals are MEANT to rot, and a burn-down lane is what rots them:
+    # #1080 lane 18 burned down `229-whmcs-client-field-populate.yml`, which used
+    # to be the first of the pair. If a lane you are landing makes this assertion
+    # fail, the fix is to swap in another entry that IS still frozen — not to
+    # delete the check, which is the only thing standing between the counts above
+    # and a vacuous pass. One write entry and one read entry, so the pair cannot
+    # both be retired by the same phase of the burn-down.
+    for expected in (
+        "222-whmcs-product-alignment.yml",
+        "115-domain-transfer-preflight.yml",
+    ):
+        assert expected in current, (
+            f"{expected} must be in the frozen set. If you have just burned it "
+            f"down, replace it here with another workflow that is still in "
+            f"KNOWN_UNGUARDED — this pair is the positive control that stops the "
+            f"count assertions above from passing over an empty scan."
+        )
     for burned in BURNED_DOWN:
         assert burned not in current, (
             f"{burned} was burned down — it must no longer interpolate any "

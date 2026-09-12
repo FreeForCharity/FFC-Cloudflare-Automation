@@ -55,8 +55,46 @@ jobs:
 
       - name: Populate client fields from product answers
         shell: pwsh
+        # `client_id` and `email` are free-text dispatch inputs. Interpolated into
+        # this body they were not arguments — they were source text pasted into the
+        # program GitHub then runs, holding the WHMCS API credential the APPROVER
+        # spent on `whmcs-prod`, in a workflow whose live mode is an UpdateClient
+        # write (#1080). Both now reach the body through step-level `env:`.
+        #
+        # The credential is named in no `env:` block here: the preceding
+        # `whmcs-secrets-from-kv` step exports WHMCS_API_IDENTIFIER / _SECRET /
+        # _APIM_SUBSCRIPTION_KEY through GITHUB_ENV, so a reader who checks this
+        # step's own `env:` (ledger L213) and a `secrets.` grep of the file (#1141)
+        # both score it as holding nothing. Run `python3
+        # scripts/check-workflow-input-interpolation.py --reachability
+        # 229-whmcs-client-field-populate.yml` for the arrival path (#1188).
+        #
+        # Both inputs sat in SINGLE quotes, where `$( )` does NOT expand — so the
+        # payload every double-quoted lane used is inert here and reports this body
+        # as harmless. What works is closing the literal and continuing the
+        # EXPRESSION, which is legal in both positions the value lands in:
+        # `'419' + $($null = Set-Content -Path <sentinel> -Value
+        # $env:WHMCS_API_SECRET) + ''` evaluates to `419`. Measured on pwsh 7.4.6
+        # against the body as it shipped, each input separately: the WHMCS secret
+        # was written to the sentinel, the callee was still handed a legal
+        # `ClientId=[419] Email=[a@example.org]`, and the step exited **0**.
+        #
+        # The sharper half is WHERE it ran. The first substitution of each pair sat
+        # inside the `IsNullOrWhiteSpace(...)` test added by #1213 — the check whose
+        # whole job is to refuse a blank. The validation WAS the injection point, so
+        # a reviewer triaging for an unvalidated input finds a validated one, one
+        # line above the splat. Same shape as ledger L206, where 112's callee-side
+        # `[ValidatePattern]` ran after the payload it appeared to constrain.
+        # `tests/workflow-logic/test_229_client_field_populate_wiring.py` measures
+        # both directions rather than asserting any of this.
+        #
+        # `overwrite` and `dry_run` stay interpolated on purpose: both are
+        # `type: boolean`, so GitHub generates the value from the declared option
+        # and neither can carry a payload.
         env:
           WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          IN_CLIENT_ID: ${{ inputs.client_id }}
+          IN_EMAIL: ${{ inputs.email }}
         run: |
           $ErrorActionPreference = 'Stop'
           $params = @{
@@ -66,9 +104,30 @@ jobs:
           }
           # `-not IsNullOrWhiteSpace`, not `-ne ''`: the latter is True for
           # whitespace, so `client_id: "   "` would be splatted through as a
-          # blank -ClientId and select nothing rather than failing (#1213).
-          if (-not [string]::IsNullOrWhiteSpace('${{ inputs.client_id }}')) { $params.ClientId = '${{ inputs.client_id }}' }
-          if (-not [string]::IsNullOrWhiteSpace('${{ inputs.email }}')) { $params.Email = '${{ inputs.email }}' }
+          # blank -ClientId and select nothing rather than failing (#1213). Now
+          # that the value arrives from `env:` the predicate's domain is
+          # string-OR-NULL rather than string, which is the case `-ne ''` gets
+          # wrong in the opposite direction — so the same test is now load-bearing
+          # for all three blank forms (unset, empty, whitespace).
+          #
+          # This is a GATED APPEND, not the fail-closed guard the other #1080
+          # lanes add (#1150, ledger L214), and the difference is deliberate: a
+          # blank `client_id` is this workflow's DOCUMENTED path ("leave blank to
+          # use email"), so exiting 1 on empty would break the common dispatch.
+          # Omitting the key is what makes the blank safe, and that is measured
+          # rather than assumed — the hashtable is splatted onto a NATIVE command,
+          # whose argument order is undefined (ledger L254). With both predicates
+          # replaced by unconditional assignments, `client_id` empty and `email`
+          # supplied, 8 runs on pwsh 7.4.6 produced FOUR outcomes, all at exit 0:
+          # 2 bound `ClientId=[]` correctly, and 6 bound ClientId to another
+          # rendered argument — `-Email:a@example.org`, `-MapJson:config/...`,
+          # `-OutputFile:artifacts/...`. Same input, same commit. Note which blank
+          # that is: empty, not unset. An UNSET mapping is dropped from the
+          # rendering entirely and was correct 8/8, so the hazard here is the blank
+          # the dispatch form produces by default, not the one a broken `env:`
+          # block produces.
+          if (-not [string]::IsNullOrWhiteSpace($env:IN_CLIENT_ID)) { $params.ClientId = $env:IN_CLIENT_ID }
+          if (-not [string]::IsNullOrWhiteSpace($env:IN_EMAIL)) { $params.Email = $env:IN_EMAIL }
           if ('${{ inputs.overwrite }}' -eq 'true') { $params.Overwrite = $true }
           if ('${{ inputs.dry_run }}' -eq 'false') { $params.Execute = $true }
           & pwsh -NoProfile -File ./scripts/whmcs-client-field-populate.ps1 @params | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append

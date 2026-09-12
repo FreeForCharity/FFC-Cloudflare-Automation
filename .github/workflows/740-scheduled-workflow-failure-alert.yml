@@ -198,9 +198,20 @@ jobs:
             // Satellite markers are repo-qualified because "Security Audit" is the name of a
             // different workflow in each of four repos; an unqualified key would collapse all
             // four into one alert, where one repo going green closes the other three's outage.
-            const markerFor = (t) => (t.isHub
-              ? `<!-- scheduled-workflow-failure-alert:${t.name} -->`
-              : `<!-- scheduled-workflow-failure-alert:${t.slug}:${t.name} -->`);
+            //
+            // 745 READS THIS LITERAL. `test_745_board_audit.py` asserts the hub form appears
+            // here verbatim as `<!-- scheduled-workflow-failure-alert:${wfName} -->`, because
+            // 745 excludes 740's alert about 745 from its own board audit and would otherwise
+            // reopen that loop the moment the two spellings drifted apart. Keeping the local
+            // name `wfName` is what holds that guard — renaming it to `t.name` here is
+            // behaviour-neutral and breaks the cross-workflow check, which is how this comment
+            // came to be written.
+            const markerFor = (t) => {
+              const wfName = t.name;
+              return t.isHub
+                ? `<!-- scheduled-workflow-failure-alert:${wfName} -->`
+                : `<!-- scheduled-workflow-failure-alert:${t.slug}:${wfName} -->`;
+            };
             const titleFor = (t) => (t.isHub
               ? `🚨 Scheduled workflow failing: ${t.name}`
               : `🚨 Scheduled workflow failing: ${t.slug} — ${t.name}`);

@@ -347,6 +347,7 @@ BURNED_DOWN = (
     "118-whmcs-domain-lock.yml",
     "102-domain-add-ffc-cloudflare-and-whmcs.yml",
     "116-domain-transfer-epp-probe.yml",
+    "702-ffc-ex-clone-deploy.yml",
 )
 
 
@@ -603,6 +604,46 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                from 118 rather than measured here. Ledger L260. `mode` (choice)
                and `show_code` (boolean) stay interpolated and are not findings.
       = 20 / 5
+      -702     burned down: `domain` moved to step-level `env:` in all five bash
+               bodies, plus `depth` and `exclude` in the clone step — ELEVEN
+               references across five steps of one github-prod job, the widest
+               entry left in the freeze. Two things make it unlike every lane
+               before it.
+
+               First, one of its sites needed no quote breaking and no `$( )`
+               placement skill: `exclude` was interpolated UNQUOTED, by
+               `${{ inputs.exclude && format('--exclude {0}', inputs.exclude)
+               || '' }}`. Every other lane's payload had to survive the quoting
+               around it; this one is bare script text on its own. It is also
+               the call site #1080's original table missed, because the input
+               reaches the body through a `format()` rather than as a bare
+               `${{ inputs.x }}` — the reason the guard's `_INPUT_REF` matches
+               a reference anywhere inside an expression.
+
+               Second, the credential is a Key Vault PAT with cross-repo write
+               scope arriving through GITHUB_ENV, and one of the five sites is
+               the step named `Gate - clone must be self-contained`. A payload
+               there runs inside the process that decides whether the clone is
+               acceptable, so it can steal the PAT and return a pass from the
+               same expression — the gate and the thing gated are one process.
+
+               Measured on the shipped bodies (bash, node 22, stub callee
+               recording its argv), with `domain` =
+               `example.org$(printf %s "$GH_TOKEN" > <sentinel>)` and `exclude`
+               = `/beta$(...)`: the sentinel received the token at BOTH sites,
+               the callee was still handed `--domain example.org` and
+               `--exclude /beta`, and the step exited 0. The same payloads
+               through the fixed body arrive at the callee verbatim, as inert
+               argv, with nothing written. A benign control was run first and
+               stole nothing, so "exited 0" is not doing the work (L237).
+
+               `dry_run` and `build_check` (boolean) stay interpolated and are
+               not findings, as do `domain` in `run-name:` and `concurrency:`,
+               which are not script bodies. The argv-array rewrite of the
+               `--exclude` conditional also fixes a latent bug the expression
+               had: the unquoted interpolation word-split, so an `exclude`
+               containing whitespace became extra arguments.
+      = 19 / 4
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just

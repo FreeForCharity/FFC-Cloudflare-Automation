@@ -351,6 +351,7 @@ BURNED_DOWN = (
     "229-whmcs-client-field-populate.yml",
     "222-whmcs-product-alignment.yml",
     "224-whmcs-github-pages-product-alignment.yml",
+    "601-wpmudev-export-sites.yml",
 )
 
 
@@ -683,17 +684,21 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     # the `222`/`224` twins, so the write half has now been replaced twice. If a
     # lane you are landing makes this assertion fail, the fix is to swap in
     # another entry that IS still frozen — not to delete the check, which is the
-    # only thing standing between the counts above and a vacuous pass. One write
-    # entry and one read entry, so the pair cannot both be retired by the same
-    # phase of the burn-down.
+    # only thing standing between the counts above and a vacuous pass.
     #
-    # `601-wpmudev-export-sites.yml` is the LAST write entry, so the lane that
-    # burns it down cannot replace like with like. That lane should pin a read
-    # entry here and say in its message that the write half is exhausted — the
-    # control's job is to prove the scan is not empty, and two read entries still
-    # do that. Dropping to one, or to none, does not.
+    # That lane has now landed: #1080 lane 20 burned down
+    # `601-wpmudev-export-sites.yml`, the last write entry, so the [W] column is
+    # zero and like-for-like replacement is no longer possible. Per the note it
+    # left, the write slot is filled by a second READ entry rather than dropped —
+    # the control's job is to prove the scan is not empty, and two read entries
+    # still do that, while one (or none) does not.
+    #
+    # Both are now read lanes, so the "cannot both be retired by the same phase"
+    # property above is gone with the phase that gave it. What replaces it is
+    # that they are retired by different WORK: 107 interpolates one input into
+    # one Cloudflare body, 115 three inputs including a `github-script` one.
     for expected in (
-        "601-wpmudev-export-sites.yml",
+        "107-audit-compliance.yml",
         "115-domain-transfer-preflight.yml",
     ):
         assert expected in current, (

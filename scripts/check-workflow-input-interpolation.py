@@ -1200,7 +1200,7 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # and there an EMPTY value is PRESERVED (exit 0, empty path, silent no-op
     # export) while an UNSET one is dropped and fails loudly. So the two blank
     # forms fail in opposite directions, and the quiet one is the one a dispatch
-    # form produces. Ledger L275.
+    # form produces. Ledger L278.
     # `tests/workflow-logic/test_601_wpmudev_export_wiring.py` measures both.
     # --- GitHub -------------------------------------------------------------
     # 704-website-analytics-wire.yml burned down: `gtm_id` / `measurement_id` now reach

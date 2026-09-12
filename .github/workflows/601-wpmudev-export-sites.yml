@@ -99,7 +99,7 @@ jobs:
           # glob-capable by design (eight workflows here rely on that, e.g.
           # 209-whmcs-tickets-triage.yml `artifacts/whmcs/tickets_*.csv`) — is
           # the second-order effect, and that step is outside this body, so no
-          # parameter choice here could reach it anyway. Ledger L276.
+          # parameter choice here could reach it anyway. Ledger L279.
           #
           # A CONTROL CHARACTER is the fourth interpretation of the same value,
           # and it is not about paths at all: GitHub parses workflow commands per

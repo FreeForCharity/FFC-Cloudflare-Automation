@@ -1044,7 +1044,7 @@ def test_without_the_pattern_gate_the_export_itself_retargets_onto_another_file(
     `prior-run-inventory.csv`, and invoking the same script through `&` (no
     native hop) binds the glob literally. So the export WRITES to a
     pre-existing file nobody named; the artifact upload globbing it is the
-    second-order effect. Ledger L276.
+    second-order effect. Ledger L279.
     """
     stripped = _strip_pattern_guard(_offline(_step()["run"]))
     out, _stolen, _rc = _run(

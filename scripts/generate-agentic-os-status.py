@@ -125,9 +125,10 @@ IN_FLIGHT_RULE = (
     "AGENTS.md. A PR is listed when it carries the agentic-os label, or when its body "
     "references an agentic-os issue in its OWN repository (e.g. 'Closes #123' / 'Refs #123'); "
     "a bare #123 is repo-local, so the same number in two repos is two different issues. "
-    "Referenced-issue labels are what decide it — nothing labels the pull requests "
-    "themselves. `open_prs_total` is the unfiltered open-PR count over exactly these same "
-    "repositories."
+    "Both paths genuinely fire: some PRs do carry the label, applied by the authoring agent "
+    "or by hand, but NO automation applies it (see FFC-Cloudflare-Automation#1070), so the "
+    "referenced-issue path is what makes this listing reliable rather than best-effort. "
+    "`open_prs_total` is the unfiltered open-PR count over exactly these same repositories."
 )
 # Criterion 5 of #925: gates are legitimately hub-only, and the page has to say
 # so. Left implicit, a reader who has just been told the backlog is org-wide will

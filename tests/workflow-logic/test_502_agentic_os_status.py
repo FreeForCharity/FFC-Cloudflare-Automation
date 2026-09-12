@@ -444,6 +444,26 @@ def main():
           "the rule must point at the `repos` field it is scoped by (#925 crit. 4)")
     check("org-wide" in feed["in_flight_prs_rule"], "the rule states the scope in words")
 
+    # The rule offers TWO inclusion paths (the label, and a referenced issue).
+    # It once stated both and then flatly denied the first -- "nothing labels the
+    # pull requests themselves" -- while `in_flight_prs[*].labels` in the very
+    # same snapshot was populated. Copilot caught that on the ffcadmin delivery
+    # PR, not here, and it had already shipped to a PUBLIC page.
+    #
+    # Assert the contradiction directly rather than pinning the whole sentence:
+    # the wording is meant to be edited, the self-consistency is not. What is
+    # false is the ABSOLUTE denial; saying no automation applies the label is
+    # true (#1070) and must stay sayable, so key on the unqualified form.
+    _rule = feed["in_flight_prs_rule"]
+    _claims_label_path = "carries the agentic-os label" in _rule
+    _denies_pr_labels = "nothing labels the pull requests" in _rule
+    check(not (_claims_label_path and _denies_pr_labels),
+          "the rule must not offer the label as an inclusion path and then deny "
+          "that PRs carry labels (contradiction shipped in delivery 91)")
+    check(not _denies_pr_labels or "no automation" in _rule.lower(),
+          "a claim that PRs are unlabelled must be qualified to the automation, "
+          "since agents and humans do apply the label by hand")
+
     # Cost + correctness of the lookup path: only numbers outside the backlog
     # are fetched, each at most once, and a hex-colour-shaped token never is.
     lookups = [u for u in call_log if re.search(r"/issues/\d+$", u)]

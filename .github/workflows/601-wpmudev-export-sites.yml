@@ -101,25 +101,22 @@ jobs:
           # the second-order effect, and that step is outside this body, so no
           # parameter choice here could reach it anyway. Ledger L276.
           #
-          # Deliberately a narrow denylist, not a filename allowlist: the hazard
-          # is the metacharacters, and an allowlist would also reject legitimate
-          # values (a space, a non-ASCII name) that were never the problem.
-          # Raised by Copilot on #1288 after the -LiteralPath round.
+          # A CONTROL CHARACTER is the fourth interpretation of the same value,
+          # and it is not about paths at all: GitHub parses workflow commands per
+          # LINE of a step's output, so a value carrying a newline can forge an
+          # `::error::` / `::notice::` / `::add-mask::` line in this log. That
+          # matters here more than in most repos, because the approver of a gated
+          # run reads exactly this output to decide whether the run did what it
+          # said.
           #
-          # `\p{C}` (control/format characters) is the FOURTH interpretation of
-          # the same value, and it is not about paths at all: GitHub parses
-          # workflow commands per LINE of a step's output, so a value carrying a
-          # newline can forge an `::error::` / `::notice::` / `::add-mask::` line
-          # in this log. That matters here more than in most repos, because the
-          # approver of a gated run reads exactly this output to decide whether
-          # the run did what it said.
+          # Rejecting it HERE is what makes the whole step safe rather than just
+          # the refusal message below: the pre-existing summary line also echoes
+          # `$out`, and a newline-bearing value carrying no other metacharacter
+          # would reach that line untouched. A fix confined to the message the
+          # review named would have left the class live one echo away. Raised by
+          # Copilot on #1288, third round; the allowlist below subsumes it, since
+          # no control character is in the permitted set.
           #
-          # Rejecting it HERE is what makes the whole step safe rather than this
-          # one message: the pre-existing summary line below also echoes `$out`,
-          # and a newline-bearing value with no metacharacter in it would reach
-          # that line untouched. A fix confined to the message this review named
-          # would have left the class live one echo away. Raised by Copilot on
-          # #1288, third round.
           # An ALLOWLIST, after four review rounds of adding one metacharacter
           # class at a time to a denylist (wildcards, then `..`, then control
           # characters, then rooted paths). The sequence is the argument: a
@@ -136,9 +133,10 @@ jobs:
           # TWO MEASURED DETAILS, both of which a plausible rewrite gets wrong:
           #
           #   `\A`/`\z`, NOT `^`/`$`. In .NET `$` also matches BEFORE a trailing
-          #   newline, so `^[A-Za-z0-9._-]+\z`-with-`$` accepts "out.csv`n" —
-          #   silently reopening the log-injection hole the third round closed.
-          #   Measured on pwsh 7.4.6: `^...$` accepts it, `\A...\z` refuses it.
+          #   newline, so the same class anchored as `^[A-Za-z0-9._-]+$` accepts
+          #   "out.csv`n" — silently reopening the log-injection hole the third
+          #   round closed. Measured on pwsh 7.4.6: the `^...$` form accepts it,
+          #   the `\A...\z` form refuses it.
           #
           #   The `..` test STAYS. It is not subsumed: `..` is made only of
           #   characters the allowlist permits, so `../escaped.csv` matches the

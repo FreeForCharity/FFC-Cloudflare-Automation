@@ -229,14 +229,73 @@ def sibling_clones(workspace: pathlib.Path) -> list[str]:
         return []
 
 
-def candidate_session_root(workspace: pathlib.Path) -> str | None:
-    """The directory a multi-repo worker's project root probably is, or None.
+def settings_bearing_ancestor(workspace: pathlib.Path) -> str | None:
+    """The nearest ancestor that already carries a Claude settings file, or None.
 
-    Fires on the shape #1237 measured: two or more sibling checkouts under a
+    Evidence, not shape. A directory holding `.claude/settings.json` was
+    configured as somebody's project root; the sibling-clone heuristic below only
+    observes that checkouts share a parent, which is true of any `repos/` folder.
+
+    Checked FIRST because the two disagree on the Conductor, and the heuristic
+    loses. Measured run 156 on the scheduled Conductor host:
+
+        clone     C:\\...\\Claude_AI_OS_Routine\\repos\\FFC-Cloudflare-Automation
+        parent    C:\\...\\Claude_AI_OS_Routine\\repos            <- no .claude at all
+        session   C:\\...\\Claude_AI_OS_Routine                   <- settings.json + settings.local.json
+
+    The Conductor's clones live one level down, in `repos/`, so its project root
+    is the checkouts' GRANDparent and `workspace.parent` names a directory that
+    is nobody's session. That is not a near miss: re-measuring the named
+    directory returns a confident `NOT WIRED` for a session that is, in fact,
+    wired, and the remedy printed alongside it offers to `--render` settings into
+    a folder no session will ever read. The run that hit this had just been
+    blocked by the very guard the script then said was absent.
+
+    The worker shape is unaffected, in both of its states. Before rendering,
+    `/home/user` has no `.claude`, this returns None, and the sibling heuristic
+    answers `/home/user` exactly as it did before. After rendering, this returns
+    `/home/user` directly. So the fallback is preserved for the only case that
+    ever depended on it.
+    """
+    try:
+        home = pathlib.Path.home().resolve()
+    except (RuntimeError, OSError):  # no home on this platform/account
+        home = None
+    for ancestor in workspace.parents:
+        # `~/.claude` is the USER-level config and is on essentially every
+        # machine, so without this the walk "finds" a session root for any clone
+        # anywhere under the home directory -- a hint that is wrong far more
+        # often than the shape heuristic it was written to correct.
+        #
+        # Not hypothetical, and not caught by reasoning: the first version of
+        # this function walked unbounded, and `test_conductor_hook_wiring.py`
+        # failed THREE pre-existing tests by naming `C:\Users\clark`, because
+        # `TemporaryDirectory()` sits under the home directory on Windows.
+        #
+        # The worker loses nothing. Its root IS its home (`/home/user`), so the
+        # evidence branch declines -- and the sibling-clone branch then answers
+        # `/home/user` anyway, which is the same value by the other route.
+        if home is not None:
+            try:
+                if ancestor.resolve() == home:
+                    continue
+            except OSError:
+                pass
+        if any((ancestor / ".claude" / n).is_file() for n in SETTINGS_NAMES):
+            return str(ancestor)
+    return None
+
+
+def candidate_session_root(workspace: pathlib.Path) -> str | None:
+    """The directory this session's project root probably is, or None.
+
+    Prefers an ancestor carrying Claude settings (evidence); falls back to the
+    sibling-clone shape #1237 measured: two or more sibling checkouts under a
     common parent. One checkout says nothing about where a session is rooted, so
     a lone clone yields None rather than a guess -- a wrong hint is worse than no
     hint, because it sends the reader to re-measure the wrong directory and get a
-    confident answer about it.
+    confident answer about it. Run 156 is that sentence coming true against this
+    function's own fallback; see `settings_bearing_ancestor`.
 
     A parent that already carries `.claude` is still named, and an earlier draft
     of this had it backwards. That draft excluded such parents on the grounds that
@@ -248,6 +307,9 @@ def candidate_session_root(workspace: pathlib.Path) -> str | None:
     the remedy degrade to a `<session project root>` placeholder at exactly the
     moment it could have named the answer.
     """
+    configured = settings_bearing_ancestor(workspace)
+    if configured is not None:
+        return configured
     if len(sibling_clones(workspace)) < 2:
         return None
     return str(workspace.parent)
@@ -419,6 +481,16 @@ def verify(workspace: pathlib.Path, *, source: str) -> dict:
         report["self_certifying"] = True
         hint = candidate_session_root(workspace)
         report["candidate_session_root"] = hint
+        # Name the EVIDENCE, not just the directory. These two hints are not
+        # equally good -- one saw a configured `.claude`, the other only saw
+        # checkouts sharing a parent -- and a reader who is about to re-measure
+        # the named directory is entitled to know which one they are acting on
+        # (run 156 acted on the weak one and got a confident wrong answer).
+        report["candidate_session_root_basis"] = (
+            None
+            if hint is None
+            else ("claude_settings" if hint == settings_bearing_ancestor(workspace) else "sibling_clones")
+        )
         report["problems"].append(
             f"workspace was inferred from the current directory ({workspace}), and that "
             "directory ships the very `.claude/hooks/` this check would probe -- so it "
@@ -428,9 +500,16 @@ def verify(workspace: pathlib.Path, *, source: str) -> dict:
             # ends. shlex.quote leaves an ordinary path bare, so this costs
             # nothing in the common case.
             + (
-                f"; sibling checkouts suggest the session root is {shlex.quote(hint)}"
-                if hint
-                else ""
+                ""
+                if not hint
+                else (
+                    f"; {shlex.quote(hint)} already carries a Claude settings file, "
+                    "so it is the likely session root"
+                    if report["candidate_session_root_basis"] == "claude_settings"
+                    else f"; sibling checkouts suggest the session root is {shlex.quote(hint)} "
+                    "(shape only -- no Claude settings found above this clone, so re-measure "
+                    "rather than trusting it)"
+                )
             )
         )
         return report

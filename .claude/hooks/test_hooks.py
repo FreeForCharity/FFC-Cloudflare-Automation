@@ -465,6 +465,17 @@ RULES = [
         # A slash inside a flag VALUE is data, not the endpoint -- must not fire.
         ("gh api field value with slash allowed",
          "gh api repos/o/r/issues -f body=/tmp/note.md", ALLOW),
+        # A redirect TARGET is a shell path, not the endpoint -- must not fire.
+        # Conductor run 161 was blocked three times on exactly this shape.
+        ("gh api redirect to absolute path allowed",
+         "gh api repos/o/r/contents/x > /c/tmp/z.yaml", ALLOW),
+        ("gh api stderr redirect to absolute path allowed",
+         "gh api repos/o/r/pulls 2> /tmp/err.txt", ALLOW),
+        ("gh api stdin from absolute path allowed",
+         "gh api graphql --input < /c/tmp/q.json", ALLOW),
+        # ...but a leading-slash endpoint BEFORE the redirect still blocks.
+        ("gh api leading slash then redirect",
+         "gh api /markdown > /tmp/out.html", BLOCK),
     ]),
 
     Rule("pipeline-exit-code", 'ledger L50', BLOCK_TIER, [

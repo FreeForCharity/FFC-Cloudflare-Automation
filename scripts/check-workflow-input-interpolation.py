@@ -1064,8 +1064,31 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
         "output_file",
     ),
     "220-whmcs-served-metrics.yml": ("charity_gids", "output_file"),
-    "222-whmcs-product-alignment.yml": ("product_id",),
-    "224-whmcs-github-pages-product-alignment.yml": ("product_id",),
+    # 222-whmcs-product-alignment.yml and
+    # 224-whmcs-github-pages-product-alignment.yml burned down together: they are
+    # the same engine (`whmcs-product-alignment.ps1`) over two source lists, one
+    # `product_id` each, one substitution point each, both single-quoted inside
+    # the splatted `$params`, both on `whmcs-prod` where a live run places
+    # AddOrder writes. Each now reads `$env:IN_PRODUCT_ID`.
+    #
+    # Taking the twins in ONE lane is what made the interesting half visible.
+    # Measured separately on each body (ledger L260 — a twin's claim is not
+    # evidence about its sibling), pwsh 7.4.6, with the fail-closed check removed
+    # and `IN_PRODUCT_ID` EMPTY, 8 runs each: 222 produced four outcomes and 224
+    # three, all nondeterministic, and in both the empty element was dropped from
+    # the native command's argument rendering (ledger L254) so ProductId bound
+    # whatever was rendered next — `-ApiUrl:https://…`, `-OutputFile:artifacts/…`
+    # — or fell through to the CALLEE'S OWN DEFAULT, '39'. An UNSET mapping was
+    # correct 8/8 on both, so once again the dangerous blank is the empty one a
+    # dispatch form produces, not the one a deleted `env:` block produces.
+    #
+    # That default is why neither twin could take 229's gated append or a default
+    # fill. On 222 the callee's '39' IS the intended marker, so a default fill
+    # would look correct forever; on 224, whose product is pid 40, the identical
+    # blank places 222's Cloudflare marker onto GitHub-Pages clients, live, at
+    # exit 0, on some runs and not others. A remedy that is right on one twin and
+    # silently wrong on the other is the argument for reading the callee's
+    # defaults rather than the workflow's.
     # 229-whmcs-client-field-populate.yml burned down: `client_id` / `email` now
     # reach the one pwsh body through step-level `env:` (IN_CLIENT_ID / IN_EMAIL).
     # Two inputs, FOUR substitution points — each input was interpolated twice on

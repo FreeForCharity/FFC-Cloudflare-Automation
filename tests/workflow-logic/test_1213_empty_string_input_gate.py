@@ -381,6 +381,20 @@ FIXED_SITES = {
         ("-not [string]::IsNullOrWhiteSpace($env:IN_EMAIL)",
          "$env:IN_EMAIL -ne ''"),
     ],
+    # The 222/224 twins (#1080 lane 19) spell the test the other way round: their
+    # predicate is the POSITIVE `IsNullOrWhiteSpace(...)` guarding an `exit 1`,
+    # not a negated gate around an append. The mutation therefore flips to `-eq`,
+    # and covering both polarities here is the point — a guard that only ever saw
+    # the negated spelling would be one rename away from reporting nothing on
+    # half the tree.
+    "222-whmcs-product-alignment.yml": [
+        ("[string]::IsNullOrWhiteSpace($env:IN_PRODUCT_ID)",
+         "$env:IN_PRODUCT_ID -eq ''"),
+    ],
+    "224-whmcs-github-pages-product-alignment.yml": [
+        ("[string]::IsNullOrWhiteSpace($env:IN_PRODUCT_ID)",
+         "$env:IN_PRODUCT_ID -eq ''"),
+    ],
 }
 
 

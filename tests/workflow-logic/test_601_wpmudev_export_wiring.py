@@ -200,7 +200,7 @@ BLANK_REFUSAL = "output_file is blank"
 # opening of the condition rather than on the regexes themselves, so the anchor
 # carries no backslashes to keep faithful through this file.
 PATTERN_ANCHOR = "if ($env:IN_OUTPUT_FILE -match "
-PATTERN_REFUSAL = "must name a single file, not a pattern"
+PATTERN_REFUSAL = "output_file must name a single file"
 
 
 # --------------------------------------------------------------------------
@@ -813,7 +813,17 @@ def test_without_literalpath_the_glob_reports_an_unrelated_files_rows():
 # Every metacharacter the gate rejects, plus the traversal and separator forms.
 # `[ab]` matters as much as `*`: a character class is a glob too, and a gate
 # written for `*` alone would let it through.
-PATTERN_VALUES = ("prior-*.csv", "wpmudev_domain?.csv", "[ab].csv", "../escaped.csv")
+PATTERN_VALUES = (
+    "prior-*.csv",
+    "wpmudev_domain?.csv",
+    "[ab].csv",
+    "../escaped.csv",
+    # The control-character rule, which is NOT about paths: GitHub parses
+    # workflow commands per line, so a newline lets a dispatcher forge an
+    # annotation in a log the gate's approver reads. Third Copilot round.
+    "out.csv\n::error::forged annotation",
+    "out.csv\r::notice::forged annotation",
+)
 
 
 def test_the_artifact_upload_still_receives_the_dispatch_input_directly():
@@ -863,6 +873,54 @@ def test_every_pattern_form_is_refused_before_the_callee_runs():
             f"{value!r}: the exporter ran anyway, bound "
             f"{_bound_output_file(out)!r}. Output: {out[:600]}"
         )
+
+
+def test_the_refusal_never_echoes_the_dispatched_value():
+    """No echo, for any refused value — the third Copilot round on #1288.
+
+    A refusal that quotes the value back is how attacker-controlled text reaches
+    a log line of its own. Control characters are rejected by the gate, but this
+    asserts the stronger property directly: the message does not carry the value
+    at all, so PowerShell's own error wrapping cannot place it at a line start
+    either.
+    """
+    body = _offline(_step()["run"])
+    for value in PATTERN_VALUES:
+        out, _stolen, _rc = _run(body, **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: value})
+        # Compare on the value's distinctive part; the whole string can contain
+        # a newline, and a substring test against multi-line output would be
+        # satisfied by coincidence.
+        marker = value.splitlines()[0] if value.splitlines() else value
+        assert marker not in out, (
+            f"the refusal echoed the dispatched value {marker!r} back into the "
+            f"log. Output: {out[:700]}"
+        )
+        assert PATTERN_REFUSAL in out, (
+            f"{value!r}: refused without the expected message, so the assertion "
+            f"above could pass on a run that failed for another reason. "
+            f"Output: {out[:700]}"
+        )
+
+
+def test_a_forged_workflow_command_never_reaches_the_start_of_a_line():
+    """The property the no-echo rule exists to protect, asserted end to end.
+
+    GitHub reads a workflow command only when it STARTS a line, so this is the
+    shape that matters rather than the substring appearing anywhere.
+    """
+    body = _offline(_step()["run"])
+    for value in ("out.csv\n::error::forged annotation", "out.csv\r::notice::forged"):
+        out, _stolen, rc = _run(body, **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: value})
+        offending = [
+            line
+            for line in out.replace("\r", "\n").splitlines()
+            if line.lstrip().startswith("::error::forged")
+            or line.lstrip().startswith("::notice::forged")
+        ]
+        assert not offending, (
+            f"a forged workflow command reached the start of a line: {offending!r}"
+        )
+        assert rc != 0, f"{value!r} must be refused; got rc={rc}. Output: {out[:700]}"
 
 
 def test_an_ordinary_filename_is_not_caught_by_the_pattern_gate():
@@ -927,6 +985,8 @@ NEEDS_PWSH = {
     "test_an_ordinary_filename_is_not_caught_by_the_pattern_gate",
     "test_every_blank_form_is_refused_before_the_callee_runs",
     "test_every_pattern_form_is_refused_before_the_callee_runs",
+    "test_a_forged_workflow_command_never_reaches_the_start_of_a_line",
+    "test_the_refusal_never_echoes_the_dispatched_value",
     "test_without_literalpath_the_glob_reports_an_unrelated_files_rows",
     "test_without_the_pattern_gate_the_export_itself_retargets_onto_another_file",
     "test_the_naive_subexpression_payload_is_inert_here",

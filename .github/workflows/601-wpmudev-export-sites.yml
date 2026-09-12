@@ -105,8 +105,28 @@ jobs:
           # is the metacharacters, and an allowlist would also reject legitimate
           # values (a space, a non-ASCII name) that were never the problem.
           # Raised by Copilot on #1288 after the -LiteralPath round.
-          if ($env:IN_OUTPUT_FILE -match '[*?\[\]]' -or $env:IN_OUTPUT_FILE -match '\.\.' -or $env:IN_OUTPUT_FILE -match '\\') {
-            Write-Error "output_file must name a single file, not a pattern. Refusing to run: '$env:IN_OUTPUT_FILE' contains a wildcard, a '..' segment, or a backslash, and the artifact upload step treats its path as a glob — so a pattern there selects files this run never wrote."
+          #
+          # `\p{C}` (control/format characters) is the FOURTH interpretation of
+          # the same value, and it is not about paths at all: GitHub parses
+          # workflow commands per LINE of a step's output, so a value carrying a
+          # newline can forge an `::error::` / `::notice::` / `::add-mask::` line
+          # in this log. That matters here more than in most repos, because the
+          # approver of a gated run reads exactly this output to decide whether
+          # the run did what it said.
+          #
+          # Rejecting it HERE is what makes the whole step safe rather than this
+          # one message: the pre-existing summary line below also echoes `$out`,
+          # and a newline-bearing value with no metacharacter in it would reach
+          # that line untouched. A fix confined to the message this review named
+          # would have left the class live one echo away. Raised by Copilot on
+          # #1288, third round.
+          if ($env:IN_OUTPUT_FILE -match '[*?\[\]]' -or $env:IN_OUTPUT_FILE -match '\.\.' -or $env:IN_OUTPUT_FILE -match '\\' -or $env:IN_OUTPUT_FILE -match '\p{C}') {
+            # The value is deliberately NOT echoed. It is already visible to
+            # whoever dispatched the run, in the run's own inputs panel, so
+            # echoing it adds nothing an operator needs — while PowerShell wraps
+            # a long error message across lines, which could place attacker text
+            # at the start of one even after control characters are rejected.
+            Write-Error 'output_file must name a single file: no wildcard (* ? [ ]), no ".." segment, no backslash, and no control characters. Refusing to run. The dispatched value is not echoed here on purpose; read it from this run''s inputs panel.'
             exit 1
           }
 

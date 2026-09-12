@@ -349,6 +349,8 @@ BURNED_DOWN = (
     "116-domain-transfer-epp-probe.yml",
     "702-ffc-ex-clone-deploy.yml",
     "229-whmcs-client-field-populate.yml",
+    "222-whmcs-product-alignment.yml",
+    "224-whmcs-github-pages-product-alignment.yml",
 )
 
 
@@ -677,14 +679,21 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     # satisfy `len(current) == expected_current` by scanning nothing.
     #
     # These literals are MEANT to rot, and a burn-down lane is what rots them:
-    # #1080 lane 18 burned down `229-whmcs-client-field-populate.yml`, which used
-    # to be the first of the pair. If a lane you are landing makes this assertion
-    # fail, the fix is to swap in another entry that IS still frozen — not to
-    # delete the check, which is the only thing standing between the counts above
-    # and a vacuous pass. One write entry and one read entry, so the pair cannot
-    # both be retired by the same phase of the burn-down.
+    # #1080 lane 18 burned down `229-whmcs-client-field-populate.yml` and lane 19
+    # the `222`/`224` twins, so the write half has now been replaced twice. If a
+    # lane you are landing makes this assertion fail, the fix is to swap in
+    # another entry that IS still frozen — not to delete the check, which is the
+    # only thing standing between the counts above and a vacuous pass. One write
+    # entry and one read entry, so the pair cannot both be retired by the same
+    # phase of the burn-down.
+    #
+    # `601-wpmudev-export-sites.yml` is the LAST write entry, so the lane that
+    # burns it down cannot replace like with like. That lane should pin a read
+    # entry here and say in its message that the write half is exhausted — the
+    # control's job is to prove the scan is not empty, and two read entries still
+    # do that. Dropping to one, or to none, does not.
     for expected in (
-        "222-whmcs-product-alignment.yml",
+        "601-wpmudev-export-sites.yml",
         "115-domain-transfer-preflight.yml",
     ):
         assert expected in current, (

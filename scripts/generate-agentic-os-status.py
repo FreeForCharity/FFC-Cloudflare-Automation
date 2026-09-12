@@ -495,12 +495,14 @@ def collect_in_flight_prs(repos, token, backlog_issues=None):
     references an agentic-os-labeled issue in its own repo. See
     ``IN_FLIGHT_RULE``.
 
-    The label alone was the previous rule and it could never match: workflow 737
-    labels linked *issues*, and nothing labels the pull requests, so the public
-    panel read 0 while a dozen agent PRs were open (#909). Resolution now runs
-    in the direction the data actually flows — from the PR to the issue it
-    references — so the panel does not depend on labelling discipline that has
-    never held.
+    The label alone was the previous rule and it could not be relied on:
+    workflow 737 labels linked *issues*, and no automation labels the pull
+    requests (#1070), so #909 saw the public panel read 0 while a dozen agent
+    PRs stood open. Agents and humans DO apply the label by hand, which is why
+    the absolute form of that claim is false and ``IN_FLIGHT_RULE`` no longer
+    makes it. Resolution now runs in the direction the data actually flows —
+    from the PR to the issue it references — so the panel does not depend on
+    labelling discipline that has never held.
 
     ``backlog_issues`` (the already-collected open agentic-os issues) answers
     most references for free; only numbers outside that set cost a lookup, and

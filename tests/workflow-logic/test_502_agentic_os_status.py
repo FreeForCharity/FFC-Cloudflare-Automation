@@ -17,10 +17,11 @@ Locked down here:
     invent links between repos that share issue numbers;
   * backlog excludes PRs (search returns both, and PRs carry `pull_request`);
   * in-flight PRs are matched by label OR by a referenced agentic-os issue, so
-    an unlabelled agent PR is counted (#909: nothing labels PRs in this repo,
-    so the label-only filter could never match and the panel read a structural
-    zero). A PR referencing only a non-agentic issue, or only another PR, is
-    still excluded;
+    an unlabelled agent PR is counted (#909: no automation labels PRs in this
+    repo — #1070 — so the label-only filter matched only what someone had
+    labelled by hand and the panel read a near-structural zero). A PR
+    referencing only a non-agentic issue, or only another PR, is still
+    excluded;
   * the feed carries the inclusion rule and the unfiltered open-PR total, so a
     zero panel is distinguishable from a dead one;
   * gates stay hub-only and the feed says so (`pending_gates_scope`);
@@ -463,6 +464,20 @@ def main():
     check(not _denies_pr_labels or "no automation" in _rule.lower(),
           "a claim that PRs are unlabelled must be qualified to the automation, "
           "since agents and humans do apply the label by hand")
+
+    # The same denial survived in `collect_in_flight_prs`'s docstring after the
+    # shipped string was fixed, and only a human reader caught it -- the check
+    # above reads the FEED, so anything the feed does not carry is invisible to
+    # it. Scope the assertion to the generator's whole source instead: the claim
+    # is false wherever it is written, and a docstring is where the next author
+    # goes looking for the rule.
+    _src = SCRIPT.read_text(encoding="utf-8")
+    for _m in re.finditer(r"nothing labels the pull requests", _src):
+        _window = _src[max(0, _m.start() - 400):_m.end() + 400].lower()
+        check("no automation" in _window,
+              "the generator source states the unqualified denial 'nothing "
+              f"labels the pull requests' at offset {_m.start()} without "
+              "qualifying it to automation (#1070)")
 
     # Cost + correctness of the lookup path: only numbers outside the backlog
     # are fetched, each at most once, and a hex-colour-shaped token never is.

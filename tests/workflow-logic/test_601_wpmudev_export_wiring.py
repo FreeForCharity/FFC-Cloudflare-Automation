@@ -841,6 +841,40 @@ def test_the_artifact_upload_still_receives_the_dispatch_input_directly():
     )
 
 
+def test_the_upload_step_is_not_failure_tolerant():
+    """The gate protects the upload TRANSITIVELY, and this is the dependency.
+
+    The gate rejects a wildcard in `Run export`, which exits 1. The upload never
+    sees that value because a step with no `if:` defaults to `if: success()` and
+    is therefore skipped — so the protection lives in step ORDERING, not in
+    anything at the upload site, where `path:` is an action input that no
+    parameter choice in the body can reach.
+
+    `if: always()` is the single most natural edit anyone will ever make to this
+    step, to keep partial output from a failed export. It would silently undo
+    the gate's cover for the upload: a wildcard `path:` would glob the workspace
+    after the gate had already refused it. The sibling test above asserts
+    `with.path`, which such an edit leaves untouched — so it cannot catch this,
+    and the premise would decay with every check still green.
+
+    Scoped to failure-TOLERANT conditions rather than to the presence of an
+    `if:` at all: `if: success()` is the default spelled out, and refusing it
+    would make this "no condition allowed", which is a different and wrong rule.
+
+    Raised by the Conductor on #1288 (run 159), whose point was that the
+    reasoning was written in a comment where it needed to be an assertion.
+    """
+    upload = find_step(load_workflow(WORKFLOW), JOB, "Upload artifact")
+    condition = upload.get("if")
+    assert condition is None or "always()" not in str(condition), (
+        "the pattern gate protects the artifact upload only because a failed "
+        "`Run export` skips it. A failure-tolerant `if:` here would let a "
+        "wildcard `path:` glob the workspace after the gate refused it — the "
+        "gate would still pass its own tests while covering nothing. "
+        f"if: {condition!r}"
+    )
+
+
 def test_the_pattern_gate_precedes_the_export():
     body = _step().get("run", "")
     assert PATTERN_ANCHOR in body, f"the pattern gate is gone: {body!r}"

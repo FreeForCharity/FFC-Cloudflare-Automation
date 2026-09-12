@@ -1485,6 +1485,9 @@ def test_a_satellite_run_on_a_non_default_branch_is_still_ignored():
         default_branches={SPT: "trunk"},
         head_branches={SPT: "some-feature"},
     )
+    # `failed is None` is load-bearing: without it a sweep that died before
+    # reaching the branch filter would satisfy both assertions below.
+    assert r["failed"] is None, r
     assert r["created"] == [], r
     assert r["comments"] == [], r
 
@@ -1534,6 +1537,7 @@ def test_dry_run_does_not_close_a_recovered_alert_either():
         open_issues=[_alert_issue(11, marker=_sat_marker(SPT))],
         dry_run=True,
     )
+    assert r["failed"] is None, r  # not "quiet because the sweep fell over"
     assert _closes(r) == [], r
     assert r["comments"] == [], r
 

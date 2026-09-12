@@ -1171,7 +1171,37 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # declares a `type:`, so both are plain strings — a pre-filled box is not a
     # constraint.
     # --- WPMUDEV ------------------------------------------------------------
-    "601-wpmudev-export-sites.yml": ("output_file",),
+    # 601-wpmudev-export-sites.yml burned down: `output_file` now reaches the pwsh
+    # body through step-level `env:`. It was the LAST write-environment entry in
+    # the freeze, so the [W] column is now zero and every remaining entry is a
+    # read lane.
+    #
+    # It is the entry whose CLASSIFICATION was the interesting part. `wpmudev-prod`
+    # is a [W] only because it does not end in `-read`, while the workflow's own
+    # title says "(Read-only)" — so this looked for eighteen lanes like the one
+    # place the mechanical rule over-reported. It does not: the body reaches a live
+    # WPMUDEV Hub API token, scoped to the Hub account rather than to this
+    # workflow's intent, and an injected payload spends it after the approver
+    # does. The environment NAME is what is wrong. Renaming it is a repo-admin
+    # change and was deliberately left out of this lane.
+    #
+    # It is also the easy-to-see shape, which is why it outlived the hard ones:
+    # the credential sits in the injected step's OWN `env:`, so both recommended
+    # sweeps — an L213 read and a `secrets.` grep (#1141) — find it without
+    # needing #1188. Single quotes, so `$( )` is inert and the double-quoted
+    # payload reports it harmless; the breakout closes the literal. Measured on
+    # pwsh 7.4.6 against the shipped body: the token was written to a sentinel,
+    # the callee still bound a legal `OutputFile=[wpmudev_domains.csv]`, and the
+    # step exited 0.
+    #
+    # The blank case is recorded in the workflow itself because it BOUNDS L254
+    # rather than repeating it. L254 is about a hashtable splatted onto a native
+    # command, where a blank vanishes; this is one explicit `-OutputFile $out`,
+    # and there an EMPTY value is PRESERVED (exit 0, empty path, silent no-op
+    # export) while an UNSET one is dropped and fails loudly. So the two blank
+    # forms fail in opposite directions, and the quiet one is the one a dispatch
+    # form produces. Ledger L278.
+    # `tests/workflow-logic/test_601_wpmudev_export_wiring.py` measures both.
     # --- GitHub -------------------------------------------------------------
     # 704-website-analytics-wire.yml burned down: `gtm_id` / `measurement_id` now reach
     # the bash body through step-level `env:`. Its only interpolating step was the one
@@ -1442,6 +1472,24 @@ def main(argv: list[str] | None = None) -> int:
         if any(is_write_environment(e) for e in environments(parsed)):
             write_workflows.append(workflow)
 
+    # The ordering advice is only advice while a write entry is left. Once the
+    # [W] column reaches zero the same sentence reads "Burn down the 0 write ones
+    # first", which states the opposite of what it means — the milestone is the
+    # one line a reader most needs said plainly, and a burn-down that ends by
+    # printing an instruction to burn down nothing invites the reading that the
+    # scan broke. Written as a branch rather than as a plural-`s` fix, because
+    # the two cases carry different INSTRUCTIONS, not different grammar.
+    if write_workflows:
+        priority = (
+            f"Burn down the {len(write_workflows)} write ones first."
+        )
+    else:
+        priority = (
+            "No entry enters a write environment any more (#1080's write half is "
+            "done): a payload in one of these still runs as code, but only ever "
+            "under a `-read` credential. Remaining entries are ordered by blast "
+            "radius, not by environment."
+        )
     print(
         f"workflow input interpolation OK: {scanned} workflow files scanned; "
         f"{len(current)} interpolate a free-text dispatch input into a script body "
@@ -1449,8 +1497,7 @@ def main(argv: list[str] | None = None) -> int:
         f"environment. All are in the KNOWN_UNGUARDED freeze and no entry is stale.\n"
         f"This is a FREEZE on new instances, not an endorsement: every entry is a "
         f"place a dispatcher can supply code that runs after an approver spends a "
-        f"production credential (#1080). Burn down the {len(write_workflows)} write "
-        f"ones first.\n"
+        f"production credential (#1080). {priority}\n"
         f"Not judged: composite actions under .github/actions/ (an action's `inputs.*` "
         f"is a different context), and reusable-workflow `workflow_call` inputs."
     )

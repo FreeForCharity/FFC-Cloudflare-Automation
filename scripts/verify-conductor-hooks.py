@@ -261,21 +261,28 @@ def settings_bearing_ancestor(workspace: pathlib.Path) -> str | None:
         home = pathlib.Path.home().resolve()
     except (RuntimeError, OSError):  # no home on this platform/account
         home = None
+    # Home is excluded as evidence UNLESS it is the clone's own parent.
+    #
+    # `~/.claude` is the USER-level config and is on essentially every machine,
+    # so treating a DISTANT home ancestor as evidence "finds" a session root for
+    # any clone anywhere under the home directory -- a hint that is wrong far
+    # more often than the shape heuristic it was written to correct. Not
+    # hypothetical: the first version of this function walked unbounded and
+    # failed THREE pre-existing tests by naming `C:\Users\clark`, because
+    # `TemporaryDirectory()` sits under the home directory on Windows. In every
+    # one of those, home was several levels up -- never the clone's parent.
+    #
+    # A clone sitting DIRECTLY in the home directory is the cloud worker's real
+    # shape, and there home IS the answer. The unconditional skip this replaces
+    # denied it: after `--render --workspace /home/user` those settings exist and
+    # were still not seen, so a lone worker clone was told `no Claude settings
+    # found above this clone` about a root carrying exactly that. The docstring
+    # above already claimed the behaviour this now implements -- the prose was
+    # right and the code disagreed with it, which is why reasoning about the
+    # worker's two states did not catch it (#1283 review).
+    immediate_parent = workspace.parent
     for ancestor in workspace.parents:
-        # `~/.claude` is the USER-level config and is on essentially every
-        # machine, so without this the walk "finds" a session root for any clone
-        # anywhere under the home directory -- a hint that is wrong far more
-        # often than the shape heuristic it was written to correct.
-        #
-        # Not hypothetical, and not caught by reasoning: the first version of
-        # this function walked unbounded, and `test_conductor_hook_wiring.py`
-        # failed THREE pre-existing tests by naming `C:\Users\clark`, because
-        # `TemporaryDirectory()` sits under the home directory on Windows.
-        #
-        # The worker loses nothing. Its root IS its home (`/home/user`), so the
-        # evidence branch declines -- and the sibling-clone branch then answers
-        # `/home/user` anyway, which is the same value by the other route.
-        if home is not None:
+        if home is not None and ancestor != immediate_parent:
             try:
                 if ancestor.resolve() == home:
                     continue

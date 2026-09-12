@@ -10,9 +10,17 @@ run-name: 'Process health metrics report'
 # absolute numbers"). The same JSON is uploaded as an artifact for later
 # ffcadmin rendering (#723).
 #
-# Read-only: the ambient GITHUB_TOKEN reads issues + Actions runs and writes ONE
-# comment on #719 in this repo. No external API, no environment gate, no push to
-# `main`. Aggregation/trend/render logic lives in
+# ONE finding does not go to #719: the Conductor-silence verdict (#1215) drives a
+# rolling issue instead, assigned and labelled, the way 744 handles a stale public
+# feed. #719 is the Conductor log, so delivering "the Conductor has stopped" there
+# addresses it to the component that is down — four correct alarms reached nobody
+# across a 30-day outage (#1269). A run that could not assess liveness leaves any
+# open alarm open and raises none: an unreadable log cannot prove a recovery.
+#
+# Read-only otherwise: the ambient GITHUB_TOKEN reads issues + Actions runs and
+# writes one comment on #719 plus that one rolling issue, both in this repo. No
+# external API, no environment gate, no Key Vault credential, no push to `main`.
+# Aggregation/trend/render/delivery logic lives in
 # scripts/process-health-metrics-lib.js (unit-tested under tests/workflow-logic/).
 
 on:
@@ -358,3 +366,123 @@ jobs:
           path: process-health-metrics.json
           retention-days: 90
           if-no-files-found: error
+
+      # Deliberately AFTER the artifact upload: this step is the only one that
+      # WRITES anything beyond the weekly comment, and a failure in it must not
+      # cost the run its measurement.
+      #
+      # `if: always()` because the input is the metrics FILE, not the previous
+      # step's in-memory state: an unrelated late failure (a flaky artifact
+      # upload) must not make the outage alarm go dark, which is the whole shape
+      # #1269 is about. A missing or unparseable file is "no measurement this
+      # run" and is handled like a not-assessed read — nothing opened, nothing
+      # closed. Fail-closed in both directions; see decideSilenceDelivery.
+      - name: Upsert / close the Conductor-silence rolling issue
+        if: always()
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const lib = require('./scripts/process-health-metrics-lib.js');
+            const FILE = 'process-health-metrics.json';
+
+            if (!fs.existsSync(FILE)) {
+              core.warning(
+                `${FILE} was not written, so this run measured no conductor liveness; ` +
+                  'leaving any open silence alarm exactly as it is.',
+              );
+              return;
+            }
+            let silence;
+            try {
+              const metrics = JSON.parse(fs.readFileSync(FILE, 'utf8'));
+              silence = (metrics.conductorRuns || {}).silence;
+            } catch (e) {
+              core.warning(
+                `Could not read ${FILE} (${e.message}); leaving any open silence alarm untouched.`,
+              );
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const nowIso = new Date().toISOString();
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            // Skips pull requests, which this listing also returns — see the
+            // library. Never hand-roll the marker match here: the close path
+            // below can close whatever this selects.
+            const existing = lib.findSilenceIssue(open);
+            const decision = lib.decideSilenceDelivery(silence, existing);
+            core.notice(
+              `Conductor silence: ${lib.silenceSummary(silence)} → ${decision.action} ` +
+                `(${decision.reason})`,
+            );
+
+            if (decision.action === 'none') return;
+
+            if (decision.action === 'close') {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.number,
+                body: lib.renderSilenceRecoveryComment(silence, { runUrl }),
+              });
+              await github.rest.issues.update({
+                owner, repo, issue_number: existing.number,
+                state: 'closed', state_reason: 'completed',
+              });
+              core.notice(`Closed rolling silence issue #${existing.number}`);
+              return;
+            }
+
+            const body = lib.renderSilenceIssueBody(silence, { nowIso, runUrl });
+            const title = lib.silenceIssueTitle(silence);
+
+            // Converge the labels on both paths, so a manually stripped label is
+            // restored rather than only the body being refreshed.
+            const labelColors = { bug: 'd73a4a', 'agentic-os': '5319e7' };
+            for (const name of lib.SILENCE_ISSUE_LABELS) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner, repo, name, color: labelColors[name] || 'ededed',
+                });
+              } catch (e) {
+                if (e.status !== 422) throw e; // 422 = already exists
+              }
+            }
+
+            if (decision.action === 'update') {
+              // Title as well as body: `lastRun` legitimately changes to null
+              // once the outage outruns the read window, and a title still
+              // naming a run that is no longer in evidence is a worse artifact
+              // than a changed one. The upsert matches on the MARKER, so
+              // retitling cannot orphan the issue.
+              await github.rest.issues.update({
+                owner, repo, issue_number: existing.number, title, body,
+              });
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: existing.number, labels: lib.SILENCE_ISSUE_LABELS,
+              });
+              try {
+                await github.rest.issues.addAssignees({
+                  owner, repo, issue_number: existing.number, assignees: lib.SILENCE_ASSIGNEES,
+                });
+              } catch (e) {
+                // The refreshed body is the alarm; a failed re-assignment must
+                // not throw it away. Said out loud rather than swallowed.
+                core.warning(`Could not converge assignees on #${existing.number}: ${e.message}`);
+              }
+              core.notice(`Refreshed rolling silence issue #${existing.number}`);
+              return;
+            }
+
+            const created = await github.rest.issues.create({
+              owner, repo, title, body,
+              labels: lib.SILENCE_ISSUE_LABELS,
+              assignees: lib.SILENCE_ASSIGNEES,
+            });
+            core.notice(
+              `Opened rolling silence issue #${created.data.number} — ` +
+                `assigned to ${lib.SILENCE_ASSIGNEES.join(', ')}`,
+            );

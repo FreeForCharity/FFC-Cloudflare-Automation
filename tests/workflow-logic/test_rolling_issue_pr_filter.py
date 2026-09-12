@@ -51,13 +51,21 @@ import sys
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import WORKFLOWS  # noqa: E402
+from wf_extract import REPO_ROOT, WORKFLOWS  # noqa: E402
 
 # The six fixed in #980, plus 744 — the one that already selected safely AND
-# closes, so it matches the shape this guard looks for. The other two workflows
-# that drop PRs correctly, 737 and 739, are deliberately absent: they enumerate
-# issues to *report* and never close one, so they do not match "lists and
-# closes" and asserting they do would fail for the wrong reason.
+# closes, so it matches the shape this guard looks for — plus 739 since #1269.
+# 737 is still deliberately absent: it enumerates issues to *report* and never
+# closes one, so it does not match "lists and closes" and asserting it does would
+# fail for the wrong reason.
+#
+# 739 was listed here as an example of that same exemption until #1269 gave its
+# Conductor-silence verdict a rolling issue, which closes on recovery. Worth
+# noting how that reached this file: the exemption was stated as a fact about
+# what 739 does, so when what 739 does changed, the comment became false and the
+# fail-closed branch in `scan_script` is what said so — the guard reported the
+# selection it could no longer see rather than passing. An exemption keyed to a
+# condition the checker still evaluates (L181) behaves exactly like this.
 #
 # Named so a removal is visible: if one of these stops matching the shape, the
 # coverage assertion below fails rather than the file silently dropping out.
@@ -65,11 +73,33 @@ KNOWN_ROLLING_MONITORS = {
     "228-whmcs-fraud-review.yml",
     "321-azure-kv-credential-liveness.yml",
     "738-fleet-smoke-engine-drift-audit.yml",
+    "739-process-health-metrics.yml",
     "740-scheduled-workflow-failure-alert.yml",
     "741-fleet-security-audit-coverage.yml",
     "743-fleet-security-header-audit.yml",
     "744-repo-public-feed-freshness.yml",
 }
+
+# Library helpers a script may use INSTEAD of an inline filter. The scan cannot
+# see inside them, so each name here is a claim — and
+# `test_every_library_selector_actually_drops_prs` below reads every definition
+# of it under `scripts/` and asserts it negates `.pull_request`. Before #1269
+# this was a bare `"findRollingIssue(" not in script` substring test, which
+# trusted the name alone; a second selector made that trust worth checking
+# rather than widening.
+LIBRARY_SELECTORS = ("findRollingIssue", "findSilenceIssue")
+
+# A call to one of those, with an optional member prefix (`lib.findRollingIssue(`
+# is how all six callers spell it today) and a left boundary so that a different
+# identifier merely ENDING in the name — `myFindSilenceIssue(` — is not a match.
+# An unqualified call is accepted too: rejecting one would be a fail-closed
+# finding rather than a silent pass, but there is no reason to make a legitimate
+# `const { findRollingIssue } = require(…)` into one.
+SELECTOR_CALL = re.compile(
+    r"(?:^|[^\w$.])(?:[A-Za-z_$][\w$]*\s*\.\s*)?(?:"
+    + "|".join(LIBRARY_SELECTORS)
+    + r")\s*\("
+)
 
 
 def closes_an_issue(script: str) -> bool:
@@ -89,10 +119,35 @@ def selects_from_a_listing(script: str) -> bool:
 DROPS_PRS = re.compile(r"!\s*[A-Za-z_$][\w$]*\.pull_request")
 
 
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
 def _code_lines(script: str) -> list[str]:
-    return [
-        ln.strip() for ln in script.splitlines() if not ln.strip().startswith("//")
-    ]
+    """Lines of `script` with comments removed.
+
+    Block comments are stripped BEFORE splitting, because they span lines and a
+    `/* … */` body does not start with `//` — so a mention inside one used to read
+    as code. Copilot found that on #1275 against the selector allow-list, and the
+    same input shows the OLDER `prefiltered` check has it too: a block-commented
+    `.filter((i) => !i.pull_request)` satisfied the pre-filter and suppressed
+    findings on a real unguarded selection. Both directions were fail-OPEN, which
+    is why this is fixed here rather than at one call site.
+
+    An UNTERMINATED `/*` swallows the rest of the input, which is what JavaScript
+    does and is also the safe direction: dropping real code from the scan can only
+    remove a selection, and a script with no visible selection is reported rather
+    than passed.
+
+    Note the two scans this feeds are NOT symmetric about a false positive, so
+    "leave both at the same strictness" is not a reason to leave a hole: a
+    mistakenly-counted `.find(` selection is a spurious FINDING (safe), while a
+    mistakenly-counted library call or pre-filter SUPPRESSES one.
+    """
+    text = _BLOCK_COMMENT.sub(" ", script)
+    cut = text.find("/*")
+    if cut != -1:
+        text = text[:cut]
+    return [ln.strip() for ln in text.splitlines() if not ln.strip().startswith("//")]
 
 
 def scan_script(script: str) -> list[str]:
@@ -118,7 +173,18 @@ def scan_script(script: str) -> list[str]:
         for ln in selections
         if not (DROPS_PRS.search(ln) or prefiltered)
     ]
-    if not selections and "findRollingIssue(" not in script:
+    # A CALL to an allow-listed library selector is a selection too — one that is
+    # safe by construction, since `test_every_library_selector_actually_drops_prs`
+    # reads the helper and asserts it negates `.pull_request`. Matched as a call on
+    # a comment-stripped line, not as a substring of the whole script: a mention in
+    # prose ("we used to use findRollingIssue()") must not suppress the fail-closed
+    # branch below, which is the one thing here that cannot be allowed to fail
+    # open. Same line-based limits as the `.find(` scan above, deliberately — a
+    # trailing comment or a string literal on a code line still counts, and making
+    # this stricter than the selection scan would be a second, divergent idea of
+    # what "code" means.
+    library_selections = [ln for ln in lines if SELECTOR_CALL.search(ln)]
+    if not selections and not library_selections:
         # Fail closed: if the marker match moved somewhere this scan cannot see,
         # say so. Failing open here would make every future copy invisible.
         reasons.append(
@@ -161,6 +227,37 @@ def scan_repo() -> dict[str, list[str]]:
 def test_no_workflow_closes_an_issue_it_selected_without_dropping_prs():
     findings = scan_repo()
     assert not findings, findings
+
+
+def test_every_library_selector_actually_drops_prs():
+    """A selector on the allow-list is a claim; this is what checks it.
+
+    `scan_script` accepts `lib.findRollingIssue(open)` without seeing the filter,
+    so the allow-list is the one place this guard trusts a NAME rather than the
+    code in front of it. Every definition of each name is read — five libraries
+    define `findRollingIssue` — because one unfiltered copy is enough to
+    reintroduce the defect while every caller still looks fixed.
+    """
+    checked = 0
+    for name in LIBRARY_SELECTORS:
+        definitions = [
+            (path, path.read_text(encoding="utf-8"))
+            for path in sorted((REPO_ROOT / "scripts").glob("*.js"))
+        ]
+        defining = [(p, t) for p, t in definitions if f"function {name}(" in t]
+        # Anchor first: a rename that moved the helper must fail loudly here
+        # rather than leave a name on the allow-list that guards nothing.
+        assert defining, f"no scripts/*.js defines {name}() — is the allow-list stale?"
+        for path, text in defining:
+            start = text.index(f"function {name}(")
+            end = text.find("\n}", start)
+            assert end != -1, f"could not delimit {name}() in {path.name}"
+            assert DROPS_PRS.search(text[start:end]), (
+                f"{path.name}:{name}() is on the selector allow-list but does not "
+                "negate .pull_request"
+            )
+            checked += 1
+    assert checked >= len(LIBRARY_SELECTORS), checked
 
 
 def test_the_scan_actually_reaches_the_known_rolling_monitors():
@@ -224,6 +321,14 @@ def test_the_scan_flags_the_pre_fix_form_of_a_real_workflow():
             "740-scheduled-workflow-failure-alert.yml",
             "const existing = open.find(i => !i.pull_request && i.body && i.body.includes(marker));",
             "const existing = open.find(i => i.body && i.body.includes(marker));",
+        ),
+        # 739 (#1269) exercises the library-selector path on shipped source: the
+        # scan sees no inline filter at all here, so what must hold is that
+        # replacing the helper with a hand-rolled match is rejected.
+        (
+            "739-process-health-metrics.yml",
+            "const existing = lib.findSilenceIssue(open);",
+            "const existing = open.find((i) => i.body.includes(lib.SILENCE_MARKER));",
         ),
     ]:
         path = WORKFLOWS / name
@@ -305,6 +410,128 @@ def test_a_filter_that_keeps_only_pull_requests_is_still_flagged():
         "const existing = open.find(i => i.body && i.body.includes(marker));",
     ]:
         assert scan_script(_synthetic(selection)), selection
+
+
+def test_a_mentioned_library_selector_does_not_satisfy_the_guard():
+    """Copilot's finding on #1275: a NAME is not a call.
+
+    The allow-list check was a substring test over the whole script, so a comment
+    naming the helper suppressed the fail-closed branch — and that branch is the
+    one thing in this file that must never fail open, since it is what makes a
+    future copy of the pattern visible at all.
+    """
+    for mention in [
+        "// we used to call lib.findRollingIssue(open) here",
+        "// see findSilenceIssue() in process-health-metrics-lib.js",
+        "// TODO: switch to findRollingIssue(open)",
+    ]:
+        script = (
+            "const open = await github.paginate(github.rest.issues.listForRepo, "
+            "{ owner, repo, state: 'open' });\n"
+            + mention
+            + "\nconst existing = pickSomehow(open);\n"
+            + CLOSE_TAIL
+        )
+        assert scan_script(script), mention
+
+
+def test_a_block_commented_selector_mention_does_not_satisfy_the_guard():
+    """Copilot's round-2 finding on #1275: `/* … */` is not code either.
+
+    `_code_lines` dropped only lines starting with `//`, so a block comment's body
+    survived and a mention inside one suppressed the fail-closed branch.
+    """
+    for mention in [
+        "/*\n * we used to call lib.findRollingIssue(open) here\n */",
+        "/* see findSilenceIssue() in process-health-metrics-lib.js */",
+        "/**\n * @see lib.findSilenceIssue(open)\n */",
+    ]:
+        script = (
+            "const open = await github.paginate(github.rest.issues.listForRepo, "
+            "{ owner, repo, state: 'open' });\n"
+            + mention
+            + "\nconst existing = pickSomehow(open);\n"
+            + CLOSE_TAIL
+        )
+        assert scan_script(script), mention
+
+
+def test_an_unterminated_block_comment_does_not_satisfy_the_guard():
+    """Swallow to end of input, as JavaScript does — and it is the safe direction."""
+    script = (
+        "const open = await github.paginate(github.rest.issues.listForRepo, "
+        "{ owner, repo, state: 'open' });\n"
+        "/* dangling comment mentioning lib.findSilenceIssue(open)\n"
+        "const existing = pickSomehow(open);\n" + CLOSE_TAIL
+    )
+    assert scan_script(script), "an unterminated block comment must not count as code"
+
+
+def test_a_block_commented_filter_does_not_satisfy_the_pre_filter():
+    """The same hole in the OLDER check, found by the same input.
+
+    A block-commented `.filter((i) => !i.pull_request)` used to satisfy
+    `prefiltered`, which suppresses the per-selection findings — so a real
+    unguarded `.find(` went unreported. Predates #1275; fixed with it.
+    """
+    script = (
+        "const open = await github.paginate(github.rest.issues.listForRepo, "
+        "{ owner, repo, state: 'open' });\n"
+        "/* const safe = open.filter((i) => !i.pull_request); */\n"
+        "const existing = open.find((i) => i.body.includes(marker));\n" + CLOSE_TAIL
+    )
+    assert scan_script(script), "a commented-out pre-filter must not excuse a selection"
+
+
+def test_a_real_call_after_a_block_comment_still_satisfies_the_guard():
+    """Stripping comments must not eat the code that follows them."""
+    script = (
+        "const open = await github.paginate(github.rest.issues.listForRepo, "
+        "{ owner, repo, state: 'open' });\n"
+        "/* Skips pull requests — see the library. */\n"
+        "const existing = lib.findSilenceIssue(open);\n" + CLOSE_TAIL
+    )
+    assert scan_script(script) == [], scan_script(script)
+
+
+def test_an_identifier_merely_ending_in_a_selector_name_is_not_a_call():
+    script = (
+        "const open = await github.paginate(github.rest.issues.listForRepo, "
+        "{ owner, repo, state: 'open' });\n"
+        "const existing = myFindSilenceIssue(open);\n" + CLOSE_TAIL
+    )
+    assert scan_script(script), "a lookalike identifier must not satisfy the allow-list"
+
+
+def test_a_real_library_selector_call_satisfies_the_guard():
+    """Both the member form every caller uses and a destructured bare call."""
+    for call in [
+        "const existing = lib.findSilenceIssue(open);",
+        "const existing = lib.findRollingIssue(open);",
+        "const existing = findRollingIssue(open);",
+        "const existing = lib . findSilenceIssue ( open );",
+    ]:
+        script = (
+            "const open = await github.paginate(github.rest.issues.listForRepo, "
+            "{ owner, repo, state: 'open' });\n" + call + "\n" + CLOSE_TAIL
+        )
+        assert scan_script(script) == [], call
+
+
+def test_a_library_call_does_not_excuse_a_second_hand_rolled_match():
+    """The two checks are independent: one safe selection does not bless another.
+
+    A script can call the helper in one place and hand-roll an unguarded match in
+    another, which would reintroduce the defect while the library call made the
+    workflow look fixed.
+    """
+    script = (
+        "const open = await github.paginate(github.rest.issues.listForRepo, "
+        "{ owner, repo, state: 'open' });\n"
+        "const existing = lib.findSilenceIssue(open);\n"
+        "const other = open.find((i) => i.body && i.body.includes(marker));\n" + CLOSE_TAIL
+    )
+    assert scan_script(script), "an unguarded second match must still be reported"
 
 
 def test_a_commented_out_filter_does_not_satisfy_the_guard():

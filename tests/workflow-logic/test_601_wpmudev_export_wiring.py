@@ -194,6 +194,13 @@ Write-Host "::endgroup::"
 # The fail-closed check, as an anchor. Stripping it is how the control for the
 # blank cases is built, and its count is asserted before substituting (L47).
 GUARD_ANCHOR = "if ([string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)) {"
+BLANK_REFUSAL = "output_file is blank"
+
+# The second gate: the value must name a file, not a pattern. Anchored on the
+# opening of the condition rather than on the regexes themselves, so the anchor
+# carries no backslashes to keep faithful through this file.
+PATTERN_ANCHOR = "if ($env:IN_OUTPUT_FILE -match "
+PATTERN_REFUSAL = "must name a single file, not a pattern"
 
 
 # --------------------------------------------------------------------------
@@ -241,36 +248,52 @@ def _pre_fix(value: str) -> str:
     return _offline(rendered)
 
 
-def _strip_guard(body: str) -> str:
-    """Remove the fail-closed check, leaving the rest of the body intact.
+def _strip_block(body: str, anchor: str, refusal: str) -> str:
+    """Remove one fail-closed check, leaving the rest of the body intact.
 
-    This is the control for every blank case: it is the shape a lane
+    This is the control behind every refusal test: it is the shape a lane
     "simplifying" the remedy would land. The anchor's count is asserted BEFORE
     the strip (L47), so a reword fails loudly here instead of silently leaving
     the body unchanged and scoring a control that expects a DEFECT as
     reassurance.
+
+    `refusal` is a distinctive fragment of the message THIS block emits, and it
+    is checked rather than a bare `exit 1`: the step now carries two independent
+    gates, so "no fail-closed exit survives" would be false by construction the
+    moment either one is stripped — an assertion that was correct when there was
+    one guard and silently wrong afterwards.
     """
-    assert body.count(GUARD_ANCHOR) == 1, (
-        f"expected exactly one fail-closed check anchored on {GUARD_ANCHOR!r}, "
-        f"found {body.count(GUARD_ANCHOR)} — this control cannot be applied, so "
-        f"it would otherwise measure an unmodified body. Body: {body!r}"
+    assert body.count(anchor) == 1, (
+        f"expected exactly one block anchored on {anchor!r}, found "
+        f"{body.count(anchor)} — this control cannot be applied, so it would "
+        f"otherwise measure an unmodified body. Body: {body!r}"
     )
     lines = body.splitlines(keepends=True)
-    start = next(i for i, line in enumerate(lines) if GUARD_ANCHOR in line)
+    start = next(i for i, line in enumerate(lines) if anchor in line)
     end = next(i for i in range(start, len(lines)) if lines[i].strip() == "}")
     stripped = "".join(lines[:start] + lines[end + 1 :])
-    assert GUARD_ANCHOR not in stripped, (
-        f"the guard survived the strip, so the control is measuring the guarded "
+    assert anchor not in stripped, (
+        f"the block survived the strip, so the control is measuring the guarded "
         f"body. Stripped: {stripped!r}"
     )
-    assert "exit 1" not in stripped, (
-        f"a fail-closed exit survived the strip: {stripped!r}"
+    assert refusal not in stripped, (
+        f"this block's refusal message {refusal!r} survived the strip: {stripped!r}"
     )
     assert CALLEE in stripped, (
         f"the strip removed the invocation itself, so the control proves nothing. "
         f"Stripped: {stripped!r}"
     )
     return stripped
+
+
+def _strip_guard(body: str) -> str:
+    """Remove the blank gate."""
+    return _strip_block(body, GUARD_ANCHOR, BLANK_REFUSAL)
+
+
+def _strip_pattern_guard(body: str) -> str:
+    """Remove the wildcard/traversal gate."""
+    return _strip_block(body, PATTERN_ANCHOR, PATTERN_REFUSAL)
 
 
 def _run(body: str, *, stub: str = None, extra_files: dict = None, **env_overrides: str):
@@ -711,8 +734,13 @@ def test_a_single_match_glob_does_not_become_the_summarys_answer():
     """
     step = _step()
     _assert_wiring(step)
+    # The pattern gate is stripped on purpose: it now refuses this value before
+    # the reads are reached, so leaving it in would make this test pass without
+    # exercising -LiteralPath at all. The two are independent defences and this
+    # one measures the inner defence with the outer one removed — which is also
+    # the state a later lane would create by relaxing the gate.
     out, _stolen, rc = _run(
-        _offline(step["run"]),
+        _strip_pattern_guard(_offline(step["run"])),
         stub=STUB_WRITES_NOTHING,
         extra_files={DECOY_NAME: DECOY_BODY},
         **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: SINGLE_MATCH_GLOB},
@@ -735,7 +763,7 @@ def test_without_literalpath_the_glob_reports_an_unrelated_files_rows():
     Reverting just the two parameters must make the same input report the decoy
     file's two domains as the export's result, at exit 0.
     """
-    body = _offline(_step()["run"])
+    body = _strip_pattern_guard(_offline(_step()["run"]))
     for literal, wildcard in (
         ("Test-Path -LiteralPath $out", "Test-Path $out"),
         ("Import-Csv -LiteralPath $out", "Import-Csv -Path $out"),
@@ -772,6 +800,121 @@ def test_without_literalpath_the_glob_reports_an_unrelated_files_rows():
     )
 
 
+# --------------------------------------------------------------------------
+# The value must name a FILE, not a pattern
+#
+# A third question about the same input, and the one neither `env:` nor
+# `-LiteralPath` can answer: `output_file` is ALSO handed to
+# `actions/upload-artifact` as `path:`, which is glob-capable by design. That
+# step is outside this body, so no parameter choice inside it reaches the
+# upload. Raised by Copilot on #1288 after the -LiteralPath round.
+# --------------------------------------------------------------------------
+
+# Every metacharacter the gate rejects, plus the traversal and separator forms.
+# `[ab]` matters as much as `*`: a character class is a glob too, and a gate
+# written for `*` alone would let it through.
+PATTERN_VALUES = ("prior-*.csv", "wpmudev_domain?.csv", "[ab].csv", "../escaped.csv")
+
+
+def test_the_artifact_upload_still_receives_the_dispatch_input_directly():
+    """The premise. If the upload ever stops taking the raw input, the gate's
+    whole justification changes, and this test is where that shows up.
+
+    Asserted from the tree rather than from the review thread: `path:` is an
+    action input, NOT a script body, so the #1080 guard does not judge it and
+    nothing else in this module would notice the day it changes.
+    """
+    upload = find_step(load_workflow(WORKFLOW), JOB, "Upload artifact")
+    assert (upload.get("with") or {}).get("path") == MAPPED_EXPRESSION, (
+        f"the upload step no longer passes {MAPPED_EXPRESSION} as its path — "
+        f"re-read the pattern gate's justification. with: {upload.get('with')!r}"
+    )
+
+
+def test_the_pattern_gate_precedes_the_export():
+    body = _step().get("run", "")
+    assert PATTERN_ANCHOR in body, f"the pattern gate is gone: {body!r}"
+    assert body.index(PATTERN_ANCHOR) < body.index(CALLEE), (
+        f"the pattern gate must run before the export. Body: {body!r}"
+    )
+
+
+def test_every_pattern_form_is_refused_before_the_callee_runs():
+    step = _step()
+    _assert_wiring(step)
+    body = _offline(step["run"])
+    for value in PATTERN_VALUES:
+        out, _stolen, rc = _run(
+            body,
+            stub=STUB_WRITES_NOTHING,
+            extra_files={DECOY_NAME: DECOY_BODY},
+            **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: value},
+        )
+        assert rc != 0, (
+            f"{value!r}: the body exited {rc} — a pattern must fail closed, "
+            f"because the artifact upload would glob it. Output: {out[:600]}"
+        )
+        assert PATTERN_REFUSAL in out, (
+            f"{value!r}: exited non-zero without the refusal message, so this "
+            f"passes on any failure including a broken harness (L214). "
+            f"Output: {out[:600]}"
+        )
+        assert _bound_output_file(out) is None, (
+            f"{value!r}: the exporter ran anyway, bound "
+            f"{_bound_output_file(out)!r}. Output: {out[:600]}"
+        )
+
+
+def test_an_ordinary_filename_is_not_caught_by_the_pattern_gate():
+    """The permissiveness half. A gate that refused everything would satisfy
+    the test above and break the workflow, and the denylist is deliberately
+    narrow — a space or a non-ASCII name was never the hazard and must pass."""
+    step = _step()
+    for value in ("wpmudev_domains.csv", "wpmudev domains.csv", "sub/dir/out.csv"):
+        out, _stolen, rc = _run(
+            _offline(step["run"]), **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: value}
+        )
+        assert PATTERN_REFUSAL not in out, (
+            f"{value!r} is a legitimate filename and was refused as a pattern. "
+            f"Output: {out[:600]}"
+        )
+
+
+def test_without_the_pattern_gate_the_export_itself_retargets_onto_another_file():
+    """The control — and the measurement that makes the gate load-bearing.
+
+    The first draft of this test asserted the exporter was handed the glob
+    VERBATIM, and it failed: the callee was bound `prior-run-inventory.csv`.
+    Chasing that produced the real mechanism, which is worse than the reported
+    one and is not about the artifact upload at all.
+
+    `$env:` stops the value being parsed as CODE. It does not keep it literal
+    across a NATIVE-command hop: 601 invokes the exporter as
+    `pwsh -NoProfile -File … -OutputFile $out`, and PowerShell expands wildcards
+    while rendering arguments for a native command. Isolated on pwsh 7.4.6 — the
+    outer variable still reads `prior-*.csv`, the callee is bound
+    `prior-run-inventory.csv`, and invoking the same script through `&` (no
+    native hop) binds the glob literally. So the export WRITES to a
+    pre-existing file nobody named; the artifact upload globbing it is the
+    second-order effect. Ledger L276.
+    """
+    stripped = _strip_pattern_guard(_offline(_step()["run"]))
+    out, _stolen, _rc = _run(
+        stripped,
+        extra_files={DECOY_NAME: DECOY_BODY},
+        **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: SINGLE_MATCH_GLOB},
+    )
+    assert _bound_output_file(out) == DECOY_NAME, (
+        f"expected the ungated body to retarget the export onto {DECOY_NAME!r} "
+        f"via native-command wildcard expansion — that is the damage the gate "
+        f"prevents. Bound {_bound_output_file(out)!r}"
+    )
+    assert _bound_output_file(out) != SINGLE_MATCH_GLOB, (
+        "the glob arrived literally, so the native hop no longer expands it and "
+        "this control is measuring something else — re-derive before trusting it"
+    )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 # Only the behavioural cases spawn a pwsh subprocess; the wiring, declaration,
@@ -781,8 +924,11 @@ TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 # `_run`.
 NEEDS_PWSH = {
     "test_a_single_match_glob_does_not_become_the_summarys_answer",
+    "test_an_ordinary_filename_is_not_caught_by_the_pattern_gate",
     "test_every_blank_form_is_refused_before_the_callee_runs",
+    "test_every_pattern_form_is_refused_before_the_callee_runs",
     "test_without_literalpath_the_glob_reports_an_unrelated_files_rows",
+    "test_without_the_pattern_gate_the_export_itself_retargets_onto_another_file",
     "test_the_naive_subexpression_payload_is_inert_here",
     "test_the_pre_fix_body_stole_the_token_and_exited_zero",
     "test_the_shipped_body_binds_the_payload_as_data",

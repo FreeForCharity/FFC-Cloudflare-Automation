@@ -79,6 +79,37 @@ jobs:
             exit 1
           }
 
+          # ...and it must name a FILE, not a pattern. This is a third question
+          # about the same value, and neither the `env:` move nor `-LiteralPath`
+          # answers it.
+          #
+          # `$env:` stops the value being parsed as CODE. It does NOT keep it
+          # literal across a NATIVE-command hop, which is what the line below
+          # `pwsh -NoProfile -File scripts/... -OutputFile $out` is: PowerShell
+          # expands wildcards while rendering arguments for a native command.
+          # Isolated on pwsh 7.4.6 with one unrelated `prior-run-inventory.csv`
+          # present and `output_file=prior-*.csv`: the outer `$out` still reads
+          # `prior-*.csv`, and the exporter is bound `prior-run-inventory.csv`.
+          # Invoking the same script through `&` (no native hop) binds the glob
+          # literally, which is how the hop was identified as the layer.
+          #
+          # So the first damage is a WRITE: the export retargets onto a
+          # pre-existing file nobody named. The reported symptom — the value is
+          # also handed to `actions/upload-artifact` as `path:`, which is
+          # glob-capable by design (eight workflows here rely on that, e.g.
+          # 209-whmcs-tickets-triage.yml `artifacts/whmcs/tickets_*.csv`) — is
+          # the second-order effect, and that step is outside this body, so no
+          # parameter choice here could reach it anyway. Ledger L276.
+          #
+          # Deliberately a narrow denylist, not a filename allowlist: the hazard
+          # is the metacharacters, and an allowlist would also reject legitimate
+          # values (a space, a non-ASCII name) that were never the problem.
+          # Raised by Copilot on #1288 after the -LiteralPath round.
+          if ($env:IN_OUTPUT_FILE -match '[*?\[\]]' -or $env:IN_OUTPUT_FILE -match '\.\.' -or $env:IN_OUTPUT_FILE -match '\\') {
+            Write-Error "output_file must name a single file, not a pattern. Refusing to run: '$env:IN_OUTPUT_FILE' contains a wildcard, a '..' segment, or a backslash, and the artifact upload step treats its path as a glob — so a pattern there selects files this run never wrote."
+            exit 1
+          }
+
           Write-Host "::group::WPMUDEV Diagnostics"
           try {
             $base = 'https://wpmudev.com/api/hub/v1'

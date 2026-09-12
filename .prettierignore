@@ -1,6 +1,13 @@
 .git/
 .venv/
 node_modules/
+# pytest's own cache. It self-ignores via a nested `.pytest_cache/.gitignore`,
+# which Prettier's default ignore-path (root .gitignore + this file) does not
+# read -- so `--check .` warns on `.pytest_cache/README.md`, a file pytest
+# wrote and nobody here maintains. Harmless today only because CI's checkout
+# has no cache when the Prettier step runs; the day anything invokes pytest
+# earlier in that job, CI goes red on a file the PR did not touch.
+.pytest_cache/
 
 # Generated / data files
 zone_*.csv

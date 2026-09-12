@@ -23,9 +23,11 @@ because the reminder is derived from the same host clock. The only reading that
 does not share that surface is a timestamp minted by a remote server.
 
 This script asks GitHub via `gh api rate_limit --include` and reads the `Date`
-response header. `GET /rate_limit` is the right probe because it does not count
-against the REST budget the Conductor is required to conserve -- the clock check
-is free.
+response header. The `rate_limit` endpoint is the right probe because it does not
+consume the PRIMARY REST quota the Conductor is required to conserve. It is not
+unconditionally free -- GitHub's secondary rate limits still apply to it, so a
+caller that polled it in a loop could be throttled. That is not this caller: the
+check runs **once, at bootstrap**, which is what keeps the cheapness real.
 
 It fails CLOSED. An unreachable API, a missing header or an unparseable one all
 report `unknown` and exit non-zero, because "I could not check your clock" and
@@ -150,8 +152,10 @@ def fetch_github_date(timeout_seconds: int = 20) -> str | None:
     """Return GitHub's `Date` response header, or None if it cannot be read.
 
     Uses `gh api rate_limit --include`: authenticated (so it does not burn the
-    unauthenticated per-IP allowance) and free (`GET /rate_limit` does not count
-    against the REST budget).
+    unauthenticated per-IP allowance), and cheap -- the `rate_limit` endpoint does
+    not consume the primary REST quota. "Cheap", not "free": secondary rate limits
+    still apply, so this is safe as a once-per-run bootstrap check and would not be
+    safe inside a poll loop.
 
     Every failure mode collapses to None on purpose -- `gh` absent, not logged
     in, offline, a proxy returning a body with no `Date`. The caller's job is to

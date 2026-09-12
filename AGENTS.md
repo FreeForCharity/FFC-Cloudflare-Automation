@@ -70,6 +70,28 @@ ran normally. So settings are picked up mid-session rather than only at startup,
 have to finish unguarded just because it started that way. Do this at run start, before any real
 work. See `docs/runbooks/conductor-hook-wiring.md`. Ledger **L218**, corrected by **L261**.
 
+**Then check the clock, before you date anything from this host.**
+
+```bash
+python3 scripts/check-conductor-clock.py
+# CLOCK: ok          -> the host agrees with GitHub; timestamps from it are usable
+# CLOCK: SKEWED      -> date the run from the `authoritative` line, NOT from `date -u`
+# CLOCK: UNVERIFIED  -> the reference could not be read; treat the host clock as unusable
+```
+
+Run 155 opened with `date -u` reporting `2026-09-11T16:05:16Z` while GitHub's `Date` response header
+said `Sat, 12 Sep 2026 03:27:48 GMT` — **11h22m of skew, across a date boundary**, on a host that
+had resumed from sleep. The session's own date reminder agreed with the host, so the two readings a
+run would naturally cross-check were not independent (**L242**) and both were wrong.
+
+Two properties make this worth a bootstrap step rather than a habit. The clock is not one fact among
+many — it is the **frame every other reading is dated in**, so a stale one silently re-dates which
+#719 comment is newest, whether a scheduled workflow has ticked since an intervention (**L267**),
+and how old a pending gate is. And it **self-heals**: by the time a run notices an inconsistency,
+NTP has usually corrected it, leaving wrong timestamps already written and nothing left to
+reproduce. The check was `ok` on this same host forty minutes after the skew was measured. Ledger
+**L270**.
+
 ## Onboarding a charity (start here for the full chain)
 
 If the task is to **onboard / provision / "set up the repo for" a charity or domain** — or you just

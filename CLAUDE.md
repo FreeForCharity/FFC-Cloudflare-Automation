@@ -698,14 +698,35 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
     the mutation harness asserts its anchor is present before substituting, and the assert fired.
 
 - **The full workflow-logic suite takes ~8 minutes once it actually runs.** It used to finish in
-  seconds only because the modules were aborting; any short command timeout now reads as a hang.
-  Measured run 142 (2026-08-10) on clean `main` at `7183417`: **480s wall, `rc=1`, 1177 PASS / 83
-  FAIL across 16 failing modules** — that failure count is the _expected_ local baseline, not a
-  regression (these modules need credentials or a Linux runner). Run 141 had to background it
-  against a 10-minute foreground cap. **The figure this line carried until run 142 was ">2 minutes",
-  which was true and four times too small** — it was written when the suite was a quarter its
-  current size, and a bound that is merely _not false_ stops being a budget you can plan with.
-  Re-measure it, do not re-copy it.
+  seconds only because the modules were aborting; any short command timeout now reads as a hang. Run
+  141 had to background it against a 10-minute foreground cap. **The figure this line carried until
+  run 142 was ">2 minutes", which was true and four times too small** — it was written when the
+  suite was a quarter its current size, and a bound that is merely _not false_ stops being a budget
+  you can plan with. Re-measure it, do not re-copy it.
+  - **Current baseline — run 155, 2026-09-12, clean `main` at `1ec71c6`:** **93 modules, 1698 PASS /
+    171 FAIL, `harness crashed` 0, and `::error::workflow-logic tests failed:` names 27 modules.**
+    Run 142's figures (`1177 PASS / 83 FAIL / 16 failing modules`) are kept above only as the
+    previous reading; the suite has grown ~44% in assertions since, and **every merged PR that adds
+    tests invalidates a recorded count**, so treat any number here as the previous reading and
+    re-derive. This line exists because run 154 found the recorded 16 and measured 27, and a stale
+    baseline is what makes a branch's red look like a regression (**L61**).
+  - **Count the failing set from the `::error::` line, never by grepping `FAIL`.** Six of the 27
+    report a **truncated roster** instead of failures — `test_120_cutover_gh_errors.py` and
+    `test_729_add_collaborator.py` print an outcome for **none** of their tests, and
+    `test_102`/`test_722`/`test_741`/`test_742` stop partway (e.g. "defines 77 tests but reported
+    43"). A `FAIL`-grep scores those as passing modules. That is **L194**, and `run_all.py`'s roster
+    guard is what makes it visible.
+  - **All 27 are host-platform artifacts, not repo defects, and they sort into four causes** — worth
+    knowing so a local red is triaged in seconds rather than investigated:
+    `PermissionError [WinError 32]` / `[WinError 5]` tearing down a `TemporaryDirectory` (Windows
+    will not unlink a file another process still holds); `FileNotFoundError` on a harness stub the
+    module expected to have written (`gh.log`); `[WinError 2]` from `subprocess` when a POSIX tool
+    is not on PATH; and `[WinError 1314] A required privilege is not held by the client` from
+    `os.symlink` — this account cannot create symlinks **at all**, verified with a bare `os.symlink`
+    in a tempdir, so `test_agent_ready_anchors.py::test_a_cited_path_cannot_escape_the_checkout` is
+    red here and green on CI's Linux runner by construction. None of these is reachable from a
+    commit, which is why **CI stays authoritative** — but per the rule above, still say which module
+    and what the text was rather than dismissing a local red wholesale.
 - **One module — `test_729_add_collaborator.py` — leaves a zero-byte `U+F022 U+F022` file in the
   repo root.** Reproducible, untracked; it is suite output, not a checkout artifact. `ls -b` renders
   the name `""`, which is what Windows maps `"` to. Bisected in run 77 by running all 50 modules in

@@ -1555,6 +1555,27 @@ def test_the_new_alert_cap_bounds_a_first_sweep_and_says_so():
     assert r["failed"] is None, r  # a cap is a bound, not a fault
 
 
+def test_an_unparseable_cap_fails_loud_and_keeps_a_bound():
+    # `Number('ten')` is NaN and `opened >= NaN` is always false, so a bad value
+    # would disable the cap outright. It must fail the run, naming the value.
+    r = _run_multi(
+        {SPT: {SATELLITE_WF: "failure"}, FOT: {SATELLITE_WF: "failure"}},
+        max_new_alerts="ten",
+    )
+    assert r["failed"] is not None, r
+    assert "MAX_NEW_ALERTS_PER_RUN" in r["failed"] and '"ten"' in r["failed"], r["failed"]
+    assert len(r["created"]) == 2, r  # the default bound (10) still admits both
+
+
+def test_an_unreadable_default_branch_is_warned_about_not_swallowed():
+    # repos.get failing falls back to the hub's branch; that guess can hide a
+    # repo entirely, so it must be named in a warning rather than taken silently.
+    r = _run_multi({SPT: {SATELLITE_WF: "failure"}}, repos_get_throw=[SPT])
+    assert SPT in {c["repo"] for c in r["reposGetCalls"]}, r["reposGetCalls"]
+    assert any("default branch" in w and SPT in w for w in r["warnings"]), r["warnings"]
+    assert len(r["created"]) == 1, r  # the fallback `main` matches this fixture's runs
+
+
 def test_a_malformed_satellite_line_fails_loud():
     # A line that parses to nothing would otherwise watch nothing and say
     # nothing — the same silence the unresolved-name guard exists to prevent.

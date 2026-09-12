@@ -155,7 +155,13 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const DRY_RUN = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
-            const MAX_NEW_ALERTS = Number(process.env.MAX_NEW_ALERTS_PER_RUN || '10');
+            // A cap that does not parse must not disable the cap: `Number('ten')` is NaN, and
+            // `opened >= NaN` is always false, so the bound would silently vanish. Keep the
+            // default bound in force and fail the run naming the bad value (reported below).
+            const rawMaxNewAlerts = process.env.MAX_NEW_ALERTS_PER_RUN || '10';
+            const parsedMaxNewAlerts = Number(rawMaxNewAlerts);
+            const badMaxNewAlerts = !(Number.isInteger(parsedMaxNewAlerts) && parsedMaxNewAlerts > 0);
+            const MAX_NEW_ALERTS = badMaxNewAlerts ? 10 : parsedMaxNewAlerts;
             // Only the default branch matters: a red run on a feature branch is the PR
             // author's problem, not a fleet-wide alert. Resolved PER REPO below — assuming
             // the hub's branch name for a satellite would filter out every one of its runs
@@ -569,6 +575,9 @@ jobs:
             }
 
             const problems = [];
+            if (badMaxNewAlerts) {
+              problems.push(`MAX_NEW_ALERTS_PER_RUN must be a positive integer, got ${JSON.stringify(rawMaxNewAlerts)}; the default cap of 10 was applied instead.`);
+            }
             if (malformed.length) {
               problems.push(`WATCHED_SATELLITE_WORKFLOWS line(s) are not \`owner/repo :: Workflow name\`: ${malformed.map(n => JSON.stringify(n)).join(', ')}`);
             }

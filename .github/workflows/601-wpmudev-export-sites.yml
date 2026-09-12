@@ -120,13 +120,36 @@ jobs:
           # that line untouched. A fix confined to the message this review named
           # would have left the class live one echo away. Raised by Copilot on
           # #1288, third round.
-          if ($env:IN_OUTPUT_FILE -match '[*?\[\]]' -or $env:IN_OUTPUT_FILE -match '\.\.' -or $env:IN_OUTPUT_FILE -match '\\' -or $env:IN_OUTPUT_FILE -match '\p{C}') {
+          # An ALLOWLIST, after four review rounds of adding one metacharacter
+          # class at a time to a denylist (wildcards, then `..`, then control
+          # characters, then rooted paths). The sequence is the argument: a
+          # denylist over an untrusted value enumerates what the author happened
+          # to think of, and each round found another thing nobody had. The
+          # value is a workspace-relative CSV filename, so state that.
+          #
+          # It rejects a space and a non-ASCII name, which the denylist allowed.
+          # That is a deliberate narrowing and the earlier reasoning for keeping
+          # them ("those were never the hazard") was wrong in the way that
+          # matters: it optimised for values nobody dispatches over a rule anyone
+          # can check.
+          #
+          # TWO MEASURED DETAILS, both of which a plausible rewrite gets wrong:
+          #
+          #   `\A`/`\z`, NOT `^`/`$`. In .NET `$` also matches BEFORE a trailing
+          #   newline, so `^[A-Za-z0-9._-]+\z`-with-`$` accepts "out.csv`n" —
+          #   silently reopening the log-injection hole the third round closed.
+          #   Measured on pwsh 7.4.6: `^...$` accepts it, `\A...\z` refuses it.
+          #
+          #   The `..` test STAYS. It is not subsumed: `..` is made only of
+          #   characters the allowlist permits, so `../escaped.csv` matches the
+          #   allowlist cleanly. Measured the same way.
+          if ($env:IN_OUTPUT_FILE -notmatch '\A[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\z' -or $env:IN_OUTPUT_FILE -match '(\A|/)\.\.(/|\z)') {
             # The value is deliberately NOT echoed. It is already visible to
             # whoever dispatched the run, in the run's own inputs panel, so
             # echoing it adds nothing an operator needs — while PowerShell wraps
             # a long error message across lines, which could place attacker text
             # at the start of one even after control characters are rejected.
-            Write-Error 'output_file must name a single file: no wildcard (* ? [ ]), no ".." segment, no backslash, and no control characters. Refusing to run. The dispatched value is not echoed here on purpose; read it from this run''s inputs panel.'
+            Write-Error 'output_file must be a workspace-relative file name using only letters, digits, dot, underscore, hyphen and / as a separator, with no ".." segment. Refusing to run. The dispatched value is not echoed here on purpose; read it from this run''s inputs panel.'
             exit 1
           }
 

@@ -199,8 +199,8 @@ BLANK_REFUSAL = "output_file is blank"
 # The second gate: the value must name a file, not a pattern. Anchored on the
 # opening of the condition rather than on the regexes themselves, so the anchor
 # carries no backslashes to keep faithful through this file.
-PATTERN_ANCHOR = "if ($env:IN_OUTPUT_FILE -match "
-PATTERN_REFUSAL = "output_file must name a single file"
+PATTERN_ANCHOR = "if ($env:IN_OUTPUT_FILE -notmatch "
+PATTERN_REFUSAL = "output_file must be a workspace-relative file name"
 
 
 # --------------------------------------------------------------------------
@@ -560,8 +560,13 @@ def test_the_naive_subexpression_payload_is_inert_here():
     assert rc == 0, f"expected exit 0, got {rc}. Output: {out[:600]}"
 
 
-def test_the_shipped_body_binds_the_payload_as_data():
-    """The same payload, supplied the way a dispatcher supplies it now."""
+def test_the_shipped_body_refuses_the_payload_outright():
+    """The payload as a dispatcher supplies it, against the body as it ships.
+
+    Since the allowlist landed this is refused at the gate rather than carried
+    through as data — the payload's quotes, spaces and `$` are not in the
+    permitted set. That is strictly stronger, and it is the OUTER layer.
+    """
     step = _step()
     _assert_wiring(step)
     payload = _payload(CALLEE_DEFAULT_OUTPUT_FILE)
@@ -571,6 +576,30 @@ def test_the_shipped_body_binds_the_payload_as_data():
     assert stolen is None, (
         f"the payload EXECUTED against the fixed body — it wrote {stolen!r}. "
         f"Output: {out[:600]}"
+    )
+    assert rc != 0 and PATTERN_REFUSAL in out, (
+        f"expected the gate to refuse the payload; rc={rc}. Output: {out[:600]}"
+    )
+    assert _bound_output_file(out) is None, (
+        f"the exporter ran anyway, bound {_bound_output_file(out)!r}"
+    )
+
+
+def test_the_env_layer_alone_binds_the_payload_as_data():
+    """The INNER layer, measured with the gate stripped.
+
+    This is the assertion the lane actually exists for, and it must not be
+    allowed to hide behind the allowlist: with the gate removed the payload
+    still arrives at the callee as one verbatim ARGUMENT rather than executing.
+    Without this, relaxing the gate later would silently remove the only
+    evidence that moving the value into `env:` did anything.
+    """
+    stripped = _strip_pattern_guard(_offline(_step()["run"]))
+    payload = _payload(CALLEE_DEFAULT_OUTPUT_FILE)
+    out, stolen, _rc = _run(stripped, **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: payload})
+    assert stolen is None, (
+        f"the payload EXECUTED with only the env: layer in place — it wrote "
+        f"{stolen!r}. Output: {out[:600]}"
     )
     assert _bound_output_file(out) == payload, (
         f"the payload should reach the callee verbatim, as one argument. It was "
@@ -637,7 +666,12 @@ def test_the_unguarded_empty_value_is_preserved_and_exits_zero():
     call, this test fails on the `rc == 0` assertion. That is the good kind of
     failure: update it, and note that the empty case became loud.
     """
-    stripped = _strip_guard(_offline(_step()["run"]))
+    # BOTH gates come off. The allowlist refuses an empty, all-spaces or
+    # unset value too, so stripping only the blank gate would leave this
+    # measuring the allowlist's refusal instead of the native argument
+    # rendering it claims to measure -- and the unset case would still go
+    # green, for the wrong reason.
+    stripped = _strip_guard(_strip_pattern_guard(_offline(_step()["run"])))
     outcomes = []
     for _ in range(BLANK_RUNS):
         out, _stolen, rc = _run(stripped, **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: ""})
@@ -659,7 +693,12 @@ def test_the_unguarded_unset_value_is_dropped_and_fails_loudly():
     argued from either one alone picks the wrong gate: `-ne ''` looks sufficient
     against the loud form and passes the quiet one.
     """
-    stripped = _strip_guard(_offline(_step()["run"]))
+    # BOTH gates come off. The allowlist refuses an empty, all-spaces or
+    # unset value too, so stripping only the blank gate would leave this
+    # measuring the allowlist's refusal instead of the native argument
+    # rendering it claims to measure -- and the unset case would still go
+    # green, for the wrong reason.
+    stripped = _strip_guard(_strip_pattern_guard(_offline(_step()["run"])))
     outcomes = []
     for _ in range(BLANK_RUNS):
         out, _stolen, rc = _run(stripped, **{TOKEN_VAR: FAKE_TOKEN})
@@ -672,7 +711,12 @@ def test_the_unguarded_unset_value_is_dropped_and_fails_loudly():
 
 def test_the_unguarded_whitespace_value_reaches_the_callee_at_exit_zero():
     """Why `IsNullOrWhiteSpace` and not `-ne ''` (#1213), measured on this site."""
-    stripped = _strip_guard(_offline(_step()["run"]))
+    # BOTH gates come off. The allowlist refuses an empty, all-spaces or
+    # unset value too, so stripping only the blank gate would leave this
+    # measuring the allowlist's refusal instead of the native argument
+    # rendering it claims to measure -- and the unset case would still go
+    # green, for the wrong reason.
+    stripped = _strip_guard(_strip_pattern_guard(_offline(_step()["run"])))
     out, _stolen, rc = _run(stripped, **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: "   "})
     assert _bound_output_file(out) == "   " and rc == 0, (
         f"expected an all-spaces value to reach the callee at exit 0 — the case "
@@ -823,6 +867,18 @@ PATTERN_VALUES = (
     # annotation in a log the gate's approver reads. Third Copilot round.
     "out.csv\n::error::forged annotation",
     "out.csv\r::notice::forged annotation",
+    # A BARE trailing newline, with nothing after it. This is the case that
+    # separates `\A...\z` from `^...$`: .NET's `$` also matches before a
+    # trailing newline, so an allowlist written with `^$` accepts this and the
+    # log-injection hole reopens silently. Measured on pwsh 7.4.6.
+    "out.csv\n",
+    # Rooted paths -- the fourth review round. `upload-artifact` would take an
+    # absolute `path:` and lift a file out of the workspace entirely.
+    "/etc/passwd",
+    "/tmp/anything.csv",
+    # A Windows drive form that carries no backslash, so the old denylist's
+    # backslash rule never saw it.
+    "C:/Windows/win.ini",
 )
 
 
@@ -962,7 +1018,7 @@ def test_an_ordinary_filename_is_not_caught_by_the_pattern_gate():
     the test above and break the workflow, and the denylist is deliberately
     narrow — a space or a non-ASCII name was never the hazard and must pass."""
     step = _step()
-    for value in ("wpmudev_domains.csv", "wpmudev domains.csv", "sub/dir/out.csv"):
+    for value in ("wpmudev_domains.csv", "sub/dir/out.csv", "a..b.csv"):
         out, _stolen, rc = _run(
             _offline(step["run"]), **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: value}
         )
@@ -1025,7 +1081,8 @@ NEEDS_PWSH = {
     "test_without_the_pattern_gate_the_export_itself_retargets_onto_another_file",
     "test_the_naive_subexpression_payload_is_inert_here",
     "test_the_pre_fix_body_stole_the_token_and_exited_zero",
-    "test_the_shipped_body_binds_the_payload_as_data",
+    "test_the_env_layer_alone_binds_the_payload_as_data",
+    "test_the_shipped_body_refuses_the_payload_outright",
     "test_the_shipped_body_still_passes_an_ordinary_value_through",
     "test_the_unguarded_empty_value_is_preserved_and_exits_zero",
     "test_the_unguarded_unset_value_is_dropped_and_fails_loudly",

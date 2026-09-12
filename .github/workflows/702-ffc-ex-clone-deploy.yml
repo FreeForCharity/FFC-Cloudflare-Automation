@@ -327,12 +327,44 @@ jobs:
 
       - name: Clone the live site (httrack)
         working-directory: automation
+        shell: bash
+        # `domain`, `depth` and `exclude` are free-text dispatch inputs. Read
+        # through `env:` they arrive as DATA; interpolated into the body they are
+        # substituted as script TEXT before bash ever runs, and `$( )` executes
+        # inside a double-quoted argument — with this job's Key Vault PAT already
+        # in reach through GITHUB_ENV (#1080).
+        #
+        # `exclude` was the worst of the three: it was interpolated UNQUOTED, so a
+        # payload needed no quote-breaking at all. The conditional `--exclude` the
+        # expression used to build is rebuilt below as an argv array, which also
+        # stops a value containing whitespace splitting into extra arguments.
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
+          IN_DEPTH: ${{ inputs.depth }}
+          IN_EXCLUDE: ${{ inputs.exclude }}
         run: |
-          node scripts/clone-site-static.mjs \
-            --domain "${{ inputs.domain }}" \
-            --out "$RUNNER_TEMP/clone" \
-            --depth "${{ inputs.depth }}" \
-            ${{ inputs.exclude && format('--exclude {0}', inputs.exclude) || '' }}
+          set -euo pipefail
+          # Fail closed on an empty or unset mapping (#1150). `domain` is
+          # `required: true`, but the dispatch API accepts an empty string for a
+          # required input, and `--domain ""` would send httrack at nothing.
+          if [ -z "${IN_DOMAIN:-}" ]; then
+            echo "::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to clone an unresolved host."
+            exit 1
+          fi
+          args=(--domain "$IN_DOMAIN" --out "$RUNNER_TEMP/clone")
+          # `depth` and `exclude` are optional, so they are omitted when blank
+          # rather than forwarded empty, and read with `:-` so a removed or
+          # misnamed mapping degrades to the callee's documented default instead
+          # of aborting on `set -u` with a bare `unbound variable`. `domain`
+          # above is the opposite case and fails closed: it is `required: true`
+          # and the callee has no default to fall back to.
+          if [ -n "${IN_DEPTH:-}" ]; then
+            args+=(--depth "$IN_DEPTH")
+          fi
+          if [ -n "${IN_EXCLUDE:-}" ]; then
+            args+=(--exclude "$IN_EXCLUDE")
+          fi
+          node scripts/clone-site-static.mjs "${args[@]}"
           cat "$RUNNER_TEMP/clone/clone-report.json"
 
       - name: Mirror runtime-loaded assets
@@ -341,10 +373,22 @@ jobs:
         # assemble content-hashed chunk URLs in JavaScript, so those are missing
         # from the mirror and every widget depending on them dies silently.
         # See #902.
+        shell: bash
+        # `domain` through `env:` rather than interpolated — same reason as the
+        # clone step above, and note the SECOND site here sits inside a path,
+        # where the surrounding text makes the interpolation read like string
+        # building rather than like code (#1080).
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
+          set -euo pipefail
+          if [ -z "${IN_DOMAIN:-}" ]; then
+            echo "::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to mirror assets for an unresolved host."
+            exit 1
+          fi
           node scripts/sync-runtime-assets.mjs \
-            --domain "${{ inputs.domain }}" \
-            --dir "$RUNNER_TEMP/clone/${{ inputs.domain }}"
+            --domain "$IN_DOMAIN" \
+            --dir "$RUNNER_TEMP/clone/$IN_DOMAIN"
 
       - name: Check out target FFC-EX repo
         uses: actions/checkout@v7.0.1
@@ -356,11 +400,22 @@ jobs:
           fetch-depth: 0
 
       - name: Integrate clone into the Next.js app
+        shell: bash
+        # First step AFTER the target repo is checked out with the Key Vault PAT,
+        # so an injected body here reaches a working tree it can also push from.
+        # `domain` arrives as data (#1080).
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
+          set -euo pipefail
+          if [ -z "${IN_DOMAIN:-}" ]; then
+            echo "::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to integrate a clone for an unresolved host."
+            exit 1
+          fi
           node automation/scripts/integrate-clone-into-nextjs.mjs \
-            --clone "$RUNNER_TEMP/clone/${{ inputs.domain }}" \
+            --clone "$RUNNER_TEMP/clone/$IN_DOMAIN" \
             --repo ffc-ex \
-            --domain "${{ inputs.domain }}"
+            --domain "$IN_DOMAIN"
 
       - name: Verify Next.js static export builds
         if: ${{ inputs.build_check }}
@@ -390,9 +445,21 @@ jobs:
         # Loads every exported page with all requests to the live host aborted.
         # Fails on a surviving legacy dependency OR a missing local asset - the
         # two classes clone-report.json cannot see. See #902.
+        shell: bash
+        # This step is the GATE, which is the reason it matters most: a payload
+        # substituted here runs in the process deciding whether the clone is
+        # acceptable, so it can both steal the PAT and report a pass. `domain`
+        # arrives as data (#1080).
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
+          set -euo pipefail
+          if [ -z "${IN_DOMAIN:-}" ]; then
+            echo "::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to run the self-contained gate against an unresolved host."
+            exit 1
+          fi
           node automation/scripts/verify-no-legacy.mjs \
-            --domain "${{ inputs.domain }}" \
+            --domain "$IN_DOMAIN" \
             --dir ffc-ex/out
 
       # Dry-run stops HERE, deliberately late: the clone, the integration and the
@@ -456,10 +523,19 @@ jobs:
           # reach (#1241).
           TARGET_REPO: ${{ steps.target.outputs.repo }}
           TARGET_BRANCH: ${{ steps.target.outputs.branch }}
+          # `domain` itself, for the same reason and on the same path: it was
+          # interpolated into the `git commit -m` and `gh pr create --title`
+          # arguments below, both double-quoted, both executed by the step that
+          # holds the PAT (#1080).
+          IN_DOMAIN: ${{ inputs.domain }}
         run: |
           set -euo pipefail
           if [ -z "${TARGET_REPO:-}" ] || [ -z "${TARGET_BRANCH:-}" ]; then
             echo "::error::TARGET_REPO / TARGET_BRANCH is empty — the 'Resolve target repo' step published nothing."
+            exit 1
+          fi
+          if [ -z "${IN_DOMAIN:-}" ]; then
+            echo "::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to open a PR whose title names no site."
             exit 1
           fi
           git config user.name 'ffc-clone-bot'
@@ -470,10 +546,10 @@ jobs:
           # --no-verify: the cloned WordPress assets must not run through the
           # FFC-EX repo's husky/lint-staged pre-commit hooks (minified CSS/JS).
           git commit --no-verify \
-            -m "Replace template scaffold with faithful static clone of live ${{ inputs.domain }}" \
+            -m "Replace template scaffold with faithful static clone of live $IN_DOMAIN" \
             -m "Generated by automation workflow 27 (clone-site-static.mjs + integrate-clone-into-nextjs.mjs). The Next.js output:'export' build now serves the exact live WordPress visuals; template page routes moved to _disabled_template_routes/."
           git push -u origin "$branch"
           gh pr create --repo "FreeForCharity/$TARGET_REPO" \
             --base main --head "$branch" --draft \
-            --title "Static clone of live ${{ inputs.domain }} (replaces template scaffold)" \
+            --title "Static clone of live $IN_DOMAIN (replaces template scaffold)" \
             --body "Automated faithful static clone of the live WordPress site, served via the existing Next.js \`output: 'export'\` build. See the automation repo's docs/ffc-ex-static-clone-runbook.md. Review the visual fidelity against the live site before merging/cutover."

@@ -76,6 +76,10 @@ M = load_module()
 SOURCE = SCRIPT.read_text(encoding="utf-8")
 
 
+# Older than any fixture issue, so the default tree withholds nothing.
+COMPLETE_HISTORY = "2000-01-01T00:00:00Z"
+
+
 class FakeTree:
     """The working tree, as data, at two points in time.
 
@@ -86,10 +90,16 @@ class FakeTree:
     that should ever be reported. `at` defaults to `files` (nothing changed),
     so a test only spells it out when it means something moved."""
 
-    def __init__(self, files, at=None, commits=None):
+    def __init__(self, files, at=None, commits=None, horizon=COMPLETE_HISTORY, shallow=False):
         self.files = dict(files)
         self.at = dict(files) if at is None else dict(at)
         self._commits = dict(commits or {})
+        # Defaults to a horizon older than any fixture issue, i.e. a complete
+        # checkout that withholds nothing. Every test written before the horizon
+        # existed therefore keeps asserting exactly what it asserted, and a test
+        # only spells `horizon` out when truncation is the thing under test.
+        self._horizon = horizon
+        self._shallow = shallow
 
     def exists(self, path):
         return path in self.files
@@ -102,6 +112,12 @@ class FakeTree:
 
     def commits_since(self, path, since):
         return list(self._commits.get(path, []))
+
+    def history_horizon(self):
+        return self._horizon
+
+    def shallow(self):
+        return self._shallow
 
 
 def issue(number, body, title="t", created="2026-08-01T00:00:00Z"):
@@ -961,6 +977,233 @@ def test_the_root_help_says_it_does_not_follow_repo():
     text = out.getvalue()
     assert "--root" in text, text
     assert "does not follow --repo" in text.lower(), text
+
+
+# --- the history horizon (#1276) ------------------------------------------
+#
+# Every verdict rests on `content_at`, which needs a commit older than the
+# issue. A truncated checkout has none, so it answers None for every path and
+# None means "say nothing" -- the same unverifiable state `_require_git` aborts
+# on, reached with SOME history instead of none. Measured on a cloud worker:
+# 24 of 55 issues behind the horizon, reported as `55 scanned` with the only
+# published limit naming the wrong cause for 8 of the 9 issues it named.
+#
+# The discriminating test is
+# `test_a_complete_checkout_reports_no_horizon_rows`: a detector that fires on
+# "the clone is shallow" rather than on the date comparison passes every other
+# test here and fails only that one.
+
+HORIZON_AUG4 = "2026-08-04T18:18:04+00:00"  # this worker's measured boundary
+
+
+def test_an_issue_older_than_the_horizon_is_reported_unread():
+    """Filed 2026-07-19; the checkout begins 2026-08-04.
+
+    `at={}` is the faithful model, not a shortcut: the real `content_at` returns
+    None for every path on a pre-horizon issue, which is exactly why the old
+    sweep said nothing at all about these. The anchor IS gone from the file
+    here -- so this is the case where a real staleness finding is lost."""
+    tree = FakeTree({WF105: POST_FIX_105}, at={}, horizon=HORIZON_AUG4, shallow=True)
+    result = M.audit([issue(724, BODY_1077, created="2026-07-19T00:11:51Z")], tree)
+    rows = result["unverifiable_history"]
+    assert [r["issue"] for r in rows] == [724], result
+    assert rows[0]["created_at"] == "2026-07-19T00:11:51Z", rows
+    # No finding, because the premise cannot be established -- and before this
+    # change that was indistinguishable from a clean bill of health.
+    assert result["premise_may_be_gone"] == [], result
+    # ...and it is NOT filed under the anchor-extraction limit, which would name
+    # the wrong cause: the body quotes a perfectly usable anchor. This is the
+    # 9 -> 1 correction measured on the live backlog.
+    assert result["no_anchor_extracted"] == [], result
+    assert M.has_findings(result) is True
+
+
+def test_an_issue_newer_than_the_horizon_is_examined_normally():
+    # The control: same tree, same body, same gone anchor -- only the filing
+    # date moves, and the finding comes back.
+    tree = FakeTree(
+        {WF105: POST_FIX_105}, at={WF105: PRE_FIX_105}, horizon=HORIZON_AUG4, shallow=True
+    )
+    result = M.audit([issue(1193, BODY_1077, created="2026-08-12T04:20:19Z")], tree)
+    assert result["unverifiable_history"] == [], result
+    assert [r["issue"] for r in result["premise_may_be_gone"]] == [1193], result
+
+
+def test_a_complete_checkout_reports_no_horizon_rows():
+    """THE discriminating case: the verdict is the date, not the clone's shape.
+
+    A detector keyed on `shallow()` would flag the whole backlog on any
+    truncated clone that nonetheless reaches back far enough, and would pass
+    every other test in this block. `shallow=True` with a 2025 horizon is
+    exactly that configuration."""
+    tree = FakeTree(
+        {WF105: POST_FIX_105},
+        at={WF105: PRE_FIX_105},
+        horizon="2025-01-01T00:00:00Z",
+        shallow=True,  # truncated, but it still reaches past the issue
+    )
+    result = M.audit([issue(724, BODY_1077, created="2026-07-19T00:11:51Z")], tree)
+    assert result["unverifiable_history"] == [], result
+    assert [r["issue"] for r in result["premise_may_be_gone"]] == [724], result
+
+
+def test_unverifiable_alone_is_a_finding_and_exits_non_zero():
+    # The house rule: never exit 0 on a read that could not be completed
+    # (`audit-agentic-os-board.py`). Asserted through `has_findings` in-process,
+    # because a clean-fixture subprocess run only exercises the zero path.
+    result = {
+        "scanned": 1,
+        "premise_may_be_gone": [],
+        "path_gone": [],
+        "no_anchor_extracted": [],
+        "unverifiable_history": [{"issue": 724, "title": "t", "url": "", "created_at": ""}],
+        "history_horizon": "2026-08-04T18:18:04+00:00",
+        "shallow_checkout": True,
+    }
+    assert M.has_findings(result) is True
+    result["unverifiable_history"] = []
+    assert M.has_findings(result) is False
+
+
+def test_no_usable_anchor_is_still_not_a_finding():
+    # The asymmetry this change rests on: "examined, nothing checkable in it" is
+    # the technique's limit; "never examined" is a failed read. Pinned so a
+    # later tidy-up cannot quietly fold the two together.
+    result = {
+        "scanned": 1,
+        "premise_may_be_gone": [],
+        "path_gone": [],
+        "no_anchor_extracted": [{"issue": 1177, "title": "t", "url": ""}],
+        "unverifiable_history": [],
+        "history_horizon": COMPLETE_HISTORY,
+        "shallow_checkout": False,
+    }
+    assert M.has_findings(result) is False
+
+
+def test_the_summary_states_what_was_examined_not_just_what_was_listed():
+    result = {
+        "scanned": 55,
+        "premise_may_be_gone": [],
+        "path_gone": [],
+        "no_anchor_extracted": [{"issue": 1177, "title": "t", "url": ""}],
+        "unverifiable_history": [
+            {"issue": n, "title": "t", "url": "", "created_at": ""} for n in range(24)
+        ],
+        "history_horizon": "2026-08-04T18:18:04+00:00",
+        "shallow_checkout": True,
+    }
+    line = M.summary_line(result)
+    # 55 listed, 24 unread => 31 examined. The old line published only `55
+    # scanned`, which reads as 55 examined.
+    assert "55 agent-ready issues scanned, 31 examined" in line, line
+    assert "24 UNREAD" in line, line
+
+
+def test_the_horizon_block_names_the_remedy():
+    # This is the one finding that is about the CHECKOUT, so the report has to
+    # say how to fix the checkout. Asserted on rendered output, not on source.
+    result = {
+        "scanned": 1,
+        "premise_may_be_gone": [],
+        "path_gone": [],
+        "no_anchor_extracted": [],
+        "unverifiable_history": [
+            {"issue": 724, "title": "old one", "url": "", "created_at": "2026-07-19T00:11:51Z"}
+        ],
+        "history_horizon": "2026-08-04T18:18:04+00:00",
+        "shallow_checkout": True,
+    }
+    text = M.render(result, HUB)
+    assert "UNVERIFIABLE" in text, text
+    assert "--unshallow" in text, text
+    assert "fetch-depth: 0" in text, text
+    assert "2026-08-04T18:18:04+00:00" in text, text
+    assert "#724" in text, text
+    # "not cleared" is the whole point of the wording; a reader must not file
+    # these as examined-and-fine.
+    assert "not cleared" in text, text
+
+
+def test_a_horizon_row_never_suppresses_a_real_finding():
+    # The `continue` that attributes an issue to the horizon runs AFTER the
+    # findings are collected. If it ever moves above them, a pre-horizon issue
+    # with a genuine PATH GONE goes silent -- the exact failure this whole
+    # change is about, reintroduced one line higher up.
+    tree = FakeTree(
+        {},  # the cited path is gone now...
+        at={"scripts/old.py": "contents"},  # ...and was there when filed
+        horizon="2026-08-04T18:18:04+00:00",
+        shallow=True,
+    )
+    body = "The sweep in `scripts/old.py` does the wrong thing."
+    result = M.audit([issue(724, body, created="2026-07-19T00:11:51Z")], tree)
+    assert [r["issue"] for r in result["path_gone"]] == [724], result
+    assert [r["issue"] for r in result["unverifiable_history"]] == [724], result
+
+
+def test_predates_horizon_fails_closed_on_an_unreadable_clock():
+    # Neither clock is ours: the API sends `...Z`, git sends `-04:00`. An
+    # unparseable stamp must answer "not established" rather than invent an
+    # ordering in either direction.
+    assert M.predates_horizon("2026-07-19T00:11:51Z", "2026-08-04T18:18:04+00:00") is True
+    assert M.predates_horizon("2026-09-01T00:00:00Z", "2026-08-04T18:18:04+00:00") is False
+    assert M.predates_horizon("", "2026-08-04T18:18:04+00:00") is False
+    assert M.predates_horizon("2026-07-19T00:11:51Z", "") is False
+    assert M.predates_horizon("not a date", "2026-08-04T18:18:04+00:00") is False
+    assert M.predates_horizon("2026-07-19T00:11:51Z", "not a date") is False
+
+
+def test_the_two_clock_spellings_compare_as_instants_not_as_strings():
+    """`%cI` renders the committer's zone, so one checkout carries several.
+
+    The real boundary set on the checkout this was written against happens to
+    order the same either way, so this pair is constructed rather than observed
+    -- the first draft of this test asserted a measured pair that in fact
+    AGREED, and said so in the failure message. A lexical `min` over mixed
+    offsets picks by wall clock, which can select a LATER instant: that
+    understates the history available and reports issues as unread that could
+    have been checked."""
+    utc = "2026-08-04T20:00:00+00:00"  # 20:00Z
+    west = "2026-08-04T17:30:00-04:00"  # 21:30Z -- later instant, earlier text
+    assert west < utc, "the premise of this test has changed"
+    assert M._as_instant(utc) < M._as_instant(west)
+    assert min([utc, west]) == west, "lexical min picks the later instant -- the hazard"
+    # The real selection, not a re-implementation of it.
+    assert M.earliest_instant([utc, west]) == utc
+    assert M.earliest_instant([west, utc]) == utc, "order of the boundary list must not matter"
+    # An issue filed between the two instants is readable against the correct
+    # horizon and unread against the lexical one.
+    between = "2026-08-04T21:00:00Z"
+    assert M.predates_horizon(between, utc) is False
+    assert M.predates_horizon(between, west) is True
+
+
+def test_earliest_instant_drops_garbage_rather_than_ordering_it():
+    # A boundary whose date git could not render must not become the horizon by
+    # sorting first, and must not discard the boundaries that ARE readable.
+    assert M.earliest_instant(["nonsense", "2026-08-04T18:18:04Z"]) == "2026-08-04T18:18:04Z"
+    assert M.earliest_instant(["nonsense", ""]) is None
+    assert M.earliest_instant([]) is None
+
+
+def test_z_and_offset_spellings_of_one_instant_are_equal():
+    assert M._as_instant("2026-08-04T18:18:04Z") == M._as_instant("2026-08-04T14:18:04-04:00")
+    assert M._as_instant("2026-08-04T18:18:04z") == M._as_instant("2026-08-04T18:18:04+00:00")
+
+
+def test_history_horizon_reads_the_real_checkout():
+    """Against the real repo, not a fake -- `history_horizon` is the one piece
+    here that talks to git, so a fake would test nothing.
+
+    Asserts the SHAPE (a parseable instant) rather than a date, because the
+    horizon moves with every re-clone and a pinned value would fail on a
+    complete checkout. `_as_instant` returning non-None is what every caller
+    depends on."""
+    horizon = M.Tree().history_horizon()
+    assert horizon, "no boundary commit found in this checkout"
+    assert M._as_instant(horizon) is not None, horizon
+    assert isinstance(M.Tree().shallow(), bool)
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

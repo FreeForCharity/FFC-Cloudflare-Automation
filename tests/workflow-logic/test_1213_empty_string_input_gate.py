@@ -395,6 +395,16 @@ FIXED_SITES = {
         ("[string]::IsNullOrWhiteSpace($env:IN_PRODUCT_ID)",
          "$env:IN_PRODUCT_ID -eq ''"),
     ],
+    # 601 (#1080 lane 20) takes the same positive spelling, and is the site where
+    # the difference between the two predicates was MEASURED rather than argued:
+    # on pwsh 7.4.6 an all-spaces `output_file` bound `OutputFile=[   ]` and the
+    # step exited 0, so `-eq ''` would have passed exactly the value the gate
+    # exists to stop. Recorded in
+    # tests/workflow-logic/test_601_wpmudev_export_wiring.py.
+    "601-wpmudev-export-sites.yml": [
+        ("[string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)",
+         "$env:IN_OUTPUT_FILE -eq ''"),
+    ],
 }
 
 

@@ -20,9 +20,65 @@ jobs:
 
       - name: Run export
         shell: pwsh
+        # `output_file` is a free-text dispatch input. Interpolated into this body
+        # it was not an argument — it was source text pasted into the program
+        # GitHub then runs, holding the WPMUDEV Hub API token under the gated
+        # `wpmudev-prod` environment (#1080). It now arrives through step-level
+        # `env:` and the body reads `$env:`.
+        #
+        # This is the LAST write-environment entry in the #1080 freeze. It is a
+        # [W] by the guard's mechanical rule — `wpmudev-prod` does not end in
+        # `-read` — while the workflow's own title says read-only. The rule is
+        # right here anyway, and for the reason that matters: what the injected
+        # body reaches is a live WPMUDEV Hub API token, whose scope is the Hub
+        # account rather than this workflow's intent. The name is what is wrong,
+        # not the classification; renaming an environment is a repo-admin change
+        # and is deliberately NOT bundled into this lane.
+        #
+        # Unlike the GITHUB_ENV lanes, the credential IS named in this step's own
+        # `env:`, so an L213 read and a `secrets.` grep (#1141) both find it —
+        # this lane is the easy-to-see shape, which is why it outlived the ones
+        # that needed #1188 to see at all.
+        #
+        # The value sat in SINGLE quotes, where `$( )` does NOT expand — so the
+        # payload every double-quoted lane used is inert here and reports this
+        # body as harmless. What works is closing the literal and continuing the
+        # EXPRESSION. Measured on pwsh 7.4.6 against the body as it shipped: the
+        # WPMUDEV token was written to a sentinel, the callee was still handed a
+        # legal `OutputFile=[wpmudev_domains.csv]`, and the step exited **0**.
         env:
           WPMUDEV_API_TOKEN: ${{ secrets.FFC_WPMUDEV_GA_API_Token }}
+          IN_OUTPUT_FILE: ${{ inputs.output_file }}
         run: |
+          # Fail closed (#1213, ledger L214), placed BEFORE the diagnostics call
+          # so a blank dispatch spends nothing. Measured on pwsh 7.4.6, 8 runs
+          # each, and the two blank forms fail in OPPOSITE directions:
+          #
+          #   EMPTY  ('')   the empty string is PRESERVED as an argument, so the
+          #                 callee bound `OutputFile=[]`, its own
+          #                 'wpmudev_domains.csv' default never applied, its
+          #                 write failed on an empty path — and the step still
+          #                 exited 0, because this body never checks
+          #                 $LASTEXITCODE after the native call. A silent no-op
+          #                 export whose only trace is the summary line
+          #                 `output file not found:` with nothing after it.
+          #   UNSET  ($null) DROPPED from the argument list instead — the way
+          #                 L254's blank splat element vanishes — so the exporter
+          #                 reports `Missing an argument for parameter
+          #                 'OutputFile'` and the body then dies at `Test-Path
+          #                 $null`. Loud, 8/8. (L254 itself is about a SPLATTED
+          #                 hashtable and does not reach this shape; the empty
+          #                 case above is where the two part company.)
+          #
+          # So the dangerous blank is the quiet one, and it is the one a dispatch
+          # form produces when someone clears the box. `IsNullOrWhiteSpace` covers
+          # both it and the all-spaces case, which bound `OutputFile=[   ]` at
+          # exit 0; a `-ne ''` gate would pass that straight through (#1213).
+          if ([string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)) {
+            Write-Error 'output_file is blank. Refusing to run: an empty value is passed to the exporter as an empty path, whose write then fails while the step still exits 0.'
+            exit 1
+          }
+
           Write-Host "::group::WPMUDEV Diagnostics"
           try {
             $base = 'https://wpmudev.com/api/hub/v1'
@@ -53,7 +109,7 @@ jobs:
           }
           Write-Host "::endgroup::"
 
-          $out = '${{ inputs.output_file }}'
+          $out = $env:IN_OUTPUT_FILE
           pwsh -NoProfile -File scripts/wpmudev-sites-export.ps1 -OutputFile $out
 
           Write-Host "::group::WPMUDEV Summary"

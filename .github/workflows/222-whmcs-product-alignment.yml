@@ -79,13 +79,60 @@ jobs:
 
       - name: Align product onto registrar-domain clients
         shell: pwsh
+        # `product_id` is a free-text dispatch input. Interpolated into this body
+        # it was not an argument — it was source text pasted into the program
+        # GitHub then runs, holding the WHMCS API credential the APPROVER spent on
+        # `whmcs-prod`, in a job whose live mode places AddOrder writes (#1080). It
+        # now arrives through step-level `env:` and the body reads `$env:`.
+        #
+        # The credential is named in no `env:` block here: the preceding
+        # `whmcs-secrets-from-kv` step exports WHMCS_API_IDENTIFIER / _SECRET /
+        # _APIM_SUBSCRIPTION_KEY through GITHUB_ENV, so a reader who checks this
+        # step's own `env:` (ledger L213) and a `secrets.` grep of the file (#1141)
+        # both score it as holding nothing. Run `python3
+        # scripts/check-workflow-input-interpolation.py --reachability
+        # 222-whmcs-product-alignment.yml` for the arrival path (#1188).
+        #
+        # The value sat in SINGLE quotes, where `$( )` does NOT expand — so the
+        # payload every double-quoted lane used is inert here and reports this body
+        # as harmless. What works is closing the literal and continuing the
+        # EXPRESSION. Measured on pwsh 7.4.6 against the body as it shipped: the
+        # decoy credential was written to a sentinel, the callee was still handed a
+        # legal `ProductId=39`, and the step exited **0**.
+        #
+        # `dry_run` stays interpolated on purpose: it is `type: boolean`, so GitHub
+        # generates the value from the declared option and it cannot carry a
+        # payload.
         env:
           WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          IN_PRODUCT_ID: ${{ inputs.product_id }}
         run: |
           $ErrorActionPreference = 'Stop'
+          # Fail closed (#1150, ledger L214), NOT the gated append 229 uses: a
+          # blank `product_id` is not a documented path here, and both cheaper
+          # remedies are actively wrong. `$params` is splatted onto a NATIVE
+          # command, whose argument rendering drops an empty element (L254), and
+          # the callee's own default is '39'. Measured on pwsh 7.4.6 with this
+          # check removed, `IN_PRODUCT_ID` empty, 8 runs: FOUR outcomes — 3 bound
+          # ProductId='39', 2 bound the next rendered argument
+          # (`-ApiUrl:https://…`), 1 bound `-OutputFile:artifacts/…`, 2 never
+          # reached the callee — 6 of them at exit 0. An UNSET mapping was correct
+          # 8/8, so the hazard is the blank a dispatch form produces when someone
+          # clears the box, not the one a broken `env:` block produces.
+          #
+          # Defaulting to the callee's '39' would be the worst of the three: on
+          # THIS workflow it happens to be the intended marker, which is exactly
+          # why it must not be relied on — its sibling 224 aligns pid 40, and the
+          # same silent default there places the Cloudflare marker on
+          # GitHub-Pages clients, live. `tests/workflow-logic/
+          # test_222_224_product_alignment_wiring.py` measures both.
+          if ([string]::IsNullOrWhiteSpace($env:IN_PRODUCT_ID)) {
+            Write-Error 'product_id is blank. Refusing to run: an empty value is dropped from the splat and the callee would fall back to its own default product id.'
+            exit 1
+          }
           $params = @{
             DomainsJson      = 'artifacts/cloudflare/registrar_domains.json'
-            ProductId        = '${{ inputs.product_id }}'
+            ProductId        = $env:IN_PRODUCT_ID
             ApiUrl           = $env:WHMCS_API_URL
             OutputFile       = 'artifacts/whmcs/whmcs_product_alignment.json'
             WelcomeEmailJson = 'config/whmcs-cloudflare-domain-email.json'

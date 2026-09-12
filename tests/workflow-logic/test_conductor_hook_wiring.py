@@ -582,7 +582,17 @@ def test_rendering_into_the_worker_session_root_wires_it():
         # The rendered config must point into the fixture's clone -- if it still
         # named REPO_ROOT the assertions above would pass while proving nothing
         # about this layout.
-        assert str(hub) in (root / ".claude" / "settings.json").read_text(encoding="utf-8")
+        #
+        # `as_posix()`, not `str()`. `render()` substitutes the hub path through
+        # `hub_clone.as_posix()` deliberately (a backslash would make the settings
+        # invalid JSON, and Claude Code answers invalid JSON by loading NO settings
+        # -- silently unguarded by the very command meant to fix it). `str(hub)` is
+        # the backslash spelling on Windows, so this assertion could never hold on
+        # the Conductor's own platform and always held on CI's ubuntu runner. It
+        # was red on `main` for exactly that reason and no CI run could show it.
+        assert hub.as_posix() in (root / ".claude" / "settings.json").read_text(
+            encoding="utf-8"
+        )
         # And the five sibling clones are untouched -- the fix belongs to the
         # session root, never to a repo checkout that a PR would then carry.
         assert not (hub / ".claude" / "settings.local.json").exists()
@@ -839,6 +849,201 @@ def test_the_printed_remedy_quotes_paths_that_contain_spaces():
         # shlex.quote wraps a spaced path in single quotes; the bare form would
         # split on the space and silently target `My`.
         assert f"--workspace '{spaced}'" in remedy[0], remedy[0]
+
+
+# --------------------------------------------------------------------------
+# Which directory the #1237 refusal NAMES as the likely session root (run 156).
+#
+# The refusal is only as useful as its hint, and a wrong hint is worse than
+# none: it sends the reader to re-measure a directory that is nobody's session
+# root, where they get a confident `NOT WIRED` and a `--render` offer that would
+# write settings no session reads. The function's own docstring said so before
+# it had this bug.
+#
+# The two layouts below are the two real scheduled sessions. They differ in
+# exactly one way -- where the clones sit relative to the root -- and the
+# sibling-clone heuristic alone answers the second correctly and the first
+# wrongly.
+# --------------------------------------------------------------------------
+
+
+def _layout(root: pathlib.Path, clone_parent: pathlib.Path, n_clones: int = 3):
+    """Build `n_clones` sibling checkouts under `clone_parent`; return the first."""
+    clone_parent.mkdir(parents=True, exist_ok=True)
+    first = None
+    for i in range(n_clones):
+        clone = clone_parent / f"repo-{i}"
+        (clone / ".git").mkdir(parents=True)
+        first = first or clone
+    return first
+
+
+def _hint(clone: pathlib.Path):
+    """`(candidate_session_root, basis)` as the verifier's own code computes it."""
+    module = _vch()
+    return (
+        module.candidate_session_root(clone),
+        module.settings_bearing_ancestor(clone),
+    )
+
+
+def test_the_conductor_shape_names_the_root_that_holds_the_settings_not_the_clones_parent():
+    """Clones in `repos/`, settings one level above it -- the Conductor.
+
+    Fails on the pre-fix tree, which returns the clones' parent (`<root>/repos`).
+    That directory has no `.claude`, so re-measuring it reports NOT WIRED for a
+    session that is wired -- which is what run 156 actually observed.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td) / "Claude_AI_OS_Routine"
+        clone = _layout(root, root / "repos")
+        (root / ".claude").mkdir(parents=True)
+        (root / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+
+        hint, configured = _hint(clone)
+        assert hint == str(root), (
+            f"expected the settings-bearing root {root!s}, got {hint!s} -- "
+            f"naming the clones' parent sends the reader to a directory that is "
+            f"nobody's project root"
+        )
+        assert configured == str(root), configured
+
+
+def test_the_worker_shape_is_unchanged_when_no_ancestor_carries_settings():
+    """Clones directly under the root, nothing configured yet -- the cloud worker.
+
+    This is the case the sibling heuristic was written for and it must survive:
+    before `--render` there is no `.claude` anywhere, so the evidence branch has
+    nothing to say and the shape branch answers correctly.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td) / "home-user"
+        clone = _layout(root, root)
+
+        hint, configured = _hint(clone)
+        assert configured is None, f"nothing is configured yet, got {configured!s}"
+        assert hint == str(root), f"expected the sibling-clone parent {root!s}, got {hint!s}"
+
+
+def test_a_lone_clone_with_no_configured_ancestor_still_yields_no_hint():
+    """The guess-refusal is preserved: one checkout says nothing about a root."""
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td) / "solo"
+        clone = _layout(root, root, n_clones=1)
+
+        hint, configured = _hint(clone)
+        assert configured is None, configured
+        assert hint is None, f"a lone clone must not produce a hint, got {hint!s}"
+
+
+def test_the_refusal_says_which_evidence_produced_its_hint():
+    """`claude_settings` and `sibling_clones` are not equally trustworthy.
+
+    The reader is about to act on the named directory, so the message has to
+    distinguish "this one is already configured" from "these checkouts share a
+    parent". Asserted on the printed text, because that is the only part a human
+    triaging at 3am actually sees.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td) / "Claude_AI_OS_Routine"
+        clone = _layout(root, root / "repos")
+        (root / ".claude").mkdir(parents=True)
+        (root / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+        # The clone must itself ship `.claude/hooks/` for the #1237 self-grading
+        # refusal to fire at all -- that refusal is what carries the hint.
+        (clone / ".claude" / "hooks").mkdir(parents=True)
+        (clone / ".claude" / "hooks" / "guard_bash.py").write_text("", encoding="utf-8")
+
+        proc = run(cwd=str(clone))
+        assert "UNVERIFIED" in proc.stdout, proc.stdout
+        assert "already carries a Claude settings file" in proc.stdout, proc.stdout
+        assert str(root) in proc.stdout, proc.stdout
+
+
+def _with_fake_home(fake_home: pathlib.Path, fn):
+    """Run `fn()` with `Path.home()` answering `fake_home`, then restore.
+
+    `Path.home()` is `os.path.expanduser("~")`, which reads `HOME` on POSIX and
+    `USERPROFILE` on Windows, so both are set -- pinning only one makes the test
+    pass on the platform that happens to run it and say nothing on the other.
+
+    Restored in `finally`. Mutating `os.environ` is exactly the in-place edit
+    CLAUDE.md/L182 records as dangerous when it is not paired with a restore, and
+    here the blast radius is every later test in the module.
+    """
+    saved = {k: os.environ.get(k) for k in ("HOME", "USERPROFILE")}
+    os.environ["HOME"] = str(fake_home)
+    os.environ["USERPROFILE"] = str(fake_home)
+    try:
+        return fn()
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def test_a_clone_directly_under_a_configured_home_names_home():
+    """The cloud worker AFTER `--render --workspace /home/user` -- #1283 review.
+
+    Its checkouts sit directly in the home directory, so the settings that render
+    just wrote are at `workspace.parent`. The first fix for #1237 skipped home
+    UNCONDITIONALLY, so this returned None and the refusal said `no Claude
+    settings found above this clone` about a root carrying exactly that.
+
+    The claim that made the skip look free was that the sibling branch answers
+    `/home/user` anyway "by the other route" -- true only while two or more
+    clones exist. `n_clones=1` is the state every worker passes through on its
+    way to that shape, and there the fallback declines too, so BOTH routes were
+    silent at once. Asserted on `configured`, not just `hint`: the routes return
+    the same string and only the basis distinguishes them.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        home = pathlib.Path(td) / "home" / "user"
+        clone = _layout(home, home, n_clones=1)
+        (home / ".claude").mkdir(parents=True)
+        (home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+
+        hint, configured = _with_fake_home(home, lambda: _hint(clone))
+        assert configured == str(home), (
+            f"home is this clone's own parent and carries settings, "
+            f"got {configured!s}"
+        )
+        assert hint == str(home), f"expected the configured home {home!s}, got {hint!s}"
+
+
+def test_a_distant_home_ancestor_is_still_not_evidence():
+    r"""...and the exclusion that narrowing relaxes is otherwise intact.
+
+    `~/.claude` is the user-level config and exists on essentially every machine,
+    so a clone nested somewhere beneath home must NOT resolve to home -- that is
+    the wrong hint the skip was written for, and why an unbounded walk failed
+    three pre-existing tests here by naming the real `C:\Users\clark`
+    (`TemporaryDirectory()` sits under home on Windows).
+
+    One hop is the whole difference between this and the test above, which is
+    what makes the pair worth keeping adjacent.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        home = pathlib.Path(td) / "home" / "user"
+        (home / ".claude").mkdir(parents=True)
+        (home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+        nested = home / "work" / "checkouts"
+        clone = _layout(nested, nested, n_clones=1)
+
+        # Asserted as "not this directory" rather than "None": on Windows the
+        # fixture lives under the REAL home, which carries a real `~/.claude`, so
+        # once `Path.home()` is pointed at the fake one the walk can legitimately
+        # reach the real one further up and answer with it. That is the exclusion
+        # working, not failing. The property under test is that the DISTANT home
+        # is not chosen, and stating it that way is true on both platforms --
+        # `is None` would only ever have held on Linux.
+        hint, configured = _with_fake_home(home, lambda: _hint(clone))
+        assert configured != str(home), (
+            f"a distant home ancestor must not count as evidence, got {configured!s}"
+        )
+        assert hint != str(home), f"the hint must not name a distant home, got {hint!s}"
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

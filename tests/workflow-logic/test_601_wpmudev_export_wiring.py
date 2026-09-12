@@ -200,12 +200,27 @@ BLANK_REFUSAL = "output_file is blank"
 # opening of the condition rather than on the regexes themselves, so the anchor
 # carries no backslashes to keep faithful through this file.
 PATTERN_ANCHOR = "if ($env:IN_OUTPUT_FILE -notmatch "
-PATTERN_REFUSAL = "output_file must be a workspace-relative file name"
+PATTERN_REFUSAL = "output_file must be a bare file name in the workspace root"
 
 
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
+
+
+def _refusal_message(body: str) -> str:
+    """The pattern gate's own Write-Error text, read from the body.
+
+    Derived rather than restated so the skip list in the echo test tracks the
+    message: if the message is ever changed to quote the input, a value that
+    used to be distinguishable becomes skippable, and the assertion on the
+    skipped SET is what catches that.
+    """
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Write-Error") and "bare file name" in stripped:
+            return stripped
+    raise AssertionError(f"pattern-gate refusal message not found in body: {body!r}")
 
 
 def _payload(legal: str) -> str:
@@ -879,6 +894,13 @@ PATTERN_VALUES = (
     # A Windows drive form that carries no backslash, so the old denylist's
     # backslash rule never saw it.
     "C:/Windows/win.ini",
+    # A subdirectory: accepted by the previous allowlist and NOT supported
+    # by the workflow, which creates no parent directory. Sixth review
+    # round -- a gate must not accept what the run cannot honour.
+    "sub/dir/out.csv",
+    # The two directory references, which the character class permits.
+    "..",
+    ".",
 )
 
 
@@ -975,12 +997,25 @@ def test_the_refusal_never_echoes_the_dispatched_value():
     either.
     """
     body = _offline(_step()["run"])
+    # The refusal NAMES the two directory references it rejects ("." and ".."),
+    # so a substring search for those values matches the message itself and
+    # reports an echo that did not happen. A value the message legitimately
+    # contains cannot discriminate, so it is skipped here rather than weakening
+    # the assertion for every value — and the skip is derived from the message
+    # in the tree, so it cannot quietly grow to cover a value that IS echoed.
+    refusal_text = _refusal_message(body)
+    skipped = []
+    checked = 0
     for value in PATTERN_VALUES:
-        out, _stolen, _rc = _run(body, **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: value})
         # Compare on the value's distinctive part; the whole string can contain
         # a newline, and a substring test against multi-line output would be
         # satisfied by coincidence.
         marker = value.splitlines()[0] if value.splitlines() else value
+        if marker in refusal_text:
+            skipped.append(value)
+            continue
+        out, _stolen, _rc = _run(body, **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: value})
+        checked += 1
         assert marker not in out, (
             f"the refusal echoed the dispatched value {marker!r} back into the "
             f"log. Output: {out[:700]}"
@@ -990,6 +1025,14 @@ def test_the_refusal_never_echoes_the_dispatched_value():
             f"above could pass on a run that failed for another reason. "
             f"Output: {out[:700]}"
         )
+    assert set(skipped) <= {".", ".."}, (
+        f"values other than the directory references were skipped as "
+        f"indistinguishable: {skipped}. A long value appearing in the refusal "
+        f"message means the message has started quoting the input."
+    )
+    assert checked >= len(PATTERN_VALUES) - 2, (
+        f"only {checked} of {len(PATTERN_VALUES)} values were actually checked"
+    )
 
 
 def test_a_forged_workflow_command_never_reaches_the_start_of_a_line():
@@ -1018,7 +1061,7 @@ def test_an_ordinary_filename_is_not_caught_by_the_pattern_gate():
     the test above and break the workflow, and the denylist is deliberately
     narrow — a space or a non-ASCII name was never the hazard and must pass."""
     step = _step()
-    for value in ("wpmudev_domains.csv", "sub/dir/out.csv", "a..b.csv"):
+    for value in ("wpmudev_domains.csv", "a..b.csv", "WPMUDEV-2026_01.csv"):
         out, _stolen, rc = _run(
             _offline(step["run"]), **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: value}
         )

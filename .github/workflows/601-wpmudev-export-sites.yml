@@ -139,15 +139,26 @@ jobs:
           #   the `\A...\z` form refuses it.
           #
           #   The `..` test STAYS. It is not subsumed: `..` is made only of
-          #   characters the allowlist permits, so `../escaped.csv` matches the
+          #   characters the allowlist permits, so a bare `..` matches the
           #   allowlist cleanly. Measured the same way.
-          if ($env:IN_OUTPUT_FILE -notmatch '\A[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\z' -or $env:IN_OUTPUT_FILE -match '(\A|/)\.\.(/|\z)') {
+          #
+          # NO `/`: a bare file name in the workspace root, which is what this
+          # workflow actually supports. Nothing here or in the exporter creates a
+          # parent directory, so `sub/dir/out.csv` fails at `Export-Csv` on a
+          # fresh runner — a value the gate would have ACCEPTED and the run could
+          # not honour. Raised by Copilot on #1288, sixth round, against a
+          # permissiveness test of mine that asserted that exact path was
+          # legitimate; I had never checked whether the workflow supported it.
+          # Creating the directory instead would be adding a capability nobody
+          # asked for, so the gate is narrowed to the truth rather than the
+          # workflow widened to the gate.
+          if ($env:IN_OUTPUT_FILE -notmatch '\A[A-Za-z0-9._-]+\z' -or $env:IN_OUTPUT_FILE -match '\A\.\.?\z') {
             # The value is deliberately NOT echoed. It is already visible to
             # whoever dispatched the run, in the run's own inputs panel, so
             # echoing it adds nothing an operator needs — while PowerShell wraps
             # a long error message across lines, which could place attacker text
             # at the start of one even after control characters are rejected.
-            Write-Error 'output_file must be a workspace-relative file name using only letters, digits, dot, underscore, hyphen and / as a separator, with no ".." segment. Refusing to run. The dispatched value is not echoed here on purpose; read it from this run''s inputs panel.'
+            Write-Error 'output_file must be a bare file name in the workspace root, using only letters, digits, dot, underscore and hyphen, and must not be "." or "..". Subdirectories are not supported: nothing creates the parent directory. Refusing to run. The dispatched value is not echoed here on purpose; read it from this run''s inputs panel.'
             exit 1
           }
 

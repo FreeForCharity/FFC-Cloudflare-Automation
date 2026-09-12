@@ -119,10 +119,35 @@ def selects_from_a_listing(script: str) -> bool:
 DROPS_PRS = re.compile(r"!\s*[A-Za-z_$][\w$]*\.pull_request")
 
 
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
 def _code_lines(script: str) -> list[str]:
-    return [
-        ln.strip() for ln in script.splitlines() if not ln.strip().startswith("//")
-    ]
+    """Lines of `script` with comments removed.
+
+    Block comments are stripped BEFORE splitting, because they span lines and a
+    `/* … */` body does not start with `//` — so a mention inside one used to read
+    as code. Copilot found that on #1275 against the selector allow-list, and the
+    same input shows the OLDER `prefiltered` check has it too: a block-commented
+    `.filter((i) => !i.pull_request)` satisfied the pre-filter and suppressed
+    findings on a real unguarded selection. Both directions were fail-OPEN, which
+    is why this is fixed here rather than at one call site.
+
+    An UNTERMINATED `/*` swallows the rest of the input, which is what JavaScript
+    does and is also the safe direction: dropping real code from the scan can only
+    remove a selection, and a script with no visible selection is reported rather
+    than passed.
+
+    Note the two scans this feeds are NOT symmetric about a false positive, so
+    "leave both at the same strictness" is not a reason to leave a hole: a
+    mistakenly-counted `.find(` selection is a spurious FINDING (safe), while a
+    mistakenly-counted library call or pre-filter SUPPRESSES one.
+    """
+    text = _BLOCK_COMMENT.sub(" ", script)
+    cut = text.find("/*")
+    if cut != -1:
+        text = text[:cut]
+    return [ln.strip() for ln in text.splitlines() if not ln.strip().startswith("//")]
 
 
 def scan_script(script: str) -> list[str]:
@@ -408,6 +433,65 @@ def test_a_mentioned_library_selector_does_not_satisfy_the_guard():
             + CLOSE_TAIL
         )
         assert scan_script(script), mention
+
+
+def test_a_block_commented_selector_mention_does_not_satisfy_the_guard():
+    """Copilot's round-2 finding on #1275: `/* … */` is not code either.
+
+    `_code_lines` dropped only lines starting with `//`, so a block comment's body
+    survived and a mention inside one suppressed the fail-closed branch.
+    """
+    for mention in [
+        "/*\n * we used to call lib.findRollingIssue(open) here\n */",
+        "/* see findSilenceIssue() in process-health-metrics-lib.js */",
+        "/**\n * @see lib.findSilenceIssue(open)\n */",
+    ]:
+        script = (
+            "const open = await github.paginate(github.rest.issues.listForRepo, "
+            "{ owner, repo, state: 'open' });\n"
+            + mention
+            + "\nconst existing = pickSomehow(open);\n"
+            + CLOSE_TAIL
+        )
+        assert scan_script(script), mention
+
+
+def test_an_unterminated_block_comment_does_not_satisfy_the_guard():
+    """Swallow to end of input, as JavaScript does — and it is the safe direction."""
+    script = (
+        "const open = await github.paginate(github.rest.issues.listForRepo, "
+        "{ owner, repo, state: 'open' });\n"
+        "/* dangling comment mentioning lib.findSilenceIssue(open)\n"
+        "const existing = pickSomehow(open);\n" + CLOSE_TAIL
+    )
+    assert scan_script(script), "an unterminated block comment must not count as code"
+
+
+def test_a_block_commented_filter_does_not_satisfy_the_pre_filter():
+    """The same hole in the OLDER check, found by the same input.
+
+    A block-commented `.filter((i) => !i.pull_request)` used to satisfy
+    `prefiltered`, which suppresses the per-selection findings — so a real
+    unguarded `.find(` went unreported. Predates #1275; fixed with it.
+    """
+    script = (
+        "const open = await github.paginate(github.rest.issues.listForRepo, "
+        "{ owner, repo, state: 'open' });\n"
+        "/* const safe = open.filter((i) => !i.pull_request); */\n"
+        "const existing = open.find((i) => i.body.includes(marker));\n" + CLOSE_TAIL
+    )
+    assert scan_script(script), "a commented-out pre-filter must not excuse a selection"
+
+
+def test_a_real_call_after_a_block_comment_still_satisfies_the_guard():
+    """Stripping comments must not eat the code that follows them."""
+    script = (
+        "const open = await github.paginate(github.rest.issues.listForRepo, "
+        "{ owner, repo, state: 'open' });\n"
+        "/* Skips pull requests — see the library. */\n"
+        "const existing = lib.findSilenceIssue(open);\n" + CLOSE_TAIL
+    )
+    assert scan_script(script) == [], scan_script(script)
 
 
 def test_an_identifier_merely_ending_in_a_selector_name_is_not_a_call():

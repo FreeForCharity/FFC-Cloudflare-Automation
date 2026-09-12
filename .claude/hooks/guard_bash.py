@@ -924,7 +924,10 @@ def main():
     #    follow a flag that takes a separate value (`gh api -X POST /repos/...`),
     #    which a flags-then-endpoint pattern misses. The `(?<=\s)` keeps it off
     #    an embedded value like `-f path=/x`, where the slash is data.
-    if re.search(r"(?<![\w-])gh\s+api\b[^\n|;&]*?(?<=\s)/[A-Za-z]", cmd):
+    #    The span also stops at `<` and `>`: a redirect target (`> /c/tmp/x`,
+    #    `2> /tmp/err`, `< /c/q.json`) is a shell path, never the endpoint, and
+    #    without that stop it blocked the Conductor three times in run 161.
+    if re.search(r"(?<![\w-])gh\s+api\b[^\n|;&<>]*?(?<=\s)/[A-Za-z]", cmd):
         block(
             "`gh api` with a leading-slash endpoint is mangled by MSYS path conversion in "
             "this environment's git-bash -- `gh api /markdown` is rewritten to a filesystem "

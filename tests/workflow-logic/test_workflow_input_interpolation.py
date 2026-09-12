@@ -348,6 +348,7 @@ BURNED_DOWN = (
     "102-domain-add-ffc-cloudflare-and-whmcs.yml",
     "116-domain-transfer-epp-probe.yml",
     "702-ffc-ex-clone-deploy.yml",
+    "229-whmcs-client-field-populate.yml",
 )
 
 

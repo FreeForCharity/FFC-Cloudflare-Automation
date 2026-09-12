@@ -1066,7 +1066,36 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     "220-whmcs-served-metrics.yml": ("charity_gids", "output_file"),
     "222-whmcs-product-alignment.yml": ("product_id",),
     "224-whmcs-github-pages-product-alignment.yml": ("product_id",),
-    "229-whmcs-client-field-populate.yml": ("client_id", "email"),
+    # 229-whmcs-client-field-populate.yml burned down: `client_id` / `email` now
+    # reach the one pwsh body through step-level `env:` (IN_CLIENT_ID / IN_EMAIL).
+    # Two inputs, FOUR substitution points — each input was interpolated twice on
+    # one line, once into the emptiness test and once into the splat — so the
+    # entry's two names covered double their apparent number of call sites. It
+    # runs on whmcs-prod, whose live mode is an UpdateClient write, and the WHMCS
+    # credential in reach is the workflow's ONLY credential and arrives through
+    # GITHUB_ENV from `whmcs-secrets-from-kv`, invisible to both the L213 `env:`
+    # read and the #1141 `secrets.` grep.
+    #
+    # It is the lane where the INJECTION POINT WAS THE VALIDATION. The first
+    # substitution of each pair sat inside the `IsNullOrWhiteSpace(...)` test
+    # #1213 added to refuse a blank, so the check that exists to reject bad input
+    # was the first place the dispatcher's code ran. Measured on pwsh 7.4.6:
+    # single quotes make `$( )` inert, so the payload closes the literal and
+    # continues the expression — `'419' + $($null = Set-Content …
+    # $env:WHMCS_API_SECRET) + ''` — the secret was stolen, the callee was still
+    # handed `ClientId=[419] Email=[a@example.org]`, and the step exited 0. Same
+    # shape as L206 (112's callee-side ValidatePattern), one layer earlier.
+    #
+    # Its remedy is a GATED APPEND rather than a fail-closed guard, because a
+    # blank `client_id` is the documented path ("leave blank to use email") — the
+    # 119 case, not the 118 case. What made that choice load-bearing rather than
+    # cosmetic: the splat goes to a NATIVE command, and with the predicates
+    # dropped an EMPTY `client_id` bound ClientId to another rendered argument in
+    # 6 of 8 runs at exit 0 (L254), while an UNSET one was correct 8/8. Ledger
+    # L271.
+    #
+    # `overwrite` and `dry_run` stay interpolated and are NOT findings: both are
+    # `type: boolean`.
     # --- Microsoft 365 ------------------------------------------------------
     # 301-m365-domain-preflight.yml burned down: `domain` now reaches both pwsh
     # bodies through step-level `env:`. Its two call sites sit in TWO jobs under

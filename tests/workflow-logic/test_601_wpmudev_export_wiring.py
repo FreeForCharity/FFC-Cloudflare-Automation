@@ -273,7 +273,7 @@ def _strip_guard(body: str) -> str:
     return stripped
 
 
-def _run(body: str, **env_overrides: str):
+def _run(body: str, *, stub: str = None, extra_files: dict = None, **env_overrides: str):
     """Run a pwsh body the way the RUNNER runs it, in a temp cwd holding the stub.
 
     Returns (output, sentinel_contents_or_None, rc). The sentinel's CONTENTS, not
@@ -289,7 +289,11 @@ def _run(body: str, **env_overrides: str):
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         (tmp / "scripts").mkdir()
-        (tmp / "scripts" / CALLEE).write_text(STUB, encoding="utf-8")
+        (tmp / "scripts" / CALLEE).write_text(
+            STUB if stub is None else stub, encoding="utf-8"
+        )
+        for name, contents in (extra_files or {}).items():
+            (tmp / name).write_text(contents, encoding="utf-8")
         script = tmp / "step.ps1"
         script.write_text(RUNNER_PREAMBLE + body + RUNNER_EPILOGUE, encoding="utf-8")
         env = child_env(**env_overrides)
@@ -653,6 +657,121 @@ def test_the_unguarded_whitespace_value_reaches_the_callee_at_exit_zero():
     )
 
 
+# --------------------------------------------------------------------------
+# The summary block reads `$out` as a LITERAL path, not as a glob
+#
+# Moving the value into `env:` stops it being parsed as CODE. It does not stop
+# it being parsed as a PATTERN — a separate interpretation with its own opt-out,
+# and the one a burn-down lane is most likely to leave behind, because the
+# injection is fixed and the read still looks innocuous. Raised by Copilot on
+# #1288.
+# --------------------------------------------------------------------------
+
+# A stub that writes NOTHING, i.e. an export that failed. That is the state in
+# which a glob is dangerous: the file the operator named does not exist, so the
+# wildcard is free to match something else.
+STUB_WRITES_NOTHING = """[CmdletBinding()]
+param(
+    [Parameter()][string]$ApiToken,
+    [Parameter()][string]$BaseUrl = 'https://wpmudev.com/api',
+    [Parameter()][string]$OutputFile = 'wpmudev_domains.csv',
+    [Parameter()][ValidateRange(1, 100)][int]$PerPage = 100
+)
+Write-Output "CALLED OutputFile=[$OutputFile] PerPage=[$PerPage]"
+"""
+
+DECOY_NAME = "prior-run-inventory.csv"
+DECOY_BODY = "domain,sitesCount\na.org,3\nb.org,7\n"
+SINGLE_MATCH_GLOB = "prior-*.csv"
+
+
+def test_the_summary_block_reads_the_path_literally():
+    """Wiring: both reads take -LiteralPath, and neither takes a bare -Path."""
+    body = _step().get("run", "")
+    assert "Test-Path -LiteralPath $out" in body, (
+        f"the summary's existence check must use -LiteralPath: {body!r}"
+    )
+    assert "Import-Csv -LiteralPath $out" in body, (
+        f"the summary's read must use -LiteralPath: {body!r}"
+    )
+    # The negative half. Without it, ADDING a -LiteralPath call elsewhere would
+    # satisfy the assertions above while a wildcard-aware read survived.
+    for forbidden in ("Test-Path $out", "Import-Csv -Path $out"):
+        assert forbidden not in body, (
+            f"{forbidden!r} is wildcard-aware and $out is dispatcher-supplied "
+            f"text — use -LiteralPath. Body: {body!r}"
+        )
+
+
+def test_a_single_match_glob_does_not_become_the_summarys_answer():
+    """Behaviour: the export wrote nothing, so the summary must say so.
+
+    The control below shows this body reporting a DIFFERENT file's contents as
+    its own result when the read is wildcard-aware, which is the whole finding.
+    """
+    step = _step()
+    _assert_wiring(step)
+    out, _stolen, rc = _run(
+        _offline(step["run"]),
+        stub=STUB_WRITES_NOTHING,
+        extra_files={DECOY_NAME: DECOY_BODY},
+        **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: SINGLE_MATCH_GLOB},
+    )
+    assert "output file not found" in out, (
+        f"the export wrote nothing, so the summary must report the file as "
+        f"missing. Output: {out[:700]}"
+    )
+    assert "domains=" not in out, (
+        f"the summary reported a domain count for a run that exported nothing — "
+        f"it has read {DECOY_NAME} through a wildcard. Output: {out[:700]}"
+    )
+    assert rc == 0, f"expected exit 0, got {rc}. Output: {out[:700]}"
+
+
+def test_without_literalpath_the_glob_reports_an_unrelated_files_rows():
+    """The control. Without it the test above passes on any body that cannot
+    find the file for ANY reason — including one where the glob never matched.
+
+    Reverting just the two parameters must make the same input report the decoy
+    file's two domains as the export's result, at exit 0.
+    """
+    body = _offline(_step()["run"])
+    for literal, wildcard in (
+        ("Test-Path -LiteralPath $out", "Test-Path $out"),
+        ("Import-Csv -LiteralPath $out", "Import-Csv -Path $out"),
+    ):
+        assert body.count(literal) == 1, (
+            f"expected exactly one {literal!r} to revert, found "
+            f"{body.count(literal)} — this control cannot be applied and would "
+            f"otherwise measure the fixed body (ledger L47)"
+        )
+        body = body.replace(literal, wildcard)
+    # Both CALL forms, not a bare `-LiteralPath` substring: the step's comments
+    # name the parameter too, so the loose form fails on prose and reports it as
+    # a surviving literal read. It did exactly that when this control was
+    # written — a correct revert scored as a broken one.
+    for spelling in ("Test-Path -LiteralPath $out", "Import-Csv -LiteralPath $out"):
+        assert spelling not in body, (
+            f"a literal read survived the revert ({spelling!r}): {body!r}"
+        )
+
+    out, _stolen, rc = _run(
+        body,
+        stub=STUB_WRITES_NOTHING,
+        extra_files={DECOY_NAME: DECOY_BODY},
+        **{TOKEN_VAR: FAKE_TOKEN, ENV_VAR: SINGLE_MATCH_GLOB},
+    )
+    assert "domains=2" in out, (
+        f"expected the wildcard-aware body to read {DECOY_NAME} and report its 2 "
+        f"domains as the export's own result — the defect -LiteralPath removes. "
+        f"Output: {out[:700]}"
+    )
+    assert rc == 0, (
+        f"the defect is silent, which is what makes it worth fixing; expected "
+        f"exit 0, got {rc}. Output: {out[:700]}"
+    )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 # Only the behavioural cases spawn a pwsh subprocess; the wiring, declaration,
@@ -661,7 +780,9 @@ TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 # into "everything passed"). This set is scoped to exactly the cases that call
 # `_run`.
 NEEDS_PWSH = {
+    "test_a_single_match_glob_does_not_become_the_summarys_answer",
     "test_every_blank_form_is_refused_before_the_callee_runs",
+    "test_without_literalpath_the_glob_reports_an_unrelated_files_rows",
     "test_the_naive_subexpression_payload_is_inert_here",
     "test_the_pre_fix_body_stole_the_token_and_exited_zero",
     "test_the_shipped_body_binds_the_payload_as_data",

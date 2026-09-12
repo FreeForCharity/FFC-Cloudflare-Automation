@@ -113,8 +113,29 @@ jobs:
           pwsh -NoProfile -File scripts/wpmudev-sites-export.ps1 -OutputFile $out
 
           Write-Host "::group::WPMUDEV Summary"
-          if (Test-Path $out) {
-            $rows = Import-Csv -Path $out
+          # -LiteralPath, not -Path: `$out` is dispatcher-supplied text, and the
+          # `-Path` parameter of both cmdlets is WILDCARD-AWARE, so `*`, `?` and
+          # `[ ]` are matched as a pattern against the workspace rather than
+          # taken as the filename. Moving the value into `env:` stops it being
+          # parsed as CODE; it does not stop it being parsed as a GLOB, which is
+          # a separate interpretation and needs its own opt-out.
+          #
+          # Measured on pwsh 7.4.6, export having written nothing, with one
+          # unrelated `prior-run-inventory.csv` in the workspace:
+          #   -Path        `prior-*.csv` -> Test-Path TRUE, Import-Csv returns
+          #                that file's 2 rows, and the summary reports them as
+          #                the export's own result. A clean, confident, wrong
+          #                number for a run that exported nothing.
+          #   -LiteralPath same input -> Test-Path FALSE, so the `else` branch
+          #                correctly reports the file as missing.
+          # A glob matching MANY files is not the hazard — `Import-Csv -Path`
+          # refuses it outright (`ReportMultipleFilesNotSupported`). The
+          # single-match glob is the one that reads an unintended file and says
+          # nothing, which is why the fix is the parameter and not a count check.
+          # Raised by Copilot on #1288; the plural framing was the wrong half,
+          # the finding was right.
+          if (Test-Path -LiteralPath $out) {
+            $rows = Import-Csv -LiteralPath $out
             $domainCount = $rows.Count
             $multiSiteDomains = ($rows | Where-Object {
                 $c = 0

@@ -1229,6 +1229,382 @@ def test_the_alert_is_found_when_a_marked_pull_request_is_listed_first():
     assert _closes(r) == [{"issue_number": 9, "state": "closed"}], r
     assert [c["issue_number"] for c in r["comments"]] == [9], r
 
+# --- the sweep is no longer hub-only (#1296) -------------------------------
+#
+# Until 2026-09-12 the target was `context.repo`, so every scheduled workflow in
+# every satellite repo failed silently forever. The measured cost: the canonical
+# template's daily Security Audit was red for eleven days reporting two critical
+# unauthenticated-RCE advisories, and produced no notification of any kind
+# (#1295). Nothing was broken; nothing was watching.
+#
+# These guards exist because the obvious multi-repo test does NOT test anything:
+# the shim used to ignore `owner`/`repo` entirely, so a script that swept the hub
+# four times would have passed a "four repos are watched" assertion. The fixtures
+# below are served PER REPO and every mocked call records which repo it was asked
+# about, so "it actually read the satellite" is an assertion rather than a hope.
+
+HUB = "FreeForCharity/FFC-Cloudflare-Automation"
+SPT = "FreeForCharity/FFC-IN-FFC_Single_Page_Template"
+FOT = "FreeForCharity/FFC-IN-Footer_Only_Template"
+SATELLITE_WF = "Security Audit"
+# The four repos #1296 names as the starting cohort.
+CORE_SATELLITES = [
+    "FreeForCharity/FFC-IN-FFC_Single_Page_Template",
+    "FreeForCharity/FFC-IN-Footer_Only_Template",
+    "FreeForCharity/FFC-IN-ffcadmin.org",
+    "FreeForCharity/FFC-IN-freeforcharity.org",
+]
+
+
+def _satellites() -> list:
+    """The shipped satellite list, read out of the step's `env:` block."""
+    raw = _step()["env"].get("WATCHED_SATELLITE_WORKFLOWS", "")
+    return [line.strip() for line in raw.split("\n") if line.strip()]
+
+
+def _sat_marker(slug, name=SATELLITE_WF):
+    """The repo-qualified marker an off-hub alert must carry."""
+    return f"{MARKER_PREFIX}{slug}:{name} -->"
+
+
+def _run_multi(
+    repos,
+    *,
+    hub_watched=(WATCHED_NAME,),
+    satellites=None,
+    open_issues=None,
+    jobs=None,
+    dry_run=False,
+    default_branches=None,
+    workflows_throw=(),
+    repos_get_throw=(),
+    max_new_alerts=None,
+    head_branches=None,
+):
+    """Drive one sweep across several repos.
+
+    `repos` maps `owner/repo` -> {workflow name: conclusion or None}. `None`
+    means the workflow exists but has no completed run. The hub's own watch list
+    is `hub_watched`; a hub entry with no conclusion contributes nothing, which
+    keeps each assertion about the satellite under test.
+
+    `satellites` overrides the generated `owner/repo :: name` lines, for the
+    malformed-input cases. `head_branches` maps a slug to the branch its run
+    reports, so "the satellite's default branch is not the hub's" is expressible.
+    """
+    script = step_github_script(WORKFLOW, JOB, STEP)
+    context = {
+        "repo": {"owner": "FreeForCharity", "repo": "FFC-Cloudflare-Automation"},
+        "payload": {"repository": {"default_branch": "main"}},
+    }
+    default_branches = dict(default_branches or {})
+    head_branches = dict(head_branches or {})
+
+    workflows_by_repo = {}
+    runs_by_repo = {}
+    next_id = 100
+    next_run_id = 500000
+    for slug, entries in repos.items():
+        owner_, repo_ = slug.split("/", 1)
+        workflows_by_repo.setdefault(slug, [])
+        runs_by_repo.setdefault(slug, {})
+        for wf_name, conclusion in entries.items():
+            wf_id = next_id
+            next_id += 1
+            workflows_by_repo[slug].append({"id": wf_id, "name": wf_name})
+            if conclusion is None:
+                continue
+            next_run_id += 1
+            runs_by_repo[slug][str(wf_id)] = [
+                {
+                    "id": next_run_id,
+                    "name": RUN_DISPLAY_NAME,
+                    "conclusion": conclusion,
+                    "run_number": 7,
+                    "head_branch": head_branches.get(
+                        slug, default_branches.get(slug, "main")
+                    ),
+                    "html_url": f"https://github.com/{slug}/actions/runs/{next_run_id}",
+                }
+            ]
+    # The hub is always swept, so it must be resolvable even when a caller only
+    # cares about satellites — an unresolved hub name would fail the run instead.
+    workflows_by_repo.setdefault(HUB, [])
+    for wf_name in hub_watched:
+        if not any(w["name"] == wf_name for w in workflows_by_repo[HUB]):
+            workflows_by_repo[HUB].append({"id": next_id, "name": wf_name})
+            next_id += 1
+
+    if satellites is None:
+        satellites = [
+            f"{slug} :: {wf_name}"
+            for slug, entries in repos.items()
+            if slug != HUB
+            for wf_name in entries
+        ]
+
+    overrides = {
+        "WATCHED_WORKFLOWS": "\n".join(hub_watched),
+        "WATCHED_SATELLITE_WORKFLOWS": "\n".join(satellites),
+    }
+    if dry_run:
+        overrides["DRY_RUN"] = "true"
+    if max_new_alerts is not None:
+        overrides["MAX_NEW_ALERTS_PER_RUN"] = str(max_new_alerts)
+    env = child_env(pathlib.Path(NODE).parent, **overrides)
+
+    with tempfile.TemporaryDirectory() as td:
+        tdp = pathlib.Path(td)
+
+        def _write(name, payload):
+            p = tdp / name
+            p.write_text(json.dumps(payload), encoding="utf-8")
+            return str(p)
+
+        (tdp / "script.js").write_text(script, encoding="utf-8")
+        env["TEST_SCRIPT_FILE"] = str(tdp / "script.js")
+        env["TEST_CONTEXT_FILE"] = _write("context.json", context)
+        env["TEST_OPEN_ISSUES_FILE"] = _write("open.json", open_issues or [])
+        env["TEST_RUN_JOBS_FILE"] = _write(
+            "jobs.json", jobs if jobs is not None else [{"name": "audit", "conclusion": "failure"}]
+        )
+        env["TEST_REPO_WORKFLOWS_BY_REPO_FILE"] = _write("wf.json", workflows_by_repo)
+        env["TEST_WORKFLOW_RUNS_BY_REPO_FILE"] = _write("runs.json", runs_by_repo)
+        env["TEST_DEFAULT_BRANCHES_FILE"] = _write("branches.json", default_branches)
+        env["TEST_REPO_WORKFLOWS_THROW"] = json.dumps(list(workflows_throw))
+        env["TEST_REPOS_GET_THROW"] = json.dumps(list(repos_get_throw))
+        proc = subprocess.run(
+            [NODE, str(HARNESS)],
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+    if proc.returncode != 0:
+        raise AssertionError(f"harness crashed: {proc.stderr}")
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def _summary(result):
+    hits = [n for n in result["notices"] if n.startswith("740 sweep:")]
+    assert len(hits) == 1, f"exactly one sweep summary expected: {result['notices']}"
+    return hits[0]
+
+
+def test_a_satellite_failure_opens_an_alert_in_the_hub():
+    r = _run_multi({SPT: {SATELLITE_WF: "failure"}})
+    assert r["threw"] is None, r
+    assert r["failed"] is None, r
+    assert len(r["created"]) == 1, r
+    issue = r["created"][0]
+    # The alert lives in the hub, not in the repo that failed: one place to read.
+    assert issue["repo"] == HUB, issue
+    assert _sat_marker(SPT) in issue["body"], issue
+    assert SPT in issue["title"] and SATELLITE_WF in issue["title"], issue
+    # An alert read from a notification shows the LINE, not the title, so the
+    # failing repo has to be named there too.
+    assert SPT in issue["body"], issue
+
+
+def test_the_sweep_actually_reads_the_satellite_repo():
+    # The polarity guard for every other test in this section: a script that
+    # ignored owner/repo and swept the hub twice would satisfy "two alerts",
+    # but cannot satisfy this.
+    r = _run_multi({SPT: {SATELLITE_WF: "failure"}})
+    assert SPT in {c["repo"] for c in r["listRepoWorkflowsCalls"]}, r["listRepoWorkflowsCalls"]
+    assert SPT in {c["repo"] for c in r["listWorkflowRunsCalls"]}, r["listWorkflowRunsCalls"]
+    assert SPT in {c["repo"] for c in r["listJobsCalls"]}, r["listJobsCalls"]
+    # …and the issue writes still go to the hub, never to the satellite.
+    assert {c["repo"] for c in r["listForRepoCalls"]} == {HUB}, r["listForRepoCalls"]
+
+
+def test_two_repos_failing_the_same_workflow_name_get_two_distinct_alerts():
+    # `Security Audit` is the name of a different workflow in each repo. An
+    # unqualified marker would collapse all four core repos into one alert —
+    # and then one repo going green would close the other three's outage.
+    r = _run_multi({SPT: {SATELLITE_WF: "failure"}, FOT: {SATELLITE_WF: "failure"}})
+    assert r["failed"] is None, r
+    assert len(r["created"]) == 2, r
+    markers = sorted(
+        m for i in r["created"] for m in (_sat_marker(SPT), _sat_marker(FOT)) if m in i["body"]
+    )
+    assert markers == sorted([_sat_marker(FOT), _sat_marker(SPT)]), r["created"]
+    assert len({i["title"] for i in r["created"]}) == 2, r["created"]
+
+
+def test_one_repos_recovery_does_not_close_another_repos_alert():
+    r = _run_multi(
+        {SPT: {SATELLITE_WF: "success"}, FOT: {SATELLITE_WF: "failure"}},
+        open_issues=[
+            _alert_issue(11, marker=_sat_marker(SPT)),
+            _alert_issue(12, marker=_sat_marker(FOT)),
+        ],
+    )
+    assert r["failed"] is None, r
+    assert _closes(r) == [{"issue_number": 11, "state": "closed"}], r
+    # the still-broken repo's alert is appended to, never closed
+    assert [c["issue_number"] for c in r["comments"] if "Recovered" not in c["body"]] == [12], r
+    assert r["created"] == [], r
+
+
+def test_the_hub_marker_is_unqualified_so_open_alerts_survive_the_change():
+    # Three rolling alerts are open under the pre-#1296 marker (#921 502, #949
+    # 228, #1033 735). Re-keying them would orphan every one: they would never
+    # auto-close on recovery, and the next failing sweep would open a duplicate
+    # beside each. So the hub's marker must stay byte-identical.
+    r = _run_multi({HUB: {WATCHED_NAME: "failure"}}, open_issues=[_alert_issue(7)])
+    assert r["failed"] is None, r
+    assert r["created"] == [], r  # the pre-existing alert is adopted, not duplicated
+    assert [c["issue_number"] for c in r["comments"]] == [7], r
+    # and the marker carries no repo qualifier
+    assert MARKER == f"{MARKER_PREFIX}{WATCHED_NAME} -->"
+
+
+def test_a_satellite_on_another_default_branch_is_still_watched():
+    # Assuming the hub's branch name across repos would filter out every run in
+    # a repo that uses another and report it as permanently green — silence
+    # dressed as health, which is the whole bug class #1296 is about.
+    r = _run_multi(
+        {SPT: {SATELLITE_WF: "failure"}},
+        default_branches={SPT: "trunk"},
+    )
+    assert r["failed"] is None, r
+    assert SPT in {c["repo"] for c in r["reposGetCalls"]}, r["reposGetCalls"]
+    assert len(r["created"]) == 1, r
+    assert all(
+        c["branch"] == "trunk" for c in r["listWorkflowRunsCalls"] if c["repo"] == SPT
+    ), r["listWorkflowRunsCalls"]
+
+
+def test_a_satellite_run_on_a_non_default_branch_is_still_ignored():
+    # The branch filter must survive becoming per-repo: a red run on a feature
+    # branch is the PR author's problem, not a fleet alert.
+    r = _run_multi(
+        {SPT: {SATELLITE_WF: "failure"}},
+        default_branches={SPT: "trunk"},
+        head_branches={SPT: "some-feature"},
+    )
+    assert r["created"] == [], r
+    assert r["comments"] == [], r
+
+
+def test_an_unreadable_satellite_repo_fails_the_run_rather_than_reading_as_clean():
+    # A repo the sweep cannot list is not a repo with nothing wrong; it is an
+    # alerter that has gone blind to it. Same stance the job-list catch takes.
+    r = _run_multi({SPT: {SATELLITE_WF: "failure"}}, workflows_throw=[SPT])
+    assert r["failed"] is not None, r
+    assert SPT in r["failed"], r["failed"]
+    assert r["created"] == [], r
+    assert "unreadable=1" in _summary(r), _summary(r)
+
+
+def test_the_summary_reports_the_denominator_not_just_the_finding():
+    # L97: "0 failing" means nothing without "out of N checked" — a sweep whose
+    # reads all failed reports zero failures just as convincingly as a healthy
+    # fleet does. The two cases must be distinguishable from the summary alone.
+    # Two watched workflows either way: the satellite's Security Audit, plus the
+    # hub entry the fixture always sweeps. Only the satellite differs.
+    healthy = _summary(_run_multi({SPT: {SATELLITE_WF: "success"}}))
+    assert "watched=2" in healthy and "checked=2" in healthy, healthy
+    assert "failing=0" in healthy, healthy
+
+    blind = _summary(_run_multi({SPT: {SATELLITE_WF: "success"}}, workflows_throw=[SPT]))
+    # Same watch list, one fewer read that landed — which is the whole point:
+    # the sweep did not shrink, its reach did.
+    assert "watched=2" in blind and "checked=1" in blind, blind
+    assert "failing=0" in blind, blind
+    assert healthy != blind, "a blind sweep must not read like a clean one"
+
+
+def test_dry_run_writes_nothing_yet_still_reports_what_it_found():
+    r = _run_multi({SPT: {SATELLITE_WF: "failure"}}, dry_run=True)
+    assert r["threw"] is None, r
+    assert r["created"] == [], r
+    assert r["comments"] == [], r
+    assert r["updates"] == [], r
+    summary = _summary(r)
+    assert "failing=1" in summary, summary
+    assert "DRY RUN" in summary, summary
+
+
+def test_dry_run_does_not_close_a_recovered_alert_either():
+    r = _run_multi(
+        {SPT: {SATELLITE_WF: "success"}},
+        open_issues=[_alert_issue(11, marker=_sat_marker(SPT))],
+        dry_run=True,
+    )
+    assert _closes(r) == [], r
+    assert r["comments"] == [], r
+
+
+def test_the_new_alert_cap_bounds_a_first_sweep_and_says_so():
+    # L03/L276: turning the sweep on across repos nobody has been watching
+    # surfaces the whole standing backlog at once. The excess is reported and
+    # left for the next sweep, never dropped silently.
+    r = _run_multi(
+        {SPT: {SATELLITE_WF: "failure"}, FOT: {SATELLITE_WF: "failure"}},
+        max_new_alerts=1,
+    )
+    assert len(r["created"]) == 1, r
+    assert any("cap" in w for w in r["warnings"]), r["warnings"]
+    assert r["failed"] is None, r  # a cap is a bound, not a fault
+
+
+def test_a_malformed_satellite_line_fails_loud():
+    # A line that parses to nothing would otherwise watch nothing and say
+    # nothing — the same silence the unresolved-name guard exists to prevent.
+    r = _run_multi({SPT: {SATELLITE_WF: "failure"}}, satellites=["Security Audit"])
+    assert r["failed"] is not None, r
+    assert "Security Audit" in r["failed"], r["failed"]
+
+
+def test_an_unresolvable_satellite_name_names_the_repo_it_was_looked_for_in():
+    r = _run_multi(
+        {SPT: {SATELLITE_WF: "failure"}},
+        satellites=[f"{SPT} :: Renamed Away"],
+    )
+    assert r["failed"] is not None, r
+    assert "Renamed Away" in r["failed"], r["failed"]
+    assert SPT in r["failed"], r["failed"]
+
+
+# --- the shipped configuration ---------------------------------------------
+
+
+def test_the_shipped_satellite_list_is_well_formed():
+    for line in _satellites():
+        owner_repo, sep, name = line.partition(" :: ")
+        assert sep, f"satellite entry must be `owner/repo :: Workflow name`: {line!r}"
+        assert owner_repo.count("/") == 1, line
+        assert name.strip(), line
+
+
+def test_the_shipped_satellite_list_covers_the_four_core_repos():
+    # #1296's acceptance criterion: the four core satellites are watched, not
+    # only the hub. Growing past them is deliberate, a cohort at a time.
+    swept = {line.partition(" :: ")[0] for line in _satellites()}
+    assert set(CORE_SATELLITES) <= swept, sorted(swept)
+
+
+def test_no_satellite_entry_targets_the_hub():
+    # A hub-targeted satellite line would take the unqualified marker a second
+    # time and race the hub list for the same rolling issue.
+    for line in _satellites():
+        assert line.partition(" :: ")[0] != HUB, line
+
+
+def test_dry_run_is_a_dispatch_input_that_defaults_to_writing():
+    # A monitor that defaults to doing nothing is the bug it exists to prevent,
+    # so scheduled sweeps must always write. The input is a rehearsal lever.
+    inputs = load_workflow(WORKFLOW)[True]["workflow_dispatch"]["inputs"]
+    assert "dry_run" in inputs, inputs
+    assert inputs["dry_run"].get("default") is False, inputs["dry_run"]
+    assert inputs["dry_run"].get("type") == "boolean", inputs["dry_run"]
+    # and the schedule is untouched — a dispatch-only alerter is a dead one
+    assert load_workflow(WORKFLOW)[True].get("schedule"), "the poll must stay scheduled"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

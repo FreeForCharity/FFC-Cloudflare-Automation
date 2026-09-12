@@ -32,6 +32,25 @@
 //                             page — the 105-workflow truncation from #843
 //   TEST_WORKFLOW_RUNS_FILE   JSON map of workflow id (as a string) -> array of run objects
 //                             returned by actions.listWorkflowRuns; a missing id yields none
+//
+//   --- multi-repo fixtures (#1296) ------------------------------------------------------
+//   The two files above are repo-BLIND: every repo sees the same inventory and runs. That is
+//   fine for a hub-only caller and useless for testing one that sweeps several repos — a
+//   script that ignored `owner`/`repo` entirely would pass. These serve per-repo data and
+//   record the repo on every call, so "it asked the satellite repo" is assertable:
+//   TEST_REPO_WORKFLOWS_BY_REPO_FILE  JSON map "owner/repo" -> array of workflow objects.
+//                             Takes precedence over TEST_REPO_WORKFLOWS_FILE for a listed
+//                             repo; an UNLISTED repo falls back to the flat fixture, so an
+//                             existing single-repo test keeps working untouched
+//   TEST_WORKFLOW_RUNS_BY_REPO_FILE   JSON map "owner/repo" -> { workflow id -> runs }, same
+//                             precedence and fallback
+//   TEST_DEFAULT_BRANCHES_FILE JSON map "owner/repo" -> default branch returned by repos.get
+//                             (default "main"), so a satellite on another default branch can
+//                             be modelled — the shape that silently unwatches a whole repo
+//   TEST_REPO_WORKFLOWS_THROW JSON array of "owner/repo" whose listRepoWorkflows rejects, to
+//                             prove a repo the sweep cannot read is reported as a fault of
+//                             the alerter rather than counted as a clean sweep
+//   TEST_REPOS_GET_THROW      JSON array of "owner/repo" whose repos.get rejects
 //   TEST_SUCCESS_RUNS_THROW   JSON array of workflow ids (as strings) whose listWorkflowRuns
 //                             throws ONLY for the `status: 'success'` query, leaving the
 //                             ordinary poll readable
@@ -98,6 +117,24 @@ const successRunsThrow = process.env.TEST_SUCCESS_RUNS_THROW
 const runsThrow = process.env.TEST_RUNS_THROW
   ? JSON.parse(process.env.TEST_RUNS_THROW).map(String)
   : [];
+// Per-repo overlays. `slug(args)` is how every mock below decides which repo it is being
+// asked about; a caller that never varies owner/repo therefore only ever sees one entry.
+const repoWorkflowsByRepo = process.env.TEST_REPO_WORKFLOWS_BY_REPO_FILE
+  ? JSON.parse(readFileSync(process.env.TEST_REPO_WORKFLOWS_BY_REPO_FILE, 'utf8'))
+  : null;
+const workflowRunsByRepo = process.env.TEST_WORKFLOW_RUNS_BY_REPO_FILE
+  ? JSON.parse(readFileSync(process.env.TEST_WORKFLOW_RUNS_BY_REPO_FILE, 'utf8'))
+  : null;
+const defaultBranches = process.env.TEST_DEFAULT_BRANCHES_FILE
+  ? JSON.parse(readFileSync(process.env.TEST_DEFAULT_BRANCHES_FILE, 'utf8'))
+  : {};
+const repoWorkflowsThrow = process.env.TEST_REPO_WORKFLOWS_THROW
+  ? JSON.parse(process.env.TEST_REPO_WORKFLOWS_THROW)
+  : [];
+const reposGetThrow = process.env.TEST_REPOS_GET_THROW
+  ? JSON.parse(process.env.TEST_REPOS_GET_THROW)
+  : [];
+const slug = (args) => `${(args || {}).owner}/${(args || {}).repo}`;
 
 const notices = [];
 const warnings = [];
@@ -106,6 +143,7 @@ const listForRepoCalls = [];
 const searchCalls = [];
 const listJobsCalls = [];
 const listRepoWorkflowsCalls = [];
+const reposGetCalls = [];
 const listWorkflowRunsCalls = [];
 const created = [];
 const comments = [];
@@ -148,6 +186,7 @@ const github = {
     actions: {
       listJobsForWorkflowRun: async (args) => {
         listJobsCalls.push({
+          repo: slug(args),
           run_id: args.run_id,
           per_page: args.per_page,
           filter: args.filter,
@@ -162,12 +201,22 @@ const github = {
       listRepoWorkflows: async (args) => {
         const perPage = Math.min(args.per_page || 30, 100);
         const page = args.page || 1;
-        listRepoWorkflowsCalls.push({ per_page: args.per_page, page });
-        const slice = repoWorkflows.slice((page - 1) * perPage, page * perPage);
-        return { data: { total_count: repoWorkflows.length, workflows: slice } };
+        const where = slug(args);
+        listRepoWorkflowsCalls.push({ repo: where, per_page: args.per_page, page });
+        if (repoWorkflowsThrow.includes(where)) {
+          throw new Error(`simulated workflow-list API failure for ${where}`);
+        }
+        const all =
+          repoWorkflowsByRepo && repoWorkflowsByRepo[where]
+            ? repoWorkflowsByRepo[where]
+            : repoWorkflows;
+        const slice = all.slice((page - 1) * perPage, page * perPage);
+        return { data: { total_count: all.length, workflows: slice } };
       },
       listWorkflowRuns: async (args) => {
+        const where = slug(args);
         listWorkflowRunsCalls.push({
+          repo: where,
           workflow_id: args.workflow_id,
           branch: args.branch,
           status: args.status,
@@ -187,7 +236,11 @@ const github = {
         // CONCLUSION. Honouring it here lets one fixture list carry both a red latest run
         // and an older green one, so a caller asking "what is the newest run?" and one
         // asking "when did this last go green?" each see what GitHub would return.
-        const all = workflowRuns[String(args.workflow_id)] || [];
+        const byId =
+          workflowRunsByRepo && workflowRunsByRepo[where]
+            ? workflowRunsByRepo[where]
+            : workflowRuns;
+        const all = byId[String(args.workflow_id)] || [];
         const runs =
           args.status === 'success' ? all.filter((r) => r.conclusion === 'success') : all;
         return {
@@ -196,6 +249,20 @@ const github = {
             workflow_runs: runs.slice(0, args.per_page || 30),
           },
         };
+      },
+    },
+    repos: {
+      // Default-branch lookup for a repo the caller does not own. Deliberately NOT
+      // defaulted to the calling repo's branch: a sweep that assumes one branch name
+      // across repos filters out every run in a repo that uses another, and reports it
+      // as permanently green — silence dressed as health (#1296).
+      get: async (args) => {
+        const where = slug(args);
+        reposGetCalls.push({ repo: where });
+        if (reposGetThrow.includes(where)) {
+          throw new Error(`simulated repos.get failure for ${where}`);
+        }
+        return { data: { default_branch: defaultBranches[where] || 'main' } };
       },
     },
     search: {
@@ -220,6 +287,7 @@ const github = {
       // single-page tests (732-era shape) working unchanged.
       listForRepo: async (args) => {
         listForRepoCalls.push({
+          repo: slug(args),
           state: args.state,
           labels: args.labels,
           per_page: args.per_page,
@@ -236,6 +304,7 @@ const github = {
         const number = nextNumber++;
         created.push({
           number,
+          repo: slug(args),
           title: args.title,
           labels: args.labels,
           body: args.body,
@@ -284,6 +353,7 @@ console.log(
     listJobsCalls,
     listRepoWorkflowsCalls,
     listWorkflowRunsCalls,
+    reposGetCalls,
     created,
     comments,
     updates,

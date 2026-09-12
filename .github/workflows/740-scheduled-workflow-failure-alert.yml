@@ -9,6 +9,15 @@ run-name: 'Failure alert sweep'
 # workflow can never close another's alert — with a dozen workflows watched, a shared marker
 # would let a weekly job's success silently clear a daily job's outage.
 #
+# IT IS NO LONGER HUB-ONLY (#1296). Until 2026-09-12 the target was `context.repo`, so every
+# scheduled workflow in every satellite repo failed silently forever. The cost was measured:
+# `FFC-IN-FFC_Single_Page_Template`'s Security Audit — the canonical template the 78-repo
+# FFC-EX fleet derives from — was red every day from 2026-09-02 to 2026-09-12 reporting two
+# critical Next.js unauthenticated-RCE advisories, and eleven days of a daily signal produced
+# no notification of any kind (#1295). Nothing was broken; nothing was watching. The satellite
+# list is WATCHED_SATELLITE_WORKFLOWS below, and every alert it raises is opened HERE, in the
+# hub: one place to read, and satellite repos keep clean issue lists.
+#
 # COVERAGE IS NOW EVERY SCHEDULED WORKFLOW BUT THIS ONE (#932). The watch list originally stopped
 # at "hub plumbing" because that was #832's scope; the WHMCS lane (209/210/225/228) and the Azure
 # inventory (320) were excluded for being out of that ticket's scope, not for being unwatchable.
@@ -24,7 +33,8 @@ run-name: 'Failure alert sweep'
 # retired into this file) were `active` and had produced exactly zero runs. The alerting layer was
 # dead for six days and nothing could tell us, because a `workflow_run` watcher cannot be tested on
 # demand. The poll can: `workflow_dispatch` below is REQUIRED, not a convenience — it is what makes
-# this alerter provable.
+# this alerter provable. That argument is what the `dry_run` input extends across repositories:
+# the multi-repo sweep can now be rehearsed against live data without writing a single issue.
 #
 # BEHAVIOUR CHANGE, deliberate: the event saw *every* run; the poll sees only the LATEST completed
 # default-branch run per workflow, so a failure that self-heals between polls is missed. That is an
@@ -39,7 +49,11 @@ run-name: 'Failure alert sweep'
 # retired 732 watched it.
 #
 # Ambient GITHUB_TOKEN only, no environment: — the alerter must never be blocked by the very
-# gate it is watching. Reports `cancelled` as well as `failure`: a run cancelled before it
+# gate it is watching. That constraint survives the multi-repo change: the satellite repos are
+# public, so their Actions history is readable without widening any credential. If a satellite
+# read ever starts failing, this workflow says so loudly and goes red rather than reporting a
+# clean sweep — see the unreadable-repo reporting at the end of the script.
+# Reports `cancelled` as well as `failure`: a run cancelled before it
 # reaches a runner (the 2026-07-24 726 incident) executes zero steps and is exactly the kind
 # of silent breakage this workflow exists to surface.
 #
@@ -53,6 +67,12 @@ on:
     # Twice hourly at :09 and :39 — minutes chosen to collide with no other hub cron slot.
     - cron: '9,39 * * * *'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Sweep and report counts, but write no issue (no create, comment or close).'
+        required: false
+        default: false
+        type: boolean
 
 # Never cancel a sweep in flight: a half-finished sweep can leave an alert unopened for the
 # workflows it had not reached yet. Overlap is the thing to prevent, not completion.
@@ -100,19 +120,127 @@ jobs:
             743. Website - Fleet Security Header Audit
             744. Repo - Public Feed Freshness [GH]
             745. Repo - Agentic OS Board Audit [GH]
+          # Scheduled workflows in OTHER repositories, one `owner/repo :: Workflow name` per
+          # line. Same byte-exact name rule as the hub list, and the same loud failure when an
+          # entry resolves to nothing.
+          #
+          # DELIBERATELY SMALL. #1296 asks for the four core repos rather than all 104, because
+          # the first sweep of a repo nobody has been watching surfaces its whole backlog of
+          # standing failures at once (ledger L03: a monitor's first run is not evidence the
+          # monitor works, and L276: a rolling alert cannot tell "it broke" from "it found what
+          # it was built to find"). Grow this list a cohort at a time, and dispatch with
+          # `dry_run=true` first to see how loud the addition will be before it writes anything.
+          #
+          # `Security Audit` is the workflow this issue was filed from: it is the daily
+          # `pnpm audit --prod` on every Node repo in the fleet, and it was red for eleven days
+          # on the template with nothing watching it.
+          WATCHED_SATELLITE_WORKFLOWS: |
+            FreeForCharity/FFC-IN-FFC_Single_Page_Template :: Security Audit
+            FreeForCharity/FFC-IN-Footer_Only_Template :: Security Audit
+            FreeForCharity/FFC-IN-ffcadmin.org :: Security Audit
+            FreeForCharity/FFC-IN-freeforcharity.org :: Security Audit
+          # Empty on a schedule, so scheduled sweeps always write. This inverts the repo's usual
+          # `dry_run` default (true on write workflows) on purpose: 740 is a monitor whose whole
+          # job is to write, and a monitor that defaults to doing nothing is the bug it exists to
+          # prevent. The input is a rehearsal lever for a human or agent changing the watch list.
+          DRY_RUN: ${{ inputs.dry_run }}
+          # How many NEW rolling alerts one sweep may open. The excess is reported and left for
+          # the next sweep 30 minutes later, never dropped silently.
+          MAX_NEW_ALERTS_PER_RUN: '10'
         with:
           script: |
+            // EVERY ALERT IS OPENED IN THE HUB, whichever repo the failing workflow lives in
+            // (#1296). `owner`/`repo` therefore mean "where the issues live" throughout this
+            // script; the repo being *read* always arrives as part of a target object.
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            const DRY_RUN = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
+            const MAX_NEW_ALERTS = Number(process.env.MAX_NEW_ALERTS_PER_RUN || '10');
             // Only the default branch matters: a red run on a feature branch is the PR
-            // author's problem, not a fleet-wide alert.
-            const defaultBranch = (context.payload.repository || {}).default_branch || 'main';
+            // author's problem, not a fleet-wide alert. Resolved PER REPO below — assuming
+            // the hub's branch name for a satellite would filter out every one of its runs
+            // and report it as permanently green, which is this issue's own failure mode.
+            const hubDefaultBranch = (context.payload.repository || {}).default_branch || 'main';
             // A DECLINE IS A DECISION; AN ABANDONED GATE IS AN OUTAGE. Both arrive here
             // wearing the same clothes (see the suppression below), so recurrence is what
             // tells them apart: a declined gate is followed by a green run next cycle, an
             // abandoned one never is. Every watched workflow runs daily or weekly, so three
             // missed weekly cycles is unambiguous while a one-off decline never trips it.
             const STALE_SUCCESS_DAYS = 21;
+
+            const parseLines = (raw) => [...new Set(
+              (raw || '').split('\n').map(s => s.trim()).filter(Boolean)
+            )];
+
+            // --- the sweep list: hub entries plus `owner/repo :: name` satellite entries ---
+            const TARGETS = [];
+            const seenTargets = new Set();
+            const malformed = [];
+            const addTarget = (o, r, name) => {
+              const key = `${o}/${r}::${name}`;
+              if (seenTargets.has(key)) return;
+              seenTargets.add(key);
+              TARGETS.push({ owner: o, repo: r, name, slug: `${o}/${r}`, isHub: o === owner && r === repo });
+            };
+            for (const name of parseLines(process.env.WATCHED_WORKFLOWS)) addTarget(owner, repo, name);
+            for (const line of parseLines(process.env.WATCHED_SATELLITE_WORKFLOWS)) {
+              // `owner/repo :: Workflow name`. Workflow names contain spaces, dots, brackets
+              // and hyphens, so the separator is ` :: ` rather than anything a name can hold.
+              const m = line.match(/^([^\s/]+)\/([^\s/]+)\s*::\s*(\S.*)$/);
+              if (!m) { malformed.push(line); continue; }
+              addTarget(m[1], m[2], m[3].trim());
+            }
+
+            // MARKER COMPATIBILITY IS LOAD-BEARING. Hub alerts keep the exact pre-#1296 marker:
+            // rolling alerts are open right now under it (#921 502, #949 228, #1033 735), and
+            // re-keying them would orphan those issues — they would never auto-close on
+            // recovery, and the next failing sweep would open a duplicate beside each one.
+            // Satellite markers are repo-qualified because "Security Audit" is the name of a
+            // different workflow in each of four repos; an unqualified key would collapse all
+            // four into one alert, where one repo going green closes the other three's outage.
+            const markerFor = (t) => (t.isHub
+              ? `<!-- scheduled-workflow-failure-alert:${t.name} -->`
+              : `<!-- scheduled-workflow-failure-alert:${t.slug}:${t.name} -->`);
+            const titleFor = (t) => (t.isHub
+              ? `🚨 Scheduled workflow failing: ${t.name}`
+              : `🚨 Scheduled workflow failing: ${t.slug} — ${t.name}`);
+
+            // --- per-repo lookups, each cached so a repo is read once per sweep -------------
+            const branchCache = new Map([[`${owner}/${repo}`, hubDefaultBranch]]);
+            const defaultBranchFor = async (t) => {
+              if (branchCache.has(t.slug)) return branchCache.get(t.slug);
+              let branch = hubDefaultBranch;
+              try {
+                const res = await github.rest.repos.get({ owner: t.owner, repo: t.repo });
+                branch = ((res.data || {}).default_branch) || hubDefaultBranch;
+              } catch (e) {
+                core.warning(`Could not read the default branch for ${t.slug} (${e.message}); assuming ${hubDefaultBranch}. If that guess is wrong every run in ${t.slug} reads as "not the default branch" and the repo goes silently unwatched.`);
+              }
+              branchCache.set(t.slug, branch);
+              return branch;
+            };
+
+            // Resolve names -> workflow ids. THIS MUST PAGINATE. The repo has >100 workflows and
+            // per_page caps at 100, so a single unpaginated page silently drops the tail — that
+            // exact truncation already produced one false "740 is not registered" conclusion
+            // while diagnosing #843.
+            const inventoryCache = new Map();
+            const inventoryFor = async (t) => {
+              if (inventoryCache.has(t.slug)) return inventoryCache.get(t.slug);
+              let entry;
+              try {
+                const all = await github.paginate(github.rest.actions.listRepoWorkflows, {
+                  owner: t.owner, repo: t.repo, per_page: 100,
+                });
+                entry = { byName: new Map(all.map(w => [w.name, w])), error: null };
+              } catch (e) {
+                // A repo whose inventory cannot be read is not a repo with nothing wrong; it
+                // is an alerter that has gone blind to it. Recorded and reported at the end.
+                entry = { byName: new Map(), error: e.message };
+              }
+              inventoryCache.set(t.slug, entry);
+              return entry;
+            };
 
             // Age, in whole days, of the newest SUCCESSFUL default-branch run. Returns
             // Infinity when there is none and when the lookup fails, so both escalate: this
@@ -135,15 +263,15 @@ jobs:
             // list (`status=bogus_value` -> total_count 0). Empty reads as "never green"
             // here, which escalates to an alert. A wrong alert is visible and correctable;
             // a wrong suppression is the six-week silence this whole change exists to end.
-            const greenAge = async (workflowId, wfName) => {
+            const greenAge = async (t, workflowId, branch) => {
               try {
                 const res = await github.rest.actions.listWorkflowRuns({
-                  owner, repo, workflow_id: workflowId,
-                  branch: defaultBranch, status: 'success', per_page: 1,
+                  owner: t.owner, repo: t.repo, workflow_id: workflowId,
+                  branch, status: 'success', per_page: 1,
                 });
                 const last = (((res.data || {}).workflow_runs) || [])[0];
                 if (!last) {
-                  return { days: Infinity, why: `it has never had a successful ${defaultBranch} run` };
+                  return { days: Infinity, why: `it has never had a successful ${branch} run` };
                 }
                 const at = Date.parse(last.updated_at || last.created_at || '');
                 if (Number.isNaN(at)) {
@@ -151,26 +279,10 @@ jobs:
                 }
                 return { days: Math.floor((Date.now() - at) / 86400000), at: last.updated_at || last.created_at };
               } catch (e) {
-                core.warning(`Could not read the success history for ${wfName} (${e.message}); treating it as never-green.`);
+                core.warning(`Could not read the success history for ${t.name} in ${t.slug} (${e.message}); treating it as never-green.`);
                 return { days: Infinity, why: `its run history could not be read (${e.message})` };
               }
             };
-            const WATCHED = [...new Set(
-              (process.env.WATCHED_WORKFLOWS || '').split('\n').map(s => s.trim()).filter(Boolean)
-            )];
-
-            // Resolve names -> workflow ids. THIS MUST PAGINATE. The repo has >100 workflows and
-            // per_page caps at 100, so a single unpaginated page silently drops the tail — that
-            // exact truncation already produced one false "740 is not registered" conclusion
-            // while diagnosing #843.
-            const allWorkflows = await github.paginate(github.rest.actions.listRepoWorkflows, {
-              owner, repo, per_page: 100,
-            });
-            const byName = new Map(allWorkflows.map(w => [w.name, w]));
-            // A renamed or deleted workflow must never become invisible — a watch-list entry
-            // matching nothing is this alerter's own failure mode (#832). Reported at the END of
-            // the sweep, so one bad name cannot disable alerting for all the good ones.
-            const unresolved = WATCHED.filter(n => !byName.has(n));
 
             // One open-issue listing for the WHOLE sweep, fetched lazily. This runs 48 times a
             // day against a 5,000/hr pool shared with every other agent (AGENTS.md), so the
@@ -179,7 +291,9 @@ jobs:
             // (`skipped`/`neutral`). A green sweep still costs that one call — `success` has to
             // look for an alert to close, which is the recovery half of the state machine.
             // Safe to cache across watched workflows because each has its own marker — a create
-            // or close for one can never change the lookup result for another.
+            // or close for one can never change the lookup result for another. It stays one
+            // call across repos too: every alert lives in the hub, so there is only ever one
+            // issue list to read.
             let openIssues = null;
             // `agentic-os,bug` is a broad pair and the backlog is long, so this MUST page.
             // A single page of 100 sorted by `updated` is not enough: once the alerter stops
@@ -230,16 +344,45 @@ jobs:
                 : `${stamp}\n${text}`;
             };
 
+            // --- counters: L97's denominator rule ------------------------------------------
+            // A sweep that read nothing and a sweep that found nothing wrong both end with
+            // zero alerts. `checked` is what tells them apart, so it is reported either way.
+            const stats = {
+              repos: 0, checked: 0, failing: 0, benign: 0, unreadable: 0,
+              opened: 0, appended: 0, closed: 0, capped: 0,
+            };
+            const unresolved = [];
+            const unreadableRepos = [];
+
+            const createAlert = async (t, title, body) => {
+              if (stats.opened >= MAX_NEW_ALERTS) {
+                stats.capped++;
+                core.warning(`New-alert cap (${MAX_NEW_ALERTS}) reached; not opening an alert for ${t.name} in ${t.slug} this sweep. It is still failing and the next sweep will open it.`);
+                return;
+              }
+              stats.opened++;
+              if (DRY_RUN) {
+                core.notice(`[dry run] would OPEN a rolling alert: ${title}`);
+                return;
+              }
+              await github.rest.issues.create({
+                owner, repo, title, labels: ['agentic-os', 'bug'], body,
+              });
+            };
+
             // `wfName` is the WORKFLOW's name, never `run.name`: for a workflow that sets
             // `run-name:` the run object carries the rendered run title instead, which would
             // scatter the marker across a different key on every run.
-            const evaluate = async (wfName, workflowId, run) => {
-              // Keyed by workflow name: one rolling issue per watched workflow, so a success
-              // only ever closes the alert for the workflow that actually recovered.
-              const marker = `<!-- scheduled-workflow-failure-alert:${wfName} -->`;
-              const title = `🚨 Scheduled workflow failing: ${wfName}`;
-              if (run.head_branch && run.head_branch !== defaultBranch) {
-                core.info(`Ignoring ${wfName} on branch ${run.head_branch} (not ${defaultBranch}).`);
+            const evaluate = async (t, workflowId, run, branch) => {
+              // Keyed by workflow name (and repo, off-hub): one rolling issue per watched
+              // workflow, so a success only ever closes the alert for the workflow that
+              // actually recovered.
+              const wfName = t.name;
+              const marker = markerFor(t);
+              const title = titleFor(t);
+              const where = t.isHub ? wfName : `${wfName} in ${t.slug}`;
+              if (run.head_branch && run.head_branch !== branch) {
+                core.info(`Ignoring ${where} on branch ${run.head_branch} (not ${branch}).`);
                 return;
               }
               // Conclusions that mean "nothing went wrong" — everything else (failure,
@@ -247,7 +390,8 @@ jobs:
               // `success` is benign too but still needs the lookup below, to close an alert.
               const BENIGN = ['skipped', 'neutral'];
               if (BENIGN.includes(run.conclusion)) {
-                core.info(`Ignoring ${wfName} (${run.conclusion}).`);
+                stats.benign++;
+                core.info(`Ignoring ${where} (${run.conclusion}).`);
                 return; // before the issue lookup: a guaranteed no-op should cost no API call
               }
               // A DECLINED OR EXPIRED APPROVAL GATE IS NOT AN OUTAGE. Watched workflow
@@ -279,21 +423,22 @@ jobs:
                 let jobs = null;
                 try {
                   const res = await github.rest.actions.listJobsForWorkflowRun({
-                    owner, repo, run_id: run.id, per_page: 100, filter: 'latest',
+                    owner: t.owner, repo: t.repo, run_id: run.id, per_page: 100, filter: 'latest',
                   });
                   jobs = (res.data || {}).jobs || [];
                 } catch (e) {
                   // Fail LOUD, never silent: an unreadable job list must not swallow a real
                   // outage — that is precisely the failure mode this workflow exists to end.
-                  core.warning(`Could not read jobs for run ${run.id} (${e.message}); alerting anyway.`);
+                  core.warning(`Could not read jobs for run ${run.id} in ${t.slug} (${e.message}); alerting anyway.`);
                 }
                 if (jobs && jobs.length) {
                   const failed = jobs.filter(j => j.conclusion === 'failure');
                   const cancelled = jobs.filter(j => j.conclusion === 'cancelled');
                   if (failed.length === 0 && cancelled.length > 0) {
-                    const green = await greenAge(workflowId, wfName);
+                    const green = await greenAge(t, workflowId, branch);
                     if (green.days <= STALE_SUCCESS_DAYS) {
-                      core.notice(`Not alerting on ${wfName}: no job failed and ${cancelled.length} were cancelled (declined approval gate, or a superseded run), and it last succeeded ${green.days}d ago. ${run.html_url}`);
+                      stats.benign++;
+                      core.notice(`Not alerting on ${where}: no job failed and ${cancelled.length} were cancelled (declined approval gate, or a superseded run), and it last succeeded ${green.days}d ago. ${run.html_url}`);
                       return;
                     }
                     // Still the gate shape — but it has stopped recovering, so it is an
@@ -316,6 +461,11 @@ jobs:
               const existing = open.find(i => !i.pull_request && i.body && i.body.includes(marker));
               if (run.conclusion === 'success') {
                 if (existing) {
+                  stats.closed++;
+                  if (DRY_RUN) {
+                    core.notice(`[dry run] would CLOSE alert #${existing.number} (${where} recovered).`);
+                    return;
+                  }
                   await github.rest.issues.createComment({
                     owner, repo, issue_number: existing.number,
                     body: `✅ Recovered: [${wfName} run](${run.html_url}) succeeded. Auto-closing.`,
@@ -326,7 +476,10 @@ jobs:
                 }
                 return;
               }
-              const line = `- ${new Date().toISOString()} — **${wfName}** [run ${run.run_number}](${run.html_url}) → ${run.conclusion}${gateNote}`;
+              stats.failing++;
+              // The repo is named in the line as well as the title: an alert read from a
+              // notification email shows the line, not the issue title.
+              const line = `- ${new Date().toISOString()} — **${wfName}**${t.isHub ? '' : ` (${t.slug})`} [run ${run.run_number}](${run.html_url}) → ${run.conclusion}${gateNote}`;
               if (existing) {
                 // ONE COMMENT PER FAILING RUN, NOT ONE PER SWEEP. The event-driven version saw
                 // each run once, so appending on every observation was the same thing. A poll
@@ -336,7 +489,12 @@ jobs:
                 // the shared REST budget. The last recorded run id lives in the body so the
                 // check needs no extra API call (the issue list already carries the body).
                 if (recordedRun(existing.body) === String(run.id)) {
-                  core.info(`Run ${run.id} for ${wfName} is already recorded; not re-commenting.`);
+                  core.info(`Run ${run.id} for ${where} is already recorded; not re-commenting.`);
+                  return;
+                }
+                stats.appended++;
+                if (DRY_RUN) {
+                  core.notice(`[dry run] would APPEND to alert #${existing.number}: ${line}`);
                   return;
                 }
                 await github.rest.issues.createComment({
@@ -347,37 +505,68 @@ jobs:
                   body: withRecordedRun(existing.body, run.id),
                 });
               } else {
-                await github.rest.issues.create({
-                  owner, repo,
-                  title, labels: ['agentic-os', 'bug'],
-                  body: `${marker}\n${RUN_MARKER_OPEN}${run.id}${RUN_MARKER_CLOSE}\n**${wfName}** ended in a bad conclusion. This rolling issue tracks that one workflow and auto-closes on its next green run.\n\nEach entry below records what was observed — the run's conclusion and a link. Open the run to see which job failed before assuming a cause.\n\n${line}\n\n_Managed by 740. Repo - Scheduled Workflow Failure Alert._`,
-                });
+                await createAlert(t, title, `${marker}\n${RUN_MARKER_OPEN}${run.id}${RUN_MARKER_CLOSE}\n**${wfName}**${t.isHub ? '' : ` in [${t.slug}](https://github.com/${t.slug})`} ended in a bad conclusion. This rolling issue tracks that one workflow and auto-closes on its next green run.\n\nEach entry below records what was observed — the run's conclusion and a link. Open the run to see which job failed before assuming a cause.\n\n${line}\n\n_Managed by 740. Repo - Scheduled Workflow Failure Alert._`);
               }
             };
 
-            for (const wfName of WATCHED) {
-              const wf = byName.get(wfName);
-              if (!wf) continue; // reported below, after the sweep
+            for (const t of TARGETS) {
+              const inv = await inventoryFor(t);
+              if (inv.error) {
+                // Counted, not skipped-and-forgotten: reported at the end and fails the run.
+                stats.unreadable++;
+                if (!unreadableRepos.some(u => u.slug === t.slug)) {
+                  unreadableRepos.push({ slug: t.slug, error: inv.error });
+                }
+                continue;
+              }
+              const wf = inv.byName.get(t.name);
+              // A renamed or deleted workflow must never become invisible — a watch-list entry
+              // matching nothing is this alerter's own failure mode (#832). Reported at the END
+              // of the sweep, so one bad name cannot disable alerting for all the good ones.
+              if (!wf) { unresolved.push(t); continue; }
+              const branch = await defaultBranchFor(t);
               let runs = [];
               try {
                 const res = await github.rest.actions.listWorkflowRuns({
-                  owner, repo, workflow_id: wf.id,
-                  branch: defaultBranch, status: 'completed', per_page: 1,
+                  owner: t.owner, repo: t.repo, workflow_id: wf.id,
+                  branch, status: 'completed', per_page: 1,
                 });
                 runs = ((res.data || {}).workflow_runs) || [];
               } catch (e) {
                 // Nothing to upsert without a run, so this cannot alert — but it must not pass
                 // silently either, or a permanently unreadable workflow reads as permanently green.
-                core.warning(`Could not read runs for ${wfName} (${e.message}); skipping it this sweep.`);
+                stats.unreadable++;
+                core.warning(`Could not read runs for ${t.name} in ${t.slug} (${e.message}); skipping it this sweep.`);
                 continue;
               }
+              stats.checked++;
               if (!runs.length) {
-                core.info(`No completed ${defaultBranch} run for ${wfName} yet.`);
+                core.info(`No completed ${branch} run for ${t.name} in ${t.slug} yet.`);
                 continue;
               }
-              await evaluate(wfName, wf.id, runs[0]);
+              await evaluate(t, wf.id, runs[0], branch);
+            }
+            stats.repos = inventoryCache.size;
+
+            // THE DENOMINATOR IS PART OF THE RESULT (L97). "0 failing" means nothing without
+            // "out of N checked" — a sweep whose repo reads all 403'd reports zero failures
+            // just as convincingly as a healthy fleet does.
+            const summary = `740 sweep: repos=${stats.repos} watched=${TARGETS.length} checked=${stats.checked} failing=${stats.failing} benign=${stats.benign} unreadable=${stats.unreadable} opened=${stats.opened} appended=${stats.appended} closed=${stats.closed} unresolved=${unresolved.length}${DRY_RUN ? ' [DRY RUN — no issue was written]' : ''}`;
+            core.notice(summary);
+            if (core.summary && core.summary.addRaw) {
+              await core.summary.addRaw(`### 740 failure-alert sweep\n\n\`\`\`\n${summary}\n\`\`\`\n`).write();
             }
 
+            const problems = [];
+            if (malformed.length) {
+              problems.push(`WATCHED_SATELLITE_WORKFLOWS line(s) are not \`owner/repo :: Workflow name\`: ${malformed.map(n => JSON.stringify(n)).join(', ')}`);
+            }
+            if (unreadableRepos.length) {
+              problems.push(`Could not list workflows for ${unreadableRepos.map(u => `${u.slug} (${u.error})`).join(', ')}. The sweep is BLIND to those repos — this alerter reports an unreadable repo as a fault of its own, never as a clean sweep.`);
+            }
             if (unresolved.length) {
-              core.setFailed(`Watched workflow name(s) match no workflow in ${owner}/${repo}: ${unresolved.map(n => JSON.stringify(n)).join(', ')}. A renamed or deleted workflow must not drop silently out of the watch list — fix the entry in WATCHED_WORKFLOWS or remove it.`);
+              problems.push(`Watched workflow name(s) match no workflow in the repo named: ${unresolved.map(t => JSON.stringify(`${t.slug} :: ${t.name}`)).join(', ')}. A renamed or deleted workflow must not drop silently out of the watch list — fix the entry in WATCHED_WORKFLOWS / WATCHED_SATELLITE_WORKFLOWS or remove it.`);
+            }
+            if (problems.length) {
+              core.setFailed(problems.join(' | '));
             }

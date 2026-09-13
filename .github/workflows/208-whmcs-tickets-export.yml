@@ -37,17 +37,87 @@ jobs:
         shell: pwsh
         env:
           WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          # #1080 lane 24. Both free-text dispatch inputs arrive as DATA in the
+          # process environment instead of being substituted into this script's
+          # TEXT. Measured on pwsh 7.4.6 against the body as it shipped, with a
+          # decoy WHMCS credential in the environment and a stub callee:
+          #
+          #   output_file  the site read `$out = "<interpolation>"` — DOUBLE
+          #                quoted, where `$( )` expands, so no quote breakout was
+          #                needed at all. A value ending `$(Set-Content -Path
+          #                SENTINEL.txt -Value $env:WHMCS_API_SECRET)` wrote the
+          #                credential to a file, and because Set-Content emits
+          #                nothing the path itself was unchanged: the callee bound
+          #                `OutputFile=[artifacts/whmcs/whmcs_tickets.csv]`,
+          #                byte-identical to the control, and the step exited 0.
+          #   status       two sites on one line, both SINGLE quoted, so `$( )`
+          #                is inert and the payload needed a breakout. `Open')) { };
+          #                <payload>; $cliArgs += @('-Status','Open'); #` closed the
+          #                call and the `if`, ran, re-supplied the legitimate
+          #                -Status append, and commented out the rest of the line —
+          #                which is where the SECOND occurrence sat. Same result:
+          #                credential exfiltrated, callee bound `Status=[Open]`,
+          #                exit 0.
+          #
+          # In both cases every observable in the run — arguments, exit code,
+          # artifact — matches an ordinary export. This job enters
+          # `whmcs-prod-read`, whose WHMCS API credential the
+          # `whmcs-secrets-from-kv` step above exports through GITHUB_ENV, plus the
+          # `az` CLI session it leaves on disk (#1188/#1208) — none of which is
+          # visible in this step's own `env:` block, so an L213 read or a
+          # `secrets.` grep scores this step as holding nothing.
+          IN_OUTPUT_FILE: ${{ inputs.output_file }}
+          IN_STATUS: ${{ inputs.status }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $out = "${{ inputs.output_file }}"
+
+          # Fail closed, not default-fill (ledger L254), for the same reason 218
+          # does: the `Upload CSV artifact` step below consumes the output_file
+          # input a second time, directly, in its `path:`. That is an artifact
+          # path rather than a script body, so #1080's guard correctly does not
+          # judge it and this lane does not widen to cover it — but it makes this
+          # step the junior of two consumers of one value. A default supplied only
+          # here would write the CSV to the substituted path while the upload
+          # still looked at the blank one, converting a clear failure into an
+          # `if-no-files-found: error` two steps later that names neither cause.
+          #
+          # This guard is load-bearing, and the hole it closes PRE-DATES the move
+          # to `env:` rather than being created by it (ledger L292, the QUOTED
+          # case — the shipped site sat inside double quotes, so a blank was
+          # already an argument that is present and empty). Measured on pwsh
+          # 7.4.6 against BOTH bodies, guard stripped:
+          #
+          #   empty            rc 1 at `Split-Path -Parent` — loud in the shipped
+          #                    body and in the fixed one alike, so the remedy
+          #                    neither creates nor removes this case.
+          #   all-whitespace   callee bound `OutputFile=[   ]` at rc **0**, in
+          #                    both bodies. Silent and wrong: the export writes a
+          #                    CSV to a whitespace-named file and the upload's
+          #                    `path:` then looks for the same blank name.
+          #
+          # So `-not IsNullOrWhiteSpace` rather than `-ne ''` is what makes the
+          # guard do anything at all here — the one case it catches is the one
+          # case that was silent. Same measurement 601 recorded (#1213).
+          if ([string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)) {
+            throw "output_file is blank. It is consumed BOTH here and by the 'Upload CSV artifact' step's path:, so this step does not substitute a default — re-dispatch with a path, or omit the input to get its declared default."
+          }
+          $out = $env:IN_OUTPUT_FILE
           $dir = Split-Path -Parent $out
           if (-not [string]::IsNullOrWhiteSpace($dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
           $cliArgs = @('-OutputFile', $out)
           # `-not IsNullOrWhiteSpace`, not `-ne ''`: the latter is True for
-          # whitespace, so `status: "   "` would reach the callee as a blank
+          # whitespace, so a status of "   " would reach the callee as a blank
           # -Status filter (#1213). Matches the predicate `$dir` already uses
           # two lines above.
-          if (-not [string]::IsNullOrWhiteSpace('${{ inputs.status }}')) { $cliArgs += @('-Status', '${{ inputs.status }}') }
+          #
+          # The move to `env:` widens this predicate's domain from string to
+          # string-or-null — an omitted input reaches the shipped body as the
+          # empty string between two quotes, and reaches this one as `$null`.
+          # `IsNullOrWhiteSpace` is true for both; `-ne ''` is true for `$null`,
+          # which is why the spelling matters more after the move than before it.
+          # Measured: blank, all-whitespace and unset all bind `Status=[]` at
+          # rc 0, in the shipped body and this one alike.
+          if (-not [string]::IsNullOrWhiteSpace($env:IN_STATUS)) { $cliArgs += @('-Status', $env:IN_STATUS) }
           & pwsh -NoProfile -File .\scripts\whmcs-tickets-export.ps1 @cliArgs
           if ($LASTEXITCODE -ne 0) { throw "Tickets export failed (exit $LASTEXITCODE)." }
 

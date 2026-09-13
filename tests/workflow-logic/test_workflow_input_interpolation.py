@@ -355,6 +355,7 @@ BURNED_DOWN = (
     "213-whmcs-zeffy-payments-import-draft.yml",
     "115-domain-transfer-preflight.yml",
     "218-whmcs-siteslist-reconciliation.yml",
+    "208-whmcs-tickets-export.yml",
 )
 
 
@@ -746,9 +747,20 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     # When it stops being easy — one entry left — the honest move is to say so
     # here and keep the single name, not to drop the control: one literal still
     # proves the scan is non-empty, which is the property the counts need.
+    #
+    # …and again: #1080 lane 24 burned down `208-whmcs-tickets-export.yml`, the
+    # THIRD consecutive lane to retire this slot — the handoff note names the
+    # widest remaining entry and the next lane takes it, so the slot rotating
+    # every lane is the burn-down working rather than a problem to solve. Filled
+    # like-for-like by `202-whmcs-export-products.yml` on the rule above: 107 is
+    # a Cloudflare body and 202 a WHMCS one, two frozen inputs across two
+    # separate export steps, so no single lane can retire both and leave the
+    # counts unwitnessed.
+    #
+    # Eleven entries are still frozen as this lands.
     for expected in (
         "107-audit-compliance.yml",
-        "208-whmcs-tickets-export.yml",
+        "202-whmcs-export-products.yml",
     ):
         assert expected in current, (
             f"{expected} must be in the frozen set. If you have just burned it "

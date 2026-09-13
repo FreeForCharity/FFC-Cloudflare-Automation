@@ -554,7 +554,7 @@ PROTECTED_BRANCH_RE = re.compile(r"(?<![\w./-])(main|master)(?![\w/-])", re.IGNO
 # match backtracks so that `-c` is read as a bare option and its ARGUMENT is
 # read as the verb: `git -c push.default=simple config --list` matched, because
 # `push.default=simple` begins with `push` followed by a word boundary. Barring
-# alt 2 from a `-c`/`-C` that owns a separate argument fixes that structurally,
+# an option that owns a separate argument from alt 2 fixes that structurally,
 # which is why `push\b` itself is left alone -- tightening the verb's trailing
 # boundary would have been a LOOSENING of a block rule, and the property worth
 # keeping is that this pattern is a strict superset of the one it replaces: no
@@ -566,8 +566,35 @@ PROTECTED_BRANCH_RE = re.compile(r"(?<![\w./-])(main|master)(?![\w/-])", re.IGNO
 # rewrite main -- from blocked to allowed, and a verb rule must not fail open
 # to buy a false-positive fix. The option-shaped restriction above buys the
 # same safety without touching what the rule can see.
-GIT_GLOBAL_OPT = r"(?:-[cC]\s+\S+|(?!-[cC]\s)--?[A-Za-z]\S*)"
-GIT_PUSH_RE = re.compile(rf"\bgit\s+(?:{GIT_GLOBAL_OPT}\s+)*push\b", re.IGNORECASE)
+#
+# `-c`/`-C` are not the only options whose value is a SEPARATE word, and the
+# long ones were missed on the first pass (Conductor run 170 on #1312, three
+# live bypasses). Measured on git 2.43.0 -- each runs the subcommand with the
+# value taken as its own argument, against a `--bogus-opt x` control that
+# exits 129:
+#
+#   git --work-tree <dir> status     -> 0, "On branch master"
+#   git --namespace x status         -> 0, "On branch master"
+#   git --config-env a.b=HOME status -> 0, "On branch master"
+#   git --git-dir <path> status      -> 0, "On branch master"
+#
+# `--exec-path` is deliberately absent: bare, it PRINTS the exec path and
+# exits without running the subcommand at all, so it can never precede a push.
+# `--super-prefix` is present and is the one entry not confirmed here -- this
+# git rejects it (129, like the bogus control), because it was removed as an
+# internal-only option. It is kept because older gits accept it and listing it
+# only widens what may sit before the verb.
+#
+# `git.exe` is the same rule reached from the other end: `\bgit\s` wants
+# whitespace right after `git`, and `git.exe push --force origin main` is a
+# working spelling on a Windows host -- which is where the Conductor runs.
+GIT_SEPARATE_ARG_OPT = r"(?:-[cC]|--(?:git-dir|work-tree|namespace|config-env|super-prefix))"
+GIT_GLOBAL_OPT = (
+    rf"(?:{GIT_SEPARATE_ARG_OPT}\s+\S+|(?!{GIT_SEPARATE_ARG_OPT}\s)--?[A-Za-z]\S*)"
+)
+GIT_PUSH_RE = re.compile(
+    rf"\bgit(?:\.exe)?\s+(?:{GIT_GLOBAL_OPT}\s+)*push\b", re.IGNORECASE
+)
 
 
 def _pipe_stages(stmt):

@@ -301,6 +301,31 @@ RULES = [
         ("force-push main via git -C", "git -C /repo push --force origin main", BLOCK),
         ("force-push master via git -c and -C",
          "git -c core.pager=cat -C /repo push -f origin master", BLOCK),
+        # `-c`/`-C` are not the only options taking a SEPARATE value word, and
+        # the long ones were missed on the first pass (Conductor run 170 on
+        # #1312). Each verified against git 2.43.0 as a running command, with
+        # a `--bogus-opt x` control exiting 129.
+        ("force-push main via git --work-tree",
+         "git --work-tree /repo push -f origin main", BLOCK),
+        ("force-push main via git --namespace",
+         "git --namespace x push --force origin main", BLOCK),
+        ("force-push main via git --config-env",
+         "git --config-env a=B push --force origin main", BLOCK),
+        # `--git-dir <path>` was already blocked, but only by accident: the
+        # path ends `.git push`, and `\bgit\s+push\b` matched INSIDE it. Pin
+        # it now that the rule itself covers the form, so a future narrowing
+        # cannot be hidden by that coincidence.
+        ("force-push main via git --git-dir with a separate arg",
+         "git --git-dir /repo/.git push --force origin main", BLOCK),
+        # `\bgit\s` wants whitespace right after `git`; the Conductor runs on
+        # Windows, where `git.exe push` is an ordinary spelling.
+        ("force-push main via git.exe", "git.exe push --force origin main", BLOCK),
+        # ...and the long options must not arm the rule either. The second is
+        # run 170's row: `log` is not option-shaped, so it ends the scan and
+        # the `push` after `--grep` is never read as the verb.
+        ("normal push feature via git --work-tree",
+         "git --work-tree /repo push --force origin feature-x", ALLOW),
+        ("git log --grep push naming main", "git log --grep push main", ALLOW),
         # ...and the widening must not arm the rule off a word that is not the
         # verb. The first is the ordinary reason to write `git -c` at all; the
         # second is `-c`'s ARGUMENT beginning with `push`, which an earlier

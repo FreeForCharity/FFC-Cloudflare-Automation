@@ -360,6 +360,25 @@ RULES = [
          "git push origin $(git branch --show-current) | grep -f patterns.txt main", ALLOW),
         ("push feature after a substitution containing its own pipeline",
          "echo $( (git log --oneline) | head -1 ) | git push -q origin feature-x", ALLOW),
+        # git's GLOBAL options may precede the subcommand, so the verb is not
+        # always the word after `git` (#1311). Each of these is a working
+        # force-push spelling that the old `\bgit\s+push\b` never saw -- the
+        # `-c` form especially, which is what tooling and CI snippets emit.
+        ("force-push main via git -c", "git -c protocol.version=2 push --force origin main", BLOCK),
+        ("force-push main via git --no-pager", "git --no-pager push --force origin main", BLOCK),
+        ("force-push main via git -C", "git -C /repo push --force origin main", BLOCK),
+        ("force-push master via git -c and -C",
+         "git -c core.pager=cat -C /repo push -f origin master", BLOCK),
+        # ...and the widening must not arm the rule off a word that is not the
+        # verb. The first is the ordinary reason to write `git -c` at all; the
+        # second is `-c`'s ARGUMENT beginning with `push`, which an earlier
+        # draft read as the subcommand by backtracking; the third proves a
+        # quoted `push` still cannot supply it.
+        ("normal push feature via git -c", "git -c a=b push --force origin feature-x", ALLOW),
+        ("git -c push.default then an unrelated main and force",
+         "git -c push.default=simple config --list && echo main --force", ALLOW),
+        ("commit message naming push, force and main",
+         'git commit --amend -m "ready to push --force origin main"', ALLOW),
         # Keeps the case-sensitive short flag pinned now that pipe splitting
         # clears the `grep -F` row on its own: prose inside a heredoc body is
         # analysed (bodies are deliberately not skipped), and this line holds

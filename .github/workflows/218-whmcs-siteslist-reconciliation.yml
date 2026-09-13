@@ -58,6 +58,41 @@ jobs:
         shell: pwsh
         env:
           WHMCS_API_URL: ${{ inputs.api_url }}
+          # #1080 lane 23. All three remaining free-text dispatch inputs this step
+          # consumes now arrive through this step-level `env:` mapping instead of
+          # being pasted into the body by `${{ }}`, which GitHub substitutes as
+          # raw text BEFORE pwsh parses the line — so the value was parsed as
+          # code, not data.
+          #
+          # Two different shapes were live here, and both were measured on the
+          # body as it shipped (pwsh 7.4.6), not argued from the line:
+          #
+          #   output_file   `$out = "${{ ... }}"` — DOUBLE-quoted, so `$( )`
+          #                 expands where it stands and no quote breakout is
+          #                 needed. With a `$(...; $null = Set-Content -Path
+          #                 <sentinel> -Value "secret=$env:WHMCS_API_SECRET";
+          #                 'artifacts/whmcs/whmcs_siteslist_reconciliation.json')`
+          #                 value: the payload ran, the decoy credential reached
+          #                 the sentinel, `$out` still held a legal path, the
+          #                 callee bound it, and the step exited **0**.
+          #
+          #   *_pid         `-...Pid '${{ ... }}'` — SINGLE-quoted, so unlike the
+          #                 above these needed a quote breakout, and a quote
+          #                 breakout is all they needed. With `40'; <payload>; #`
+          #                 on the trailing argument the LEGITIMATE call completed
+          #                 with all four arguments first, the payload then ran,
+          #                 the stray quote was commented out, and the step exited
+          #                 **0**. The mid-line `cloudflare_pid` site is the same
+          #                 shape with the commented-out tail re-supplied by the
+          #                 payload; measured separately, same result.
+          #
+          # In every case `$LASTEXITCODE` and the `Test-Path` check below both
+          # still passed, so nothing in the run distinguishes it from an ordinary
+          # one. This job enters `whmcs-prod-read`, whose WHMCS credential and
+          # `az` CLI session an injected body reaches (#1188/#1208).
+          IN_OUTPUT_FILE: ${{ inputs.output_file }}
+          IN_CLOUDFLARE_PID: ${{ inputs.cloudflare_pid }}
+          IN_GITHUB_PAGES_PID: ${{ inputs.github_pages_pid }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -72,9 +107,73 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
             $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
           }
-          $out = "${{ inputs.output_file }}"
+          # Default-fill, not fail-closed (ledger L254): both pids DECLARE a
+          # default in `on.workflow_dispatch.inputs`, so a dispatch that blanks
+          # one is asking for that default rather than for an error.
+          #
+          # This guard is load-bearing, and — unlike 115 (L291) — the hole it
+          # closes is PRE-EXISTING rather than created by the move to `env:`.
+          # Both sites were already SINGLE-quoted, so a blank was already an
+          # argument that is present and empty in the shipped body too; the
+          # remedy does not change that, which is why the measurement below is
+          # quoted against both bodies rather than only the new one.
+          #
+          # Measured, guard stripped, on pwsh 7.4.6: an empty pid binds
+          # `CfPid=[] GhPid=[]` and the step exits **0**. That is silent and
+          # maximally wrong, not merely cosmetic — the callee tests membership
+          # with `$clientPids[$cid].Contains($CloudflareProductPid)`
+          # (whmcs-siteslist-reconciliation.ps1:174,192), and `.Contains('')` is
+          # false for every client, so EVERY Cloudflare domain and EVERY Pages
+          # site falls into the `else` branch and is appended to the gap list.
+          # The artifact is the Phase 2 backfill work-list, so a blank pid turns
+          # it into a maximal false work-list that reads like a real finding.
+          if ([string]::IsNullOrWhiteSpace($env:IN_CLOUDFLARE_PID)) {
+            $env:IN_CLOUDFLARE_PID = '39'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:IN_GITHUB_PAGES_PID)) {
+            $env:IN_GITHUB_PAGES_PID = '40'
+          }
 
-          & pwsh -NoProfile -File .\scripts\whmcs-siteslist-reconciliation.ps1 -ApiUrl $env:WHMCS_API_URL -OutputFile $out -CloudflareProductPid '${{ inputs.cloudflare_pid }}' -GithubPagesProductPid '${{ inputs.github_pages_pid }}'
+          # `output_file` deliberately does NOT get the same default-fill, even
+          # though it also declares a default. The `Upload reconciliation
+          # artifact` step below consumes the `output_file` input directly, in
+          # its `path:` — an artifact path, not a script body, so #1080's guard
+          # correctly does not judge it and this lane does not widen to cover
+          # it. But that makes it a SECOND consumer of the same raw input: a
+          # default supplied
+          # only here would write the JSON to the default path while the upload
+          # still looked at the blank one, turning a clear failure into a
+          # confusing `if-no-files-found: error` two steps later. Failing closed
+          # keeps the two consumers agreeing, and preserves the shipped
+          # behaviour exactly — measured, a blank `output_file` already exits 1
+          # today, at the `Test-Path` check below, with a message naming no file.
+          #
+          # Note the comments in this block NAME that input rather than quoting
+          # its interpolation expression. Two separate tools object to the
+          # quoted form, and only the first is obvious:
+          #
+          #   the #1080 guard  scans this `run:` block as TEXT and does not
+          #                    parse comments, so a spelled-out expression
+          #                    registers as a call site. Its message names the
+          #                    input and the workflow, so it reads as "the
+          #                    remedy is incomplete" rather than "your prose
+          #                    matched" (ledger L293).
+          #   actionlint       parses every interpolation in a `run:` scalar,
+          #                    comments included, so even an EMPTY pair of
+          #                    braces written as an illustration fails with
+          #                    `unexpected end of input while parsing …`.
+          #
+          # Both are conservative in the safe direction and should stay that
+          # way — a comment-stripper that got pwsh or bash quoting wrong would
+          # be a silent bypass, which is worse than a false positive that fails
+          # closed. The cost is simply that a comment ABOUT an interpolation
+          # cannot reproduce one inside the body it documents.
+          if ([string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)) {
+            throw "output_file is blank. It is consumed BOTH here and by the 'Upload reconciliation artifact' step's path:, so this step does not substitute a default — re-dispatch with a path, or omit the input to get its declared default."
+          }
+          $out = $env:IN_OUTPUT_FILE
+
+          & pwsh -NoProfile -File .\scripts\whmcs-siteslist-reconciliation.ps1 -ApiUrl $env:WHMCS_API_URL -OutputFile $out -CloudflareProductPid $env:IN_CLOUDFLARE_PID -GithubPagesProductPid $env:IN_GITHUB_PAGES_PID
 
           if ($LASTEXITCODE -ne 0) {
             throw "WHMCS sites-list reconciliation script failed with exit code $LASTEXITCODE. See logs above."

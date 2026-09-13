@@ -1043,17 +1043,38 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # at exit 0. `priority` (choice) and `dry_run` (boolean) stay interpolated:
     # GitHub constrains both, so neither can carry a payload.
     "208-whmcs-tickets-export.yml": ("output_file", "status"),
-    "213-whmcs-zeffy-payments-import-draft.yml": (
-        "clients_output",
-        "end_date",
-        "invoices_output",
-        "max_rows",
-        "max_rows_per_file",
-        "start_date",
-        "transactions_output",
-        "zeffy_output",
-        "zeffy_output_xlsx",
-    ),
+    # 213-whmcs-zeffy-payments-import-draft.yml burned down (#1080 lane 21): all
+    # NINE free-text inputs now reach all six script bodies through step-level
+    # `env:`. It was the widest entry in the freeze -- nine inputs, 21 references,
+    # six bodies in one job -- and the FIRST read-only lane, so it is also the
+    # first burn-down that moves the interpolating baseline without moving the
+    # write one (test_workflow_input_interpolation.py's `_expected_write`).
+    #
+    # Its sites sat in DOUBLE quotes, where `$( )` expands, so the 116/702 payload
+    # works with no quote breakout. Measured on pwsh 7.4.6 against the body as it
+    # shipped: the decoy credential was written to a sentinel, the exporter was
+    # still handed a legal `OutputFile=[artifacts/whmcs/whmcs_clients.csv]`, and
+    # the step exited 0; the benign control leaked nothing.
+    #
+    # FOUR of the nine keep a GATED APPEND rather than a fail-closed exit, which no
+    # earlier lane needed: `start_date` and `end_date` document `default: ''`, and
+    # `max_rows` / `max_rows_per_file` are caps whose omission means "no flag, use
+    # the callee's default". For all four a blank is a routine dispatch and refusing
+    # it would break the documented call (L254 -- the remedy follows what the callee
+    # does with a missing argument, and here an omitted filter is correct). The five
+    # path inputs fail closed. Four plus five is the nine.
+    #
+    # `include_zero_invoices` (boolean) stays interpolated at `:269` (a step `if:`),
+    # `:484` (a script body) and `:658` (an upload step's `if:`) and is NOT a
+    # finding. The five `actions/upload-artifact` `path:` sites (`:646`-`:680`) are
+    # not script bodies; this guard correctly does not judge them and the lane did
+    # not widen to cover them (#1080 lane 18/20 handoff).
+    #
+    # Those line numbers are a snapshot and nothing checks them: the ledger's
+    # citation guard reads `docs/lessons-ledger.md`, not this file. The first draft
+    # of this comment cited `:453`/`:640` and was already wrong when written,
+    # because an unrelated comment I added higher in the workflow had shifted every
+    # line below it. Re-derive rather than trusting them.
     "214-whmcs-clients-metrics.yml": ("output_file",),
     "215-whmcs-nonprofit-clients-metrics.yml": ("output_file",),
     "216-whmcs-activity-metrics.yml": ("charity_gids", "output_file"),

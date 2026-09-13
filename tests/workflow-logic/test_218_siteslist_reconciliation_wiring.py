@@ -436,6 +436,48 @@ def test_all_three_inputs_travel_in_env_and_are_not_interpolated():
     )
 
 
+def test_each_variable_reaches_the_CALL_SITE_and_not_merely_the_body():
+    """`$env:X in body` is too weak, because the default-fill guard reads it too.
+
+    Found by this lane's own mutation review. Replacing
+    `-GithubPagesProductPid $env:IN_GITHUB_PAGES_PID` with a hard-coded `'40'`
+    leaves the variable read twice in the guard above, so the
+    "step maps X but never reads it" assertion is satisfied by a body that fills
+    the variable and then throws it away at the call site — the dispatcher's
+    value reaching nothing, which is precisely the failure that assertion is
+    worded to catch. The behavioural tests did catch the mutation, so the module
+    was not blind; but the wiring test's message would have sent the reader to
+    the wrong place.
+
+    Every #1080 lane's module shares the wiring assertion's shape, and the two-
+    part remedy (guard that fills + call site that uses) is what creates the
+    hole, so this is a property of the pattern rather than of this workflow.
+    Ledger L294.
+    """
+    body = _body()
+    invocation = [ln for ln in body.splitlines() if CALLEE in ln and ln.lstrip().startswith("&")]
+    assert len(invocation) == 1, (
+        f"expected exactly one line invoking {CALLEE}; found {len(invocation)}. "
+        f"Body: {body!r}"
+    )
+    line = invocation[0]
+    for argument in (
+        "-OutputFile $out",
+        "-CloudflareProductPid $env:IN_CLOUDFLARE_PID",
+        "-GithubPagesProductPid $env:IN_GITHUB_PAGES_PID",
+    ):
+        assert argument in line, (
+            f"the callee invocation must pass {argument!r}, or the dispatched "
+            f"value reaches nothing however faithfully the env: block maps it. "
+            f"Invocation: {line!r}"
+        )
+    assert "$out = $env:IN_OUTPUT_FILE" in body, (
+        f"`$out` must come from IN_OUTPUT_FILE — the invocation passes `$out`, so "
+        f"a `$out` assigned from anything else silently ignores the input. "
+        f"Body: {body!r}"
+    )
+
+
 def test_the_checker_agrees_this_workflow_is_burned_down():
     """The guard's freeze and this module must not be able to disagree.
 

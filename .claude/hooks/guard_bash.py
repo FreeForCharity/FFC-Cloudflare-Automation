@@ -443,7 +443,38 @@ FORCE_LONG_RE = re.compile(r"--force\b", re.IGNORECASE)
 # lowercase-only, which is what keeps `-F` and `-qF` out.
 FORCE_SHORT_RE = re.compile(r"(?<!\S)-[A-Za-z]*f[A-Za-z]*\b")
 PROTECTED_BRANCH_RE = re.compile(r"(?<![\w./-])(main|master)(?![\w/-])", re.IGNORECASE)
-GIT_PUSH_RE = re.compile(r"\bgit\s+push\b", re.IGNORECASE)
+# git accepts its GLOBAL options BEFORE the subcommand, so the verb is not
+# always the word right after `git` (#1311). `git -c protocol.version=2 push
+# --force origin main`, `git --no-pager push ...` and `git -C /repo push ...` are
+# all working force-push spellings -- measured, each one parses its options and
+# gets as far as the remote lookup -- and `\bgit\s+push\b` saw none of them.
+# `git -c` in particular is what tooling and CI snippets emit routinely, so an
+# agent could reach this without trying to.
+#
+# Only OPTION-SHAPED words may sit between `git` and `push`, plus the single
+# argument word that `-c` and `-C` take separately. That is what keeps the
+# widening safe: in a real git command line the SUBCOMMAND is the first
+# non-option word, so `commit`, `log`, or an unquoted message word ends the
+# scan before a stray `push` can be read as the verb.
+#
+# The lookahead on the second alternative is load-bearing. Without it, a failed
+# match backtracks so that `-c` is read as a bare option and its ARGUMENT is
+# read as the verb: `git -c push.default=simple config --list` matched, because
+# `push.default=simple` begins with `push` followed by a word boundary. Barring
+# alt 2 from a `-c`/`-C` that owns a separate argument fixes that structurally,
+# which is why `push\b` itself is left alone -- tightening the verb's trailing
+# boundary would have been a LOOSENING of a block rule, and the property worth
+# keeping is that this pattern is a strict superset of the one it replaces: no
+# command that was blocked before can become allowed here.
+#
+# Deliberately NOT matched against `_strip_quoted(stage)`, though #1311 raised
+# it as the way to make a permissive verb match safe. Blanking quoted spans
+# would take `bash -c "git push --force origin main"` -- which really does
+# rewrite main -- from blocked to allowed, and a verb rule must not fail open
+# to buy a false-positive fix. The option-shaped restriction above buys the
+# same safety without touching what the rule can see.
+GIT_GLOBAL_OPT = r"(?:-[cC]\s+\S+|(?!-[cC]\s)--?[A-Za-z]\S*)"
+GIT_PUSH_RE = re.compile(rf"\bgit\s+(?:{GIT_GLOBAL_OPT}\s+)*push\b", re.IGNORECASE)
 
 
 def _pipe_stages(stmt):

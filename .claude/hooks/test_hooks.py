@@ -246,6 +246,11 @@ RULES = [
         ("force-push -f main", "git push -f origin main", BLOCK),
         ("force-with-lease master", "git push --force-with-lease origin master", BLOCK),
         ("commit then force-push main via &&", "git commit -m x && git push -f origin main", BLOCK),
+        # git's option parser bundles short options, so these force-push too.
+        # Measured: `-fq`/`-qf` reach the remote lookup, `-qZ` is rejected as an
+        # unknown switch -- the cluster really is being split. Copilot on #1310.
+        ("force-push main via bundled -fq", "git push -fq origin main", BLOCK),
+        ("force-push main via bundled -qf", "git push -qf origin main", BLOCK),
         # Heredoc bodies are analysed, not skipped: `bash <<EOF` really does run
         # what is inside one, so this must stay the direction the rule fails in.
         ("force-push main inside a heredoc body",
@@ -262,6 +267,10 @@ RULES = [
         # flag is now matched case-sensitively.
         ("commit -F file then push feature",
          "git commit -q -F msg.txt; git push -q origin feature-x", ALLOW),
+        # Widening the short flag to a bundled cluster must not undo that: the
+        # `f` inside the cluster is lowercase-only, so `-qF` stays clear.
+        ("commit -qF file naming main then push feature",
+         "git commit -qF main-notes.txt; git push -q origin feature-x", ALLOW),
         ("heredoc commit message naming main then push feature",
          "git commit -q -F - <<'EOF'\nfix: only for CI runs on main\nEOF\n"
          "git push -q origin feature-x", ALLOW),

@@ -324,7 +324,27 @@ def _pre_fix_js(issue_number: str) -> str:
     # Drop the shipped validity check with the shipped head: it is part of the
     # remedy, and leaving it in would make the control refuse the payload for the
     # reason under test rather than executing it.
-    guard_start = tail.index("if (!Number.isInteger(issueNumber)")
+    #
+    # Located by ASSERTION, not by `str.index`. A bare `.index` raises ValueError
+    # — which the module runner does not catch — so a body whose check had been
+    # renamed or removed aborted the whole roster at this test, and the six cases
+    # sorted after it reported no outcome at all. Measured during this lane's own
+    # mutation review: neutering the check to `if (false)` produced 10 outcomes
+    # for 17 tests and rc 1, and a reviewer counting FAIL lines scored the seven
+    # unreached cases as passing (ledger L194, reached through a helper rather
+    # than through the harness).
+    check_anchor = "if (!Number.isInteger(issueNumber)"
+    assert tail.count(check_anchor) == 1, (
+        f"expected exactly one {check_anchor!r} in the shipped body to remove for "
+        f"this control; found {tail.count(check_anchor)}. If the validity check "
+        f"was renamed, update this anchor; if it was deleted, that is the finding. "
+        f"Body: {shipped!r}"
+    )
+    guard_start = tail.index(check_anchor)
+    assert "return;" in tail[guard_start:], (
+        f"the validity check no longer returns, so removing it would not produce "
+        f"the pre-fix body. Body: {shipped!r}"
+    )
     guard_end = tail.index("}", tail.index("return;", guard_start)) + 1
     body = head + PRE_FIX_JS_HEAD + tail[:guard_start] + tail[guard_end:]
     assert "Number.isInteger" not in body, (
@@ -352,6 +372,14 @@ def _strip_pwsh_guards(body: str) -> str:
             f"unmodified body. Body: {body!r}"
         )
         start = body.index(anchor)
+        # Asserted rather than `.index`-ed for the same reason as `_pre_fix_js`:
+        # a ValueError here is not caught by the module runner and would abort
+        # the roster, turning every case sorted after this one into an outcome
+        # nobody reported (ledger L194).
+        assert fill in body[start:], (
+            f"the guard at {anchor!r} no longer assigns {fill} — this control "
+            f"cannot locate its end. Body: {body!r}"
+        )
         end = body.index("}", body.index(fill, start)) + 1
         body = body[:start] + body[end:]
     # Count the ANCHOR, not the bare call name: the step body explains the guards

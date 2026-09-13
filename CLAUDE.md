@@ -1464,4 +1464,5 @@ MSYS_NO_PATHCONV=1 git -C C:/…/wt164-1297 checkout -- .claude/hooks/test_hooks
 ```
 
 This section is appended at the end on purpose. `docs/lessons-ledger.md` cites `CLAUDE.md` by line
-number, and inserting it beside the earlier note shifted a cited line (L147) onto a blank one.
+number, and inserting it beside the earlier note shifted the `CLAUDE.md` line that ledger row L147
+(in `docs/lessons-ledger.md`, not a line number here) cites onto a blank one.

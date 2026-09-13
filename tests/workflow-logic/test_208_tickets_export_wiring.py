@@ -173,6 +173,10 @@ GUARD_BLOCKS = (
         "output_file is blank.",
     ),
     (
+        r"if ($env:IN_OUTPUT_FILE -match '[\r\n]') {",
+        "carriage return or newline",
+    ),
+    (
         r"if ($env:IN_OUTPUT_FILE -match '[*?\[\]]') {",
         "glob metacharacter",
     ),
@@ -908,6 +912,71 @@ def test_a_tilde_prefixed_output_file_is_refused():
         )
 
 
+def test_a_newline_in_output_file_is_refused():
+    """Raised by Copilot on #1308, and the follow-up found a hole in THESE guards.
+
+    `actions/upload-artifact` reads `path:` as a newline-delimited list of
+    patterns, so one input carrying a newline is several patterns to the second
+    consumer while still being one string to the first.
+
+    The sharper half is what that does to the other guards. Measured on pwsh
+    7.4.6 against `artifacts/whmcs/x.csv<LF>C:/…/msal_token_cache.json`, before
+    the newline guard existed:
+
+        rooted guard  `-match '^([A-Za-z]+:|[\\/])'`   ->  False
+        tilde guard   `-match '^~'`                    ->  False
+        glob guard    (unanchored)                     ->  True
+        `..` guard    (splits the whole string)        ->  True
+
+    `^` anchors at the start of the STRING, not of each line, so the two
+    anchored guards were only ever validating the first line. Both payload
+    shapes below are therefore regression tests for the guards as much as for
+    the workflow: each one passed every check before this case existed.
+    """
+    test_both_inputs_travel_in_env_and_are_not_interpolated()
+    for payload in (
+        "artifacts/whmcs/x.csv\nC:/Users/runneradmin/.azure/msal_token_cache.json",
+        "artifacts/whmcs/x.csv\n~/.azure/x.csv",
+        "artifacts/whmcs/x.csv\r\nC:/secret",
+        "artifacts/whmcs/x.csv\n",
+    ):
+        out, _stolen, rc = _run(_body(), IN_OUTPUT_FILE=payload, IN_STATUS="")
+        assert rc != 0, (
+            f"output_file {payload!r} carries a newline and must be refused; "
+            f"rc={rc}. Output: {out!r}"
+        )
+        assert "carriage return or newline" in out, (
+            f"the step exited non-zero without naming the cause. Output: {out!r}"
+        )
+        assert _bound(out) == "", (
+            f"the callee ran despite the newline. Bound: {_bound(out)!r}"
+        )
+
+
+def test_the_anchored_guards_are_only_sound_because_newlines_are_refused_first():
+    """Pin the ORDER, not just the presence — it is load-bearing here.
+
+    `^` in the rooted and tilde guards means start-of-string, so they are sound
+    only over a value already known to hold one line. Moving the newline check
+    after them, or deleting it, silently narrows both to the first line again.
+    This asserts the newline guard appears BEFORE them in the body, which no
+    behavioural case can see: every payload above is refused by the newline
+    guard wherever it sits, as long as it is somewhere.
+    """
+    body = _body()
+    newline_at = body.index(GUARD_BLOCKS[1][0])
+    for anchored in (
+        r"if ($env:IN_OUTPUT_FILE -match '^([A-Za-z]+:|[\\/])') {",
+        r"if ($env:IN_OUTPUT_FILE -match '^~') {",
+    ):
+        assert anchored in body, f"anchored guard missing: {anchored!r}"
+        assert newline_at < body.index(anchored), (
+            f"the newline guard must come BEFORE {anchored!r}: that guard "
+            f"anchors on the start of the value, so over a multiline value it "
+            f"validates only the first line. Body: {body!r}"
+        )
+
+
 def test_the_path_guards_do_not_refuse_a_legitimate_output_file():
     """Positive control — discrimination, not permissiveness (ledger L47).
 
@@ -1021,6 +1090,7 @@ NEEDS_PWSH = {
     "test_an_unset_output_file_fails_closed_too",
     "test_a_whitespace_output_file_fails_closed_too",
     "test_a_glob_metacharacter_in_output_file_is_refused",
+    "test_a_newline_in_output_file_is_refused",
     "test_an_absolute_or_drive_rooted_output_file_is_refused",
     "test_a_tilde_prefixed_output_file_is_refused",
     "test_a_dotdot_segment_in_output_file_is_refused",

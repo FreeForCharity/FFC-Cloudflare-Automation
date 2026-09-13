@@ -139,6 +139,36 @@ jobs:
           # None of the three forms has a legitimate use here: the declared
           # default is a relative path under `artifacts/`, as in every sibling
           # 2xx export.
+          # FIRST, and the other four depend on it. Raised by Copilot on #1308.
+          #
+          # `actions/upload-artifact` reads `path:` as a NEWLINE-DELIMITED LIST
+          # of patterns, so one input carrying a newline is several patterns to
+          # the second consumer while still being one string to this one. That
+          # is L298 again — different grammars — but it also breaks the guards
+          # below, which is why it has to come first rather than last.
+          #
+          # Measured on pwsh 7.4.6, against
+          # `artifacts/whmcs/x.csv<LF>C:/Users/runneradmin/.azure/msal_token_cache.json`:
+          #
+          #   rooted guard  `-match '^([A-Za-z]+:|[\\/])'`   -> False
+          #   tilde guard   `-match '^~'`                    -> False
+          #   glob guard    (unanchored)                     -> True
+          #   `..` guard    (splits the whole string)        -> True
+          #
+          # `^` anchors at the start of the STRING, not of each line, so the two
+          # anchored guards silently validate only the first line and a payload
+          # on the second goes straight past them. The two unanchored ones
+          # happen to scan the whole value. Nothing in the shape of those four
+          # checks tells you which kind you are reading — the anchor is one
+          # character and the difference is total.
+          #
+          # The remedy is to forbid the newline rather than to sprinkle `(?m)`:
+          # multiline mode would make each guard see every line, but it would
+          # still leave the value meaning ONE path here and SEVERAL there.
+          # A newline is never legitimate in a CSV filename.
+          if ($env:IN_OUTPUT_FILE -match '[\r\n]') {
+            throw "output_file contains a carriage return or newline. The 'Upload CSV artifact' step reads its path: as a newline-delimited list of patterns, so a newline here smuggles extra patterns past the checks below — which anchor on the start of the value and therefore only ever see its first line."
+          }
           if ($env:IN_OUTPUT_FILE -match '[*?\[\]]') {
             throw "output_file contains a glob metacharacter (one of * ? [ ]). It is passed unchanged to the 'Upload CSV artifact' step, whose path: is a glob selector, so a pattern can match files this export never wrote. Pass a plain relative path."
           }

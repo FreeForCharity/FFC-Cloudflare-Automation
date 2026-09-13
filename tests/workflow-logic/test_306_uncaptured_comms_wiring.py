@@ -81,7 +81,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, find_step, load_workflow  # noqa: E402
+from wf_extract import child_env, find_step, load_workflow, pwsh_invocation  # noqa: E402
 
 import importlib.util  # noqa: E402
 
@@ -594,6 +594,40 @@ def test_the_guard_no_longer_reports_this_workflow():
 # Cases that shell out to pwsh; everything else is a static assertion over the
 # workflow YAML and must run on a host that has no pwsh. A whole-module gate
 # here reported green having asserted nothing -- #1182, ledger L246.
+# The CALL SITE, per variable (#1306, ledger L294). Both variables are read by
+# fail-closed guards above the call, so `$env:X in body` is satisfied without
+# either value reaching the discovery script. Unlike the splatting lanes this
+# body passes them directly, across a backtick continuation — which is why the
+# assertion has to be made against the JOINED invocation statement rather than
+# against the single line carrying the script name.
+CALLEE = "discover-uncaptured-comms.ps1"
+CALL_SITE = {
+    "IN_MAILBOXES": "-Mailboxes $env:IN_MAILBOXES",
+    "IN_SINCE_DAYS": "-SinceDays $env:IN_SINCE_DAYS",
+}
+
+
+def test_each_input_reaches_the_CALL_SITE_and_not_merely_the_body():
+    """A direct call, so the argument must be on the invocation itself.
+
+    This is the strongest form of the check available in this repo: there is no
+    splat variable to indirect through, so the assertion names the exact
+    parameter/value pair the runner will execute. A body that guarded both
+    variables and then passed `-SinceDays 30` would be green under the assertion
+    above, and would silently ignore every `since_days` an operator dispatched —
+    on `m365-prod`, where the credential in reach makes the step worth getting
+    right.
+    """
+    body = _step().get("run", "")
+    invocation = pwsh_invocation(body, CALLEE)
+    for var, argument in CALL_SITE.items():
+        assert argument in invocation, (
+            f"the invocation of {CALLEE} must pass {argument!r}, or {var} is "
+            f"guarded and then discarded and the dispatcher's value reaches "
+            f"nothing. Invocation: {invocation!r}"
+        )
+
+
 NEEDS_PWSH = {
     "test_an_empty_mapping_fails_closed_and_says_which_one",
     "test_an_unset_mapping_fails_closed_and_says_which_one",

@@ -93,7 +93,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, find_step, load_workflow  # noqa: E402
+from wf_extract import child_env, find_step, load_workflow, pwsh_invocation  # noqa: E402
 
 _GUARD_PATH = (
     pathlib.Path(__file__).resolve().parents[2]
@@ -805,6 +805,40 @@ def test_the_guard_no_longer_reports_this_workflow():
         f"{WORKFLOW} was burned down but is still listed in KNOWN_UNGUARDED — a "
         f"stale entry, which the guard itself exits 1 on"
     )
+
+
+# The CALL SITE, per variable (#1306, ledger L294). Both variables are read by
+# their gated-append predicates, which is all `$env:X in body` above requires —
+# so it is green on a body that tests the dispatched value for emptiness and
+# then assigns a constant into the splat.
+SPLAT = "@params"
+CALL_SITE = {
+    "IN_CLIENT_ID": "$params.ClientId = $env:IN_CLIENT_ID",
+    "IN_EMAIL": "$params.Email = $env:IN_EMAIL",
+}
+
+
+def test_each_input_reaches_the_CALL_SITE_and_not_merely_the_body():
+    """Assert the whole assignment, not the key and the read separately.
+
+    This lane's remedy is a gated append — `if (-not IsNullOrWhiteSpace(...)) {
+    $params.ClientId = $env:IN_CLIENT_ID }` — so the variable is read on the `if`
+    line whatever the assignment does. Asserting the assignment verbatim is the
+    only spelling that fails when the right-hand side becomes a literal, because
+    every weaker fragment of it (`$params.ClientId`, `$env:IN_CLIENT_ID`) survives
+    that edit somewhere else in the body.
+    """
+    body = _step().get("run", "")
+    invocation = pwsh_invocation(body, CALLEE)
+    assert SPLAT in invocation, (
+        f"the invocation of {CALLEE} must splat {SPLAT}. Invocation: {invocation!r}"
+    )
+    for var, assignment in CALL_SITE.items():
+        assert assignment in body, (
+            f"{SPLAT} must be filled by {assignment!r}, or {var} is tested for "
+            f"emptiness and then thrown away — the populate runs against a value "
+            f"the dispatcher never supplied. Body: {body!r}"
+        )
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

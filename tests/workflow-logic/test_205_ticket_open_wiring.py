@@ -107,7 +107,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, find_step, load_workflow  # noqa: E402
+from wf_extract import child_env, find_step, load_workflow, pwsh_invocation  # noqa: E402
 
 _GUARD_PATH = (
     pathlib.Path(__file__).resolve().parents[2]
@@ -750,6 +750,41 @@ def test_the_guard_no_longer_reports_this_workflow():
         f"{WORKFLOW} was burned down but is still listed in KNOWN_UNGUARDED — a "
         f"stale entry, which the guard itself exits 1 on"
     )
+
+
+# The CALL SITE, per variable (#1306, ledger L294). Both mapped variables are
+# read by a guard before the argument list is built — `TICKET_DEPTID` by a
+# fail-closed `IsNullOrWhiteSpace`, `TICKET_CLIENT_ID` by the gated append's
+# predicate — so `$env:X in body` above is satisfied twice over by reads that
+# pass nothing to the callee.
+CALLEE = "whmcs-ticket-open.ps1"
+SPLAT = "@cliArgs"
+CALL_SITE = {
+    "TICKET_DEPTID": "'-DeptId', $env:TICKET_DEPTID",
+    "TICKET_CLIENT_ID": "$cliArgs += @('-ClientId', $env:TICKET_CLIENT_ID)",
+}
+
+
+def test_each_input_reaches_the_CALL_SITE_and_not_merely_the_body():
+    """The argument array, not the guard, is what reaches the ticket.
+
+    `TICKET_CLIENT_ID` is the instructive one: its read is a GATED APPEND, so the
+    variable is read in the `if` and could be appended as anything. A body that
+    tested `IsNullOrWhiteSpace($env:TICKET_CLIENT_ID)` and then appended
+    `@('-ClientId', '1')` would open every ticket against client 1 and satisfy
+    every other assertion in this module — the env: mapping is present, the
+    variable is read, nothing is interpolated.
+    """
+    body = _step().get("run", "")
+    invocation = pwsh_invocation(body, CALLEE)
+    assert SPLAT in invocation, (
+        f"the invocation of {CALLEE} must splat {SPLAT}. Invocation: {invocation!r}"
+    )
+    for var, element in CALL_SITE.items():
+        assert element in body, (
+            f"{SPLAT} must be built with {element!r}, or {var} is read by its "
+            f"guard and then discarded before the call. Body: {body!r}"
+        )
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

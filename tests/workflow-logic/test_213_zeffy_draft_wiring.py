@@ -70,7 +70,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, find_step, load_workflow  # noqa: E402
+from wf_extract import child_env, find_step, load_workflow, pwsh_invocation  # noqa: E402
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _GUARD_PATH = _REPO_ROOT / "scripts" / "check-workflow-input-interpolation.py"
@@ -703,6 +703,209 @@ def test_a_payload_in_an_optional_filter_is_inert_too():
     assert bound is not None and bound.startswith("2026-01-01$("), (
         f"the payload should have reached the callee verbatim; bound {bound!r}"
     )
+
+
+# The CALL SITE, per step and per variable (#1306, ledger L294). Every one of
+# these variables is read by the fail-closed guard or the gated-append predicate
+# that precedes its use, so `$env:{var}` is in the body before the argument list
+# is even built — the weak assertion cannot fail on any of the six steps. Read
+# as a table for the same reason SITES above is: a step that loses an argument
+# fails by name rather than by a whole-file grep.
+#
+# Each variable maps to (fragment, binding, on_invocation): the fragment that
+# BUILDS the argument, the assignment that connects the local to the env var,
+# and whether that fragment must appear on the invocation statement itself or in
+# the body that fills the splatted argument list. Both links are needed —
+# `'-OutputFile', $out` is equally true of an `$out` assigned from a literal —
+# and the location is data rather than a fallback on purpose: a locator that
+# tried the invocation and settled for the body would quietly accept exactly the
+# arguments this test exists to reject.
+#
+# Two rows are deliberately not argument spellings, and the reason is recorded
+# here rather than as a skip:
+#   * "Lookup invoices" consumes IN_TRANSACTIONS_OUTPUT by READING the CSV it
+#     names; the callee receives a temp file built from that CSV's contents, so
+#     the consuming statement is the Import-Csv, not the invocation.
+#   * "Validate Zeffy CSV headers" invokes no script at all. IN_ZEFFY_OUTPUT_XLSX
+#     is consumed by the enumeration that derives the .xlsx list from it.
+CALL_SITES = {
+    "Export clients": (
+        "whmcs-clients-export.ps1",
+        None,
+        {
+            "IN_CLIENTS_OUTPUT": (
+                "-OutputFile $out",
+                "$out = $env:IN_CLIENTS_OUTPUT",
+                True,
+            ),
+        },
+    ),
+    "Export transactions": (
+        "whmcs-transactions-export.ps1",
+        "@args",
+        {
+            "IN_TRANSACTIONS_OUTPUT": (
+                "'-OutputFile', $out",
+                "$out = $env:IN_TRANSACTIONS_OUTPUT",
+                False,
+            ),
+            "IN_MAX_ROWS": (
+                "$args += @('-MaxRows', $maxRows)",
+                "$maxRows = ([string]$env:IN_MAX_ROWS).Trim()",
+                False,
+            ),
+            "IN_START_DATE": (
+                "$args += @('-StartDate', $startDate)",
+                "$startDate = ([string]$env:IN_START_DATE).Trim()",
+                False,
+            ),
+            "IN_END_DATE": (
+                "$args += @('-EndDate', $endDate)",
+                "$endDate = ([string]$env:IN_END_DATE).Trim()",
+                False,
+            ),
+        },
+    ),
+    "Export invoices": (
+        "whmcs-invoices-export.ps1",
+        "@args",
+        {
+            "IN_INVOICES_OUTPUT": (
+                "'-OutputFile', $out",
+                "$out = $env:IN_INVOICES_OUTPUT",
+                False,
+            ),
+            "IN_START_DATE": (
+                "$args += @('-StartDate', $startDate)",
+                "$startDate = ([string]$env:IN_START_DATE).Trim()",
+                False,
+            ),
+            "IN_END_DATE": (
+                "$args += @('-EndDate', $endDate)",
+                "$endDate = ([string]$env:IN_END_DATE).Trim()",
+                False,
+            ),
+        },
+    ),
+    "Lookup invoices": (
+        "whmcs-invoices-lookup.ps1",
+        None,
+        {
+            "IN_TRANSACTIONS_OUTPUT": (
+                "Import-Csv -LiteralPath $txPath",
+                "$txPath = $env:IN_TRANSACTIONS_OUTPUT",
+                False,
+            ),
+        },
+    ),
+    "Generate Zeffy payments import draft": (
+        "zeffy-payments-import-draft.ps1",
+        "@genArgs",
+        {
+            "IN_CLIENTS_OUTPUT": (
+                "'-ClientsCsv', $clients",
+                "$clients = $env:IN_CLIENTS_OUTPUT",
+                False,
+            ),
+            "IN_TRANSACTIONS_OUTPUT": (
+                "'-TransactionsCsv', $tx",
+                "$tx = $env:IN_TRANSACTIONS_OUTPUT",
+                False,
+            ),
+            "IN_INVOICES_OUTPUT": (
+                "$genArgs += @('-InvoicesCsv', $invoices, '-IncludeZeroInvoices')",
+                "$invoices = $env:IN_INVOICES_OUTPUT",
+                False,
+            ),
+            "IN_ZEFFY_OUTPUT": (
+                "'-OutputFile', $out",
+                "$out = $env:IN_ZEFFY_OUTPUT",
+                False,
+            ),
+            "IN_ZEFFY_OUTPUT_XLSX": (
+                "'-XlsxOutputFile', $outXlsx",
+                "$outXlsx = $env:IN_ZEFFY_OUTPUT_XLSX",
+                False,
+            ),
+            "IN_MAX_ROWS_PER_FILE": (
+                "$genArgs += @('-MaxRowsPerFile', $maxRowsPerFile)",
+                "$maxRowsPerFile = ([string]$env:IN_MAX_ROWS_PER_FILE).Trim()",
+                False,
+            ),
+        },
+    ),
+    "Validate Zeffy CSV headers": (
+        None,
+        None,
+        {
+            "IN_ZEFFY_OUTPUT_XLSX": (
+                '"$xlsxBaseName-part*.xlsx"',
+                "$xlsxBase = $env:IN_ZEFFY_OUTPUT_XLSX",
+                False,
+            ),
+        },
+    ),
+}
+
+
+def test_the_call_site_table_covers_every_mapped_variable():
+    """CALL_SITES and SITES must not be able to disagree.
+
+    Without this, a step that gained a mapping would gain a wiring assertion and
+    no call-site assertion, and the gap would be invisible — which is how the
+    weak assertion survived twenty-three lanes in the first place.
+    """
+    for step_name, mappings in SITES.items():
+        assert step_name in CALL_SITES, (
+            f"{step_name!r} maps {sorted(mappings)} but has no CALL_SITES row — "
+            f"its variables are asserted to be READ and not to be PASSED"
+        )
+        _, _, covered = CALL_SITES[step_name]
+        assert set(covered) == set(mappings), (
+            f"{step_name!r}: SITES maps {sorted(mappings)} but CALL_SITES covers "
+            f"{sorted(covered)}"
+        )
+    extra = sorted(set(CALL_SITES) - set(SITES))
+    assert not extra, f"CALL_SITES has rows for steps SITES does not: {extra}"
+
+
+def test_every_variable_reaches_its_CALL_SITE_and_not_merely_its_body():
+    """Sixteen step/variable pairs, each asserted at the statement that uses it.
+
+    #1306's measurement is that a body reading a mapped variable more than once
+    hides a call-site deletion, because one of the reads is the guard. Every pair
+    here is in that state — this lane's remedy gave all nine inputs either a
+    fail-closed guard or a gated append — so on this module the existing wiring
+    assertion has no discriminating power whatever. Ledger L294.
+    """
+    for step_name, (callee, splat, mappings) in CALL_SITES.items():
+        body = _body(step_name)
+        invocation = None
+        if callee is not None:
+            invocation = pwsh_invocation(body, callee)
+            if splat is not None:
+                assert splat in invocation, (
+                    f"{step_name!r}: the invocation of {callee} must splat "
+                    f"{splat}, or these per-variable assertions are checking an "
+                    f"argument list nothing passes. Invocation: {invocation!r}"
+                )
+        for var, (fragment, binding, on_invocation) in mappings.items():
+            if on_invocation:
+                assert fragment in invocation, (
+                    f"{step_name!r}: the invocation must pass {fragment!r}, or "
+                    f"{var} is guarded and then discarded. "
+                    f"Invocation: {invocation!r}"
+                )
+            else:
+                assert fragment in body, (
+                    f"{step_name!r}: {fragment!r} must build the call, or {var} "
+                    f"is guarded and then discarded and the dispatcher's value "
+                    f"reaches nothing. Body: {body!r}"
+                )
+            assert binding in body, (
+                f"{step_name!r}: {binding!r} must be what fills that local, or "
+                f"the argument is decoupled from {var}. Body: {body!r}"
+            )
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

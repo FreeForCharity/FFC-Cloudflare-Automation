@@ -957,11 +957,45 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # `[ValidatePattern]` on both parameters could never have stopped a payload — it
     # runs after the injected expression, so its rejection message reads like a
     # control working on a run where the code had already executed.
-    "115-domain-transfer-preflight.yml": (
-        "issue_number",
-        "min_days_to_expiry",
-        "post_reg_lock_days",
-    ),
+    # 115-domain-transfer-preflight.yml burned down: `min_days_to_expiry` and
+    # `post_reg_lock_days` now reach the preflight pwsh body, and `issue_number` the
+    # `github-script` body, through step-level `env:`. It was the LAST entry holding
+    # a `github-script` body, and the only one whose inputs were all `type: number`.
+    #
+    # It is the lane that shows `number` is not a type at all for this purpose. The
+    # two pwsh sites sat UNQUOTED in argument position of a native call, where
+    # `$( )` expands, so no quote breakout was needed; measured on pwsh 7.4.6 with
+    # `min_days_to_expiry` = `$(Write-Host '…'; $null = Set-Content -Path <sentinel>
+    # -Value "token=$env:GITHUB_TOKEN"; 15)`: the payload ran, the runner
+    # environment reached the sentinel, the callee was still handed a legal
+    # `MinDaysToExpiry=[15]`, and the step exited 0.
+    #
+    # The `github-script` site is the one worth carrying forward, because it is a
+    # DIFFERENT shape from every pwsh lane before it. `Number('${{ … }}')` is
+    # single-quoted, so it needed a quote breakout and nothing else: measured on
+    # node with `719'); <payload>; Number('`, the payload ran with the step's
+    # authenticated Octokit (`permissions: issues: write`) and posted a comment of
+    # its own, the legitimate summary comment still posted afterwards, and the step
+    # exited 0. That is the only credential 115 ever had in reach, which is why
+    # #1188's variable-defined sweep — correctly — reported nothing for this file:
+    # an `actions/github-script` token is not a variable in anyone's `env:`.
+    #
+    # Both pwsh sites take the default-fill remedy rather than fail-closed (L254):
+    # each input DECLARES a default, so a blank is a request for that default.
+    #
+    # And here the guard closes a hole the REMEDY opens, which is the opposite of
+    # what 116 measured and worth not copying across. On the interpolated site both
+    # blank forms were loud — an empty value is no token at all, so the callee's
+    # binder refused with `Missing an argument for parameter 'MinDaysToExpiry'`,
+    # rc 1. Through `env:` the two forms SPLIT: unset still vanishes and is still
+    # loud, but EMPTY survives as an empty argument and `[int]''` coerces to **0**,
+    # so the step exits 0 having disabled the expiry floor and the ICANN 60-day
+    # lock — every expired or just-registered domain reported `ready`. Measured on
+    # pwsh 7.4.6 with the guard stripped.
+    #
+    # `issue_number` has no default and a blank IS routine there (the step's own
+    # `if:` skips it), so it gets a positive-integer check instead, which is newly
+    # reachable precisely because the payload now arrives as data.
     # 116-domain-transfer-epp-probe.yml burned down: `domain` now reaches the one
     # pwsh body through step-level `env:` (IN_DOMAIN), and the job-summary line that
     # re-interpolated it reads the local `$domain` instead. It runs on whmcs-prod

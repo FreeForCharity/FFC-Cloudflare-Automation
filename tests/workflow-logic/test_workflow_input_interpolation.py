@@ -353,6 +353,7 @@ BURNED_DOWN = (
     "224-whmcs-github-pages-product-alignment.yml",
     "601-wpmudev-export-sites.yml",
     "213-whmcs-zeffy-payments-import-draft.yml",
+    "115-domain-transfer-preflight.yml",
 )
 
 
@@ -725,11 +726,16 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     #
     # Both are now read lanes, so the "cannot both be retired by the same phase"
     # property above is gone with the phase that gave it. What replaces it is
-    # that they are retired by different WORK: 107 interpolates one input into
-    # one Cloudflare body, 115 three inputs including a `github-script` one.
+    # that they are retired by different WORK.
+    #
+    # That lane has now landed too: #1080 lane 22 burned down
+    # `115-domain-transfer-preflight.yml`, so the second slot is filled
+    # like-for-like by `218-whmcs-siteslist-reconciliation.yml` per the note
+    # above — 107 interpolates one input into one Cloudflare body, 218 three
+    # inputs into one WHMCS body, so no single lane retires both.
     for expected in (
         "107-audit-compliance.yml",
-        "115-domain-transfer-preflight.yml",
+        "218-whmcs-siteslist-reconciliation.yml",
     ):
         assert expected in current, (
             f"{expected} must be in the frozen set. If you have just burned it "

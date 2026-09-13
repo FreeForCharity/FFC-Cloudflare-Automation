@@ -1113,11 +1113,44 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     "215-whmcs-nonprofit-clients-metrics.yml": ("output_file",),
     "216-whmcs-activity-metrics.yml": ("charity_gids", "output_file"),
     "217-whmcs-client-fields-survey.yml": ("output_file", "throttle_ms"),
-    "218-whmcs-siteslist-reconciliation.yml": (
-        "cloudflare_pid",
-        "github_pages_pid",
-        "output_file",
-    ),
+    # 218-whmcs-siteslist-reconciliation.yml burned down (#1080 lane 23): all three
+    # of its free-text inputs now reach the one `whmcs-prod-read` pwsh body through
+    # step-level `env:`.
+    #
+    # It is the lane that shows the two quoting shapes side by side in ONE body, and
+    # that the difference decides how the payload is written, not whether it runs.
+    # Measured on pwsh 7.4.6 against the body as it shipped, each at exit 0 with the
+    # legitimate call still made and a decoy credential written to a sentinel:
+    #
+    #   `$out = "${{ inputs.output_file }}"`        DOUBLE-quoted, so `$( )` expands
+    #                                              in place -- no breakout needed.
+    #   `-CloudflareProductPid '${{ ... }}'`        SINGLE-quoted, so a breakout is
+    #   `-GithubPagesProductPid '${{ ... }}'`       needed, and is all that is needed
+    #                                              (`40'; <payload>; #`).
+    #
+    # The trailing-argument site is the cheapest of the three: the legitimate call
+    # completes with all four arguments BEFORE the payload runs, so `$LASTEXITCODE`
+    # and the step's own `Test-Path` check both pass and the run is indistinguishable
+    # from an ordinary one.
+    #
+    # Its blank story is a THIRD case, distinct from both L260 and L291, and the
+    # distinction is what a later lane should copy rather than the remedy's shape.
+    # 116 (L260) recorded its guard as attribution because the blank was already loud
+    # in both forms; 115 (L291) found the hazard CREATED by the move to `env:`,
+    # because its sites were unquoted and an empty value was no argument at all. Here
+    # both pid sites were already single-quoted, so a blank was already an argument
+    # that is present and empty -- the hole is real, silent (`CfPid=[]` at exit 0,
+    # and `.Contains('')` is false for every client, so the artifact becomes a
+    # maximal FALSE Phase 2 work-list), and PRE-EXISTING. The default-fill guard is
+    # load-bearing, and it fixes a defect the interpolation was hiding rather than
+    # one the remedy introduced.
+    #
+    # `output_file` deliberately does NOT take the same default-fill: the artifact
+    # step's `path:` consumes the same raw input, so a body-side default would
+    # desync the two consumers. It fails closed instead, which preserves the shipped
+    # behaviour (a blank already exited 1 at `Test-Path`) with a message that names
+    # the cause. That `path:` is not a script body, this guard correctly does not
+    # judge it, and the lane did not widen to cover it.
     "220-whmcs-served-metrics.yml": ("charity_gids", "output_file"),
     # 222-whmcs-product-alignment.yml and
     # 224-whmcs-github-pages-product-alignment.yml burned down together: they are

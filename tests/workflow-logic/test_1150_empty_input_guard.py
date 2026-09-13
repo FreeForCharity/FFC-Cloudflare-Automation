@@ -94,11 +94,24 @@ CONVERTED_1148 = [
     ("802-candid-essentials-search.yml", "essentials_search", "Essentials search", "INPUT_SEARCH_TERMS"),
 ]
 
-# 221's step also references WHMCS_API_URL, guarded, and is deliberately NOT in
-# the list above: #1146's table covers that step under `QUERY`. So the scan sees
-# 18 references across these 14 workflows and 17 of them are #1148's — the
-# difference is accounted for rather than absorbed by a >= assertion.
-EXTRA_GUARDED_IN_THE_SAME_STEPS = 1
+# Guarded references the scan sees inside these same steps that the #1148 table
+# above deliberately does not list. Counted rather than absorbed by a `>=`, so a
+# new UNGUARDED reference in an already-converted workflow cannot hide behind
+# "all 17 present and guarded" — which is why this number has to be maintained.
+#
+#   1  221's step also references WHMCS_API_URL, guarded. #1146's table covers
+#      that step under `QUERY`.
+#   2  218's `cloudflare_pid` / `github_pages_pid`, converted by #1080 lane 23
+#      and guarded by the same step's default-fill. A #1080 burn-down lands a
+#      value in `env:` and then reads it as a direct argument, which is exactly
+#      the shape this guard scans — so every remaining lane over a 1xx/2xx/8xx
+#      workflow in the table above will add to this count too.
+#
+# So the scan sees 20 references across these 14 workflows and 17 of them are
+# #1148's. If you are burning down one of these workflows and this assertion
+# fails, the fix is to add your guarded sites here with a line saying which
+# issue converted them — never to relax the equality.
+EXTRA_GUARDED_IN_THE_SAME_STEPS = 3
 
 # The two sites a form-blind matcher flags and this guard must not (#1150
 # criterion 3): both invoke through the PowerShell binder, so an empty value

@@ -1076,7 +1076,33 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # break-out, so the WHMCS secret exfiltrated and the legitimate call still ran
     # at exit 0. `priority` (choice) and `dry_run` (boolean) stay interpolated:
     # GitHub constrains both, so neither can carry a payload.
-    "208-whmcs-tickets-export.yml": ("output_file", "status"),
+    # 208-whmcs-tickets-export.yml burned down (#1080 lane 24): `output_file` and
+    # `status` now reach the single pwsh body through step-level `env:`
+    # (IN_OUTPUT_FILE / IN_STATUS). It is the first entry whose THREE call sites
+    # carried two different quoting shapes with the SAME text substituted twice
+    # on one line, and the pair is worth recording because the two halves needed
+    # opposite payloads:
+    #
+    #   `$out = "<interpolation>"`  DOUBLE quoted, so `$( )` expands and no quote
+    #                              breakout is needed — the 116/702 shape.
+    #   `'<interpolation>'` x2      SINGLE quoted, so `$( )` is inert; the payload
+    #                              closed the call and the `if`, ran, re-supplied
+    #                              the legitimate `-Status` append, then commented
+    #                              out the rest of the line — which is where the
+    #                              second occurrence lived. A payload that only
+    #                              broke out of the first quote would leave the
+    #                              second occurrence dangling and fail loudly,
+    #                              which is the one thing an injection must not do.
+    #
+    # Measured on pwsh 7.4.6 against the body as it shipped, decoy WHMCS
+    # credential in the environment: both payloads exfiltrated it, the callee
+    # bound arguments byte-identical to the control, and the step exited 0. The
+    # job enters `whmcs-prod-read`, so the credential in reach is the one
+    # `whmcs-secrets-from-kv` exports through GITHUB_ENV plus the `az` session it
+    # leaves on disk (#1188/#1208) — nothing a reader of this step's own `env:`
+    # would see. `output_file`'s blank guard closes a PRE-EXISTING silent case
+    # (all-whitespace bound `OutputFile=[   ]` at rc 0 in both bodies), not one
+    # the remedy created; ledger L292's QUOTED case.
     # 213-whmcs-zeffy-payments-import-draft.yml burned down (#1080 lane 21): all
     # NINE free-text inputs now reach all six script bodies through step-level
     # `env:`. It was the widest entry in the freeze -- nine inputs, 21 references,

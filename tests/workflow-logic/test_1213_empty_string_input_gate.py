@@ -365,9 +365,25 @@ def test_the_scan_sees_real_workflows():
 # --- the real tree, and reverting the real sites ---------------------------
 
 FIXED_SITES = {
+    # 208's gate now reads `$env:` rather than an interpolated input: #1080 lane
+    # 24 moved both of its free-text inputs into step-level `env:` (IN_OUTPUT_FILE
+    # / IN_STATUS). The mutation follows the spelling, which is the point of this
+    # guard covering BOTH forms — and as with 229, the move WIDENS what `-ne ''`
+    # gets wrong: an omitted input reached the interpolated body as the empty
+    # string between two quotes and reaches this one as `$null`, which `-ne ''`
+    # scores as non-empty. Measured on pwsh 7.4.6 in
+    # test_208_tickets_export_wiring.py: blank, whitespace and unset all bind
+    # `Status=[]` under the shipped predicate.
+    #
+    # The same lane ADDED a second gate to this workflow — the fail-closed
+    # `output_file` check — so this entry grew from one row to two. Both are
+    # listed rather than only the pre-existing one: a gate this guard cannot see
+    # is a gate no mutation can prove is load-bearing.
     "208-whmcs-tickets-export.yml": [
-        ("-not [string]::IsNullOrWhiteSpace('${{ inputs.status }}')",
-         "'${{ inputs.status }}' -ne ''"),
+        ("-not [string]::IsNullOrWhiteSpace($env:IN_STATUS)",
+         "$env:IN_STATUS -ne ''"),
+        ("[string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)",
+         "$env:IN_OUTPUT_FILE -eq ''"),
     ],
     # 229's two gates now read `$env:` rather than an interpolated input: the
     # #1080 lane that burned the workflow down moved both values into step-level

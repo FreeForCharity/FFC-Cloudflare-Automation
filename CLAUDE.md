@@ -1446,3 +1446,22 @@ export AZURE_CONFIG_DIR="$PWD/azconfig"
   goes back to the `secrets.*` form against an environment that does not carry copies.
 - **No write API:** the annual Candid Platinum profile update stays a manual web form — the
   paste-sheet automation is issue #493.
+
+## `MSYS_NO_PATHCONV=1` also breaks `/c/...` paths on the same command line (validated 2026-09-13, Conductor run 164)
+
+The earlier section prescribes `MSYS_NO_PATHCONV=1` for a `rev:.github/…` argument. That prefix
+switches off **all** MSYS argument conversion, including the `/c/` → `C:/` rewrite that lets native
+`git` find a git-bash path. Reverting an edit in a scratch worktree, run 164 ran
+`MSYS_NO_PATHCONV=1 git -C /c/…/wt164-1297 checkout -- .claude/hooks/test_hooks.py` and got
+`fatal: cannot change to '/c/…/wt164-1297': No such file or directory`. The directory existed, and
+the same command without the prefix had just worked there. One call both fixed the `.github/…`
+argument and broke the `-C` argument, so the error named a path that exists.
+
+Whenever the prefix is set, write every path as `C:/…`:
+
+```bash
+MSYS_NO_PATHCONV=1 git -C C:/…/wt164-1297 checkout -- .claude/hooks/test_hooks.py
+```
+
+This section is appended at the end on purpose. `docs/lessons-ledger.md` cites `CLAUDE.md` by line
+number, and inserting it beside the earlier note shifted a cited line (L147) onto a blank one.

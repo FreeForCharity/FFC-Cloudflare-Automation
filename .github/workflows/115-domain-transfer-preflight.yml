@@ -91,9 +91,66 @@ jobs:
 
       - name: Run transfer-readiness preflight (offline)
         shell: pwsh
+        env:
+          # #1080 lane 22. Both free-text dispatch inputs this step consumes now
+          # arrive through a step-level `env:` mapping instead of being pasted
+          # into the body by `${{ }}`, which GitHub substitutes as raw text
+          # BEFORE pwsh parses the line — so the value was parsed as code.
+          #
+          # `type: number` is NOT a constraint. GitHub validates `boolean` and
+          # `choice` against a value it generated itself and validates nothing
+          # else, so a `number` input carries arbitrary text to the same place a
+          # `string` one does. That is the whole reason 115 was in the freeze and
+          # absent from #1080's own string-only table.
+          #
+          # These two sites sat UNQUOTED, in argument position of a native call,
+          # where `$( )` expands — so no quote breakout was needed. Measured on
+          # pwsh 7.4.6 against the body as it shipped, with `min_days_to_expiry` =
+          # `$(Write-Host '…'; $null = Set-Content -Path <sentinel> -Value "token=$env:GITHUB_TOKEN"; 15)`:
+          # the payload ran, the runner environment was written to the sentinel,
+          # the callee was STILL handed a legal `MinDaysToExpiry=[15]`, and the
+          # step exited **0**. `$null =` swallows the subexpression's output, so
+          # the argument keeps its legal value and the log reads as an ordinary
+          # run. The benign control leaked nothing.
+          IN_MIN_DAYS_TO_EXPIRY: ${{ inputs.min_days_to_expiry }}
+          IN_POST_REG_LOCK_DAYS: ${{ inputs.post_reg_lock_days }}
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path artifacts/transfer/runbooks | Out-Null
+
+          # Default-fill, not fail-closed (ledger L254). Both inputs DECLARE a
+          # default in `on.workflow_dispatch.inputs`, so the workflow has already
+          # answered what an absent value means; a dispatch that blanks one is
+          # asking for that default, not for an error.
+          #
+          # It is NOT only cosmetic, and the reason is not L214's argument-shift.
+          # Measured on pwsh 7.4.6, guard stripped, against the two blank forms —
+          # they behave DIFFERENTLY, and the quiet one is the hazard:
+          #
+          #   UNSET  ($null)  the reference vanishes from the argument list, the
+          #                   callee's binder refuses: "Missing an argument for
+          #                   parameter 'MinDaysToExpiry'". rc 1. LOUD.
+          #   EMPTY  ('')     the reference survives as an empty argument, and
+          #                   `[int]''` coerces to **0**. The callee is invoked
+          #                   with MinDaysToExpiry=0 / PostRegLockDays=0 and the
+          #                   step exits **0**. SILENT — and those two zeros turn
+          #                   off the expiry floor and the ICANN 60-day
+          #                   post-registration lock, so already-expired and
+          #                   just-registered domains are reported `ready`.
+          #
+          # That hole is introduced BY the remedy: on the old interpolated site an
+          # empty value was no token at all, so both blank forms died at the
+          # binder (rc 1, same message — measured). Moving the value into `env:`
+          # is what turns "argument absent" into "argument present and empty",
+          # which is the form `[int]` silently accepts. So this guard is
+          # load-bearing, not decoration, and a lane that copies the shape
+          # without it ships a quieter workflow than the one it replaced.
+          if ([string]::IsNullOrWhiteSpace($env:IN_MIN_DAYS_TO_EXPIRY)) {
+            $env:IN_MIN_DAYS_TO_EXPIRY = '15'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:IN_POST_REG_LOCK_DAYS)) {
+            $env:IN_POST_REG_LOCK_DAYS = '60'
+          }
 
           $ErrorActionPreference = 'Continue'
           $out = & pwsh -NoProfile -File .\scripts\domain-transfer-preflight.ps1 `
@@ -101,8 +158,8 @@ jobs:
             -CloudflareZonesCsv artifacts/transfer/cf_zones.csv `
             -OutputFile artifacts/transfer/domain_transfer_preflight.csv `
             -RunbookDir artifacts/transfer/runbooks `
-            -MinDaysToExpiry ${{ inputs.min_days_to_expiry }} `
-            -PostRegLockDays ${{ inputs.post_reg_lock_days }}
+            -MinDaysToExpiry $env:IN_MIN_DAYS_TO_EXPIRY `
+            -PostRegLockDays $env:IN_POST_REG_LOCK_DAYS
           $exit = $LASTEXITCODE
           $ErrorActionPreference = 'Stop'
           if ($exit -ne 0) { throw "domain-transfer-preflight.ps1 failed (exit $exit)." }
@@ -248,10 +305,42 @@ jobs:
       - name: Comment summary back to issue
         if: ${{ inputs.issue_number != '' && inputs.issue_number != 0 }}
         uses: actions/github-script@v9
+        env:
+          # #1080 lane 22 — the only `github-script` body left in the freeze, and
+          # the one call site here that reaches a credential. The shipped
+          # spelling was `Number('${{ inputs.issue_number }}')`: SINGLE-quoted,
+          # so unlike the pwsh sites above this one needed a quote breakout, and
+          # a quote breakout is all it needed.
+          #
+          # Measured on node against the body as it shipped, with `issue_number`
+          # = `719'); <payload>; Number('`: the payload ran with this step's
+          # authenticated Octokit — `permissions: issues: write` at workflow
+          # level — and posted a comment of its own choosing, the runner
+          # environment was written to a sentinel, the LEGITIMATE summary comment
+          # still posted to 719 afterwards, and the step exited **0**. Nothing in
+          # the run distinguishes it from an ordinary one.
+          #
+          # `if:` above still gates on the raw expression, which is correct: an
+          # expression context is not a script body, and GitHub compares values
+          # there rather than substituting text.
+          IN_ISSUE_NUMBER: ${{ inputs.issue_number }}
         with:
           script: |
             const fs = require('fs');
-            const issueNumber = Number('${{ inputs.issue_number }}');
+            // `process.env`, never an expression pasted into this body: the
+            // value arrives as data, so a payload that used to execute now
+            // lands as an ordinary string.
+            // That makes the non-numeric case newly REACHABLE rather than
+            // impossible, so it is checked here instead of being handed to the
+            // API as `NaN`, which fails with a message about the request.
+            const issueNumber = Number(process.env.IN_ISSUE_NUMBER);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed(
+                `IN_ISSUE_NUMBER is not a positive integer: ${JSON.stringify(process.env.IN_ISSUE_NUMBER)}. ` +
+                  'The step-level env: mapping is missing or misnamed, or the dispatch supplied a non-numeric issue_number.'
+              );
+              return;
+            }
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             let table = '';
             try {

@@ -152,9 +152,39 @@ BREAKOUT_PAYLOAD = (
     "$cliArgs += @('-Status','" + LEGAL_STATUS + "'); #"
 )
 
-# The one emptiness guard the pre-fix control strips, with the literal that ends
-# its block so the strip can find the closing brace without a bare `.index`.
-GUARD_BLOCK = ("if ([string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)) {", "throw")
+# The guards the pre-fix control strips, each with the literal that ends its
+# block so the strip can find the closing brace without a bare `.index`.
+#
+# All four are `output_file`'s and all four are this lane's, so all four come
+# out for the pre-fix body: one emptiness guard, and the three path guards added
+# for the Copilot finding on #1308.
+#
+# The END LITERAL is each guard's own message fragment, not the bare word
+# `throw`. It was `throw` while the emptiness guard was the only one, and the
+# moment the path guards landed that made `test_the_guard_anchor…` stop
+# discriminating: it asserted no `throw` survived the strip, which a correct
+# strip of one guard out of four can no longer satisfy. The control failed
+# loudly and correctly rather than going quietly permissive — but the shape is
+# worth naming, because an end-anchor shared by several blocks silently stops
+# identifying any one of them.
+GUARD_BLOCKS = (
+    (
+        "if ([string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)) {",
+        "output_file is blank.",
+    ),
+    (
+        r"if ($env:IN_OUTPUT_FILE -match '[*?\[\]]') {",
+        "glob metacharacter",
+    ),
+    (
+        r"if ($env:IN_OUTPUT_FILE -match '^([A-Za-z]:|[\\/])') {",
+        "workspace-relative",
+    ),
+    (
+        r"if (($env:IN_OUTPUT_FILE -split '[\\/]') -contains '..') {",
+        "'..' segment",
+    ),
+)
 
 # The shipped spellings the pre-fix control rewrites, and what each becomes when
 # GitHub pastes the value in as raw text instead.
@@ -222,12 +252,12 @@ def _interpolated_inputs(body: str) -> set:
     return found
 
 
-def _strip_guard(body: str) -> str:
-    """Remove the fail-closed guard, asserting it was there first.
+def _strip_guards(body: str) -> str:
+    """Remove all four `output_file` guards, asserting each was there first.
 
-    The count is asserted BEFORE substituting (ledger L47): an anchor that
-    stopped matching must fail loudly rather than silently leave the body
-    unchanged and score the control as a pass.
+    Counts are asserted BEFORE substituting (ledger L47): an anchor that stopped
+    matching must fail loudly rather than silently leave the body unchanged and
+    score the control as a pass.
 
     Every lookup is guarded by an assertion rather than a bare `str.index`. A
     ValueError here is not an AssertionError, so the module runner would not
@@ -235,31 +265,35 @@ def _strip_guard(body: str) -> str:
     would report no outcome at all, which a reviewer counting FAIL lines scores
     as passing (ledger L194).
     """
-    anchor, terminator = GUARD_BLOCK
-    assert body.count(anchor) == 1, (
-        f"expected exactly one {anchor!r} to strip, found {body.count(anchor)} — "
-        f"this control would otherwise measure an unmodified body. Body: {body!r}"
-    )
-    start = body.index(anchor)
-    assert terminator in body[start:], (
-        f"the guard at {anchor!r} no longer contains {terminator!r}, so this "
-        f"control cannot locate its end. Body: {body!r}"
-    )
-    end = body.index("}", body.index(terminator, start)) + 1
-    stripped = body[:start] + body[end:]
-    # Count the ANCHOR, not the bare call name: the step body explains the guard
-    # in comments directly above it, so an `"IsNullOrWhiteSpace" not in body`
-    # check would fail on the PROSE describing the thing it looks for and report
-    # the control as broken over a correct strip (#1019).
-    assert anchor not in stripped, (
-        f"the guard survived the strip, so the control is measuring the guarded "
-        f"body. Stripped: {stripped!r}"
-    )
-    assert CALLEE in stripped, (
+    for anchor, terminator in GUARD_BLOCKS:
+        assert body.count(anchor) == 1, (
+            f"expected exactly one {anchor!r} to strip, found "
+            f"{body.count(anchor)} — this control would otherwise measure an "
+            f"unmodified body. Body: {body!r}"
+        )
+        start = body.index(anchor)
+        assert terminator in body[start:], (
+            f"the guard at {anchor!r} no longer contains {terminator!r}, so "
+            f"this control cannot locate its end. Body: {body!r}"
+        )
+        end = body.index("}", body.index(terminator, start)) + 1
+        body = body[:start] + body[end:]
+    # Count the ANCHOR, not the bare call name: the step body explains each
+    # guard in comments directly above it, so an `"IsNullOrWhiteSpace" not in
+    # body` check would fail on the PROSE describing the thing it looks for and
+    # report the control as broken over a correct strip (#1019). For the same
+    # reason the message fragments are checked inside the remaining CODE only —
+    # the comments quote them too.
+    for anchor, _ in GUARD_BLOCKS:
+        assert anchor not in body, (
+            f"a guard survived the strip, so the control is measuring the "
+            f"guarded body. Stripped: {body!r}"
+        )
+    assert CALLEE in body, (
         f"the strip removed the invocation itself, so the control proves "
-        f"nothing. Stripped: {stripped!r}"
+        f"nothing. Stripped: {body!r}"
     )
-    return stripped
+    return body
 
 
 def _pre_fix(output_file: str, status: str) -> str:
@@ -273,7 +307,7 @@ def _pre_fix(output_file: str, status: str) -> str:
 
     Each anchor's count is asserted before substituting (ledger L47).
     """
-    body = _strip_guard(_body())
+    body = _strip_guards(_body())
     for shipped, template in PRE_FIX_SITES:
         assert body.count(shipped) == 1, (
             f"expected exactly one {shipped!r} to rewrite, found "
@@ -477,10 +511,12 @@ def test_output_file_fails_closed_because_the_artifact_step_shares_the_input():
         f"leaving the body's comment asserting a coupling that is gone"
     )
     body = _body()
-    assert GUARD_BLOCK[0] in body, (
-        f"the fail-closed guard is gone from the body while the second consumer "
-        f"remains. Body: {body!r}"
-    )
+    for anchor, _ in GUARD_BLOCKS:
+        assert anchor in body, (
+            f"the guard {anchor!r} is gone from the body while the second "
+            f"consumer remains. All four exist because this input reaches a "
+            f"glob-capable `path:` as well as this script. Body: {body!r}"
+        )
 
 
 def test_the_job_still_enters_only_a_read_environment():
@@ -505,26 +541,37 @@ def test_the_job_still_enters_only_a_read_environment():
 def test_the_guard_anchor_this_module_strips_is_really_in_the_body():
     """Ledger L47: prove the pre-fix control can still find what it removes.
 
-    Without this, a refactor that renamed the guard would make `_strip_guard`
+    Without this, a refactor that renamed a guard would make `_strip_guards`
     fail — but only inside the pwsh-gated cases, which SKIP on a host with no
     pwsh. The control would then be silently unexercised on exactly the hosts
     that cannot notice.
     """
     body = _body()
-    anchor, terminator = GUARD_BLOCK
-    assert body.count(anchor) == 1, (
-        f"the pre-fix control's guard anchor {anchor!r} appears "
-        f"{body.count(anchor)} times. Body: {body!r}"
-    )
+    for anchor, _ in GUARD_BLOCKS:
+        assert body.count(anchor) == 1, (
+            f"the pre-fix control's guard anchor {anchor!r} appears "
+            f"{body.count(anchor)} times. Body: {body!r}"
+        )
     for shipped, _ in PRE_FIX_SITES:
         assert body.count(shipped) == 1, (
             f"the pre-fix control rewrites {shipped!r}, which appears "
             f"{body.count(shipped)} times. Body: {body!r}"
         )
-    stripped = _strip_guard(body)
-    assert terminator not in stripped.split(CALLEE)[0], (
-        f"the strip left the guard's throw behind. Stripped: {stripped!r}"
-    )
+    stripped = _strip_guards(body)
+    # Each guard's own message, not the shared word `throw`: four blocks end in
+    # `throw`, so that anchor stopped identifying any one of them the moment the
+    # path guards landed. Checked against the CODE before the invocation only —
+    # the comments above each guard quote these fragments too.
+    code = stripped.split(CALLEE)[0]
+    for _, message in GUARD_BLOCKS:
+        surviving = [
+            line for line in code.splitlines()
+            if message in line and not line.lstrip().startswith("#")
+        ]
+        assert not surviving, (
+            f"the strip left {message!r} behind in executable code: "
+            f"{surviving!r}"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -632,7 +679,7 @@ def test_without_the_guard_a_whitespace_output_file_binds_whitespace_at_exit_zer
     doing the work rather than the move to `env:` having fixed it incidentally.
     """
     test_both_inputs_travel_in_env_and_are_not_interpolated()
-    out, _stolen, rc = _run(_strip_guard(_body()), IN_OUTPUT_FILE="   ", IN_STATUS="")
+    out, _stolen, rc = _run(_strip_guards(_body()), IN_OUTPUT_FILE="   ", IN_STATUS="")
     assert rc == 0, (
         f"the guard-stripped body should accept a whitespace path silently, or "
         f"the guard is not what makes the shipped body refuse it; rc={rc}. "
@@ -738,6 +785,140 @@ def test_a_whitespace_output_file_fails_closed_too():
     )
 
 
+def test_a_glob_metacharacter_in_output_file_is_refused():
+    """Raised by Copilot on #1308: the upload step's `path:` is a glob SELECTOR.
+
+    `[` and `]` are the case that matters, and the reason this is not covered by
+    "a bad path fails the export anyway": `*` and `?` are illegal in a Windows
+    filename so they self-block, while `[` and `]` are legal there AND are
+    character-class metacharacters to `@actions/glob`. All four are asserted, so
+    a future narrowing to only the self-blocking pair fails here.
+    """
+    test_both_inputs_travel_in_env_and_are_not_interpolated()
+    for payload in (
+        "artifacts/whmcs/*.csv",
+        "artifacts/whmcs/tickets?.csv",
+        "artifacts/whmcs/[m]sal_token_cache.json",
+        "artifacts/whmcs/x].csv",
+    ):
+        out, _stolen, rc = _run(_body(), IN_OUTPUT_FILE=payload, IN_STATUS="")
+        assert rc != 0, (
+            f"output_file {payload!r} carries a glob metacharacter and must be "
+            f"refused; rc={rc}. Output: {out!r}"
+        )
+        assert "glob metacharacter" in out, (
+            f"the step exited non-zero without naming the cause, so this cannot "
+            f"be told apart from a broken harness (CLAUDE.md). Output: {out!r}"
+        )
+        assert _bound(out) == "", (
+            f"the callee ran despite the glob. Bound: {_bound(out)!r}"
+        )
+
+
+def test_an_absolute_or_drive_rooted_output_file_is_refused():
+    """Needs no glob at all — the upload uploads whatever its path: resolves to.
+
+    The Windows spellings are asserted from a Linux test host on purpose: the
+    guard is an explicit regex rather than `IsPathRooted` precisely so that the
+    host running the assertion and the host running the job agree. If this is
+    ever rewritten to a platform-dependent API, `C:/…` and `\\\\server\\share`
+    stop being refused here while still reaching the runner.
+    """
+    test_both_inputs_travel_in_env_and_are_not_interpolated()
+    for payload in (
+        "/etc/passwd",
+        "C:/Users/runneradmin/.azure/msal_token_cache.json",
+        "C:\\Users\\runneradmin\\.azure\\accessTokens.json",
+        "\\\\server\\share\\x.csv",
+        "/home/runner/.azure/x.csv",
+    ):
+        out, _stolen, rc = _run(_body(), IN_OUTPUT_FILE=payload, IN_STATUS="")
+        assert rc != 0, (
+            f"output_file {payload!r} is absolute/rooted and must be refused; "
+            f"rc={rc}. Output: {out!r}"
+        )
+        assert "workspace-relative" in out, (
+            f"the step exited non-zero without naming the cause. Output: {out!r}"
+        )
+        assert _bound(out) == "", (
+            f"the callee ran despite the absolute path. Bound: {_bound(out)!r}"
+        )
+
+
+def test_a_dotdot_segment_in_output_file_is_refused():
+    """Both separators, because the job runs on Windows and the test on Linux."""
+    test_both_inputs_travel_in_env_and_are_not_interpolated()
+    for payload in (
+        "../../../home/runner/.azure/x.csv",
+        "artifacts/../../x.csv",
+        "artifacts\\..\\..\\x.csv",
+    ):
+        out, _stolen, rc = _run(_body(), IN_OUTPUT_FILE=payload, IN_STATUS="")
+        assert rc != 0, (
+            f"output_file {payload!r} escapes the workspace and must be "
+            f"refused; rc={rc}. Output: {out!r}"
+        )
+        assert "'..' segment" in out, (
+            f"the step exited non-zero without naming the cause. Output: {out!r}"
+        )
+        assert _bound(out) == "", (
+            f"the callee ran despite the '..'. Bound: {_bound(out)!r}"
+        )
+
+
+def test_the_path_guards_do_not_refuse_a_legitimate_output_file():
+    """Positive control — discrimination, not permissiveness (ledger L47).
+
+    Three guards that reject everything would satisfy every case above. These
+    are the shapes an ordinary dispatch uses, including the declared default and
+    a name containing a dot-segment that is NOT `..`, which a naive
+    `contains '..'` substring test would reject.
+    """
+    test_both_inputs_travel_in_env_and_are_not_interpolated()
+    for payload in (
+        LEGAL_OUT,
+        "whmcs_tickets.csv",
+        "artifacts/whmcs/2026-09-13.tickets.csv",
+        "artifacts/whmcs/sub/dir/tickets.csv",
+        "artifacts\\whmcs\\tickets.csv",
+    ):
+        out, _stolen, rc = _run(_body(), IN_OUTPUT_FILE=payload, IN_STATUS="")
+        assert rc == 0, (
+            f"output_file {payload!r} is a legitimate relative path and must be "
+            f"accepted; rc={rc}. Output: {out!r}"
+        )
+        assert _bound(out).endswith(f"Out=[{payload}]"), (
+            f"the legitimate path must reach the callee unchanged. "
+            f"Bound: {_bound(out)!r}"
+        )
+
+
+def test_the_declared_default_survives_its_own_guards():
+    """The guards must not reject the value GitHub supplies when nobody types one.
+
+    Read from `on.workflow_dispatch.inputs` rather than written down again: a
+    default that the body refuses is a workflow that fails on every ordinary
+    dispatch, and nothing else in this module would notice, because every other
+    case passes its own literal.
+    """
+    workflow = _workflow()
+    on = workflow.get(True, workflow.get("on"))
+    assert isinstance(on, dict), f"{WORKFLOW} has no readable `on:` block"
+    spec = (on.get("workflow_dispatch") or {}).get("inputs", {}).get("output_file")
+    assert isinstance(spec, dict), f"output_file has no readable spec: {spec!r}"
+    declared = spec.get("default")
+    assert isinstance(declared, str) and declared, (
+        f"output_file no longer declares a default ({declared!r}); the "
+        f"fail-closed guard's message tells a dispatcher to omit the input to "
+        f"get one, so that advice would now be wrong"
+    )
+    out, _stolen, rc = _run(_body(), IN_OUTPUT_FILE=declared, IN_STATUS="")
+    assert rc == 0, (
+        f"the declared default {declared!r} is refused by this step's own "
+        f"guards; rc={rc}. Output: {out!r}"
+    )
+
+
 def test_a_blank_status_adds_no_filter():
     """Blank `status` means "all tickets" — documented behaviour, not an error."""
     test_both_inputs_travel_in_env_and_are_not_interpolated()
@@ -794,6 +975,11 @@ NEEDS_PWSH = {
     "test_a_blank_output_file_fails_closed_and_never_calls_the_script",
     "test_an_unset_output_file_fails_closed_too",
     "test_a_whitespace_output_file_fails_closed_too",
+    "test_a_glob_metacharacter_in_output_file_is_refused",
+    "test_an_absolute_or_drive_rooted_output_file_is_refused",
+    "test_a_dotdot_segment_in_output_file_is_refused",
+    "test_the_path_guards_do_not_refuse_a_legitimate_output_file",
+    "test_the_declared_default_survives_its_own_guards",
     "test_a_blank_status_adds_no_filter",
     "test_an_unset_status_adds_no_filter",
     "test_a_whitespace_status_adds_no_filter",

@@ -101,6 +101,54 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)) {
             throw "output_file is blank. It is consumed BOTH here and by the 'Upload CSV artifact' step's path:, so this step does not substitute a default — re-dispatch with a path, or omit the input to get its declared default."
           }
+
+          # The other half of the same two-consumer coupling, and a different
+          # hazard from the blank case above. Raised by Copilot on #1308.
+          #
+          # The upload step receives output_file RAW, and its `path:` is a
+          # glob-capable SELECTOR (`@actions/glob`), not a filename. So the
+          # junior consumer can be pointed at files the senior one never wrote —
+          # and this job holds the WHMCS credential that does not appear in this
+          # step's `env:` plus the `az` CLI session `whmcs-secrets-from-kv`
+          # leaves on disk (#1188/#1208), so the prize is on the runner's
+          # filesystem rather than in a variable.
+          #
+          # Not every payload self-blocks at the export. `*` and `?` are illegal
+          # in a Windows filename, so those die here and the upload never runs
+          # (it carries no `if:`, so it is `success()`-gated). `[` and `]` are
+          # NOT illegal: they are legal Windows filename characters AND
+          # character-class metacharacters to the globber. That is the shape
+          # with no self-block — the export writes a literal `[m]sal…json` and
+          # exits 0, and the upload's glob then matches a different, real file.
+          # An absolute path or a `..` segment needs no glob at all.
+          #
+          # HONEST LIMIT: the payload's success turns on Windows filename
+          # legality and PowerShell's `-Path` wildcard resolution, and this was
+          # authored on a Linux worker while the job runs on `windows-latest`,
+          # so it is NOT measured. This is the safer fix taken without that
+          # measurement, per the security rule. The guard's own behaviour IS
+          # measured, because it is pure string logic and platform-free.
+          #
+          # Which is also why the rooted test is an explicit regex rather than
+          # [System.IO.Path]::IsPathRooted: that API is platform-DEPENDENT
+          # (`C:\x` and `\x` are rooted on Windows, neither on Linux), so a test
+          # running on ubuntu CI would assert something the Windows runner does
+          # not do — a guard green on the only host that checks it and absent on
+          # the only host that runs it.
+          #
+          # None of the three forms has a legitimate use here: the declared
+          # default is a relative path under `artifacts/`, as in every sibling
+          # 2xx export.
+          if ($env:IN_OUTPUT_FILE -match '[*?\[\]]') {
+            throw "output_file contains a glob metacharacter (one of * ? [ ]). It is passed unchanged to the 'Upload CSV artifact' step, whose path: is a glob selector, so a pattern can match files this export never wrote. Pass a plain relative path."
+          }
+          if ($env:IN_OUTPUT_FILE -match '^([A-Za-z]:|[\\/])') {
+            throw "output_file must be a workspace-relative path; got an absolute, drive-rooted or UNC path. The 'Upload CSV artifact' step uploads whatever its path: resolves to, so an absolute path can put runner files into a downloadable artifact."
+          }
+          if (($env:IN_OUTPUT_FILE -split '[\\/]') -contains '..') {
+            throw "output_file must not contain a '..' segment: it escapes the workspace, and the 'Upload CSV artifact' step uploads whatever its path: resolves to."
+          }
+
           $out = $env:IN_OUTPUT_FILE
           $dir = Split-Path -Parent $out
           if (-not [string]::IsNullOrWhiteSpace($dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }

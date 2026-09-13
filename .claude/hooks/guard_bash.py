@@ -433,7 +433,15 @@ FORCE_LONG_RE = re.compile(r"--force\b", re.IGNORECASE)
 # this half of #1309: `-F` is not a git-push flag, but it is `gh api -F`,
 # `git commit -F`, `grep -F` and `sort -f`. Under the old lowercased match a
 # `-F` anywhere in the command supplied the "force" half of the rule.
-FORCE_SHORT_RE = re.compile(r"(?<!\S)-f\b")
+#
+# `[A-Za-z]*` on both sides because git's option parser BUNDLES short options:
+# `git push -fq origin main` and `-qf` both force-push (measured -- `-qZ` is
+# rejected as an unknown switch, so the parser really is splitting the
+# cluster), while `-f\b` sees neither. That hole predates #1309 -- the original
+# `\s-f\b` missed it too -- and it is a bypass of a protected-branch rule, so
+# it is fixed here rather than deferred. The `f` inside the cluster stays
+# lowercase-only, which is what keeps `-F` and `-qF` out.
+FORCE_SHORT_RE = re.compile(r"(?<!\S)-[A-Za-z]*f[A-Za-z]*\b")
 PROTECTED_BRANCH_RE = re.compile(r"(?<![\w./-])(main|master)(?![\w/-])", re.IGNORECASE)
 GIT_PUSH_RE = re.compile(r"\bgit\s+push\b", re.IGNORECASE)
 

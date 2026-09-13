@@ -307,6 +307,15 @@ file. Prefix the command:
 MSYS_NO_PATHCONV=1 git cat-file -p "origin/<branch>:.github/workflows/<file>.yml"
 ```
 
+**The same prefix breaks any `/c/...` path on that command line, so pair it with `C:/...`.**
+`MSYS_NO_PATHCONV=1` turns off _all_ argument conversion, including the `/c/` → `C:/` rewrite that
+lets native `git` find a git-bash path. In Conductor run 164, a worktree revert written as
+`MSYS_NO_PATHCONV=1 git -C /c/…/wt164-1297 checkout -- .claude/hooks/test_hooks.py` failed with
+`fatal: cannot change to '/c/…/wt164-1297': No such file or directory`. The directory existed; the
+same command without the prefix had just worked there. The prefix fixes the `.github/…` argument and
+breaks the `-C` argument in the same call, so the error names a path that exists. Whenever the
+prefix is set, write every path as `C:/…` (`git -C C:/…/wt164-1297 checkout -- .claude/…`).
+
 ## `gh api` list endpoints silently truncate at `per_page` — paginate before concluding "absent"
 
 `per_page=100` returns 100 items and **no warning** that more exist. On 2026-07-25 this produced a

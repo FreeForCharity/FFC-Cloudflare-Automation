@@ -142,8 +142,31 @@ jobs:
           if ($env:IN_OUTPUT_FILE -match '[*?\[\]]') {
             throw "output_file contains a glob metacharacter (one of * ? [ ]). It is passed unchanged to the 'Upload CSV artifact' step, whose path: is a glob selector, so a pattern can match files this export never wrote. Pass a plain relative path."
           }
-          if ($env:IN_OUTPUT_FILE -match '^([A-Za-z]:|[\\/])') {
-            throw "output_file must be a workspace-relative path; got an absolute, drive-rooted or UNC path. The 'Upload CSV artifact' step uploads whatever its path: resolves to, so an absolute path can put runner files into a downloadable artifact."
+          # `[A-Za-z]+:`, not `[A-Za-z]:` — a PSDrive qualifier is not limited to
+          # a single-letter filesystem drive. Measured on pwsh 7.4.6:
+          # `Temp:/x.csv` and `env:/x` both pass a single-letter test and are
+          # resolved by the provider, so the narrow spelling admits a
+          # workspace escape that looks nothing like `C:\`.
+          if ($env:IN_OUTPUT_FILE -match '^([A-Za-z]+:|[\\/])') {
+            throw "output_file must be a workspace-relative path; got an absolute, UNC, drive- or PSDrive-qualified path. The 'Upload CSV artifact' step uploads whatever its path: resolves to, so a path outside the workspace can put runner files into a downloadable artifact."
+          }
+          # `~` is PowerShell's home shorthand and is NOT caught by the test
+          # above: it starts with neither a separator nor a qualifier. Raised by
+          # Copilot on #1308 and measured here on pwsh 7.4.6 —
+          # `GetUnresolvedProviderPathFromPSPath('~/.azure/x.csv')` returns
+          # `/root/.azure/x.csv`, so the export writes clean outside the
+          # workspace.
+          #
+          # This is the sharpest instance of the two-consumer point (ledger
+          # L298) rather than a repeat of it: PowerShell expands `~` and
+          # `@actions/glob` does not, so the two consumers do not merely apply
+          # different grammars to the value — they disagree about WHICH FILE IT
+          # NAMES. The export would overwrite a file in the user profile (the
+          # `az` session lives there) while the upload looked for a literal `~`
+          # directory under the workspace and failed at `if-no-files-found`,
+          # which reads as a path typo two steps from the damage.
+          if ($env:IN_OUTPUT_FILE -match '^~') {
+            throw "output_file must not begin with '~': PowerShell expands it to the user profile, so this export would write outside the workspace, while the 'Upload CSV artifact' step's globber does not expand it — the two consumers would not even agree which file is meant."
           }
           if (($env:IN_OUTPUT_FILE -split '[\\/]') -contains '..') {
             throw "output_file must not contain a '..' segment: it escapes the workspace, and the 'Upload CSV artifact' step uploads whatever its path: resolves to."

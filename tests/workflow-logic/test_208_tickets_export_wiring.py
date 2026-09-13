@@ -177,8 +177,12 @@ GUARD_BLOCKS = (
         "glob metacharacter",
     ),
     (
-        r"if ($env:IN_OUTPUT_FILE -match '^([A-Za-z]:|[\\/])') {",
+        r"if ($env:IN_OUTPUT_FILE -match '^([A-Za-z]+:|[\\/])') {",
         "workspace-relative",
+    ),
+    (
+        r"if ($env:IN_OUTPUT_FILE -match '^~') {",
+        "must not begin with '~'",
     ),
     (
         r"if (($env:IN_OUTPUT_FILE -split '[\\/]') -contains '..') {",
@@ -831,6 +835,12 @@ def test_an_absolute_or_drive_rooted_output_file_is_refused():
         "C:\\Users\\runneradmin\\.azure\\accessTokens.json",
         "\\\\server\\share\\x.csv",
         "/home/runner/.azure/x.csv",
+        # Multi-letter PSDrive qualifiers. A single-letter `[A-Za-z]:` test
+        # admits these, and both are resolved by the provider: measured on pwsh
+        # 7.4.6, `Temp:/x.csv` and `env:/x` are qualified paths that escape the
+        # workspace while looking nothing like `C:\`.
+        "Temp:/x.csv",
+        "env:/x",
     ):
         out, _stolen, rc = _run(_body(), IN_OUTPUT_FILE=payload, IN_STATUS="")
         assert rc != 0, (
@@ -866,6 +876,38 @@ def test_a_dotdot_segment_in_output_file_is_refused():
         )
 
 
+def test_a_tilde_prefixed_output_file_is_refused():
+    """Raised by Copilot on #1308: `~` starts with neither separator nor qualifier.
+
+    So the rooted test above does not see it, and PowerShell expands it anyway.
+    Measured on pwsh 7.4.6: `GetUnresolvedProviderPathFromPSPath('~/.azure/x.csv')`
+    returns an absolute path under the user profile, which is where the `az`
+    session this job leaves on disk lives.
+
+    The sharpest form of L298 rather than a repeat: PowerShell expands `~` and
+    `@actions/glob` does not, so the two consumers disagree about which file the
+    value NAMES — the export writes outside the workspace while the upload looks
+    for a literal `~` directory inside it.
+    """
+    test_both_inputs_travel_in_env_and_are_not_interpolated()
+    for payload in (
+        "~/.azure/msal_token_cache.json",
+        "~/x.csv",
+        "~",
+    ):
+        out, _stolen, rc = _run(_body(), IN_OUTPUT_FILE=payload, IN_STATUS="")
+        assert rc != 0, (
+            f"output_file {payload!r} is home-relative and must be refused; "
+            f"rc={rc}. Output: {out!r}"
+        )
+        assert "must not begin with '~'" in out, (
+            f"the step exited non-zero without naming the cause. Output: {out!r}"
+        )
+        assert _bound(out) == "", (
+            f"the callee ran despite the '~'. Bound: {_bound(out)!r}"
+        )
+
+
 def test_the_path_guards_do_not_refuse_a_legitimate_output_file():
     """Positive control — discrimination, not permissiveness (ledger L47).
 
@@ -880,6 +922,9 @@ def test_the_path_guards_do_not_refuse_a_legitimate_output_file():
         "whmcs_tickets.csv",
         "artifacts/whmcs/2026-09-13.tickets.csv",
         "artifacts/whmcs/sub/dir/tickets.csv",
+        # A tilde that is not LEADING is an ordinary filename character, and an
+        # over-broad `-match '~'` would reject it.
+        "artifacts/whmcs/tickets~1.csv",
         "artifacts\\whmcs\\tickets.csv",
     ):
         out, _stolen, rc = _run(_body(), IN_OUTPUT_FILE=payload, IN_STATUS="")
@@ -977,6 +1022,7 @@ NEEDS_PWSH = {
     "test_a_whitespace_output_file_fails_closed_too",
     "test_a_glob_metacharacter_in_output_file_is_refused",
     "test_an_absolute_or_drive_rooted_output_file_is_refused",
+    "test_a_tilde_prefixed_output_file_is_refused",
     "test_a_dotdot_segment_in_output_file_is_refused",
     "test_the_path_guards_do_not_refuse_a_legitimate_output_file",
     "test_the_declared_default_survives_its_own_guards",

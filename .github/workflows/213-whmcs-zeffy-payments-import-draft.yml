@@ -415,9 +415,15 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           # Fail closed (#1213, ledger L214) — see the "Export clients" step. All
-          # four are output paths whose blank is not legitimate; `invoices_output`
-          # is read only behind the `include_zero_invoices` boolean but is still
-          # a path this step would otherwise `Test-Path` blank.
+          # FIVE are file paths and a blank is not legitimate for any of them, but
+          # they are not all the same KIND of path: the generator READS three
+          # (`-ClientsCsv`, `-TransactionsCsv`, `-InvoicesCsv`) and WRITES two
+          # (`-OutputFile`, `-XlsxOutputFile`). Both directions are guarded here
+          # because both are equally blank-able — a blank read path fails at
+          # `Test-Path`/`Import-Csv` and a blank write path at the export, and
+          # neither should get as far as spending the credential.
+          # `invoices_output` is consumed only behind the `include_zero_invoices`
+          # boolean and is still checked, because the check runs before the branch.
           foreach ($name in @('IN_CLIENTS_OUTPUT', 'IN_TRANSACTIONS_OUTPUT', 'IN_INVOICES_OUTPUT', 'IN_ZEFFY_OUTPUT', 'IN_ZEFFY_OUTPUT_XLSX')) {
             if ([string]::IsNullOrWhiteSpace([System.Environment]::GetEnvironmentVariable($name))) {
               Write-Output "::error::$name is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank value. Refusing to call zeffy-payments-import-draft.ps1 with an empty path."

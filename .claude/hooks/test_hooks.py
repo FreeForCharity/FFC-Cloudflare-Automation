@@ -243,8 +243,36 @@ RULES = [
     Rule("force-push-protected", 'Force-push to a protected branch', BLOCK_TIER, [
         ("force-push main", "git push --force origin main", BLOCK),
         ("force-with-lease main", "git push --force-with-lease origin main", BLOCK),
+        ("force-push -f main", "git push -f origin main", BLOCK),
+        ("force-with-lease master", "git push --force-with-lease origin master", BLOCK),
+        ("commit then force-push main via &&", "git commit -m x && git push -f origin main", BLOCK),
+        # Heredoc bodies are analysed, not skipped: `bash <<EOF` really does run
+        # what is inside one, so this must stay the direction the rule fails in.
+        ("force-push main inside a heredoc body",
+         "bash <<'EOF'\ngit push --force origin main\nEOF", BLOCK),
         ("normal push feature", "git push -u origin claude/ai-agent-hooks-security-bchbh8", ALLOW),
         ("force-push feature/main allowed", "git push --force origin feature/main", ALLOW),
+        # force-push-protected decides per SEGMENT (#1309). Judging the whole
+        # command made "a push appears somewhere" AND "a force flag appears
+        # somewhere" AND "the word main appears somewhere" a violation, which
+        # blocked Conductor run 168 three times on an ordinary feature-branch
+        # push. Cases A and B are verbatim from the issue; neither can rewrite
+        # a protected branch. Note `-F` is not a git-push flag at all -- it is
+        # `git commit -F`, `gh api -F` and `grep -F`, which is why the short
+        # flag is now matched case-sensitively.
+        ("commit -F file then push feature",
+         "git commit -q -F msg.txt; git push -q origin feature-x", ALLOW),
+        ("heredoc commit message naming main then push feature",
+         "git commit -q -F - <<'EOF'\nfix: only for CI runs on main\nEOF\n"
+         "git push -q origin feature-x", ALLOW),
+        ("push feature then gh api -f body naming main",
+         "git push -q origin feature-x; "
+         "gh api repos/o/r/pulls/1/comments -f body='... main ...'", ALLOW),
+        ("push feature then echo main via &&", "git push origin feature-x && echo main", ALLOW),
+        # A pipeline is deliberately ONE segment, so statement scoping alone
+        # does not clear this -- the case-sensitive short-flag match does.
+        ("push feature piped through grep -F main",
+         "git push origin feature-x | grep -F main", ALLOW),
     ]),
 
     Rule("echo-secret-var", 'Refusing to echo/print a secret value', BLOCK_TIER, [

@@ -968,6 +968,17 @@ These are the ways that difference has actually bitten, each found the expensive
 - **`gh` inside a `while read` loop eats the loop's stdin**, losing one input line per invocation.
   Read from a dedicated descriptor (`while read … <&3; done 3< file`) or redirect the child
   (`gh … </dev/null`). A board audit silently processed 73 of 74 rows this way.
+- **Parallel Bash tool calls share one persisted cwd, so a `cd` in one call can re-root a sibling's
+  relative paths** (conductor runs 162 and 163). Calls issued in the same batch are not isolated
+  shells: when one begins `cd <dir>`, a sibling using relative paths may resolve them against
+  `<dir>`. Run 162 ran a commit→mutate→restore sequence inside a sibling detached worktree (commit
+  rc=1 "nothing to commit", `git checkout --` over the wrong tree; nothing lost only because that
+  tree was clean). Run 163, one run after that was written into the Conductor's private notes, had a
+  `grep docs/lessons-ledger.md` resolve against `scratch/`. No hook can catch this: a hook sees one
+  call, never its siblings. So in any call batched beside another, use **absolute paths**
+  (`git -C <abs>`, absolute file arguments); keep a stateful git sequence in **one** call guarded by
+  `[ "$(git -C <abs> rev-parse --abbrev-ref HEAD)" = "<branch>" ] || exit 9`; and let at most one
+  call in a batch `cd`.
 - **Space-delimited `awk` columns break on human labels.** Project board statuses include
   `In Progress` and `In Review`, so `$6` reads an item id instead of a state. Emit tab-delimited
   rows (`IFS=$'\t'`) for anything carrying a human-authored field.

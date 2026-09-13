@@ -96,6 +96,26 @@ jobs:
         shell: pwsh
         env:
           WHMCS_API_URL: ${{ inputs.api_url }}
+          # #1080 lane 21. Every free-text dispatch input this job consumes now
+          # arrives through a step-level `env:` mapping instead of being pasted
+          # into the body by `${{ }}`, which GitHub substitutes as raw text
+          # BEFORE pwsh parses the line — so the value was parsed as code.
+          #
+          # These sites sat in DOUBLE quotes, where `$( )` expands, so no quote
+          # breakout was needed. Measured on pwsh 7.4.6 against the body as it
+          # shipped, with `clients_output` =
+          # `artifacts/whmcs/whmcs_clients.csv$($null = Set-Content -Path <sentinel> -Value $env:WHMCS_API_SECRET)`:
+          # the WHMCS API secret was written to the sentinel, the exporter was
+          # still handed a legal `OutputFile=[artifacts/whmcs/whmcs_clients.csv]`,
+          # and the step exited **0**. `$null =` swallows the subexpression's
+          # output, so the variable keeps its legal value and the run reads as
+          # entirely ordinary in the log. The benign control leaked nothing.
+          #
+          # The credential is not visible in this step's own `env:` (ledger L213)
+          # and a `secrets.` grep of the file (#1141) scores it as holding
+          # nothing: it arrives through GITHUB_ENV from `whmcs-secrets-from-kv`,
+          # which is the arrival path #1188 exists to surface.
+          IN_CLIENTS_OUTPUT: ${{ inputs.clients_output }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -111,7 +131,36 @@ jobs:
             $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
           }
 
-          $out = "${{ inputs.clients_output }}"
+          # Fail closed (#1213, ledger L214). A blank is NOT legitimate for an
+          # output path — the input documents a default and the body treats the
+          # value as a file it will later assert exists.
+          #
+          # What this guard buys here is NOT what it bought on 601, and the
+          # difference was measured on this body rather than carried across
+          # (ledger L260). pwsh 7.4.6, guard stripped, all three blank forms:
+          #
+          #   EMPTY  ('')    dies at `Split-Path -Parent $out` — "Cannot bind
+          #                  argument to parameter 'Path' because it is an empty
+          #                  string". rc=1, exporter never called. LOUD.
+          #   UNSET  ($null) same line, "…because it is null". rc=1. LOUD.
+          #   SPACES ('   ') `Split-Path` ACCEPTS it, `$dir` comes back empty so
+          #                  no directory is made, and the exporter IS invoked
+          #                  with `OutputFile=[   ]` — a credentialed call the
+          #                  step should never have made.
+          #
+          # So for the first two the guard buys ATTRIBUTION (it names the missing
+          # mapping instead of a binder error pointing at `Split-Path`), and only
+          # the third is a hole it actually closes. That third case is exactly the
+          # one a `-ne ''` gate passes straight through, which is why the test is
+          # `IsNullOrWhiteSpace` (#1213). The blank reaches a cmdlet binder here
+          # before it ever reaches the native `pwsh -File` call, which is why
+          # L214's argument-drop never gets a chance to fire.
+          if ([string]::IsNullOrWhiteSpace($env:IN_CLIENTS_OUTPUT)) {
+            Write-Output '::error::IN_CLIENTS_OUTPUT is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank clients_output. Refusing to call whmcs-clients-export.ps1 with an empty -OutputFile.'
+            exit 1
+          }
+
+          $out = $env:IN_CLIENTS_OUTPUT
           $dir = Split-Path -Parent $out
           if (-not [string]::IsNullOrWhiteSpace($dir)) {
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -131,6 +180,17 @@ jobs:
         shell: pwsh
         env:
           WHMCS_API_URL: ${{ inputs.api_url }}
+          # #1080 lane 21 — see the "Export clients" step for the measurement.
+          # `max_rows` / `start_date` / `end_date` are the three inputs in this
+          # job whose blank IS legitimate and documented (`start_date` and
+          # `end_date` default to `''`), so they keep the gated-append remedy
+          # rather than failing closed: the flag is omitted and the callee's own
+          # default applies. That is the L254 distinction — a fail-closed `exit 1`
+          # is the wrong remedy wherever a blank is a routine dispatch.
+          IN_TRANSACTIONS_OUTPUT: ${{ inputs.transactions_output }}
+          IN_MAX_ROWS: ${{ inputs.max_rows }}
+          IN_START_DATE: ${{ inputs.start_date }}
+          IN_END_DATE: ${{ inputs.end_date }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -146,7 +206,13 @@ jobs:
             $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
           }
 
-          $out = "${{ inputs.transactions_output }}"
+          # Fail closed (#1213, ledger L214) — see the "Export clients" step.
+          if ([string]::IsNullOrWhiteSpace($env:IN_TRANSACTIONS_OUTPUT)) {
+            Write-Output '::error::IN_TRANSACTIONS_OUTPUT is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank transactions_output. Refusing to call whmcs-transactions-export.ps1 with an empty -OutputFile.'
+            exit 1
+          }
+
+          $out = $env:IN_TRANSACTIONS_OUTPUT
           $dir = Split-Path -Parent $out
           if (-not [string]::IsNullOrWhiteSpace($dir)) {
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -157,17 +223,34 @@ jobs:
             '-OutputFile', $out
           )
 
-          $maxRows = "${{ inputs.max_rows }}".Trim()
+          # `[string]` cast before `.Trim()`. Measured on pwsh 7.4.6 (Linux — this
+          # job runs on windows-latest, and that half is documented behaviour
+          # rather than something a Linux sandbox can measure, so it is stated as
+          # the weaker claim):
+          #
+          #   $env:X where X=''      -> ''      (.Trim() is fine)
+          #   $env:X where X is UNSET -> $null  (.Trim() is a TERMINATING
+          #                                      RuntimeException under 'Stop')
+          #   ([string]$null).Trim()  -> ''     (what this line does)
+          #
+          # So the cast is not decoration: a deleted or misspelled `env:` mapping
+          # turns a legitimately blank filter into a failed export, and the error
+          # names `.Trim()` on a null rather than the mapping that is missing.
+          # On Windows an empty value is additionally indistinguishable from an
+          # unset one, so the same reference is expected to hit the $null branch
+          # for a blank dispatch there — the cast covers both without depending on
+          # which platform is right.
+          $maxRows = ([string]$env:IN_MAX_ROWS).Trim()
           if (-not [string]::IsNullOrWhiteSpace($maxRows)) {
             $args += @('-MaxRows', $maxRows)
           }
 
-          $startDate = "${{ inputs.start_date }}".Trim()
+          $startDate = ([string]$env:IN_START_DATE).Trim()
           if (-not [string]::IsNullOrWhiteSpace($startDate)) {
             $args += @('-StartDate', $startDate)
           }
 
-          $endDate = "${{ inputs.end_date }}".Trim()
+          $endDate = ([string]$env:IN_END_DATE).Trim()
           if (-not [string]::IsNullOrWhiteSpace($endDate)) {
             $args += @('-EndDate', $endDate)
           }
@@ -187,6 +270,10 @@ jobs:
         shell: pwsh
         env:
           WHMCS_API_URL: ${{ inputs.api_url }}
+          # #1080 lane 21 — see the "Export clients" step for the measurement.
+          IN_INVOICES_OUTPUT: ${{ inputs.invoices_output }}
+          IN_START_DATE: ${{ inputs.start_date }}
+          IN_END_DATE: ${{ inputs.end_date }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -202,7 +289,13 @@ jobs:
             $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
           }
 
-          $out = "${{ inputs.invoices_output }}"
+          # Fail closed (#1213, ledger L214) — see the "Export clients" step.
+          if ([string]::IsNullOrWhiteSpace($env:IN_INVOICES_OUTPUT)) {
+            Write-Output '::error::IN_INVOICES_OUTPUT is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank invoices_output. Refusing to call whmcs-invoices-export.ps1 with an empty -OutputFile.'
+            exit 1
+          }
+
+          $out = $env:IN_INVOICES_OUTPUT
           $dir = Split-Path -Parent $out
           if (-not [string]::IsNullOrWhiteSpace($dir)) {
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -213,12 +306,13 @@ jobs:
             '-OutputFile', $out
           )
 
-          $startDate = "${{ inputs.start_date }}".Trim()
+          # `[string]` cast before `.Trim()` — see the "Export transactions" step.
+          $startDate = ([string]$env:IN_START_DATE).Trim()
           if (-not [string]::IsNullOrWhiteSpace($startDate)) {
             $args += @('-StartDate', $startDate)
           }
 
-          $endDate = "${{ inputs.end_date }}".Trim()
+          $endDate = ([string]$env:IN_END_DATE).Trim()
           if (-not [string]::IsNullOrWhiteSpace($endDate)) {
             $args += @('-EndDate', $endDate)
           }
@@ -236,6 +330,8 @@ jobs:
         shell: pwsh
         env:
           WHMCS_API_URL: ${{ inputs.api_url }}
+          # #1080 lane 21 — see the "Export clients" step for the measurement.
+          IN_TRANSACTIONS_OUTPUT: ${{ inputs.transactions_output }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -251,7 +347,15 @@ jobs:
             $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
           }
 
-          $txPath = "${{ inputs.transactions_output }}"
+          # Fail closed (#1213, ledger L214) — see the "Export clients" step. A
+          # blank here would make `Test-Path` throw a parameter-binding error
+          # naming the callee rather than the missing mapping that caused it.
+          if ([string]::IsNullOrWhiteSpace($env:IN_TRANSACTIONS_OUTPUT)) {
+            Write-Output '::error::IN_TRANSACTIONS_OUTPUT is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank transactions_output. Refusing to look up deleted-client invoices without the transactions CSV.'
+            exit 1
+          }
+
+          $txPath = $env:IN_TRANSACTIONS_OUTPUT
           if (-not (Test-Path $txPath)) {
             throw "Transactions CSV not found: $txPath"
           }
@@ -296,14 +400,42 @@ jobs:
 
       - name: Generate Zeffy payments import draft
         shell: pwsh
+        env:
+          # #1080 lane 21 — see the "Export clients" step for the measurement.
+          # This is the widest body in the job: five path inputs feed the
+          # generator's argument list, so one dispatched payload executed here
+          # five times over.
+          IN_CLIENTS_OUTPUT: ${{ inputs.clients_output }}
+          IN_TRANSACTIONS_OUTPUT: ${{ inputs.transactions_output }}
+          IN_INVOICES_OUTPUT: ${{ inputs.invoices_output }}
+          IN_ZEFFY_OUTPUT: ${{ inputs.zeffy_output }}
+          IN_ZEFFY_OUTPUT_XLSX: ${{ inputs.zeffy_output_xlsx }}
+          IN_MAX_ROWS_PER_FILE: ${{ inputs.max_rows_per_file }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $clients = "${{ inputs.clients_output }}"
-          $tx = "${{ inputs.transactions_output }}"
-          $invoices = "${{ inputs.invoices_output }}"
-          $out = "${{ inputs.zeffy_output }}"
-          $outXlsx = "${{ inputs.zeffy_output_xlsx }}"
+          # Fail closed (#1213, ledger L214) — see the "Export clients" step. All
+          # FIVE are file paths and a blank is not legitimate for any of them, but
+          # they are not all the same KIND of path: the generator READS three
+          # (`-ClientsCsv`, `-TransactionsCsv`, `-InvoicesCsv`) and WRITES two
+          # (`-OutputFile`, `-XlsxOutputFile`). Both directions are guarded here
+          # because both are equally blank-able — a blank read path fails at
+          # `Test-Path`/`Import-Csv` and a blank write path at the export, and
+          # neither should get as far as spending the credential.
+          # `invoices_output` is consumed only behind the `include_zero_invoices`
+          # boolean and is still checked, because the check runs before the branch.
+          foreach ($name in @('IN_CLIENTS_OUTPUT', 'IN_TRANSACTIONS_OUTPUT', 'IN_INVOICES_OUTPUT', 'IN_ZEFFY_OUTPUT', 'IN_ZEFFY_OUTPUT_XLSX')) {
+            if ([string]::IsNullOrWhiteSpace([System.Environment]::GetEnvironmentVariable($name))) {
+              Write-Output "::error::$name is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank value. Refusing to call zeffy-payments-import-draft.ps1 with an empty path."
+              exit 1
+            }
+          }
+
+          $clients = $env:IN_CLIENTS_OUTPUT
+          $tx = $env:IN_TRANSACTIONS_OUTPUT
+          $invoices = $env:IN_INVOICES_OUTPUT
+          $out = $env:IN_ZEFFY_OUTPUT
+          $outXlsx = $env:IN_ZEFFY_OUTPUT_XLSX
 
           function Get-ZeffyOutputFiles {
             param([string]$BaseOutputFile)
@@ -336,7 +468,10 @@ jobs:
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
           }
 
-          $maxRowsPerFile = "${{ inputs.max_rows_per_file }}".Trim()
+          # Gated append, not fail-closed: a blank cap is legitimate and the
+          # generator's own default applies. `[string]` cast — see "Export
+          # transactions".
+          $maxRowsPerFile = ([string]$env:IN_MAX_ROWS_PER_FILE).Trim()
           $genArgs = @(
             '-ClientsCsv', $clients,
             '-TransactionsCsv', $tx,
@@ -422,6 +557,12 @@ jobs:
 
       - name: Validate Zeffy CSV headers
         shell: pwsh
+        env:
+          # #1080 lane 21 — see the "Export clients" step for the measurement.
+          # This site is the one that would survive a careless lane: it is 150
+          # lines below the generator, in a step whose other inputs all arrive
+          # through GITHUB_ENV, so a reader fixing "the generator" misses it.
+          IN_ZEFFY_OUTPUT_XLSX: ${{ inputs.zeffy_output_xlsx }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -463,7 +604,13 @@ jobs:
             "  - $f" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           }
 
-          $xlsxBase = "${{ inputs.zeffy_output_xlsx }}"
+          # Fail closed (#1213, ledger L214) — see the "Export clients" step.
+          if ([string]::IsNullOrWhiteSpace($env:IN_ZEFFY_OUTPUT_XLSX)) {
+            Write-Output '::error::IN_ZEFFY_OUTPUT_XLSX is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank zeffy_output_xlsx. Refusing to enumerate .xlsx outputs from an empty base path.'
+            exit 1
+          }
+
+          $xlsxBase = $env:IN_ZEFFY_OUTPUT_XLSX
           $xlsxDir = Split-Path -Parent $xlsxBase
           if ([string]::IsNullOrWhiteSpace($xlsxDir)) { $xlsxDir = '.' }
           $xlsxBaseName = [System.IO.Path]::GetFileNameWithoutExtension($xlsxBase)

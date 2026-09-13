@@ -352,6 +352,7 @@ BURNED_DOWN = (
     "222-whmcs-product-alignment.yml",
     "224-whmcs-github-pages-product-alignment.yml",
     "601-wpmudev-export-sites.yml",
+    "213-whmcs-zeffy-payments-import-draft.yml",
 )
 
 
@@ -648,6 +649,35 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
                had: the unquoted interpolation word-split, so an `exclude`
                containing whitespace became extra arguments.
       = 19 / 4
+      -229 -222 -224 -601
+               lanes 18-20, all `whmcs-prod` / `wpmudev-prod` and all recorded on
+               #1080 rather than here. 601 was the LAST write entry, so the [W]
+               column reached zero with it.
+      = 15 / 0
+      -213     burned down (lane 21): all NINE free-text inputs now reach all six
+               script bodies through step-level `env:`. The widest entry the
+               freeze ever held — nine inputs, 21 references, six bodies in one
+               job, sixteen of the guard's forty-two remaining call sites — and
+               the FIRST read-only lane, so it is the first entry whose removal
+               moves this baseline without moving the write one. That is the case
+               `_expected_write` was written for and could not be measured until
+               now.
+
+               Double-quoted sites, so the 116/702 payload works with no quote
+               breakout. Measured on pwsh 7.4.6 against the shipped body: the
+               decoy credential was written to a sentinel, the exporter was still
+               handed a legal `OutputFile=[artifacts/whmcs/whmcs_clients.csv]`,
+               and the step exited 0; the benign control leaked nothing.
+
+               Two inputs deliberately keep a GATED APPEND rather than failing
+               closed — `start_date` and `end_date` document `default: ''`, so a
+               blank is a routine dispatch (L254). And the fail-closed guard buys
+               less here than on 601: measured with it stripped, the empty and
+               unset blanks already die loudly at `Split-Path`'s binder, and only
+               the all-spaces form reaches the callee. Both bounds are pinned in
+               test_213_zeffy_draft_wiring.py rather than restated from a sibling
+               lane (L260).
+      = 14 / 0
 
     Pinned so that a silent collapse in either direction fails. If someone
     narrows the type rule back to string-only, this says which workflows just
@@ -715,19 +745,29 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
 
 
 def test_the_write_baseline_decrements_only_for_write_entries():
-    """Polarity control for the write baseline — it cannot be measured today.
+    """Polarity control for the write baseline — now also measured for real.
 
-    Every entry in BURNED_DOWN so far enters a write environment, so
-    `FROZEN_BASELINE_WRITE - len(BURNED_DOWN)` and the correct
-    `- len(write subset)` return the SAME number on this tree. The module going
-    green is therefore no evidence that the right one is in use, and the wrong
-    one fails on a correct tree the first time a read-only workflow is burned
-    down — a false red that reads as "the ledger is wrong" rather than "the
-    arithmetic is". Found by review on #1211, before that could happen.
+    This was written when the difference was hypothetical: every entry in
+    BURNED_DOWN entered a write environment, so `FROZEN_BASELINE_WRITE -
+    len(BURNED_DOWN)` and the correct `- len(write subset)` returned the SAME
+    number, the module going green was no evidence that the right one was in
+    use, and the wrong one would have failed on a correct tree the first time a
+    read-only workflow was burned down. Found by review on #1211, before that
+    could happen.
 
-    So this pins the difference directly, with the read-only entry taken from
-    the tree rather than invented.
+    #1080 lane 21 burned down `213-whmcs-zeffy-payments-import-draft.yml`
+    (`whmcs-prod-read`), which is that first read-only entry — so the two forms
+    now return DIFFERENT numbers on the real tree and the count assertion above
+    is itself the measurement. The hypothetical control below is kept rather than
+    retired: it is the half that still holds if a future lane order puts another
+    read-only entry first, and deleting a control because the case it anticipated
+    has arrived is how the anticipation stops being checked.
     """
+    assert any(not _is_write(w) for w in BURNED_DOWN), (
+        "no BURNED_DOWN entry is read-only, so the difference this test pins is "
+        "hypothetical again — 213 was the first; if it was removed, say so here "
+        "rather than letting the docstring above claim a measurement"
+    )
     burned_write = {w for w in BURNED_DOWN if _is_write(w)}
     assert burned_write, (
         "positive control: no BURNED_DOWN entry enters a write environment, so "

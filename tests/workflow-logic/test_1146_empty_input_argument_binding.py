@@ -166,12 +166,13 @@ BEHAVIOURAL = {
     "201-whmcs-export-domains.yml/Export domains": {
         "${{ inputs.output_file }}": "artifacts/whmcs/whmcs_domains.csv",
     },
-    "213-whmcs-zeffy-payments-import-draft.yml/Export transactions": {
-        "${{ inputs.transactions_output }}": "artifacts/whmcs/whmcs_transactions.csv",
-        "${{ inputs.max_rows }}": "200000",
-        "${{ inputs.start_date }}": "",
-        "${{ inputs.end_date }}": "",
-    },
+    # #1080 lane 21 moved all four of 213's own inputs out of this body and into
+    # step-level `env:`, so there is nothing left for this render to substitute.
+    # What they used to supply as TEXT the harness now supplies as ENVIRONMENT,
+    # in RENDER_ENV below — dropping them here without moving them there would
+    # leave the body running against whatever the developer's shell happened to
+    # hold, which is the L199 shape this module exists inside.
+    "213-whmcs-zeffy-payments-import-draft.yml/Export transactions": {},
     "221-whmcs-application-search.yml/Search applications": {},
     "801-candid-charity-check.yml/Charity Check lookup": {},
     "802-candid-essentials-search.yml/Essentials search": {},
@@ -190,7 +191,27 @@ CONTROLLED = (
     "INPUT_SEARCH_TERMS",
     "INPUT_SIZE",
     "INPUT_OUTPUT_FILE",
+    # #1080 lane 21: 213's own inputs now arrive as environment rather than as
+    # substituted text, so they join the set the harness owns outright.
+    "IN_TRANSACTIONS_OUTPUT",
+    "IN_MAX_ROWS",
+    "IN_START_DATE",
+    "IN_END_DATE",
 )
+
+# What a row needs in the ENVIRONMENT for its body to reach the code this module
+# is about. 213's fail-closed check on `IN_TRANSACTIONS_OUTPUT` (#1080 lane 21)
+# runs before the `-ApiUrl` argument this module measures, so without this every
+# 213 case below would exit 1 on a different guard and the WHMCS_API_URL
+# assertions would never be reached — passing or failing for the wrong reason.
+RENDER_ENV = {
+    "213-whmcs-zeffy-payments-import-draft.yml/Export transactions": {
+        "IN_TRANSACTIONS_OUTPUT": "artifacts/whmcs/whmcs_transactions.csv",
+        "IN_MAX_ROWS": "200000",
+        "IN_START_DATE": "",
+        "IN_END_DATE": "",
+    },
+}
 
 
 def _key(row) -> str:
@@ -246,6 +267,19 @@ def _render(row) -> str:
         f"expression, so pwsh would see literal text: {body!r}"
     )
     return body
+
+
+def _run_row(row, body: str = None, stub: str = STUB, **overrides: str) -> tuple[str, int]:
+    """Run a row's body with the environment that row needs, then the overrides.
+
+    A row's RENDER_ENV entry is what its body used to get by substitution, so it
+    is not an override and must not be written at each call site: a case that
+    forgot it would fail on an unrelated guard, and the message would name a
+    variable this module is not about.
+    """
+    layered = dict(RENDER_ENV.get(_key(row), {}))
+    layered.update(overrides)
+    return _run(_render(row) if body is None else body, stub=stub, **layered)
 
 
 def _run(body: str, stub: str = STUB, **overrides: str) -> tuple[str, int]:
@@ -426,7 +460,7 @@ def test_values_reach_the_callee_at_every_behavioural_site():
     ]
     for wf, sub, overrides, expected in cases:
         row = next(r for r in SITES if r[0] == wf and r[2] == sub)
-        out, rc = _run(_render(row), **overrides)
+        out, rc = _run_row(row, **overrides)
         assert rc == 0, f"{wf}/{sub} exited {rc}: {out}"
         assert expected in out, f"{wf}/{sub}: expected {expected} in output: {out}"
 
@@ -445,7 +479,7 @@ def test_fail_closed_sites_state_the_cause_and_do_not_call_the_script():
     ]
     for wf, sub, var, overrides in cases:
         row = next(r for r in SITES if r[0] == wf and r[2] == sub)
-        out, rc = _run(_render(row), **overrides)  # `var` deliberately unset
+        out, rc = _run_row(row, **overrides)  # `var` deliberately unset
         assert rc == 1, f"{wf}/{sub} exited {rc} with {var} unset, expected 1: {out}"
         assert f"::error::{var} is empty" in out, (
             f"{wf}/{sub} exited 1 without naming {var} as the cause, so the "
@@ -468,7 +502,7 @@ def test_default_filled_sites_reach_the_apim_gateway_with_the_mapping_gone():
         ("213-whmcs-zeffy-payments-import-draft.yml", "Export transactions"),
     ):
         row = next(r for r in SITES if r[0] == wf and r[2] == sub)
-        out, rc = _run(_render(row))  # WHMCS_API_URL deliberately unset
+        out, rc = _run_row(row)  # WHMCS_API_URL deliberately unset
         assert rc == 0, f"{wf}/{sub} exited {rc} with WHMCS_API_URL unset: {out}"
         assert f"ApiUrl=[{APIM}]" in out, (
             f"{wf}/{sub}: an unset WHMCS_API_URL did not arrive as the APIM "
@@ -498,7 +532,7 @@ def test_the_array_splat_form_defaults_like_the_direct_form():
         "213's transactions step now uses the direct form as well as (or "
         "instead of) the array — the site table must be re-derived"
     )
-    out, rc = _run(_render(row))
+    out, rc = _run_row(row)
     assert rc == 0 and f"ApiUrl=[{APIM}]" in out, (
         f"the array-splat site did not default (rc={rc}): {out}"
     )
@@ -558,7 +592,7 @@ def test_without_the_guard_the_default_filled_form_loses_the_argument_too():
         if r[0] == "213-whmcs-zeffy-payments-import-draft.yml" and r[2] == "Export transactions"
     )
     stripped = _strip_guard(_render(row), "WHMCS_API_URL")
-    out, rc = _run(stripped)
+    out, rc = _run_row(row, body=stripped)
     assert "Missing an argument for parameter 'ApiUrl'" in out, (
         f"expected the array-splat site to lose its empty argument without the "
         f"default-fill; if it now arrives empty, the remedy is cosmetic and "

@@ -446,6 +446,31 @@ PROTECTED_BRANCH_RE = re.compile(r"(?<![\w./-])(main|master)(?![\w/-])", re.IGNO
 GIT_PUSH_RE = re.compile(r"\bgit\s+push\b", re.IGNORECASE)
 
 
+def _pipe_stages(stmt):
+    """Split one segment on `|` outside quotes.
+
+    The counterpart to `_split_on_logical`, which deliberately leaves `|`
+    alone because a secret can cross a pipe. Rule 2's three conditions cannot:
+    a `git push` is force-pushing to `main` only if the verb, the flag and the
+    refspec are arguments of the SAME command. `|&` is bash's
+    "pipe stdout and stderr", so the `&` is consumed with the bar rather than
+    left to start the next stage.
+    """
+    bare = _strip_quoted(stmt)
+    parts = []
+    start = 0
+    i = 0
+    while i < len(bare):
+        if bare[i] == "|":
+            parts.append(stmt[start:i])
+            i += 2 if bare.startswith("|&", i) else 1
+            start = i
+            continue
+        i += 1
+    parts.append(stmt[start:])
+    return parts
+
+
 def force_push_violation(cmd):
     """`git push --force origin main` -- history rewritten on a protected branch.
 
@@ -464,17 +489,23 @@ def force_push_violation(cmd):
     nothing on the #1309 false positive, whose heredoc body carries the word
     `main` but no push verb.
 
-    A pipeline is one segment (`_split_on_logical` does not split `|`), so
-    `git push origin feature-x | grep -F main` still holds all three halves in
-    one unit. The case-sensitive short-flag match is what clears it.
+    `_echo_segments` keeps a pipeline whole, which rule 3 needs (`printenv |
+    grep GH_TOKEN` prints a secret across the pipe) and this rule must not
+    have: a later stage supplies flags and words the push never saw, so
+    `git push origin feature-x | grep -f patterns.txt main` armed all three
+    halves. This rule therefore splits the segment again on `|` and requires
+    the three inside ONE stage. That only narrows the window and cannot open a
+    bypass -- a real force-push carries its own verb, flag and refspec in its
+    own stage, wherever in the pipeline it sits. Copilot on #1310.
     """
     for seg in _echo_segments(cmd):
-        if not GIT_PUSH_RE.search(seg):
-            continue
-        if not (FORCE_LONG_RE.search(seg) or FORCE_SHORT_RE.search(seg)):
-            continue
-        if PROTECTED_BRANCH_RE.search(seg):
-            return "Force-push to a protected branch (main/master) is not allowed."
+        for stage in _pipe_stages(seg):
+            if not GIT_PUSH_RE.search(stage):
+                continue
+            if not (FORCE_LONG_RE.search(stage) or FORCE_SHORT_RE.search(stage)):
+                continue
+            if PROTECTED_BRANCH_RE.search(stage):
+                return "Force-push to a protected branch (main/master) is not allowed."
     return None
 
 

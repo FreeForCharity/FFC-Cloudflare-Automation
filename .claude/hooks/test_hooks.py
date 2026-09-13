@@ -278,10 +278,26 @@ RULES = [
          "git push -q origin feature-x; "
          "gh api repos/o/r/pulls/1/comments -f body='... main ...'", ALLOW),
         ("push feature then echo main via &&", "git push origin feature-x && echo main", ALLOW),
-        # A pipeline is deliberately ONE segment, so statement scoping alone
-        # does not clear this -- the case-sensitive short-flag match does.
+        # A later pipeline stage supplies flags and words the push never saw.
+        # `_echo_segments` keeps a pipeline whole (rule 3 needs that), so rule 2
+        # splits on `|` itself. The lowercase row is Copilot's on #1310 -- the
+        # uppercase one is cleared by the case-sensitive flag match as well.
         ("push feature piped through grep -F main",
          "git push origin feature-x | grep -F main", ALLOW),
+        ("push feature piped through grep -f naming main",
+         "git push origin feature-x | grep -f patterns.txt main", ALLOW),
+        # Splitting on `|` must not open a bypass: a real force-push carries
+        # its verb, flag and refspec in its own stage, wherever it sits.
+        ("force-push main as the last pipeline stage",
+         "echo x | git push --force origin main", BLOCK),
+        ("force-push main as the first pipeline stage",
+         "git push --force origin main | tee push.log", BLOCK),
+        # Keeps the case-sensitive short flag pinned now that pipe splitting
+        # clears the `grep -F` row on its own: prose inside a heredoc body is
+        # analysed (bodies are deliberately not skipped), and this line holds
+        # all three halves in ONE stage. Only `-F != -f` clears it.
+        ("heredoc prose naming git push -F and main",
+         "gh pr create -F - <<'EOF'\nwe force-push with git push -F only on main\nEOF", ALLOW),
     ]),
 
     Rule("echo-secret-var", 'Refusing to echo/print a secret value', BLOCK_TIER, [

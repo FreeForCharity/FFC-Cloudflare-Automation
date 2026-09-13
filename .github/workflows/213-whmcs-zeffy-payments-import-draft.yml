@@ -223,10 +223,23 @@ jobs:
             '-OutputFile', $out
           )
 
-          # `[string]` cast before `.Trim()`: an env: mapping whose value is empty
-          # reads back as $null on the Windows runner this job uses, and
-          # `$null.Trim()` is a terminating error under 'Stop' — which would turn
-          # a legitimately blank filter into a failed export.
+          # `[string]` cast before `.Trim()`. Measured on pwsh 7.4.6 (Linux — this
+          # job runs on windows-latest, and that half is documented behaviour
+          # rather than something a Linux sandbox can measure, so it is stated as
+          # the weaker claim):
+          #
+          #   $env:X where X=''      -> ''      (.Trim() is fine)
+          #   $env:X where X is UNSET -> $null  (.Trim() is a TERMINATING
+          #                                      RuntimeException under 'Stop')
+          #   ([string]$null).Trim()  -> ''     (what this line does)
+          #
+          # So the cast is not decoration: a deleted or misspelled `env:` mapping
+          # turns a legitimately blank filter into a failed export, and the error
+          # names `.Trim()` on a null rather than the mapping that is missing.
+          # On Windows an empty value is additionally indistinguishable from an
+          # unset one, so the same reference is expected to hit the $null branch
+          # for a blank dispatch there — the cast covers both without depending on
+          # which platform is right.
           $maxRows = ([string]$env:IN_MAX_ROWS).Trim()
           if (-not [string]::IsNullOrWhiteSpace($maxRows)) {
             $args += @('-MaxRows', $maxRows)

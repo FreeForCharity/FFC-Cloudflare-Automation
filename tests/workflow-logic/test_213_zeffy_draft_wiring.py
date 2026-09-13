@@ -456,8 +456,12 @@ def test_the_optional_filters_keep_the_gated_append_and_do_not_fail_closed():
             )
             assert f"([string]$env:{var}).Trim()" in body, (
                 f"step {step_name!r} must read {var} through a [string] cast "
-                f"before .Trim(); an empty env: mapping reads back as $null on "
-                f"the Windows runner and $null.Trim() is terminating under 'Stop'"
+                f"before .Trim(). Measured on pwsh 7.4.6: an UNSET mapping reads "
+                f"back as $null and $null.Trim() is a terminating "
+                f"RuntimeException under 'Stop', so a deleted or misspelled "
+                f"mapping fails the export while naming .Trim() rather than the "
+                f"mapping. (An EMPTY value reads as '' on Linux; on Windows the "
+                f"two are indistinguishable, which only widens the case.)"
             )
         assert name in inputs, f"{name} is no longer a dispatch input"
 

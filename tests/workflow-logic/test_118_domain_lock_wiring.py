@@ -104,7 +104,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, find_step, load_workflow  # noqa: E402
+from wf_extract import child_env, find_step, load_workflow, pwsh_invocation  # noqa: E402
 
 _GUARD_PATH = (
     pathlib.Path(__file__).resolve().parents[2]
@@ -724,6 +724,36 @@ def test_the_guard_no_longer_reports_this_workflow():
         f"{WORKFLOW} was burned down but is still listed in KNOWN_UNGUARDED — a "
         f"stale entry, which the guard itself exits 1 on"
     )
+
+
+# The CALL SITE (#1306, ledger L294). `$env:IN_DOMAIN in body` above is
+# satisfied by the fail-closed guard's own read, so it cannot distinguish a
+# body that passes the dispatched domain from one that guards it and then
+# splats a literal.
+CALLEE = "whmcs-domain-lock.ps1"
+SPLAT = "@params"
+CALL_SITE = {"IN_DOMAIN": "$params = @{ Domain = $env:IN_DOMAIN }"}
+
+
+def test_the_domain_reaches_the_CALL_SITE_and_not_merely_the_body():
+    """The hashtable entry, not the guard, is what carries the value.
+
+    Worth asserting on this lane specifically: the hashtable is splatted onto a
+    NATIVE command, and the module already measures (L254) that a blank `Domain`
+    is dropped from the rendering and shifts every later parameter. A HARD-CODED
+    `Domain` has the opposite signature — it renders perfectly, binds cleanly and
+    is wrong every run — so none of the binding tests above can see it.
+    """
+    body = _step().get("run", "")
+    invocation = pwsh_invocation(body, CALLEE)
+    assert SPLAT in invocation, (
+        f"the invocation of {CALLEE} must splat {SPLAT}. Invocation: {invocation!r}"
+    )
+    for var, entry in CALL_SITE.items():
+        assert entry in body, (
+            f"{SPLAT} must be built as {entry!r}, or {var} is guarded and then "
+            f"discarded — the dispatcher's domain reaching nothing. Body: {body!r}"
+        )
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

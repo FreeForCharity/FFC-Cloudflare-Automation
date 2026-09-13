@@ -224,7 +224,7 @@ PARAMS = ("ApiUrl", "Query", "Ein", "SearchTerms")
 
 
 def _first_parameter_use(body: str, var: str) -> int | None:
-    """Offset of the first `-Param $env:VAR` OUTSIDE a comment, or None.
+    """Offset of the first parameter-position use of `var` OUTSIDE a comment.
 
     Comment lines must be excluded, and not as a nicety: each guard's own
     comment quotes the call it is protecting (`-Query $env:QUERY` and so on),
@@ -232,14 +232,25 @@ def _first_parameter_use(body: str, var: str) -> int | None:
     reports every correctly-ordered site as inverted. That failure is in the
     reassuring direction for the opposite edit — a guard moved BELOW its call
     would still find the comment first and pass.
+
+    BOTH parameter spellings are recognised, which the direct form alone was
+    not (#1306, ledger L294). Two of the seventeen sites — 213's transactions
+    and invoices exports — build their arguments as an ARRAY (`'-ApiUrl',
+    $env:WHMCS_API_URL`) rather than writing them inline, and against those this
+    returned None. That mattered because the caller skipped its ordering
+    assertion on a None, so the two sites whose spelling this could not read
+    were silently exempted from the check rather than reported: the same
+    "green because nothing was examined" shape #1306 is about, reached through
+    a locator rather than through a substring.
     """
     offset = 0
     for line in body.split("\n"):
         if not line.strip().startswith("#"):
             for param in PARAMS:
-                found = line.find(f"-{param} $env:{var}")
-                if found >= 0:
-                    return offset + found
+                for spelling in (f"-{param} $env:{var}", f"'-{param}', $env:{var}"):
+                    found = line.find(spelling)
+                    if found >= 0:
+                        return offset + found
         offset += len(line) + 1
     return None
 
@@ -363,11 +374,23 @@ def test_every_converted_site_maps_reads_and_guards_its_variable():
         )
         guard_at = body.index(GUARD_MARKER % var)
         first_use = _first_parameter_use(body, var)
-        if first_use is not None:
-            assert guard_at < first_use, (
-                f"{_key(row)}: the {var} guard sits AFTER its first "
-                f"parameter-position use, so the shift happens first"
-            )
+        # Not `if first_use is not None` (#1306, ledger L294). A site whose
+        # parameter-position use has been REPLACED BY A LITERAL returns None
+        # here, and skipping on a None made the ordering assertion vanish for
+        # exactly the edit it should catch — while `$env:{var} in body` above
+        # stayed green on the guard's own read. Requiring the use is what turns
+        # an unreadable site into a failure instead of an exemption.
+        assert first_use is not None, (
+            f"{_key(row)}: {var} is mapped and guarded but reaches no "
+            f"parameter position — the guard fills a value the call then "
+            f"ignores, so the dispatcher's input reaches nothing. Looked for "
+            f"`-<Param> $env:{var}` and `'-<Param>', $env:{var}` with Param in "
+            f"{list(PARAMS)}. Body: {body!r}"
+        )
+        assert guard_at < first_use, (
+            f"{_key(row)}: the {var} guard sits AFTER its first "
+            f"parameter-position use, so the shift happens first"
+        )
 
 
 def test_the_remedy_matches_the_inputs_declared_requiredness():

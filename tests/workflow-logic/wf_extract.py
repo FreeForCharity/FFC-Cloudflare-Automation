@@ -237,3 +237,84 @@ def step_github_script(workflow_file: str, job_id: str, name_substring: str) -> 
     if "github-script" not in uses:
         raise ValueError(f"step is not a github-script step (uses: {uses})")
     return step["with"]["script"]
+
+
+# --- locating the CALL SITE inside a pwsh step body (#1306, ledger L294) -----
+#
+# Every #1080 lane asserts its wiring as `f"$env:{var}" in body`, and the
+# message it fails with says "maps {var} but never reads $env:{var} — the env:
+# block is decoration and the value reaches nothing". The message states the
+# property; the assertion does not check it. The #1080 remedy has two parts —
+# a guard that fills or refuses the variable, and a call site that passes it to
+# the callee — and THE GUARD IS A READ. So a body that reads the variable in
+# its guard and then hard-codes a literal at the call site satisfies the
+# assertion while the dispatcher's value reaches nothing, which is precisely
+# the failure the message is worded to catch. Found by mutation review on #1305
+# (lane 23), where replacing `-GithubPagesProductPid $env:IN_GITHUB_PAGES_PID`
+# with `'40'` left the wiring test green.
+#
+# A module cannot fix that with a narrower substring search over the body — the
+# guard's text is in the body too. It has to assert against the STATEMENT that
+# performs the call, which is what this returns.
+
+_PWSH_COMMENT = re.compile(r"^\s*#")
+
+
+def _pwsh_quoted_at(line: str, index: int) -> bool:
+    """Is `index` inside a quoted span of this pwsh line?
+
+    Needed because every fail-closed guard names its own callee in prose —
+    `'::error::… Refusing to call whmcs-domain-lock.ps1 with an empty -Domain.'`
+    — so a plain substring search finds the error message as well as the call
+    and cannot tell them apart. That is the same root as #1019, where a control
+    asserting `"IsNullOrWhiteSpace" not in body` failed on the prose describing
+    the guard it was looking for.
+    """
+    single = double = False
+    for char in line[:index]:
+        if char == "'" and not double:
+            single = not single
+        elif char == '"' and not single:
+            double = not double
+    return single or double
+
+
+def pwsh_invocation(body: str, callee: str) -> str:
+    """The one logical pwsh statement in `body` that invokes `callee`.
+
+    Backtick continuations are joined, because a call a reader sees as one
+    statement is several lines in the file (115 spells six parameters that way,
+    306 four), and a line-at-a-time locator would find only the fragment
+    carrying the script name — which is never the fragment carrying the
+    arguments.
+
+    Raises if the callee is not invoked exactly once. That is deliberate rather
+    than defensive: a body that grows a second call site is a body where "the
+    invocation" no longer identifies anything, and silently asserting against
+    whichever one came first would weaken the check in exactly the direction
+    #1306 is about.
+    """
+    lines = body.splitlines()
+    starts = [
+        i
+        for i, line in enumerate(lines)
+        if not _PWSH_COMMENT.match(line)
+        and callee in line
+        and not _pwsh_quoted_at(line, line.index(callee))
+    ]
+    if len(starts) != 1:
+        raise AssertionError(
+            f"expected exactly one unquoted invocation of {callee!r}; found "
+            f"{len(starts)}: {[lines[i].strip() for i in starts]!r}"
+        )
+    index = starts[0]
+    statement = [lines[index]]
+    while statement[-1].rstrip().endswith("`"):
+        index += 1
+        if index >= len(lines):
+            raise AssertionError(
+                f"the invocation of {callee!r} ends with a continuation "
+                f"backtick but the body ends: {statement!r}"
+            )
+        statement.append(lines[index])
+    return " ".join(part.strip().rstrip("`").strip() for part in statement)

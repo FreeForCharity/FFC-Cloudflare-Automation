@@ -75,7 +75,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, find_step, load_workflow  # noqa: E402
+from wf_extract import child_env, find_step, load_workflow, pwsh_invocation  # noqa: E402
 
 _GUARD_PATH = (
     pathlib.Path(__file__).resolve().parents[2]
@@ -676,6 +676,40 @@ def test_the_guard_no_longer_reports_this_workflow():
         f"{WORKFLOW} was burned down but is still listed in KNOWN_UNGUARDED — a "
         f"stale entry, which the guard itself exits 1 on"
     )
+
+
+# The CALL SITE (#1306, ledger L294). The `$env:IN_DOMAIN in body` assertion
+# above is satisfied by this body's own fail-closed guard, which reads the
+# variable before deciding whether to refuse — so it stays green on a body that
+# guards the value and then passes a literal to the probe.
+SPLAT = "@scriptArgs"
+CALL_SITE = {"IN_DOMAIN": ("'-Domain', $domain", "$domain = $env:IN_DOMAIN")}
+
+
+def test_the_domain_reaches_the_CALL_SITE_and_not_merely_the_body():
+    """`$env:IN_DOMAIN in body` is true of the guard alone.
+
+    This body reads the variable twice — once in `IsNullOrWhiteSpace` and once
+    into `$domain` — which is exactly the shape #1306 measures: one read is the
+    guard, so deleting the other leaves the weak assertion true. Replacing
+    `@('-Domain', $domain)` with `@('-Domain', 'example.org')` would send every
+    dispatch to the same domain and no other test in this module would notice,
+    because the probe is read-only and the harness supplies its own fixture.
+    """
+    body = _step().get("run", "")
+    invocation = pwsh_invocation(body, CALLEE)
+    assert SPLAT in invocation, (
+        f"the invocation of {CALLEE} must splat {SPLAT}. Invocation: {invocation!r}"
+    )
+    for var, (element, binding) in CALL_SITE.items():
+        assert element in body, (
+            f"{SPLAT} must be built with {element!r}, or {var} reaches the "
+            f"callee through nothing. Body: {body!r}"
+        )
+        assert binding in body, (
+            f"{binding!r} must be what fills that local, or the argument is "
+            f"decoupled from {var}. Body: {body!r}"
+        )
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

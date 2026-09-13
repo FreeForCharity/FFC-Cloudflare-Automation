@@ -81,7 +81,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, find_step, load_workflow  # noqa: E402
+from wf_extract import child_env, find_step, load_workflow, pwsh_invocation  # noqa: E402
 
 _GUARD_PATH = (
     pathlib.Path(__file__).resolve().parents[2]
@@ -752,6 +752,47 @@ def test_the_dry_run_switch_still_tracks_the_boolean():
 # "everything passed" on a host with no PowerShell while every static assertion
 # above went unmeasured (#1182); the roster is checked against the declared
 # tests below so a rename cannot silently change what runs.
+# The CALL SITE, per variable (#1306, ledger L294). This lane is the clearest
+# case in the repo for why `$env:X in body` is too weak: `IN_DOMAINS` is read by
+# a DEFAULT-FILL, which substitutes a 13-domain list when the dispatch box is
+# blank. That read satisfies the assertion above on its own, so a body that
+# defaulted the value and then splatted the default unconditionally would be
+# green here and ignore every domain an operator typed.
+CALLEE = "bulk-staging-cname-github-pages.ps1"
+SPLAT = "@params"
+CALL_SITE = {
+    "IN_DOMAINS": ("Domains = $domainsInput", "$domainsInput = [string]$env:IN_DOMAINS"),
+    "IN_TARGET": ("$params.Target = $target", "$target = [string]$env:IN_TARGET"),
+}
+
+
+def test_each_input_reaches_the_CALL_SITE_and_not_merely_the_body():
+    """A default-fill read is still a read, so the weak assertion cannot see this.
+
+    `$domainsInput` is assigned from the env var and then conditionally REPLACED
+    by `$defaultDomains`. That makes the connection between the input and the
+    call a two-link chain, and the assertion has to cover both links: the entry
+    the splat carries, and the assignment that puts the dispatched value into the
+    local in the first place. Drop the second and `Domains = $domainsInput` is
+    equally true of a `$domainsInput` that only ever holds the default list.
+    """
+    body = _step().get("run", "")
+    invocation = pwsh_invocation(body, CALLEE)
+    assert SPLAT in invocation, (
+        f"the invocation of {CALLEE} must splat {SPLAT}. Invocation: {invocation!r}"
+    )
+    for var, (entry, binding) in CALL_SITE.items():
+        assert entry in body, (
+            f"{SPLAT} must carry {entry!r}, or {var} reaches the callee through "
+            f"nothing. Body: {body!r}"
+        )
+        assert binding in body, (
+            f"{binding!r} must be what connects {var} to that local — without "
+            f"it the entry is satisfied by a local holding only the default. "
+            f"Body: {body!r}"
+        )
+
+
 NEEDS_PWSH = {
     "test_an_empty_domains_mapping_falls_back_to_the_default_list",
     "test_an_empty_target_mapping_omits_the_argument_entirely",

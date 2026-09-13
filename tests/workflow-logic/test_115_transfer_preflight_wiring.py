@@ -75,7 +75,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, find_step, load_workflow  # noqa: E402
+from wf_extract import child_env, find_step, load_workflow, pwsh_invocation  # noqa: E402
 
 _GUARD_PATH = (
     pathlib.Path(__file__).resolve().parents[2]
@@ -815,6 +815,73 @@ def test_a_non_numeric_issue_number_is_refused_by_name():
     assert result["failures"] and "not-a-number" in result["failures"][0], (
         f"the failure must quote the offending value: {result!r}"
     )
+
+
+# The CALL SITE, per variable (#1306, ledger L294). 115 carries the weak
+# assertion in its worst form: both pwsh guards are DEFAULT-FILLS that write
+# back through `$env:` itself (`$env:IN_MIN_DAYS_TO_EXPIRY = '15'`), so each
+# variable is read AND written above the call. `$env:X in body` cannot fail on
+# this body no matter what the invocation passes.
+PWSH_CALL_SITE = {
+    "IN_MIN_DAYS_TO_EXPIRY": "-MinDaysToExpiry $env:IN_MIN_DAYS_TO_EXPIRY",
+    "IN_POST_REG_LOCK_DAYS": "-PostRegLockDays $env:IN_POST_REG_LOCK_DAYS",
+}
+
+# The JS step's chain is one link longer: the value is read, converted, and only
+# then passed. Asserting the conversion as well as the argument is what stops a
+# `const issueNumber = 1` from satisfying `issue_number: issueNumber`.
+JS_CALLEE = "github.rest.issues.createComment"
+JS_CALL_SITE = {
+    "IN_ISSUE_NUMBER": (
+        "issue_number: issueNumber",
+        "const issueNumber = Number(process.env.IN_ISSUE_NUMBER);",
+    )
+}
+
+
+def test_both_pwsh_inputs_reach_the_CALL_SITE_and_not_merely_the_body():
+    """Six parameters spelled across backtick continuations, so join first.
+
+    The invocation a reader sees as one statement is seven lines in the file, and
+    the line carrying the script name carries none of the arguments — so a
+    line-at-a-time locator would find the call and learn nothing from it. Joining
+    the continuation is what makes `-MinDaysToExpiry $env:IN_MIN_DAYS_TO_EXPIRY`
+    an assertion about the call rather than about the body.
+
+    Both of this step's guards are default-fills, which is the exact shape #1306
+    was measured on: replacing either argument with the guard's own literal
+    ('15', '60') leaves a body that behaves plausibly, ignores the dispatch, and
+    passes every other test in this module. Ledger L294.
+    """
+    body = _pwsh_step()["run"]
+    invocation = pwsh_invocation(body, CALLEE)
+    for var, argument in PWSH_CALL_SITE.items():
+        assert argument in invocation, (
+            f"the invocation of {CALLEE} must pass {argument!r}, or {var} is "
+            f"defaulted and then discarded and the dispatcher's threshold "
+            f"reaches nothing. Invocation: {invocation!r}"
+        )
+
+
+def test_the_issue_number_reaches_the_CALL_SITE_and_not_merely_the_body():
+    """`process.env.IN_ISSUE_NUMBER in body` is satisfied by the guard twice.
+
+    The JS guard both tests the value and quotes it back in its own failure
+    message, so the reader appears three times in a body that could still comment
+    on a hard-coded issue. The conversion is asserted alongside the argument
+    because `issue_number: issueNumber` says nothing about where `issueNumber`
+    came from — and this step posts to an issue number an operator supplies.
+    """
+    body = _js_step()["with"]["script"]
+    for var, (argument, binding) in JS_CALL_SITE.items():
+        assert argument in body, (
+            f"the {JS_CALLEE} call must pass {argument!r}, or {var} reaches no "
+            f"API call. Body: {body!r}"
+        )
+        assert binding in body, (
+            f"{binding!r} must be what fills that local, or the comment is "
+            f"posted to an issue {var} never named. Body: {body!r}"
+        )
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

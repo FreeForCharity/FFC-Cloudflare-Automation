@@ -40,7 +40,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, find_step, load_workflow
+from wf_extract import child_env, find_step, load_workflow, pwsh_invocation
 
 WORKFLOW = "112-dns-bulk-replace-a-ip.yml"
 JOB = "bulk-replace"
@@ -253,6 +253,51 @@ def test_dry_run_false_omits_the_switch():
 # Cases that shell out to pwsh; everything else is a static assertion over the
 # workflow YAML and must run on a host that has no pwsh. A whole-module gate
 # here reported green having asserted nothing -- #1182, ledger L246.
+# The CALL SITE, per variable (#1306, ledger L294). `$env:X in body` above is
+# satisfied by the guard's own read, so it stays green on a body that fills the
+# variable and then hard-codes the argument. These are the fragments a literal
+# would displace: the hashtable entry the splat carries, and the assignment that
+# connects the local to the env var. Neither appears in the guard.
+CALLEE = "bulk-replace-a-record-ip.ps1"
+SPLAT = "@params"
+CALL_SITE = {
+    "IN_OLD_IP": ("OldIp = $oldIp", "$oldIp = [string]$env:IN_OLD_IP"),
+    "IN_NEW_IP": ("NewIp = $newIp", "$newIp = [string]$env:IN_NEW_IP"),
+}
+
+
+def test_each_input_reaches_the_CALL_SITE_and_not_merely_the_body():
+    """The wiring assertion above cannot tell a used value from a filled one.
+
+    Both inputs reach the callee through `$params`, so there are two places a
+    literal can be substituted without disturbing `$env:IN_OLD_IP in body`: the
+    hashtable entry, and the local's assignment. A body that read the env var in
+    its guard and then splatted `OldIp = '10.0.0.1'` would pass every other test
+    in this module while the dispatcher's address reached nothing.
+
+    Asserting the local's assignment as well as the entry is what closes the
+    second gap — `OldIp = $oldIp` alone is satisfied by an `$oldIp` assigned from
+    anywhere. Ledger L294.
+    """
+    body = _step().get("run", "")
+    invocation = pwsh_invocation(body, CALLEE)
+    assert SPLAT in invocation, (
+        f"the invocation of {CALLEE} must splat {SPLAT}, or these per-variable "
+        f"assertions are checking a hashtable nothing passes. "
+        f"Invocation: {invocation!r}"
+    )
+    for var, (entry, binding) in CALL_SITE.items():
+        assert entry in body, (
+            f"{SPLAT} must carry {entry!r}, or {var} reaches the callee through "
+            f"nothing however faithfully the env: block maps it. Body: {body!r}"
+        )
+        assert binding in body, (
+            f"{binding!r} must be the only source of that local — an entry "
+            f"assigned from anything else silently decouples {var} from the "
+            f"call. Body: {body!r}"
+        )
+
+
 NEEDS_PWSH = {
     "test_dry_run_false_omits_the_switch",
     "test_dry_run_true_sets_the_switch",

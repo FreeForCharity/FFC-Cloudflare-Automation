@@ -59,11 +59,41 @@ def _strip_quoted(text):
     does not read as a pipeline. Never use it to look for `$?`, which most often
     appears inside double quotes (`echo "EXIT=$?"`) -- that is the case worth
     catching, not the case worth ignoring.
+
+    Backslash escapes are honoured, and that is load-bearing rather than
+    pedantry: an escape-blind scan mistakes a LITERAL quote for the start of a
+    span and blanks everything after it. `-f body=it\'s` is one unquoted word
+    to the shell, but reads here as an unterminated single quote, so every
+    operator -- and, for rule 8, the endpoint -- vanishes from the blanked
+    copy. It fails PERMISSIVELY, which is the direction that matters: the
+    caller sees a command with nothing left in it to object to.
+
+    Outside single quotes a backslash consumes the next character (so `\"` does
+    not close a double-quoted span); inside single quotes nothing is special
+    and only `'` closes. The escaped character is blanked along with its
+    backslash, because an escaped character is data and never an operator,
+    which is the only question any caller of this asks.
     """
     out = list(text)
     quote = None
-    for i, ch in enumerate(text):
-        if quote:
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if quote == "'":
+            # Single quotes: nothing is special, not even a backslash.
+            if ch == "'":
+                quote = None
+            else:
+                out[i] = " "
+        elif ch == "\\" and i + 1 < n:
+            # Unquoted, or inside double quotes: the escape and what it
+            # consumes are both literal data.
+            out[i] = " "
+            out[i + 1] = " "
+            i += 2
+            continue
+        elif quote == '"':
             if ch == quote:
                 quote = None
             else:
@@ -71,6 +101,7 @@ def _strip_quoted(text):
         elif ch in "'\"":
             quote = ch
             out[i] = " "
+        i += 1
     return "".join(out)
 
 

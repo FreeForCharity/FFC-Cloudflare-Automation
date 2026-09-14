@@ -496,6 +496,25 @@ RULES = [
         # call. This is the case that catches the obvious wrong fix.
         ("gh api jq comparison without endpoint allowed",
          "gh api repos/o/r/issues --jq '.[] | select(.number > 5)'", ALLOW),
+        # An ESCAPED quote is a literal character, not the start of a quoted
+        # span. An escape-blind stripper reads it as an unterminated quote and
+        # blanks the rest of the command -- endpoint included -- so the call
+        # sails through with nothing left to object to. Found in review of
+        # #1313 (Conductor run 171); these three block on `main` and regressed
+        # when the span first became quote-aware.
+        ("gh api escaped single quote then endpoint",
+         "gh api -f body=it\\'s /markdown", BLOCK),
+        ("gh api escaped double quote then endpoint",
+         'gh api -f body=a\\"b /markdown', BLOCK),
+        # The realistic one: `\"` inside a double-quoted span does not close it.
+        ("gh api escaped double quote inside double quotes then endpoint",
+         'gh api -f body="a\\" > x" /markdown', BLOCK),
+        # Controls for the opposite error -- an over-eager stripper. Neither of
+        # these involves an escape, and both were already correct.
+        ("gh api double-quoted jq then leading slash endpoint",
+         'gh api --jq ".a > 1" /markdown', BLOCK),
+        ("gh api apostrophe inside double quotes then endpoint",
+         "gh api -f body=\"it's\" /markdown", BLOCK),
     ]),
 
     Rule("pipeline-exit-code", 'ledger L50', BLOCK_TIER, [

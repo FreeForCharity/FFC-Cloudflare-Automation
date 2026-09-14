@@ -465,6 +465,37 @@ RULES = [
         # A slash inside a flag VALUE is data, not the endpoint -- must not fire.
         ("gh api field value with slash allowed",
          "gh api repos/o/r/issues -f body=/tmp/note.md", ALLOW),
+        # A redirect TARGET is a shell path, not the endpoint -- must not fire.
+        # Conductor run 161 was blocked three times on exactly this shape.
+        ("gh api redirect to absolute path allowed",
+         "gh api repos/o/r/contents/x > /c/tmp/z.yaml", ALLOW),
+        ("gh api stderr redirect to absolute path allowed",
+         "gh api repos/o/r/pulls 2> /tmp/err.txt", ALLOW),
+        ("gh api stdin from absolute path allowed",
+         "gh api graphql --input < /c/tmp/q.json", ALLOW),
+        # ...but a leading-slash endpoint BEFORE the redirect still blocks.
+        ("gh api leading slash then redirect",
+         "gh api /markdown > /tmp/out.html", BLOCK),
+        # A stop character INSIDE QUOTES is jq/header data, not a shell operator.
+        # A quote-blind span ends on it and never reaches the endpoint that
+        # follows, so these are the bypasses the `<>` stop would otherwise open.
+        # Measured on the quote-blind span: the first three were all ALLOWED.
+        ("gh api jq gt then leading slash endpoint",
+         "gh api --jq '.a > 1' /markdown", BLOCK),
+        ("gh api jq lt then leading slash endpoint",
+         "gh api --jq '.a < 1' /markdown", BLOCK),
+        # `|` has been a stop character since rule 8 was written, so this one
+        # is an OLDER bypass than the `<>` pair -- allowed before either change.
+        ("gh api jq pipe then leading slash endpoint",
+         "gh api --jq '.workflow_runs[] | select(.id > 5)' /repos/o/r/actions/runs", BLOCK),
+        # Pins behaviour that was already correct: a quoted span with no stop
+        # character in it never truncated the match.
+        ("gh api quoted header then leading slash endpoint",
+         "gh api -H 'Accept: application/vnd.github+json' /markdown", BLOCK),
+        # ...and quoting a stop character must not start blocking a correct
+        # call. This is the case that catches the obvious wrong fix.
+        ("gh api jq comparison without endpoint allowed",
+         "gh api repos/o/r/issues --jq '.[] | select(.number > 5)'", ALLOW),
     ]),
 
     Rule("pipeline-exit-code", 'ledger L50', BLOCK_TIER, [

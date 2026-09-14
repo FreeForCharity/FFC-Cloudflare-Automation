@@ -924,7 +924,18 @@ def main():
     #    follow a flag that takes a separate value (`gh api -X POST /repos/...`),
     #    which a flags-then-endpoint pattern misses. The `(?<=\s)` keeps it off
     #    an embedded value like `-f path=/x`, where the slash is data.
-    if re.search(r"(?<![\w-])gh\s+api\b[^\n|;&]*?(?<=\s)/[A-Za-z]", cmd):
+    #    The span stops at `<` and `>` as well as `|;&`, because a redirect
+    #    target is a shell path and never the endpoint (`> /c/tmp/x`, `2>
+    #    /tmp/err`, `< /c/q.json`); without that stop the rule blocked the
+    #    Conductor three times in run 161 on ordinary read-only calls.
+    #    All five stop characters are SHELL OPERATORS, so the span is searched
+    #    against `_strip_quoted(cmd)`: inside quotes they are jq or header
+    #    data, and a quote-blind span ends early on them and never reaches the
+    #    endpoint that follows. `gh api --jq '.a > 5' /markdown` is the shape.
+    #    Measured on the quote-blind span, that call is ALLOWED -- and so is
+    #    `--jq '... | select(...)' /repos/...`, whose `|` predates the `<>`
+    #    stop, so this closes an older bypass rather than only a new one.
+    if re.search(r"(?<![\w-])gh\s+api\b[^\n|;&<>]*?(?<=\s)/[A-Za-z]", _strip_quoted(cmd)):
         block(
             "`gh api` with a leading-slash endpoint is mangled by MSYS path conversion in "
             "this environment's git-bash -- `gh api /markdown` is rewritten to a filesystem "

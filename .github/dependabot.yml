@@ -1,8 +1,13 @@
 version: 2
 updates:
-  # Enable version updates for GitHub Actions
+  # Enable version updates for GitHub Actions.
+  # '/' only scans .github/workflows. The composite actions under .github/actions/ carry their own
+  # pins, and every Key Vault credential fetch goes through one of them, so they must be listed too
+  # or they are silently left behind on each bump (tests/workflow-logic/test_action_pin_consistency.py).
   - package-ecosystem: 'github-actions'
-    directory: '/'
+    directories:
+      - '/'
+      - '/.github/actions/*'
     schedule:
       interval: 'weekly'
       day: 'monday'

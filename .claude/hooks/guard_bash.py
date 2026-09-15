@@ -59,11 +59,41 @@ def _strip_quoted(text):
     does not read as a pipeline. Never use it to look for `$?`, which most often
     appears inside double quotes (`echo "EXIT=$?"`) -- that is the case worth
     catching, not the case worth ignoring.
+
+    Backslash escapes are honoured, and that is load-bearing rather than
+    pedantry: an escape-blind scan mistakes a LITERAL quote for the start of a
+    span and blanks everything after it. `-f body=it\'s` is one unquoted word
+    to the shell, but reads here as an unterminated single quote, so every
+    operator -- and, for rule 8, the endpoint -- vanishes from the blanked
+    copy. It fails PERMISSIVELY, which is the direction that matters: the
+    caller sees a command with nothing left in it to object to.
+
+    Outside single quotes a backslash consumes the next character (so `\"` does
+    not close a double-quoted span); inside single quotes nothing is special
+    and only `'` closes. The escaped character is blanked along with its
+    backslash, because an escaped character is data and never an operator,
+    which is the only question any caller of this asks.
     """
     out = list(text)
     quote = None
-    for i, ch in enumerate(text):
-        if quote:
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if quote == "'":
+            # Single quotes: nothing is special, not even a backslash.
+            if ch == "'":
+                quote = None
+            else:
+                out[i] = " "
+        elif ch == "\\" and i + 1 < n:
+            # Unquoted, or inside double quotes: the escape and what it
+            # consumes are both literal data.
+            out[i] = " "
+            out[i + 1] = " "
+            i += 2
+            continue
+        elif quote == '"':
             if ch == quote:
                 quote = None
             else:
@@ -71,6 +101,7 @@ def _strip_quoted(text):
         elif ch in "'\"":
             quote = ch
             out[i] = " "
+        i += 1
     return "".join(out)
 
 
@@ -924,7 +955,18 @@ def main():
     #    follow a flag that takes a separate value (`gh api -X POST /repos/...`),
     #    which a flags-then-endpoint pattern misses. The `(?<=\s)` keeps it off
     #    an embedded value like `-f path=/x`, where the slash is data.
-    if re.search(r"(?<![\w-])gh\s+api\b[^\n|;&]*?(?<=\s)/[A-Za-z]", cmd):
+    #    The span stops at `<` and `>` as well as `|;&`, because a redirect
+    #    target is a shell path and never the endpoint (`> /c/tmp/x`, `2>
+    #    /tmp/err`, `< /c/q.json`); without that stop the rule blocked the
+    #    Conductor three times in run 161 on ordinary read-only calls.
+    #    All five stop characters are SHELL OPERATORS, so the span is searched
+    #    against `_strip_quoted(cmd)`: inside quotes they are jq or header
+    #    data, and a quote-blind span ends early on them and never reaches the
+    #    endpoint that follows. `gh api --jq '.a > 5' /markdown` is the shape.
+    #    Measured on the quote-blind span, that call is ALLOWED -- and so is
+    #    `--jq '... | select(...)' /repos/...`, whose `|` predates the `<>`
+    #    stop, so this closes an older bypass rather than only a new one.
+    if re.search(r"(?<![\w-])gh\s+api\b[^\n|;&<>]*?(?<=\s)/[A-Za-z]", _strip_quoted(cmd)):
         block(
             "`gh api` with a leading-slash endpoint is mangled by MSYS path conversion in "
             "this environment's git-bash -- `gh api /markdown` is rewritten to a filesystem "

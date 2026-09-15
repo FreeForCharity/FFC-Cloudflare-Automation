@@ -443,7 +443,65 @@ FORCE_LONG_RE = re.compile(r"--force\b", re.IGNORECASE)
 # lowercase-only, which is what keeps `-F` and `-qF` out.
 FORCE_SHORT_RE = re.compile(r"(?<!\S)-[A-Za-z]*f[A-Za-z]*\b")
 PROTECTED_BRANCH_RE = re.compile(r"(?<![\w./-])(main|master)(?![\w/-])", re.IGNORECASE)
-GIT_PUSH_RE = re.compile(r"\bgit\s+push\b", re.IGNORECASE)
+# git accepts its GLOBAL options BEFORE the subcommand, so the verb is not
+# always the word right after `git` (#1311). `git -c protocol.version=2 push
+# --force origin main`, `git --no-pager push ...` and `git -C /repo push ...` are
+# all working force-push spellings -- measured, each one parses its options and
+# gets as far as the remote lookup -- and `\bgit\s+push\b` saw none of them.
+# `git -c` in particular is what tooling and CI snippets emit routinely, so an
+# agent could reach this without trying to.
+#
+# Only OPTION-SHAPED words may sit between `git` and `push`, plus the single
+# argument word that `-c` and `-C` take separately. That is what keeps the
+# widening safe: in a real git command line the SUBCOMMAND is the first
+# non-option word, so `commit`, `log`, or an unquoted message word ends the
+# scan before a stray `push` can be read as the verb.
+#
+# The lookahead on the second alternative is load-bearing. Without it, a failed
+# match backtracks so that `-c` is read as a bare option and its ARGUMENT is
+# read as the verb: `git -c push.default=simple config --list` matched, because
+# `push.default=simple` begins with `push` followed by a word boundary. Barring
+# an option that owns a separate argument from alt 2 fixes that structurally,
+# which is why `push\b` itself is left alone -- tightening the verb's trailing
+# boundary would have been a LOOSENING of a block rule, and the property worth
+# keeping is that this pattern is a strict superset of the one it replaces: no
+# command that was blocked before can become allowed here.
+#
+# Deliberately NOT matched against `_strip_quoted(stage)`, though #1311 raised
+# it as the way to make a permissive verb match safe. Blanking quoted spans
+# would take `bash -c "git push --force origin main"` -- which really does
+# rewrite main -- from blocked to allowed, and a verb rule must not fail open
+# to buy a false-positive fix. The option-shaped restriction above buys the
+# same safety without touching what the rule can see.
+#
+# `-c`/`-C` are not the only options whose value is a SEPARATE word, and the
+# long ones were missed on the first pass (Conductor run 170 on #1312, three
+# live bypasses). Measured on git 2.43.0 -- each runs the subcommand with the
+# value taken as its own argument, against a `--bogus-opt x` control that
+# exits 129:
+#
+#   git --work-tree <dir> status     -> 0, "On branch master"
+#   git --namespace x status         -> 0, "On branch master"
+#   git --config-env a.b=HOME status -> 0, "On branch master"
+#   git --git-dir <path> status      -> 0, "On branch master"
+#
+# `--exec-path` is deliberately absent: bare, it PRINTS the exec path and
+# exits without running the subcommand at all, so it can never precede a push.
+# `--super-prefix` is present and is the one entry not confirmed here -- this
+# git rejects it (129, like the bogus control), because it was removed as an
+# internal-only option. It is kept because older gits accept it and listing it
+# only widens what may sit before the verb.
+#
+# `git.exe` is the same rule reached from the other end: `\bgit\s` wants
+# whitespace right after `git`, and `git.exe push --force origin main` is a
+# working spelling on a Windows host -- which is where the Conductor runs.
+GIT_SEPARATE_ARG_OPT = r"(?:-[cC]|--(?:git-dir|work-tree|namespace|config-env|super-prefix))"
+GIT_GLOBAL_OPT = (
+    rf"(?:{GIT_SEPARATE_ARG_OPT}\s+\S+|(?!{GIT_SEPARATE_ARG_OPT}\s)--?[A-Za-z]\S*)"
+)
+GIT_PUSH_RE = re.compile(
+    rf"\bgit(?:\.exe)?\s+(?:{GIT_GLOBAL_OPT}\s+)*push\b", re.IGNORECASE
+)
 
 
 def _pipe_stages(stmt):

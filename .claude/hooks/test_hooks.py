@@ -292,6 +292,50 @@ RULES = [
          "echo x | git push --force origin main", BLOCK),
         ("force-push main as the first pipeline stage",
          "git push --force origin main | tee push.log", BLOCK),
+        # git's GLOBAL options may precede the subcommand, so the verb is not
+        # always the word after `git` (#1311). Each of these is a working
+        # force-push spelling that the old `\bgit\s+push\b` never saw -- the
+        # `-c` form especially, which is what tooling and CI snippets emit.
+        ("force-push main via git -c", "git -c protocol.version=2 push --force origin main", BLOCK),
+        ("force-push main via git --no-pager", "git --no-pager push --force origin main", BLOCK),
+        ("force-push main via git -C", "git -C /repo push --force origin main", BLOCK),
+        ("force-push master via git -c and -C",
+         "git -c core.pager=cat -C /repo push -f origin master", BLOCK),
+        # `-c`/`-C` are not the only options taking a SEPARATE value word, and
+        # the long ones were missed on the first pass (Conductor run 170 on
+        # #1312). Each verified against git 2.43.0 as a running command, with
+        # a `--bogus-opt x` control exiting 129.
+        ("force-push main via git --work-tree",
+         "git --work-tree /repo push -f origin main", BLOCK),
+        ("force-push main via git --namespace",
+         "git --namespace x push --force origin main", BLOCK),
+        ("force-push main via git --config-env",
+         "git --config-env a=B push --force origin main", BLOCK),
+        # `--git-dir <path>` was already blocked, but only by accident: the
+        # path ends `.git push`, and `\bgit\s+push\b` matched INSIDE it. Pin
+        # it now that the rule itself covers the form, so a future narrowing
+        # cannot be hidden by that coincidence.
+        ("force-push main via git --git-dir with a separate arg",
+         "git --git-dir /repo/.git push --force origin main", BLOCK),
+        # `\bgit\s` wants whitespace right after `git`; the Conductor runs on
+        # Windows, where `git.exe push` is an ordinary spelling.
+        ("force-push main via git.exe", "git.exe push --force origin main", BLOCK),
+        # ...and the long options must not arm the rule either. The second is
+        # run 170's row: `log` is not option-shaped, so it ends the scan and
+        # the `push` after `--grep` is never read as the verb.
+        ("normal push feature via git --work-tree",
+         "git --work-tree /repo push --force origin feature-x", ALLOW),
+        ("git log --grep push naming main", "git log --grep push main", ALLOW),
+        # ...and the widening must not arm the rule off a word that is not the
+        # verb. The first is the ordinary reason to write `git -c` at all; the
+        # second is `-c`'s ARGUMENT beginning with `push`, which an earlier
+        # draft read as the subcommand by backtracking; the third proves a
+        # quoted `push` still cannot supply it.
+        ("normal push feature via git -c", "git -c a=b push --force origin feature-x", ALLOW),
+        ("git -c push.default then an unrelated main and force",
+         "git -c push.default=simple config --list && echo main --force", ALLOW),
+        ("commit message naming push, force and main",
+         'git commit --amend -m "ready to push --force origin main"', ALLOW),
         # Keeps the case-sensitive short flag pinned now that pipe splitting
         # clears the `grep -F` row on its own: prose inside a heredoc body is
         # analysed (bodies are deliberately not skipped), and this line holds

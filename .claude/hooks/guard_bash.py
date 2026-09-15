@@ -426,6 +426,89 @@ def _names_a_secret(chunk):
     )
 
 
+# Long force flags are matched case-insensitively -- `--force-with-lease` is
+# covered by `--force\b`, since the `-` that follows `force` is a word boundary.
+FORCE_LONG_RE = re.compile(r"--force\b", re.IGNORECASE)
+# The SHORT flag is matched case-SENSITIVELY, and that is the whole point of
+# this half of #1309: `-F` is not a git-push flag, but it is `gh api -F`,
+# `git commit -F`, `grep -F` and `sort -f`. Under the old lowercased match a
+# `-F` anywhere in the command supplied the "force" half of the rule.
+#
+# `[A-Za-z]*` on both sides because git's option parser BUNDLES short options:
+# `git push -fq origin main` and `-qf` both force-push (measured -- `-qZ` is
+# rejected as an unknown switch, so the parser really is splitting the
+# cluster), while `-f\b` sees neither. That hole predates #1309 -- the original
+# `\s-f\b` missed it too -- and it is a bypass of a protected-branch rule, so
+# it is fixed here rather than deferred. The `f` inside the cluster stays
+# lowercase-only, which is what keeps `-F` and `-qF` out.
+FORCE_SHORT_RE = re.compile(r"(?<!\S)-[A-Za-z]*f[A-Za-z]*\b")
+PROTECTED_BRANCH_RE = re.compile(r"(?<![\w./-])(main|master)(?![\w/-])", re.IGNORECASE)
+GIT_PUSH_RE = re.compile(r"\bgit\s+push\b", re.IGNORECASE)
+
+
+def _pipe_stages(stmt):
+    """Split one segment on `|` outside quotes.
+
+    The counterpart to `_split_on_logical`, which deliberately leaves `|`
+    alone because a secret can cross a pipe. Rule 2's three conditions cannot:
+    a `git push` is force-pushing to `main` only if the verb, the flag and the
+    refspec are arguments of the SAME command. `|&` is bash's
+    "pipe stdout and stderr", so the `&` is consumed with the bar rather than
+    left to start the next stage.
+    """
+    bare = _strip_quoted(stmt)
+    parts = []
+    start = 0
+    i = 0
+    while i < len(bare):
+        if bare[i] == "|":
+            parts.append(stmt[start:i])
+            i += 2 if bare.startswith("|&", i) else 1
+            start = i
+            continue
+        i += 1
+    parts.append(stmt[start:])
+    return parts
+
+
+def force_push_violation(cmd):
+    """`git push --force origin main` -- history rewritten on a protected branch.
+
+    The rule decides per SEGMENT (#1309). Judging the whole command made "a
+    push appears somewhere", "a force flag appears somewhere" and "the word
+    main appears somewhere" a violation, which is the agent's standard idiom:
+    a commit whose message mentions `main`, or a `gh api ... -F body=...`
+    posted right after a push, each supplied one of the three halves. Conductor
+    run 168 was blocked three times pushing a one-line fix to a feature branch,
+    and the pressure that creates is to route around the hook.
+
+    Segments come from `_echo_segments`, which INCLUDES heredoc bodies. That is
+    deliberate and is the fail-closed choice: `bash <<EOF` ... `git push
+    --force origin main` ... `EOF` really does rewrite main, so dropping the
+    body would turn a blocked command into an allowed one. Including it costs
+    nothing on the #1309 false positive, whose heredoc body carries the word
+    `main` but no push verb.
+
+    `_echo_segments` keeps a pipeline whole, which rule 3 needs (`printenv |
+    grep GH_TOKEN` prints a secret across the pipe) and this rule must not
+    have: a later stage supplies flags and words the push never saw, so
+    `git push origin feature-x | grep -f patterns.txt main` armed all three
+    halves. This rule therefore splits the segment again on `|` and requires
+    the three inside ONE stage. That only narrows the window and cannot open a
+    bypass -- a real force-push carries its own verb, flag and refspec in its
+    own stage, wherever in the pipeline it sits. Copilot on #1310.
+    """
+    for seg in _echo_segments(cmd):
+        for stage in _pipe_stages(seg):
+            if not GIT_PUSH_RE.search(stage):
+                continue
+            if not (FORCE_LONG_RE.search(stage) or FORCE_SHORT_RE.search(stage)):
+                continue
+            if PROTECTED_BRANCH_RE.search(stage):
+                return "Force-push to a protected branch (main/master) is not allowed."
+    return None
+
+
 def echo_secret_violation(cmd):
     """`echo $GH_TOKEN` -- a secret printed into the log.
 
@@ -796,11 +879,12 @@ def main():
         if re.search(pat, low):
             block(f"Refusing to disable TLS/proxy security: {desc}.")
 
-    # 2. Force-push to a protected branch. Match 'main'/'master' only as a
-    #    standalone branch token, so e.g. 'feature/main' is NOT caught.
-    if re.search(r"\bgit\s+push\b", low) and re.search(r"(--force\b|--force-with-lease|\s-f\b)", low):
-        if re.search(r"(?<![\w./-])(main|master)(?![\w/-])", low):
-            block("Force-push to a protected branch (main/master) is not allowed.")
+    # 2. Force-push to a protected branch, decided per segment (see
+    #    force_push_violation). Match 'main'/'master' only as a standalone
+    #    branch token, so e.g. 'feature/main' is NOT caught.
+    reason = force_push_violation(cmd)
+    if reason:
+        block(reason)
 
     # 3. Printing secrets to logs, decided per statement (see
     #    echo_secret_violation). Case-insensitive so a lowercase env var

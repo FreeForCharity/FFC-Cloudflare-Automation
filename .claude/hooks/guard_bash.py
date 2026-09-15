@@ -447,7 +447,7 @@ GIT_PUSH_RE = re.compile(r"\bgit\s+push\b", re.IGNORECASE)
 
 
 def _pipe_stages(stmt):
-    """Split one segment on `|` outside quotes.
+    """Split one segment on `|` outside quotes, substitutions and escapes.
 
     The counterpart to `_split_on_logical`, which deliberately leaves `|`
     alone because a secret can cross a pipe. Rule 2's three conditions cannot:
@@ -455,13 +455,60 @@ def _pipe_stages(stmt):
     refspec are arguments of the SAME command. `|&` is bash's
     "pipe stdout and stderr", so the `&` is consumed with the bar rather than
     left to start the next stage.
+
+    Only a TOP-LEVEL `|` is a stage boundary, and getting that wrong fails
+    permissively rather than restrictively -- which is why the skips below are
+    the load-bearing half of this function rather than polish. A `|` inside a
+    command substitution belongs to a different command whose output becomes
+    one WORD of this one, so the outer command continues past the closing
+    paren: splitting there tears a single `git push` line in two, leaving the
+    verb and the flag in one computed "stage" and the refspec in the next, and
+    rule 2 then sees no stage carrying all three. Measured on this branch
+    before the fix, each a real force-push to `main` that the guard ALLOWED:
+
+        git push --force $(git remote | head -1) main
+        git push --force origin $(cat b.txt | tr -d '\\n'):main
+        git push --force `git remote | head -1` main
+        git push --force origin \\| main
+
+    All four BLOCK on `main`, where the rule judged the whole segment, so
+    these were a regression introduced with stage splitting rather than
+    pre-existing holes. Copilot on #1310.
+
+    So `|` is a boundary only outside `$(...)`, `${...}`, backticks and a
+    backslash escape. Bare `(`/`{` are tracked only once a substitution is
+    open, so `$( (a) | b )` keeps its inner paren from closing the span early
+    while an ordinary `$(a) | b` still splits.
     """
     bare = _strip_quoted(stmt)
     parts = []
+    closers = []
+    backtick = False
     start = 0
     i = 0
     while i < len(bare):
-        if bare[i] == "|":
+        ch = bare[i]
+        if ch == "\\":
+            # An escaped character is data, never an operator -- `\|` included.
+            i += 2
+            continue
+        if ch == "`":
+            backtick = not backtick
+            i += 1
+            continue
+        if ch == "$" and bare[i + 1 : i + 2] in ("(", "{"):
+            closers.append(")" if bare[i + 1] == "(" else "}")
+            i += 2
+            continue
+        if closers and ch in "({":
+            closers.append(")" if ch == "(" else "}")
+            i += 1
+            continue
+        if closers and ch == closers[-1]:
+            closers.pop()
+            i += 1
+            continue
+        if ch == "|" and not closers and not backtick:
             parts.append(stmt[start:i])
             i += 2 if bare.startswith("|&", i) else 1
             start = i
@@ -494,9 +541,17 @@ def force_push_violation(cmd):
     have: a later stage supplies flags and words the push never saw, so
     `git push origin feature-x | grep -f patterns.txt main` armed all three
     halves. This rule therefore splits the segment again on `|` and requires
-    the three inside ONE stage. That only narrows the window and cannot open a
-    bypass -- a real force-push carries its own verb, flag and refspec in its
-    own stage, wherever in the pipeline it sits. Copilot on #1310.
+    the three inside ONE stage. Copilot on #1310.
+
+    That narrowing is safe only for a boundary that is really a boundary, and
+    an earlier revision of this PR claimed here that it "cannot open a bypass
+    -- a real force-push carries its own verb, flag and refspec in its own
+    stage". It does; the claim was still wrong, because a `|` inside a command
+    substitution is not a stage boundary at all, and splitting on it cut that
+    single command's own words across two stages. Four real force-pushes to
+    `main` were ALLOWED as a result, all four of which `main` blocks. The
+    rows, and what `_pipe_stages` now skips to restore them, are in its
+    docstring. A stage-scoping rule is only as safe as its notion of a stage.
     """
     for seg in _echo_segments(cmd):
         for stage in _pipe_stages(seg):

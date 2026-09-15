@@ -292,6 +292,28 @@ RULES = [
          "echo x | git push --force origin main", BLOCK),
         ("force-push main as the first pipeline stage",
          "git push --force origin main | tee push.log", BLOCK),
+        # ...but only where the `|` is really a stage boundary. A `|` inside a
+        # command substitution belongs to a DIFFERENT command whose output is
+        # one word of this one, so splitting there cut a single force-push in
+        # two -- verb and flag in one computed stage, refspec in the next --
+        # and all four of these were ALLOWED at 46adfe3 while `main` blocked
+        # every one. A permissive miss, so they are the rows that matter.
+        # Copilot on #1310.
+        ("force-push main with a pipe inside $() ",
+         "git push --force $(git remote | head -1) main", BLOCK),
+        ("force-push main with a pipe inside $() in the refspec",
+         "git push --force origin $(cat b.txt | tr -d '\\n'):main", BLOCK),
+        ("force-push main with a pipe inside backticks",
+         "git push --force `git remote | head -1` main", BLOCK),
+        ("force-push main with an escaped pipe between arguments",
+         "git push --force origin \\| main", BLOCK),
+        # The opposite error -- a substitution that swallows the rest of the
+        # line -- would re-break the false positive the stage split exists for.
+        # `$(a) | b` must still split; only an UNCLOSED span may run on.
+        ("push feature through a substitution, then grep -f naming main",
+         "git push origin $(git branch --show-current) | grep -f patterns.txt main", ALLOW),
+        ("push feature after a substitution containing its own pipeline",
+         "echo $( (git log --oneline) | head -1 ) | git push -q origin feature-x", ALLOW),
         # Keeps the case-sensitive short flag pinned now that pipe splitting
         # clears the `grep -F` row on its own: prose inside a heredoc body is
         # analysed (bodies are deliberately not skipped), and this line holds

@@ -151,8 +151,69 @@ def _statements(cmd):
     return stmts
 
 
+def _top_level_ops(bare, ops):
+    """Yield `(index, length)` for each operator in `ops` that is TOP LEVEL.
+
+    `bare` must already be `_strip_quoted`, so the only spans left to skip are
+    the ones quoting cannot express: command substitutions `$(...)`, parameter
+    expansions `${...}`, backticks, and a backslash escape.
+
+    An operator inside one of those is not a separator of THIS command. A
+    substitution is a command of its own whose *output* becomes a single word
+    here, and the outer command continues past the closing paren -- so
+    splitting there tears one command's words across two computed pieces. For
+    a rule that requires several conditions in the same piece that fails
+    PERMISSIVELY, which is the direction a guard must never fail in.
+
+    Bare `(`/`{` are tracked only once a substitution is open, so
+    `$( (a) && b )` does not close its span early while an ordinary
+    `$(a) && b` still splits. `ops` is matched longest-first by the caller's
+    ordering, so `|&` wins over `|`.
+
+    Extracted from `_pipe_stages`, which had this scanner inline, because
+    `_split_on_logical` needs exactly the same span model and a second copy
+    would be one more place for the two to drift apart (#1309).
+    """
+    closers = []
+    backtick = False
+    i = 0
+    n = len(bare)
+    while i < n:
+        ch = bare[i]
+        if ch == "\\":
+            # An escaped character is data, never an operator -- `\|` included.
+            i += 2
+            continue
+        if ch == "`":
+            backtick = not backtick
+            i += 1
+            continue
+        if ch == "$" and bare[i + 1 : i + 2] in ("(", "{"):
+            closers.append(")" if bare[i + 1] == "(" else "}")
+            i += 2
+            continue
+        if closers and ch in "({":
+            closers.append(")" if ch == "(" else "}")
+            i += 1
+            continue
+        if closers and ch == closers[-1]:
+            closers.pop()
+            i += 1
+            continue
+        if not closers and not backtick:
+            for op in ops:
+                if bare.startswith(op, i):
+                    yield i, len(op)
+                    i += len(op)
+                    break
+            else:
+                i += 1
+            continue
+        i += 1
+
+
 def _split_on_logical(stmt):
-    """Split one statement on `&&` / `||` outside quotes.
+    """Split one statement on `&&` / `||` outside quotes and substitutions.
 
     A pipeline (`|`) is deliberately NOT split: `printenv | grep GH_TOKEN`
     prints a secret and must stay one unit, whereas
@@ -160,18 +221,31 @@ def _split_on_logical(stmt):
     too -- splitting it would tear `echo >&2 $TOKEN` into a half holding the
     verb and a half holding the variable, which is the one direction a guard
     must never fail in.
+
+    Only a TOP-LEVEL `&&` / `||` is a boundary, for the reason `_top_level_ops`
+    states, and this is the same defect `_pipe_stages` was fixed for one level
+    down. Once rule 2 decides per segment, an `&&` inside a substitution tears
+    a single `git push` line in two -- verb and flag in one segment, refspec in
+    the next -- and the rule sees no segment carrying all three. Measured on
+    this branch before the fix, each a real force-push to `main` that the guard
+    ALLOWED even with `_pipe_stages` already fixed:
+
+        git push --force $(cd /repo && git remote) main
+        git push --force $(test -d .git && echo origin) main
+        git push --force `cd /repo && git remote` main
+        git push --force $(cd /repo && (echo origin | cat)) main
+        git push --force $(cd /repo || echo origin) main
+        git push --force origin $(cd /repo && cat b.txt):main
+
+    All six BLOCK on `main`, where the rule judged the whole command, so they
+    are a regression this stack introduced rather than pre-existing holes.
     """
     bare = _strip_quoted(stmt)
     parts = []
     start = 0
-    i = 0
-    while i < len(bare):
-        if bare.startswith("&&", i) or bare.startswith("||", i):
-            parts.append(stmt[start:i])
-            i += 2
-            start = i
-            continue
-        i += 1
+    for i, oplen in _top_level_ops(bare, ("&&", "||")):
+        parts.append(stmt[start:i])
+        start = i + oplen
     parts.append(stmt[start:])
     return parts
 
@@ -482,38 +556,11 @@ def _pipe_stages(stmt):
     """
     bare = _strip_quoted(stmt)
     parts = []
-    closers = []
-    backtick = False
     start = 0
-    i = 0
-    while i < len(bare):
-        ch = bare[i]
-        if ch == "\\":
-            # An escaped character is data, never an operator -- `\|` included.
-            i += 2
-            continue
-        if ch == "`":
-            backtick = not backtick
-            i += 1
-            continue
-        if ch == "$" and bare[i + 1 : i + 2] in ("(", "{"):
-            closers.append(")" if bare[i + 1] == "(" else "}")
-            i += 2
-            continue
-        if closers and ch in "({":
-            closers.append(")" if ch == "(" else "}")
-            i += 1
-            continue
-        if closers and ch == closers[-1]:
-            closers.pop()
-            i += 1
-            continue
-        if ch == "|" and not closers and not backtick:
-            parts.append(stmt[start:i])
-            i += 2 if bare.startswith("|&", i) else 1
-            start = i
-            continue
-        i += 1
+    # `|&` first so the longest match wins and the `&` is consumed with the bar.
+    for i, oplen in _top_level_ops(bare, ("|&", "|")):
+        parts.append(stmt[start:i])
+        start = i + oplen
     parts.append(stmt[start:])
     return parts
 

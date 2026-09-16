@@ -1059,10 +1059,11 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # the CNAME flip — so an injected payload ran twice, under two credentials.
     # --- WHMCS --------------------------------------------------------------
     "201-whmcs-export-domains.yml": ("output_file",),
-    "202-whmcs-export-products.yml": (
-        "client_products_output_file",
-        "products_output_file",
-    ),
+    # 202-whmcs-export-products.yml burned down (#1080 lane 25): both output-path
+    # inputs reach the pwsh body through step-level `env:`, and one `foreach` guard
+    # body applies the same six checks to both — the first lane whose step carried
+    # two free-text paths, where duplicated guards are how one value silently keeps
+    # a check the other gains.
     "203-whmcs-export-payment-methods.yml": ("output_file",),
     # 205-whmcs-ticket-open.yml burned down: `deptid` and `client_id` now reach
     # the pwsh body through step-level `env:` (TICKET_DEPTID / TICKET_CLIENT_ID).

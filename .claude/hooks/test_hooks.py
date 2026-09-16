@@ -307,6 +307,32 @@ RULES = [
          "git push --force `git remote | head -1` main", BLOCK),
         ("force-push main with an escaped pipe between arguments",
          "git push --force origin \\| main", BLOCK),
+        # Same defect one level UP, in `_split_on_logical`, which tears the
+        # statement into segments before `_pipe_stages` ever runs. An `&&` or
+        # `||` inside a substitution is not a segment boundary either, and all
+        # six of these were ALLOWED at 533b1ea -- with `_pipe_stages` already
+        # fixed -- while `main` blocked every one. Permissive, so they matter.
+        ("force-push main with && inside $()",
+         "git push --force $(cd /repo && git remote) main", BLOCK),
+        ("force-push main with && inside $() guarding a test",
+         "git push --force $(test -d .git && echo origin) main", BLOCK),
+        ("force-push main with && inside backticks",
+         "git push --force `cd /repo && git remote` main", BLOCK),
+        ("force-push main with && and a nested pipeline inside $()",
+         "git push --force $(cd /repo && (echo origin | cat)) main", BLOCK),
+        ("force-push main with || inside $()",
+         "git push --force $(cd /repo || echo origin) main", BLOCK),
+        ("force-push main with && inside $() in the refspec",
+         "git push --force origin $(cd /repo && cat b.txt):main", BLOCK),
+        # ...and the ALLOW half, which is what stops the lazy fix of simply not
+        # splitting on `&&`. A TOP-LEVEL `&&` is still a real boundary, so a
+        # feature-branch push followed by an unrelated command naming `main`
+        # must stay allowed -- that is #1309, the false positive this whole
+        # stack exists to remove.
+        ("push feature, then && a command naming main",
+         "git push origin feature-x && grep -f patterns.txt main", ALLOW),
+        ("push feature through a substitution containing &&",
+         "git push origin $(cd /repo && git branch --show-current)", ALLOW),
         # The opposite error -- a substitution that swallows the rest of the
         # line -- would re-break the false positive the stage split exists for.
         # `$(a) | b` must still split; only an UNCLOSED span may run on.

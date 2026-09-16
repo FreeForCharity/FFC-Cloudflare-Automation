@@ -92,6 +92,28 @@ _GUARD_PATH = (
     / "check-workflow-input-interpolation.py"
 )
 _spec = importlib.util.spec_from_file_location("interp_guard_202", _GUARD_PATH)
+# An unguarded `_spec.loader.exec_module(...)` can raise AttributeError at
+# IMPORT time, before a single case reports — the worst version of the roster
+# abort this module's docstring is about: not a truncated roster but an empty
+# one, naming `NoneType` rather than the path it could not import.
+#
+# Raised by Copilot on #1328, whose OBSERVATION is right and whose stated
+# trigger is not — worth recording, because the wrong trigger is the one a
+# reader would test against. Measured on this interpreter:
+#
+#   path missing, still `.py`   spec and loader both exist; `exec_module` raises
+#                               FileNotFoundError NAMING the path. Already
+#                               diagnosable; this assertion does not fire.
+#   suffix changed / directory  `spec_from_file_location` returns None outright,
+#                               so `_spec.loader` is the AttributeError.
+#
+# So the case to guard is the checker being MOVED or RENAMED, not deleted.
+assert _spec is not None and _spec.loader is not None, (
+    f"cannot infer an importer for the #1080 checker at {_GUARD_PATH} "
+    f"(exists={_GUARD_PATH.exists()}) — every assertion in this module is "
+    f"stated against that checker, so name the path rather than failing on a "
+    f"None attribute"
+)
 guard = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(guard)
 
@@ -585,13 +607,25 @@ def test_every_guarded_input_is_a_free_text_dispatch_input():
     inputs = _declared_inputs()
     for name, _var, default in INPUTS:
         assert name in inputs, f"{name} is not a dispatch input of {WORKFLOW}"
-        declared = inputs[name].get("type", "string")
+        # A YAML input whose body is empty parses to None, not to a mapping, so
+        # `.get` would raise AttributeError and abort the roster — the same
+        # failure this module's docstring says it does not permit, reached
+        # through the workflow rather than through the test. Raised by Copilot
+        # on #1328; the guard's own `dispatch_inputs` already takes this care,
+        # which is what makes it the right shape to copy.
+        spec = inputs[name]
+        assert isinstance(spec, dict), (
+            f"{name}'s dispatch-input definition is {spec!r}, not a mapping — "
+            f"the workflow's `inputs:` block is malformed, and this must be a "
+            f"named failure rather than an AttributeError"
+        )
+        declared = spec.get("type", "string")
         assert declared == "string", (
             f"{name} is declared {declared!r}, not free text — this module's "
             f"premise is wrong for it"
         )
-        assert inputs[name].get("default") == default, (
-            f"{name}'s declared default is {inputs[name].get('default')!r}, not "
+        assert spec.get("default") == default, (
+            f"{name}'s declared default is {spec.get('default')!r}, not "
             f"{default!r} — the fixtures below use the stale value"
         )
 
@@ -604,7 +638,21 @@ def test_the_upload_step_still_consumes_both_inputs_raw():
     the comments become wrong. That should be a red test, not a stale paragraph.
     """
     step = find_step(_workflow(), JOB, ARTIFACT_STEP)
-    path = step["with"]["path"]
+    # Same class as the two Copilot raised on #1328, fixed here rather than left
+    # as the one unguarded lookup in a module that says it has none: a `with:`
+    # block or a `path:` key that has gone away must name itself, not raise
+    # KeyError and abort the roster.
+    with_block = step.get("with")
+    assert isinstance(with_block, dict) and "path" in with_block, (
+        f"the {ARTIFACT_STEP!r} step has no `with.path` ({with_block!r}) — the "
+        f"second consumer this PR's fail-closed reasoning rests on is gone, "
+        f"which is a finding rather than a crash"
+    )
+    path = with_block["path"]
+    assert isinstance(path, str), (
+        f"the {ARTIFACT_STEP!r} step's path: is {path!r}, not a string — the "
+        f"substring checks below would be meaningless against it"
+    )
     for name, _var, _default in INPUTS:
         assert "${{ inputs.%s }}" % name in path, (
             f"the {ARTIFACT_STEP!r} step no longer interpolates {name} into "
@@ -775,7 +823,20 @@ def test_the_declared_defaults_survive_their_own_guards():
     default that the guards would reject fails here instead of on dispatch.
     """
     inputs = _declared_inputs()
-    env = {var: inputs[name]["default"] for name, var, _ in INPUTS}
+    # The SECOND site of the class Copilot raised on #1328, and the one its
+    # review did not name. Found by mutation-testing the fix to the first: a
+    # null input body made this comprehension raise TypeError ('NoneType' is not
+    # subscriptable), the roster truncated to 14 of 24, and the eight cases
+    # after it reported nothing — so fixing only the site the review named would
+    # have left the abort intact and looked like it had been closed.
+    env = {}
+    for name, var, _default in INPUTS:
+        spec = inputs.get(name)
+        assert isinstance(spec, dict) and "default" in spec, (
+            f"{name} has no declared default ({spec!r}), so there is nothing "
+            f"for this case to send through the guards"
+        )
+        env[var] = spec["default"]
     out, _stolen, rc = _run(_body(), **env)
     assert rc == 0, (
         f"the declared defaults must pass every guard; rc={rc}. Output: {out!r}"

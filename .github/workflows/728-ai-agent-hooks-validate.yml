@@ -5,8 +5,11 @@ name: '728. Repo - AI Agent Hooks Validate [Repo]'
 # the suite is checked against the MERGED result rather than after the fact.
 
 on:
-  # No `branches:` filter and no `paths:` filter -- both deliberately, for
-  # DIFFERENT reasons, and this workflow shipped with only one of them.
+  # No `branches:` filter and no `paths:` filter ON `pull_request:` -- both
+  # deliberately, for DIFFERENT reasons, and this workflow shipped with only one
+  # of them. Neither statement is about `push:` below, whose `branches: [main]`
+  # stays and is correct: `push` creates no pull-request check context, so
+  # filtering it cannot suppress one, and post-merge runs belong on `main`.
   #
   # `paths:` (#1084, below): a path-filtered workflow produces no check context
   # at all on a non-matching PR, so the context could never be made required.

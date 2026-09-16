@@ -20,6 +20,14 @@ TWO VALUES THROUGH ONE GUARD BODY — THE SHAPE THAT MAKES THIS LANE DIFFERENT
     itself, so a third input added to this step without a spec entry is a
     failure here rather than an unguarded path in production.
 
+    EVERY LOOKUP IN THIS MODULE ASSERTS PRESENCE BEFORE INDEXING
+    Not style. A `str.index` miss raises ValueError, which is not an
+    AssertionError, so the module runner does not catch it and the roster
+    ABORTS — the remaining cases report no outcome at all, and a reviewer
+    counting FAIL lines scores that as passing (ledger L194). This module's own
+    mutation run produced exactly that: deleting the tilde guard truncated the
+    roster to 16 outcomes for 24 defined tests instead of naming one failure.
+
 BOTH SITES WERE LIVE, AND NEITHER NEEDED A QUOTE BREAKOUT
     Measured on pwsh 7.4.6 against the body as it shipped, with decoy
     credentials in the environment and a stub callee. Both sites read
@@ -339,7 +347,12 @@ def _strip_only_blank_guard(body: str) -> str:
         f"the blank guard no longer contains {BLANK_GUARD_MESSAGE!r}. "
         f"Body: {body!r}"
     )
-    end = body.index("}", body.index(BLANK_GUARD_MESSAGE, start)) + 1
+    message_at = body.index(BLANK_GUARD_MESSAGE, start)
+    assert "}" in body[message_at:], (
+        f"the blank guard's block does not close after its message, so this "
+        f"strip cannot find its end. Body: {body!r}"
+    )
+    end = body.index("}", message_at) + 1
     stripped = body[:start] + body[end:]
     assert anchor not in stripped, "the blank guard survived its own strip"
     assert NEWLINE_GUARD_MESSAGE in stripped, (
@@ -531,7 +544,16 @@ def test_the_guard_loop_covers_both_inputs_and_only_them():
     because each pairing is asserted rather than each name being merely present.
     """
     body = _body()
+    assert GUARD_LOOP_ANCHOR in body, (
+        f"the guard loop is gone from the body, so NOTHING is validated — a "
+        f"missing anchor must fail here, not raise ValueError and abort the "
+        f"roster (L194). Body: {body!r}"
+    )
     start = body.index(GUARD_LOOP_ANCHOR)
+    assert GUARD_LOOP_OPEN in body[start:], (
+        f"the guard loop no longer opens with {GUARD_LOOP_OPEN!r}, so its spec "
+        f"list cannot be read. Body: {body!r}"
+    )
     spec_list = body[start : body.index(GUARD_LOOP_OPEN, start)]
     for name, var, _default in INPUTS:
         pairing = f"Input = '{name}'"
@@ -606,8 +628,17 @@ def test_the_newline_guard_precedes_the_anchored_guards():
     exactly why the ordering needs its own assertion.
     """
     body = _body()
+    assert NEWLINE_GUARD_MESSAGE in body, (
+        f"the newline guard is gone from the body — a multi-line value would "
+        f"reach the anchored checks below, which see only its first line. "
+        f"Body: {body!r}"
+    )
     newline_at = body.index(NEWLINE_GUARD_MESSAGE)
     for message in ANCHORED_GUARD_MESSAGES:
+        assert message in body, (
+            f"the {message!r} guard is gone from the body, so the ordering this "
+            f"case pins no longer has two things to order. Body: {body!r}"
+        )
         assert newline_at < body.index(message), (
             f"the newline guard must come before the {message!r} guard, which "
             f"anchors on '^' and would otherwise examine only the first line "

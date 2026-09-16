@@ -1,8 +1,19 @@
 name: '722. Repo - CI Validate and Test [Repo]'
 
 on:
+  # No `branches:` filter on `pull_request:` (#1325). GitHub matches that filter
+  # against the BASE ref, so with `branches: [main]` this workflow -- and the
+  # required `Validate Repository` check it supplies -- never ran on a PR stacked
+  # on another agent's feature branch. The check was ABSENT, not failing, so the
+  # PR displayed an all-green list with nothing distinguishing "validated" from
+  # "never examined" (same shape as L240). Measured on #1312 and #1323, two
+  # `.claude/hooks/guard_bash.py` PRs reviewed with this suite silently not run.
+  #
+  # The cost is real and accepted: a stacked PR now runs the ~5m validate job
+  # too. A stacked PR is rare here, and the alternative -- a required check that
+  # is sometimes absent -- is the defect, because a PR that can never acquire
+  # `Validate Repository` can never enter the merge queue.
   pull_request:
-    branches: [main]
   merge_group:
   push:
     branches: [main]

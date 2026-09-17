@@ -101,7 +101,7 @@ def _strip_single_quoted(text):
 
 
 def _split_statements(line):
-    """Split one line on `;` separators that are outside quotes.
+    """Split one line on TOP-LEVEL `;` separators.
 
     A bare `line.split(";")` also splits the semicolons inside
     `python -c "import x; print(y)"`, tearing one statement into two whose
@@ -109,14 +109,33 @@ def _split_statements(line):
     the shell sees none and lets a `$?` inside a quoted argument read as a
     separate statement. `_strip_quoted` preserves length, so offsets into the
     blanked copy index the original.
+
+    Quoting is not the only span a `;` can hide in, and this is the SAME defect
+    `_pipe_stages` and `_split_on_logical` were each fixed for -- at the
+    outermost of the three splitters, which runs before either of them. A `;`
+    inside `$(...)`, `${...}` or backticks separates two commands whose
+    combined *output* is one word of this line; the outer command continues
+    past the closing paren. Tearing there puts a force-push's verb and flag in
+    one statement and its refspec in the next, and rule 2 -- which requires all
+    three in one piece -- goes silent. Measured at f28b310, with both other
+    splitters already fixed, each a real force-push to `main` that was ALLOWED:
+
+        git push --force $(cd /repo; git remote) main
+        git push --force `cd /repo; git remote` main
+        git push --force origin $(cd /repo; cat b.txt):main
+
+    All three BLOCK on `main`, where rule 2 judged the whole command rather
+    than each segment, so they are a regression this stack introduced rather
+    than pre-existing holes. `_top_level_ops` is shared rather than copied for
+    the reason its own docstring gives: a second copy is how these splitters
+    came to disagree in the first place.
     """
     bare = _strip_quoted(line)
     parts = []
     start = 0
-    for i, ch in enumerate(bare):
-        if ch == ";":
-            parts.append(line[start:i])
-            start = i + 1
+    for i, oplen in _top_level_ops(bare, (";",)):
+        parts.append(line[start:i])
+        start = i + oplen
     parts.append(line[start:])
     return parts
 
@@ -151,8 +170,69 @@ def _statements(cmd):
     return stmts
 
 
+def _top_level_ops(bare, ops):
+    """Yield `(index, length)` for each operator in `ops` that is TOP LEVEL.
+
+    `bare` must already be `_strip_quoted`, so the only spans left to skip are
+    the ones quoting cannot express: command substitutions `$(...)`, parameter
+    expansions `${...}`, backticks, and a backslash escape.
+
+    An operator inside one of those is not a separator of THIS command. A
+    substitution is a command of its own whose *output* becomes a single word
+    here, and the outer command continues past the closing paren -- so
+    splitting there tears one command's words across two computed pieces. For
+    a rule that requires several conditions in the same piece that fails
+    PERMISSIVELY, which is the direction a guard must never fail in.
+
+    Bare `(`/`{` are tracked only once a substitution is open, so
+    `$( (a) && b )` does not close its span early while an ordinary
+    `$(a) && b` still splits. `ops` is matched longest-first by the caller's
+    ordering, so `|&` wins over `|`.
+
+    Extracted from `_pipe_stages`, which had this scanner inline, because
+    `_split_on_logical` needs exactly the same span model and a second copy
+    would be one more place for the two to drift apart (#1309).
+    """
+    closers = []
+    backtick = False
+    i = 0
+    n = len(bare)
+    while i < n:
+        ch = bare[i]
+        if ch == "\\":
+            # An escaped character is data, never an operator -- `\|` included.
+            i += 2
+            continue
+        if ch == "`":
+            backtick = not backtick
+            i += 1
+            continue
+        if ch == "$" and bare[i + 1 : i + 2] in ("(", "{"):
+            closers.append(")" if bare[i + 1] == "(" else "}")
+            i += 2
+            continue
+        if closers and ch in "({":
+            closers.append(")" if ch == "(" else "}")
+            i += 1
+            continue
+        if closers and ch == closers[-1]:
+            closers.pop()
+            i += 1
+            continue
+        if not closers and not backtick:
+            for op in ops:
+                if bare.startswith(op, i):
+                    yield i, len(op)
+                    i += len(op)
+                    break
+            else:
+                i += 1
+            continue
+        i += 1
+
+
 def _split_on_logical(stmt):
-    """Split one statement on `&&` / `||` outside quotes.
+    """Split one statement on `&&` / `||` outside quotes and substitutions.
 
     A pipeline (`|`) is deliberately NOT split: `printenv | grep GH_TOKEN`
     prints a secret and must stay one unit, whereas
@@ -160,18 +240,31 @@ def _split_on_logical(stmt):
     too -- splitting it would tear `echo >&2 $TOKEN` into a half holding the
     verb and a half holding the variable, which is the one direction a guard
     must never fail in.
+
+    Only a TOP-LEVEL `&&` / `||` is a boundary, for the reason `_top_level_ops`
+    states, and this is the same defect `_pipe_stages` was fixed for one level
+    down. Once rule 2 decides per segment, an `&&` inside a substitution tears
+    a single `git push` line in two -- verb and flag in one segment, refspec in
+    the next -- and the rule sees no segment carrying all three. Measured on
+    this branch before the fix, each a real force-push to `main` that the guard
+    ALLOWED even with `_pipe_stages` already fixed:
+
+        git push --force $(cd /repo && git remote) main
+        git push --force $(test -d .git && echo origin) main
+        git push --force `cd /repo && git remote` main
+        git push --force $(cd /repo && (echo origin | cat)) main
+        git push --force $(cd /repo || echo origin) main
+        git push --force origin $(cd /repo && cat b.txt):main
+
+    All six BLOCK on `main`, where the rule judged the whole command, so they
+    are a regression this stack introduced rather than pre-existing holes.
     """
     bare = _strip_quoted(stmt)
     parts = []
     start = 0
-    i = 0
-    while i < len(bare):
-        if bare.startswith("&&", i) or bare.startswith("||", i):
-            parts.append(stmt[start:i])
-            i += 2
-            start = i
-            continue
-        i += 1
+    for i, oplen in _top_level_ops(bare, ("&&", "||")):
+        parts.append(stmt[start:i])
+        start = i + oplen
     parts.append(stmt[start:])
     return parts
 
@@ -424,6 +517,117 @@ def _names_a_secret(chunk):
         or KNOWN_SECRET_VARS_RE.search(chunk)
         or "${{ secrets." in chunk
     )
+
+
+# Long force flags are matched case-insensitively -- `--force-with-lease` is
+# covered by `--force\b`, since the `-` that follows `force` is a word boundary.
+FORCE_LONG_RE = re.compile(r"--force\b", re.IGNORECASE)
+# The SHORT flag is matched case-SENSITIVELY, and that is the whole point of
+# this half of #1309: `-F` is not a git-push flag, but it is `gh api -F`,
+# `git commit -F`, `grep -F` and `sort -f`. Under the old lowercased match a
+# `-F` anywhere in the command supplied the "force" half of the rule.
+#
+# `[A-Za-z]*` on both sides because git's option parser BUNDLES short options:
+# `git push -fq origin main` and `-qf` both force-push (measured -- `-qZ` is
+# rejected as an unknown switch, so the parser really is splitting the
+# cluster), while `-f\b` sees neither. That hole predates #1309 -- the original
+# `\s-f\b` missed it too -- and it is a bypass of a protected-branch rule, so
+# it is fixed here rather than deferred. The `f` inside the cluster stays
+# lowercase-only, which is what keeps `-F` and `-qF` out.
+FORCE_SHORT_RE = re.compile(r"(?<!\S)-[A-Za-z]*f[A-Za-z]*\b")
+PROTECTED_BRANCH_RE = re.compile(r"(?<![\w./-])(main|master)(?![\w/-])", re.IGNORECASE)
+GIT_PUSH_RE = re.compile(r"\bgit\s+push\b", re.IGNORECASE)
+
+
+def _pipe_stages(stmt):
+    """Split one segment on `|` outside quotes, substitutions and escapes.
+
+    The counterpart to `_split_on_logical`, which deliberately leaves `|`
+    alone because a secret can cross a pipe. Rule 2's three conditions cannot:
+    a `git push` is force-pushing to `main` only if the verb, the flag and the
+    refspec are arguments of the SAME command. `|&` is bash's
+    "pipe stdout and stderr", so the `&` is consumed with the bar rather than
+    left to start the next stage.
+
+    Only a TOP-LEVEL `|` is a stage boundary, and getting that wrong fails
+    permissively rather than restrictively -- which is why the skips below are
+    the load-bearing half of this function rather than polish. A `|` inside a
+    command substitution belongs to a different command whose output becomes
+    one WORD of this one, so the outer command continues past the closing
+    paren: splitting there tears a single `git push` line in two, leaving the
+    verb and the flag in one computed "stage" and the refspec in the next, and
+    rule 2 then sees no stage carrying all three. Measured on this branch
+    before the fix, each a real force-push to `main` that the guard ALLOWED:
+
+        git push --force $(git remote | head -1) main
+        git push --force origin $(cat b.txt | tr -d '\\n'):main
+        git push --force `git remote | head -1` main
+        git push --force origin \\| main
+
+    All four BLOCK on `main`, where the rule judged the whole segment, so
+    these were a regression introduced with stage splitting rather than
+    pre-existing holes. Copilot on #1310.
+
+    So `|` is a boundary only outside `$(...)`, `${...}`, backticks and a
+    backslash escape. Bare `(`/`{` are tracked only once a substitution is
+    open, so `$( (a) | b )` keeps its inner paren from closing the span early
+    while an ordinary `$(a) | b` still splits.
+    """
+    bare = _strip_quoted(stmt)
+    parts = []
+    start = 0
+    # `|&` first so the longest match wins and the `&` is consumed with the bar.
+    for i, oplen in _top_level_ops(bare, ("|&", "|")):
+        parts.append(stmt[start:i])
+        start = i + oplen
+    parts.append(stmt[start:])
+    return parts
+
+
+def force_push_violation(cmd):
+    """`git push --force origin main` -- history rewritten on a protected branch.
+
+    The rule decides per SEGMENT (#1309). Judging the whole command made "a
+    push appears somewhere", "a force flag appears somewhere" and "the word
+    main appears somewhere" a violation, which is the agent's standard idiom:
+    a commit whose message mentions `main`, or a `gh api ... -F body=...`
+    posted right after a push, each supplied one of the three halves. Conductor
+    run 168 was blocked three times pushing a one-line fix to a feature branch,
+    and the pressure that creates is to route around the hook.
+
+    Segments come from `_echo_segments`, which INCLUDES heredoc bodies. That is
+    deliberate and is the fail-closed choice: `bash <<EOF` ... `git push
+    --force origin main` ... `EOF` really does rewrite main, so dropping the
+    body would turn a blocked command into an allowed one. Including it costs
+    nothing on the #1309 false positive, whose heredoc body carries the word
+    `main` but no push verb.
+
+    `_echo_segments` keeps a pipeline whole, which rule 3 needs (`printenv |
+    grep GH_TOKEN` prints a secret across the pipe) and this rule must not
+    have: a later stage supplies flags and words the push never saw, so
+    `git push origin feature-x | grep -f patterns.txt main` armed all three
+    halves. This rule therefore splits the segment again on `|` and requires
+    the three inside ONE stage. Copilot on #1310.
+
+    That narrowing is safe only for a boundary that is really a boundary, and
+    an earlier revision of this PR claimed here that it "cannot open a bypass
+    -- a real force-push carries its own verb, flag and refspec in its own
+    stage". It does; the claim was still wrong, because a `|` inside a command
+    substitution is not a stage boundary at all, and splitting on it cut that
+    single command's own words across two stages. Four real force-pushes to
+    `main` were ALLOWED as a result, all four of which `main` blocks. The
+    rows, and what `_pipe_stages` now skips to restore them, are in its
+    docstring. A stage-scoping rule is only as safe as its notion of a stage.
+    """
+    for seg in _echo_segments(cmd):
+        for stage in _pipe_stages(seg):
+            if not GIT_PUSH_RE.search(stage):
+                continue
+            if not (FORCE_LONG_RE.search(stage) or FORCE_SHORT_RE.search(stage)):
+                continue
+            if PROTECTED_BRANCH_RE.search(stage):
+                return "Force-push to a protected branch (main/master) is not allowed."
+    return None
 
 
 def echo_secret_violation(cmd):
@@ -796,11 +1000,12 @@ def main():
         if re.search(pat, low):
             block(f"Refusing to disable TLS/proxy security: {desc}.")
 
-    # 2. Force-push to a protected branch. Match 'main'/'master' only as a
-    #    standalone branch token, so e.g. 'feature/main' is NOT caught.
-    if re.search(r"\bgit\s+push\b", low) and re.search(r"(--force\b|--force-with-lease|\s-f\b)", low):
-        if re.search(r"(?<![\w./-])(main|master)(?![\w/-])", low):
-            block("Force-push to a protected branch (main/master) is not allowed.")
+    # 2. Force-push to a protected branch, decided per segment (see
+    #    force_push_violation). Match 'main'/'master' only as a standalone
+    #    branch token, so e.g. 'feature/main' is NOT caught.
+    reason = force_push_violation(cmd)
+    if reason:
+        block(reason)
 
     # 3. Printing secrets to logs, decided per statement (see
     #    echo_secret_violation). Case-insensitive so a lowercase env var

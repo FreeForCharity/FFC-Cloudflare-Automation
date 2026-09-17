@@ -85,9 +85,17 @@ ENVIRONMENTAL_SIGNATURES = (
     "[WinError 32]",
     # ERROR_ACCESS_DENIED, reached by the same teardown path as WinError 32.
     "[WinError 5]",
-    # ERROR_FILE_NOT_FOUND from `subprocess`, i.e. a POSIX tool the module
-    # shells out to is absent from PATH on this host.
-    "[WinError 2]",
+    # NOT HERE, and deliberately: `[WinError 2]` (ERROR_FILE_NOT_FOUND).
+    # #1119 lists it as a host cause -- a POSIX tool missing from PATH -- and it
+    # still cannot be a signature, because that case and a genuine repo defect
+    # are textually IDENTICAL. Measured: a missing tool and a wrong path handed
+    # to `subprocess` differ only in the path they quote, and the Windows
+    # spelling ("The system cannot find the file specified") omits even that. A
+    # substring cannot separate "this host lacks `bash`" from "this module
+    # shells out to a path that moved", so the tie breaks toward assertion and
+    # the WinError-2 modules stay in the noisy bucket until #1119 pays for the
+    # Windows CI leg. Rejected on review of this PR; do not re-add without a
+    # discriminator that is not the error text.
     # ERROR_PRIVILEGE_NOT_HELD. This account cannot create symlinks at all, so
     # `os.symlink` is unavailable by construction rather than by defect.
     "[WinError 1314]",

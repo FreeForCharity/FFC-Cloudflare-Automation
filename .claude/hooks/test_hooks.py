@@ -299,7 +299,7 @@ RULES = [
         # and all four of these were ALLOWED at 46adfe3 while `main` blocked
         # every one. A permissive miss, so they are the rows that matter.
         # Copilot on #1310.
-        ("force-push main with a pipe inside $() ",
+        ("force-push main with a pipe inside $()",
          "git push --force $(git remote | head -1) main", BLOCK),
         ("force-push main with a pipe inside $() in the refspec",
          "git push --force origin $(cat b.txt | tr -d '\\n'):main", BLOCK),

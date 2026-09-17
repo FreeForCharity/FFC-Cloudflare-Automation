@@ -101,7 +101,7 @@ def _strip_single_quoted(text):
 
 
 def _split_statements(line):
-    """Split one line on `;` separators that are outside quotes.
+    """Split one line on TOP-LEVEL `;` separators.
 
     A bare `line.split(";")` also splits the semicolons inside
     `python -c "import x; print(y)"`, tearing one statement into two whose
@@ -109,14 +109,33 @@ def _split_statements(line):
     the shell sees none and lets a `$?` inside a quoted argument read as a
     separate statement. `_strip_quoted` preserves length, so offsets into the
     blanked copy index the original.
+
+    Quoting is not the only span a `;` can hide in, and this is the SAME defect
+    `_pipe_stages` and `_split_on_logical` were each fixed for -- at the
+    outermost of the three splitters, which runs before either of them. A `;`
+    inside `$(...)`, `${...}` or backticks separates two commands whose
+    combined *output* is one word of this line; the outer command continues
+    past the closing paren. Tearing there puts a force-push's verb and flag in
+    one statement and its refspec in the next, and rule 2 -- which requires all
+    three in one piece -- goes silent. Measured at f28b310, with both other
+    splitters already fixed, each a real force-push to `main` that was ALLOWED:
+
+        git push --force $(cd /repo; git remote) main
+        git push --force `cd /repo; git remote` main
+        git push --force origin $(cd /repo; cat b.txt):main
+
+    All three BLOCK on `main`, where rule 2 judged the whole command rather
+    than each segment, so they are a regression this stack introduced rather
+    than pre-existing holes. `_top_level_ops` is shared rather than copied for
+    the reason its own docstring gives: a second copy is how these splitters
+    came to disagree in the first place.
     """
     bare = _strip_quoted(line)
     parts = []
     start = 0
-    for i, ch in enumerate(bare):
-        if ch == ";":
-            parts.append(line[start:i])
-            start = i + 1
+    for i, oplen in _top_level_ops(bare, (";",)):
+        parts.append(line[start:i])
+        start = i + oplen
     parts.append(line[start:])
     return parts
 

@@ -324,6 +324,26 @@ RULES = [
          "git push --force $(cd /repo || echo origin) main", BLOCK),
         ("force-push main with && inside $() in the refspec",
          "git push --force origin $(cd /repo && cat b.txt):main", BLOCK),
+        # Same defect one level up AGAIN, in `_split_statements` -- the
+        # outermost of the three splitters, which runs before the other two.
+        # A `;` inside a substitution is not a statement boundary, and all
+        # three of these were ALLOWED at f28b310, with `_pipe_stages` AND
+        # `_split_on_logical` both already fixed, while `main` blocked every
+        # one. Permissive, so they are the rows that matter.
+        ("force-push main with ; inside $()",
+         "git push --force $(cd /repo; git remote) main", BLOCK),
+        ("force-push main with ; inside backticks",
+         "git push --force `cd /repo; git remote` main", BLOCK),
+        ("force-push main with ; inside $() in the refspec",
+         "git push --force origin $(cd /repo; cat b.txt):main", BLOCK),
+        # The ALLOW half for `;`, which stops the lazy fix of simply not
+        # splitting on it. A TOP-LEVEL `;` is still a real statement boundary,
+        # so a feature push followed by an unrelated command naming `main`
+        # must stay allowed.
+        ("push feature, then ; a command naming main",
+         "git push origin feature-x; grep -f patterns.txt main", ALLOW),
+        ("push feature through a substitution containing ;",
+         "git push origin $(cd /repo; git branch --show-current)", ALLOW),
         # ...and the ALLOW half, which is what stops the lazy fix of simply not
         # splitting on `&&`. A TOP-LEVEL `&&` is still a real boundary, so a
         # feature-branch push followed by an unrelated command naming `main`

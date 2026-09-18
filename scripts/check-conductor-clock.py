@@ -66,9 +66,6 @@ import subprocess
 import sys
 from collections.abc import Callable
 
-# Reads one probe's transcript and returns the raw `Date` header value, or None.
-DateReader = Callable[[str], "str | None"]
-
 # 120s is chosen to be well inside anything that changes a decision (the finest
 # grain the Conductor reasons about is a workflow tick, minutes apart) while
 # staying outside ordinary NTP jitter, so this does not cry wolf on a healthy
@@ -289,8 +286,20 @@ def _run_probe(argv: list[str], timeout_seconds: int) -> str | None:
     return proc.stdout
 
 
-def probe_commands(timeout_seconds: int) -> list[tuple[list[str], DateReader]]:
+def probe_commands(
+    timeout_seconds: int,
+) -> list[tuple[list[str], Callable[[str], str | None]]]:
     """The probes to try, in order, each paired with its transcript reader.
+
+    The reader type is spelled inline rather than hoisted to a module-level
+    alias on purpose. An alias is an ASSIGNMENT, whose right-hand side `from
+    __future__ import annotations` does NOT defer -- so `Callable[[str], str |
+    None]` there is evaluated at import and needs Python >= 3.10, while the same
+    text in this annotation is never evaluated at all. Nothing else in this repo
+    requires 3.10 at runtime and the Conductor's host pins no version, so the
+    alias would have put a version floor under the one script that runs before
+    anything else. (Measured: an undefined name is fine in the annotation and
+    raises `NameError` in the assignment.)
 
     `gh` stays first: it is authenticated, so it does not spend the
     unauthenticated per-IP allowance, and on a host that has it the answer costs

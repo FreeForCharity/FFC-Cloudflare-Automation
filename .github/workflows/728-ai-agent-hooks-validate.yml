@@ -5,8 +5,22 @@ name: '728. Repo - AI Agent Hooks Validate [Repo]'
 # the suite is checked against the MERGED result rather than after the fact.
 
 on:
+  # No `branches:` filter and no `paths:` filter ON `pull_request:` -- both
+  # deliberately, for DIFFERENT reasons, and this workflow shipped with only one
+  # of them. Neither statement is about `push:` below, whose `branches: [main]`
+  # stays and is correct: `push` creates no pull-request check context, so
+  # filtering it cannot suppress one, and post-merge runs belong on `main`.
+  #
+  # `paths:` (#1084, below): a path-filtered workflow produces no check context
+  # at all on a non-matching PR, so the context could never be made required.
+  #
+  # `branches:` (#1325): that filter matches the BASE ref. With `branches:
+  # [main]` the one workflow that runs the hooks suite did not run on a PR based
+  # on a feature branch -- including #1312 and #1323, which change
+  # `.claude/hooks/guard_bash.py` itself. Hooks validation follows the FILE, not
+  # the base branch. The header comment above already claimed "unfiltered"; it
+  # was true of `paths:` and false of `branches:` for as long as both existed.
   pull_request:
-    branches: [main]
 
   # `merge_group:` is load-bearing (#1084). This is the only workflow that runs
   # the hooks suite, and without this trigger the merge queue never evaluated it

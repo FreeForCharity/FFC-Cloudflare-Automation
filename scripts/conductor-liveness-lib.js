@@ -106,7 +106,14 @@ const ISO_8601 = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\
 // `parseConductorComments` additionally reports how many comments matched, so a
 // pattern that has stopped matching the current format is visible as a
 // collapsed count rather than as a confident wrong timestamp.
-const CONDUCTOR_RE = /^[\s>]*#{0,6}\s*(?:conductor\s+)?run\s+(\d+)\s*[—–-]?\s*(START|END)\b/im;
+// The separator class is written with explicit escapes rather than literal em
+// and en dash characters. Both spellings behave identically, but a non-ASCII
+// byte inside a regex is precisely what an encoding round-trip mangles — this
+// host's cp1252 default has corrupted repo files before — and a silently
+// mutilated character class here fails by matching nothing, which is the L215
+// failure mode this pattern exists to resist.
+const CONDUCTOR_RE =
+  /^[\s>]*#{0,6}\s*(?:conductor\s+)?run\s+(\d+)\s*[—–-]?\s*(START|END)\b/im;
 
 const MARKER = '<!-- conductor-liveness -->';
 // The history the next run reads back. Kept as one HTML-comment line so the

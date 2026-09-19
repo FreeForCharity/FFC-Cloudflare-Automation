@@ -228,10 +228,23 @@ def test_an_unreadable_log_is_a_finding():
     assert s["verdict"] == "UNKNOWN" and "HTTP 500" in s["detail"], s
 
 
-def test_an_empty_comment_page_is_a_finding():
+def test_an_empty_comment_page_is_a_finding_and_names_that_cause():
+    """The detail text is load-bearing, not decoration. "the log returned no
+    comments at all" is a read/API problem; "no START/END matched in N comments"
+    is silence or a stale pattern. Both are UNKNOWN and both are findings, so
+    asserting only `hasFinding` lets the two diagnoses collapse into one — a
+    mutation pass caught exactly that here: deleting the empty-page branch
+    changed no verdict, because the matched==0 branch below absorbs it and
+    reports the wrong reason. Unknown is never alive, and WHICH unknown is what
+    the reader acts on."""
     a = analyze(comments=[], mergedPRs=[{"number": 1, "merged_at": NOW}], openPRs=2)
     assert a["hasFinding"]
-    assert _sig(a, "conductor-silence")["verdict"] == "UNKNOWN"
+    s = _sig(a, "conductor-silence")
+    assert s["verdict"] == "UNKNOWN", s
+    assert "no comments at all" in s["detail"], s
+    # ...and specifically NOT the stale-pattern diagnosis, which would send the
+    # reader to fix a regex when the log read came back empty.
+    assert "L215" not in s["detail"], s
 
 
 def test_a_pattern_that_matches_nothing_is_a_finding_and_says_so():

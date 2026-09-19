@@ -566,8 +566,17 @@ def test_main_fails_the_build_when_there_is_a_finding():
             "run() bailed on host discovery before reaching the substituted verdict, "
             f"so the exit code above measured the harness, not the guard: {out!r}"
         )
+        # Both lines, and they are not interchangeable. The summary proves the
+        # finding was COUNTED; only the per-finding line names which call is
+        # unresolvable, which is the whole actionable content of a failure. A
+        # mutation deleting just the per-finding loop leaves the count intact
+        # and is invisible to a summary-only assertion (Copilot, this PR).
+        assert f"::error::{planted}" in out, (
+            f"run() failed the build without naming the offending call, so the log "
+            f"says a call is unresolvable but not which one: {out!r}"
+        )
         assert "FAILED: 1 unresolvable command call(s), 0 structural error(s)." in out, (
-            f"run() failed the build without reporting the finding that caused it: {out!r}"
+            f"run() reported the finding but not the summary count: {out!r}"
         )
 
         code, out = verdict([], ["a structural problem"])

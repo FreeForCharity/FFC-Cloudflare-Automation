@@ -44,6 +44,34 @@ jobs:
         shell: pwsh
         env:
           WHMCS_API_URL: ${{ inputs.api_url }}
+          # #1080 lane 25. Both output-path inputs arrive as DATA in the process
+          # environment instead of being substituted into this script's TEXT.
+          # Measured on pwsh 7.4.6 against the body as it shipped, with a decoy
+          # credential in the environment and a stub callee — both sites read
+          # `$x = "<interpolation>"`, DOUBLE quoted, so `$( )` expands and no
+          # quote breakout was needed:
+          #
+          #   products_output_file         `artifacts/whmcs/p.csv$(Set-Content
+          #                                -Path SENTINEL.txt -Value
+          #                                $env:WHMCS_API_SECRET)` wrote the
+          #                                credential to a file. Set-Content
+          #                                emits nothing, so the path itself was
+          #                                unchanged: the callee bound
+          #                                `ProductsOutputFile=[artifacts/whmcs/p.csv]`
+          #                                and the step exited **0**.
+          #   client_products_output_file  identical result at the second site;
+          #                                the legitimate first path still bound,
+          #                                so the run reads as an ordinary export.
+          #
+          # In both cases every observable — arguments, exit code, artifact —
+          # matches a clean run. This job enters `whmcs-prod-read`, whose WHMCS
+          # credential the `whmcs-secrets-from-kv` step above exports through
+          # GITHUB_ENV, plus the `az` CLI session it leaves on disk
+          # (#1188/#1208) — none of which appears in this step's own `env:`, so
+          # an L213 read or a `secrets.` grep scores this step as holding
+          # nothing.
+          IN_PRODUCTS_OUTPUT_FILE: ${{ inputs.products_output_file }}
+          IN_CLIENT_PRODUCTS_OUTPUT_FILE: ${{ inputs.client_products_output_file }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -59,8 +87,109 @@ jobs:
             $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
           }
 
-          $productsOut = "${{ inputs.products_output_file }}"
-          $clientProductsOut = "${{ inputs.client_products_output_file }}"
+          # One guard body over BOTH values, rather than the two copies 208's
+          # single-input lane produced. This workflow is the first in the
+          # burn-down whose step carries two free-text paths, and duplicated
+          # guards are how one of them silently keeps a check the other gained:
+          # the loop makes "applied to both" structural instead of reviewed.
+          # The input NAME travels with the value so each `throw` still names
+          # the input the dispatcher actually typed.
+          #
+          # Both values are consumed a SECOND time, raw, by the `Upload CSV
+          # Artifact` step's `path:`. That is an artifact selector rather than a
+          # script body, so #1080's guard correctly does not judge it and this
+          # lane does not widen to cover it — but it makes this step the senior
+          # of two consumers with different grammars (ledger L298), which is
+          # what the last four checks are about.
+          foreach ($spec in @(
+            @{ Input = 'products_output_file';        Value = $env:IN_PRODUCTS_OUTPUT_FILE },
+            @{ Input = 'client_products_output_file'; Value = $env:IN_CLIENT_PRODUCTS_OUTPUT_FILE }
+          )) {
+            $name  = $spec.Input
+            $value = $spec.Value
+
+            # Fail closed, not default-fill (ledger L254): the upload step reads
+            # each input directly, so a default supplied only here would write
+            # the CSV to the substituted path while the upload still looked at
+            # the blank one — an `if-no-files-found: error` two steps later
+            # naming neither cause.
+            #
+            # `-not IsNullOrWhiteSpace` rather than `-ne ''`, and that spelling
+            # is what makes this guard do anything: measured on pwsh 7.4.6
+            # against BOTH bodies with the guard stripped, an all-whitespace
+            # value binds `ProductsOutputFile=[   ]`, the export writes a
+            # whitespace-named CSV, and only the `Test-Path` assertion further
+            # down turns it red — after the write. The move to `env:` also
+            # widens the domain from string to string-or-null: an omitted input
+            # reaches the shipped body as the empty string between two quotes
+            # and reaches this one as `$null`. `IsNullOrWhiteSpace` is true for
+            # both; `-ne ''` is true for `$null`.
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              throw "$name is blank. It is consumed BOTH here and by the 'Upload CSV Artifact' step's path:, so this step does not substitute a default — re-dispatch with a path, or omit the input to get its declared default."
+            }
+
+            # FIRST, and the four checks below depend on it.
+            #
+            # `actions/upload-artifact` reads `path:` as a NEWLINE-DELIMITED
+            # LIST of patterns — and this workflow's `path:` is literally
+            # spelled as such a list, one interpolation per line — so one input
+            # carrying a newline is several patterns to that consumer while
+            # still being one string here.
+            #
+            # It also breaks the checks below, which is why it cannot come
+            # last. `^` anchors at the start of the STRING, not of each line, so
+            # `^([A-Za-z]+:|[\\/])` and `^~` see only the first line of a
+            # multi-line value and a payload on the second walks past both.
+            # Forbidding the newline is the remedy rather than `(?m)`:
+            # multiline mode would make each check see every line but would
+            # still leave the value meaning ONE path here and SEVERAL there.
+            if ($value -match '[\r\n]') {
+              throw "$name contains a carriage return or newline. The 'Upload CSV Artifact' step reads its path: as a newline-delimited list of patterns, so a newline here smuggles extra patterns past the checks below — which anchor on the start of the value and therefore only ever see its first line."
+            }
+
+            # `path:` is glob-capable (`@actions/glob`), so the junior consumer
+            # can be pointed at files this export never wrote. Not every payload
+            # self-blocks first: `*` and `?` are illegal in a Windows filename,
+            # but `[` and `]` are legal filename characters AND character-class
+            # metacharacters — the export writes a literal `[m]sal…json` and
+            # exits 0, and the upload's glob then matches a different, real file.
+            if ($value -match '[*?\[\]]') {
+              throw "$name contains a glob metacharacter (one of * ? [ ]). It is passed unchanged to the 'Upload CSV Artifact' step, whose path: is a glob selector, so a pattern can match files this export never wrote. Pass a plain relative path."
+            }
+
+            # `[A-Za-z]+:`, not `[A-Za-z]:` — a PSDrive qualifier is not limited
+            # to a single-letter filesystem drive, so `Temp:/x.csv` and `env:/x`
+            # pass the narrow spelling and are still resolved by the provider.
+            #
+            # An explicit regex rather than [System.IO.Path]::IsPathRooted,
+            # which is platform-DEPENDENT: `C:\x` and `\x` are rooted on Windows
+            # and neither is on Linux, so a test running on ubuntu CI would
+            # assert something the `windows-latest` runner does not do.
+            if ($value -match '^([A-Za-z]+:|[\\/])') {
+              throw "$name must be a workspace-relative path; got an absolute, UNC, drive- or PSDrive-qualified path. The 'Upload CSV Artifact' step uploads whatever its path: resolves to, so a path outside the workspace can put runner files into a downloadable artifact."
+            }
+
+            # `~` begins with neither a separator nor a qualifier, so the test
+            # above does not catch it. This is the sharpest instance of the
+            # two-consumer point rather than a repeat of it: PowerShell expands
+            # `~` and `@actions/glob` does not, so the consumers disagree about
+            # WHICH FILE IS MEANT. Measured here on pwsh 7.4.6 against the
+            # shipped body: `~/.azure/x.csv` bound `/root/.azure/x.csv` and the
+            # step exited **0** — a clean write outside the workspace, where the
+            # `az` session lives.
+            if ($value -match '^~') {
+              throw "$name must not begin with '~': PowerShell expands it to the user profile, so this export would write outside the workspace, while the 'Upload CSV Artifact' step's globber does not expand it — the two consumers would not even agree which file is meant."
+            }
+
+            # Measured the same way and with the same result: `../../etc/x.csv`
+            # bound as written and exited 0.
+            if (($value -split '[\\/]') -contains '..') {
+              throw "$name must not contain a '..' segment: it escapes the workspace, and the 'Upload CSV Artifact' step uploads whatever its path: resolves to."
+            }
+          }
+
+          $productsOut = $env:IN_PRODUCTS_OUTPUT_FILE
+          $clientProductsOut = $env:IN_CLIENT_PRODUCTS_OUTPUT_FILE
 
           foreach ($out in @($productsOut, $clientProductsOut)) {
             $dir = Split-Path -Parent $out
@@ -69,6 +198,24 @@ jobs:
             }
           }
 
+          # Both values are bound INLINE here, not through a `$cliArgs` array as
+          # 208 does, so the L214 argument-shift hazard the `api_url` note above
+          # describes looks like it should apply to these two as well. MEASURED,
+          # AND IT DOES NOT — the claim is recorded here because writing it
+          # without checking is what #1172 is about. On pwsh 7.4.6, with the
+          # blank guard stripped and `IN_PRODUCTS_OUTPUT_FILE` unset, the body
+          # dies at `Split-Path -Parent` (`Cannot bind argument to parameter
+          # 'Path' because it is null`) two lines above and never reaches this
+          # call, so no argument can vanish from it. `api_url` differs precisely
+          # because it is DEFAULTED rather than guarded: it reaches its `-ApiUrl`
+          # position whatever it holds.
+          #
+          # What the blank guard is actually load-bearing for is the case that
+          # does NOT die here: an all-whitespace value passes `Split-Path` and
+          # binds `ProductsOutputFile=[   ]`, so the export writes a
+          # whitespace-named CSV and only the `Test-Path` assertion below turns
+          # the step red — after the write, and with the upload step's `path:`
+          # pointed at the same blank name.
           & pwsh -NoProfile -File .\scripts\whmcs-products-export.ps1 -ApiUrl $env:WHMCS_API_URL -ProductsOutputFile $productsOut -ClientProductsOutputFile $clientProductsOut
 
           if ($LASTEXITCODE -ne 0) {

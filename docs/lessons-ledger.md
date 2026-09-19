@@ -82,7 +82,6 @@ block — verified to be the whole fix on that pair, 48 PASS / rc=0, nothing els
 touched.
 
 <!-- reserved-ids
-L299 #1327
 -->
 
 ## Verification and monitoring

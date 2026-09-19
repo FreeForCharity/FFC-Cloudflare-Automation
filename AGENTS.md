@@ -92,6 +92,28 @@ NTP has usually corrected it, leaving wrong timestamps already written and nothi
 reproduce. The check was `ok` on this same host forty minutes after the skew was measured. Ledger
 **L270**.
 
+**The reference is reached by whichever probe the host has, and the cloud worker's is `curl` through
+the egress proxy (#1335).** The check asks `gh api rate_limit --include` first and falls back to
+`curl` against `https://api.github.com/rate_limit`. There is a second probe because the first is
+structurally unavailable to the scheduled multi-repo worker — that session has **no `gh` CLI at
+all**, by design, so from the day this step was written until #1335 it returned `UNVERIFIED` on
+every run of that class. Honest, and never a pass: the hooks half of the same trap (L218/L261) lied
+and was noticed; this half merely never worked. Two things are worth knowing before re-diagnosing a
+`UNVERIFIED` here:
+
+- **The proxy allowlists `api.github.com` per PATH, and a blocked path is `Date`-less, not
+  `Date`-wrong.** Measured from a worker sandbox: `/rate_limit` → `200` with a `Date`; `/` → `200`
+  with **no** `Date`; `/zen` and `/meta` → `403`, no `Date`. The 403 body says sessions are "bound
+  to their configured repositories", which reads as a general policy and is not one — `/rate_limit`
+  is non-repo-scoped and allowed. The endpoint is pinned by name in the script for that reason; do
+  not swap it for the cheaper-looking `/zen`.
+- **The transcript carries two responses**, the proxy's `CONNECT` and GitHub's, and only the second
+  may supply the timestamp — a proxy-minted `Date` shares this host's surface and is worth nothing
+  (**L242**). The script reads the last block and requires it to carry a GitHub origin header.
+
+`UNVERIFIED` still means what it always did: both probes came back empty, so date the run from a
+GitHub timestamp rather than from this host.
+
 ## Onboarding a charity (start here for the full chain)
 
 If the task is to **onboard / provision / "set up the repo for" a charity or domain** — or you just

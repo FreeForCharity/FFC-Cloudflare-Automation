@@ -220,6 +220,205 @@ def test_agents_md_tells_the_conductor_to_run_this():
     assert "check-conductor-clock.py" in agents, "AGENTS.md does not mention the clock check"
 
 
+# ---------------------------------------------------------------------------
+# The `curl` fallback (#1335). The cloud worker has no `gh`, so before this the
+# check reported UNVERIFIED on every run of that session class -- honest, and
+# never a pass. These cases pin the two ways a fallback could be worse than no
+# fallback: reading a timestamp the proxy minted, or reporting one when the
+# response carried none.
+# ---------------------------------------------------------------------------
+
+# Captured verbatim from a worker sandbox, 2026-09-18. Two status lines: the
+# egress proxy's CONNECT, then GitHub's own response.
+MEASURED_CURL_TRANSCRIPT = """HTTP/1.1 200 Connection Established
+
+HTTP/1.1 200 OK
+Server: github.com
+Date: Fri, 18 Sep 2026 03:16:30 GMT
+Content-Type: application/json; charset=utf-8
+X-Github-Request-Id: 80E8:D39EC:44EA723:E8462BF:6AAC58E6
+"""
+
+MEASURED_SERVER = datetime.datetime(2026, 9, 18, 3, 16, 30, tzinfo=UTC)
+
+# The `/` shape: allowlisted enough to answer 200, and carries no `Date` at all.
+NO_DATE_200_TRANSCRIPT = """HTTP/1.1 200 Connection Established
+
+HTTP/1.1 200 OK
+Server: github.com
+Content-Type: application/json; charset=utf-8
+X-Github-Request-Id: 80E8:D39EC:44EA723:E8462BF:6AAC58E7
+"""
+
+# The `/zen` shape: the proxy refuses a non-allowlisted path itself.
+REFUSED_403_TRANSCRIPT = """HTTP/1.1 200 Connection Established
+
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+
+{"message":"This GitHub API path is not available: sessions are bound to their configured repositories."}
+"""
+
+
+def test_the_measured_transcript_yields_githubs_instant():
+    raw = M.date_from_curl_transcript(MEASURED_CURL_TRANSCRIPT)
+    assert M.parse_http_date(raw) == MEASURED_SERVER, raw
+
+
+def test_a_date_on_the_proxys_connect_block_cannot_be_read_as_the_reference():
+    """The discriminating case, and the reason the real transcript is not enough.
+
+    Today's CONNECT block carries no `Date`, so "first `Date` in the stream"
+    passes the measured fixture while being wrong. A proxy that added one would
+    hand this check a timestamp minted on THIS host -- the one surface a clock
+    check may not share (L242) -- and every other assertion here would still be
+    green. So the wrong value is injected deliberately rather than waited for.
+    """
+    poisoned = MEASURED_CURL_TRANSCRIPT.replace(
+        "HTTP/1.1 200 Connection Established\n",
+        "HTTP/1.1 200 Connection Established\nDate: Mon, 01 Jan 1990 00:00:00 GMT\n",
+    )
+    assert "1990" in poisoned, "the fixture did not take; this test would prove nothing"
+    parsed = M.parse_http_date(M.date_from_curl_transcript(poisoned))
+    assert parsed == MEASURED_SERVER, parsed
+    assert parsed.year != 1990, parsed
+
+
+def test_a_200_that_carries_no_date_is_not_an_answer():
+    """A SUCCESSFUL response with no timestamp -- distinct from a probe that
+    failed to run, and the shape an endpoint swap to `/` would produce."""
+    assert M.date_from_curl_transcript(NO_DATE_200_TRANSCRIPT) is None
+
+
+def test_a_refused_path_is_not_an_answer():
+    assert M.date_from_curl_transcript(REFUSED_403_TRANSCRIPT) is None
+
+
+def test_a_date_from_a_block_that_is_not_githubs_is_refused():
+    """`curl` exits 0 when the PROXY answers, so a zero exit says nothing about
+    who replied. Without the origin-marker requirement this transcript reads as
+    a clean remote reference."""
+    proxy_only = """HTTP/1.1 200 Connection Established
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+Date: Mon, 01 Jan 1990 00:00:00 GMT
+"""
+    assert M.date_from_curl_transcript(proxy_only) is None
+
+
+def test_the_gh_reader_is_unchanged_by_the_fallback():
+    """The Conductor's host still has `gh`, and its transcript is one block."""
+    gh_out = """HTTP/2.0 200 OK
+Date: Sat, 12 Sep 2026 03:27:48 GMT
+Content-Type: application/json
+
+{
+  "resources": {
+    "core": {"limit": 5000, "remaining": 5000}
+  },
+  "date": "1999-01-01T00:00:00Z"
+}
+"""
+    assert M.parse_http_date(M.date_from_gh_transcript(gh_out)) == RUN155_SERVER
+
+
+def test_text_before_any_status_line_belongs_to_no_response():
+    assert M.split_response_blocks("Date: Mon, 01 Jan 1990 00:00:00 GMT\n") == []
+
+
+def test_the_probe_endpoint_is_pinned_by_name_and_reaches_the_curl_argv():
+    """`/zen`, `/meta` and `/` all answer without a `Date` through this proxy, so
+    the endpoint is not interchangeable and the constant says so."""
+    assert M.GITHUB_DATE_PROBE_URL == "https://api.github.com/rate_limit"
+    argvs = [argv for argv, _ in M.probe_commands(20)]
+    assert argvs[0][0] == "gh", argvs  # authenticated probe stays first
+    curl_argv = argvs[1]
+    assert curl_argv[0] == "curl", curl_argv
+    assert M.GITHUB_DATE_PROBE_URL in curl_argv, curl_argv
+    assert "-D" in curl_argv, "headers are the only thing this call wants"
+
+
+def _verdict_through(transcripts):
+    """Run the real `main()` with the probe layer replaced, and return
+    (exit code, verdict dict). `transcripts` maps a probe's binary name to the
+    stdout it produces, or to None for a probe that cannot run at all."""
+    import contextlib
+    import io
+    import json as _json
+
+    original = M._run_probe
+    M._run_probe = lambda argv, timeout_seconds: transcripts.get(argv[0])
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = M.main(["--json"])
+        return rc, _json.loads(buf.getvalue())
+    finally:
+        M._run_probe = original
+
+
+def test_a_host_with_no_gh_still_gets_a_verdict_through_the_fallback():
+    """AC 1 of #1335: the whole point. `gh` cannot run; the answer is still real."""
+    rc, verdict = _verdict_through({"curl": MEASURED_CURL_TRANSCRIPT})
+    assert verdict["authoritative"] == "2026-09-18T03:16:30Z", verdict
+    assert verdict["verdict"] in (M.VERDICT_OK, M.VERDICT_SKEWED), verdict
+    assert rc == M.EXIT_BY_VERDICT[verdict["verdict"]], (rc, verdict)
+
+
+def test_a_skew_is_still_caught_through_the_fallback():
+    """Without this, a fallback that hard-coded `ok` would satisfy every other
+    criterion here. The transcript's `Date` is decades away from any real host
+    clock, so the comparison cannot come out inside tolerance."""
+    rc, verdict = _verdict_through(
+        {
+            "curl": MEASURED_CURL_TRANSCRIPT.replace(
+                "Fri, 18 Sep 2026 03:16:30 GMT", "Mon, 01 Jan 1990 00:00:00 GMT"
+            )
+        }
+    )
+    assert verdict["verdict"] == M.VERDICT_SKEWED, verdict
+    assert rc == 1, (rc, verdict)
+    assert "AHEAD OF" in verdict["reason"], verdict
+
+
+def test_a_probe_that_runs_but_answers_nothing_does_not_end_the_search():
+    """`gh` present but pointed somewhere that yields no `Date` must not consume
+    the attempt -- otherwise adding the fallback would have made the `gh` host
+    strictly worse."""
+    rc, verdict = _verdict_through(
+        {"gh": NO_DATE_200_TRANSCRIPT, "curl": MEASURED_CURL_TRANSCRIPT}
+    )
+    assert verdict["authoritative"] == "2026-09-18T03:16:30Z", verdict
+    assert rc == M.EXIT_BY_VERDICT[verdict["verdict"]], (rc, verdict)
+
+
+def test_both_probes_unavailable_still_fails_closed():
+    """The contract that must survive the new probe: no reference is `UNVERIFIED`
+    and exit 2, never `ok`. Asserted on the verdict AND the exit code -- exit 2
+    alone cannot distinguish this from an unparseable response (CLAUDE.md)."""
+    rc, verdict = _verdict_through({})
+    assert verdict["verdict"] == M.VERDICT_UNKNOWN, verdict
+    assert verdict["authoritative"] is None, verdict
+    assert "UNVERIFIED" in verdict["reason"], verdict
+    assert rc == 2, (rc, verdict)
+
+
+def test_a_refused_fallback_reports_unverified_not_a_crash():
+    rc, verdict = _verdict_through({"curl": REFUSED_403_TRANSCRIPT})
+    assert verdict["verdict"] == M.VERDICT_UNKNOWN, verdict
+    assert rc == 2, (rc, verdict)
+
+
+def test_agents_md_records_that_the_worker_reaches_the_reference_by_proxy():
+    """AC 5 of #1335: so the `gh`-absent / 403 shape is not re-diagnosed from
+    scratch by the next worker that reads the bootstrap section."""
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert "#1335" in agents, "AGENTS.md does not cite the issue that added the fallback"
+    lowered = agents.lower()
+    assert "egress proxy" in lowered, "AGENTS.md does not say how the worker reaches the reference"
+
+
 def run_module_tests(tests):
     """Run every test, report each, and return the failure count.
 

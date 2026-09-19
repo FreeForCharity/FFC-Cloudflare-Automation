@@ -564,8 +564,8 @@ So when the sweep terminates with 0 actionable PRs, spend one read on the superv
 concluding anything:
 
 - **`747. Repo - Conductor Liveness`** measures this every two hours and keeps a rolling issue open
-  while it holds. An open 747 issue, or a `conductor-silence` signal past its 6h warn threshold, means
-  the run's one contribution is to escalate the **supervisor's** absence — not to re-verify an
+  while it holds. An open 747 issue, or a `conductor-silence` signal past its 6h warn threshold,
+  means the run's one contribution is to escalate the **supervisor's** absence — not to re-verify an
   unchanged cohort for the tenth time.
 - Reading it by hand is one call, and #719 is the same source 747 uses. Per **L215** match the
   em-dash heading form the log has used since ~run 87, not the pre-87 bare form:

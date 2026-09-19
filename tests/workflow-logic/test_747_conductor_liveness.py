@@ -205,7 +205,15 @@ def test_the_healthy_window_is_silent():
 def test_day_five_is_still_a_finding_and_says_how_long():
     a = _outage(DAY_FIVE, 13, [{"at": LAST_CONDUCTOR, "openPRs": 4}])
     assert a["hasFinding"]
-    assert _sig(a, "conductor-silence")["measured"] > 100, _sig(a, "conductor-silence")
+    s = _sig(a, "conductor-silence")
+    # Assert the verdict before the magnitude. `measured` is None on every
+    # UNKNOWN, and `None > 100` raises TypeError rather than failing an
+    # assertion — which the module runner does not catch, so one such comparison
+    # aborts the whole roster and every later test silently goes unreported
+    # (ledger L194). run_all.py's roster guard catches that in CI; a standalone
+    # run of this module would just look like a small failure set.
+    assert s["verdict"] == "ALERT", s
+    assert s["measured"] > 100, s
 
 
 def test_the_report_names_every_signal_and_never_averages_them():
@@ -387,6 +395,10 @@ def test_the_newest_is_chosen_by_timestamp_not_by_position():
             _comment("2026-09-14T10:00:00Z", "## Run 174 — END"),
         ]
     )
+    # `newest` is None whenever nothing matched, and subscripting it then raises
+    # TypeError instead of failing an assertion — which aborts the roster and
+    # hides every test after this one (ledger L194). Assert it matched first.
+    assert p["matched"] == 2 and p["newest"] is not None, p
     assert p["newest"]["run"] == 180, p
 
 

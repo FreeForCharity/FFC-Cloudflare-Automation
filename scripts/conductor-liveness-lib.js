@@ -106,14 +106,17 @@ const ISO_8601 = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\
 // `parseConductorComments` additionally reports how many comments matched, so a
 // pattern that has stopped matching the current format is visible as a
 // collapsed count rather than as a confident wrong timestamp.
-// The separator class is written with explicit escapes rather than literal em
-// and en dash characters. Both spellings behave identically, but a non-ASCII
-// byte inside a regex is precisely what an encoding round-trip mangles — this
-// host's cp1252 default has corrupted repo files before — and a silently
-// mutilated character class here fails by matching nothing, which is the L215
-// failure mode this pattern exists to resist.
-const CONDUCTOR_RE =
-  /^[\s>]*#{0,6}\s*(?:conductor\s+)?run\s+(\d+)\s*[—–-]?\s*(START|END)\b/im;
+//
+// The separator class holds LITERAL em dash, en dash and ASCII hyphen. Those two
+// non-ASCII bytes are the one fragile thing in this module: an encoding
+// round-trip that mangles them — this repo has hit cp1252 corruption more than
+// once — breaks the class by making it match nothing, which is the same silent
+// L215 failure the pattern exists to resist. What defends against that is not a
+// comment but `test_the_pattern_matches_hyphen_and_en_dash_separators`, which
+// exercises all four separator spellings and fails loudly if these bytes change.
+// Do not "simplify" the class to ASCII-only: the log's current format uses the em
+// dash, so that edit silently stops matching every recent comment.
+const CONDUCTOR_RE = /^[\s>]*#{0,6}\s*(?:conductor\s+)?run\s+(\d+)\s*[—–-]?\s*(START|END)\b/im;
 
 const MARKER = '<!-- conductor-liveness -->';
 // The history the next run reads back. Kept as one HTML-comment line so the
@@ -563,7 +566,7 @@ function renderBody(a, iso) {
       '',
       '1. Check whether the routine is still running on that host, and restart it if not.',
       `2. Until it is back, every green, resolved, 0-behind draft PR is unpromotable: ` +
-        '`gh pr ready` plus an enqueue is the Conductor\'s alone, so cloud workers cannot drain ' +
+        "`gh pr ready` plus an enqueue is the Conductor's alone, so cloud workers cannot drain " +
         'the queue however many runs they spend on it.',
       '3. A worker run that finds 0 actionable PRs **and** this issue open should escalate the ' +
         "supervisor's absence rather than re-verify an unchanged cohort (AGENTS.md § the landing " +

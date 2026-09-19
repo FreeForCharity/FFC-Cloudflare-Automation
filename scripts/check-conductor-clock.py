@@ -292,14 +292,22 @@ def probe_commands(
     """The probes to try, in order, each paired with its transcript reader.
 
     The reader type is spelled inline rather than hoisted to a module-level
-    alias on purpose. An alias is an ASSIGNMENT, whose right-hand side `from
-    __future__ import annotations` does NOT defer -- so `Callable[[str], str |
-    None]` there is evaluated at import and needs Python >= 3.10, while the same
-    text in this annotation is never evaluated at all. Nothing else in this repo
-    requires 3.10 at runtime and the Conductor's host pins no version, so the
-    alias would have put a version floor under the one script that runs before
-    anything else. (Measured: an undefined name is fine in the annotation and
-    raises `NameError` in the assignment.)
+    alias on purpose. The distinction is WHEN the text is evaluated, not where
+    it is written: an alias is an ASSIGNMENT, and `from __future__ import
+    annotations` does not defer an assignment's right-hand side, so
+    `Callable[[str], str | None]` there is evaluated at import; the identical
+    text in this annotation is never evaluated at all. (Measured: an undefined
+    name is fine in the annotation and raises `NameError` in the assignment.)
+
+    Which matters here because an evaluated `str | None` needs Python >= 3.10.
+    The repo uses PEP-604 unions freely -- but an audit of every tracked `.py`
+    puts 115 of 118 in annotations under the future import, where they are
+    deferred and cost nothing; the 3 that are evaluated are all annotations in
+    two TEST modules that happen to lack the import. So no script that runs on
+    an operator's host carries that floor today, and the Conductor's host pins
+    no Python version. An alias here would have put one under the first thing
+    every agent runs, where the failure mode is an ImportError before `main()`
+    rather than the fail-closed `UNVERIFIED` this module exists to report.
 
     `gh` stays first: it is authenticated, so it does not spend the
     unauthenticated per-IP allowance, and on a host that has it the answer costs

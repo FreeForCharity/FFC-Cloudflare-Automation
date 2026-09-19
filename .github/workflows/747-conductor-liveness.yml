@@ -25,7 +25,7 @@ run-name: 'Conductor liveness (supervisor heartbeat)'
 # Four signals, each reported BY NAME with its measured value and never averaged
 # into a single verdict:
 #
-#   conductor-silence  age of the newest `Run N — START|END` comment on #719
+#   conductor-silence  age of the newest `Run N — START / END` comment on #719
 #   merge-silence      age of the newest merged agentic-os PR (independent)
 #   open-pr-cap        open agentic-os PR count vs the worker cap of 3, CONTEXT
 #   pr-growth          monotonic growth in that count across consecutive runs

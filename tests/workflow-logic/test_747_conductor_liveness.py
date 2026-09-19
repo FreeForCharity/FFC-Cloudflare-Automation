@@ -690,6 +690,40 @@ def test_the_workflow_has_a_safety_table_row():
     assert "| 747 " in doc, "add a row to docs/workflow-safety-and-approvals.md"
 
 
+def test_the_safety_row_carries_no_pipe_and_so_actually_parses():
+    """The row's PRESENCE is not its correctness, and this is the gap that shipped.
+
+    `generate-workflow-catalog.py:parse_safety_table` matches each cell with
+    `([^|]+)` — cells may contain no `|` at all, and escaping it as `\\|` does not
+    help because the class excludes the character, not the sequence. A row with a
+    stray pipe therefore matches nothing, and the generator still exits 0 while
+    emitting `safetyLevel: ''`, `approvalEnv: ''`, `guard: ''` for this workflow;
+    the README then prints the `(repo plumbing)` fallback. Nothing failed: the
+    doc-consistency check passed, the generator passed, and the presence test
+    above passed, because a malformed row is still a row beginning `| 747 `.
+
+    This shipped here as a literal `START|END` inside a code span, and prettier
+    compounded it by widening the table's separator to the 6 columns the split
+    cell implied. Assert the parse, not the presence.
+    """
+    row = next(
+        ln
+        for ln in (REPO_ROOT / "docs" / "workflow-safety-and-approvals.md")
+        .read_text(encoding="utf-8")
+        .split("\n")
+        if ln.startswith("| 747 ")
+    )
+    cells = row.split("|")[1:-1]
+    assert len(cells) == 5, (len(cells), "a 747 row cell contains a stray `|`")
+
+    cat = json.loads((REPO_ROOT / "docs" / "workflow-catalog.json").read_text(encoding="utf-8"))
+    entries = cat["workflows"] if isinstance(cat, dict) and "workflows" in cat else cat
+    mine = next(w for w in entries if str(w.get("number")) == "747")
+    # The three fields that silently came back empty.
+    assert mine["safetyLevel"] == "Reads", mine["safetyLevel"]
+    assert mine["guard"], "guard is empty -- the safety row did not parse"
+
+
 def test_agents_md_gives_the_worker_the_escalation_trigger():
     """#1339 scope B. Without this the worker files a 39th 'normal terminal
     state' and the monitor's finding reaches nobody who acts on it."""

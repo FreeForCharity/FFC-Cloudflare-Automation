@@ -39,6 +39,151 @@ WHOLE_MODULE_SKIP = "all"
 # that quietly STOPS following the convention must be caught, not excused.
 EXEMPT_NAME = "RUN_ALL_ROSTER_EXEMPT"
 
+# --------------------------------------------------------------------------
+# Failure classification (#1290)
+#
+# A failing sweep used to end in one undifferentiated list of module names. On
+# a Windows host most of those modules never failed an assertion -- they died
+# on the bash/PowerShell harness shim (#1119) -- but they rendered identically
+# to a real regression, so the only economical response was to ignore the whole
+# list. A signal that is always noisy in the same way stops being read.
+#
+# This is a RENDERING fix and nothing else. Every failure still fails the run;
+# see `main`'s return below. A sweep that passed on "environmental only" would
+# be strictly worse than the undifferentiated list it replaces.
+# --------------------------------------------------------------------------
+
+# Where a reader goes to understand the environmental bucket. Named once so the
+# summary and the tests cannot drift from each other.
+ENVIRONMENTAL_ISSUE = "#1119"
+
+ASSERTION = "assertion"
+ENVIRONMENTAL = "environmental"
+
+# One line per signature. Each is a string that only the ENVIRONMENT can emit:
+# it is produced by the shell, the OS or a runtime's own startup, before or
+# outside any code this repository owns. Adding one is a one-line change.
+#
+# The bar for membership is deliberately high -- a signature here can only ever
+# move a failure OUT of the actionable bucket, so a loose one (a bare
+# `FileNotFoundError`, say, which a genuine path bug produces just as readily)
+# would hide exactly what this list exists to surface. When in doubt, leave it
+# out: an unrecognised failure is classified as an assertion by
+# `classify_failure`, which is the safe direction.
+ENVIRONMENTAL_SIGNATURES = (
+    # A PowerShell host refusing to run the harness's bash `gh`/`git` shim: the
+    # shim is a shell document, and PowerShell cannot place one in a pipeline.
+    # Emitted by the host before a single line of module code runs.
+    "Cannot run a document in the middle of a pipeline",
+    # git-bash failing to PARSE a command substitution. A shell parse error is
+    # raised before the command is executed, so no repo logic reached the point
+    # of producing it -- it is the shim quoting difference #1119 tracks.
+    "command substitution: line 1: syntax error near unexpected token",
+    # ERROR_SHARING_VIOLATION. Windows will not unlink a file another process
+    # still holds, which is how a `tempfile.TemporaryDirectory` teardown dies
+    # here long after the test body itself has passed.
+    "[WinError 32]",
+    # ERROR_ACCESS_DENIED, reached by the same teardown path as WinError 32.
+    "[WinError 5]",
+    # NOT HERE, and deliberately: `[WinError 2]` (ERROR_FILE_NOT_FOUND).
+    # #1119 lists it as a host cause -- a POSIX tool missing from PATH -- and it
+    # still cannot be a signature, because that case and a genuine repo defect
+    # are textually IDENTICAL. Measured: a missing tool and a wrong path handed
+    # to `subprocess` differ only in the path they quote, and the Windows
+    # spelling ("The system cannot find the file specified") omits even that. A
+    # substring cannot separate "this host lacks `bash`" from "this module
+    # shells out to a path that moved", so the tie breaks toward assertion and
+    # the WinError-2 modules stay in the noisy bucket until #1119 pays for the
+    # Windows CI leg. Rejected on review of this PR; do not re-add without a
+    # discriminator that is not the error text.
+    # ERROR_PRIVILEGE_NOT_HELD. This account cannot create symlinks at all, so
+    # `os.symlink` is unavailable by construction rather than by defect.
+    "[WinError 1314]",
+    # node aborting inside its own C++ startup when spawned with a scrubbed
+    # environment (#943's shape). Never reachable from repo code.
+    "Assertion failed: ncrypto::CSPRNG",
+)
+
+# `  FAIL <name>` -- the outcome line a module prints when a test it RAN failed
+# its assertion. Distinct from OUTCOME_RE, which counts every outcome for the
+# roster check; here only the failures are evidence.
+FAIL_LINE_RE = re.compile(r"^  FAIL ([^\s:]+)", re.M)
+
+
+def environmental_signature(output: str) -> str | None:
+    """The first `ENVIRONMENTAL_SIGNATURES` entry present in `output`, or None."""
+    for signature in ENVIRONMENTAL_SIGNATURES:
+        if signature in output:
+            return signature
+    return None
+
+
+def classify_failure(output: str) -> tuple[str, str]:
+    """Classify one failing module's captured output as assertion or environmental.
+
+    Returns `(kind, evidence)`, where `evidence` is the thing actually matched
+    rather than a boolean -- the classification has to be checkable by the
+    person reading the summary, not merely trusted.
+
+    **Assertion evidence is tested FIRST, and that order is the point of this
+    function.** A module on a Windows host routinely contains both: a real
+    failing assertion AND a `[WinError 32]` from some unrelated teardown. If
+    the environmental signature were allowed to win, one incidental OS error
+    would silently reclassify a genuine regression as "not our problem" -- the
+    exact defect #1290 exists to prevent, rather than a fix for it. So any sign
+    that a test ran and failed makes the module an assertion failure no matter
+    what else its output contains.
+
+    The cost of that order is the one worth accepting: a `  FAIL` line whose
+    reason happens to be environmental is reported as an assertion failure.
+    That is over-reporting into the actionable bucket, which someone reads and
+    corrects, rather than under-reporting into the bucket nobody reads.
+    """
+    failed_tests = FAIL_LINE_RE.findall(output)
+    if failed_tests:
+        return ASSERTION, f"reported FAIL for {failed_tests[0]}"
+    if "AssertionError" in output:
+        return ASSERTION, "raised AssertionError"
+    signature = environmental_signature(output)
+    if signature is not None:
+        return ENVIRONMENTAL, signature
+    # Unrecognised: fail toward "this is a real bug". An environment this list
+    # does not yet describe is a signature to add, and until someone adds it
+    # the failure stays visible.
+    return ASSERTION, "no environmental signature recognised"
+
+
+def summary_lines(failures: list[tuple[str, str, str]]) -> list[str]:
+    """Render the classified breakdown that precedes the canonical summary line.
+
+    Ordering is load-bearing: this goes ABOVE
+    `::error::workflow-logic tests failed: ...`, which stays the LAST line of a
+    finished run. AGENTS.md's base-vs-PR comparison recipe requires that line
+    to be present before two runs may be compared, and describes it as the
+    terminal line; appending anything after it would quietly falsify that.
+    """
+    environmental = [f for f in failures if f[1] == ENVIRONMENTAL]
+    assertions = [f for f in failures if f[1] == ASSERTION]
+    lines = [
+        f"::error::failure breakdown: {len(assertions)} assertion failure(s); "
+        f"{len(environmental)} environmental (see {ENVIRONMENTAL_ISSUE})"
+    ]
+    # With an empty environmental bucket -- ubuntu, i.e. what CI runs -- the
+    # canonical line below is already the assertion list, so itemising it again
+    # would be noise. CI's reading is unchanged in substance.
+    if not environmental:
+        return lines
+    lines.append(
+        f"::error::  environmental ({ENVIRONMENTAL_ISSUE}) -- not a code defect, "
+        "and the run still fails on them:"
+    )
+    for name, _, evidence in environmental:
+        lines.append(f"::error::    {name} -- matched {evidence!r}")
+    lines.append("::error::  assertion failures -- these are the ones to act on:")
+    for name, _, evidence in assertions:
+        lines.append(f"::error::    {name} -- {evidence}")
+    return lines
+
 
 def _reported_any_test(output: str) -> bool:
     """True if a module reported anything at all about what it ran.
@@ -197,7 +342,17 @@ def main(argv: list[str] | None = None) -> int:
     if not modules:
         print("::error::no workflow-logic test modules found")
         return 1
-    failed = []
+    # (module name, kind, evidence) per failing module, classified from the
+    # output that module actually produced -- never from a list of module names
+    # known to be flaky, which would go stale silently and cannot notice a real
+    # regression appearing inside a module already on it.
+    #
+    # ONE list, and the canonical name list is derived from it below. The
+    # obvious shape -- a `failed` list of names beside a `failures` list of
+    # records -- requires every future `append` site to remember both, and the
+    # cost of forgetting is a breakdown whose counts silently disagree with the
+    # summary line right under it. Deriving makes that unrepresentable.
+    failures: list[tuple[str, str, str]] = []
     for mod in modules:
         print(f"== {mod.name} ==")
         proc = subprocess.run(
@@ -230,7 +385,7 @@ def main(argv: list[str] | None = None) -> int:
                 "executes the module's tests and reports each one -- see any "
                 "existing module."
             )
-            failed.append(mod.name)
+            failures.append((mod.name, *classify_failure(proc.stdout)))
             continue
         finding = roster_finding(
             mod.name,
@@ -240,11 +395,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         if finding:
             print(f"::error::{finding}")
-            failed.append(mod.name)
+            failures.append((mod.name, *classify_failure(proc.stdout)))
             continue
         if proc.returncode != 0:
-            failed.append(mod.name)
-    if failed:
+            failures.append((mod.name, *classify_failure(proc.stdout)))
+    if failures:
+        failed = [name for name, _, _ in failures]
+        for line in summary_lines(failures):
+            print(line)
+        # Unchanged, and last. Both properties are relied on elsewhere: the
+        # prefix is what AGENTS.md greps for, and `test_run_all_roster.py`
+        # asserts the module list follows it directly.
         print(f"::error::workflow-logic tests failed: {', '.join(failed)}")
         return 1
     print(f"All {len(modules)} workflow-logic test modules passed.")

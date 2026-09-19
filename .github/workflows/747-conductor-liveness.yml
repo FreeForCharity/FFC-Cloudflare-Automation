@@ -109,6 +109,32 @@ jobs:
             // issues listing, which returns pull requests too (same object in
             // the REST model) and carries `pull_request.merged_at` — one cheap
             // labelled query per state instead of walking every PR in the repo.
+            //
+            // Both halves of that were questioned in review and both are
+            // MEASURED against the live API (2026-09-19), because the obvious
+            // "fix" is wrong in a way that fails silently:
+            //
+            //   * the issues endpoint's `pull_request` stub really does carry
+            //     `merged_at`. Its keys are exactly
+            //     [diff_url, html_url, merged_at, patch_url, url], and the six
+            //     merged agentic-os PRs on the first page all returned real
+            //     timestamps (#1340 2026-09-19T16:48:51Z, #1337 16:12:46Z, …).
+            //     It is `null` for a closed-unmerged PR, which is precisely what
+            //     the truthy filter below is for.
+            //   * `pulls.list` does NOT support `labels=` and does not say so.
+            //     Measured: `pulls?state=closed&labels=agentic-os` and
+            //     `…&labels=this-label-does-not-exist-xyz` both return the SAME
+            //     five PRs, while the issues endpoint returns 5 and 0 for the
+            //     same pair. So switching to `pulls.list` would either silently
+            //     drop the label filter — scoring any merged PR as an
+            //     agentic-os merge — or force a walk of every closed PR in the
+            //     repo to filter client-side.
+            //
+            // Keep the issues endpoint. If this ever does need to change, note
+            // that the failure mode here is loud by design, not silent: an
+            // extraction that stopped working yields an empty `mergedPRs`, which
+            // the library classifies UNKNOWN — a standing finding — rather than
+            // a reassuring "recently merged".
             let mergedPRs = [];
             let mergedError = null;
             try {

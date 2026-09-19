@@ -551,6 +551,36 @@ that is its own tracked defect (**#1269**: 739's silence alarm fired 4 times cor
 across a 30-day outage, with 0 addressees). Post the note on #719 _and_ follow #1269 for the
 delivery channel rather than inventing one here.
 
+**Before filing a sweep as a normal terminal state, check that the actor you are waiting on still
+exists (#1339).** A complete PR set means no landing work is available — and it reads exactly the
+same whether the Conductor is healthy with nothing to promote or has not run in five days. On
+2026-09-14 it stopped mid-run and **~39 consecutive worker runs** each computed "0 worker-actionable
+PRs" correctly, in increasing detail, and filed it as routine; the open pile grew 4 → 13 with all 17
+monitoring workflows green. The sentence _"the only remaining action is promotion, which is the
+Conductor's"_ is true on a healthy day and true during an outage, and the cohort's state cannot tell
+them apart. **A terminal state reached 39 times in a row is not a terminal state, it is an outage.**
+
+So when the sweep terminates with 0 actionable PRs, spend one read on the supervisor before
+concluding anything:
+
+- **`747. Repo - Conductor Liveness`** measures this every two hours and keeps a rolling issue open
+  while it holds. An open 747 issue, or a `conductor-silence` signal past its 6h warn threshold, means
+  the run's one contribution is to escalate the **supervisor's** absence — not to re-verify an
+  unchanged cohort for the tenth time.
+- Reading it by hand is one call, and #719 is the same source 747 uses. Per **L215** match the
+  em-dash heading form the log has used since ~run 87, not the pre-87 bare form:
+
+  ```bash
+  gh api --paginate repos/FreeForCharity/FFC-Cloudflare-Automation/issues/719/comments \
+    --jq '.[] | "\(.created_at) \(.body[0:40])"' | grep -iE 'run [0-9]+ .?(START|END)' | tail -3
+  ```
+
+  A newest entry older than a few hours is the finding. Note this needs `--paginate` and a
+  **streaming** `--jq`, for the two reasons in the rate-budget section above.
+
+Nothing in this repository can restart the Conductor — it runs on an operator workstation reachable
+only by @clarkemoyer — so the deliverable is the escalation, not a fix.
+
 Two mechanics for whoever does have promotion authority, both already paid for:
 
 - **The first `enqueuePullRequest` after `gh pr ready` is expected to fail** with

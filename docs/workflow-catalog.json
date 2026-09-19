@@ -2208,6 +2208,25 @@
       "categoryCode": "GH"
     },
     {
+      "number": 747,
+      "title": "Repo - Conductor Liveness",
+      "apis": [
+        "GH"
+      ],
+      "file": "747-conductor-liveness.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Two-hourly OUTCOME check on whether the Conductor \u2014 the locally-run routine that is the only actor with promotion and merge authority \u2014 is still working.  Why (#1339): the Conductor posted its run 174 END to the Conductor Log (#719) at 2026-09-14T10:20Z and then went quiet for about five days. Nothing noticed. This repo has 17 monitoring workflows (730-746) and every one of them watches something that happens INSIDE GitHub Actions \u2014 waiting runs (734), scheduled-workflow failures (740), board drift (745), feed freshness (744) \u2014 so a routine whose only GitHub footprint is a comment on an issue is invisible to the entire fleet by construction. All 17 were green while 0 agentic-os PRs merged, the open pile grew from 4 to 13, and about 39 consecutive cloud-worker runs each correctly computed \"0 worker-actionable PRs\" and filed it as a normal terminal state. A terminal state reached 39 times in a row is not a terminal state, it is an outage.  744's header already makes this argument one level down: #921 watches whether 502 succeeds, not whether its PR merged; #908 watches PRs hanging behind main, not the publisher never opening one. Same shape, one level up. This workflow asserts the outcome instead \u2014 are the Conductor's comments still arriving, and is work still landing.  Four signals, each reported BY NAME with its measured value and never averaged into a single verdict:  conductor-silence  age of the newest `Run N \u2014 START|END` comment on #719 merge-silence      age of the newest merged agentic-os PR (independent) open-pr-cap        open agentic-os PR count vs the worker cap of 3, CONTEXT pr-growth          monotonic growth in that count across consecutive runs  open-pr-cap is deliberately never a finding on its own. The pile stood at 4 \u2014 above the cap \u2014 throughout the healthy window before the outage, so a level-triggered rule reports every ordinary day and teaches its reader to ignore it. Sustained growth is the shape a stalled supervisor makes, and pr-growth is what reports it.  An unreadable log, an empty comment page, a pattern that no longer matches the log's format (ledger L215), or a timestamp that is absent, empty, non-ISO or in the future is a FINDING, never \"alive\". \"Could not check\" and \"checked, fine\" are different answers and collapsing them is the exact fail-open this workflow exists to close (ledger L02).  Credentials: NONE beyond the ambient GITHUB_TOKEN. The log is a public issue in this repository and so are the PRs. Using a Key Vault PAT here would be circular in 744's sense, carried up a level: a liveness check must not depend on a credential whose death it might need to report, and it must not sit behind an environment gate that only the absent supervisor can approve. No Key Vault access, no environment, no approval gate.  Classification + report logic lives in scripts/conductor-liveness-lib.js (unit-tested under tests/workflow-logic/).",
+      "safetyLevel": "",
+      "approvalEnv": "",
+      "guard": "",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 801,
       "title": "Candid - Charity Check (EIN)",
       "apis": [

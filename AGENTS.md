@@ -240,7 +240,9 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
     line naming the failing modules, so require that line in **both** files before comparing:
 
     ```bash
-    # run_all.py:215,217 — exactly one of these is the last line of a finished run.
+    # run_all.py:398,400 — exactly one of these is the last line of a finished run.
+    # Still true after #1290 added the classified breakdown: that prints ABOVE the
+    # failure line precisely so this stays the terminal one.
     for f in pr.txt base.txt; do
       grep -qE '^(::error::workflow-logic tests failed:|All [0-9]+ workflow-logic test modules passed\.)' "$f" \
         || { echo "$f INCOMPLETE — do not compare"; exit 1; }

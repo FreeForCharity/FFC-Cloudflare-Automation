@@ -189,6 +189,18 @@ def _top_level_ops(bare, ops):
     `$(a) && b` still splits. `ops` is matched longest-first by the caller's
     ordering, so `|&` wins over `|`.
 
+    A backtick is only a span delimiter at TOP LEVEL. Inside an open `$(...)`
+    it is one of that substitution's own characters, and the `)` ends the span
+    regardless -- so toggling on it there would carry the flag out past the
+    close. The damage is not the missed split it looks like: an odd backtick
+    inside a substitution INVERTS the parity for everything after it, so the
+    opening backtick of a later, genuine `` `...` `` reads as a close and its
+    contents are scanned as top level. The `|` in
+    `git push --force `git remote | head -1` main` then splits a real
+    force-push into two stages, which is exactly the permissive tear this
+    scanner exists to prevent -- 21 of them, measured over the probe corpus.
+    Copilot review on #1336.
+
     Extracted from `_pipe_stages`, which had this scanner inline, because
     `_split_on_logical` needs exactly the same span model and a second copy
     would be one more place for the two to drift apart (#1309).
@@ -203,7 +215,7 @@ def _top_level_ops(bare, ops):
             # An escaped character is data, never an operator -- `\|` included.
             i += 2
             continue
-        if ch == "`":
+        if ch == "`" and not closers:
             backtick = not backtick
             i += 1
             continue

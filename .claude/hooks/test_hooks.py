@@ -307,6 +307,32 @@ RULES = [
          "git push --force `git remote | head -1` main", BLOCK),
         ("force-push main with an escaped pipe between arguments",
          "git push --force origin \\| main", BLOCK),
+        # An ODD backtick inside a substitution used to toggle the scanner's
+        # backtick flag and carry it out past the closing paren, INVERTING the
+        # parity for the rest of the line. The opening backtick of the later,
+        # genuine span then read as a close, so its `|` and `&&` were scanned
+        # as top level and tore a real force-push into two stages. 21 of these
+        # were ALLOWED before the `not closers` guard. Copilot on #1336.
+        ("force-push main after an odd backtick leaked out of $()",
+         "echo $(echo ` ) ; git push --force `git remote | head -1` main", BLOCK),
+        ("force-push main after an odd backtick, && in the later span",
+         "echo $(echo ` ) ; git push -f `cd /repo && git remote` main", BLOCK),
+        ("force-push main after an odd backtick, ; in the later span",
+         "echo $(echo ` ) ; git -C /repo push --force `cd /repo; git remote` main",
+         BLOCK),
+        # ...and the ALLOW half, which is what stops the lazy fix of never
+        # toggling the flag at all. A TOP-LEVEL backtick span is still a real
+        # span, so an operator inside one is still not a boundary, and a
+        # feature push followed by an unrelated command naming `main` must
+        # stay allowed either side of it.
+        ("push feature, then && a command naming main, after a closed $()",
+         "echo $(echo hi) ; git push origin feature-x && grep -f patterns.txt main",
+         ALLOW),
+        ("push feature through a top-level backtick span containing a pipe",
+         "git push origin `git branch --show-current | tr -d x`", ALLOW),
+        ("push feature after a substitution holding an EVEN backtick pair",
+         "echo $(echo `date`) ; git push origin feature-x | grep -f patterns.txt main",
+         ALLOW),
         # Same defect one level UP, in `_split_on_logical`, which tears the
         # statement into segments before `_pipe_stages` ever runs. An `&&` or
         # `||` inside a substitution is not a segment boundary either, and all

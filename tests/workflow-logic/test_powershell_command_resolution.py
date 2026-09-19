@@ -38,7 +38,9 @@ per the CLAUDE.md rule that CI, not a local sandbox, is authoritative here.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
 import pathlib
 import shutil
@@ -59,6 +61,12 @@ spec.loader.exec_module(checker)
 
 PWSH = checker.find_powershell()
 SKIPPED: list[str] = []
+
+# The first thing `run()` prints when `find_powershell()` comes back empty, before
+# it has called `audit` at all. Named here because one test below asserts its
+# ABSENCE: that string in captured output means the run never reached the verdict
+# under test, so any exit code read alongside it describes the host, not the guard.
+NO_HOST = "no PowerShell host found"
 
 
 class Skip(Exception):
@@ -524,19 +532,56 @@ def test_main_fails_the_build_when_there_is_a_finding():
     return 0 unconditionally would leave every other test here passing while CI
     stopped failing on the defect. Asserted on a substituted verdict rather than
     on the tree, which is clean by construction (the #927 lesson).
+
+    Host-gated like its AST-backed siblings, for a reason the exit code hides
+    (#1109). `run()` returns 1 on a missing host BEFORE it calls `audit`, so
+    without a host the substituted verdict is never reached: the two `== 1`
+    assertions below passed while measuring nothing, and the clean case failed —
+    one false red and two greens that meant the opposite of what they read.
+
+    Hence also: every case asserts on what `run()` REPORTED, not only on what it
+    returned. That is the CLAUDE.md rule that a test asserting an exit code must
+    assert on the output too, or it cannot tell the system under test from its
+    own harness — and this test is the worked example of why.
     """
+    require_pwsh()
     original = checker.audit
     planted = checker.Finding(file="scripts/x.ps1", line=7, command="Get-Planted")
-    checker.audit = lambda facts, inventory: ([planted], {}, {}, [])
+
+    def verdict(findings: list, structural: list) -> tuple[int, str]:
+        """Run the checker over a substituted verdict, capturing what it reported."""
+        checker.audit = lambda facts, inventory: (findings, {}, {}, structural)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = checker.run(REPO_ROOT)
+        return code, buffer.getvalue()
+
     try:
-        assert checker.run(REPO_ROOT) == 1, (
+        code, out = verdict([planted], [])
+        assert code == 1, (
             "run() returned 0 with a finding in hand — CI would go green over the "
-            "exact defect this script exists to fail."
+            f"exact defect this script exists to fail. Reported: {out!r}"
         )
-        checker.audit = lambda facts, inventory: ([], {}, {}, ["a structural problem"])
-        assert checker.run(REPO_ROOT) == 1, "a structural error must also fail the build"
-        checker.audit = lambda facts, inventory: ([], {}, {}, [])
-        assert checker.run(REPO_ROOT) == 0
+        assert NO_HOST not in out, (
+            "run() bailed on host discovery before reaching the substituted verdict, "
+            f"so the exit code above measured the harness, not the guard: {out!r}"
+        )
+        assert "FAILED: 1 unresolvable command call(s), 0 structural error(s)." in out, (
+            f"run() failed the build without reporting the finding that caused it: {out!r}"
+        )
+
+        code, out = verdict([], ["a structural problem"])
+        assert code == 1, f"a structural error must also fail the build. Reported: {out!r}"
+        assert "::error::a structural problem" in out, (
+            f"a structural error must be reported, not merely counted: {out!r}"
+        )
+
+        code, out = verdict([], [])
+        assert code == 0, f"run() failed the build on a clean verdict: {out!r}"
+        assert "PowerShell command resolution OK" in out, (
+            "a clean run must say so — a silent 0 is indistinguishable from a scan "
+            f"that never happened: {out!r}"
+        )
     finally:
         checker.audit = original
 

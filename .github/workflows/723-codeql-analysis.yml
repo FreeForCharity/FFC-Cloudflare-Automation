@@ -1,8 +1,13 @@
 name: '723. Repo - CodeQL Security Analysis [Repo]'
 
 on:
+  # No `branches:` filter ON `pull_request:` -- the `push:` one below stays, and
+  # is correct. Reason spelled out in 722-ci.yml (#1325): a `pull_request:`
+  # `branches:` filter matches the BASE ref, so a PR stacked on a feature branch
+  # got no CodeQL analysis at all while showing a green check list. `push:`
+  # creates no pull-request check context either way, so restricting it to `main`
+  # is right: post-merge runs belong on `main`.
   pull_request:
-    branches: [main]
   merge_group:
   push:
     branches: [main]

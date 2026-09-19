@@ -184,10 +184,20 @@ def _top_level_ops(bare, ops):
     a rule that requires several conditions in the same piece that fails
     PERMISSIVELY, which is the direction a guard must never fail in.
 
-    Bare `(`/`{` are tracked only once a substitution is open, so
+    Bare `(`/`{` are tracked only once a COMMAND substitution is open, so
     `$( (a) && b )` does not close its span early while an ordinary
-    `$(a) && b` still splits. `ops` is matched longest-first by the caller's
-    ordering, so `|&` wins over `|`.
+    `$(a) && b` still splits. They are deliberately NOT tracked inside a
+    parameter expansion: `${x:-foo(}` is valid bash -- the default-value word
+    is literal text and its `(` need not balance -- so pushing a closer for it
+    made the `}` that really ends the expansion pair with the `(` instead, and
+    `closers` then never emptied. Every later operator on the line was
+    invisible, which for rule 2 is the #1309 false positive returning by
+    another door. A nested `$(` or `${` inside either kind is still caught by
+    the `$` branch above, so nothing is lost by not tracking bare ones here.
+    Copilot review on #1336.
+
+    `ops` is matched longest-first by the caller's ordering, so `|&` wins over
+    `|`.
 
     A backtick is only a span delimiter at TOP LEVEL. Inside an open `$(...)`
     it is one of that substitution's own characters, and the `)` ends the span
@@ -205,6 +215,9 @@ def _top_level_ops(bare, ops):
     `_split_on_logical` needs exactly the same span model and a second copy
     would be one more place for the two to drift apart (#1309).
     """
+    # Each entry is `(closing_char, is_param_expansion)`. The flag matters
+    # because bare `(`/`{` nest differently in the two span kinds -- see the
+    # `closers[-1][1]` test below.
     closers = []
     backtick = False
     i = 0
@@ -220,14 +233,14 @@ def _top_level_ops(bare, ops):
             i += 1
             continue
         if ch == "$" and bare[i + 1 : i + 2] in ("(", "{"):
-            closers.append(")" if bare[i + 1] == "(" else "}")
+            closers.append((")", False) if bare[i + 1] == "(" else ("}", True))
             i += 2
             continue
-        if closers and ch in "({":
-            closers.append(")" if ch == "(" else "}")
+        if closers and not closers[-1][1] and ch in "({":
+            closers.append((")" if ch == "(" else "}", False))
             i += 1
             continue
-        if closers and ch == closers[-1]:
+        if closers and ch == closers[-1][0]:
             closers.pop()
             i += 1
             continue

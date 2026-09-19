@@ -333,6 +333,26 @@ RULES = [
         ("push feature after a substitution holding an EVEN backtick pair",
          "echo $(echo `date`) ; git push origin feature-x | grep -f patterns.txt main",
          ALLOW),
+        # A bare `(` inside a PARAMETER expansion is literal text -- `${x:-foo(}`
+        # is valid bash and its paren need not balance. Tracking it as a nested
+        # span made the `}` that really ends the expansion pair with the `(`,
+        # so `closers` never emptied and every later operator on the line went
+        # invisible. That is #1309's false positive returning by another door,
+        # so these are the rows that matter. Copilot on #1336.
+        ("push feature, then && a command naming main, after ${} with a bare (",
+         "echo ${x:-foo(} ; git push origin feature-x && grep -f patterns.txt main",
+         ALLOW),
+        ("push feature piped to grep naming main, after ${} with a bare {",
+         "echo ${x:-foo{} ; git push origin feature-x | grep -f patterns.txt main",
+         ALLOW),
+        # ...and the BLOCK half, which stops the lazy fix of never tracking
+        # bare grouping at all. Inside a COMMAND substitution `( )` really is
+        # syntactic, so `$( (a) && b )` must not close its span early and the
+        # force-push it wraps must still be caught.
+        ("force-push main after a ${} carrying a bare (",
+         "echo ${x:-foo(} ; git push --force origin main", BLOCK),
+        ("force-push main with a grouped subshell inside $()",
+         "git push --force $( (echo origin) && cat r.txt ) main", BLOCK),
         # Same defect one level UP, in `_split_on_logical`, which tears the
         # statement into segments before `_pipe_stages` ever runs. An `&&` or
         # `||` inside a substitution is not a segment boundary either, and all

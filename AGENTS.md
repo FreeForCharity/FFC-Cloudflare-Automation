@@ -491,6 +491,53 @@ and all authenticate as the same user. Before starting ANY issue:
    last hour means a rollout may be in flight (two sessions racing the same fleet fix produced
    conflicting variants on 2026-07-19).
 
+### The landing sweep, and when it is finished (#1261, #1272, #1281)
+
+The scheduled cloud worker opens each run with a **PR cap**: if 3 or more `agentic-os` PRs are open,
+it spends the run landing them — fixing CI failures, addressing review comments, resolving threads,
+updating PR descriptions — instead of starting new work. That rule lives in a prompt stored on
+Clarke's account and, until this section, appeared nowhere in this repository, so a worker reading
+`AGENTS.md` faithfully learned nothing about the cap or about when a sweep should stop. It has no
+natural terminal state, and that is what this section supplies.
+
+**A PR is _complete_ — not landing work — when all four hold:** CI green · **0 behind `main`** · all
+review threads resolved · it already carries a landing-sweep comment. Check each open `agentic-os`
+PR against that test **before** starting a sweep.
+
+**If _every_ open PR is complete, do not re-verify.** Post a one-paragraph "still blocked, nothing
+changed" note on #719, escalate the stall to a human, and spend the run on the backlog instead. The
+load-bearing clause is the last one: a fully-complete PR set means **no landing work is available**,
+not _work to redo_. Re-measuring an unchanged tree produces a verification matrix that reads like
+progress and moves nothing.
+
+**Why a complete PR is not worker-actionable: promotion is the Conductor's, not the worker's.** The
+only remaining action on a green, resolved, up-to-date draft is `gh pr ready` followed by an
+enqueue, and both are outside a sandbox worker's authority — so a worker cannot clear the cap
+itself, however many runs it spends trying. Run 153's finding put it exactly: _"The verification was
+never the bottleneck. Promotion was, and promotion is ours alone."_
+
+**A PR in a reserved lane is never worker-landing-work, whatever its state.** `.claude/hooks/` is
+reviewed and merged by @clarkemoyer alone (#1027), so a hooks PR cannot be landed by a worker even
+when it is green, resolved and 0 behind. Treat a lane check as the **first** filter, ahead of the
+four-part test: on 2026-09-15 all four open `agentic-os` PRs (#1297, #1310, #1312, #1313) were hooks
+PRs, which is a cap held entirely by work no worker could ever move.
+
+**"Escalate to a human" must name a destination a human actually reads.** #719 alone is not one —
+that is its own tracked defect (**#1269**: 739's silence alarm fired 4 times correctly into #719
+across a 30-day outage, with 0 addressees). Post the note on #719 _and_ follow #1269 for the
+delivery channel rather than inventing one here.
+
+Two mechanics for whoever does have promotion authority, both already paid for:
+
+- **The first `enqueuePullRequest` after `gh pr ready` is expected to fail** with
+  `Required status check "Phantom Revert Guard" is expected`, even when that exact SHA already
+  carries a green run of it. Promoting a draft re-registers the branch checks; it is a
+  re-registration race, not a missing check. Poll the head SHA's `check-runs` and retry — do not
+  diagnose it.
+- **Do not pre-emptively `update-branch` on a PR that is 0 behind.** Being behind is the trigger,
+  not promoting. A merge commit on a worker's branch is pure cost. Check first:
+  `gh api repos/FreeForCharity/FFC-Cloudflare-Automation/compare/main...<branch> --jq '{ahead:.ahead_by,behind:.behind_by}'`.
+
 ## GitHub API rate budget (shared — be frugal)
 
 Every agent session, scheduled task, and PAT-based workflow authenticates as the same user and

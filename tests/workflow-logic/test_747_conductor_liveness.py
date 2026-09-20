@@ -373,6 +373,52 @@ def test_the_pattern_matches_the_current_em_dash_heading_form():
     assert p["newest"]["phase"] == "START", p
 
 
+def test_the_pattern_matches_every_format_the_log_has_carried():
+    """The live log caught this module shipping the very defect it cites.
+
+    #719 changed format a second time at run 167, from a heading to a BOLD line:
+
+        ## Run 166 — END                    <- the first revision matched this
+        **Conductor run 167 — START** (…)   <- and silently did not match this
+
+    Measured over all 871 comments: the first pattern found 260 matches ending at
+    run 166 (2026-09-13T10:24:41Z), the current one finds 296 ending at run 174
+    (2026-09-14T10:20:04Z) — 36 missed, and the newest now agrees with the figure
+    #1339 quotes independently.
+
+    It was invisible because the Conductor was genuinely down, so BOTH patterns
+    said ALERT and the monitor looked right. The stale one was right for the
+    wrong reason; its real failure is on recovery, where it would never see the
+    new comments and would alert forever.
+    """
+    forms = {
+        "**Conductor run 167 — START**": (167, "START"),  # current, run 167+
+        "**Conductor run 174 — END** (2026-09-14 10:20Z)": (174, "END"),
+        "## Run 166 — END": (166, "END"),  # heading era, ~87-166
+        "RUN 86 START": (86, "START"),  # pre-87 bare form
+        "_Conductor run 200 - END_": (200, "END"),  # underscore emphasis
+        "> **Run 201 – START**": (201, "START"),  # quoted, en dash
+    }
+    for body, (num, phase) in forms.items():
+        p = parse_comments([_comment(NOW, body)])
+        assert p["matched"] == 1, (body, p)
+        assert p["newest"]["run"] == num, (body, p)
+        assert p["newest"]["phase"] == phase, (body, p)
+
+
+def test_the_pattern_does_not_match_mere_prose_about_a_run():
+    """The leading class is permissive by design; the rest must not be, or a
+    worker comment discussing the Conductor would read as a heartbeat."""
+    for body in (
+        "the cloud worker saw run 174 START in the log",  # not at line start
+        "## Cloud worker — landing sweep, 2026-09-20",
+        "Run 174 was the last one before the outage",  # no phase word
+        "## Run START",  # no number
+    ):
+        p = parse_comments([_comment(NOW, body)])
+        assert p["matched"] == 0, (body, p)
+
+
 def test_the_pattern_matches_the_pre_87_bare_form():
     """Ledger L215: a filter written for one era silently stops matching."""
     p = parse_comments([_comment(NOW, "RUN 86 START")])

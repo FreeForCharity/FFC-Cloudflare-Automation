@@ -101,11 +101,43 @@ const ISO_8601 = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\
 // reported the newest thing it could see, and the two bugs composed into one
 // well-formed, in-range, 46-runs-stale answer.
 //
-// So: optional leading `#` heading marks, an optional `Conductor` word, and the
-// separator may be an em dash, an en dash, a hyphen, or absent entirely.
-// `parseConductorComments` additionally reports how many comments matched, so a
-// pattern that has stopped matching the current format is visible as a
-// collapsed count rather than as a confident wrong timestamp.
+// **This module shipped with that exact defect, and the live log caught it.**
+// The first revision allowed leading `#` and `>` but not emphasis, and the log
+// changed format again at run 167 to a BOLD line rather than a heading:
+//
+//     ## Run 166 — END                       <- matched
+//     **Conductor run 167 — START** (…)      <- did NOT match
+//
+// Measured over all 871 comments on #719 (2026-09-20): the first pattern found
+// 260 matches ending at run 166 (2026-09-13T10:24:41Z); this one finds 296
+// ending at run 174 (2026-09-14T10:20:04Z) — **36 comments missed**, and the
+// newest now agrees with the figure #1339 quotes independently.
+//
+// What makes it worth this much comment is WHY it was invisible: the Conductor
+// was genuinely down when the defect was introduced, so both patterns said
+// ALERT and the monitor looked correct. The stale one was right for the wrong
+// reason. Its real failure arrives on RECOVERY — it would never see the new
+// comments, so it would report a growing silence forever, which is how a
+// monitor becomes noise and stops being read.
+//
+// So the leading class admits whitespace, `>`, `#`, `*` and `_` (horizontal
+// whitespace only, so `^` keeps anchoring per line), the `Conductor` word is
+// optional, and the separator may be an em dash, an en dash, a hyphen, or
+// absent.
+//
+// The phase ends on `(?![A-Za-z0-9])` rather than `\b`, and that is not
+// stylistic: `_` IS a word character, so `\b` does not match between `D` and
+// `_`, and `_Conductor run 200 - END_` failed while `**…END**` passed. The
+// leading class already admits `_`, so accepting one emphasis marker and
+// rejecting the other was an asymmetry inside the very fix for a
+// too-narrow pattern. The negative lookahead still refuses `ENDED` and
+// `STARTING`, which is all `\b` was doing here.
+//
+// `parseConductorComments` additionally reports how many
+// comments matched, so a pattern that has stopped matching is visible as a
+// collapsed count rather than as a confident wrong timestamp — and
+// `test_the_pattern_matches_every_format_the_log_has_carried` pins all four
+// spellings, including the one that got past the first revision.
 //
 // The separator class holds LITERAL em dash, en dash and ASCII hyphen. Those two
 // non-ASCII bytes are the one fragile thing in this module: an encoding
@@ -116,7 +148,8 @@ const ISO_8601 = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\
 // exercises all four separator spellings and fails loudly if these bytes change.
 // Do not "simplify" the class to ASCII-only: the log's current format uses the em
 // dash, so that edit silently stops matching every recent comment.
-const CONDUCTOR_RE = /^[\s>]*#{0,6}\s*(?:conductor\s+)?run\s+(\d+)\s*[—–-]?\s*(START|END)\b/im;
+const CONDUCTOR_RE =
+  /^[>#*_ \t]*(?:conductor[ \t]+)?run[ \t]+(\d+)[ \t]*[—–-]?[ \t]*(START|END)(?![A-Za-z0-9])/im;
 
 const MARKER = '<!-- conductor-liveness -->';
 // The history the next run reads back. Kept as one HTML-comment line so the

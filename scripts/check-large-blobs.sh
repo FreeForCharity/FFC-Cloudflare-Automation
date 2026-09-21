@@ -100,7 +100,16 @@ is_text_blob() {
   if ! stripped="$(git cat-file blob "$sha" | LC_ALL=C tr -d '\000' | wc -c)"; then
     return 2
   fi
-  [ "$size" = "$stripped" ]
+  # `wc` right-aligns its count on some implementations, so this can arrive as
+  # "  1200000". GNU coreutils 9.4 reading stdin does not pad -- measured -- but
+  # the comparison is against `cat-file --batch-check`'s unpadded size, so a
+  # string compare would read every text blob on a padding `wc` as binary.
+  # Normalize, then refuse rather than guess if what is left is not a number.
+  stripped="${stripped//[[:space:]]/}"
+  case "$stripped" in
+    '' | *[!0-9]*) return 2 ;;
+  esac
+  [ "$size" -eq "$stripped" ]
 }
 
 # Size of <path> as it stands on the base ref, or "" if there is no blob there.

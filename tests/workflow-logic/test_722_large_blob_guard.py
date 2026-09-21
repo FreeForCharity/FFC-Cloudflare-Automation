@@ -95,6 +95,7 @@ def _run_guard(
     base: str = "base",
     head: str = "HEAD",
     allowlist: pathlib.Path | None = None,
+    path_prefix: pathlib.Path | None = None,
 ) -> subprocess.CompletedProcess:
     # Inherit the real environment. A scrubbed env breaks `bash` on Windows
     # hosts (it resolves to the WSL shim, which needs SYSTEMROOT et al.) and
@@ -108,6 +109,8 @@ def _run_guard(
         # Default to a path that cannot exist so the fixture repos are scanned
         # with no exemptions regardless of the caller's working directory.
         env["BLOB_ALLOWLIST"] = str(repo / "no-allowlist-here.txt")
+    if path_prefix is not None:
+        env["PATH"] = str(path_prefix) + os.pathsep + env["PATH"]
     return subprocess.run(
         [_bash(), str(GUARD), base, head],
         cwd=repo,
@@ -314,6 +317,66 @@ def test_a_grown_tracked_binary_is_distinguished_from_both(tmp_path):
     assert "TRACKED binary file that GREW" in result.stdout, out
     assert "already tracks" in result.stdout, out
     assert "A TRACKED TEXT FILE GREW" not in result.stderr, out
+
+
+def test_a_right_aligned_wc_count_does_not_turn_text_into_binary(tmp_path):
+    """The size comparison must survive a `wc` that pads its count.
+
+    The sniff compares `wc -c` output against the size `cat-file --batch-check`
+    reported, and those two come from different tools. BSD-family `wc`
+    right-aligns, so the count can arrive as `"  1200000"` -- a string compare
+    would then read every text blob as binary and hand a Markdown file the
+    binary remedy, which is the exact defect this PR exists to remove, restored
+    by a detail of output formatting.
+
+    GNU coreutils 9.4 reading stdin does not pad (measured on this host), so the
+    only way to exercise it is to supply a `wc` that does. The shim calls the
+    real binary by absolute path -- resolved before it goes on PATH, or it would
+    recurse -- and right-aligns the result.
+    """
+    if sys.platform == "win32":
+        # The shim is a shebang script made executable with chmod; neither
+        # travels to a Windows filesystem. The behaviour under test is not
+        # platform-specific, so covering it on POSIX covers it.
+        return
+
+    real_wc = shutil.which("wc")
+    assert real_wc, "fixture needs a real `wc` to delegate to"
+
+    repo = _init_repo(tmp_path)
+    (repo / "ledger.md").write_bytes(b"x" * 900_000)
+    _commit(repo, "baseline text file under the limit")
+    _git(repo, "branch", "-f", "base", "HEAD")
+    (repo / "ledger.md").write_bytes(b"x" * BIG)
+    _commit(repo, "grow it")
+
+    shim_dir = tmp_path / "bsd-wc"
+    shim_dir.mkdir()
+    shim = shim_dir / "wc"
+    shim.write_text(
+        "#!/bin/sh\n"
+        f'out=$("{real_wc}" "$@") || exit $?\n'
+        'printf "%10s\\n" "$out"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+
+    # Precondition: the shim really does pad, or this test proves nothing.
+    padded = subprocess.run(
+        [str(shim), "-c"],
+        input="abc",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    ).stdout
+    assert padded.startswith(" "), f"shim did not pad: {padded!r}"
+
+    result = _run_guard(repo, path_prefix=shim_dir)
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert "TRACKED text file that GREW" in result.stdout, out
+    assert "binary" not in result.stdout, out
 
 
 def test_a_dot_path_is_still_recognised_as_tracked(tmp_path):

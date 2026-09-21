@@ -565,8 +565,26 @@ def test_the_guard_installs_its_own_yaml_dependency_in_ci():
     image that drops it turns this guard into an ImportError, which is a red build
     that says nothing about exit codes."""
     ci = (REPO_ROOT / ".github" / "workflows" / "722-ci.yml").read_text(encoding="utf-8")
-    block = ci.split("Validate pwsh steps that downgrade an exit code", 1)[1]
-    block = block.split("scripts/check-pwsh-exit-downgrade.py", 1)[0]
+
+    # Assert each marker BEFORE splitting on it. `split(...)[1]` raises IndexError
+    # on a missing marker, and this module's runner catches only AssertionError --
+    # so a renamed step would abort the module mid-roster and take the 11 tests
+    # that sort after this one with it, reporting a harness death rather than a
+    # wiring failure (L194).
+    step = "Validate pwsh steps that downgrade an exit code"
+    assert step in ci, (
+        f"722-ci.yml no longer has a step named {step!r} -- if it was renamed, "
+        "update this test; if it was removed, the guard is no longer wired in"
+    )
+    block = ci.split(step, 1)[1]
+
+    invocation = "scripts/check-pwsh-exit-downgrade.py"
+    assert invocation in block, (
+        f"the {step!r} step no longer invokes {invocation} -- the step name and "
+        "its command have drifted apart"
+    )
+    block = block.split(invocation, 1)[0]
+
     assert "pip install --quiet pyyaml" in block, (
         "the exit-downgrade step must install PyYAML defensively, like its siblings"
     )

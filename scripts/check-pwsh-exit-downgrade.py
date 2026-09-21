@@ -36,15 +36,22 @@ WHY THIS IS A GUARD AND NOT A ONE-LINE FIX
 WHAT COUNTS AS A DOWNGRADE (and what deliberately does not)
     A step is in scope when it captures `$LASTEXITCODE` into a variable AND
     tolerates a non-zero value of it -- an `if ($x -ne 0) { ... }` whose block
-    neither exits, throws, nor emits `::error::`. That block is the author
-    saying "this failure is acceptable".
+    neither exits nor throws. That block is the author saying "this failure is
+    acceptable".
+
+    `::error::` is deliberately NOT a terminator: an annotation changes what the
+    log says, not what the step returns, so a block that annotates and falls
+    through is still relying on the epilogue and is still in scope. See the
+    comment above `TERMINATES_RE`, and
+    `test_an_error_annotation_without_an_exit_is_still_a_downgrade`.
 
     A step that captures the code and PROPAGATES it is not in scope:
 
         $code = $LASTEXITCODE
         if ($code -ne 0) { exit $code }        # correct; says nothing to us
         if ($code -ne 0) { throw "..." }       # correct
-        if ($code -ne 0) { Write-Output '::error::...'; exit 1 }
+        if ($code -ne 0) { Write-Output '::error::...'; exit 1 }  # the `exit 1`,
+                                                                 # not the annotation
 
     Only the tolerating shape is reported, because only it is contradicted by
     the epilogue. Flagging propagation would flag the majority of correct call

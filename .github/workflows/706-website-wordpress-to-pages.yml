@@ -551,10 +551,16 @@ jobs:
           for pair in ${MOUNTS:-}; do
             host="${pair%%=*}"
             mount="${pair#*=}"
-            [ -n "$host" ] && [ -n "$mount" ] && [ "$host" != "$mount" ] || {
+            # An explicit `if`, not `A && B || C`: that form is not if-then-else
+            # (shellcheck SC2015, and actionlint fails the build on it), and the
+            # reason it matters here is that `${pair%%=*}` and `${pair#*=}` BOTH
+            # return the whole string when `pair` contains no `=` — so a
+            # malformed pair arrives as host == mount rather than as an empty
+            # field, which is what the third test is actually looking for.
+            if [ -z "$host" ] || [ -z "$mount" ] || [ "$host" = "$mount" ]; then
               echo "::error::malformed mount pair '$pair' — resolve emitted something this loop cannot read."
               exit 1
-            }
+            fi
             capture_one "$host" "$mount" "$mount" || exit 1
             mounted=$((mounted + 1))
           done

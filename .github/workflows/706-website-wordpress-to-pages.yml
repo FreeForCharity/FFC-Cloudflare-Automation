@@ -552,6 +552,7 @@ jobs:
       # and the completeness gate is re-applied with THIS run's min_percent
       # rather than inherited from the run that produced the capture.
       - name: Reuse the capture from an earlier run
+        id: reuse
         if: needs.resolve.outputs.reuse_run != ''
         working-directory: automation
         env:
@@ -654,6 +655,7 @@ jobs:
           echo "Reused the capture from run $REUSE_RUN: $expected host(s) re-verified and re-assessed. The live site was not contacted."
 
       - name: Capture the live WordPress site
+        id: capture
         # Skipped entirely when a previous run's capture is being reused. The
         # two paths are mutually exclusive by construction rather than by a
         # flag read inside one script: a crawl that ran anyway would overwrite
@@ -1120,6 +1122,24 @@ jobs:
       # integration against its own checkout rather than trying to ship a .git
       # directory through an artifact.
       - name: Upload the neutralized capture (handoff to deliver)
+        # Runs even when a LATER step failed, which is the case that matters.
+        # Measured on run 35571249633: three hostnames crawled for 36m32s, all
+        # three past their completeness gates, then `Convert the capture into
+        # real app routes` failed — and because this step sat after it, the
+        # whole capture was discarded and the retry had to crawl again. That is
+        # exactly the cost `reuse_capture_from_run` exists to remove, and the
+        # input cannot help while the artifact only survives a green run. The
+        # failure a reuse is FOR is a failure after the capture.
+        #
+        # Conditioned on a capture existing rather than on `always()`: with no
+        # capture there are no files, `if-no-files-found: error` would fail
+        # this step too, and a second red step on an already-failed job hides
+        # which one was the real failure. `outcome`, not `conclusion` — the
+        # capture step's conclusion is what the job reports, and these two
+        # differ exactly when a step failed, which is the case being handled.
+        if:
+          ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.reuse.outcome ==
+          'success') }}
         uses: actions/upload-artifact@v4
         with:
           name: wp-capture-${{ github.run_id }}

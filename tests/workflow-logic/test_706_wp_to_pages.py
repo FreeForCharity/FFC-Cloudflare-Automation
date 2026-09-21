@@ -511,8 +511,48 @@ def test_a_reused_capture_is_re_uploaded_under_THIS_runs_id():
     upload = next(
         s for s in convert["steps"] if "Upload the neutralized capture" in s.get("name", "")
     )
-    assert "if" not in upload, upload
     assert upload["with"]["name"] == "wp-capture-${{ github.run_id }}", upload["with"]
+    # It may be conditioned on a capture EXISTING, never on how this run was
+    # dispatched: skipping the upload on a reused capture breaks the handoff
+    # for the retried `deliver` that capture reuse exists to serve.
+    assert "reuse_run" not in (upload.get("if") or ""), upload.get("if")
+
+
+def test_the_capture_is_uploaded_even_when_a_LATER_step_fails():
+    """The measured cost of getting this wrong, on run 35571249633: three
+    hostnames crawled for 36m32s, all three past their completeness gates, then
+    `Convert the capture into real app routes` failed — and because the upload
+    sat after it, the whole capture was discarded and the retry had to crawl
+    again. The failure a reuse is FOR is a failure after the capture, so an
+    artifact that only survives a green run cannot serve one."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    upload = next(
+        s for s in convert["steps"] if "Upload the neutralized capture" in s.get("name", "")
+    )
+    cond = upload.get("if") or ""
+    assert "cancelled()" in cond, cond
+    # Conditioned on a capture existing, so a run that never captured does not
+    # add a second red step on top of the real failure.
+    assert "steps.capture.outcome" in cond, cond
+    assert "steps.reuse.outcome" in cond, cond
+    # `outcome`, not `conclusion`: they differ exactly when a step failed,
+    # which is the case being handled.
+    assert "conclusion" not in cond, cond
+    ids = {s.get("id") for s in convert["steps"]}
+    assert {"capture", "reuse"} <= ids, ids
+
+
+def test_reuse_does_not_require_the_SOURCE_run_to_have_succeeded():
+    """The capture worth reusing usually belongs to a run that FAILED after the
+    crawl. A check on the source run's conclusion would refuse exactly the runs
+    this input exists for."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    # Asserted on what the step QUERIES, not on the word "success" appearing
+    # anywhere: a prose comment in this step legitimately contains it, and a
+    # bare substring assert failed on that comment rather than on any check.
+    code = "\n".join(l for l in run.splitlines() if not l.lstrip().startswith("#"))
+    assert ".conclusion" not in code, code
+    assert ".status" not in code, code
 
 
 def test_verify_reused_capture_is_self_tested_in_the_gate():

@@ -576,7 +576,27 @@ function main() {
     process.exit(1);
   }
   if (!dryRun && remainingHtml.length) {
-    console.error(`public/ still holds ${remainingHtml.length} HTML files`);
+    // NAME them. This gate used to print only a count, and the conversion it
+    // stops runs after a 13-14 minute crawl of the charity's live site — so a
+    // bare number costs another full crawl just to learn which files it meant.
+    // Measured on newheightseducation.org (run 35571249633): "public/ still
+    // holds 2 HTML files", and nothing in the run said which 2.
+    console.error(
+      `public/ still holds ${remainingHtml.length} HTML file(s) that never became a route:`,
+    );
+    for (const f of remainingHtml.slice(0, 20)) console.error(`  ${f}`);
+    if (remainingHtml.length > 20) {
+      console.error(`  ... and ${remainingHtml.length - 20} more`);
+    }
+    // The cause is nearly always this, so say it rather than make the reader
+    // rediscover it: only `<path>/index.html` is treated as a captured page
+    // (see `htmlFiles` above), so a source URL that already ends in `.html`
+    // lands here under its own name and is never converted. Leaving it would
+    // publish a second, unrouted copy of that page at a different URL.
+    console.error(
+      'Only `<path>/index.html` becomes a route, so a captured URL ending in `.html`' +
+        ' is never picked up and would be published as a second, unrouted copy.',
+    );
     process.exit(1);
   }
 }

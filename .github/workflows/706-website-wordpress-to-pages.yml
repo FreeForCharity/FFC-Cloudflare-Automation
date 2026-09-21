@@ -135,6 +135,16 @@ on:
         required: false
         type: string
         default: ''
+      max_pdf_mb:
+        description: >-
+          Downsample any captured PDF larger than this, in MB. GitHub REFUSES a push containing any
+          file over 100 MB, and that rejection arrives at the push — after the crawl and after the
+          approval have both been spent. The default is deliberately below the hard limit rather
+          than at it, because Ghostscript's output size is not predictable from its input. Set to a
+          very large number to disable the pass; the size guard still refuses the run.
+        required: false
+        type: string
+        default: '90'
       reuse_max_age_hours:
         description: >-
           Refuse a reused capture older than this many hours. Artifacts are retained 7 days (168h),
@@ -170,6 +180,7 @@ jobs:
       mount_count: ${{ steps.resolve.outputs.mount_count }}
       reuse_run: ${{ steps.resolve.outputs.reuse_run }}
       reuse_max_age_hours: ${{ steps.resolve.outputs.reuse_max_age_hours }}
+      max_pdf_mb: ${{ steps.resolve.outputs.max_pdf_mb }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7
@@ -194,6 +205,7 @@ jobs:
           INPUT_IGNORE: ${{ inputs.ignore_hosts }}
           INPUT_REUSE_RUN: ${{ inputs.reuse_capture_from_run }}
           INPUT_REUSE_MAX_AGE: ${{ inputs.reuse_max_age_hours }}
+          INPUT_MAX_PDF_MB: ${{ inputs.max_pdf_mb }}
         shell: bash
         run: |
           set -euo pipefail
@@ -462,13 +474,21 @@ jobs:
             echo "::error::reuse_max_age_hours must be a positive whole number of hours, got '$reuse_max_age'."
             exit 1
           fi
+          max_pdf_mb="$(printf '%s' "${INPUT_MAX_PDF_MB:-90}" | tr -d '[:space:]')"
+          [ -n "$max_pdf_mb" ] || max_pdf_mb=90
+          if ! printf '%s' "$max_pdf_mb" | grep -qE '^[0-9]+$' || [ "$max_pdf_mb" -lt 1 ]; then
+            echo "::error::max_pdf_mb must be a positive whole number of MB, got '$max_pdf_mb'."
+            exit 1
+          fi
           {
             echo "reuse_run=$reuse_run"
             echo "reuse_max_age_hours=$reuse_max_age"
+            echo "max_pdf_mb=$max_pdf_mb"
           } >> "$GITHUB_OUTPUT"
 
           echo "Resolved: domain=$domain repo=$repo mode=$mode max=$max delay=$delay posts=$posts"
           echo "Extra hosts mounted: $mount_count"
+          echo "PDFs larger than ${max_pdf_mb} MB will be downsampled"
           if [ -n "$reuse_run" ]; then
             echo "Reusing the capture from run $reuse_run (max age ${reuse_max_age}h) — the live site will NOT be crawled."
           fi
@@ -487,6 +507,7 @@ jobs:
           node scripts/assess-capture-completeness.mjs --self-test
           node scripts/clone-to-routes-lib.mjs --self-test
           node scripts/convert-clone-to-routes.mjs --self-test
+          node scripts/check-publishable-size.mjs --self-test
 
   convert:
     runs-on: ubuntu-latest
@@ -671,6 +692,7 @@ jobs:
           POSTS: ${{ needs.resolve.outputs.posts }}
           IGNORE_HOSTS: ${{ needs.resolve.outputs.ignore_hosts }}
           MOUNTS: ${{ needs.resolve.outputs.mounts }}
+          MAX_PDF_MB: ${{ needs.resolve.outputs.max_pdf_mb }}
         shell: bash
         run: |
           set -uo pipefail
@@ -692,6 +714,7 @@ jobs:
             if [ -n "$mount" ]; then args+=(--mount "$mount"); fi
             if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
             if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
+            if [ -n "$MAX_PDF_MB" ]; then args+=(--max-pdf-mb "$MAX_PDF_MB"); fi
 
             echo "::group::capture $label"
             # `|| rc=$?`, never `set +e … set -e`. This step declares
@@ -907,6 +930,23 @@ jobs:
           node automation/scripts/convert-clone-to-routes.mjs \
             --repo ffc-ex \
             --site-name "$SOURCE_DOMAIN"
+
+      # Ask the one question every gate above skips: can this tree be PUSHED?
+      #
+      # The completeness gate, the self-containment gate and the build all ask
+      # "is this a coherent site?". None of them asks "will git take it?", and
+      # on 2026-09-21 that gap cost a 40-minute crawl plus a spent human
+      # approval: run 35582162161 converted cleanly, passed 120/120 pages, and
+      # was refused by the pre-receive hook over three EdGuide PDFs of 115.93,
+      # 108.72 and 167.22 MB. Answering it here costs milliseconds.
+      #
+      # Named files, not a count: an operator told "3 files are too large" has
+      # to re-run the crawl to learn which three.
+      - name: Gate - the tree must be publishable (push + Pages limits)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node automation/scripts/check-publishable-size.mjs ffc-ex
 
       - name: Build the static export
         working-directory: ffc-ex
@@ -1344,6 +1384,23 @@ jobs:
           node automation/scripts/convert-clone-to-routes.mjs \
             --repo ffc-ex \
             --site-name "$SOURCE_DOMAIN"
+
+      # Ask the one question every gate above skips: can this tree be PUSHED?
+      #
+      # The completeness gate, the self-containment gate and the build all ask
+      # "is this a coherent site?". None of them asks "will git take it?", and
+      # on 2026-09-21 that gap cost a 40-minute crawl plus a spent human
+      # approval: run 35582162161 converted cleanly, passed 120/120 pages, and
+      # was refused by the pre-receive hook over three EdGuide PDFs of 115.93,
+      # 108.72 and 167.22 MB. Answering it here costs milliseconds.
+      #
+      # Named files, not a count: an operator told "3 files are too large" has
+      # to re-run the crawl to learn which three.
+      - name: Gate - the tree must be publishable (push + Pages limits)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node automation/scripts/check-publishable-size.mjs ffc-ex
 
       - name: Commit and open a draft PR on the FFC-EX repo
         working-directory: ffc-ex

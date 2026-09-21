@@ -46,7 +46,10 @@
  *   2  invalid usage / self-test failure / crash
  */
 
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join, dirname, extname, resolve as resolvePath, sep } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -1294,6 +1297,58 @@ export function worthReencoding(originalBytes, encodedBytes, minSavingRatio = 0.
   return encodedBytes <= originalBytes * (1 - minSavingRatio);
 }
 
+/**
+ * Ghostscript rungs for an oversized PDF, tried in order; the first that
+ * lands under budget wins, exactly like IMAGE_QUALITY_LADDER.
+ *
+ * `/printer` and `/prepress` are deliberately absent. Measured on an 8-page
+ * ~200 dpi scan-shaped fixture (gradient plus low-amplitude noise, US Letter
+ * box, 1700x2200 px):
+ *
+ *   /prepress  6,160,013 -> 10,839,765   176.0%   <- LARGER than the input
+ *   /printer   6,160,013 ->  5,510,014    89.4%
+ *   /ebook     6,160,013 ->  2,726,528    44.3%
+ *   /screen    6,160,013 ->    308,369     5.0%
+ *
+ * `/prepress` inflating the file is the same hazard `worthReencoding`
+ * documents for images, and it is why `worthShrinking` below refuses a result
+ * that is not strictly smaller: a pass that reports an optimisation while
+ * making the file heavier is worse than no pass.
+ */
+export const PDF_DOWNSAMPLE_LADDER = ['/ebook', '/screen'];
+
+/**
+ * Whether this asset is a candidate for downsampling at all.
+ *
+ * Size is part of the predicate, as it is for images: a PDF already under
+ * budget is left byte-identical to what the charity uploaded. These are the
+ * charity's own publications, so the bar for touching one is that it cannot
+ * otherwise be published.
+ */
+export function shouldShrinkPdf(absUrl, bytes, maxBytes) {
+  if (typeof absUrl !== 'string' || !/\.pdf(\?|$)/i.test(absUrl)) return false;
+  if (!Number.isFinite(bytes) || !Number.isFinite(maxBytes)) return false;
+  return bytes > maxBytes;
+}
+
+/**
+ * Whether a downsampled PDF is worth keeping.
+ *
+ * Strictly smaller is the whole test, and the missing minimum-saving ratio is
+ * the deliberate difference from `worthReencoding`. That ratio exists for
+ * images because keeping a re-encode means RENAMING the file and rewriting
+ * every reference to it, and each rewrite is a chance to strand one; a 5% win
+ * does not pay for that risk. A shrunk PDF keeps its name, so there is no
+ * reference to strand and no threshold to justify -- any real reduction is a
+ * reduction, and on a file that cannot otherwise be pushed at all, a 5% win
+ * may be exactly the one that fits.
+ */
+export function worthShrinking(originalBytes, shrunkBytes) {
+  if (!Number.isFinite(originalBytes) || !Number.isFinite(shrunkBytes)) return false;
+  if (shrunkBytes <= 0 || originalBytes <= 0) return false;
+  return shrunkBytes < originalBytes;
+}
+
 /** The local name an image takes once re-encoded to WebP. */
 export function webpName(name) {
   return name.replace(/\.[^./]+$/, '') + '.webp';
@@ -2061,6 +2116,57 @@ function selfTest() {
     worthReencoding(100_000, 0),
     false,
   );
+  eq(
+    'shouldShrinkPdf takes an oversized PDF',
+    shouldShrinkPdf('https://x.org/u/NHEG-May-June-2026.pdf', 167 * 1048576, 90 * 1048576),
+    true,
+  );
+  eq(
+    'shouldShrinkPdf leaves a PDF already under budget byte-identical',
+    shouldShrinkPdf('https://x.org/u/flyer.pdf', 2 * 1048576, 90 * 1048576),
+    false,
+  );
+  eq(
+    'shouldShrinkPdf ignores a non-PDF however large',
+    shouldShrinkPdf('https://x.org/u/video.mp4', 400 * 1048576, 90 * 1048576),
+    false,
+  );
+  eq(
+    'shouldShrinkPdf matches a query-suffixed PDF url',
+    shouldShrinkPdf('https://x.org/u/a.pdf?ver=3', 200 * 1048576, 90 * 1048576),
+    true,
+  );
+  eq(
+    'shouldShrinkPdf is case-insensitive about the extension',
+    shouldShrinkPdf('https://x.org/u/A.PDF', 200 * 1048576, 90 * 1048576),
+    true,
+  );
+  eq(
+    'shouldShrinkPdf refuses a non-string url rather than throwing',
+    shouldShrinkPdf(null, 200, 90),
+    false,
+  );
+  eq('shouldShrinkPdf refuses a NaN size', shouldShrinkPdf('https://x.org/a.pdf', NaN, 90), false);
+  // The ladder's top rung MEASURED larger than its input on a scan-shaped
+  // fixture (/prepress, 176%). This is the guard that makes that harmless.
+  eq('worthShrinking keeps a strictly smaller result', worthShrinking(167, 74), true);
+  eq('worthShrinking rejects a LARGER result', worthShrinking(6160013, 10839765), false);
+  eq('worthShrinking rejects an identical result', worthShrinking(100, 100), false);
+  // Deliberately different from worthReencoding's 25% floor: a shrunk PDF keeps
+  // its name, so there is no reference to strand and no threshold to justify.
+  eq(
+    'worthShrinking accepts a small win that worthReencoding would refuse',
+    worthShrinking(100, 96),
+    true,
+  );
+  eq('...and worthReencoding does refuse that same pair', worthReencoding(100, 96), false);
+  eq('worthShrinking rejects a zero-byte result', worthShrinking(100, 0), false);
+  eq(
+    'the ladder excludes the rung measured to inflate the file',
+    PDF_DOWNSAMPLE_LADDER.includes('/prepress'),
+    false,
+  );
+  eq('the ladder runs cheapest-quality-loss first', PDF_DOWNSAMPLE_LADDER, ['/ebook', '/screen']);
   eq(
     'webpName replaces the extension rather than appending',
     webpName('x/a/flyer.png'),
@@ -3243,6 +3349,12 @@ const numericOptions = [
   // `__tests__/assets/image-weight.test.ts`. Kept as an option rather than a
   // constant so a repo that raises its own budget can say so here.
   ['max-image-kb', arg('max-image-kb', '400'), { min: 16, max: 100000 }],
+  // GitHub refuses any file of 100 MB or more at the push, so the budget is
+  // set BELOW that rather than at it. Ghostscript's output size is not
+  // predictable from its input, so a budget equal to the limit would let a
+  // file land at 99.7 MB on one run and 100.4 MB on the next -- and the
+  // failure surfaces at the push, after the crawl and after a human approval.
+  ['max-pdf-mb', arg('max-pdf-mb', '90'), { min: 1, max: 100000 }],
 ];
 const parsedOptions = {};
 const badOptions = [];
@@ -3262,6 +3374,13 @@ const includePosts = flag('include-posts');
 // are themselves the deliverable.
 const optimizeImages = !flag('no-optimize-images');
 const maxImageBytes = parsedOptions['max-image-kb'] * 1024;
+// On by default for the same reason images are: an oversized PDF is a cost the
+// visitor pays, and past 100 MB the receiving repo cannot accept it at all.
+// `--no-optimize-pdfs` ships the captured bytes verbatim, which is the right
+// choice only when the originals are themselves the deliverable AND something
+// downstream is hosting them off the repo.
+const optimizePdfs = !flag('no-optimize-pdfs');
+const maxPdfBytes = parsedOptions['max-pdf-mb'] * 1024 * 1024;
 const jsonOut = arg('json-out', '');
 // Hosts whose references are dropped from the capture entirely: not fetched,
 // not counted as failures, not counted against the "zero external asset hosts"
@@ -3766,6 +3885,15 @@ async function capture() {
     bytesAfter: 0,
     available: null,
   };
+  const pdfShrink = {
+    shrunk: 0,
+    declined: 0,
+    skippedNoEncoder: 0,
+    stillOverBudget: [],
+    bytesBefore: 0,
+    bytesAfter: 0,
+    available: null,
+  };
   const cmsScriptsRemoved = [];
   let cmsInlineScriptsRemoved = 0;
   let waypointRulesRemoved = 0;
@@ -3927,6 +4055,79 @@ async function capture() {
       : null;
   }
 
+  /**
+   * Downsample one PDF with Ghostscript, walking the rung ladder.
+   *
+   * Shelling out rather than using a library: there is no usable pure-JS PDF
+   * downsampler, and Ghostscript is present on `ubuntu-latest`. It is probed
+   * the same way `sharp` is -- once, with the absence reported once and the
+   * originals shipped unchanged. Shipping them unchanged is not silently
+   * fine here, which is why `check-publishable-size.mjs` fails the run
+   * afterwards on any file the push would reject; this pass makes the file
+   * publishable, that guard makes an unpublishable one loud and early.
+   *
+   * Ghostscript works on files, not buffers, so each attempt round-trips
+   * through a temp directory that is removed whatever happens.
+   */
+  async function shrinkPdfBuffer(buf, budget) {
+    if (pdfShrink.available === false) return null;
+    const dir = mkdtempSync(join(tmpdir(), 'ffc-pdf-'));
+    const src = join(dir, 'in.pdf');
+    try {
+      writeFileSync(src, buf);
+      let best = null;
+      for (const rung of PDF_DOWNSAMPLE_LADDER) {
+        const dest = join(dir, `out${rung.replace('/', '-')}.pdf`);
+        try {
+          await new Promise((res, rej) => {
+            execFile(
+              'gs',
+              [
+                '-q',
+                '-dNOPAUSE',
+                '-dBATCH',
+                '-dSAFER',
+                '-sDEVICE=pdfwrite',
+                `-dPDFSETTINGS=${rung}`,
+                '-dDetectDuplicateImages=true',
+                '-o',
+                dest,
+                src,
+              ],
+              { maxBuffer: 1 << 20 },
+              (err) => (err ? rej(err) : res()),
+            );
+          });
+        } catch (err) {
+          // A MISSING BINARY and a PDF THAT DEFEATED GHOSTSCRIPT are different
+          // failures needing opposite responses -- stop trying at all, versus
+          // skip this one file -- and they are indistinguishable by whether an
+          // output file appeared. Keying off ENOENT is what separates them; an
+          // earlier draft inferred it from `existsSync(dest)` and would have
+          // announced "ghostscript is not installed" on the first corrupt PDF,
+          // on a box where it is installed and working.
+          if (err && err.code === 'ENOENT') {
+            pdfShrink.available = false;
+            console.error(
+              '[asset] ghostscript (gs) is not installed, so oversized PDFs ship as' +
+                ' captured. Install it before the capture step to downsample them.',
+            );
+            return null;
+          }
+          continue; // this rung failed on this file; try the next one
+        }
+        if (!existsSync(dest)) continue;
+        const out = readFileSync(dest);
+        pdfShrink.available = true;
+        if (!best || out.length < best.buffer.length) best = { buffer: out, rung };
+        if (out.length <= budget) return { buffer: out, rung };
+      }
+      return best;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   async function localizeAsset(rawUrl) {
     // Normalized HERE rather than at each call site: assets arrive from three
     // independent paths (the page loop, the CSS-to-CSS recursion, and the
@@ -3999,6 +4200,38 @@ async function capture() {
         }
       }
     }
+    // Downsample an oversized PDF.
+    //
+    // Unlike the image pass this does NOT rename: `/x/NHEG-May-June-2026.pdf`
+    // stays that path, so every reference to it -- in markup, in a link, in a
+    // sitemap the capture does not even parse -- keeps working with no rewrite.
+    // That is what makes it safe to apply to a charity's own publications.
+    //
+    // Measured on this migration: three EdGuide issues are over GitHub's hard
+    // 100 MB per-file limit (115.93 MB, 108.72 MB, 167.22 MB), and the push of
+    // an otherwise complete and gate-passing conversion was rejected outright
+    // by the pre-receive hook -- after the 40-minute crawl and after the human
+    // approval it had already spent.
+    if (optimizePdfs && shouldShrinkPdf(absUrl, buf.length, maxPdfBytes)) {
+      const shrunk = await shrinkPdfBuffer(buf, maxPdfBytes);
+      if (shrunk && worthShrinking(buf.length, shrunk.buffer.length)) {
+        pdfShrink.shrunk += 1;
+        pdfShrink.bytesBefore += buf.length;
+        pdfShrink.bytesAfter += shrunk.buffer.length;
+        if (shrunk.buffer.length > maxPdfBytes) pdfShrink.stillOverBudget.push(name);
+        buf = shrunk.buffer;
+      } else if (pdfShrink.available === false) {
+        // Not the same thing as declining on merit. Reporting it as one would
+        // be a claim the operator cannot check: "downsampling would not have
+        // been smaller" about a file nothing tried to downsample.
+        pdfShrink.skippedNoEncoder += 1;
+        pdfShrink.stillOverBudget.push(name);
+      } else {
+        pdfShrink.declined += 1;
+        pdfShrink.stillOverBudget.push(name);
+      }
+    }
+
     usedAssetNames.add(name);
 
     if (!isContainedPath(assetsRoot, name)) {
@@ -4241,6 +4474,35 @@ async function capture() {
       `[capture] ${imageRecode.collisions.length} image(s) kept their original encoding because` +
         ` the .webp name was already taken: ${imageRecode.collisions.slice(0, 5).join(', ')}`,
     );
+  if (pdfShrink.shrunk) {
+    const mb = (n) => (n / 1048576).toFixed(1);
+    console.error(
+      `[capture] downsampled ${pdfShrink.shrunk} oversized PDF(s):` +
+        ` ${mb(pdfShrink.bytesBefore)} MB -> ${mb(pdfShrink.bytesAfter)} MB` +
+        ` (${(100 - (pdfShrink.bytesAfter / pdfShrink.bytesBefore) * 100).toFixed(1)}% smaller).` +
+        ' Each kept its own name, so no reference needed rewriting.',
+    );
+  }
+  if (pdfShrink.declined)
+    console.error(
+      `[capture] ${pdfShrink.declined} oversized PDF(s) shipped as captured —` +
+        ' downsampling them produced nothing smaller.',
+    );
+  if (pdfShrink.skippedNoEncoder)
+    console.error(
+      `[capture] ${pdfShrink.skippedNoEncoder} oversized PDF(s) shipped as captured because` +
+        ' ghostscript was not available. This is NOT a judgement that they were already' +
+        ' optimal: nothing tried. Install ghostscript before the capture step.',
+    );
+  if (pdfShrink.stillOverBudget.length)
+    // Named, not counted: these are the files a push will reject, and the
+    // operator cannot act on a number. Uncapped on purpose — a long list is
+    // itself the finding, and truncating it hides the ones at the end.
+    console.error(
+      `[capture] ${pdfShrink.stillOverBudget.length} PDF(s) are still over the` +
+        ` ${Math.round(maxPdfBytes / 1048576)} MB budget and will be REJECTED by a` +
+        ` git push if they reach one: ${pdfShrink.stillOverBudget.join(', ')}`,
+    );
   const assetTally = tallyFailures(assetFailures);
   const assetFailureNote = describeFailures(assetTally, domain);
   if (assetFailureNote) console.error(`[capture] assets: ${assetFailureNote}`);
@@ -4319,6 +4581,14 @@ async function capture() {
       headLinksRemoved: cmsHeadLinksRemoved,
     },
     imageOptimization: {
+      enabledPdfs: optimizePdfs,
+      maxPdfMb: Math.round(maxPdfBytes / 1048576),
+      pdfsShrunk: pdfShrink.shrunk,
+      pdfsDeclined: pdfShrink.declined,
+      pdfsSkippedNoEncoder: pdfShrink.skippedNoEncoder,
+      pdfsStillOverBudget: pdfShrink.stillOverBudget,
+      pdfBytesBefore: pdfShrink.bytesBefore,
+      pdfBytesAfter: pdfShrink.bytesAfter,
       enabled: optimizeImages,
       encoderAvailable: imageRecode.available,
       maxImageKb: Math.round(maxImageBytes / 1024),

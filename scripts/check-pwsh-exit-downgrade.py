@@ -153,10 +153,13 @@ def _scan_line(line: str) -> tuple[str, str]:
     literals left intact -- what a human should be shown quoted back at them.
 
     `code` is that same span with the **contents of every string literal
-    blanked to spaces**. Every syntactic question this guard asks is asked of
-    `code`, so a brace, a `#`, or the word `exit` inside a literal cannot be
-    read as syntax. The first revision asked them of the raw text and was wrong
-    three ways, each a SILENT one (Copilot, #1347):
+    blanked to spaces, the delimiters kept**. Every syntactic question this
+    guard asks is asked of `code`, so a brace, a `#`, or the word `exit` inside
+    a literal cannot be read as syntax -- while a line holding nothing but a
+    literal still reads as executable, because its quotes survive. Blanking the
+    delimiters too is the one thing that cannot be done here, and is its own
+    entry in the list below. The first revision asked these questions of the raw
+    text and was wrong three ways, each a SILENT one (Copilot, #1347):
 
       * `Write-Warning "tolerated exit $code"` matched `TERMINATES_RE`, so a
         real downgrade was classified as propagation and the step went
@@ -186,7 +189,16 @@ def _scan_line(line: str) -> tuple[str, str]:
             if ch == "#":
                 break
             visible.append(ch)
-            code.append(" " if ch in ("'", '"') else ch)
+            # The DELIMITERS stay in `code`; only a literal's CONTENTS are
+            # blanked. Blanking the quotes too made a line holding nothing but a
+            # string literal come out empty, so `_last_statement` skipped it and
+            # named an earlier line as the body's last statement -- contradicting
+            # its own docstring, changing the quoted detail, and misclassifying
+            # `conditional-terminal-exit` where `no-terminal-exit` was correct
+            # (Copilot, #1347). Keeping them costs nothing: a quote is not a
+            # brace, not a `#`, and not a terminator keyword, so none of the
+            # questions asked of `code` can be answered differently by it.
+            code.append(ch)
             if ch in ("'", '"'):
                 quote = ch
             i += 1
@@ -209,7 +221,7 @@ def _scan_line(line: str) -> tuple[str, str]:
                 continue
             quote = None
             visible.append(ch)
-            code.append(" ")
+            code.append(ch)  # closing delimiter is kept -- see the note above
             i += 1
             continue
         visible.append(ch)

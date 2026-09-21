@@ -387,6 +387,50 @@ if ($code -ne 0) {
     assert _kinds(body) == [guard.NO_EXIT], f"got {_kinds(body)!r}"
 
 
+def test_a_literal_only_final_line_is_the_last_statement():
+    """`_scan_line` keeps string DELIMITERS in the `code` view.
+
+    Blanking them too made a line holding nothing but a literal come out empty,
+    so `_last_statement` skipped it and named an earlier line instead. Here that
+    turns a correct `no-terminal-exit` into `conditional-terminal-exit`, because
+    the line it falls back to is the conditional `exit` above (Copilot, #1347).
+    """
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "tolerated: $code"
+}
+if ($other) { exit 1 }
+"done"
+"""
+    assert _kinds(body) == [guard.NO_EXIT], (
+        "the literal on the final line is the last statement, and it is not an "
+        f"exit; got {_kinds(body)!r}"
+    )
+
+
+def test_the_reported_last_statement_is_the_literal_not_the_brace():
+    """The same defect seen through the finding's own text. A detail that names
+    the wrong line sends the reader to the wrong place, which is the failure
+    this guard exists to stop -- one level up."""
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "tolerated: $code"
+}
+"exit 0"
+"""
+    findings = guard.scan_body(body)
+    assert len(findings) == 1, f"expected one finding; got {findings!r}"
+    assert findings[0].line == 6, (
+        f"the finding must point at the literal on line 6, not the closing brace "
+        f"on line 5; got line {findings[0].line}"
+    )
+    assert '"exit 0"' in findings[0].detail, (
+        f"the detail must quote the literal it is talking about; got {findings[0].detail!r}"
+    )
+
+
 def test_a_string_holding_only_the_word_exit_is_not_a_terminal_exit():
     """The last statement is a literal, not an `exit`."""
     body = """

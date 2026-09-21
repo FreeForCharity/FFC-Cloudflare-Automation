@@ -1320,18 +1320,52 @@ export function shouldReencodeImage(absUrl, bytes, maxBytes) {
  * that 404s and looks like a download failure rather than a rewrite bug.
  */
 export function rewriteRefs(text, replacements) {
-  const pairs = [...replacements.entries()].sort((a, b) => b[0].length - a[0].length);
+  const pairs = [...replacements.entries()]
+    .filter(([, to]) => to)
+    .sort((a, b) => b[0].length - a[0].length);
+  if (!pairs.length) return text;
+
+  // EVERY raw is swapped for a sentinel first, and only then are sentinels
+  // swapped for targets. Substituting targets directly — the obvious loop —
+  // lets a LATER raw match inside text an EARLIER replacement already wrote,
+  // and sorting longest-first does not prevent it: that ordering protects one
+  // raw from another, while this collision is between a replacement's OUTPUT
+  // and a later raw.
+  //
+  // It is not hypothetical. `normalizedLinkIndex` deliberately keeps every
+  // spelling of a destination, so a page carrying both
+  // `https://school.example.org/parents/home-school-families/` and the
+  // root-relative `/parents/home-school-families/` supplies two raws where the
+  // second occurs inside the first's target. Measured on
+  // newheightseducation.org (runs 35571249633, 35575009432):
+  //
+  //   want  ../school/parents/home-school-families/
+  //   got   ../school../../school/parents/home-school-families/
+  //
+  // and unmounted, where the same collision is SILENT because the mangled
+  // `..../../parents/…` does not match the dead-link detector's `^\.\./`:
+  //
+  //   want  ../parents/home-school-families/
+  //   got   ..../../parents/home-school-families/
+  //
+  // A sentinel cannot be matched by any later raw (no URL contains NUL), so
+  // one pass of raws followed by one pass of sentinels is order-independent.
+  const targets = [];
+  const token = (i) => `\u0000ffc-ref-${i}\u0000`;
   let out = text;
   for (const [from, to] of pairs) {
-    if (!to) continue;
-    out = out.split(from).join(to);
+    out = out.split(from).join(token(targets.push(to) - 1));
     // Page builders store URLs inside HTML-entity-escaped JSON, where the
     // delimiter is &quot; rather than a quote. Those copies are real references
     // and survive a markup-only rewrite pointing at the decommissioned host.
     const escaped = from.replace(/\//g, '\\/');
-    if (escaped !== from) out = out.split(escaped).join(to.replace(/\//g, '\\/'));
+    if (escaped !== from) {
+      const slashed = to.replace(/\//g, '\\/');
+      out = out.split(escaped).join(token(targets.push(slashed) - 1));
+    }
   }
-  return out;
+  // One pass, and via a callback so a `$&` inside a target is literal.
+  return out.replace(/\u0000ffc-ref-(\d+)\u0000/g, (whole, i) => targets[Number(i)] ?? whole);
 }
 
 /**
@@ -2997,6 +3031,65 @@ function selfTest() {
     'rewriteRefs also rewrites escaped-JSON copies',
     rewriteRefs('{"u":"https:\\/\\/x.org\\/logo.png"}', reps),
     '{"u":"assets\\/logo.png"}',
+  );
+
+  // A replacement's OUTPUT must never be rescanned. `normalizedLinkIndex`
+  // keeps every spelling of one destination, so these two raws arrive together
+  // on any page that links to a section both absolutely and root-relatively —
+  // and the second occurs inside the first's target.
+  eq(
+    'rewriteRefs does not rewrite inside what it just wrote (mounted)',
+    rewriteRefs(
+      '<a href="https://s.x.org/parents/home-school-families/">x</a>',
+      new Map([
+        [
+          'https://s.x.org/parents/home-school-families/',
+          '../school/parents/home-school-families/',
+        ],
+        ['/parents/home-school-families/', '../../school/parents/home-school-families/'],
+      ]),
+    ),
+    '<a href="../school/parents/home-school-families/">x</a>',
+  );
+  eq(
+    'rewriteRefs does not rewrite inside what it just wrote (unmounted)',
+    rewriteRefs(
+      '<a href="https://x.org/parents/home-school-families/">x</a>',
+      new Map([
+        ['https://x.org/parents/home-school-families/', '../parents/home-school-families/'],
+        ['/parents/home-school-families/', '../../parents/home-school-families/'],
+      ]),
+    ),
+    '<a href="../parents/home-school-families/">x</a>',
+  );
+  // The longest-first ordering still decides which of two overlapping RAWS
+  // wins — that is a different property and this must not regress it.
+  eq(
+    'rewriteRefs still prefers the longer raw',
+    rewriteRefs(
+      '<a href="https://x.org/a/b/">x</a>',
+      new Map([
+        ['https://x.org/a/', 'SHORT'],
+        ['https://x.org/a/b/', 'LONG'],
+      ]),
+    ),
+    '<a href="LONG">x</a>',
+  );
+  // A falsy target means "no replacement known" and the reference must be left
+  // exactly as it is. The pre-sentinel code expressed this as `if (!to)
+  // continue`; the filter is the same rule and a mutation test caught that
+  // nothing covered it — without it the ref is replaced with an empty string,
+  // silently deleting a URL rather than leaving a visible one.
+  eq(
+    'rewriteRefs leaves a reference with no target alone',
+    rewriteRefs('<img src="https://x.org/a.png">', new Map([['https://x.org/a.png', '']])),
+    '<img src="https://x.org/a.png">',
+  );
+  // A target containing `$&` must land literally, not as the whole match.
+  eq(
+    'rewriteRefs treats a dollar-ampersand in a target literally',
+    rewriteRefs('<img src="https://x.org/q.png">', new Map([['https://x.org/q.png', 'a$&b']])),
+    '<img src="a$&b">',
   );
 
   eq(

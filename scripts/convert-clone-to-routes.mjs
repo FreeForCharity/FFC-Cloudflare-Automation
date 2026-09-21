@@ -606,6 +606,36 @@ function transformInlineStyles(html) {
  * The template's own home page is the one exception: the charity's front page
  * owns `/` now, so it is dropped rather than restored.
  */
+/** A `page.*` directly here — i.e. this directory IS a route someone owns. */
+function hasRoutablePage(dir) {
+  if (!existsSync(dir)) return false;
+  return readdirSync(dir).some((name) => /^page\.(tsx|ts|jsx|js)$/.test(name));
+}
+
+/**
+ * Move a parked route tree into place, tolerating a destination that already
+ * exists as the empty husk integrate left behind.
+ *
+ * `renameSync` cannot merge into an existing directory, so the husk has to be
+ * merged rather than renamed over. A file whose destination already exists is
+ * left parked instead of overwriting captured content — the same "the capture
+ * wins" rule the entry-level check applies, enforced per file so a partially
+ * captured subtree cannot smuggle a template page over a real one.
+ */
+function mergeRouteDirectory(from, to) {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const src = join(from, entry.name);
+    const dest = join(to, entry.name);
+    if (entry.isDirectory()) {
+      mergeRouteDirectory(src, dest);
+    } else if (!existsSync(dest)) {
+      renameSync(src, dest);
+    }
+  }
+  if (!readdirSync(from).length) rmSync(from, { recursive: true, force: true });
+}
+
 function restoreTemplateRoutes(repo) {
   const parked = join(repo, '_disabled_template_routes');
   const restored = [];
@@ -624,11 +654,29 @@ function restoreTemplateRoutes(repo) {
       continue;
     }
     const to = join(repo, 'src', 'app', entry.name);
-    if (existsSync(to)) {
+    // Collision means THE CAPTURE OWNS THIS ROUTE — a routable page already
+    // sits there — not merely that the directory exists.
+    //
+    // `existsSync(to)` was the predicate until #1342, and it read every route
+    // as collided, so NONE was ever restored. The cause is upstream:
+    // integrate-clone-into-nextjs.mjs parks routes by moving the `page.tsx`
+    // FILE, which leaves `src/app/<slug>/` behind as an empty directory.
+    // Measured against pristine `main`: after integrate, all four of
+    // donation-policy, free-for-charity-donation-policy,
+    // vulnerability-disclosure-policy and privacy-policy exist with
+    // `contents=[]`. Every one then took the `collided` branch here.
+    //
+    // The visible cost was the whole footer standard 404ing on every exported
+    // page, which is what 706's self-containment gate reports as `0/3 pages
+    // passed` — a failure that names template routes and so reads as a problem
+    // with the captured site. The old self-test could not catch it because its
+    // fixture built `src/app/about-us/` WITH a page.tsx, i.e. only the genuine
+    // collision, never the empty husk the real pipeline produces.
+    if (hasRoutablePage(to)) {
       collided.push(entry.name);
       continue;
     }
-    renameSync(from, to);
+    mergeRouteDirectory(from, to);
     restored.push(entry.name);
   }
   if (!readdirSync(parked).length) rmSync(parked, { recursive: true, force: true });
@@ -938,16 +986,56 @@ function selfTest() {
   const dir = mkdtempSync(join(tmpdir(), 'ffc-convert-'));
   try {
     mkdirSync(join(dir, '_disabled_template_routes', 'privacy-policy'), { recursive: true });
+    mkdirSync(join(dir, '_disabled_template_routes', 'donation-policy'), { recursive: true });
     mkdirSync(join(dir, '_disabled_template_routes', 'about-us'), { recursive: true });
     mkdirSync(join(dir, 'src', 'app', 'about-us'), { recursive: true });
+    // THE HUSK: integrate-clone-into-nextjs.mjs parks a route by moving its
+    // `page.tsx` file, leaving `src/app/<slug>/` behind empty. This is what the
+    // real pipeline hands this function, and reproducing it is the whole point
+    // — the pre-#1342 fixture only ever built the `about-us` case below, so the
+    // predicate could read "directory exists" as "collision" and still pass.
+    mkdirSync(join(dir, 'src', 'app', 'donation-policy'), { recursive: true });
     write(join(dir, '_disabled_template_routes', 'privacy-policy', 'page.tsx'), 'x');
+    write(join(dir, '_disabled_template_routes', 'donation-policy', 'page.tsx'), 'the policy');
     write(join(dir, '_disabled_template_routes', 'about-us', 'page.tsx'), 'x');
     write(join(dir, '_disabled_template_routes', 'page.tsx'), 'template home');
     write(join(dir, 'src', 'app', 'about-us', 'page.tsx'), 'the captured page');
 
+    // A NESTED parked tree whose top level is free but whose child the capture
+    // owns. The entry-level collision check passes it (no `page.*` directly in
+    // `src/app/legal`), so the merge runs and its per-file guard is the only
+    // thing standing between the template's `legal/terms` page and the
+    // charity's. Without this case that guard is never executed by any test.
+    mkdirSync(join(dir, '_disabled_template_routes', 'legal', 'terms'), { recursive: true });
+    mkdirSync(join(dir, 'src', 'app', 'legal', 'terms'), { recursive: true });
+    write(join(dir, '_disabled_template_routes', 'legal', 'page.tsx'), 'template legal index');
+    write(join(dir, '_disabled_template_routes', 'legal', 'terms', 'page.tsx'), 'template terms');
+    write(join(dir, 'src', 'app', 'legal', 'terms', 'page.tsx'), 'the captured terms');
+
     const routes = restoreTemplateRoutes(dir);
     // The footer standard links to these; leaving them parked ships 404s.
-    eq('a parked template route comes back', routes.restored, ['privacy-policy']);
+    // Sorted: readdir order is filesystem-dependent and is not the property
+    // under test.
+    eq('a parked template route comes back', [...routes.restored].sort(), [
+      'donation-policy',
+      'legal',
+      'privacy-policy',
+    ]);
+    eq(
+      'a nested template page lands where the capture left room for it',
+      readFileSync(join(dir, 'src', 'app', 'legal', 'page.tsx'), 'utf8'),
+      'template legal index',
+    );
+    eq(
+      'but a nested page the capture owns is NOT overwritten by the merge',
+      readFileSync(join(dir, 'src', 'app', 'legal', 'terms', 'page.tsx'), 'utf8'),
+      'the captured terms',
+    );
+    eq(
+      'an EMPTY src/app/<slug> left by integrate is not a collision',
+      readFileSync(join(dir, 'src', 'app', 'donation-policy', 'page.tsx'), 'utf8'),
+      'the policy',
+    );
     // The charity's front page owns / now.
     eq(
       'the template home page is dropped, not restored',

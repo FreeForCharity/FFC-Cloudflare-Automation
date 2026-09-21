@@ -207,22 +207,57 @@ export function classifyRestIndex(status, body) {
 }
 
 /**
+ * A `--mount` value as a path segment prefix: no leading or trailing slashes,
+ * no traversal, empty when unset.
+ *
+ * Deliberately strict rather than forgiving. The value becomes a directory the
+ * capture writes into, so `..` here would put a charity's pages outside the
+ * output tree — `isContainedPath` would then reject every write, which reads as
+ * a broken capture rather than as a bad argument.
+ */
+export function normalizeMount(mount) {
+  if (typeof mount !== 'string') return '';
+  const cleaned = mount
+    .trim()
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .split('/')
+    .filter((s) => s && s !== '.' && s !== '..')
+    .join('/');
+  return cleaned;
+}
+
+/**
  * Map a live page URL to the local path its captured HTML belongs at.
  * `https://x.org/about-us/` -> `about-us/index.html`; the home page -> `index.html`.
+ *
+ * `mount` moves the whole capture under a path prefix, which is how a charity's
+ * SUBDOMAIN is folded into the apex site's repo: capture
+ * `school.example.org` with `--mount school` and its pages land at
+ * `school/<path>/index.html`, i.e. the URLs `/school/...` on the merged site.
+ *
+ * Nothing else has to change for that to work, and the reason is
+ * `relativePrefix()`: it derives a page's `../` count from the DEPTH of this
+ * local path, so a mounted page automatically reaches the shared asset root one
+ * level further up. Applying the prefix here rather than by moving files
+ * afterwards is what keeps that true — a post-hoc move would leave every
+ * relative reference in the mounted pages pointing one level too shallow.
  */
-export function localPathForLink(link, domain) {
+export function localPathForLink(link, domain, mount = '') {
   let path;
   try {
     path = new URL(link).pathname;
   } catch {
     return null;
   }
+  const prefix = normalizeMount(mount);
+  const under = (p) => (prefix ? `${prefix}/${p}` : p);
   path = path.replace(/^\/+/, '').replace(/\/+$/, '');
-  if (path === '') return 'index.html';
+  if (path === '') return under('index.html');
   // A link that already names a file keeps its name; a directory-style link
   // becomes <dir>/index.html so a static host serves it at the same URL.
-  if (/\.[a-z0-9]{2,5}$/i.test(path)) return path;
-  return `${path}/index.html`;
+  if (/\.[a-z0-9]{2,5}$/i.test(path)) return under(path);
+  return under(`${path}/index.html`);
 }
 
 /**
@@ -1285,18 +1320,52 @@ export function shouldReencodeImage(absUrl, bytes, maxBytes) {
  * that 404s and looks like a download failure rather than a rewrite bug.
  */
 export function rewriteRefs(text, replacements) {
-  const pairs = [...replacements.entries()].sort((a, b) => b[0].length - a[0].length);
+  const pairs = [...replacements.entries()]
+    .filter(([, to]) => to)
+    .sort((a, b) => b[0].length - a[0].length);
+  if (!pairs.length) return text;
+
+  // EVERY raw is swapped for a sentinel first, and only then are sentinels
+  // swapped for targets. Substituting targets directly — the obvious loop —
+  // lets a LATER raw match inside text an EARLIER replacement already wrote,
+  // and sorting longest-first does not prevent it: that ordering protects one
+  // raw from another, while this collision is between a replacement's OUTPUT
+  // and a later raw.
+  //
+  // It is not hypothetical. `normalizedLinkIndex` deliberately keeps every
+  // spelling of a destination, so a page carrying both
+  // `https://school.example.org/parents/home-school-families/` and the
+  // root-relative `/parents/home-school-families/` supplies two raws where the
+  // second occurs inside the first's target. Measured on
+  // newheightseducation.org (runs 35571249633, 35575009432):
+  //
+  //   want  ../school/parents/home-school-families/
+  //   got   ../school../../school/parents/home-school-families/
+  //
+  // and unmounted, where the same collision is SILENT because the mangled
+  // `..../../parents/…` does not match the dead-link detector's `^\.\./`:
+  //
+  //   want  ../parents/home-school-families/
+  //   got   ..../../parents/home-school-families/
+  //
+  // A sentinel cannot be matched by any later raw (no URL contains NUL), so
+  // one pass of raws followed by one pass of sentinels is order-independent.
+  const targets = [];
+  const token = (i) => `\u0000ffc-ref-${i}\u0000`;
   let out = text;
   for (const [from, to] of pairs) {
-    if (!to) continue;
-    out = out.split(from).join(to);
+    out = out.split(from).join(token(targets.push(to) - 1));
     // Page builders store URLs inside HTML-entity-escaped JSON, where the
     // delimiter is &quot; rather than a quote. Those copies are real references
     // and survive a markup-only rewrite pointing at the decommissioned host.
     const escaped = from.replace(/\//g, '\\/');
-    if (escaped !== from) out = out.split(escaped).join(to.replace(/\//g, '\\/'));
+    if (escaped !== from) {
+      const slashed = to.replace(/\//g, '\\/');
+      out = out.split(escaped).join(token(targets.push(slashed) - 1));
+    }
   }
-  return out;
+  // One pass, and via a callback so a `$&` inside a target is literal.
+  return out.replace(/\u0000ffc-ref-(\d+)\u0000/g, (whole, i) => targets[Number(i)] ?? whole);
 }
 
 /**
@@ -1602,6 +1671,67 @@ function selfTest() {
   eq('localPath nested', localPathForLink('https://x.org/a/b/', 'x.org'), 'a/b/index.html');
   eq('localPath file keeps name', localPathForLink('https://x.org/feed.xml', 'x.org'), 'feed.xml');
   eq('localPath rejects garbage', localPathForLink('not a url', 'x.org'), null);
+
+  // --- mounting a subdomain under a path prefix -------------------------
+  eq(
+    'mount: home lands under the prefix',
+    localPathForLink('https://s.x.org/', 's.x.org', 'school'),
+    'school/index.html',
+  );
+  eq(
+    'mount: nested keeps its shape below the prefix',
+    localPathForLink('https://s.x.org/a/b/', 's.x.org', 'school'),
+    'school/a/b/index.html',
+  );
+  eq(
+    'mount: a file keeps its name below the prefix',
+    localPathForLink('https://s.x.org/feed.xml', 's.x.org', 'school'),
+    'school/feed.xml',
+  );
+  eq(
+    'mount: empty is the unmounted behaviour',
+    localPathForLink('https://x.org/a/', 'x.org', ''),
+    'a/index.html',
+  );
+  eq(
+    'mount: a garbage URL is still rejected',
+    localPathForLink('not a url', 'x.org', 'school'),
+    null,
+  );
+
+  // The mount is normalized, so the three spellings an operator will actually
+  // type are ONE capture rather than three different output trees.
+  for (const spelling of ['school', '/school', 'school/', '/school/']) {
+    eq(
+      `mount: '${spelling}' normalizes to the same path`,
+      localPathForLink('https://s.x.org/a/', 's.x.org', spelling),
+      'school/a/index.html',
+    );
+  }
+  eq('mount: traversal is stripped, not honoured', normalizeMount('../../etc'), 'etc');
+  eq('mount: a lone dot segment is dropped', normalizeMount('./school/.'), 'school');
+  eq('mount: a non-string is empty', normalizeMount(null), '');
+
+  // THE load-bearing property. Applying the prefix here rather than moving
+  // files afterwards is only correct because relativePrefix() derives the `../`
+  // count from this path's depth — so a mounted page reaches the shared asset
+  // root one level further up, automatically. If these two ever disagree, every
+  // asset reference in every mounted page is silently off by one level.
+  eq(
+    'mount: relativePrefix deepens to match the mounted page',
+    relativePrefix(localPathForLink('https://s.x.org/a/', 's.x.org', 'school')),
+    '../'.repeat(2),
+  );
+  eq(
+    'mount: and the unmounted page is unchanged',
+    relativePrefix(localPathForLink('https://x.org/a/', 'x.org', '')),
+    '../',
+  );
+  eq(
+    'mount: a mounted home page is one level down, not at the root',
+    relativePrefix(localPathForLink('https://s.x.org/', 's.x.org', 'school')),
+    '../',
+  );
 
   // The politeness delay must apply to ASSETS too — they are the bulk of the
   // crawl. A cap here meant `--delay` could not slow the run down at all, and
@@ -2903,6 +3033,65 @@ function selfTest() {
     '{"u":"assets\\/logo.png"}',
   );
 
+  // A replacement's OUTPUT must never be rescanned. `normalizedLinkIndex`
+  // keeps every spelling of one destination, so these two raws arrive together
+  // on any page that links to a section both absolutely and root-relatively —
+  // and the second occurs inside the first's target.
+  eq(
+    'rewriteRefs does not rewrite inside what it just wrote (mounted)',
+    rewriteRefs(
+      '<a href="https://s.x.org/parents/home-school-families/">x</a>',
+      new Map([
+        [
+          'https://s.x.org/parents/home-school-families/',
+          '../school/parents/home-school-families/',
+        ],
+        ['/parents/home-school-families/', '../../school/parents/home-school-families/'],
+      ]),
+    ),
+    '<a href="../school/parents/home-school-families/">x</a>',
+  );
+  eq(
+    'rewriteRefs does not rewrite inside what it just wrote (unmounted)',
+    rewriteRefs(
+      '<a href="https://x.org/parents/home-school-families/">x</a>',
+      new Map([
+        ['https://x.org/parents/home-school-families/', '../parents/home-school-families/'],
+        ['/parents/home-school-families/', '../../parents/home-school-families/'],
+      ]),
+    ),
+    '<a href="../parents/home-school-families/">x</a>',
+  );
+  // The longest-first ordering still decides which of two overlapping RAWS
+  // wins — that is a different property and this must not regress it.
+  eq(
+    'rewriteRefs still prefers the longer raw',
+    rewriteRefs(
+      '<a href="https://x.org/a/b/">x</a>',
+      new Map([
+        ['https://x.org/a/', 'SHORT'],
+        ['https://x.org/a/b/', 'LONG'],
+      ]),
+    ),
+    '<a href="LONG">x</a>',
+  );
+  // A falsy target means "no replacement known" and the reference must be left
+  // exactly as it is. The pre-sentinel code expressed this as `if (!to)
+  // continue`; the filter is the same rule and a mutation test caught that
+  // nothing covered it — without it the ref is replaced with an empty string,
+  // silently deleting a URL rather than leaving a visible one.
+  eq(
+    'rewriteRefs leaves a reference with no target alone',
+    rewriteRefs('<img src="https://x.org/a.png">', new Map([['https://x.org/a.png', '']])),
+    '<img src="https://x.org/a.png">',
+  );
+  // A target containing `$&` must land literally, not as the whole match.
+  eq(
+    'rewriteRefs treats a dollar-ampersand in a target literally',
+    rewriteRefs('<img src="https://x.org/q.png">', new Map([['https://x.org/q.png', 'a$&b']])),
+    '<img src="a$&b">',
+  );
+
   eq(
     'remainingExternalAssetHosts reports an unlocalized asset host',
     remainingExternalAssetHosts('<img src="https://cdn.example.net/a.png">', 'x.org'),
@@ -3040,6 +3229,10 @@ const flag = (name) => process.argv.includes(`--${name}`);
 const domain = normalizeDomain(arg('domain', ''));
 const inspectOnly = flag('inspect');
 const outDir = arg('out', '');
+// Path prefix this capture is mounted under; empty for an apex capture. See
+// localPathForLink(). Normalized once here so every consumer sees the same
+// value and a `--mount /school/` is not a different capture from `--mount school`.
+const mount = normalizeMount(arg('mount', ''));
 // Validated rather than parseInt'd: NaN here is silently catastrophic, not
 // loud. See parsePositiveInt.
 const numericOptions = [
@@ -3485,7 +3678,7 @@ async function capture() {
       menuOrder: it.menu_order ?? 0,
       template: it.template ?? '',
       source: 'rest',
-      localPath: localPathForLink(it.link, domain),
+      localPath: localPathForLink(it.link, domain, mount),
     }))
     // localPathForLink maps by PATHNAME, so a stale-host link still yields a
     // correct local path — the entry looks fine and only the fetch fails. That
@@ -3504,7 +3697,7 @@ async function capture() {
   let fromSitemap = 0;
   for (const raw of sm.urls) {
     const url = normalizeSelfHost(raw, selfHost, domain);
-    const localPath = localPathForLink(url, domain);
+    const localPath = localPathForLink(url, domain, mount);
     if (!localPath || known.has(localPath)) continue;
     known.add(localPath);
     fromSitemap++;
@@ -4072,6 +4265,14 @@ async function capture() {
 
   const report = {
     domain,
+    // Where this host's pages were written, relative to the site root. Recorded
+    // because a capture can be REUSED by a later run (`reuse_capture_from_run`),
+    // and a reused capture's mount is the difference between republishing the
+    // same site and publishing a charity's subdomain at a URL the new dispatch
+    // did not ask for. Nothing else in the artifact states it: the mount is
+    // visible only as directory depth, which is exactly the kind of fact a
+    // verifier should not have to infer.
+    mount,
     capturedAt: new Date().toISOString(),
     restRoot: rest.indexUrl,
     restFlavor: rest.kind,

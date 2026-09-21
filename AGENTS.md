@@ -706,6 +706,27 @@ run 107 reviewed the 703 gate whose run is **123 commits** behind `main` and con
 `git diff` that `703-sites-list-generate.yml` is byte-identical across all 123 — same check,
 opposite answer, and only the check tells you which case you are in.
 
+**…and `--ref` can name a BRANCH, which is both a genuinely useful capability and the sharpest case
+of the rule above.** `gh workflow run <file>.yml --ref <branch>` checks the workflow _and its
+scripts_ out from that branch, so a fix to a pipeline can be validated against a real site **before
+it merges** — on 2026-09-21 `706` was dispatched on `claude/new-heights-education-app-kr7yq0` and
+the conversion passed a gate it had been failing, in production, against the charity's live site,
+with the fix still in an open PR. Nothing else gives you that.
+
+The other half is not optional. A branch dispatch runs **unreviewed code with the environment's
+credentials**, so approving a gated run means checking which ref it is on, not only which workflow
+it is:
+
+```bash
+gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id> \
+  --jq '"\(.head_branch)  \(.head_sha[0:8])  \(.event)"'
+# main  1ec71c6c  schedule          -> reviewed code
+# claude/…  ff5155f1  workflow_dispatch -> an open PR's code, holding the gate's credential
+```
+
+`head_branch != main` is not a reason to refuse — it is a reason to read the diff at that SHA before
+approving, using the commands above.
+
 **A held gate also stops the schedule behind it, and `status=waiting` will not show you that
 (L212).** A run parked at a gate holds its `concurrency` slot for as long as it waits, so the next
 scheduled run is admitted to the group but gets **no job at all** until the older one is reaped.

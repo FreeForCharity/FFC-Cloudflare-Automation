@@ -139,6 +139,33 @@ function copyTemplate(name, dest) {
  * the clean one and the rest are SUFFIXED, never dropped: a page silently
  * missing from a migration is the failure mode nobody notices.
  */
+/**
+ * HTML still sitting in `public/` that should have become a route.
+ *
+ * `<assetsDir>/…` is excluded, and that exclusion is load-bearing rather than
+ * a convenience. The asset localizer stores an `<iframe src>` under
+ * `<assetsDir>/<host>/<path>`, and some of those targets legitimately serve
+ * `text/html` — a video-player document, an embedded map, a widget. Those are
+ * ASSETS the published site must keep, not pages that failed to become routes,
+ * and the two are only distinguishable by where they live.
+ *
+ * Measured on run 35575009432 (newheightseducation.org): the gate failed on
+ * two Animoto player documents under
+ * `_ffc-assets/s3.amazonaws.com/embed.animoto.com/`. Deleting them would have
+ * broken both embeds; failing the run on them blocked a conversion that was
+ * correct.
+ *
+ * `startsWith` is anchored at the root on purpose: a captured page really
+ * living at `foo/_ffc-assets/x.html` is a page, not an asset of this site.
+ *
+ * @param {string[]} files     paths relative to `public/`
+ * @param {string}   assetsDir the localized-asset directory name
+ */
+export function unroutedHtml(files, assetsDir) {
+  const prefix = `${assetsDir}/`;
+  return files.filter((f) => f.endsWith('.html') && !f.startsWith(prefix));
+}
+
 export function assignSlugs(localPaths) {
   const taken = new Set();
   const assigned = [];
@@ -482,7 +509,7 @@ function main() {
     rmSync(join(publicDir, assetsDir, 'clone-enhance.js'), { force: true });
   }
 
-  const remainingHtml = walk(publicDir).filter((f) => f.endsWith('.html'));
+  const remainingHtml = unroutedHtml(walk(publicDir), assetsDir);
 
   console.log('--- conversion ---------------------------------------------');
   console.log(`site                  ${siteName || '(unknown)'}`);
@@ -576,7 +603,32 @@ function main() {
     process.exit(1);
   }
   if (!dryRun && remainingHtml.length) {
-    console.error(`public/ still holds ${remainingHtml.length} HTML files`);
+    // NAME them. This gate used to print only a count, and the conversion it
+    // stops runs after a 13-14 minute crawl of the charity's live site — so a
+    // bare number costs another full crawl just to learn which files it meant.
+    // Measured on newheightseducation.org (run 35571249633): "public/ still
+    // holds 2 HTML files", and nothing in the run said which 2.
+    console.error(
+      `public/ still holds ${remainingHtml.length} HTML file(s) that never became a route:`,
+    );
+    for (const f of remainingHtml.slice(0, 20)) console.error(`  ${f}`);
+    if (remainingHtml.length > 20) {
+      console.error(`  ... and ${remainingHtml.length - 20} more`);
+    }
+    // Says the cause rather than making the reader rediscover it. The first
+    // version of this hint named only the page case and was WRONG about the
+    // first real failure it met — those files were localized assets, which is
+    // why `<assetsDir>/` is now excluded above. Both cases stated, in the
+    // order they are likely.
+    console.error(
+      'Only `<path>/index.html` becomes a route, so a captured PAGE whose URL already ends' +
+        ' in `.html` lands here under its own name and would be published as a second,' +
+        ' unrouted copy of that page.',
+    );
+    console.error(
+      `(Localized assets under \`${assetsDir}/\` are not counted — an <iframe src> that serves` +
+        ' HTML is an asset the site must keep, not a page that failed to convert.)',
+    );
     process.exit(1);
   }
 }
@@ -606,6 +658,36 @@ function transformInlineStyles(html) {
  * The template's own home page is the one exception: the charity's front page
  * owns `/` now, so it is dropped rather than restored.
  */
+/** A `page.*` directly here — i.e. this directory IS a route someone owns. */
+function hasRoutablePage(dir) {
+  if (!existsSync(dir)) return false;
+  return readdirSync(dir).some((name) => /^page\.(tsx|ts|jsx|js)$/.test(name));
+}
+
+/**
+ * Move a parked route tree into place, tolerating a destination that already
+ * exists as the empty husk integrate left behind.
+ *
+ * `renameSync` cannot merge into an existing directory, so the husk has to be
+ * merged rather than renamed over. A file whose destination already exists is
+ * left parked instead of overwriting captured content — the same "the capture
+ * wins" rule the entry-level check applies, enforced per file so a partially
+ * captured subtree cannot smuggle a template page over a real one.
+ */
+function mergeRouteDirectory(from, to) {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const src = join(from, entry.name);
+    const dest = join(to, entry.name);
+    if (entry.isDirectory()) {
+      mergeRouteDirectory(src, dest);
+    } else if (!existsSync(dest)) {
+      renameSync(src, dest);
+    }
+  }
+  if (!readdirSync(from).length) rmSync(from, { recursive: true, force: true });
+}
+
 function restoreTemplateRoutes(repo) {
   const parked = join(repo, '_disabled_template_routes');
   const restored = [];
@@ -624,11 +706,29 @@ function restoreTemplateRoutes(repo) {
       continue;
     }
     const to = join(repo, 'src', 'app', entry.name);
-    if (existsSync(to)) {
+    // Collision means THE CAPTURE OWNS THIS ROUTE — a routable page already
+    // sits there — not merely that the directory exists.
+    //
+    // `existsSync(to)` was the predicate until #1342, and it read every route
+    // as collided, so NONE was ever restored. The cause is upstream:
+    // integrate-clone-into-nextjs.mjs parks routes by moving the `page.tsx`
+    // FILE, which leaves `src/app/<slug>/` behind as an empty directory.
+    // Measured against pristine `main`: after integrate, all four of
+    // donation-policy, free-for-charity-donation-policy,
+    // vulnerability-disclosure-policy and privacy-policy exist with
+    // `contents=[]`. Every one then took the `collided` branch here.
+    //
+    // The visible cost was the whole footer standard 404ing on every exported
+    // page, which is what 706's self-containment gate reports as `0/3 pages
+    // passed` — a failure that names template routes and so reads as a problem
+    // with the captured site. The old self-test could not catch it because its
+    // fixture built `src/app/about-us/` WITH a page.tsx, i.e. only the genuine
+    // collision, never the empty husk the real pipeline produces.
+    if (hasRoutablePage(to)) {
       collided.push(entry.name);
       continue;
     }
-    renameSync(from, to);
+    mergeRouteDirectory(from, to);
     restored.push(entry.name);
   }
   if (!readdirSync(parked).length) rmSync(parked, { recursive: true, force: true });
@@ -869,6 +969,47 @@ function selfTest() {
     }
   };
 
+  // --- leftover HTML ---------------------------------------------------
+  // This rule decides whether a conversion may proceed, and it was wrong once
+  // in production while living inline in main(), where no self-test could
+  // reach it. That is the reason it is a function.
+  eq(
+    'an unrouted page is counted',
+    unroutedHtml(['about/legacy.html', 'index.html'], '_ffc-assets'),
+    ['about/legacy.html', 'index.html'],
+  );
+  eq(
+    'a localized asset that serves HTML is NOT counted',
+    unroutedHtml(['_ffc-assets/s3.amazonaws.com/embed.animoto.com/play__x.html'], '_ffc-assets'),
+    [],
+  );
+  eq(
+    'the real run-35575009432 mix: assets dropped, pages kept',
+    unroutedHtml(
+      [
+        '_ffc-assets/s3.amazonaws.com/embed.animoto.com/play__a.html',
+        '_ffc-assets/s3.amazonaws.com/embed.animoto.com/play__b.html',
+        'stray-page.html',
+      ],
+      '_ffc-assets',
+    ),
+    ['stray-page.html'],
+  );
+  eq('non-HTML is never counted', unroutedHtml(['_ffc-assets/x.css', 'a.pdf'], '_ffc-assets'), []);
+  // Anchored at the ROOT: a captured page that genuinely lives under a
+  // directory of that name deeper in the tree is a page, not an asset. A
+  // substring test would swallow it.
+  eq(
+    'the exclusion is anchored, not a substring match',
+    unroutedHtml(['deep/_ffc-assets/x.html'], '_ffc-assets'),
+    ['deep/_ffc-assets/x.html'],
+  );
+  eq(
+    'a custom --assets-dir is honoured',
+    unroutedHtml(['other/x.html', '_ffc-assets/x.html'], 'other'),
+    ['_ffc-assets/x.html'],
+  );
+
   // --- slug assignment -------------------------------------------------
   // RFC 3986 makes a percent-escape's hex digits case-insensitive, so these
   // two sitemap entries are one page. Publishing both would put the charity's
@@ -938,16 +1079,56 @@ function selfTest() {
   const dir = mkdtempSync(join(tmpdir(), 'ffc-convert-'));
   try {
     mkdirSync(join(dir, '_disabled_template_routes', 'privacy-policy'), { recursive: true });
+    mkdirSync(join(dir, '_disabled_template_routes', 'donation-policy'), { recursive: true });
     mkdirSync(join(dir, '_disabled_template_routes', 'about-us'), { recursive: true });
     mkdirSync(join(dir, 'src', 'app', 'about-us'), { recursive: true });
+    // THE HUSK: integrate-clone-into-nextjs.mjs parks a route by moving its
+    // `page.tsx` file, leaving `src/app/<slug>/` behind empty. This is what the
+    // real pipeline hands this function, and reproducing it is the whole point
+    // — the pre-#1342 fixture only ever built the `about-us` case below, so the
+    // predicate could read "directory exists" as "collision" and still pass.
+    mkdirSync(join(dir, 'src', 'app', 'donation-policy'), { recursive: true });
     write(join(dir, '_disabled_template_routes', 'privacy-policy', 'page.tsx'), 'x');
+    write(join(dir, '_disabled_template_routes', 'donation-policy', 'page.tsx'), 'the policy');
     write(join(dir, '_disabled_template_routes', 'about-us', 'page.tsx'), 'x');
     write(join(dir, '_disabled_template_routes', 'page.tsx'), 'template home');
     write(join(dir, 'src', 'app', 'about-us', 'page.tsx'), 'the captured page');
 
+    // A NESTED parked tree whose top level is free but whose child the capture
+    // owns. The entry-level collision check passes it (no `page.*` directly in
+    // `src/app/legal`), so the merge runs and its per-file guard is the only
+    // thing standing between the template's `legal/terms` page and the
+    // charity's. Without this case that guard is never executed by any test.
+    mkdirSync(join(dir, '_disabled_template_routes', 'legal', 'terms'), { recursive: true });
+    mkdirSync(join(dir, 'src', 'app', 'legal', 'terms'), { recursive: true });
+    write(join(dir, '_disabled_template_routes', 'legal', 'page.tsx'), 'template legal index');
+    write(join(dir, '_disabled_template_routes', 'legal', 'terms', 'page.tsx'), 'template terms');
+    write(join(dir, 'src', 'app', 'legal', 'terms', 'page.tsx'), 'the captured terms');
+
     const routes = restoreTemplateRoutes(dir);
     // The footer standard links to these; leaving them parked ships 404s.
-    eq('a parked template route comes back', routes.restored, ['privacy-policy']);
+    // Sorted: readdir order is filesystem-dependent and is not the property
+    // under test.
+    eq('a parked template route comes back', [...routes.restored].sort(), [
+      'donation-policy',
+      'legal',
+      'privacy-policy',
+    ]);
+    eq(
+      'a nested template page lands where the capture left room for it',
+      readFileSync(join(dir, 'src', 'app', 'legal', 'page.tsx'), 'utf8'),
+      'template legal index',
+    );
+    eq(
+      'but a nested page the capture owns is NOT overwritten by the merge',
+      readFileSync(join(dir, 'src', 'app', 'legal', 'terms', 'page.tsx'), 'utf8'),
+      'the captured terms',
+    );
+    eq(
+      'an EMPTY src/app/<slug> left by integrate is not a collision',
+      readFileSync(join(dir, 'src', 'app', 'donation-policy', 'page.tsx'), 'utf8'),
+      'the policy',
+    );
     // The charity's front page owns / now.
     eq(
       'the template home page is dropped, not restored',

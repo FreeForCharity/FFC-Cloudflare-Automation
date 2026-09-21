@@ -406,9 +406,16 @@ jobs:
           # JSON to the next job and parsing it with `node -e` — is the inlined
           # snippet this workflow's own guard forbids (SC2016: a JS template
           # literal inside a single-quoted shell string reads as a shell
-          # variable). Neither field can contain a space or an `=`: the parser
-          # rejects any host that is not a hostname and any mount segment that
-          # is not a URL path segment, so this encoding is unambiguous.
+          # variable).
+          #
+          # The encoding is only unambiguous because neither field can contain
+          # a space or an `=`, and that is a property the PARSER enforces, not
+          # one this line may assume: `isHostname` accepts only DNS labels, and
+          # `badMountSegments` accepts only kebab-case URL segments. Both
+          # charsets exclude a space and an `=`. Weaken either check and the
+          # `awk` below silently truncates a mount at its first space, which
+          # reaches the capture as a DIFFERENT mount path than the operator
+          # typed — a wrong published URL, reported as a successful run.
           mount_pairs="$(printf '%s\n' "$mounts_tsv" | awk 'NF {printf "%s=%s ", $1, $2}')"
           mount_count="$(printf '%s\n' "$mounts_tsv" | awk 'NF' | wc -l | tr -d ' ')"
           {
@@ -537,6 +544,15 @@ jobs:
             # Each host overwrites the shared report path, so keep a per-host
             # copy: the artifact has to show what EACH capture did, not just
             # whichever ran last.
+            #
+            # `label` is interpolated into a FILENAME here, so it may never
+            # contain a `/`. Callers pass the hostname (or the literal `apex`),
+            # never the mount: a mount is a URL PATH and `/school/spring-2026`
+            # is a legal one, which would make this `cp` write into a
+            # subdirectory that does not exist — the capture succeeds, the copy
+            # fails, and the run dies after the crawl it was meant to preserve.
+            # `isHostname` in parse-host-mounts.mjs forbids a `/` in a host, so
+            # the hostname form cannot reach that shape at all.
             cp "$report" "$RUNNER_TEMP/capture/site/wp-capture-report.${label}.json"
             return 0
           }
@@ -561,7 +577,11 @@ jobs:
               echo "::error::malformed mount pair '$pair' — resolve emitted something this loop cannot read."
               exit 1
             fi
-            capture_one "$host" "$mount" "$mount" || exit 1
+            # The label is the HOST, not the mount — see the `cp` inside
+            # capture_one. A hostname is also the more useful thing to read in
+            # the log group and in the artifact's filename, because it names
+            # what was crawled rather than where it landed.
+            capture_one "$host" "$mount" "$host" || exit 1
             mounted=$((mounted + 1))
           done
 

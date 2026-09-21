@@ -263,6 +263,21 @@ def test_extra_hosts_refuses_an_empty_mount():
     assert "collide" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
 
 
+def test_extra_hosts_refuses_a_mount_with_a_space():
+    """`resolve` flattens the parser's output with a whitespace-delimited awk,
+    so a mount containing a space is TRUNCATED at that space rather than
+    rejected — the charity's pages land at a URL nobody typed and every gate in
+    the run still passes. Asserted end to end through the step, not just in the
+    parser's own self-test, because the truncation lives in the step."""
+    proc, outputs = run_resolve(INPUT_EXTRA_HOSTS="school.example.org => /school catalog")
+    assert proc.returncode != 0, proc.stdout
+    both = proc.stdout + proc.stderr
+    assert "kebab-case" in both, both
+    # The failure mode this guards against, stated as an assertion: the step
+    # must not have emitted the truncated mount as if it were the real one.
+    assert "school.example.org=school " not in outputs, outputs
+
+
 def test_extra_hosts_refuses_overlapping_mounts():
     proc, _ = run_resolve(
         INPUT_EXTRA_HOSTS="a.example.org => /x\nb.example.org => /x/y"
@@ -291,6 +306,20 @@ def test_the_capture_step_mounts_each_extra_host():
     assert 'capture_one "$DOMAIN" "" "apex"' in run, run
     # Every host runs the same assessment, inside the function.
     assert run.count("assess-capture-completeness.mjs") == 1, run
+
+
+def test_the_per_host_report_is_labelled_by_HOST_not_by_MOUNT():
+    """`label` is interpolated into a filename. A mount is a URL path and may
+    legally nest (`/school/spring-2026`), so labelling by mount turns the `cp`
+    destination into a path whose directory does not exist: the capture
+    succeeds and the run dies copying the report it was meant to preserve —
+    after the 15-minute crawl, which is the most expensive place in this
+    pipeline to lose. A hostname cannot contain a `/` (isHostname)."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert 'capture_one "$host" "$mount" "$host"' in run, run
+    assert 'capture_one "$host" "$mount" "$mount"' not in run, run
+    # And the reason the assertion above matters: the label reaches a filename.
+    assert 'wp-capture-report.${label}.json' in run, run
 
 
 def test_parse_host_mounts_is_self_tested_in_the_gate():

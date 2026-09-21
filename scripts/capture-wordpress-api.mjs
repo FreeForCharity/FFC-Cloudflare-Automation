@@ -4172,6 +4172,14 @@ async function capture() {
 
   const report = {
     domain,
+    // Where this host's pages were written, relative to the site root. Recorded
+    // because a capture can be REUSED by a later run (`reuse_capture_from_run`),
+    // and a reused capture's mount is the difference between republishing the
+    // same site and publishing a charity's subdomain at a URL the new dispatch
+    // did not ask for. Nothing else in the artifact states it: the mount is
+    // visible only as directory depth, which is exactly the kind of fact a
+    // verifier should not have to infer.
+    mount,
     capturedAt: new Date().toISOString(),
     restRoot: rest.indexUrl,
     restFlavor: rest.kind,

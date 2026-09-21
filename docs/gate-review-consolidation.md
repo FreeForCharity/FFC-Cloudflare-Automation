@@ -50,10 +50,10 @@ instinct and it stops at the run title.
 
 ## Recommendations, in value order
 
-### A. Let a `deliver` reuse a previous run's capture — `reuse_capture_from_run`
+### A. Let a `deliver` reuse a previous run's capture — `reuse_capture_from_run` — IMPLEMENTED
 
-The single highest-value change. Add an input naming a prior run id; `convert` downloads that run's
-`neutralized capture` artifact instead of crawling.
+The single highest-value change, and it shipped in the same PR as this document. An input names a
+prior run id; `convert` downloads that run's capture artifact instead of crawling.
 
 Consequences:
 
@@ -65,10 +65,39 @@ Consequences:
 Guard it: refuse a capture from a run whose `domain` input differs, or the artifact is expired, and
 say which — a silently stale capture would publish yesterday's site.
 
+**What the guard turned out to need, beyond that sketch.** The paragraph above named two checks. The
+implementation needs five, and three of them only became visible once `extra_hosts` existed:
+
+- **domain** — as sketched. A run id is digits typed by hand off a URL, and the adjacent digits are
+  another charity's migration.
+- **the host SET, compared in both directions** — a capture missing a host publishes a site with a
+  section silently absent; a capture carrying a host this dispatch did not ask for publishes a
+  hostname nobody requested. The second is the one an "at least what I need" check waves through,
+  and it is the check that `verifyReusedCapture` would not have had if the sketch had been
+  implemented literally.
+- **each host's MOUNT** — a mount is applied inside the capture, because `relativePrefix()` derives
+  each page's `../` count from its depth at capture time. So a capture mounted at `/school` cannot
+  be re-pointed at `/courses` by moving files: every relative reference would be off by one, on
+  every page. Recording the mount in the capture report (`capture-wordpress-api.mjs`) is what makes
+  this checkable at all — before that the mount existed only as directory depth, which is exactly
+  the kind of fact a verifier should not have to infer.
+- **age** — expiry is not staleness. Artifacts are retained 7 days, so a capture can be perfectly
+  live by the artifact API's reckoning and still predate a change to the site. Reported always,
+  refused past `reuse_max_age_hours`.
+- **the completeness gate, re-applied** — not inherited. A capture that passed at 90% must still
+  fail a dispatch asking for 98%, or `min_capture_percent` stops meaning anything the moment a
+  capture is reused.
+
+The reason all five live in a self-tested script rather than in the step: nothing downstream can
+catch a wrong capture. The build passes, the self-containment gate passes, the PR opens — every one
+of those asks whether the tree is a coherent site, and none asks whether it is the site that was
+asked for.
+
 ### B. Split `convert` and `deliver` into separately dispatchable runs
 
-With (A) in place this becomes natural. `convert` runs ungated and publishes its report; a human
-reads it; `deliver` is then a **cheap, fast** dispatch that hits the gate within a minute.
+With (A) in place this becomes natural — and (A) is now in place, so this is the next one to do.
+`convert` runs ungated and publishes its report; a human reads it; `deliver` is then a **cheap,
+fast** dispatch that hits the gate within a minute.
 
 This inverts the current cost model. Today the reviewer waits for the machine. Then the machine
 waits for the reviewer — which is the correct direction, because the reviewer is the scarce
@@ -82,6 +111,13 @@ neutralized, self-containment result, and the routes that will change.
 
 An approval is only meaningful if the approver can see what they are approving. Right now "approve"
 means "I trust that the run did the right thing", which is not a review.
+
+**Partly done.** `convert`'s summary now states the number of hostnames captured, and — when the
+capture was reused — says so prominently with a link to the run it came from and a sentence saying
+what that means for the evidence. That one was not optional: a reused capture describes the site at
+an earlier moment, and the run log that says so is fifteen steps above the gate. The rest of this
+recommendation (per-host page counts, completeness percentages, the routes that will change) is
+still unwritten.
 
 ### D. Batch by scope, not by run
 

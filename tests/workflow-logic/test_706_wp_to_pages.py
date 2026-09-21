@@ -56,6 +56,13 @@ def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]
             INPUT_IGNORE="",
             INPUT_PUBLISH="",
             INPUT_MINPCT="",
+            # A real workflow_dispatch always SETS every input to its
+            # default, so the empty string is the production shape —
+            # and setting them here means an inherited INPUT_REUSE_RUN
+            # from the surrounding shell cannot quietly turn these
+            # tests into tests of a reuse dispatch.
+            INPUT_REUSE_RUN="",
+            INPUT_REUSE_MAX_AGE="",
         )
         env.update(env_overrides)
         proc = subprocess.run(
@@ -320,6 +327,134 @@ def test_the_per_host_report_is_labelled_by_HOST_not_by_MOUNT():
     assert 'capture_one "$host" "$mount" "$mount"' not in run, run
     # And the reason the assertion above matters: the label reaches a filename.
     assert 'wp-capture-report.${label}.json' in run, run
+
+
+# --- reuse_capture_from_run: not crawling a charity twice for one result ----
+
+
+def test_reuse_is_off_by_default():
+    """Every existing dispatch must be completely unaffected. Asserted on the
+    OUTPUT, because an input that silently defaulted to something truthy would
+    skip the crawl and publish an artifact from a run nobody named."""
+    proc, outputs = run_resolve()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "reuse_run=\n" in outputs or outputs.rstrip().endswith("reuse_run="), outputs
+
+
+def test_reuse_run_id_must_be_numeric():
+    """A run id reaches `gh run download` and an artifact name. Refused here,
+    in the job that reaches no network, so a typo costs seconds rather than a
+    job that has already installed a native module."""
+    proc, _ = run_resolve(INPUT_REUSE_RUN="not-a-run")
+    assert proc.returncode != 0, proc.stdout
+    assert "numeric run id" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_a_numeric_reuse_run_id_is_published_for_the_convert_job():
+    proc, outputs = run_resolve(INPUT_REUSE_RUN=" 35571249633 ")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "reuse_run=35571249633" in outputs, outputs
+
+
+def test_reuse_max_age_defaults_and_refuses_junk():
+    """The age limit is the only check standing between a reused capture and a
+    site that has changed since, so it may not silently fall back to 'no limit'
+    when it is mistyped."""
+    proc, outputs = run_resolve()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "reuse_max_age_hours=168" in outputs, outputs
+    for bad in ("0", "-5", "lots"):
+        proc, _ = run_resolve(INPUT_REUSE_MAX_AGE=bad)
+        assert proc.returncode != 0, (bad, proc.stdout)
+        assert "reuse_max_age_hours" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_the_crawl_and_the_reuse_are_exact_complements():
+    """The load-bearing property. If both steps could run, the crawl would
+    overwrite the very capture the reuse was meant to preserve and the run
+    would still report success; if neither could, the job would proceed with an
+    empty capture directory. Asserted as literal, opposite conditions on the
+    same expression rather than as 'both mention reuse_run'."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    by_name = {s.get("name", ""): s for s in convert["steps"]}
+    crawl = by_name["Capture the live WordPress site"]
+    reuse = by_name["Reuse the capture from an earlier run"]
+    assert crawl["if"] == "needs.resolve.outputs.reuse_run == ''", crawl["if"]
+    assert reuse["if"] == "needs.resolve.outputs.reuse_run != ''", reuse["if"]
+
+
+def test_convert_keeps_contents_read_when_it_gains_actions_read():
+    """A job-level `permissions` block REPLACES the workflow-level one rather
+    than extending it, so adding `actions: read` for the artifact download
+    without restating `contents: read` breaks the checkout — which reads as a
+    checkout problem, not as a permissions one."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    assert convert["permissions"]["actions"] == "read", convert["permissions"]
+    assert convert["permissions"]["contents"] == "read", convert["permissions"]
+
+
+def test_reuse_refuses_a_run_of_a_different_workflow():
+    """A run id from another workflow would otherwise fail later at 'no
+    artifact named wp-capture-<id>', which reads as an expired artifact rather
+    than as the wrong run. The literal path is asserted against this file's own
+    name so a rename cannot leave the check pointing at nothing."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert f"self='.github/workflows/{WORKFLOW}'" in run, run
+
+
+def test_reuse_reapplies_this_runs_completeness_threshold():
+    """Inheriting the source run's gate would mean `min_capture_percent` stops
+    meaning anything the moment a capture is reused: a capture that passed at
+    90% would satisfy a dispatch asking for 98%."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert "assess-capture-completeness.mjs" in run, run
+    assert '--min-percent "$MIN_PERCENT"' in run, run
+
+
+def test_reuse_counts_what_it_assessed_against_what_it_expected():
+    """A per-item success log is not evidence of completeness: a file with no
+    trailing newline loses its last line to `read`, and every line that DID run
+    prints a pass. The count is the only thing that can see the missing one."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert "assessed=$((assessed + 1))" in run, run
+    assert "expected=$((MOUNT_COUNT + 1))" in run, run
+    assert '[ "$assessed" -ne "$expected" ]' in run, run
+
+
+def test_reuse_verifies_the_artifact_before_anything_reads_it():
+    """Domain, host set, mounts and age are checked against THIS dispatch. Every
+    later gate in this workflow asks whether the tree is a coherent site, and
+    none asks whether it is the site that was asked for."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert "verify-reused-capture.mjs" in run, run
+    assert '--domain "$DOMAIN"' in run, run
+    assert '--mounts "$MOUNTS"' in run, run
+    assert '--max-age-hours "$MAX_AGE"' in run, run
+
+
+def test_reuse_reads_the_verifier_exit_code_without_a_pipe():
+    """Ledger L50. The verifier's whole contract is its exit code; reading it
+    through a pipe reports the reader's status and turns a refusal into a pass."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert 'rc=$?' in run, run
+    assert 'verify-reused-capture.mjs' in run, run
+    # The verifier's stdout goes to a FILE, never into another command.
+    assert '> "$reports"' in run, run
+    assert "verify-reused-capture.mjs |" not in run.replace("\n", " "), run
+
+
+def test_verify_reused_capture_is_self_tested_in_the_gate():
+    gate = step_run(WORKFLOW, "resolve", "Offline self-tests (gate every later job)")
+    assert "verify-reused-capture.mjs --self-test" in gate, gate
+
+
+def test_the_summary_says_when_a_capture_was_reused():
+    """An approval is only meaningful if the approver can see what they are
+    approving, and a reused capture describes the site at an earlier moment.
+    The run log that says so is fifteen steps above the gate."""
+    run = step_run(WORKFLOW, "convert", "Report what would be written")
+    assert "REUSE_RUN" in run, run
+    assert "REUSED" in run, run
 
 
 def test_parse_host_mounts_is_self_tested_in_the_gate():

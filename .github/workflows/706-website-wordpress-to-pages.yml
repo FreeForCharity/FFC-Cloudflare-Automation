@@ -124,6 +124,25 @@ on:
         required: false
         type: string
         default: ''
+      reuse_capture_from_run:
+        description: >-
+          Run id of an EARLIER 706 run whose capture to reuse instead of crawling the live site
+          again. The capture is downloaded from that run's artifact, re-verified against this
+          dispatch (same domain, same hosts, same mounts, not stale) and re-assessed against this
+          run's min_percent. Use it to retry a `deliver` that failed after the approval gate: the
+          crawl is 13-14 minutes and the result is supposed to be identical, so repeating it costs a
+          second approval and hits the charity's server again for nothing. Leave empty to crawl.
+        required: false
+        type: string
+        default: ''
+      reuse_max_age_hours:
+        description: >-
+          Refuse a reused capture older than this many hours. Artifacts are retained 7 days (168h),
+          so a capture can be well within retention and still predate a change to the live site.
+          Only read when reuse_capture_from_run is set.
+        required: false
+        type: string
+        default: '168'
 
 permissions:
   contents: read
@@ -149,6 +168,8 @@ jobs:
       ignore_hosts: ${{ steps.resolve.outputs.ignore_hosts }}
       mounts: ${{ steps.resolve.outputs.mounts }}
       mount_count: ${{ steps.resolve.outputs.mount_count }}
+      reuse_run: ${{ steps.resolve.outputs.reuse_run }}
+      reuse_max_age_hours: ${{ steps.resolve.outputs.reuse_max_age_hours }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7
@@ -171,6 +192,8 @@ jobs:
           INPUT_DELAY: ${{ inputs.delay_ms }}
           INPUT_POSTS: ${{ inputs.include_posts }}
           INPUT_IGNORE: ${{ inputs.ignore_hosts }}
+          INPUT_REUSE_RUN: ${{ inputs.reuse_capture_from_run }}
+          INPUT_REUSE_MAX_AGE: ${{ inputs.reuse_max_age_hours }}
         shell: bash
         run: |
           set -euo pipefail
@@ -423,8 +446,32 @@ jobs:
             echo "mount_count=$mount_count"
           } >> "$GITHUB_OUTPUT"
 
+          # A run id, validated to digits HERE so no later step has to wonder.
+          # It reaches `gh run download` and an artifact name, and an operator
+          # types it by hand from a URL — the shape is the only thing this job
+          # can check, and checking the shape is what keeps the failure in this
+          # job rather than in the one that has already installed sharp.
+          reuse_run="$(printf '%s' "${INPUT_REUSE_RUN:-}" | tr -d '[:space:]')"
+          if [ -n "$reuse_run" ] && ! printf '%s' "$reuse_run" | grep -qE '^[0-9]+$'; then
+            echo "::error::reuse_capture_from_run must be a numeric run id (the digits at the end of an Actions run URL), got '$reuse_run'."
+            exit 1
+          fi
+          reuse_max_age="$(printf '%s' "${INPUT_REUSE_MAX_AGE:-168}" | tr -d '[:space:]')"
+          [ -n "$reuse_max_age" ] || reuse_max_age=168
+          if ! printf '%s' "$reuse_max_age" | grep -qE '^[0-9]+$' || [ "$reuse_max_age" -lt 1 ]; then
+            echo "::error::reuse_max_age_hours must be a positive whole number of hours, got '$reuse_max_age'."
+            exit 1
+          fi
+          {
+            echo "reuse_run=$reuse_run"
+            echo "reuse_max_age_hours=$reuse_max_age"
+          } >> "$GITHUB_OUTPUT"
+
           echo "Resolved: domain=$domain repo=$repo mode=$mode max=$max delay=$delay posts=$posts"
           echo "Extra hosts mounted: $mount_count"
+          if [ -n "$reuse_run" ]; then
+            echo "Reusing the capture from run $reuse_run (max age ${reuse_max_age}h) — the live site will NOT be crawled."
+          fi
 
       # Placed in `resolve`, which every other job needs, so a broken classifier
       # cannot reach the live site. Both scripts decide what gets fetched and
@@ -433,6 +480,7 @@ jobs:
         run: |
           node scripts/capture-wordpress-api.mjs --self-test
           node scripts/parse-host-mounts.mjs --self-test
+          node scripts/verify-reused-capture.mjs --self-test
           node scripts/replace-forms-with-mailto.mjs --self-test
           node scripts/integrate-clone-into-nextjs.mjs --self-test
           node scripts/verify-no-legacy.mjs --self-test
@@ -453,6 +501,15 @@ jobs:
       cancel-in-progress: false
     outputs:
       pages_with_forms: ${{ steps.forms.outputs.pages_with_forms }}
+    # `actions: read` is new, and it is the whole permission cost of capture
+    # reuse: downloading an EARLIER run's artifact is an Actions API read,
+    # which a job that only ever crawled a live site never needed. Listed
+    # beside `contents: read` because a job-level block REPLACES the
+    # workflow-level one rather than extending it — omit it and the checkout
+    # fails, which reads as a checkout problem.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -474,7 +531,135 @@ jobs:
         shell: bash
         run: npm install --no-save --no-audit --no-fund sharp@0.34.5
 
+      # The alternative to crawling a charity's shared host for 13-14 minutes
+      # to obtain a result that is supposed to be byte-identical to one GitHub
+      # is already storing.
+      #
+      # WHY THIS IS WORTH A JOB'S PERMISSIONS. `deliver` sits behind a human
+      # approval gate that appears at minute 15, and an approval is spent the
+      # moment it is given. A failure anywhere after it — a transient push
+      # error, a build that needed one more fix — costs the crawl AND a second
+      # approval, from a reviewer who has by then moved on. Measured on the New
+      # Heights migration (#1342): the same origin was crawled four times in one
+      # session, three of them re-work.
+      #
+      # WHY IT IS NOT JUST A DOWNLOAD. A run id is digits typed by hand from a
+      # URL, and the adjacent digits are another charity's migration. Nothing
+      # downstream can catch that: the build passes, the self-containment gate
+      # passes, the PR opens — every one of those asks "is this a coherent
+      # site?" and none asks "is this the site that was asked for". So the
+      # artifact is verified against THIS dispatch before anything reads it,
+      # and the completeness gate is re-applied with THIS run's min_percent
+      # rather than inherited from the run that produced the capture.
+      - name: Reuse the capture from an earlier run
+        if: needs.resolve.outputs.reuse_run != ''
+        working-directory: automation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REUSE_RUN: ${{ needs.resolve.outputs.reuse_run }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          MOUNTS: ${{ needs.resolve.outputs.mounts }}
+          MOUNT_COUNT: ${{ needs.resolve.outputs.mount_count }}
+          MIN_PERCENT: ${{ needs.resolve.outputs.min_percent }}
+          MAX_AGE: ${{ needs.resolve.outputs.reuse_max_age_hours }}
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # This workflow's own path. A run id from a DIFFERENT workflow would
+          # otherwise fail later at "no artifact named wp-capture-<id>", which
+          # reads as an expired artifact rather than as the wrong run.
+          self='.github/workflows/706-website-wordpress-to-pages.yml'
+
+          src_path="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REUSE_RUN" --jq '.path')" || {
+            echo "::error::run $REUSE_RUN is not readable in $GITHUB_REPOSITORY. A capture can only be reused from a run of this workflow in this repository."
+            exit 1
+          }
+          if [ -z "$src_path" ]; then
+            echo "::error::run $REUSE_RUN returned no workflow path — refusing to guess which workflow produced it."
+            exit 1
+          fi
+          if [ "$src_path" != "$self" ]; then
+            echo "::error::run $REUSE_RUN is a run of '$src_path', not of '$self'. Only a 706 run produces a capture this one can read."
+            exit 1
+          fi
+
+          # jq reads the name from the environment rather than from an
+          # interpolated shell string: the artifact name contains the run id,
+          # and building a jq filter by concatenation is how a quoting bug
+          # becomes a filter that silently matches nothing.
+          export ARTIFACT_NAME="wp-capture-$REUSE_RUN"
+          # `|| { … }` rather than `-z`: an API call that FAILED and a run that
+          # genuinely holds no such artifact both leave this variable empty,
+          # and they need opposite responses — retry versus re-dispatch a
+          # convert. A single emptiness check would report the reassuring one.
+          expired="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REUSE_RUN/artifacts" \
+            --paginate --jq '.artifacts[] | select(.name==env.ARTIFACT_NAME) | "\(.expired)"')" || {
+            echo "::error::could not list the artifacts of run $REUSE_RUN. This is an API failure, not a missing artifact — retry before re-dispatching a convert."
+            exit 1
+          }
+          if [ -z "$expired" ]; then
+            echo "::error::run $REUSE_RUN has no artifact named '$ARTIFACT_NAME'. Either its capture step never finished, or the artifact has been deleted. Dispatch a fresh convert."
+            exit 1
+          fi
+          if [ "$expired" = "true" ]; then
+            echo "::error::the capture artifact from run $REUSE_RUN has expired (retention is 7 days). Dispatch a fresh convert."
+            exit 1
+          fi
+
+          gh run download "$REUSE_RUN" --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" --dir "$RUNNER_TEMP/capture" || {
+            echo "::error::could not download '$ARTIFACT_NAME' from run $REUSE_RUN."
+            exit 1
+          }
+
+          # Everything that decides whether this artifact may be published as
+          # THIS run's result: same domain, exactly this run's hosts, each at
+          # the mount this run asks for, and not stale. Redirected to a file
+          # rather than piped, so the exit code read below is the verifier's
+          # and not a reader's (ledger L50).
+          reports="$RUNNER_TEMP/reused-capture-reports.txt"
+          node scripts/verify-reused-capture.mjs \
+            --dir "$RUNNER_TEMP/capture/site" \
+            --domain "$DOMAIN" \
+            --mounts "$MOUNTS" \
+            --max-age-hours "$MAX_AGE" > "$reports"
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::the capture from run $REUSE_RUN cannot be reused for this dispatch — see the errors above. Nothing was published."
+            exit 1
+          fi
+
+          # The completeness gate is re-applied here rather than inherited: a
+          # capture that passed at 90% must still fail a dispatch that asks for
+          # 98%, or `min_capture_percent` silently stops meaning anything the
+          # moment a capture is reused.
+          assessed=0
+          while IFS= read -r report; do
+            [ -n "$report" ] || continue
+            node scripts/assess-capture-completeness.mjs \
+              --report "$report" --min-percent "$MIN_PERCENT" || exit 1
+            assessed=$((assessed + 1))
+          done < "$reports"
+
+          # A per-item success log is not evidence of completeness: a file
+          # without a trailing newline loses its last line to `read`, and every
+          # line that DID run prints a pass. Count and compare.
+          expected=$((MOUNT_COUNT + 1))
+          if [ "$assessed" -ne "$expected" ]; then
+            echo "::error::re-assessed $assessed capture report(s), expected $expected (apex + $MOUNT_COUNT mounted host(s)). A pass on each report read is not evidence that every host was read."
+            exit 1
+          fi
+
+          echo "Reused the capture from run $REUSE_RUN: $expected host(s) re-verified and re-assessed. The live site was not contacted."
+
       - name: Capture the live WordPress site
+        # Skipped entirely when a previous run's capture is being reused. The
+        # two paths are mutually exclusive by construction rather than by a
+        # flag read inside one script: a crawl that ran anyway would overwrite
+        # the very artifact the reuse was meant to preserve, and the run would
+        # still report success.
+        if: needs.resolve.outputs.reuse_run == ''
         working-directory: automation
         env:
           DOMAIN: ${{ needs.resolve.outputs.domain }}
@@ -874,6 +1059,13 @@ jobs:
           SOURCE_DOMAIN: ${{ needs.resolve.outputs.domain }}
           TARGET_REPO: ${{ needs.resolve.outputs.repo }}
           RUN_MODE: ${{ needs.resolve.outputs.mode }}
+          MOUNT_COUNT: ${{ needs.resolve.outputs.mount_count }}
+          # Stated in the summary because it changes what the summary MEANS: a
+          # reused capture is evidence about a site as it stood at some earlier
+          # moment, not as it stands now. An approver reading "706 — <domain>"
+          # would otherwise have no way to tell the two apart, and the run log
+          # that says so is fifteen steps up.
+          REUSE_RUN: ${{ needs.resolve.outputs.reuse_run }}
         run: |
           set -euo pipefail
           # Fail closed on empty: this summary is the only artifact a `preview`
@@ -887,6 +1079,14 @@ jobs:
             echo "## 706 — $SOURCE_DOMAIN → $TARGET_REPO"
             echo ""
             echo "Mode: \`$RUN_MODE\`"
+            echo ""
+            echo "Hostnames captured: 1 apex + ${MOUNT_COUNT:-0} mounted"
+            if [ -n "${REUSE_RUN:-}" ]; then
+              echo ""
+              echo "⚠️ **Capture REUSED from run [$REUSE_RUN](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSE_RUN})** — the live site was not crawled by this run."
+              echo ""
+              echo "It was re-verified against this dispatch (domain, hostnames, mounts, age) and re-assessed against this run's completeness threshold. It still describes the site as it stood when that run captured it."
+            fi
             echo ""
             echo "Changed paths that a delivery would commit: $(git add -A --dry-run | wc -l)"
           } >> "$GITHUB_STEP_SUMMARY"

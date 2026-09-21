@@ -205,6 +205,141 @@ def test_allowlist_does_not_exempt_other_paths(tmp_path):
     assert result.returncode == 1, result.stdout + result.stderr
 
 
+def _grow_tracked_file(tmp_path, name: str, before: bytes, after: bytes):
+    """Commit `name` at `before` bytes on the base, then grow it to `after`."""
+    repo = _init_repo(tmp_path)
+    (repo / name).write_bytes(before)
+    _commit(repo, "baseline: the file exists and is under the limit")
+    _git(repo, "branch", "-f", "base", "HEAD")
+
+    (repo / name).write_bytes(after)
+    _commit(repo, "docs: append to a file the repo already tracks")
+    return _run_guard(repo)
+
+
+def test_a_grown_tracked_text_file_is_not_diagnosed_as_a_committed_binary(tmp_path):
+    """AC3 of #1243: the two failures have different causes and different fixes.
+
+    Before this, both produced `This PR introduces one or more blobs over N
+    bytes` followed by instructions to delete a file and force-push. Every word
+    of that describes a binary swept in by `git add -A`. A reader whose actual
+    mistake was appending a table row to a 1 MB Markdown file was handed a
+    diagnosis about somebody else's mistake -- measured on #1242, where the
+    first reading of the failure was that something binary had been staged.
+    """
+    result = _grow_tracked_file(
+        tmp_path, "ledger.md", b"x" * 900_000, b"x" * BIG
+    )
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+
+    # The headline must not claim something was introduced -- nothing was.
+    assert "already tracks" in result.stdout, out
+    assert "an existing file grew" in result.stdout, out
+
+    # The per-file line must classify it and name both sizes, the limit and the
+    # overage, so the reader can see how far over it is without measuring.
+    assert "TRACKED text file that GREW" in result.stdout, out
+    assert "900000 bytes" in result.stdout, out
+    assert str(BIG) in result.stdout, out
+    assert "1048576" in result.stdout, out
+    assert f"over by {BIG - 1048576}" in result.stdout, out
+
+    # And the remedy that actually applies must be present.
+    assert "A TRACKED TEXT FILE GREW PAST THE LIMIT" in result.stderr, out
+    assert "large-blob-allowlist.txt" in result.stderr, out
+
+
+def test_a_text_blob_far_larger_than_the_sniff_window_is_still_read_as_text(tmp_path):
+    """The classification must not collapse on exactly the files it is for.
+
+    The blob is sniffed for NUL bytes in its first 8 KiB, so every file this
+    guard reports is orders of magnitude larger than the window. This pins that
+    the sniff still answers: a 1.2 MB text file, 146x the window, reads as text.
+
+    What this does NOT pin is the guard's choice to dump the blob to a file
+    rather than pipe it into `head` -- reverting that spelling leaves this test
+    green on ubuntu, measured. The SIGPIPE failure it guards against reproduces
+    for `git cat-file blob | head -c 8192 > /dev/null` (exit 141) and not for
+    the `| wc -c` form the function would have used (exit 0, five runs). The
+    file form is kept as cheap insurance on the Windows host, where it has not
+    been measured; if it ever does fail there, this test is what reddens.
+    """
+    result = _grow_tracked_file(
+        tmp_path, "ledger.md", b"x" * 900_000, b"x" * BIG
+    )
+    out = result.stdout + result.stderr
+    assert "text file" in result.stdout, out
+    assert "unreadable content" not in result.stdout, out
+
+
+def test_a_new_binary_keeps_the_binary_diagnosis(tmp_path):
+    """Opposite polarity: the original message must survive for its own case.
+
+    A classification that always said "a tracked text file grew" would pass the
+    test above and be useless. PR #910's actual shape must still read as what
+    it was.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "actionlint").write_bytes(b"\0" * BIG)
+    _commit(repo, "commit a tool binary")
+
+    result = _run_guard(repo)
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert "introduces one or more blobs" in result.stdout, out
+    assert "NEW binary file" in result.stdout, out
+    assert "not present on base" in result.stdout, out
+
+    # The text-file remedy must NOT fire here: it tells the reader not to delete
+    # anything, which is exactly the wrong advice for a swept-in binary.
+    assert "A TRACKED TEXT FILE GREW" not in result.stderr, out
+    assert "git push --force-with-lease" in result.stderr, out
+
+
+def test_a_grown_tracked_binary_is_distinguished_from_both(tmp_path):
+    """Third combination: tracked (so not "introduced") but binary (so not text).
+
+    Pinned because the two flags are independent and a single boolean would
+    conflate them -- the headline follows "was it already tracked", the remedy
+    paragraph follows "is it text".
+    """
+    result = _grow_tracked_file(
+        tmp_path, "vendor.bin", b"\0" * 900_000, b"\0" * BIG
+    )
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert "TRACKED binary file that GREW" in result.stdout, out
+    assert "already tracks" in result.stdout, out
+    assert "A TRACKED TEXT FILE GREW" not in result.stderr, out
+
+
+def test_classification_never_swallows_an_offender(tmp_path):
+    """Two offenders of different shapes must both be reported.
+
+    The classification only shapes the message; it must not be able to decide
+    that a file is fine. A branch that reports one offender and drops the other
+    is the false-clean this guard exists to prevent, one file at a time.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "ledger.md").write_bytes(b"x" * 900_000)
+    _commit(repo, "baseline text file under the limit")
+    _git(repo, "branch", "-f", "base", "HEAD")
+
+    (repo / "ledger.md").write_bytes(b"x" * BIG)
+    (repo / "actionlint").write_bytes(b"\0" * BIG)
+    _commit(repo, "one of each")
+
+    result = _run_guard(repo)
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert "ledger.md" in result.stdout, out
+    assert "actionlint" in result.stdout, out
+    # Mixed shapes: the generic headline is the honest one, because something
+    # WAS introduced.
+    assert "introduces one or more blobs" in result.stdout, out
+
+
 def test_unresolvable_ref_fails_loudly(tmp_path):
     """A shallow checkout must error, never report a false clean."""
     repo = _init_repo(tmp_path)

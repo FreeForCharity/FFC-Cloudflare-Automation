@@ -23,6 +23,16 @@
 # `whmcs/theme/six_ffc/**` bundle) never register unless a PR actually rewrites
 # them -- and the allowlist covers that case.
 #
+# Two failures, two messages (#1243)
+# -----------------------------------
+# "A binary was swept in by `git add -A`" and "a text file the repo already
+# tracks grew past the limit" are different mistakes with different remedies,
+# and this guard used to describe only the first -- so the second was handed a
+# diagnosis about somebody else's mistake, plus instructions to delete a file
+# that has to stay. Each offender is therefore classified on two independent
+# axes, tracked-on-base vs new, and text vs binary, and the report names the
+# base size, the head size, the limit and the overage.
+#
 # Usage:  check-large-blobs.sh <base-ref> <head-ref>
 # Env:    MAX_BLOB_BYTES     (default 1048576 = 1 MiB)
 #         BLOB_ALLOWLIST     (default .github/large-blob-allowlist.txt)
@@ -71,11 +81,64 @@ is_allowlisted() {
   return 1
 }
 
+# Scratch space for blob content sniffing. One directory, cleaned on any exit.
+SNIFF_DIR="$(mktemp -d)"
+# shellcheck disable=SC2064  # expand SNIFF_DIR now, while it is still set
+trap "rm -rf '$SNIFF_DIR'" EXIT
+
+# "Is this blob text?" -- no NUL byte in its first 8 KiB, the same heuristic git
+# itself uses to decide whether to print a diff.
+#
+# The blob is dumped to a file first rather than piped into `head`, because
+# `head` closing the pipe early can leave `git` with SIGPIPE and, under
+# `set -o pipefail`, turn the sniff non-zero for every blob larger than the
+# window -- which is every blob this guard ever reports.
+#
+# Measured, because the obvious form is not obviously wrong: on ubuntu bash
+# 5.2.21, `git cat-file blob $sha | head -c 8192 > /dev/null` does exit **141**,
+# but the same producer feeding `head -c 8192 | wc -c` inside a command
+# substitution exits **0** on five consecutive runs. So the hazard is real in
+# one spelling and did not reproduce in the one this function would have used.
+# The file form is kept anyway: it costs one write of an already-oversized blob
+# on a run that is failing regardless, and it does not depend on the timing of a
+# signal. It has NOT been measured on the Windows git-bash host that also runs
+# this suite. Returns 0 = text, 1 = binary, 2 = could not read.
+is_text_blob() {
+  local sha="$1" blob raw stripped
+  blob="${SNIFF_DIR}/blob"
+  if ! git cat-file blob "$sha" >"$blob" 2>/dev/null; then
+    return 2
+  fi
+  # `head` reading a FILE and `wc` consuming all of its output: no early close,
+  # so no SIGPIPE on either side.
+  raw="$(head -c 8192 "$blob" | wc -c)"
+  stripped="$(head -c 8192 "$blob" | LC_ALL=C tr -d '\000' | wc -c)"
+  [ "$raw" = "$stripped" ]
+}
+
+# Size of <path> as it stands on the base ref, or "" if the path is not there.
+# A path that is absent on the base is new to this PR; a path that is present
+# and smaller is a tracked file this PR grew, which is a different mistake with
+# a different remedy.
+size_on_base() {
+  local path="$1" size
+  if size="$(git cat-file -s "${BASE_REF}:${path}" 2>/dev/null)"; then
+    printf '%s' "$size"
+  fi
+}
+
 # `rev-list --objects` prints "<sha> [<path>]"; `cat-file --batch-check` then
 # resolves type and size. Joining them keeps this to two git invocations
 # regardless of how many objects the range contains.
 offenders=""
 allowed=""
+# Which SHAPES of offender were seen. The headline and the remedy differ: a
+# committed binary is removed, a tracked text file that grew past the limit is
+# not -- and until #1243 the message described only the first, so every reader
+# of the second was handed a diagnosis about somebody else's mistake.
+grown_seen=0
+grown_text_seen=0
+new_seen=0
 
 # An enumeration failure must never read as "no objects, therefore clean" -- that
 # is the exact false-OK this guard exists to prevent. Both git calls are checked.
@@ -124,9 +187,35 @@ if [ -n "$object_list" ]; then
     entry="$(printf '  %10s bytes  %s  (%s)' "$osize" "$path" "${sha:0:12}")"
     if is_allowlisted "$path"; then
       allowed="${allowed}${entry}"$'\n'
-    else
-      offenders="${offenders}${entry}"$'\n'
+      continue
     fi
+
+    # Classify the offender. This only shapes the message -- a classification
+    # that cannot be determined must never drop the file from the report, so
+    # every branch below still appends an entry.
+    base_size="$(size_on_base "$path")"
+    if is_text_blob "$sha"; then
+      kind="text file"
+    elif [ "$?" = "1" ]; then
+      kind="binary file"
+    else
+      kind="file of unreadable content"
+    fi
+
+    over=$((osize - MAX_BLOB_BYTES))
+    if [ -n "$base_size" ]; then
+      grown_seen=1
+      if [ "$kind" = "text file" ]; then
+        grown_text_seen=1
+      fi
+      detail="$(printf '%14sTRACKED %s that GREW: %s bytes on %s -> %s bytes here (+%s). Limit %s, over by %s.' \
+        "" "$kind" "$base_size" "$BASE_REF" "$osize" "$((osize - base_size))" "$MAX_BLOB_BYTES" "$over")"
+    else
+      new_seen=1
+      detail="$(printf '%14sNEW %s, not present on %s. Limit %s, over by %s.' \
+        "" "$kind" "$BASE_REF" "$MAX_BLOB_BYTES" "$over")"
+    fi
+    offenders="${offenders}${entry}"$'\n'"${detail}"$'\n'
   done <<< "$object_list"
 fi
 
@@ -141,9 +230,40 @@ if [ -z "$offenders" ]; then
   exit 0
 fi
 
-echo "::error::This PR introduces one or more blobs over ${MAX_BLOB_BYTES} bytes."
+if [ "$grown_seen" = 1 ] && [ "$new_seen" = 0 ]; then
+  # Nothing was added -- a file the repository already tracks crossed the line.
+  # Say so in the headline, because "this PR introduces a blob" reads as "you
+  # committed a binary by mistake" and sends the reader looking for one.
+  echo "::error::This PR pushes a file the repository already tracks past the" \
+    "${MAX_BLOB_BYTES}-byte blob limit. Nothing new was committed -- an existing file grew."
+else
+  echo "::error::This PR introduces one or more blobs over ${MAX_BLOB_BYTES} bytes."
+fi
 echo "Oversized blobs introduced in this PR's commits:"
 printf '%s' "$offenders"
+
+if [ "$grown_text_seen" = 1 ]; then
+  cat >&2 <<EOF
+
+A TRACKED TEXT FILE GREW PAST THE LIMIT. That is not the mistake the rest of
+this message describes: nothing was committed by accident, and there is no
+binary to delete. The limit is ${MAX_BLOB_BYTES} bytes and the file is over it,
+so shrink it or exempt it:
+
+  * Shrink the file -- split it, archive the older part, or move long content
+    into a linked file. Note that trimming a Markdown TABLE usually does not
+    shrink it: prettier re-pads every cell to the column width.
+  * If the file genuinely belongs in git at this size, add its path to
+    .github/large-blob-allowlist.txt in the same PR and say why in the
+    description. Also update whatever documentation states the old ceiling --
+    an exemption that is not written down keeps being obeyed after it is
+    lifted (#1243).
+
+The branch rewrite below is for a blob that should never have existed. It does
+not apply to a tracked file that is simply too big now.
+EOF
+fi
+
 cat >&2 <<'EOF'
 
 These may not appear in the "Files changed" tab. A blob added in one commit and

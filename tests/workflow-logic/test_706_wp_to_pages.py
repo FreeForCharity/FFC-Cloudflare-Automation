@@ -443,6 +443,19 @@ def test_reuse_reads_the_verifier_exit_code_without_a_pipe():
     assert "verify-reused-capture.mjs |" not in run.replace("\n", " "), run
 
 
+def test_a_reused_capture_is_re_uploaded_under_THIS_runs_id():
+    """`deliver` downloads `wp-capture-<this run's id>`. The upload step is
+    therefore unconditional: make it skip on a reused capture and the handoff
+    breaks for exactly the dispatch capture reuse exists to serve — a retried
+    `deliver` — and it breaks AFTER the approval has been spent."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    upload = next(
+        s for s in convert["steps"] if "Upload the neutralized capture" in s.get("name", "")
+    )
+    assert "if" not in upload, upload
+    assert upload["with"]["name"] == "wp-capture-${{ github.run_id }}", upload["with"]
+
+
 def test_verify_reused_capture_is_self_tested_in_the_gate():
     gate = step_run(WORKFLOW, "resolve", "Offline self-tests (gate every later job)")
     assert "verify-reused-capture.mjs --self-test" in gate, gate

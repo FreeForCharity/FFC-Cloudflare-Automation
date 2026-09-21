@@ -113,6 +113,17 @@ on:
         required: false
         type: string
         default: ''
+      extra_hosts:
+        description: >-
+          Additional hostnames to fold into this SAME repo, each mounted at a URL path. One per
+          line, `<hostname> => <path>` — e.g. `school.example.org => /school`. A charity's site is
+          often several hostnames on one hosting plan; this captures them into one static site so
+          `/school/...` serves what `school.example.org` served, and the subdomains become redirects
+          at cutover. Each host is captured and gated SEPARATELY, so one short capture cannot hide
+          behind another's page count. Leave empty for a single-hostname site.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -136,6 +147,8 @@ jobs:
       delay: ${{ steps.resolve.outputs.delay }}
       posts: ${{ steps.resolve.outputs.posts }}
       ignore_hosts: ${{ steps.resolve.outputs.ignore_hosts }}
+      mounts: ${{ steps.resolve.outputs.mounts }}
+      mount_count: ${{ steps.resolve.outputs.mount_count }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7
@@ -150,6 +163,9 @@ jobs:
           INPUT_EMAIL: ${{ inputs.contact_email }}
           INPUT_PUBLISH: ${{ inputs.publish_domain }}
           INPUT_MODE: ${{ inputs.mode }}
+          # Free text reaching a shell, so it arrives as DATA in env: rather
+          # than interpolated into the script body (#1080's rule).
+          INPUT_EXTRA_HOSTS: ${{ inputs.extra_hosts }}
           INPUT_MINPCT: ${{ inputs.min_capture_percent }}
           INPUT_MAX: ${{ inputs.max_items }}
           INPUT_DELAY: ${{ inputs.delay_ms }}
@@ -370,7 +386,38 @@ jobs:
             echo "ignore_hosts=$ignore_hosts"
           } >> "$GITHUB_OUTPUT"
 
+          # Extra hostnames folded into this same repo under URL paths. Parsed
+          # and validated HERE, in the job that reaches no network, so a typo
+          # costs a few seconds rather than a 15-minute crawl and a human
+          # approval. The parser exits non-zero on any bad line and prints an
+          # ::error:: for EVERY one, so a dispatch is fixed in a single pass.
+          # `:-` because this step runs under `set -u` and an UNSET variable is
+          # not the same failure as an invalid one: without the default, a
+          # caller that never passed extra_hosts aborts on "unbound variable"
+          # and the `||` branch below reports it as "extra_hosts did not
+          # validate" — a message naming an input the operator never supplied.
+          mounts_tsv="$(node scripts/parse-host-mounts.mjs \
+            --text "${INPUT_EXTRA_HOSTS:-}" --apex "$domain")" || {
+            echo "::error::extra_hosts did not validate — see the errors above. Nothing was captured."
+            exit 1
+          }
+          # Flattened to one line of `host=mount` pairs rather than passed as
+          # JSON. A job output is a single line, and the alternative — handing
+          # JSON to the next job and parsing it with `node -e` — is the inlined
+          # snippet this workflow's own guard forbids (SC2016: a JS template
+          # literal inside a single-quoted shell string reads as a shell
+          # variable). Neither field can contain a space or an `=`: the parser
+          # rejects any host that is not a hostname and any mount segment that
+          # is not a URL path segment, so this encoding is unambiguous.
+          mount_pairs="$(printf '%s\n' "$mounts_tsv" | awk 'NF {printf "%s=%s ", $1, $2}')"
+          mount_count="$(printf '%s\n' "$mounts_tsv" | awk 'NF' | wc -l | tr -d ' ')"
+          {
+            echo "mounts=$mount_pairs"
+            echo "mount_count=$mount_count"
+          } >> "$GITHUB_OUTPUT"
+
           echo "Resolved: domain=$domain repo=$repo mode=$mode max=$max delay=$delay posts=$posts"
+          echo "Extra hosts mounted: $mount_count"
 
       # Placed in `resolve`, which every other job needs, so a broken classifier
       # cannot reach the live site. Both scripts decide what gets fetched and
@@ -378,6 +425,7 @@ jobs:
       - name: Offline self-tests (gate every later job)
         run: |
           node scripts/capture-wordpress-api.mjs --self-test
+          node scripts/parse-host-mounts.mjs --self-test
           node scripts/replace-forms-with-mailto.mjs --self-test
           node scripts/integrate-clone-into-nextjs.mjs --self-test
           node scripts/verify-no-legacy.mjs --self-test
@@ -428,52 +476,90 @@ jobs:
           DELAY: ${{ needs.resolve.outputs.delay }}
           POSTS: ${{ needs.resolve.outputs.posts }}
           IGNORE_HOSTS: ${{ needs.resolve.outputs.ignore_hosts }}
+          MOUNTS: ${{ needs.resolve.outputs.mounts }}
         shell: bash
         run: |
           set -uo pipefail
-          args=(--domain "$DOMAIN" --out "$RUNNER_TEMP/capture/site" --max "$MAX" --delay "$DELAY")
-          if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
-          if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
 
-          set +e
-          node scripts/capture-wordpress-api.mjs "${args[@]}"
-          rc=$?
-          set -e
+          # One capture per hostname, all into ONE output tree: the apex at the
+          # root, each extra host under its `--mount` path. The mount is applied
+          # INSIDE the capture (localPathForLink) rather than by moving files
+          # afterwards, because relativePrefix() derives each page's `../` count
+          # from its local path's depth — move the files later and every
+          # relative reference in the mounted pages points one level too
+          # shallow, on every page, silently.
+          #
+          # Each host is gated on its OWN completeness report before the next
+          # one runs. An aggregate percentage across hosts would let a 40%
+          # capture of a 110-page subdomain hide behind a complete apex.
+          capture_one() {
+            local host="$1" mount="$2" label="$3"
+            local args=(--domain "$host" --out "$RUNNER_TEMP/capture/site" --max "$MAX" --delay "$DELAY")
+            if [ -n "$mount" ]; then args+=(--mount "$mount"); fi
+            if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
+            if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
 
-          # The capture exits 1 for ANY unmet gate, which conflates two things
-          # that deserve opposite treatment:
-          #
-          #   COMPLETENESS — did we get the site? Losing pages is a migration
-          #   defect and must stop the run.
-          #
-          #   ASSET HEALTH — are there dead references? A live site's own broken
-          #   links are reproduced FAITHFULLY. Failing on them would mean FFC
-          #   can never migrate a site that has one dead image, which is most
-          #   real charity sites. Measured on the first live delivery: 15 failed
-          #   assets, all of them 404/410 on the live site too, blocked a
-          #   capture that had reached 589 of 590 entries with ZERO page-fetch
-          #   failures.
-          #
-          # So completeness is enforced here, on the report's own numbers, and
-          # asset health is reported. `verify-no-legacy` remains the hard gate
-          # on whether the exported site actually stands alone.
-          report="$RUNNER_TEMP/capture/site/wp-capture-report.json"
-          if [ ! -f "$report" ]; then
-            echo "::error::The capture produced no report at $report (exit $rc). Nothing to assess."
-            exit 1
-          fi
-          if [ "$rc" -ge 2 ]; then
-            echo "::error::capture-wordpress-api.mjs exited $rc — usage error or crash, not a gate result."
-            exit 1
-          fi
+            echo "::group::capture $label"
+            set +e
+            node scripts/capture-wordpress-api.mjs "${args[@]}"
+            local rc=$?
+            set -e
+            echo "::endgroup::"
 
-          # In a script, not `node -e '…'`: every JS template literal inside a
-          # single-quoted shell string reads to shellcheck as an unexpanded
-          # shell variable (SC2016), and quoting around that is how a script
-          # acquires escaping nobody can safely edit later. The file also gets
-          # its own self-tests, which an inline block cannot have.
-          node scripts/assess-capture-completeness.mjs \
-            --report "$report" --min-percent "$MIN_PERCENT"
+            # The capture exits 1 for ANY unmet gate, which conflates two things
+            # that deserve opposite treatment:
+            #
+            #   COMPLETENESS — did we get the site? Losing pages is a migration
+            #   defect and must stop the run.
+            #
+            #   ASSET HEALTH — are there dead references? A live site's own
+            #   broken links are reproduced FAITHFULLY. Failing on them would
+            #   mean FFC can never migrate a site that has one dead image, which
+            #   is most real charity sites. Measured on the first live delivery:
+            #   15 failed assets, all of them 404/410 on the live site too,
+            #   blocked a capture that had reached 589 of 590 entries with ZERO
+            #   page-fetch failures.
+            #
+            # So completeness is enforced here, on the report's own numbers, and
+            # asset health is reported. `verify-no-legacy` remains the hard gate
+            # on whether the exported site actually stands alone.
+            local report="$RUNNER_TEMP/capture/site/wp-capture-report.json"
+            if [ ! -f "$report" ]; then
+              echo "::error::$label produced no report at $report (exit $rc). Nothing to assess."
+              return 1
+            fi
+            if [ "$rc" -ge 2 ]; then
+              echo "::error::capture-wordpress-api.mjs exited $rc for $label — usage error or crash, not a gate result."
+              return 1
+            fi
+            node scripts/assess-capture-completeness.mjs \
+              --report "$report" --min-percent "$MIN_PERCENT" || return 1
+            # Each host overwrites the shared report path, so keep a per-host
+            # copy: the artifact has to show what EACH capture did, not just
+            # whichever ran last.
+            cp "$report" "$RUNNER_TEMP/capture/site/wp-capture-report.${label}.json"
+            return 0
+          }
+
+          capture_one "$DOMAIN" "" "apex" || exit 1
+
+          # `MOUNTS` is what `resolve` already validated, as space-separated
+          # `host=mount` pairs. Re-using its result rather than re-parsing the
+          # raw input means the thing that was checked and the thing that runs
+          # cannot drift apart.
+          mounted=0
+          for pair in ${MOUNTS:-}; do
+            host="${pair%%=*}"
+            mount="${pair#*=}"
+            [ -n "$host" ] && [ -n "$mount" ] && [ "$host" != "$mount" ] || {
+              echo "::error::malformed mount pair '$pair' — resolve emitted something this loop cannot read."
+              exit 1
+            }
+            capture_one "$host" "$mount" "$mount" || exit 1
+            mounted=$((mounted + 1))
+          done
+
+          echo "Captured 1 apex + $mounted mounted host(s)."
 
       # Runs BEFORE integration, so the forms are dead in the artifact too and
       # a later stage cannot accidentally publish the un-neutralized capture.

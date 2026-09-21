@@ -223,6 +223,81 @@ def test_ignore_hosts_normalize_and_dedupe():
     assert "ignore_hosts=a.org,b.org" in outputs, outputs
 
 
+# --- extra_hosts: folding a charity's subdomains into one repo ---------------
+
+
+def test_extra_hosts_is_optional_and_defaults_to_no_mounts():
+    """A single-hostname site must be completely unaffected. Asserted on the
+    OUTPUT rather than the exit code: an unset input that aborted the step under
+    `set -u` would also be caught by every other test here, but a silently empty
+    mount list that still reported success would not."""
+    proc, outputs = run_resolve()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "mount_count=0" in outputs, outputs
+    assert "mounts=\n" in outputs or outputs.rstrip().endswith("mounts="), outputs
+
+
+def test_extra_hosts_parses_into_host_equals_mount_pairs():
+    proc, outputs = run_resolve(
+        INPUT_EXTRA_HOSTS="school.example.org => /school\npublications.example.org => publications"
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "mounts=school.example.org=school publications.example.org=publications" in outputs, outputs
+    assert "mount_count=2" in outputs, outputs
+
+
+def test_extra_hosts_refuses_the_apex_domain():
+    """Mounting the apex would capture the same site twice, the second time into
+    a subdirectory, and the completeness gate would pass for both."""
+    proc, _ = run_resolve(INPUT_EXTRA_HOSTS="example.org => /main")
+    assert proc.returncode != 0, proc.stdout
+    assert "apex domain" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_extra_hosts_refuses_an_empty_mount():
+    """An empty mount silently merges a subdomain INTO the apex's routes, where
+    it collides slug for slug — the expensive failure this validation exists
+    for, and the one that looks like a successful run."""
+    proc, _ = run_resolve(INPUT_EXTRA_HOSTS="school.example.org => /")
+    assert proc.returncode != 0, proc.stdout
+    assert "collide" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_extra_hosts_refuses_overlapping_mounts():
+    proc, _ = run_resolve(
+        INPUT_EXTRA_HOSTS="a.example.org => /x\nb.example.org => /x/y"
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "overlaps" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_extra_hosts_validation_happens_before_any_network_work():
+    """`resolve` reaches no live site. Validating here is what keeps a typo from
+    costing a 15-minute crawl AND a human approval before it is noticed."""
+    resolve_job = load_workflow(WORKFLOW)["jobs"]["resolve"]
+    assert "environment" not in resolve_job, resolve_job
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    assert "parse-host-mounts.mjs" in script, script
+
+
+def test_the_capture_step_mounts_each_extra_host():
+    """Each host is captured with its own `--mount`, and gated on its OWN
+    completeness report: an aggregate across hosts would let a 40% capture of a
+    110-page subdomain hide behind a complete apex."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert "--mount" in run, run
+    assert "capture_one" in run, run
+    # The apex is captured unmounted, at the root.
+    assert 'capture_one "$DOMAIN" "" "apex"' in run, run
+    # Every host runs the same assessment, inside the function.
+    assert run.count("assess-capture-completeness.mjs") == 1, run
+
+
+def test_parse_host_mounts_is_self_tested_in_the_gate():
+    gate = step_run(WORKFLOW, "resolve", "Offline self-tests (gate every later job)")
+    assert "parse-host-mounts.mjs --self-test" in gate, gate
+
+
 # --- job wiring -------------------------------------------------------------
 
 

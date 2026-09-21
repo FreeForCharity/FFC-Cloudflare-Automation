@@ -84,8 +84,25 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 # semantics under test are identical in both hosts.
 PWSH_SHELLS = frozenset({"pwsh", "powershell"})
 
-EXPRESSION_TOKEN = "__GHA_EXPRESSION__"
-EXPRESSION_RE = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
+# NOT masked: `${{ … }}` is left in the body deliberately.
+#
+# The sibling guard `check-pwsh-workflow-invocations.py` blanks GitHub
+# expressions before parsing, because it hands the body to the PowerShell
+# parser, which reads `${{` as a brace-quoted variable name. This scanner does
+# not parse PowerShell -- it brace-matches and quote-tracks -- and `${{` / `}}`
+# are brace-BALANCED by construction, so masking cannot change a verdict here.
+#
+# Measured rather than assumed, because a masking step is cheap to add and
+# impossible to notice is dead: eight bodies were scanned with masking and with
+# it stubbed out, including a quoted brace (`'{'`), an embedded double quote, a
+# `#`, a multi-line expression, an expression inside the `if` block and one as
+# the final statement. **All eight returned identical verdicts**, and a mutation
+# deleting the mask survived the whole test module. It was removed rather than
+# pinned by a source-shape test, which would have turned the table green while
+# asserting a spelling instead of a behaviour. The expression-bearing fixtures
+# in `test_pwsh_exit_downgrade.py` are kept -- they are real coverage of the
+# quote-aware scanner against expression text, which is what actually protects
+# this.
 
 # `$name = $LASTEXITCODE`, optionally followed by a comment.
 CAPTURE_RE = re.compile(
@@ -112,20 +129,6 @@ class Finding:
 
     def __str__(self) -> str:
         return f"line {self.line} [{self.kind}] ${self.variable}: {self.detail}"
-
-
-def mask_expressions(text: str) -> str:
-    """Replace `${{ ... }}` with a bare token, preserving the line count.
-
-    `${{ inputs.x }}` is not PowerShell. Left in place its braces are counted by
-    the block scanner below, which would report a spurious `unbalanced-if-block`
-    on a body that is perfectly well formed.
-    """
-
-    def _replace(match: re.Match) -> str:
-        return EXPRESSION_TOKEN + "\n" * match.group(0).count("\n")
-
-    return EXPRESSION_RE.sub(_replace, text)
 
 
 def _strip_comments(line: str) -> str:
@@ -206,8 +209,7 @@ def _last_statement(lines: list[str]) -> tuple[int, str] | None:
 
 def scan_body(text: str) -> list[Finding]:
     """Findings for one `run:` body written in PowerShell."""
-    body = mask_expressions(text)
-    lines = body.splitlines()
+    lines = text.splitlines()
 
     captured = [
         (index, match.group("var"))

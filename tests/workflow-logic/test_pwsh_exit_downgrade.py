@@ -201,17 +201,40 @@ if ($code -ne 0) {
 
 
 def test_a_github_expression_does_not_read_as_an_unbalanced_block():
-    """`${{ inputs.x }}` is not PowerShell; unmasked its braces skew the count."""
-    body = """
-$domain = '${{ inputs.domain }}'
+    """`${{ … }}` reaches the scanner unmasked, on purpose (see the guard's
+    comment). These bodies are the check that leaving it there is safe."""
+    bodies = [
+        "$domain = '${{ inputs.domain }}'",
+        "$sep = '${{ inputs.sep == '{' && 'a' || 'b' }}'",
+        "$multi = '${{ inputs.a\n  && inputs.b }}'",
+    ]
+    for prefix in bodies:
+        body = (
+            prefix
+            + """
 $code = $LASTEXITCODE
 if ($code -ne 0) {
   Write-Warning "tolerated: $code"
 }
 "done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 """
+        )
+        assert _kinds(body) == [guard.NO_EXIT], (
+            f"expression text must not manufacture an UNBALANCED, and must not hide "
+            f"the real finding; {prefix!r} gave {_kinds(body)!r}"
+        )
+
+
+def test_an_expression_inside_the_tolerated_block_does_not_hide_the_finding():
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "${{ inputs.msg }} $code"
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
     assert _kinds(body) == [guard.NO_EXIT], (
-        f"expression masking must not manufacture an UNBALANCED; got {_kinds(body)!r}"
+        f"an expression inside the block must not change the verdict; got {_kinds(body)!r}"
     )
 
 

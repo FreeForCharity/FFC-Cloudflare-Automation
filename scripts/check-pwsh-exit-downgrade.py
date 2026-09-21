@@ -229,7 +229,15 @@ def _if_block(code_lines: list[str], start: int) -> tuple[int, str] | None:
             if ch == "{":
                 depth += 1
                 seen_open = True
-            elif ch == "}":
+            elif ch == "}" and seen_open:
+                # `and seen_open` is load-bearing, not defensive. The scan can
+                # START on a `} elseif (...) {` header -- `test_re` matches that
+                # spelling on purpose -- and that leading `}` closes the PREVIOUS
+                # block, not this one. Counting it drove depth to -1, so the
+                # trailing `{` brought it back to 0 and the block was declared
+                # closed on its own header line: the body was never examined, an
+                # `exit` inside it never seen, and a propagating block reported
+                # as a downgrade (Copilot HIGH, #1347).
                 depth -= 1
         if seen_open and depth <= 0:
             return index, "\n".join(collected)

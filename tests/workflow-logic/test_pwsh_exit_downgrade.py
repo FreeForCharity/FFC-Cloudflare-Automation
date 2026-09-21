@@ -36,19 +36,38 @@ WHICH OF THE STRING-LITERAL TESTS ACTUALLY DISCRIMINATE (measured, #1347)
     * **Doubled quotes and the single-quote backtick — correctness only, NOT
       reachable.** The reading of the code was accurate, but no verdict moves:
       11 candidate bodies built to exploit it (doubled quotes followed by a `{`
-      or a `#`, a backtick against the closing quote, a backtick-escaped quote)
-      returned **identical verdicts on both revisions**. The reason is
-      structural — an adjacent doubled quote is two toggles that cancel, so
-      parity is preserved, and the backtick mis-parse only runs a literal to
-      end-of-line, where this line-based scanner resets anyway. Their
-      individual mutations survive this module.
+      or a `#`, a backtick against the closing quote) returned **identical
+      verdicts on both revisions**. The reason is structural — an adjacent
+      doubled quote is two toggles that cancel, so parity is preserved, and the
+      backtick mis-parse only runs a literal to end-of-line, where this
+      line-based scanner resets anyway. Their individual mutations survive.
 
-    So `test_a_doubled_double_quote_…`, `test_a_doubled_single_quote_…`,
-    `test_a_backtick_is_literal_…` and `test_a_backtick_escaped_quote_…` are
-    **regression pins, not discriminators**, and are labelled that way so a
-    later reader does not mistake them for evidence. They are kept because they
-    pin the lexer as a whole: deleting `_scan_line` outright reddens 8 tests in
-    this module, these four among them.
+    So `test_a_doubled_double_quote_…`, `test_a_doubled_single_quote_…` and
+    `test_a_backtick_is_literal_…` are **regression pins, not discriminators**,
+    and are labelled that way so a later reader does not mistake them for
+    evidence. They are kept because they pin the lexer as a whole: deleting
+    `_scan_line` outright reddens 8 tests in this module, these three among
+    them.
+
+    `test_a_backtick_escaped_quote_…` was in that list until Copilot pointed
+    out the fixture did not contain what its name claimed -- a backslash and a
+    backtick escaping a SPACE, rather than a backtick-escaped double quote.
+    With the real sequence it **discriminates**: removing the backtick branch
+    from `_scan_line` now reddens it, where before the mutation survived. A
+    fixture that tests something easier than its name is the quietest way for a
+    suite to overstate itself, and it was found by review, not by the mutation
+    pass -- the mutation pass had already scored that branch as untested and
+    was right for the wrong reason.
+
+SECOND REVIEW ROUND (#1347, Copilot HIGH)
+    `test_a_closing_brace_on_the_elseif_header_does_not_close_the_new_block`
+    and its `…_still_reports_a_genuine_downgrade` sibling cover a real false
+    positive: `_if_block` counted the leading `}` of a `} elseif (...) {`
+    header, which belongs to the PREVIOUS block, so depth returned to 0 on the
+    header line and the block was declared closed before its body was read. An
+    `exit` inside it was invisible and a propagating block was reported as a
+    downgrade. `test_re` matches that spelling deliberately, so it is a shape
+    the guard was written for, not an exotic input.
 """
 
 from __future__ import annotations
@@ -204,6 +223,47 @@ if ($somethingElse) { exit 1 }
     )
 
 
+def test_a_closing_brace_on_the_elseif_header_does_not_close_the_new_block():
+    """`} elseif (...) {` -- the leading `}` closes the PREVIOUS block.
+
+    Counting it drove depth to -1, the trailing `{` brought it back to 0, and
+    the block was declared closed on its own header line. The body was then
+    never examined, so the `exit $code` inside it was invisible and a
+    PROPAGATING block was reported as a downgrade (Copilot HIGH, #1347).
+    `test_re` matches this spelling deliberately, so it is not an exotic input.
+    """
+    body = """
+$code = $LASTEXITCODE
+if ($somethingElse -eq 1) {
+  Write-Output 'a'
+} elseif ($code -ne 0) {
+  exit $code
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [], (
+        "the elseif block propagates via `exit $code`, so there is nothing to "
+        f"report; got {_kinds(body)!r}"
+    )
+
+
+def test_the_elseif_form_still_reports_a_genuine_downgrade():
+    """The other polarity of the same fix: having stopped closing the block on
+    its header, the scanner must still read the body and find the downgrade."""
+    body = """
+$code = $LASTEXITCODE
+if ($somethingElse -eq 1) {
+  Write-Output 'a'
+} elseif ($code -ne 0) {
+  Write-Warning "tolerated: $code"
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [guard.NO_EXIT], (
+        f"the elseif block tolerates the failure and nothing exits; got {_kinds(body)!r}"
+    )
+
+
 def test_an_unclosable_if_block_is_reported_rather_than_skipped():
     body = """
 $code = $LASTEXITCODE
@@ -309,12 +369,18 @@ if ($code -ne 0) {
 
 
 def test_a_backtick_escaped_quote_inside_a_double_quoted_string_is_data():
-    """REGRESSION PIN, not a discriminator -- passes on the pre-fix revision too
-    (see the module docstring): unreachable, not merely unexercised."""
+    """A backtick-escaped DOUBLE QUOTE, which is what the name says and what the
+    first version of this fixture did not contain -- it held a backtick escaping
+    a space, so it exercised nothing the plain cases did not (Copilot, #1347).
+
+    With the real sequence the test discriminates: if the backtick does not
+    escape, the `"` ends the literal, the `{` after it counts as syntax, and the
+    block scanner reports `unbalanced-if-block` instead of the real finding.
+    """
     body = """
 $code = $LASTEXITCODE
 if ($code -ne 0) {
-  Write-Warning "an escaped quote \\` is data { not a brace"
+  Write-Warning "an escaped quote `" is still inside { not a brace"
 }
 "done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 """

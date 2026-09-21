@@ -28,7 +28,14 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import WORKFLOWS, child_env, forward_slashes, load_workflow, step_run
+from wf_extract import (
+    WORKFLOWS,
+    child_env,
+    find_step,
+    forward_slashes,
+    load_workflow,
+    step_run,
+)
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -1274,7 +1281,177 @@ def test_min_capture_percent_is_validated():
     assert "must be a whole number between 1 and 100" in proc.stdout, proc.stdout
 
 
+
+
+def _step_names(job_id: str) -> list[str]:
+    """Step names of one job, in order."""
+    wf = load_workflow(WORKFLOW)
+    return [s.get("name", "") for s in wf["jobs"][job_id]["steps"]]
+
+
+def _index_of(job_id: str, substring: str) -> int:
+    for i, name in enumerate(_step_names(job_id)):
+        if substring in name:
+            return i
+    raise AssertionError(f"no step matching {substring!r} in job {job_id}: {_step_names(job_id)}")
+
+
+def _capture_script_text() -> str:
+    return (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+
+
+GUARD = "the tree must be publishable"
+
+
+def test_the_publishable_size_guard_runs_in_BOTH_jobs():
+    """The convert-job copy is the early warning; the deliver-job copy is the
+    one that actually protects the push.
+
+    Neither is redundant. `deliver` can run against a capture REUSED from a run
+    that predates the PDF pass, so a convert-side check alone proves nothing
+    about the tree being pushed; and a deliver-side check alone moves the
+    failure back behind the human approval, which is the cost this guard
+    exists to avoid.
+    """
+    for job in ("convert", "deliver"):
+        i = _index_of(job, GUARD)
+        script = step_run(WORKFLOW, job, GUARD)
+        assert "check-publishable-size.mjs ffc-ex" in script, (job, script)
+        assert i >= 0
+
+
+def test_the_size_guard_runs_before_the_steps_it_exists_to_save():
+    """Fail in milliseconds, not after a multi-minute build or behind a push.
+
+    The guard only reads file sizes off disk. Ordering it later would still
+    catch the problem, but only once the run has spent the very time this
+    check exists to save.
+    """
+    assert _index_of("convert", GUARD) < _index_of("convert", "Build the static export")
+    assert _index_of("deliver", GUARD) < _index_of("deliver", "Commit and open a draft PR")
+
+
+def test_the_size_guard_is_self_tested_before_anything_uses_it():
+    """Same rule every other decision-making script in this workflow follows:
+    a guard that decides whether a run may proceed does not run unverified."""
+    script = step_run(WORKFLOW, "resolve", "Offline self-tests")
+    assert "node scripts/check-publishable-size.mjs --self-test" in script
+
+
+def test_max_pdf_mb_is_validated_before_the_network():
+    """A bad budget must cost seconds, not a 40-minute crawl AND an approval."""
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    assert "max_pdf_mb must be a whole number of MB between 1 and 100000" in script
+    assert 'echo "max_pdf_mb=$max_pdf_mb"' in script
+
+
+def test_max_pdf_mb_is_bounded_to_match_the_capture():
+    """`resolve` and the capture must agree on the range, or the earlier check
+    is decorative.
+
+    Measured: `capture-wordpress-api.mjs` declares
+    `['max-pdf-mb', ..., { min: 1, max: 100000 }]` and exits 2 with
+    "expected an integer 1..100000". A resolve that only checks positivity lets
+    999999 through, and the run then dies in `convert` -- after checkout and
+    setup -- which is exactly the "fail before the network" promise this job
+    exists to keep.
+    """
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    assert '[ "$max_pdf_mb" -gt 100000 ]' in script, script[-400:]
+    assert "between 1 and 100000" in script
+
+    # The input description must not tell an operator to do the thing the
+    # bound refuses; the first draft said "set to a very large number".
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["max_pdf_mb"]["description"]
+    assert "very large number" not in desc, desc
+    assert "100000" in desc, desc
+
+
+def test_max_pdf_mb_reaches_the_capture():
+    """The input is inert unless it is BOTH exported to the step and appended
+    to the capture's argv. Asserting only one of the two passes while the
+    budget silently stays at the script's own default."""
+    wf = load_workflow(WORKFLOW)
+    step = find_step(wf, "convert", "Capture the live WordPress site")
+    assert step["env"]["MAX_PDF_MB"] == "${{ needs.resolve.outputs.max_pdf_mb }}", step["env"]
+    assert 'args+=(--max-pdf-mb "$MAX_PDF_MB")' in step["run"]
+
+
+def test_the_resolve_job_publishes_max_pdf_mb():
+    """A job output that names a step output the step never sets resolves to
+    the empty string, and an empty budget is not an error anywhere downstream
+    — it simply stops being applied."""
+    wf = load_workflow(WORKFLOW)
+    assert wf["jobs"]["resolve"]["outputs"]["max_pdf_mb"] == (
+        "${{ steps.resolve.outputs.max_pdf_mb }}"
+    )
+
+
+def test_the_pdf_budget_default_is_below_githubs_hard_limit():
+    """90, not 100.
+
+    Ghostscript's output size is not predictable from its input, so a budget
+    set AT the limit lets a file land at 99.7 MB on one run and 100.4 MB on the
+    next — and that difference only shows up at the push, after the approval.
+    """
+    wf = load_workflow(WORKFLOW)
+    # YAML parses a bare `on:` key as the boolean True, so this cannot be
+    # read as wf["on"] — the same dance test_workflow_is_dispatch_only does.
+    triggers = wf[True] if True in wf else wf["on"]
+    assert triggers["workflow_dispatch"]["inputs"]["max_pdf_mb"]["default"] == "90"
+
+
+def test_the_pdf_ladder_excludes_the_rung_that_inflates_a_file():
+    """/prepress measured 176% of its input on a scan-shaped fixture. A pass
+    that reports an optimisation while making the file bigger is worse than no
+    pass, so that rung is not on the ladder at all."""
+    src = _capture_script_text()
+    ladder = src.split("export const PDF_DOWNSAMPLE_LADDER = ")[1].split(";")[0]
+    assert "/prepress" not in ladder, ladder
+    assert "/printer" not in ladder, ladder
+    assert "/ebook" in ladder and "/screen" in ladder, ladder
+
+
+def test_a_shrunk_pdf_keeps_its_name():
+    """The image pass renames (.png -> .webp) and must rewrite every reference
+    to match. The PDF pass must NOT rename: a renamed PDF strands every link to
+    it, including links in places the capture never parses, such as a sitemap
+    or a PDF that links to another PDF."""
+    src = _capture_script_text()
+    call = src.split("if (optimizePdfs && shouldShrinkPdf(")[1].split("usedAssetNames.add(name)")[0]
+    assert "name = " not in call, f"the PDF pass must not reassign the local name:\n{call}"
+    assert "buf = shrunk.buffer;" in call
+
+
+def test_ghostscript_absence_is_distinguished_from_a_bad_pdf():
+    """Opposite responses — stop trying at all, versus skip this one file —
+    and they are indistinguishable by whether an output file appeared. An
+    earlier draft inferred it from existsSync and would have announced
+    'ghostscript is not installed' on the first corrupt PDF, on a box where it
+    is installed and working."""
+    src = _capture_script_text()
+    assert "err.code === 'ENOENT'" in src
+
+
+def test_pdfs_still_over_budget_are_named_not_counted():
+    """These are exactly the files a push will reject. A count cannot be acted
+    on without re-running the crawl that produced it."""
+    src = _capture_script_text()
+    assert "pdfShrink.stillOverBudget.join(', ')" in src
+    assert "will be REJECTED by a" in src
+
+
+# Built HERE, at the end of the module, and not one line earlier. This is a
+# snapshot of `globals()` taken where it appears, so a roster placed mid-file
+# silently omits every test defined below it -- this module defined 108 and ran
+# 97 that way, reporting a clean green over a suite 11 tests smaller than the
+# one in the file. Nothing in the module's own output can show that; only
+# run_all.py's roster guard catches it, as "defines N but reported M" (L194).
+# Keep this line last.
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+
 
 if __name__ == "__main__":
     failures = []

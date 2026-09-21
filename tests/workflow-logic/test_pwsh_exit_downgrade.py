@@ -20,6 +20,35 @@ The propagation tests exist for the opposite polarity. `$code = $LASTEXITCODE`
 followed by `if ($code -ne 0) { exit $code }` is correct, common, and must stay
 silent; a guard that flags it would fire on most of this repo's pwsh steps and
 be switched off within a week.
+
+WHICH OF THE STRING-LITERAL TESTS ACTUALLY DISCRIMINATE (measured, #1347)
+    Copilot raised two defects in the first revision's quote handling. They are
+    not worth the same, and the tests say so rather than presenting eight
+    equally-weighted green rows:
+
+    * **Terminator keywords inside a literal — REAL, and the serious one.**
+      `Write-Warning "tolerated exit $code"` matched `TERMINATES_RE`, so a live
+      downgrade was filed as propagation and never checked. Replayed against
+      the pre-fix revision, `test_the_word_exit_inside_a_warning_string_…`,
+      `…_throw_…`, `test_an_error_annotation_without_an_exit_…` and
+      `test_a_string_holding_only_the_word_exit_…` all FAIL there and pass
+      here. Those four are discriminators.
+    * **Doubled quotes and the single-quote backtick — correctness only, NOT
+      reachable.** The reading of the code was accurate, but no verdict moves:
+      11 candidate bodies built to exploit it (doubled quotes followed by a `{`
+      or a `#`, a backtick against the closing quote, a backtick-escaped quote)
+      returned **identical verdicts on both revisions**. The reason is
+      structural — an adjacent doubled quote is two toggles that cancel, so
+      parity is preserved, and the backtick mis-parse only runs a literal to
+      end-of-line, where this line-based scanner resets anyway. Their
+      individual mutations survive this module.
+
+    So `test_a_doubled_double_quote_…`, `test_a_doubled_single_quote_…`,
+    `test_a_backtick_is_literal_…` and `test_a_backtick_escaped_quote_…` are
+    **regression pins, not discriminators**, and are labelled that way so a
+    later reader does not mistake them for evidence. They are kept because they
+    pin the lexer as a whole: deleting `_scan_line` outright reddens 8 tests in
+    this module, these four among them.
 """
 
 from __future__ import annotations
@@ -183,6 +212,126 @@ if ($code -ne 0) {
 """
     assert guard.UNBALANCED in _kinds(body), (
         f"a block the scanner cannot delimit is its blind spot; got {_kinds(body)!r}"
+    )
+
+
+# --- string literals are data, not syntax (Copilot, #1347) ------------------
+#
+# These are the highest-value tests in the module after the two halves of
+# #1068's evidence. Each one was a live defect in the first revision, and every
+# one of them failed SILENTLY and in the permissive direction: the guard said
+# nothing and the reader had no way to know it had stopped looking.
+
+
+def test_the_word_exit_inside_a_warning_string_is_not_propagation():
+    """The false negative that matters most: a downgrade whose message happens
+    to contain the word `exit` was classified as propagation and skipped."""
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "tolerated exit $code from the preflight"
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [guard.NO_EXIT], (
+        "a terminator keyword inside a string literal must not count as "
+        f"propagation -- that is a silent miss in a guard; got {_kinds(body)!r}"
+    )
+
+
+def test_the_word_throw_inside_a_string_is_not_propagation():
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "will not throw for $code"
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [guard.NO_EXIT], f"got {_kinds(body)!r}"
+
+
+def test_an_error_annotation_without_an_exit_is_still_a_downgrade():
+    """`::error::` annotates; it does not change the step's exit status, so a
+    block that annotates and falls through is still relying on the epilogue."""
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Output "::error::preflight failed with $code"
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [guard.NO_EXIT], (
+        f"an annotation is not a terminator; got {_kinds(body)!r}"
+    )
+
+
+def test_a_doubled_double_quote_does_not_end_the_string():
+    """REGRESSION PIN, not a discriminator -- this passes on the pre-fix
+    revision too (see the module docstring). `""` is PowerShell's escape for a
+    literal quote; reading it as close-then-reopen is wrong, but it is two
+    toggles and they cancel, so no verdict was ever reachable through it."""
+    body = '''
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "he said ""hi"" # not a comment { not a brace"
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+'''
+    assert _kinds(body) == [guard.NO_EXIT], (
+        f"a doubled quote must not end the literal; got {_kinds(body)!r}"
+    )
+
+
+def test_a_doubled_single_quote_does_not_end_the_string():
+    """REGRESSION PIN, not a discriminator -- passes on the pre-fix revision too
+    (see the module docstring): unreachable, not merely unexercised."""
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning 'it''s tolerated # not a comment { not a brace'
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [guard.NO_EXIT], f"got {_kinds(body)!r}"
+
+
+def test_a_backtick_is_literal_inside_a_single_quoted_string():
+    """REGRESSION PIN, not a discriminator -- passes on the pre-fix revision too
+    (see the module docstring): unreachable, not merely unexercised."""
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning 'a backtick ` is literal here'
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [guard.NO_EXIT], f"got {_kinds(body)!r}"
+
+
+def test_a_backtick_escaped_quote_inside_a_double_quoted_string_is_data():
+    """REGRESSION PIN, not a discriminator -- passes on the pre-fix revision too
+    (see the module docstring): unreachable, not merely unexercised."""
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "an escaped quote \\` is data { not a brace"
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [guard.NO_EXIT], f"got {_kinds(body)!r}"
+
+
+def test_a_string_holding_only_the_word_exit_is_not_a_terminal_exit():
+    """The last statement is a literal, not an `exit`."""
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "tolerated: $code"
+}
+"exit 0"
+"""
+    assert _kinds(body) == [guard.NO_EXIT], (
+        f"a quoted 'exit 0' is a string, not a statement; got {_kinds(body)!r}"
     )
 
 

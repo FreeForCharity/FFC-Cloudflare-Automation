@@ -111,7 +111,15 @@ CAPTURE_RE = re.compile(
 )
 
 # Terminators that make an `if` block a PROPAGATION rather than a downgrade.
-TERMINATES_RE = re.compile(r"(?:^|[\s;{])(?:exit|throw)\b|::error::", re.IGNORECASE)
+#
+# `::error::` is deliberately NOT one of them. An annotation does not change the
+# step's exit status -- only `exit` and `throw` do -- so a block that annotates
+# and then falls through is still relying on the runner epilogue, which is the
+# whole subject of this guard. It was in this set in the first revision, and it
+# only ever matched because the scanner was reading INSIDE string literals; once
+# literals are blanked (see `_scan_line`) an `::error::` written the way anyone
+# actually writes it, `Write-Output "::error::…"`, is invisible here anyway.
+TERMINATES_RE = re.compile(r"(?:^|[\s;{])(?:exit|throw)\b", re.IGNORECASE)
 
 EXIT_STATEMENT_RE = re.compile(r"^exit\b", re.IGNORECASE)
 
@@ -131,89 +139,126 @@ class Finding:
         return f"line {self.line} [{self.kind}] ${self.variable}: {self.detail}"
 
 
-def _strip_comments(line: str) -> str:
-    """Drop a trailing `#` comment that is not inside a quoted string."""
-    out: list[str] = []
+def _scan_line(line: str) -> tuple[str, str]:
+    """Split one line into `(code, visible)`, both the same length.
+
+    `visible` is the line with any trailing `#` comment removed and string
+    literals left intact -- what a human should be shown quoted back at them.
+
+    `code` is that same span with the **contents of every string literal
+    blanked to spaces**. Every syntactic question this guard asks is asked of
+    `code`, so a brace, a `#`, or the word `exit` inside a literal cannot be
+    read as syntax. The first revision asked them of the raw text and was wrong
+    three ways, each a SILENT one (Copilot, #1347):
+
+      * `Write-Warning "tolerated exit $code"` matched `TERMINATES_RE`, so a
+        real downgrade was classified as propagation and the step went
+        unchecked -- a false negative in a guard, which is the failure class
+        this whole PR is about;
+      * a doubled quote (`""` / `''`, PowerShell's escape for a literal quote
+        in both string kinds) was read as close-then-reopen. That inverts the
+        parity for the rest of the line, so a later `#` looked like a comment
+        and a later `}` like syntax;
+      * a backtick was treated as an escape inside SINGLE-quoted strings, where
+        PowerShell gives it no special meaning -- so `'a`'` consumed the real
+        closing quote.
+
+    Known limit, stated rather than hidden: this is line-based, so a string
+    that spans lines (including a here-string) resets at the newline. The
+    failure direction is a brace that stops being counted, which surfaces as
+    `unbalanced-if-block` -- a reported finding, not a silent pass.
+    """
+    code: list[str] = []
+    visible: list[str] = []
     quote: str | None = None
-    index = 0
-    while index < len(line):
-        ch = line[index]
-        if quote:
-            # PowerShell escapes with a backtick, and doubles a quote inside a
-            # string of the same kind. Either way the next character is data.
-            if ch == "`":
-                out.append(ch)
-                index += 1
-                if index < len(line):
-                    out.append(line[index])
-                    index += 1
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if quote is None:
+            if ch == "#":
+                break
+            visible.append(ch)
+            code.append(" " if ch in ("'", '"') else ch)
+            if ch in ("'", '"'):
+                quote = ch
+            i += 1
+            continue
+
+        # Inside a string literal.
+        if quote == '"' and ch == "`" and i + 1 < n:
+            # Backtick escapes the next character -- double-quoted strings only.
+            visible.extend((ch, line[i + 1]))
+            code.extend("  ")
+            i += 2
+            continue
+        if ch == quote:
+            if i + 1 < n and line[i + 1] == quote:
+                # A doubled quote is an escaped literal quote in BOTH string
+                # kinds; the literal does not end here.
+                visible.extend((ch, line[i + 1]))
+                code.extend("  ")
+                i += 2
                 continue
-            if ch == quote:
-                quote = None
-            out.append(ch)
-        elif ch in ("'", '"'):
-            quote = ch
-            out.append(ch)
-        elif ch == "#":
-            break
-        else:
-            out.append(ch)
-        index += 1
-    return "".join(out)
+            quote = None
+            visible.append(ch)
+            code.append(" ")
+            i += 1
+            continue
+        visible.append(ch)
+        code.append(" ")
+        i += 1
+    return "".join(code), "".join(visible)
 
 
-def _if_block(lines: list[str], start: int) -> tuple[int, str] | None:
-    """Return (last_line_index, block_text) for the `if` opening at `start`.
+def _if_block(code_lines: list[str], start: int) -> tuple[int, str] | None:
+    """Return (last_line_index, block_code) for the `if` opening at `start`.
 
-    Brace-matched across lines, ignoring braces inside quoted strings. Returns
-    None when the block never closes -- the caller reports that as a finding
-    rather than skipping the step.
+    Brace-matched across lines over the string-blanked `code` view, so a brace
+    inside a literal is already a space by the time it gets here. Returns None
+    when the block never closes -- the caller reports that as a finding rather
+    than skipping the step.
     """
     depth = 0
     seen_open = False
     collected: list[str] = []
-    for index in range(start, len(lines)):
-        stripped = _strip_comments(lines[index])
-        collected.append(stripped)
-        quote: str | None = None
-        pos = 0
-        while pos < len(stripped):
-            ch = stripped[pos]
-            if quote:
-                if ch == "`":
-                    pos += 2
-                    continue
-                if ch == quote:
-                    quote = None
-            elif ch in ("'", '"'):
-                quote = ch
-            elif ch == "{":
+    for index in range(start, len(code_lines)):
+        line = code_lines[index]
+        collected.append(line)
+        for ch in line:
+            if ch == "{":
                 depth += 1
                 seen_open = True
             elif ch == "}":
                 depth -= 1
-            pos += 1
         if seen_open and depth <= 0:
             return index, "\n".join(collected)
     return None
 
 
-def _last_statement(lines: list[str]) -> tuple[int, str] | None:
-    """The last executable line of a body: (1-based line number, text)."""
-    for index in range(len(lines) - 1, -1, -1):
-        text = _strip_comments(lines[index]).strip()
-        if text:
-            return index + 1, text
+def _last_statement(
+    code_lines: list[str], visible_lines: list[str]
+) -> tuple[int, str, str] | None:
+    """The last executable line: (1-based line number, code, visible).
+
+    "Executable" is decided on `code`, so a line holding only a string literal
+    still counts while a line holding only a comment does not.
+    """
+    for index in range(len(code_lines) - 1, -1, -1):
+        if code_lines[index].strip():
+            return index + 1, code_lines[index].strip(), visible_lines[index].strip()
     return None
 
 
 def scan_body(text: str) -> list[Finding]:
     """Findings for one `run:` body written in PowerShell."""
-    lines = text.splitlines()
+    scanned = [_scan_line(line) for line in text.splitlines()]
+    code_lines = [code for code, _ in scanned]
+    visible_lines = [visible for _, visible in scanned]
 
     captured = [
         (index, match.group("var"))
-        for index, line in enumerate(lines)
+        for index, line in enumerate(code_lines)
         if (match := CAPTURE_RE.match(line))
     ]
     if not captured:
@@ -230,10 +275,10 @@ def scan_body(text: str) -> list[Finding]:
             r").*\)",
             re.IGNORECASE,
         )
-        for index, line in enumerate(lines):
-            if not test_re.match(_strip_comments(line)):
+        for index, line in enumerate(code_lines):
+            if not test_re.match(line):
                 continue
-            block = _if_block(lines, index)
+            block = _if_block(code_lines, index)
             if block is None:
                 findings.append(
                     Finding(
@@ -252,16 +297,16 @@ def scan_body(text: str) -> list[Finding]:
     if not downgraded:
         return findings
 
-    last = _last_statement(lines)
+    last = _last_statement(code_lines, visible_lines)
     if last is None:
         return findings
-    line_number, statement = last
+    line_number, statement_code, statement = last
 
-    if EXIT_STATEMENT_RE.match(statement):
+    if EXIT_STATEMENT_RE.match(statement_code):
         return findings
 
     names = ", ".join("$" + name for name in dict.fromkeys(downgraded))
-    if re.search(r"\bexit\b", statement, re.IGNORECASE):
+    if re.search(r"\bexit\b", statement_code, re.IGNORECASE):
         findings.append(
             Finding(
                 CONDITIONAL_EXIT,

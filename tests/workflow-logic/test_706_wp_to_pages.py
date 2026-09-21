@@ -322,6 +322,32 @@ def test_the_capture_step_mounts_each_extra_host():
     assert run.count("assess-capture-completeness.mjs") == 1, run
 
 
+def test_convert_has_time_to_finish_a_polite_multi_host_crawl():
+    """`timeout-minutes: 90` cut a healthy crawl in half. Measured on run
+    35659542248, three hostnames at delay_ms=2000: apex 40 min (1 of 1),
+    school 36 min (111 of 111), then the axe fell 14 minutes into
+    publications. Nothing was wrong — the run simply ran out of clock.
+
+    The failure mode is what makes this worth a test rather than a bigger
+    number. A `timeout-minutes` expiry reports as **cancelled**, not failed,
+    so it looks like a human pressed the button; it took a full re-read of
+    the log to establish the crawl had been healthy throughout.
+
+    And the slowness is deliberate. Crawling this charity's apex at the 250ms
+    default knocked its two subdomains offline twice, so `delay_ms` has to
+    stay high — the timeout must accommodate the politeness, not cap it.
+
+    Bounded at both ends on purpose: below the three-host projection (~3h)
+    the timeout is the thing that fails a good run, and at or above GitHub's
+    360-minute hard cap for hosted runners it stops being a backstop against
+    a genuinely stuck job."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    timeout = convert.get("timeout-minutes")
+    assert isinstance(timeout, int), convert
+    assert timeout >= 240, timeout
+    assert timeout < 360, timeout
+
+
 def test_ghostscript_is_installed_before_the_capture_that_needs_it():
     """#1348 shipped the PDF downsampling pass assuming `gs` was on the runner.
     Run 35634361425 measured that it is not:

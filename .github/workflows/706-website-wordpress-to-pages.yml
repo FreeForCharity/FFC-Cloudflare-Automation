@@ -518,7 +518,34 @@ jobs:
 
   convert:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # 90 minutes was not a budget, it was an unexamined default, and it cut a
+    # working crawl in half. Measured on run 35659542248 (three New Heights
+    # hostnames at delay_ms=2000):
+    #
+    #   apex           21:51:55 -> 22:31:57   40 min   1 of 1
+    #   school         22:31:57 -> 23:07:44   36 min   111 of 111
+    #   publications   23:07:44 -> CANCELLED  14 min   inventory only
+    #
+    # A `timeout-minutes` expiry is reported as **cancelled**, not failed, so it
+    # does not read as an error anywhere — the job list, the run summary and the
+    # check all say "cancelled", which looks like a human pressed the button.
+    # That cost a re-read of the whole log to discover the crawl had been
+    # healthy the entire time and simply ran out of clock 14 minutes into the
+    # third host.
+    #
+    # Why the crawl is slow ON PURPOSE. This charity is on shared hosting, and
+    # crawling the apex at the 250ms default took its two subdomains offline
+    # twice — measured: both answered when probed alone, both refused
+    # immediately after a sustained apex crawl. Raising `delay_ms` to 2000 fixed
+    # it (school went 0 -> 111 of 111). So a long run is the correct behaviour
+    # here, not a symptom, and the timeout has to accommodate the politeness
+    # rather than the other way around.
+    #
+    # 330 leaves headroom under GitHub's 360-minute hard cap for hosted runners,
+    # so a genuinely stuck job still dies rather than burning the maximum. This
+    # is a backstop, not a schedule: nothing waits on it, and a healthy
+    # three-host crawl at this delay projects to ~2.5-3 hours.
+    timeout-minutes: 330
     needs: resolve
     # Keyed on the NORMALIZED domain, so `https://Example.org/` and
     # `example.org` share a group. A workflow-level `concurrency:` cannot see a

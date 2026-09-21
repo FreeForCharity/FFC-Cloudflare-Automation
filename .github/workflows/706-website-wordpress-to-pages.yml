@@ -717,6 +717,24 @@ jobs:
           # capture of a 110-page subdomain hide behind a complete apex.
           capture_one() {
             local host="$1" mount="$2" label="$3"
+            # Every host writes THIS one path, so it must be cleared before each
+            # capture or a host that dies before writing one is assessed against
+            # the PREVIOUS host's report — and passes.
+            #
+            # Measured, run 35622301582: school.newheightseducation.org became
+            # unreachable, its capture aborted at "REST API is not usable"
+            # before writing anything, and the apex report from twelve minutes
+            # earlier was still sitting here. The gate below read it and
+            # reported `Captured 1 of 1 inventory entries (100.0%)` for a host
+            # that fetched nothing at all — byte-identical to the apex's
+            # summary, down to the apex's own asset-failure counts and its
+            # `www.newheightseducation.org` unlocalized host. Had the third
+            # host not hard-failed, the run would have delivered a site missing
+            # all 110 of that subdomain's pages while reporting three green
+            # hosts. The `[ ! -f "$report" ]` branch below was written for
+            # exactly this case and could not fire, because the file existed.
+            local report="$RUNNER_TEMP/capture/site/wp-capture-report.json"
+            rm -f "$report"
             local args=(--domain "$host" --out "$RUNNER_TEMP/capture/site" --max "$MAX" --delay "$DELAY")
             if [ -n "$mount" ]; then args+=(--mount "$mount"); fi
             if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
@@ -758,7 +776,6 @@ jobs:
             # So completeness is enforced here, on the report's own numbers, and
             # asset health is reported. `verify-no-legacy` remains the hard gate
             # on whether the exported site actually stands alone.
-            local report="$RUNNER_TEMP/capture/site/wp-capture-report.json"
             if [ ! -f "$report" ]; then
               echo "::error::$label produced no report at $report (exit $rc). Nothing to assess."
               return 1

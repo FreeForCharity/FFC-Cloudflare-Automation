@@ -322,6 +322,41 @@ def test_the_capture_step_mounts_each_extra_host():
     assert run.count("assess-capture-completeness.mjs") == 1, run
 
 
+def test_each_host_starts_from_no_report_so_a_stale_one_cannot_be_assessed():
+    """Every host writes the SAME report path, so it must be cleared before
+    each capture — otherwise a host that dies before writing one is assessed
+    against the PREVIOUS host's report, and passes.
+
+    Measured, run 35622301582: school.newheightseducation.org became
+    unreachable, its capture aborted at `REST API is not usable` before
+    writing anything, and the apex's report from twelve minutes earlier was
+    still on disk. The gate read that and reported `Captured 1 of 1 inventory
+    entries (100.0%)` for a host that fetched nothing at all — byte-identical
+    to the apex's summary, down to the apex's own asset-failure counts and its
+    `www.newheightseducation.org` unlocalized host. Had the third host not
+    hard-failed, the run would have delivered a site missing all 110 of that
+    subdomain's pages while reporting three green hosts.
+
+    The `[ ! -f "$report" ]` branch was written for exactly this case and
+    could not fire, because the file existed. A guard that cannot observe the
+    state it guards is not a weaker guard, it is an absent one.
+
+    Ordering carries the whole assertion. An `rm -f` placed after the capture
+    would delete the very report the gate is about to read, turning a silent
+    false pass into a loud false failure — the opposite defect, equally wrong."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert 'rm -f "$report"' in run, run
+    removed = run.index('rm -f "$report"')
+    captured = run.index('node scripts/capture-wordpress-api.mjs "${args[@]}" || rc=$?')
+    assessed = run.index("assess-capture-completeness.mjs")
+    assert removed < captured < assessed, (removed, captured, assessed)
+    # ...and INSIDE capture_one, so it runs once per host rather than once for
+    # the whole step. Cleared only at the top, the second host inherits the
+    # first host's report exactly as before.
+    body = run.split("capture_one() {", 1)[1].split("\n}", 1)[0]
+    assert 'rm -f "$report"' in body, body
+
+
 def test_the_per_host_report_is_labelled_by_HOST_not_by_MOUNT():
     """`label` is interpolated into a filename. A mount is a URL path and may
     legally nest (`/school/spring-2026`), so labelling by mount turns the `cp`

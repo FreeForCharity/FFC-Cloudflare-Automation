@@ -77,11 +77,18 @@ jobs:
           $outDir = Join-Path $env:RUNNER_TEMP 'domain-status-cloudflare'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
+          # Capture each callee's status IMMEDIATELY. `$LASTEXITCODE` is a single
+          # global slot: before #1068 neither of these two was inspected at all, so
+          # the DKIM call three statements down overwrote both and an audit that
+          # exited non-zero was silent. These two are NOT tolerated (#1068 AC2) --
+          # they are acted on at the end of the body, beside the `exit`.
           $audit = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -Audit *>&1
+          $auditExit = $LASTEXITCODE
           $auditPath = Join-Path $outDir 'cloudflare-audit.txt'
           $audit | Out-File -FilePath $auditPath -Encoding utf8
 
           $dry = & pwsh -NoProfile -File .\Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -DryRun *>&1
+          $dryExit = $LASTEXITCODE
           $dryPath = Join-Path $outDir 'cloudflare-dryrun.txt'
           $dry | Out-File -FilePath $dryPath -Encoding utf8
 
@@ -95,15 +102,46 @@ jobs:
             ''
           }
 
+          # An unauthenticated DKIM preflight does not fail loudly -- it reports every
+          # selector as missing, which is indistinguishable from a real finding and
+          # would now be swallowed by the tolerated-warning path below (#1068 AC2).
+          if ([string]::IsNullOrWhiteSpace($cfToken)) {
+            Write-Output '::error::Neither CLOUDFLARE_API_TOKEN_FFC nor CLOUDFLARE_API_TOKEN_CM is set: the Key Vault step exported no Cloudflare token. Refusing to run the DKIM preflight unauthenticated, which would report every selector as missing.'
+            exit 1
+          }
+
           $dkim = & pwsh -NoProfile -File .\scripts\m365-domain-preflight.ps1 -Domain $domain -SkipGraph -CloudflareToken $cfToken *>&1
           $dkimExit = $LASTEXITCODE
           $dkimPath = Join-Path $outDir 'cloudflare-dkim-check.txt'
           $dkim | Out-File -FilePath $dkimPath -Encoding utf8
           if ($dkimExit -ne 0) {
+            # TOLERATED (#1068 AC1): a non-zero DKIM preflight is the normal state for a
+            # domain that is not yet provisioned -- i.e. exactly the domain someone runs
+            # a status check on. The `exit 0` at the end of this body is what makes the
+            # downgrade real: without it the runner's appended `exit $LASTEXITCODE`
+            # re-exports this very code and fails the step anyway, skipping `summary`
+            # and `post_back` so the diagnostic goes silent when it has something to say.
             Write-Warning "m365-domain-preflight.ps1 (DKIM Cloudflare-only) exited with code $dkimExit (output saved to $dkimPath)"
           }
 
           "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          # Published `out_dir` first so the failure below still names readable files.
+          $fatal = @()
+          if ($auditExit -ne 0) {
+            $fatal += "Update-CloudflareDns.ps1 -Zone $domain -Audit exited with code $auditExit (output saved to $auditPath)"
+          }
+          if ($dryExit -ne 0) {
+            $fatal += "Update-CloudflareDns.ps1 -Zone $domain -EnforceStandard -DryRun exited with code $dryExit (output saved to $dryPath)"
+          }
+          if ($fatal.Count -gt 0) {
+            foreach ($message in $fatal) { Write-Output "::error::$message" }
+            exit 1
+          }
+
+          # Unconditional, and the last statement in the body on purpose: see the
+          # tolerated-warning comment above. Guarded by scripts/check-pwsh-exit-downgrade.py.
+          exit 0
 
       - name: Summarize Cloudflare results
         id: summary
@@ -270,6 +308,19 @@ jobs:
 
   summary:
     runs-on: ubuntu-latest
+    # DELIBERATELY NOT `if: always()` (#1068 AC3, decided rather than defaulted).
+    # The question was whether one job's failure should be allowed to silence the
+    # whole report. It no longer can for the reported cause: #1068 was a TOLERATED
+    # DKIM warning failing the `cloudflare` job, and that is fixed at its source, so
+    # reaching this point with a failed dependency now means a GENUINE failure.
+    # In that state both report jobs would be actively harmful rather than merely
+    # unhelpful: they `download-artifact` by name from the job that died, and they
+    # read `needs.<job>.outputs.*`, which a failed job leaves empty -- so they would
+    # either fail again at the download or trip their own fail-closed empty-mapping
+    # guard, trading a clean `skipped` for a second, misleading red. `post_back`
+    # additionally writes a comment on a charity-facing issue, and rendering a
+    # verdict about a domain from absent Cloudflare data is worse than rendering
+    # nothing. Revisit only together with a no-data rendering path for both jobs.
     needs: [cloudflare, m365]
 
     steps:

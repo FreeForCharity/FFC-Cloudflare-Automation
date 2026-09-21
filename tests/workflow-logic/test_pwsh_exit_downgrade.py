@@ -1,0 +1,348 @@
+"""Unit tests for the downgraded-`$LASTEXITCODE` guard (#1068).
+
+The load-bearing tests are `test_the_exact_pre_fix_101_body_is_a_finding` and
+`test_the_m365_sibling_in_the_same_file_is_clean`. They are the two halves of
+#1068's own evidence: the body that shipped and failed, and the body 160 lines
+below it in the same workflow that does the same thing correctly. A guard that
+cannot tell those two apart is worthless here, because the tree is clean by
+construction once the fix lands -- every other test in this module would also
+pass against a `scan_body` that returned `[]` unconditionally.
+
+`test_the_live_m365_step_is_flagged_when_its_exit_0_is_removed` is the mutation
+#1068's Verification section asks for by name, run against the **real** workflow
+text rather than a fixture, so a refactor that moves the idiom cannot leave this
+module quietly testing a string nobody ships. Per AGENTS.md the plant is
+asserted to have landed -- the occurrence count is checked before the mutant's
+verdict is read -- because a mutation that no longer applies is otherwise
+indistinguishable from a mutation that was caught.
+
+The propagation tests exist for the opposite polarity. `$code = $LASTEXITCODE`
+followed by `if ($code -ne 0) { exit $code }` is correct, common, and must stay
+silent; a guard that flags it would fire on most of this repo's pwsh steps and
+be switched off within a week.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import pathlib
+import sys
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+GUARD = REPO_ROOT / "scripts" / "check-pwsh-exit-downgrade.py"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "101-domain-status.yml"
+
+_spec = importlib.util.spec_from_file_location("check_pwsh_exit_downgrade", GUARD)
+guard = importlib.util.module_from_spec(_spec)
+assert _spec.loader is not None
+# Registered BEFORE exec: `@dataclass` resolves its field annotations through
+# `sys.modules[cls.__module__]`, which is None for a module loaded by spec alone
+# -- the import raises `AttributeError: 'NoneType' object has no attribute
+# '__dict__'` inside dataclasses, nowhere near the guard's own code.
+sys.modules[_spec.name] = guard
+_spec.loader.exec_module(guard)
+
+
+def _kinds(body: str) -> list[str]:
+    return [f.kind for f in guard.scan_body(body)]
+
+
+# --- the two halves of #1068's evidence -------------------------------------
+
+# Verbatim from `101-domain-status.yml`'s `cloudflare` job as it shipped before
+# the fix (run 30953491678). Shortened only by dropping the Cloudflare audit and
+# dry-run calls, which play no part in the defect.
+PRE_FIX_101 = """
+$ErrorActionPreference = 'Stop'
+$domain = $env:IN_DOMAIN
+$outDir = Join-Path $env:RUNNER_TEMP 'domain-status-cloudflare'
+
+$dkim = & pwsh -NoProfile -File .\\scripts\\m365-domain-preflight.ps1 -Domain $domain -SkipGraph -CloudflareToken $cfToken *>&1
+$dkimExit = $LASTEXITCODE
+$dkimPath = Join-Path $outDir 'cloudflare-dkim-check.txt'
+$dkim | Out-File -FilePath $dkimPath -Encoding utf8
+if ($dkimExit -ne 0) {
+  Write-Warning "m365-domain-preflight.ps1 (DKIM Cloudflare-only) exited with code $dkimExit (output saved to $dkimPath)"
+}
+
+"out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+"""
+
+# The same idiom from the `m365` job of the same file, which ends `exit 0`.
+CORRECT_SIBLING = """
+$ErrorActionPreference = 'Stop'
+$pre = & pwsh -NoProfile -File .\\scripts\\m365-domain-preflight.ps1 -Domain $domain -SkipCloudflare *>&1
+$preExit = $LASTEXITCODE
+if ($preExit -ne 0) {
+  Write-Warning "m365-domain-preflight.ps1 exited with code $preExit"
+}
+
+$dns = & pwsh -NoProfile -File .\\scripts\\m365-domain-status.ps1 -Domain $domain *>&1
+$dnsExit = $LASTEXITCODE
+if ($dnsExit -ne 0) {
+  Write-Warning "m365-domain-status.ps1 exited with code $dnsExit"
+}
+
+"out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+exit 0
+"""
+
+
+def test_the_exact_pre_fix_101_body_is_a_finding():
+    """Without this the module asserts only that a clean tree is clean."""
+    assert _kinds(PRE_FIX_101) == [guard.NO_EXIT], (
+        "the body that actually failed run 30953491678 must be a finding; got "
+        f"{_kinds(PRE_FIX_101)!r}"
+    )
+
+
+def test_the_m365_sibling_in_the_same_file_is_clean():
+    """Two downgrades and an `exit 0`. The closest possible true negative."""
+    assert _kinds(CORRECT_SIBLING) == [], (
+        "the correct idiom from the same workflow must not be flagged; got "
+        f"{_kinds(CORRECT_SIBLING)!r}"
+    )
+
+
+def test_the_two_bodies_differ_only_in_the_exit():
+    """Guards against a fixture pair that disagrees for some unrelated reason."""
+    patched = PRE_FIX_101.rstrip() + "\n\nexit 0\n"
+    assert _kinds(patched) == [], (
+        "adding `exit 0` to the pre-fix body must clear the finding -- otherwise "
+        f"the fixtures differ in more than the exit; got {_kinds(patched)!r}"
+    )
+
+
+# --- the opposite polarity: propagation must stay silent --------------------
+
+
+def test_propagating_the_exit_code_is_not_a_finding():
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) { exit $code }
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [], f"propagation is correct handling; got {_kinds(body)!r}"
+
+
+def test_throwing_on_the_exit_code_is_not_a_finding():
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  throw "preflight failed with $code"
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [], f"`throw` is propagation; got {_kinds(body)!r}"
+
+
+def test_an_error_annotation_and_exit_is_not_a_finding():
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Output "::error::preflight failed with $code"
+  exit 1
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [], f"annotate-and-exit is propagation; got {_kinds(body)!r}"
+
+
+def test_a_body_that_never_captures_lastexitcode_is_not_scanned():
+    body = """
+$ErrorActionPreference = 'Stop'
+& pwsh -NoProfile -File .\\scripts\\thing.ps1
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [], f"no capture, nothing to say; got {_kinds(body)!r}"
+
+
+# --- fail-closed shapes -----------------------------------------------------
+
+
+def test_a_conditional_terminal_exit_is_its_own_finding():
+    """`if ($x) { exit 1 }` leaves $LASTEXITCODE untouched on the other branch."""
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "tolerated: $code"
+}
+if ($somethingElse) { exit 1 }
+"""
+    assert _kinds(body) == [guard.CONDITIONAL_EXIT], (
+        f"a conditional final exit must be distinguished, not accepted; got {_kinds(body)!r}"
+    )
+
+
+def test_an_unclosable_if_block_is_reported_rather_than_skipped():
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "tolerated: $code
+"""
+    assert guard.UNBALANCED in _kinds(body), (
+        f"a block the scanner cannot delimit is its blind spot; got {_kinds(body)!r}"
+    )
+
+
+def test_a_brace_inside_a_string_does_not_break_the_block_scanner():
+    """Without quote-awareness this reads as an extra `{` and reports UNBALANCED."""
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "tolerated { not a block: $code"
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [guard.NO_EXIT], (
+        f"a brace inside a string is data, and the real finding must survive it; got {_kinds(body)!r}"
+    )
+
+
+def test_a_github_expression_does_not_read_as_an_unbalanced_block():
+    """`${{ inputs.x }}` is not PowerShell; unmasked its braces skew the count."""
+    body = """
+$domain = '${{ inputs.domain }}'
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "tolerated: $code"
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [guard.NO_EXIT], (
+        f"expression masking must not manufacture an UNBALANCED; got {_kinds(body)!r}"
+    )
+
+
+def test_a_trailing_comment_is_not_the_last_statement():
+    body = CORRECT_SIBLING + "\n# trailing note about the exit above\n"
+    assert _kinds(body) == [], (
+        f"comments must be stripped before reading the last statement; got {_kinds(body)!r}"
+    )
+
+
+def test_exit_with_a_variable_is_accepted():
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "tolerated: $code"
+}
+exit $deliberateStatus
+"""
+    assert _kinds(body) == [], (
+        f"an author who computed a status deliberately is not the target; got {_kinds(body)!r}"
+    )
+
+
+# --- against the real tree ---------------------------------------------------
+
+
+def test_the_repository_is_clean_under_the_guard():
+    assert guard.main() == 0, "the tree must be green under its own guard"
+
+
+def test_the_live_101_cloudflare_step_now_ends_with_an_explicit_exit():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    findings = guard.scan_workflow(text, WORKFLOW.name)
+    assert findings == [], f"101-domain-status.yml must be clean; got {findings!r}"
+
+
+def test_the_live_101_cloudflare_step_still_tolerates_the_dkim_warning():
+    """AC1: the warning survives. A fix that deleted the downgrade would also
+    turn the guard green, and would be the wrong fix."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "$dkimExit = $LASTEXITCODE" in text, "the DKIM capture was removed"
+    assert "(DKIM Cloudflare-only) exited with code $dkimExit" in text, (
+        "the tolerated-warning message was removed; AC1 requires it still be emitted"
+    )
+
+
+def test_the_live_101_cloudflare_step_still_fails_on_a_genuine_error():
+    """AC2: the two Update-CloudflareDns.ps1 calls are inspected, not ignored."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    for anchor in ("$auditExit = $LASTEXITCODE", "$dryExit = $LASTEXITCODE"):
+        assert anchor in text, (
+            f"{anchor} missing: a genuine Cloudflare failure would be silent again (AC2)"
+        )
+    assert "Refusing to run the DKIM preflight unauthenticated" in text, (
+        "the empty-token guard was removed (AC2)"
+    )
+
+
+def test_ac3_decision_is_recorded_in_the_workflow():
+    """AC3 is 'state the decision either way'. A decision that lives only in a PR
+    body is not available to the next reader of the file."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "DELIBERATELY NOT `if: always()`" in text, (
+        "AC3's decision must be recorded beside the `needs:` it is about"
+    )
+
+
+def test_the_live_m365_step_is_flagged_when_its_exit_0_is_removed():
+    """The mutation #1068's Verification section asks for, by name.
+
+    Run on the real workflow text in memory -- nothing on disk is touched, so
+    there is no restore to get wrong (CLAUDE.md's read_text/write_text CRLF
+    trap, and the `git checkout --` trap of L182).
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    anchor = "\n\n          exit 0\n"
+    landed = text.count(anchor)
+    assert landed == 1, (
+        f"the mutation anchor {anchor!r} appears {landed} times, not 1 -- the m365 "
+        "step's idiom moved, so this mutation would test nothing (assert the plant "
+        "landed before reading the mutant's verdict)"
+    )
+
+    mutant = text.replace(anchor, "\n")
+    findings = guard.scan_workflow(mutant, WORKFLOW.name)
+    assert findings, (
+        "removing the m365 step's `exit 0` must be caught by the guard; it was not, "
+        "so the guard is permissive rather than discriminating"
+    )
+    assert any("m365" in f for f in findings), (
+        f"the finding must name the mutated job; got {findings!r}"
+    )
+
+    assert guard.scan_workflow(text, WORKFLOW.name) == [], (
+        "the unmutated text must still be clean (restore check)"
+    )
+
+
+# --- wiring ------------------------------------------------------------------
+
+
+def test_the_guard_is_wired_into_ci():
+    """A checker nobody runs is the failure mode this whole class is about."""
+    ci = (REPO_ROOT / ".github" / "workflows" / "722-ci.yml").read_text(encoding="utf-8")
+    assert "scripts/check-pwsh-exit-downgrade.py" in ci, (
+        "check-pwsh-exit-downgrade.py must run in 722-ci.yml, or the rule is documentation"
+    )
+
+
+def test_the_guard_installs_its_own_yaml_dependency_in_ci():
+    """The runner image only happens to preinstall PyYAML; without the install an
+    image that drops it turns this guard into an ImportError, which is a red build
+    that says nothing about exit codes."""
+    ci = (REPO_ROOT / ".github" / "workflows" / "722-ci.yml").read_text(encoding="utf-8")
+    block = ci.split("Validate pwsh steps that downgrade an exit code", 1)[1]
+    block = block.split("scripts/check-pwsh-exit-downgrade.py", 1)[0]
+    assert "pip install --quiet pyyaml" in block, (
+        "the exit-downgrade step must install PyYAML defensively, like its siblings"
+    )
+
+
+TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+
+if __name__ == "__main__":
+    failures = 0
+    for t in TESTS:
+        try:
+            t()
+            print(f"  PASS {t.__name__}")
+        except AssertionError as e:
+            failures += 1
+            print(f"  FAIL {t.__name__}: {str(e)[:400]}")
+    sys.exit(1 if failures else 0)

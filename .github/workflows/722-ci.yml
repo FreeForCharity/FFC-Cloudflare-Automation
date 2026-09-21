@@ -337,6 +337,23 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/check-workflow-fixed-tmp-paths.py
 
+      - name: Validate pwsh steps that downgrade an exit code end with an explicit exit
+        shell: bash
+        run: |
+          # The runner appends `exit $LASTEXITCODE` to every pwsh `run:` body, so a
+          # step that captures a callee's exit code and deliberately downgrades it
+          # to a warning still fails -- with the very code its author chose to
+          # tolerate. 101's `cloudflare` job did exactly that for 48 days: a DKIM
+          # preflight returning non-zero is the NORMAL state for a domain that is
+          # not yet provisioned, i.e. exactly the domain someone runs a status
+          # check on, and because `summary` and `post_back` both `needs:` that job,
+          # the workflow then reported nothing at all. The diagnostic went silent
+          # precisely when it had something to say (#1068).
+          # The same file already carried the correct idiom in its `m365` job, 160
+          # lines below, which is why this is a class guard and not a one-line fix.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 scripts/check-pwsh-exit-downgrade.py
+
       # No `if:` on this step, deliberately. It runs on pull_request, merge_group
       # and push alike: 722 is a required check, and for a queued PR the merge
       # group is where the required checks are evaluated, so a step gated to

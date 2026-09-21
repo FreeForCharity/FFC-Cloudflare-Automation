@@ -692,10 +692,21 @@ jobs:
             if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
 
             echo "::group::capture $label"
-            set +e
-            node scripts/capture-wordpress-api.mjs "${args[@]}"
-            local rc=$?
-            set -e
+            # `|| rc=$?`, never `set +e … set -e`. This step declares
+            # `set -uo pipefail` — deliberately WITHOUT errexit, so that every
+            # failure below reports a named ::error:: rather than dying
+            # silently at whichever line happened to fail first.
+            #
+            # The toggle pair this replaces restored the WRONG state: it left
+            # errexit ON for the rest of the step after the first capture
+            # (measured: off before, ON after), so the step's declared error
+            # mode silently became something else partway through. And while it
+            # was on it protected nothing, because `capture_one` is always
+            # invoked as `capture_one … || exit 1`, and a tested context
+            # suspends errexit inside the function body too — measured: a
+            # failing untested `cp` still let this function return 0.
+            local rc=0
+            node scripts/capture-wordpress-api.mjs "${args[@]}" || rc=$?
             echo "::endgroup::"
 
             # The capture exits 1 for ANY unmet gate, which conflates two things
@@ -738,7 +749,11 @@ jobs:
             # fails, and the run dies after the crawl it was meant to preserve.
             # `isHostname` in parse-host-mounts.mjs forbids a `/` in a host, so
             # the hostname form cannot reach that shape at all.
-            cp "$report" "$RUNNER_TEMP/capture/site/wp-capture-report.${label}.json"
+            cp "$report" "$RUNNER_TEMP/capture/site/wp-capture-report.${label}.json" || {
+              echo "::error::$label was captured and passed its gates, but its report could not be copied to wp-capture-report.${label}.json."
+              echo "::error::That file is not cosmetic: a later run reusing this capture reads the per-host reports to decide which hosts it may publish and where."
+              return 1
+            }
             return 0
           }
 
@@ -797,10 +812,8 @@ jobs:
           # that to "no forms found" is how a search that never ran becomes
           # "nothing to replace" and ships live, dead forms. The three cases are
           # kept apart.
-          set +e
-          matches="$(grep -rlIE '<form[[:space:]/>]' "$site" --include='*.html' --include='*.htm')"
-          rc=$?
-          set -e
+          rc=0
+          matches="$(grep -rlIE '<form[[:space:]/>]' "$site" --include='*.html' --include='*.htm')" || rc=$?
           if [ "$rc" -gt 1 ]; then
             echo "::error::Searching $site for forms failed (grep exit $rc). Refusing to treat a failed search as 'no forms'."
             exit 1
@@ -1014,10 +1027,13 @@ jobs:
             # Fixing one site of a bug and leaving its twin is the failure mode
             # this whole workflow keeps hitting, so the two now match:
             # 0 = matches, 1 = no matches, >1 = a real error worth stopping for.
-            set +e
-            f="$(grep -rlF -- "/$r" "${dirs[@]}" | tr '\n' ' ')"
-            rc=$?
-            set -e
+            # Same `|| rc=$?` form as the forms search, and for the second
+            # reason given at the capture step: this step also declares no
+            # errexit, so the toggle pair used to switch it ON from the first
+            # loop iteration onward — in the one step whose header says it must
+            # never fail the run.
+            rc=0
+            f="$(grep -rlF -- "/$r" "${dirs[@]}" | tr '\n' ' ')" || rc=$?
             if [ "$rc" -gt 1 ]; then
               echo "::error::Searching the target repo's tests for /$r failed (grep exit $rc). Refusing to treat a failed search as 'no references'."
               exit 1

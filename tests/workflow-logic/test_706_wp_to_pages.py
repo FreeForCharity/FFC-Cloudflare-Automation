@@ -329,6 +329,65 @@ def test_the_per_host_report_is_labelled_by_HOST_not_by_MOUNT():
     assert 'wp-capture-report.${label}.json' in run, run
 
 
+# --- error handling: the step's declared mode must stay its mode -----------
+
+
+def test_no_step_toggles_errexit_mid_script():
+    """`set +e … set -e` does not restore — it ASSERTS. In a step that declares
+    `set -uo pipefail` (no errexit, deliberately, so every failure reports a
+    named ::error:: instead of dying silently at whichever line failed first),
+    the pair turns errexit ON for the remainder of the step. Measured: off
+    before the first call, ON after it.
+
+    Two of 706's steps had it, in both cases in a loop, so the mode flipped on
+    the first iteration and stayed flipped. `cmd || rc=$?` captures the same
+    status and touches no option — verified identical under both modes."""
+    wf = load_workflow(WORKFLOW)
+    offenders = []
+    for job_id, job in wf["jobs"].items():
+        for step in job.get("steps", []) or []:
+            run = step.get("run") or ""
+            for i, line in enumerate(run.splitlines(), 1):
+                if line.strip() in ("set +e", "set -e"):
+                    offenders.append(f"{job_id}/{step.get('name', '?')}:{i} {line.strip()}")
+    assert not offenders, offenders
+
+
+def test_the_capture_captures_its_exit_code_without_disabling_errexit():
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert 'node scripts/capture-wordpress-api.mjs "${args[@]}" || rc=$?' in run, run
+    assert "local rc=0" in run, run
+
+
+def test_the_per_host_report_copy_is_guarded_explicitly():
+    """errexit never covered this `cp`, even while it was (accidentally) on:
+    `capture_one` is always invoked as `capture_one … || exit 1`, and a tested
+    context suspends errexit inside the function body too. Measured: a failing
+    untested `cp` let the function return 0.
+
+    It is not a cosmetic file. `verify-reused-capture.mjs` reads the per-host
+    reports to decide which hosts a reused capture may publish and where, so a
+    silently missing one turns into a refusal — or worse, a wrong publish — in
+    a later run that has no way to know why."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert 'wp-capture-report.${label}.json" || {' in run, run
+    # And the guard must actually stop the host, not just narrate.
+    # Taken line by line to the closing brace. `split("}")` is wrong here and
+    # fails in the flattering direction: the guard's own message contains
+    # `${label}`, so it cuts mid-string and reports the guard as empty.
+    tail = run.split('wp-capture-report.${label}.json" || {', 1)[1].splitlines()
+    body = []
+    for line in tail:
+        if line.strip() == "}":
+            break
+        body.append(line)
+    else:
+        raise AssertionError("the report-copy guard has no closing brace")
+    copy_guard = "\n".join(body)
+    assert "::error::" in copy_guard, copy_guard
+    assert "return 1" in copy_guard, copy_guard
+
+
 # --- reuse_capture_from_run: not crawling a charity twice for one result ----
 
 

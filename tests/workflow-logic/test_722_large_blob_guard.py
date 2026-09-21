@@ -250,6 +250,13 @@ def test_a_grown_tracked_text_file_is_not_diagnosed_as_a_committed_binary(tmp_pa
 
     # And the remedy that actually applies must be present.
     assert "A TRACKED TEXT FILE GREW PAST THE LIMIT" in result.stderr, out
+
+    # The two halves of the message must agree. A list header reading
+    # "blobs INTRODUCED in this PR's commits" sits two lines under a headline
+    # saying nothing new was committed, and a reader resolves that contradiction
+    # by believing the word they already expected -- which is the whole failure
+    # being fixed here, reintroduced by a heading.
+    assert "introduced" not in result.stdout.lower(), out
     assert "large-blob-allowlist.txt" in result.stderr, out
 
 

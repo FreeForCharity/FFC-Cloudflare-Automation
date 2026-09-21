@@ -252,7 +252,10 @@ if [ "$grown_seen" = 1 ] && [ "$new_seen" = 0 ]; then
 else
   echo "::error::This PR introduces one or more blobs over ${MAX_BLOB_BYTES} bytes."
 fi
-echo "Oversized blobs introduced in this PR's commits:"
+# Neutral wording on purpose. "introduced" contradicts the grown-file headline
+# two lines up, which says nothing new was committed -- and a message whose two
+# halves disagree is the defect this script was changed to stop producing.
+echo "Blobs over ${MAX_BLOB_BYTES} bytes in this PR's commits:"
 printf '%s' "$offenders"
 
 if [ "$grown_text_seen" = 1 ]; then

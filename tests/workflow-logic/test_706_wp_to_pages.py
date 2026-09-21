@@ -322,6 +322,43 @@ def test_the_capture_step_mounts_each_extra_host():
     assert run.count("assess-capture-completeness.mjs") == 1, run
 
 
+def test_ghostscript_is_installed_before_the_capture_that_needs_it():
+    """#1348 shipped the PDF downsampling pass assuming `gs` was on the runner.
+    Run 35634361425 measured that it is not:
+
+        [asset] ghostscript (gs) is not installed, so oversized PDFs ship as
+        captured. Install it before the capture step to downsample them.
+        [capture] 4 oversized PDF(s) shipped as captured because ghostscript
+        was not available. This is NOT a judgement that they were already
+        optimal: nothing tried.
+
+    The pass degraded exactly as it was built to — it said so, and the
+    publishable-size gate then refused the tree and named all four files. That
+    is the good failure mode, and it still bought nothing: those four are
+    507.7 MB of a charity's own magazines that no `git push` will take.
+
+    Ordering is the assertion. An install placed after the capture is a
+    no-op that looks like a fix, and nothing in the run's output would say so
+    — the capture would go on reporting `pdfsSkippedNoEncoder` while a green
+    `gs --version` scrolled past underneath it."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]["steps"]
+    names = [s.get("name", "") for s in convert]
+    gs = [i for i, n in enumerate(names) if "Ghostscript" in n]
+    capture = names.index("Capture the live WordPress site")
+    assert gs, names
+    assert gs[0] < capture, (gs, capture, names)
+
+    run = convert[gs[0]]["run"]
+    assert "apt-get install" in run and "ghostscript" in run, run
+    # `apt-get update` first: the runner image ships no package lists, so a
+    # bare install 404s on every mirror path.
+    assert run.index("apt-get update") < run.index("apt-get install"), run
+    # And prove the binary exists rather than trusting apt's exit code — a
+    # renamed or dropped package then fails HERE, in seconds, instead of
+    # 20 minutes later as one line in a capture log.
+    assert "gs --version" in run, run
+
+
 def test_each_host_starts_from_no_report_so_a_stale_one_cannot_be_assessed():
     """Every host writes the SAME report path, so it must be cleared before
     each capture — otherwise a host that dies before writing one is assessed

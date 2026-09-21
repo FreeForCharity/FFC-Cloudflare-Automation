@@ -559,6 +559,39 @@ jobs:
         shell: bash
         run: npm install --no-save --no-audit --no-fund sharp@0.34.5
 
+      # Ghostscript is NOT on ubuntu-latest, measured rather than assumed.
+      #
+      # #1348 shipped the PDF downsampling pass relying on the runner having
+      # `gs`, and run 35634361425 proved it does not:
+      #
+      #   [asset] ghostscript (gs) is not installed, so oversized PDFs ship as
+      #   captured. Install it before the capture step to downsample them.
+      #   [capture] 4 oversized PDF(s) shipped as captured because ghostscript
+      #   was not available. This is NOT a judgement that they were already
+      #   optimal: nothing tried.
+      #
+      # The pass degraded exactly as designed — it said so, loudly, and the
+      # publishable-size gate then refused the tree and named all four files —
+      # but a pass that never runs buys nothing, and these four are 507.7 MB of
+      # a charity's own magazines that no `git push` will accept.
+      #
+      # `-qq` and `--no-install-recommends` keep this to a few seconds: the
+      # recommends pull in a font and driver set the pdfwrite device does not
+      # need. `apt-get update` is required first — the runner image ships with
+      # no package lists, so a bare install 404s on every mirror path.
+      #
+      # Verified, not inferred: the step ends by running `gs --version`, so a
+      # future runner image that drops or renames the package fails HERE, in
+      # ten seconds, rather than 20 minutes later as a line in a capture log
+      # that only says the PDFs shipped whole.
+      - name: Install Ghostscript (PDF downsampler)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ghostscript
+          gs --version
+
       # The alternative to crawling a charity's shared host for 13-14 minutes
       # to obtain a result that is supposed to be byte-identical to one GitHub
       # is already storing.

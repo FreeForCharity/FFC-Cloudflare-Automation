@@ -28,7 +28,14 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import WORKFLOWS, child_env, forward_slashes, load_workflow, step_run
+from wf_extract import (
+    WORKFLOWS,
+    child_env,
+    find_step,
+    forward_slashes,
+    load_workflow,
+    step_run,
+)
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -56,6 +63,13 @@ def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]
             INPUT_IGNORE="",
             INPUT_PUBLISH="",
             INPUT_MINPCT="",
+            # A real workflow_dispatch always SETS every input to its
+            # default, so the empty string is the production shape —
+            # and setting them here means an inherited INPUT_REUSE_RUN
+            # from the surrounding shell cannot quietly turn these
+            # tests into tests of a reuse dispatch.
+            INPUT_REUSE_RUN="",
+            INPUT_REUSE_MAX_AGE="",
         )
         env.update(env_overrides)
         proc = subprocess.run(
@@ -221,6 +235,385 @@ def test_ignore_hosts_normalize_and_dedupe():
     proc, outputs = run_resolve(INPUT_IGNORE="A.org,,www.a.org,b.org,")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ignore_hosts=a.org,b.org" in outputs, outputs
+
+
+# --- extra_hosts: folding a charity's subdomains into one repo ---------------
+
+
+def test_extra_hosts_is_optional_and_defaults_to_no_mounts():
+    """A single-hostname site must be completely unaffected. Asserted on the
+    OUTPUT rather than the exit code: an unset input that aborted the step under
+    `set -u` would also be caught by every other test here, but a silently empty
+    mount list that still reported success would not."""
+    proc, outputs = run_resolve()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "mount_count=0" in outputs, outputs
+    assert "mounts=\n" in outputs or outputs.rstrip().endswith("mounts="), outputs
+
+
+def test_extra_hosts_parses_into_host_equals_mount_pairs():
+    proc, outputs = run_resolve(
+        INPUT_EXTRA_HOSTS="school.example.org => /school\npublications.example.org => publications"
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "mounts=school.example.org=school publications.example.org=publications" in outputs, outputs
+    assert "mount_count=2" in outputs, outputs
+
+
+def test_extra_hosts_refuses_the_apex_domain():
+    """Mounting the apex would capture the same site twice, the second time into
+    a subdirectory, and the completeness gate would pass for both."""
+    proc, _ = run_resolve(INPUT_EXTRA_HOSTS="example.org => /main")
+    assert proc.returncode != 0, proc.stdout
+    assert "apex domain" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_extra_hosts_refuses_an_empty_mount():
+    """An empty mount silently merges a subdomain INTO the apex's routes, where
+    it collides slug for slug — the expensive failure this validation exists
+    for, and the one that looks like a successful run."""
+    proc, _ = run_resolve(INPUT_EXTRA_HOSTS="school.example.org => /")
+    assert proc.returncode != 0, proc.stdout
+    assert "collide" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_extra_hosts_refuses_a_mount_with_a_space():
+    """`resolve` flattens the parser's output with a whitespace-delimited awk,
+    so a mount containing a space is TRUNCATED at that space rather than
+    rejected — the charity's pages land at a URL nobody typed and every gate in
+    the run still passes. Asserted end to end through the step, not just in the
+    parser's own self-test, because the truncation lives in the step."""
+    proc, outputs = run_resolve(INPUT_EXTRA_HOSTS="school.example.org => /school catalog")
+    assert proc.returncode != 0, proc.stdout
+    both = proc.stdout + proc.stderr
+    assert "kebab-case" in both, both
+    # The failure mode this guards against, stated as an assertion: the step
+    # must not have emitted the truncated mount as if it were the real one.
+    assert "school.example.org=school " not in outputs, outputs
+
+
+def test_extra_hosts_refuses_overlapping_mounts():
+    proc, _ = run_resolve(
+        INPUT_EXTRA_HOSTS="a.example.org => /x\nb.example.org => /x/y"
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "overlaps" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_extra_hosts_validation_happens_before_any_network_work():
+    """`resolve` reaches no live site. Validating here is what keeps a typo from
+    costing a 15-minute crawl AND a human approval before it is noticed."""
+    resolve_job = load_workflow(WORKFLOW)["jobs"]["resolve"]
+    assert "environment" not in resolve_job, resolve_job
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    assert "parse-host-mounts.mjs" in script, script
+
+
+def test_the_capture_step_mounts_each_extra_host():
+    """Each host is captured with its own `--mount`, and gated on its OWN
+    completeness report: an aggregate across hosts would let a 40% capture of a
+    110-page subdomain hide behind a complete apex."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert "--mount" in run, run
+    assert "capture_one" in run, run
+    # The apex is captured unmounted, at the root.
+    assert 'capture_one "$DOMAIN" "" "apex"' in run, run
+    # Every host runs the same assessment, inside the function.
+    assert run.count("assess-capture-completeness.mjs") == 1, run
+
+
+def test_each_host_starts_from_no_report_so_a_stale_one_cannot_be_assessed():
+    """Every host writes the SAME report path, so it must be cleared before
+    each capture — otherwise a host that dies before writing one is assessed
+    against the PREVIOUS host's report, and passes.
+
+    Measured, run 35622301582: school.newheightseducation.org became
+    unreachable, its capture aborted at `REST API is not usable` before
+    writing anything, and the apex's report from twelve minutes earlier was
+    still on disk. The gate read that and reported `Captured 1 of 1 inventory
+    entries (100.0%)` for a host that fetched nothing at all — byte-identical
+    to the apex's summary, down to the apex's own asset-failure counts and its
+    `www.newheightseducation.org` unlocalized host. Had the third host not
+    hard-failed, the run would have delivered a site missing all 110 of that
+    subdomain's pages while reporting three green hosts.
+
+    The `[ ! -f "$report" ]` branch was written for exactly this case and
+    could not fire, because the file existed. A guard that cannot observe the
+    state it guards is not a weaker guard, it is an absent one.
+
+    Ordering carries the whole assertion. An `rm -f` placed after the capture
+    would delete the very report the gate is about to read, turning a silent
+    false pass into a loud false failure — the opposite defect, equally wrong."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert 'rm -f "$report"' in run, run
+    removed = run.index('rm -f "$report"')
+    captured = run.index('node scripts/capture-wordpress-api.mjs "${args[@]}" || rc=$?')
+    assessed = run.index("assess-capture-completeness.mjs")
+    assert removed < captured < assessed, (removed, captured, assessed)
+    # ...and INSIDE capture_one, so it runs once per host rather than once for
+    # the whole step. Cleared only at the top, the second host inherits the
+    # first host's report exactly as before.
+    body = run.split("capture_one() {", 1)[1].split("\n}", 1)[0]
+    assert 'rm -f "$report"' in body, body
+
+
+def test_the_per_host_report_is_labelled_by_HOST_not_by_MOUNT():
+    """`label` is interpolated into a filename. A mount is a URL path and may
+    legally nest (`/school/spring-2026`), so labelling by mount turns the `cp`
+    destination into a path whose directory does not exist: the capture
+    succeeds and the run dies copying the report it was meant to preserve —
+    after the 15-minute crawl, which is the most expensive place in this
+    pipeline to lose. A hostname cannot contain a `/` (isHostname)."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert 'capture_one "$host" "$mount" "$host"' in run, run
+    assert 'capture_one "$host" "$mount" "$mount"' not in run, run
+    # And the reason the assertion above matters: the label reaches a filename.
+    assert 'wp-capture-report.${label}.json' in run, run
+
+
+# --- error handling: the step's declared mode must stay its mode -----------
+
+
+def test_no_step_toggles_errexit_mid_script():
+    """`set +e … set -e` does not restore — it ASSERTS. In a step that declares
+    `set -uo pipefail` (no errexit, deliberately, so every failure reports a
+    named ::error:: instead of dying silently at whichever line failed first),
+    the pair turns errexit ON for the remainder of the step. Measured: off
+    before the first call, ON after it.
+
+    Two of 706's steps had it, in both cases in a loop, so the mode flipped on
+    the first iteration and stayed flipped. `cmd || rc=$?` captures the same
+    status and touches no option — verified identical under both modes."""
+    wf = load_workflow(WORKFLOW)
+    offenders = []
+    for job_id, job in wf["jobs"].items():
+        for step in job.get("steps", []) or []:
+            run = step.get("run") or ""
+            for i, line in enumerate(run.splitlines(), 1):
+                if line.strip() in ("set +e", "set -e"):
+                    offenders.append(f"{job_id}/{step.get('name', '?')}:{i} {line.strip()}")
+    assert not offenders, offenders
+
+
+def test_the_capture_captures_its_exit_code_without_disabling_errexit():
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert 'node scripts/capture-wordpress-api.mjs "${args[@]}" || rc=$?' in run, run
+    assert "local rc=0" in run, run
+
+
+def test_the_per_host_report_copy_is_guarded_explicitly():
+    """errexit never covered this `cp`, even while it was (accidentally) on:
+    `capture_one` is always invoked as `capture_one … || exit 1`, and a tested
+    context suspends errexit inside the function body too. Measured: a failing
+    untested `cp` let the function return 0.
+
+    It is not a cosmetic file. `verify-reused-capture.mjs` reads the per-host
+    reports to decide which hosts a reused capture may publish and where, so a
+    silently missing one turns into a refusal — or worse, a wrong publish — in
+    a later run that has no way to know why."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert 'wp-capture-report.${label}.json" || {' in run, run
+    # And the guard must actually stop the host, not just narrate.
+    # Taken line by line to the closing brace. `split("}")` is wrong here and
+    # fails in the flattering direction: the guard's own message contains
+    # `${label}`, so it cuts mid-string and reports the guard as empty.
+    tail = run.split('wp-capture-report.${label}.json" || {', 1)[1].splitlines()
+    body = []
+    for line in tail:
+        if line.strip() == "}":
+            break
+        body.append(line)
+    else:
+        raise AssertionError("the report-copy guard has no closing brace")
+    copy_guard = "\n".join(body)
+    assert "::error::" in copy_guard, copy_guard
+    assert "return 1" in copy_guard, copy_guard
+
+
+# --- reuse_capture_from_run: not crawling a charity twice for one result ----
+
+
+def test_reuse_is_off_by_default():
+    """Every existing dispatch must be completely unaffected. Asserted on the
+    OUTPUT, because an input that silently defaulted to something truthy would
+    skip the crawl and publish an artifact from a run nobody named."""
+    proc, outputs = run_resolve()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "reuse_run=\n" in outputs or outputs.rstrip().endswith("reuse_run="), outputs
+
+
+def test_reuse_run_id_must_be_numeric():
+    """A run id reaches `gh run download` and an artifact name. Refused here,
+    in the job that reaches no network, so a typo costs seconds rather than a
+    job that has already installed a native module."""
+    proc, _ = run_resolve(INPUT_REUSE_RUN="not-a-run")
+    assert proc.returncode != 0, proc.stdout
+    assert "numeric run id" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_a_numeric_reuse_run_id_is_published_for_the_convert_job():
+    proc, outputs = run_resolve(INPUT_REUSE_RUN=" 35571249633 ")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "reuse_run=35571249633" in outputs, outputs
+
+
+def test_reuse_max_age_defaults_and_refuses_junk():
+    """The age limit is the only check standing between a reused capture and a
+    site that has changed since, so it may not silently fall back to 'no limit'
+    when it is mistyped."""
+    proc, outputs = run_resolve()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "reuse_max_age_hours=168" in outputs, outputs
+    for bad in ("0", "-5", "lots"):
+        proc, _ = run_resolve(INPUT_REUSE_MAX_AGE=bad)
+        assert proc.returncode != 0, (bad, proc.stdout)
+        assert "reuse_max_age_hours" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_the_crawl_and_the_reuse_are_exact_complements():
+    """The load-bearing property. If both steps could run, the crawl would
+    overwrite the very capture the reuse was meant to preserve and the run
+    would still report success; if neither could, the job would proceed with an
+    empty capture directory. Asserted as literal, opposite conditions on the
+    same expression rather than as 'both mention reuse_run'."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    by_name = {s.get("name", ""): s for s in convert["steps"]}
+    crawl = by_name["Capture the live WordPress site"]
+    reuse = by_name["Reuse the capture from an earlier run"]
+    assert crawl["if"] == "needs.resolve.outputs.reuse_run == ''", crawl["if"]
+    assert reuse["if"] == "needs.resolve.outputs.reuse_run != ''", reuse["if"]
+
+
+def test_convert_keeps_contents_read_when_it_gains_actions_read():
+    """A job-level `permissions` block REPLACES the workflow-level one rather
+    than extending it, so adding `actions: read` for the artifact download
+    without restating `contents: read` breaks the checkout — which reads as a
+    checkout problem, not as a permissions one."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    assert convert["permissions"]["actions"] == "read", convert["permissions"]
+    assert convert["permissions"]["contents"] == "read", convert["permissions"]
+
+
+def test_reuse_refuses_a_run_of_a_different_workflow():
+    """A run id from another workflow would otherwise fail later at 'no
+    artifact named wp-capture-<id>', which reads as an expired artifact rather
+    than as the wrong run. The literal path is asserted against this file's own
+    name so a rename cannot leave the check pointing at nothing."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert f"self='.github/workflows/{WORKFLOW}'" in run, run
+
+
+def test_reuse_reapplies_this_runs_completeness_threshold():
+    """Inheriting the source run's gate would mean `min_capture_percent` stops
+    meaning anything the moment a capture is reused: a capture that passed at
+    90% would satisfy a dispatch asking for 98%."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert "assess-capture-completeness.mjs" in run, run
+    assert '--min-percent "$MIN_PERCENT"' in run, run
+
+
+def test_reuse_counts_what_it_assessed_against_what_it_expected():
+    """A per-item success log is not evidence of completeness: a file with no
+    trailing newline loses its last line to `read`, and every line that DID run
+    prints a pass. The count is the only thing that can see the missing one."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert "assessed=$((assessed + 1))" in run, run
+    assert "expected=$((MOUNT_COUNT + 1))" in run, run
+    assert '[ "$assessed" -ne "$expected" ]' in run, run
+
+
+def test_reuse_verifies_the_artifact_before_anything_reads_it():
+    """Domain, host set, mounts and age are checked against THIS dispatch. Every
+    later gate in this workflow asks whether the tree is a coherent site, and
+    none asks whether it is the site that was asked for."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert "verify-reused-capture.mjs" in run, run
+    assert '--domain "$DOMAIN"' in run, run
+    assert '--mounts "$MOUNTS"' in run, run
+    assert '--max-age-hours "$MAX_AGE"' in run, run
+
+
+def test_reuse_reads_the_verifier_exit_code_without_a_pipe():
+    """Ledger L50. The verifier's whole contract is its exit code; reading it
+    through a pipe reports the reader's status and turns a refusal into a pass."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert 'rc=$?' in run, run
+    assert 'verify-reused-capture.mjs' in run, run
+    # The verifier's stdout goes to a FILE, never into another command.
+    assert '> "$reports"' in run, run
+    assert "verify-reused-capture.mjs |" not in run.replace("\n", " "), run
+
+
+def test_a_reused_capture_is_re_uploaded_under_THIS_runs_id():
+    """`deliver` downloads `wp-capture-<this run's id>`. The upload step is
+    therefore unconditional: make it skip on a reused capture and the handoff
+    breaks for exactly the dispatch capture reuse exists to serve — a retried
+    `deliver` — and it breaks AFTER the approval has been spent."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    upload = next(
+        s for s in convert["steps"] if "Upload the neutralized capture" in s.get("name", "")
+    )
+    assert upload["with"]["name"] == "wp-capture-${{ github.run_id }}", upload["with"]
+    # It may be conditioned on a capture EXISTING, never on how this run was
+    # dispatched: skipping the upload on a reused capture breaks the handoff
+    # for the retried `deliver` that capture reuse exists to serve.
+    assert "reuse_run" not in (upload.get("if") or ""), upload.get("if")
+
+
+def test_the_capture_is_uploaded_even_when_a_LATER_step_fails():
+    """The measured cost of getting this wrong, on run 35571249633: three
+    hostnames crawled for 36m32s, all three past their completeness gates, then
+    `Convert the capture into real app routes` failed — and because the upload
+    sat after it, the whole capture was discarded and the retry had to crawl
+    again. The failure a reuse is FOR is a failure after the capture, so an
+    artifact that only survives a green run cannot serve one."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    upload = next(
+        s for s in convert["steps"] if "Upload the neutralized capture" in s.get("name", "")
+    )
+    cond = upload.get("if") or ""
+    assert "cancelled()" in cond, cond
+    # Conditioned on a capture existing, so a run that never captured does not
+    # add a second red step on top of the real failure.
+    assert "steps.capture.outcome" in cond, cond
+    assert "steps.reuse.outcome" in cond, cond
+    # `outcome`, not `conclusion`: they differ exactly when a step failed,
+    # which is the case being handled.
+    assert "conclusion" not in cond, cond
+    ids = {s.get("id") for s in convert["steps"]}
+    assert {"capture", "reuse"} <= ids, ids
+
+
+def test_reuse_does_not_require_the_SOURCE_run_to_have_succeeded():
+    """The capture worth reusing usually belongs to a run that FAILED after the
+    crawl. A check on the source run's conclusion would refuse exactly the runs
+    this input exists for."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    # Asserted on what the step QUERIES, not on the word "success" appearing
+    # anywhere: a prose comment in this step legitimately contains it, and a
+    # bare substring assert failed on that comment rather than on any check.
+    code = "\n".join(l for l in run.splitlines() if not l.lstrip().startswith("#"))
+    assert ".conclusion" not in code, code
+    assert ".status" not in code, code
+
+
+def test_verify_reused_capture_is_self_tested_in_the_gate():
+    gate = step_run(WORKFLOW, "resolve", "Offline self-tests (gate every later job)")
+    assert "verify-reused-capture.mjs --self-test" in gate, gate
+
+
+def test_the_summary_says_when_a_capture_was_reused():
+    """An approval is only meaningful if the approver can see what they are
+    approving, and a reused capture describes the site at an earlier moment.
+    The run log that says so is fifteen steps above the gate."""
+    run = step_run(WORKFLOW, "convert", "Report what would be written")
+    assert "REUSE_RUN" in run, run
+    assert "REUSED" in run, run
+
+
+def test_parse_host_mounts_is_self_tested_in_the_gate():
+    gate = step_run(WORKFLOW, "resolve", "Offline self-tests (gate every later job)")
+    assert "parse-host-mounts.mjs --self-test" in gate, gate
 
 
 # --- job wiring -------------------------------------------------------------
@@ -923,7 +1316,177 @@ def test_min_capture_percent_is_validated():
     assert "must be a whole number between 1 and 100" in proc.stdout, proc.stdout
 
 
+
+
+def _step_names(job_id: str) -> list[str]:
+    """Step names of one job, in order."""
+    wf = load_workflow(WORKFLOW)
+    return [s.get("name", "") for s in wf["jobs"][job_id]["steps"]]
+
+
+def _index_of(job_id: str, substring: str) -> int:
+    for i, name in enumerate(_step_names(job_id)):
+        if substring in name:
+            return i
+    raise AssertionError(f"no step matching {substring!r} in job {job_id}: {_step_names(job_id)}")
+
+
+def _capture_script_text() -> str:
+    return (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+
+
+GUARD = "the tree must be publishable"
+
+
+def test_the_publishable_size_guard_runs_in_BOTH_jobs():
+    """The convert-job copy is the early warning; the deliver-job copy is the
+    one that actually protects the push.
+
+    Neither is redundant. `deliver` can run against a capture REUSED from a run
+    that predates the PDF pass, so a convert-side check alone proves nothing
+    about the tree being pushed; and a deliver-side check alone moves the
+    failure back behind the human approval, which is the cost this guard
+    exists to avoid.
+    """
+    for job in ("convert", "deliver"):
+        i = _index_of(job, GUARD)
+        script = step_run(WORKFLOW, job, GUARD)
+        assert "check-publishable-size.mjs ffc-ex" in script, (job, script)
+        assert i >= 0
+
+
+def test_the_size_guard_runs_before_the_steps_it_exists_to_save():
+    """Fail in milliseconds, not after a multi-minute build or behind a push.
+
+    The guard only reads file sizes off disk. Ordering it later would still
+    catch the problem, but only once the run has spent the very time this
+    check exists to save.
+    """
+    assert _index_of("convert", GUARD) < _index_of("convert", "Build the static export")
+    assert _index_of("deliver", GUARD) < _index_of("deliver", "Commit and open a draft PR")
+
+
+def test_the_size_guard_is_self_tested_before_anything_uses_it():
+    """Same rule every other decision-making script in this workflow follows:
+    a guard that decides whether a run may proceed does not run unverified."""
+    script = step_run(WORKFLOW, "resolve", "Offline self-tests")
+    assert "node scripts/check-publishable-size.mjs --self-test" in script
+
+
+def test_max_pdf_mb_is_validated_before_the_network():
+    """A bad budget must cost seconds, not a 40-minute crawl AND an approval."""
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    assert "max_pdf_mb must be a whole number of MB between 1 and 100000" in script
+    assert 'echo "max_pdf_mb=$max_pdf_mb"' in script
+
+
+def test_max_pdf_mb_is_bounded_to_match_the_capture():
+    """`resolve` and the capture must agree on the range, or the earlier check
+    is decorative.
+
+    Measured: `capture-wordpress-api.mjs` declares
+    `['max-pdf-mb', ..., { min: 1, max: 100000 }]` and exits 2 with
+    "expected an integer 1..100000". A resolve that only checks positivity lets
+    999999 through, and the run then dies in `convert` -- after checkout and
+    setup -- which is exactly the "fail before the network" promise this job
+    exists to keep.
+    """
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    assert '[ "$max_pdf_mb" -gt 100000 ]' in script, script[-400:]
+    assert "between 1 and 100000" in script
+
+    # The input description must not tell an operator to do the thing the
+    # bound refuses; the first draft said "set to a very large number".
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["max_pdf_mb"]["description"]
+    assert "very large number" not in desc, desc
+    assert "100000" in desc, desc
+
+
+def test_max_pdf_mb_reaches_the_capture():
+    """The input is inert unless it is BOTH exported to the step and appended
+    to the capture's argv. Asserting only one of the two passes while the
+    budget silently stays at the script's own default."""
+    wf = load_workflow(WORKFLOW)
+    step = find_step(wf, "convert", "Capture the live WordPress site")
+    assert step["env"]["MAX_PDF_MB"] == "${{ needs.resolve.outputs.max_pdf_mb }}", step["env"]
+    assert 'args+=(--max-pdf-mb "$MAX_PDF_MB")' in step["run"]
+
+
+def test_the_resolve_job_publishes_max_pdf_mb():
+    """A job output that names a step output the step never sets resolves to
+    the empty string, and an empty budget is not an error anywhere downstream
+    — it simply stops being applied."""
+    wf = load_workflow(WORKFLOW)
+    assert wf["jobs"]["resolve"]["outputs"]["max_pdf_mb"] == (
+        "${{ steps.resolve.outputs.max_pdf_mb }}"
+    )
+
+
+def test_the_pdf_budget_default_is_below_githubs_hard_limit():
+    """90, not 100.
+
+    Ghostscript's output size is not predictable from its input, so a budget
+    set AT the limit lets a file land at 99.7 MB on one run and 100.4 MB on the
+    next — and that difference only shows up at the push, after the approval.
+    """
+    wf = load_workflow(WORKFLOW)
+    # YAML parses a bare `on:` key as the boolean True, so this cannot be
+    # read as wf["on"] — the same dance test_workflow_is_dispatch_only does.
+    triggers = wf[True] if True in wf else wf["on"]
+    assert triggers["workflow_dispatch"]["inputs"]["max_pdf_mb"]["default"] == "90"
+
+
+def test_the_pdf_ladder_excludes_the_rung_that_inflates_a_file():
+    """/prepress measured 176% of its input on a scan-shaped fixture. A pass
+    that reports an optimisation while making the file bigger is worse than no
+    pass, so that rung is not on the ladder at all."""
+    src = _capture_script_text()
+    ladder = src.split("export const PDF_DOWNSAMPLE_LADDER = ")[1].split(";")[0]
+    assert "/prepress" not in ladder, ladder
+    assert "/printer" not in ladder, ladder
+    assert "/ebook" in ladder and "/screen" in ladder, ladder
+
+
+def test_a_shrunk_pdf_keeps_its_name():
+    """The image pass renames (.png -> .webp) and must rewrite every reference
+    to match. The PDF pass must NOT rename: a renamed PDF strands every link to
+    it, including links in places the capture never parses, such as a sitemap
+    or a PDF that links to another PDF."""
+    src = _capture_script_text()
+    call = src.split("if (optimizePdfs && shouldShrinkPdf(")[1].split("usedAssetNames.add(name)")[0]
+    assert "name = " not in call, f"the PDF pass must not reassign the local name:\n{call}"
+    assert "buf = shrunk.buffer;" in call
+
+
+def test_ghostscript_absence_is_distinguished_from_a_bad_pdf():
+    """Opposite responses — stop trying at all, versus skip this one file —
+    and they are indistinguishable by whether an output file appeared. An
+    earlier draft inferred it from existsSync and would have announced
+    'ghostscript is not installed' on the first corrupt PDF, on a box where it
+    is installed and working."""
+    src = _capture_script_text()
+    assert "err.code === 'ENOENT'" in src
+
+
+def test_pdfs_still_over_budget_are_named_not_counted():
+    """These are exactly the files a push will reject. A count cannot be acted
+    on without re-running the crawl that produced it."""
+    src = _capture_script_text()
+    assert "pdfShrink.stillOverBudget.join(', ')" in src
+    assert "will be REJECTED by a" in src
+
+
+# Built HERE, at the end of the module, and not one line earlier. This is a
+# snapshot of `globals()` taken where it appears, so a roster placed mid-file
+# silently omits every test defined below it -- this module defined 108 and ran
+# 97 that way, reporting a clean green over a suite 11 tests smaller than the
+# one in the file. Nothing in the module's own output can show that; only
+# run_all.py's roster guard catches it, as "defines N but reported M" (L194).
+# Keep this line last.
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+
 
 if __name__ == "__main__":
     failures = []

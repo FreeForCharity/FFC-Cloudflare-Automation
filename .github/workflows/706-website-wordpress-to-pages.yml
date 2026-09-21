@@ -113,6 +113,47 @@ on:
         required: false
         type: string
         default: ''
+      extra_hosts:
+        description: >-
+          Additional hostnames to fold into this SAME repo, each mounted at a URL path. One per
+          line, `<hostname> => <path>` — e.g. `school.example.org => /school`. A charity's site is
+          often several hostnames on one hosting plan; this captures them into one static site so
+          `/school/...` serves what `school.example.org` served, and the subdomains become redirects
+          at cutover. Each host is captured and gated SEPARATELY, so one short capture cannot hide
+          behind another's page count. Leave empty for a single-hostname site.
+        required: false
+        type: string
+        default: ''
+      reuse_capture_from_run:
+        description: >-
+          Run id of an EARLIER 706 run whose capture to reuse instead of crawling the live site
+          again. The capture is downloaded from that run's artifact, re-verified against this
+          dispatch (same domain, same hosts, same mounts, not stale) and re-assessed against this
+          run's min_percent. Use it to retry a `deliver` that failed after the approval gate: the
+          crawl is 13-14 minutes and the result is supposed to be identical, so repeating it costs a
+          second approval and hits the charity's server again for nothing. Leave empty to crawl.
+        required: false
+        type: string
+        default: ''
+      max_pdf_mb:
+        description: >-
+          Downsample any captured PDF larger than this, in MB. GitHub REFUSES a push containing any
+          file over 100 MB, and that rejection arrives at the push — after the crawl and after the
+          approval have both been spent. The default is deliberately below the hard limit rather
+          than at it, because Ghostscript's output size is not predictable from its input. Range
+          1-100000, matching the capture's own bound. Set it to 100000 to effectively disable the
+          pass; the size guard still refuses a tree git would reject.
+        required: false
+        type: string
+        default: '90'
+      reuse_max_age_hours:
+        description: >-
+          Refuse a reused capture older than this many hours. Artifacts are retained 7 days (168h),
+          so a capture can be well within retention and still predate a change to the live site.
+          Only read when reuse_capture_from_run is set.
+        required: false
+        type: string
+        default: '168'
 
 permissions:
   contents: read
@@ -136,6 +177,11 @@ jobs:
       delay: ${{ steps.resolve.outputs.delay }}
       posts: ${{ steps.resolve.outputs.posts }}
       ignore_hosts: ${{ steps.resolve.outputs.ignore_hosts }}
+      mounts: ${{ steps.resolve.outputs.mounts }}
+      mount_count: ${{ steps.resolve.outputs.mount_count }}
+      reuse_run: ${{ steps.resolve.outputs.reuse_run }}
+      reuse_max_age_hours: ${{ steps.resolve.outputs.reuse_max_age_hours }}
+      max_pdf_mb: ${{ steps.resolve.outputs.max_pdf_mb }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7
@@ -150,11 +196,17 @@ jobs:
           INPUT_EMAIL: ${{ inputs.contact_email }}
           INPUT_PUBLISH: ${{ inputs.publish_domain }}
           INPUT_MODE: ${{ inputs.mode }}
+          # Free text reaching a shell, so it arrives as DATA in env: rather
+          # than interpolated into the script body (#1080's rule).
+          INPUT_EXTRA_HOSTS: ${{ inputs.extra_hosts }}
           INPUT_MINPCT: ${{ inputs.min_capture_percent }}
           INPUT_MAX: ${{ inputs.max_items }}
           INPUT_DELAY: ${{ inputs.delay_ms }}
           INPUT_POSTS: ${{ inputs.include_posts }}
           INPUT_IGNORE: ${{ inputs.ignore_hosts }}
+          INPUT_REUSE_RUN: ${{ inputs.reuse_capture_from_run }}
+          INPUT_REUSE_MAX_AGE: ${{ inputs.reuse_max_age_hours }}
+          INPUT_MAX_PDF_MB: ${{ inputs.max_pdf_mb }}
         shell: bash
         run: |
           set -euo pipefail
@@ -370,7 +422,83 @@ jobs:
             echo "ignore_hosts=$ignore_hosts"
           } >> "$GITHUB_OUTPUT"
 
+          # Extra hostnames folded into this same repo under URL paths. Parsed
+          # and validated HERE, in the job that reaches no network, so a typo
+          # costs a few seconds rather than a 15-minute crawl and a human
+          # approval. The parser exits non-zero on any bad line and prints an
+          # ::error:: for EVERY one, so a dispatch is fixed in a single pass.
+          # `:-` because this step runs under `set -u` and an UNSET variable is
+          # not the same failure as an invalid one: without the default, a
+          # caller that never passed extra_hosts aborts on "unbound variable"
+          # and the `||` branch below reports it as "extra_hosts did not
+          # validate" — a message naming an input the operator never supplied.
+          mounts_tsv="$(node scripts/parse-host-mounts.mjs \
+            --text "${INPUT_EXTRA_HOSTS:-}" --apex "$domain")" || {
+            echo "::error::extra_hosts did not validate — see the errors above. Nothing was captured."
+            exit 1
+          }
+          # Flattened to one line of `host=mount` pairs rather than passed as
+          # JSON. A job output is a single line, and the alternative — handing
+          # JSON to the next job and parsing it with `node -e` — is the inlined
+          # snippet this workflow's own guard forbids (SC2016: a JS template
+          # literal inside a single-quoted shell string reads as a shell
+          # variable).
+          #
+          # The encoding is only unambiguous because neither field can contain
+          # a space or an `=`, and that is a property the PARSER enforces, not
+          # one this line may assume: `isHostname` accepts only DNS labels, and
+          # `badMountSegments` accepts only kebab-case URL segments. Both
+          # charsets exclude a space and an `=`. Weaken either check and the
+          # `awk` below silently truncates a mount at its first space, which
+          # reaches the capture as a DIFFERENT mount path than the operator
+          # typed — a wrong published URL, reported as a successful run.
+          mount_pairs="$(printf '%s\n' "$mounts_tsv" | awk 'NF {printf "%s=%s ", $1, $2}')"
+          mount_count="$(printf '%s\n' "$mounts_tsv" | awk 'NF' | wc -l | tr -d ' ')"
+          {
+            echo "mounts=$mount_pairs"
+            echo "mount_count=$mount_count"
+          } >> "$GITHUB_OUTPUT"
+
+          # A run id, validated to digits HERE so no later step has to wonder.
+          # It reaches `gh run download` and an artifact name, and an operator
+          # types it by hand from a URL — the shape is the only thing this job
+          # can check, and checking the shape is what keeps the failure in this
+          # job rather than in the one that has already installed sharp.
+          reuse_run="$(printf '%s' "${INPUT_REUSE_RUN:-}" | tr -d '[:space:]')"
+          if [ -n "$reuse_run" ] && ! printf '%s' "$reuse_run" | grep -qE '^[0-9]+$'; then
+            echo "::error::reuse_capture_from_run must be a numeric run id (the digits at the end of an Actions run URL), got '$reuse_run'."
+            exit 1
+          fi
+          reuse_max_age="$(printf '%s' "${INPUT_REUSE_MAX_AGE:-168}" | tr -d '[:space:]')"
+          [ -n "$reuse_max_age" ] || reuse_max_age=168
+          if ! printf '%s' "$reuse_max_age" | grep -qE '^[0-9]+$' || [ "$reuse_max_age" -lt 1 ]; then
+            echo "::error::reuse_max_age_hours must be a positive whole number of hours, got '$reuse_max_age'."
+            exit 1
+          fi
+          max_pdf_mb="$(printf '%s' "${INPUT_MAX_PDF_MB:-90}" | tr -d '[:space:]')"
+          [ -n "$max_pdf_mb" ] || max_pdf_mb=90
+          # The upper bound is not decoration: capture-wordpress-api.mjs declares
+          # `['max-pdf-mb', …, { min: 1, max: 100000 }]`, so a larger value is
+          # refused THERE — in `convert`, after checkout and setup, which is
+          # exactly the "fail before the network" promise this job exists to
+          # keep. The two bounds must agree or the earlier one is decorative.
+          if ! printf '%s' "$max_pdf_mb" | grep -qE '^[0-9]+$' \
+            || [ "$max_pdf_mb" -lt 1 ] || [ "$max_pdf_mb" -gt 100000 ]; then
+            echo "::error::max_pdf_mb must be a whole number of MB between 1 and 100000, got '$max_pdf_mb'."
+            exit 1
+          fi
+          {
+            echo "reuse_run=$reuse_run"
+            echo "reuse_max_age_hours=$reuse_max_age"
+            echo "max_pdf_mb=$max_pdf_mb"
+          } >> "$GITHUB_OUTPUT"
+
           echo "Resolved: domain=$domain repo=$repo mode=$mode max=$max delay=$delay posts=$posts"
+          echo "Extra hosts mounted: $mount_count"
+          echo "PDFs larger than ${max_pdf_mb} MB will be downsampled"
+          if [ -n "$reuse_run" ]; then
+            echo "Reusing the capture from run $reuse_run (max age ${reuse_max_age}h) — the live site will NOT be crawled."
+          fi
 
       # Placed in `resolve`, which every other job needs, so a broken classifier
       # cannot reach the live site. Both scripts decide what gets fetched and
@@ -378,12 +506,15 @@ jobs:
       - name: Offline self-tests (gate every later job)
         run: |
           node scripts/capture-wordpress-api.mjs --self-test
+          node scripts/parse-host-mounts.mjs --self-test
+          node scripts/verify-reused-capture.mjs --self-test
           node scripts/replace-forms-with-mailto.mjs --self-test
           node scripts/integrate-clone-into-nextjs.mjs --self-test
           node scripts/verify-no-legacy.mjs --self-test
           node scripts/assess-capture-completeness.mjs --self-test
           node scripts/clone-to-routes-lib.mjs --self-test
           node scripts/convert-clone-to-routes.mjs --self-test
+          node scripts/check-publishable-size.mjs --self-test
 
   convert:
     runs-on: ubuntu-latest
@@ -398,6 +529,15 @@ jobs:
       cancel-in-progress: false
     outputs:
       pages_with_forms: ${{ steps.forms.outputs.pages_with_forms }}
+    # `actions: read` is new, and it is the whole permission cost of capture
+    # reuse: downloading an EARLIER run's artifact is an Actions API read,
+    # which a job that only ever crawled a live site never needed. Listed
+    # beside `contents: read` because a job-level block REPLACES the
+    # workflow-level one rather than extending it — omit it and the checkout
+    # fails, which reads as a checkout problem.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -419,7 +559,137 @@ jobs:
         shell: bash
         run: npm install --no-save --no-audit --no-fund sharp@0.34.5
 
+      # The alternative to crawling a charity's shared host for 13-14 minutes
+      # to obtain a result that is supposed to be byte-identical to one GitHub
+      # is already storing.
+      #
+      # WHY THIS IS WORTH A JOB'S PERMISSIONS. `deliver` sits behind a human
+      # approval gate that appears at minute 15, and an approval is spent the
+      # moment it is given. A failure anywhere after it — a transient push
+      # error, a build that needed one more fix — costs the crawl AND a second
+      # approval, from a reviewer who has by then moved on. Measured on the New
+      # Heights migration (#1342): the same origin was crawled four times in one
+      # session, three of them re-work.
+      #
+      # WHY IT IS NOT JUST A DOWNLOAD. A run id is digits typed by hand from a
+      # URL, and the adjacent digits are another charity's migration. Nothing
+      # downstream can catch that: the build passes, the self-containment gate
+      # passes, the PR opens — every one of those asks "is this a coherent
+      # site?" and none asks "is this the site that was asked for". So the
+      # artifact is verified against THIS dispatch before anything reads it,
+      # and the completeness gate is re-applied with THIS run's min_percent
+      # rather than inherited from the run that produced the capture.
+      - name: Reuse the capture from an earlier run
+        id: reuse
+        if: needs.resolve.outputs.reuse_run != ''
+        working-directory: automation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REUSE_RUN: ${{ needs.resolve.outputs.reuse_run }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          MOUNTS: ${{ needs.resolve.outputs.mounts }}
+          MOUNT_COUNT: ${{ needs.resolve.outputs.mount_count }}
+          MIN_PERCENT: ${{ needs.resolve.outputs.min_percent }}
+          MAX_AGE: ${{ needs.resolve.outputs.reuse_max_age_hours }}
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # This workflow's own path. A run id from a DIFFERENT workflow would
+          # otherwise fail later at "no artifact named wp-capture-<id>", which
+          # reads as an expired artifact rather than as the wrong run.
+          self='.github/workflows/706-website-wordpress-to-pages.yml'
+
+          src_path="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REUSE_RUN" --jq '.path')" || {
+            echo "::error::run $REUSE_RUN is not readable in $GITHUB_REPOSITORY. A capture can only be reused from a run of this workflow in this repository."
+            exit 1
+          }
+          if [ -z "$src_path" ]; then
+            echo "::error::run $REUSE_RUN returned no workflow path — refusing to guess which workflow produced it."
+            exit 1
+          fi
+          if [ "$src_path" != "$self" ]; then
+            echo "::error::run $REUSE_RUN is a run of '$src_path', not of '$self'. Only a 706 run produces a capture this one can read."
+            exit 1
+          fi
+
+          # jq reads the name from the environment rather than from an
+          # interpolated shell string: the artifact name contains the run id,
+          # and building a jq filter by concatenation is how a quoting bug
+          # becomes a filter that silently matches nothing.
+          export ARTIFACT_NAME="wp-capture-$REUSE_RUN"
+          # `|| { … }` rather than `-z`: an API call that FAILED and a run that
+          # genuinely holds no such artifact both leave this variable empty,
+          # and they need opposite responses — retry versus re-dispatch a
+          # convert. A single emptiness check would report the reassuring one.
+          expired="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REUSE_RUN/artifacts" \
+            --paginate --jq '.artifacts[] | select(.name==env.ARTIFACT_NAME) | "\(.expired)"')" || {
+            echo "::error::could not list the artifacts of run $REUSE_RUN. This is an API failure, not a missing artifact — retry before re-dispatching a convert."
+            exit 1
+          }
+          if [ -z "$expired" ]; then
+            echo "::error::run $REUSE_RUN has no artifact named '$ARTIFACT_NAME'. Either its capture step never finished, or the artifact has been deleted. Dispatch a fresh convert."
+            exit 1
+          fi
+          if [ "$expired" = "true" ]; then
+            echo "::error::the capture artifact from run $REUSE_RUN has expired (retention is 7 days). Dispatch a fresh convert."
+            exit 1
+          fi
+
+          gh run download "$REUSE_RUN" --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" --dir "$RUNNER_TEMP/capture" || {
+            echo "::error::could not download '$ARTIFACT_NAME' from run $REUSE_RUN."
+            exit 1
+          }
+
+          # Everything that decides whether this artifact may be published as
+          # THIS run's result: same domain, exactly this run's hosts, each at
+          # the mount this run asks for, and not stale. Redirected to a file
+          # rather than piped, so the exit code read below is the verifier's
+          # and not a reader's (ledger L50).
+          reports="$RUNNER_TEMP/reused-capture-reports.txt"
+          node scripts/verify-reused-capture.mjs \
+            --dir "$RUNNER_TEMP/capture/site" \
+            --domain "$DOMAIN" \
+            --mounts "$MOUNTS" \
+            --max-age-hours "$MAX_AGE" > "$reports"
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::the capture from run $REUSE_RUN cannot be reused for this dispatch — see the errors above. Nothing was published."
+            exit 1
+          fi
+
+          # The completeness gate is re-applied here rather than inherited: a
+          # capture that passed at 90% must still fail a dispatch that asks for
+          # 98%, or `min_capture_percent` silently stops meaning anything the
+          # moment a capture is reused.
+          assessed=0
+          while IFS= read -r report; do
+            [ -n "$report" ] || continue
+            node scripts/assess-capture-completeness.mjs \
+              --report "$report" --min-percent "$MIN_PERCENT" || exit 1
+            assessed=$((assessed + 1))
+          done < "$reports"
+
+          # A per-item success log is not evidence of completeness: a file
+          # without a trailing newline loses its last line to `read`, and every
+          # line that DID run prints a pass. Count and compare.
+          expected=$((MOUNT_COUNT + 1))
+          if [ "$assessed" -ne "$expected" ]; then
+            echo "::error::re-assessed $assessed capture report(s), expected $expected (apex + $MOUNT_COUNT mounted host(s)). A pass on each report read is not evidence that every host was read."
+            exit 1
+          fi
+
+          echo "Reused the capture from run $REUSE_RUN: $expected host(s) re-verified and re-assessed. The live site was not contacted."
+
       - name: Capture the live WordPress site
+        id: capture
+        # Skipped entirely when a previous run's capture is being reused. The
+        # two paths are mutually exclusive by construction rather than by a
+        # flag read inside one script: a crawl that ran anyway would overwrite
+        # the very artifact the reuse was meant to preserve, and the run would
+        # still report success.
+        if: needs.resolve.outputs.reuse_run == ''
         working-directory: automation
         env:
           DOMAIN: ${{ needs.resolve.outputs.domain }}
@@ -428,52 +698,143 @@ jobs:
           DELAY: ${{ needs.resolve.outputs.delay }}
           POSTS: ${{ needs.resolve.outputs.posts }}
           IGNORE_HOSTS: ${{ needs.resolve.outputs.ignore_hosts }}
+          MOUNTS: ${{ needs.resolve.outputs.mounts }}
+          MAX_PDF_MB: ${{ needs.resolve.outputs.max_pdf_mb }}
         shell: bash
         run: |
           set -uo pipefail
-          args=(--domain "$DOMAIN" --out "$RUNNER_TEMP/capture/site" --max "$MAX" --delay "$DELAY")
-          if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
-          if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
 
-          set +e
-          node scripts/capture-wordpress-api.mjs "${args[@]}"
-          rc=$?
-          set -e
+          # One capture per hostname, all into ONE output tree: the apex at the
+          # root, each extra host under its `--mount` path. The mount is applied
+          # INSIDE the capture (localPathForLink) rather than by moving files
+          # afterwards, because relativePrefix() derives each page's `../` count
+          # from its local path's depth — move the files later and every
+          # relative reference in the mounted pages points one level too
+          # shallow, on every page, silently.
+          #
+          # Each host is gated on its OWN completeness report before the next
+          # one runs. An aggregate percentage across hosts would let a 40%
+          # capture of a 110-page subdomain hide behind a complete apex.
+          capture_one() {
+            local host="$1" mount="$2" label="$3"
+            # Every host writes THIS one path, so it must be cleared before each
+            # capture or a host that dies before writing one is assessed against
+            # the PREVIOUS host's report — and passes.
+            #
+            # Measured, run 35622301582: school.newheightseducation.org became
+            # unreachable, its capture aborted at "REST API is not usable"
+            # before writing anything, and the apex report from twelve minutes
+            # earlier was still sitting here. The gate below read it and
+            # reported `Captured 1 of 1 inventory entries (100.0%)` for a host
+            # that fetched nothing at all — byte-identical to the apex's
+            # summary, down to the apex's own asset-failure counts and its
+            # `www.newheightseducation.org` unlocalized host. Had the third
+            # host not hard-failed, the run would have delivered a site missing
+            # all 110 of that subdomain's pages while reporting three green
+            # hosts. The `[ ! -f "$report" ]` branch below was written for
+            # exactly this case and could not fire, because the file existed.
+            local report="$RUNNER_TEMP/capture/site/wp-capture-report.json"
+            rm -f "$report"
+            local args=(--domain "$host" --out "$RUNNER_TEMP/capture/site" --max "$MAX" --delay "$DELAY")
+            if [ -n "$mount" ]; then args+=(--mount "$mount"); fi
+            if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
+            if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
+            if [ -n "$MAX_PDF_MB" ]; then args+=(--max-pdf-mb "$MAX_PDF_MB"); fi
 
-          # The capture exits 1 for ANY unmet gate, which conflates two things
-          # that deserve opposite treatment:
-          #
-          #   COMPLETENESS — did we get the site? Losing pages is a migration
-          #   defect and must stop the run.
-          #
-          #   ASSET HEALTH — are there dead references? A live site's own broken
-          #   links are reproduced FAITHFULLY. Failing on them would mean FFC
-          #   can never migrate a site that has one dead image, which is most
-          #   real charity sites. Measured on the first live delivery: 15 failed
-          #   assets, all of them 404/410 on the live site too, blocked a
-          #   capture that had reached 589 of 590 entries with ZERO page-fetch
-          #   failures.
-          #
-          # So completeness is enforced here, on the report's own numbers, and
-          # asset health is reported. `verify-no-legacy` remains the hard gate
-          # on whether the exported site actually stands alone.
-          report="$RUNNER_TEMP/capture/site/wp-capture-report.json"
-          if [ ! -f "$report" ]; then
-            echo "::error::The capture produced no report at $report (exit $rc). Nothing to assess."
-            exit 1
-          fi
-          if [ "$rc" -ge 2 ]; then
-            echo "::error::capture-wordpress-api.mjs exited $rc — usage error or crash, not a gate result."
-            exit 1
-          fi
+            echo "::group::capture $label"
+            # `|| rc=$?`, never `set +e … set -e`. This step declares
+            # `set -uo pipefail` — deliberately WITHOUT errexit, so that every
+            # failure below reports a named ::error:: rather than dying
+            # silently at whichever line happened to fail first.
+            #
+            # The toggle pair this replaces restored the WRONG state: it left
+            # errexit ON for the rest of the step after the first capture
+            # (measured: off before, ON after), so the step's declared error
+            # mode silently became something else partway through. And while it
+            # was on it protected nothing, because `capture_one` is always
+            # invoked as `capture_one … || exit 1`, and a tested context
+            # suspends errexit inside the function body too — measured: a
+            # failing untested `cp` still let this function return 0.
+            local rc=0
+            node scripts/capture-wordpress-api.mjs "${args[@]}" || rc=$?
+            echo "::endgroup::"
 
-          # In a script, not `node -e '…'`: every JS template literal inside a
-          # single-quoted shell string reads to shellcheck as an unexpanded
-          # shell variable (SC2016), and quoting around that is how a script
-          # acquires escaping nobody can safely edit later. The file also gets
-          # its own self-tests, which an inline block cannot have.
-          node scripts/assess-capture-completeness.mjs \
-            --report "$report" --min-percent "$MIN_PERCENT"
+            # The capture exits 1 for ANY unmet gate, which conflates two things
+            # that deserve opposite treatment:
+            #
+            #   COMPLETENESS — did we get the site? Losing pages is a migration
+            #   defect and must stop the run.
+            #
+            #   ASSET HEALTH — are there dead references? A live site's own
+            #   broken links are reproduced FAITHFULLY. Failing on them would
+            #   mean FFC can never migrate a site that has one dead image, which
+            #   is most real charity sites. Measured on the first live delivery:
+            #   15 failed assets, all of them 404/410 on the live site too,
+            #   blocked a capture that had reached 589 of 590 entries with ZERO
+            #   page-fetch failures.
+            #
+            # So completeness is enforced here, on the report's own numbers, and
+            # asset health is reported. `verify-no-legacy` remains the hard gate
+            # on whether the exported site actually stands alone.
+            if [ ! -f "$report" ]; then
+              echo "::error::$label produced no report at $report (exit $rc). Nothing to assess."
+              return 1
+            fi
+            if [ "$rc" -ge 2 ]; then
+              echo "::error::capture-wordpress-api.mjs exited $rc for $label — usage error or crash, not a gate result."
+              return 1
+            fi
+            node scripts/assess-capture-completeness.mjs \
+              --report "$report" --min-percent "$MIN_PERCENT" || return 1
+            # Each host overwrites the shared report path, so keep a per-host
+            # copy: the artifact has to show what EACH capture did, not just
+            # whichever ran last.
+            #
+            # `label` is interpolated into a FILENAME here, so it may never
+            # contain a `/`. Callers pass the hostname (or the literal `apex`),
+            # never the mount: a mount is a URL PATH and `/school/spring-2026`
+            # is a legal one, which would make this `cp` write into a
+            # subdirectory that does not exist — the capture succeeds, the copy
+            # fails, and the run dies after the crawl it was meant to preserve.
+            # `isHostname` in parse-host-mounts.mjs forbids a `/` in a host, so
+            # the hostname form cannot reach that shape at all.
+            cp "$report" "$RUNNER_TEMP/capture/site/wp-capture-report.${label}.json" || {
+              echo "::error::$label was captured and passed its gates, but its report could not be copied to wp-capture-report.${label}.json."
+              echo "::error::That file is not cosmetic: a later run reusing this capture reads the per-host reports to decide which hosts it may publish and where."
+              return 1
+            }
+            return 0
+          }
+
+          capture_one "$DOMAIN" "" "apex" || exit 1
+
+          # `MOUNTS` is what `resolve` already validated, as space-separated
+          # `host=mount` pairs. Re-using its result rather than re-parsing the
+          # raw input means the thing that was checked and the thing that runs
+          # cannot drift apart.
+          mounted=0
+          for pair in ${MOUNTS:-}; do
+            host="${pair%%=*}"
+            mount="${pair#*=}"
+            # An explicit `if`, not `A && B || C`: that form is not if-then-else
+            # (shellcheck SC2015, and actionlint fails the build on it), and the
+            # reason it matters here is that `${pair%%=*}` and `${pair#*=}` BOTH
+            # return the whole string when `pair` contains no `=` — so a
+            # malformed pair arrives as host == mount rather than as an empty
+            # field, which is what the third test is actually looking for.
+            if [ -z "$host" ] || [ -z "$mount" ] || [ "$host" = "$mount" ]; then
+              echo "::error::malformed mount pair '$pair' — resolve emitted something this loop cannot read."
+              exit 1
+            fi
+            # The label is the HOST, not the mount — see the `cp` inside
+            # capture_one. A hostname is also the more useful thing to read in
+            # the log group and in the artifact's filename, because it names
+            # what was crawled rather than where it landed.
+            capture_one "$host" "$mount" "$host" || exit 1
+            mounted=$((mounted + 1))
+          done
+
+          echo "Captured 1 apex + $mounted mounted host(s)."
 
       # Runs BEFORE integration, so the forms are dead in the artifact too and
       # a later stage cannot accidentally publish the un-neutralized capture.
@@ -500,10 +861,8 @@ jobs:
           # that to "no forms found" is how a search that never ran becomes
           # "nothing to replace" and ships live, dead forms. The three cases are
           # kept apart.
-          set +e
-          matches="$(grep -rlIE '<form[[:space:]/>]' "$site" --include='*.html' --include='*.htm')"
-          rc=$?
-          set -e
+          rc=0
+          matches="$(grep -rlIE '<form[[:space:]/>]' "$site" --include='*.html' --include='*.htm')" || rc=$?
           if [ "$rc" -gt 1 ]; then
             echo "::error::Searching $site for forms failed (grep exit $rc). Refusing to treat a failed search as 'no forms'."
             exit 1
@@ -595,6 +954,23 @@ jobs:
           node automation/scripts/convert-clone-to-routes.mjs \
             --repo ffc-ex \
             --site-name "$SOURCE_DOMAIN"
+
+      # Ask the one question every gate above skips: can this tree be PUSHED?
+      #
+      # The completeness gate, the self-containment gate and the build all ask
+      # "is this a coherent site?". None of them asks "will git take it?", and
+      # on 2026-09-21 that gap cost a 40-minute crawl plus a spent human
+      # approval: run 35582162161 converted cleanly, passed 120/120 pages, and
+      # was refused by the pre-receive hook over three EdGuide PDFs of 115.93,
+      # 108.72 and 167.22 MB. Answering it here costs milliseconds.
+      #
+      # Named files, not a count: an operator told "3 files are too large" has
+      # to re-run the crawl to learn which three.
+      - name: Gate - the tree must be publishable (push + Pages limits)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node automation/scripts/check-publishable-size.mjs ffc-ex
 
       - name: Build the static export
         working-directory: ffc-ex
@@ -717,10 +1093,13 @@ jobs:
             # Fixing one site of a bug and leaving its twin is the failure mode
             # this whole workflow keeps hitting, so the two now match:
             # 0 = matches, 1 = no matches, >1 = a real error worth stopping for.
-            set +e
-            f="$(grep -rlF -- "/$r" "${dirs[@]}" | tr '\n' ' ')"
-            rc=$?
-            set -e
+            # Same `|| rc=$?` form as the forms search, and for the second
+            # reason given at the capture step: this step also declares no
+            # errexit, so the toggle pair used to switch it ON from the first
+            # loop iteration onward — in the one step whose header says it must
+            # never fail the run.
+            rc=0
+            f="$(grep -rlF -- "/$r" "${dirs[@]}" | tr '\n' ' ')" || rc=$?
             if [ "$rc" -gt 1 ]; then
               echo "::error::Searching the target repo's tests for /$r failed (grep exit $rc). Refusing to treat a failed search as 'no references'."
               exit 1
@@ -762,6 +1141,13 @@ jobs:
           SOURCE_DOMAIN: ${{ needs.resolve.outputs.domain }}
           TARGET_REPO: ${{ needs.resolve.outputs.repo }}
           RUN_MODE: ${{ needs.resolve.outputs.mode }}
+          MOUNT_COUNT: ${{ needs.resolve.outputs.mount_count }}
+          # Stated in the summary because it changes what the summary MEANS: a
+          # reused capture is evidence about a site as it stood at some earlier
+          # moment, not as it stands now. An approver reading "706 — <domain>"
+          # would otherwise have no way to tell the two apart, and the run log
+          # that says so is fifteen steps up.
+          REUSE_RUN: ${{ needs.resolve.outputs.reuse_run }}
         run: |
           set -euo pipefail
           # Fail closed on empty: this summary is the only artifact a `preview`
@@ -775,6 +1161,14 @@ jobs:
             echo "## 706 — $SOURCE_DOMAIN → $TARGET_REPO"
             echo ""
             echo "Mode: \`$RUN_MODE\`"
+            echo ""
+            echo "Hostnames captured: 1 apex + ${MOUNT_COUNT:-0} mounted"
+            if [ -n "${REUSE_RUN:-}" ]; then
+              echo ""
+              echo "⚠️ **Capture REUSED from run [$REUSE_RUN](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSE_RUN})** — the live site was not crawled by this run."
+              echo ""
+              echo "It was re-verified against this dispatch (domain, hostnames, mounts, age) and re-assessed against this run's completeness threshold. It still describes the site as it stood when that run captured it."
+            fi
             echo ""
             echo "Changed paths that a delivery would commit: $(git add -A --dry-run | wc -l)"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -792,6 +1186,24 @@ jobs:
       # integration against its own checkout rather than trying to ship a .git
       # directory through an artifact.
       - name: Upload the neutralized capture (handoff to deliver)
+        # Runs even when a LATER step failed, which is the case that matters.
+        # Measured on run 35571249633: three hostnames crawled for 36m32s, all
+        # three past their completeness gates, then `Convert the capture into
+        # real app routes` failed — and because this step sat after it, the
+        # whole capture was discarded and the retry had to crawl again. That is
+        # exactly the cost `reuse_capture_from_run` exists to remove, and the
+        # input cannot help while the artifact only survives a green run. The
+        # failure a reuse is FOR is a failure after the capture.
+        #
+        # Conditioned on a capture existing rather than on `always()`: with no
+        # capture there are no files, `if-no-files-found: error` would fail
+        # this step too, and a second red step on an already-failed job hides
+        # which one was the real failure. `outcome`, not `conclusion` — the
+        # capture step's conclusion is what the job reports, and these two
+        # differ exactly when a step failed, which is the case being handled.
+        if:
+          ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.reuse.outcome ==
+          'success') }}
         uses: actions/upload-artifact@v4
         with:
           name: wp-capture-${{ github.run_id }}
@@ -996,6 +1408,23 @@ jobs:
           node automation/scripts/convert-clone-to-routes.mjs \
             --repo ffc-ex \
             --site-name "$SOURCE_DOMAIN"
+
+      # Ask the one question every gate above skips: can this tree be PUSHED?
+      #
+      # The completeness gate, the self-containment gate and the build all ask
+      # "is this a coherent site?". None of them asks "will git take it?", and
+      # on 2026-09-21 that gap cost a 40-minute crawl plus a spent human
+      # approval: run 35582162161 converted cleanly, passed 120/120 pages, and
+      # was refused by the pre-receive hook over three EdGuide PDFs of 115.93,
+      # 108.72 and 167.22 MB. Answering it here costs milliseconds.
+      #
+      # Named files, not a count: an operator told "3 files are too large" has
+      # to re-run the crawl to learn which three.
+      - name: Gate - the tree must be publishable (push + Pages limits)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node automation/scripts/check-publishable-size.mjs ffc-ex
 
       - name: Commit and open a draft PR on the FFC-EX repo
         working-directory: ffc-ex

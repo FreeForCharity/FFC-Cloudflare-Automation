@@ -139,6 +139,33 @@ function copyTemplate(name, dest) {
  * the clean one and the rest are SUFFIXED, never dropped: a page silently
  * missing from a migration is the failure mode nobody notices.
  */
+/**
+ * HTML still sitting in `public/` that should have become a route.
+ *
+ * `<assetsDir>/…` is excluded, and that exclusion is load-bearing rather than
+ * a convenience. The asset localizer stores an `<iframe src>` under
+ * `<assetsDir>/<host>/<path>`, and some of those targets legitimately serve
+ * `text/html` — a video-player document, an embedded map, a widget. Those are
+ * ASSETS the published site must keep, not pages that failed to become routes,
+ * and the two are only distinguishable by where they live.
+ *
+ * Measured on run 35575009432 (newheightseducation.org): the gate failed on
+ * two Animoto player documents under
+ * `_ffc-assets/s3.amazonaws.com/embed.animoto.com/`. Deleting them would have
+ * broken both embeds; failing the run on them blocked a conversion that was
+ * correct.
+ *
+ * `startsWith` is anchored at the root on purpose: a captured page really
+ * living at `foo/_ffc-assets/x.html` is a page, not an asset of this site.
+ *
+ * @param {string[]} files     paths relative to `public/`
+ * @param {string}   assetsDir the localized-asset directory name
+ */
+export function unroutedHtml(files, assetsDir) {
+  const prefix = `${assetsDir}/`;
+  return files.filter((f) => f.endsWith('.html') && !f.startsWith(prefix));
+}
+
 export function assignSlugs(localPaths) {
   const taken = new Set();
   const assigned = [];
@@ -482,7 +509,7 @@ function main() {
     rmSync(join(publicDir, assetsDir, 'clone-enhance.js'), { force: true });
   }
 
-  const remainingHtml = walk(publicDir).filter((f) => f.endsWith('.html'));
+  const remainingHtml = unroutedHtml(walk(publicDir), assetsDir);
 
   console.log('--- conversion ---------------------------------------------');
   console.log(`site                  ${siteName || '(unknown)'}`);
@@ -576,7 +603,32 @@ function main() {
     process.exit(1);
   }
   if (!dryRun && remainingHtml.length) {
-    console.error(`public/ still holds ${remainingHtml.length} HTML files`);
+    // NAME them. This gate used to print only a count, and the conversion it
+    // stops runs after a 13-14 minute crawl of the charity's live site — so a
+    // bare number costs another full crawl just to learn which files it meant.
+    // Measured on newheightseducation.org (run 35571249633): "public/ still
+    // holds 2 HTML files", and nothing in the run said which 2.
+    console.error(
+      `public/ still holds ${remainingHtml.length} HTML file(s) that never became a route:`,
+    );
+    for (const f of remainingHtml.slice(0, 20)) console.error(`  ${f}`);
+    if (remainingHtml.length > 20) {
+      console.error(`  ... and ${remainingHtml.length - 20} more`);
+    }
+    // Says the cause rather than making the reader rediscover it. The first
+    // version of this hint named only the page case and was WRONG about the
+    // first real failure it met — those files were localized assets, which is
+    // why `<assetsDir>/` is now excluded above. Both cases stated, in the
+    // order they are likely.
+    console.error(
+      'Only `<path>/index.html` becomes a route, so a captured PAGE whose URL already ends' +
+        ' in `.html` lands here under its own name and would be published as a second,' +
+        ' unrouted copy of that page.',
+    );
+    console.error(
+      `(Localized assets under \`${assetsDir}/\` are not counted — an <iframe src> that serves` +
+        ' HTML is an asset the site must keep, not a page that failed to convert.)',
+    );
     process.exit(1);
   }
 }
@@ -916,6 +968,47 @@ function selfTest() {
       failures += 1;
     }
   };
+
+  // --- leftover HTML ---------------------------------------------------
+  // This rule decides whether a conversion may proceed, and it was wrong once
+  // in production while living inline in main(), where no self-test could
+  // reach it. That is the reason it is a function.
+  eq(
+    'an unrouted page is counted',
+    unroutedHtml(['about/legacy.html', 'index.html'], '_ffc-assets'),
+    ['about/legacy.html', 'index.html'],
+  );
+  eq(
+    'a localized asset that serves HTML is NOT counted',
+    unroutedHtml(['_ffc-assets/s3.amazonaws.com/embed.animoto.com/play__x.html'], '_ffc-assets'),
+    [],
+  );
+  eq(
+    'the real run-35575009432 mix: assets dropped, pages kept',
+    unroutedHtml(
+      [
+        '_ffc-assets/s3.amazonaws.com/embed.animoto.com/play__a.html',
+        '_ffc-assets/s3.amazonaws.com/embed.animoto.com/play__b.html',
+        'stray-page.html',
+      ],
+      '_ffc-assets',
+    ),
+    ['stray-page.html'],
+  );
+  eq('non-HTML is never counted', unroutedHtml(['_ffc-assets/x.css', 'a.pdf'], '_ffc-assets'), []);
+  // Anchored at the ROOT: a captured page that genuinely lives under a
+  // directory of that name deeper in the tree is a page, not an asset. A
+  // substring test would swallow it.
+  eq(
+    'the exclusion is anchored, not a substring match',
+    unroutedHtml(['deep/_ffc-assets/x.html'], '_ffc-assets'),
+    ['deep/_ffc-assets/x.html'],
+  );
+  eq(
+    'a custom --assets-dir is honoured',
+    unroutedHtml(['other/x.html', '_ffc-assets/x.html'], 'other'),
+    ['_ffc-assets/x.html'],
+  );
 
   // --- slug assignment -------------------------------------------------
   // RFC 3986 makes a percent-escape's hex digits case-insensitive, so these

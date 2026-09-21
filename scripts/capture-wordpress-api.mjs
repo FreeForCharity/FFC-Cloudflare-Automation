@@ -46,8 +46,7 @@
  *   2  invalid usage / self-test failure / crash
  */
 
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, mkdtempSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname, extname, resolve as resolvePath, sep } from 'node:path';

@@ -140,8 +140,9 @@ on:
           Downsample any captured PDF larger than this, in MB. GitHub REFUSES a push containing any
           file over 100 MB, and that rejection arrives at the push — after the crawl and after the
           approval have both been spent. The default is deliberately below the hard limit rather
-          than at it, because Ghostscript's output size is not predictable from its input. Set to a
-          very large number to disable the pass; the size guard still refuses the run.
+          than at it, because Ghostscript's output size is not predictable from its input. Range
+          1-100000, matching the capture's own bound. Set it to 100000 to effectively disable the
+          pass; the size guard still refuses a tree git would reject.
         required: false
         type: string
         default: '90'
@@ -476,8 +477,14 @@ jobs:
           fi
           max_pdf_mb="$(printf '%s' "${INPUT_MAX_PDF_MB:-90}" | tr -d '[:space:]')"
           [ -n "$max_pdf_mb" ] || max_pdf_mb=90
-          if ! printf '%s' "$max_pdf_mb" | grep -qE '^[0-9]+$' || [ "$max_pdf_mb" -lt 1 ]; then
-            echo "::error::max_pdf_mb must be a positive whole number of MB, got '$max_pdf_mb'."
+          # The upper bound is not decoration: capture-wordpress-api.mjs declares
+          # `['max-pdf-mb', …, { min: 1, max: 100000 }]`, so a larger value is
+          # refused THERE — in `convert`, after checkout and setup, which is
+          # exactly the "fail before the network" promise this job exists to
+          # keep. The two bounds must agree or the earlier one is decorative.
+          if ! printf '%s' "$max_pdf_mb" | grep -qE '^[0-9]+$' \
+            || [ "$max_pdf_mb" -lt 1 ] || [ "$max_pdf_mb" -gt 100000 ]; then
+            echo "::error::max_pdf_mb must be a whole number of MB between 1 and 100000, got '$max_pdf_mb'."
             exit 1
           fi
           {

@@ -41,8 +41,20 @@ export const GITHUB_MAX_FILE_BYTES = 100 * 1024 * 1024;
 /** GitHub Pages' documented published-site limit. */
 export const PAGES_MAX_SITE_BYTES = 1024 * 1024 * 1024;
 
-/** Directories never shipped to the target repo, so never counted. */
-const SKIP_DIRS = new Set(['.git', 'node_modules', '.next', '.github']);
+/**
+ * Directories that are neither pushed nor published, so never counted.
+ *
+ * `.github/` is deliberately NOT here, though it is not published either. The
+ * per-file check is about what a PUSH will take, and `.github/` is tracked and
+ * pushed like any other directory -- excluding it would blind the one check
+ * whose job is to catch a file git will refuse. Its few KB cannot move the
+ * total, so counting it costs nothing and closes that hole.
+ *
+ * `.git/` holds the object store (never a pushed *file*), and `node_modules/`
+ * and `.next/` are gitignored build output -- counting those would distort the
+ * total by gigabytes that reach neither the remote nor the published site.
+ */
+export const SKIP_DIRS = new Set(['.git', 'node_modules', '.next']);
 
 /**
  * Every file under `dir`, as `{ path, bytes }` with POSIX-separated paths.
@@ -113,11 +125,16 @@ export function assessTree(files, { maxFileBytes, maxTotalBytes, totalWarnOnly =
   };
 }
 
+/**
+ * Exported so the self-test asserts on the STRING the CLI actually prints,
+ * rather than on a copy of it that can drift.
+ */
+export const USAGE =
+  'usage: check-publishable-size.mjs <dir> [--max-file-mb=N] [--max-total-mb=N] [--total-warn-only]';
+
 function usage(msg) {
   console.error(`check-publishable-size: ${msg}`);
-  console.error(
-    'usage: check-publishable-size.mjs <dir> [--max-file-mb N] [--max-total-mb N] [--total-warn-only]',
-  );
+  console.error(USAGE);
   return 2;
 }
 
@@ -245,6 +262,24 @@ function selfTest() {
     ['a.pdf', 'b.pdf'],
   );
   eq('heaviestFiles does not mutate its input', files[0].path, 'a.pdf');
+
+  // `.github/` is pushed, so an oversized file there is a push rejection like
+  // any other. The first draft skipped it, blinding the per-file check to a
+  // whole tracked directory.
+  eq('.github is NOT skipped, because it is pushed', SKIP_DIRS.has('.github'), false);
+  eq('.git is skipped', SKIP_DIRS.has('.git'), true);
+  eq(
+    'gitignored build output is skipped',
+    [SKIP_DIRS.has('node_modules'), SKIP_DIRS.has('.next')],
+    [true, true],
+  );
+  // Help that prints a command the parser cannot run is worse than no help,
+  // because it reads as authoritative.
+  eq(
+    'the usage text uses the = form the parser accepts',
+    /--max-file-mb=N/.test(USAGE) && !/--max-file-mb N/.test(USAGE),
+    true,
+  );
 
   eq('the per-file default is GitHub’s hard limit', GITHUB_MAX_FILE_BYTES, 100 * MB);
   eq('the total default is the Pages limit', PAGES_MAX_SITE_BYTES, 1024 * MB);

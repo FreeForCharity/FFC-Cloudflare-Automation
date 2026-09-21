@@ -1341,8 +1341,32 @@ def test_the_size_guard_is_self_tested_before_anything_uses_it():
 def test_max_pdf_mb_is_validated_before_the_network():
     """A bad budget must cost seconds, not a 40-minute crawl AND an approval."""
     script = step_run(WORKFLOW, "resolve", "Resolve inputs")
-    assert "max_pdf_mb must be a positive whole number of MB" in script
+    assert "max_pdf_mb must be a whole number of MB between 1 and 100000" in script
     assert 'echo "max_pdf_mb=$max_pdf_mb"' in script
+
+
+def test_max_pdf_mb_is_bounded_to_match_the_capture():
+    """`resolve` and the capture must agree on the range, or the earlier check
+    is decorative.
+
+    Measured: `capture-wordpress-api.mjs` declares
+    `['max-pdf-mb', ..., { min: 1, max: 100000 }]` and exits 2 with
+    "expected an integer 1..100000". A resolve that only checks positivity lets
+    999999 through, and the run then dies in `convert` -- after checkout and
+    setup -- which is exactly the "fail before the network" promise this job
+    exists to keep.
+    """
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    assert '[ "$max_pdf_mb" -gt 100000 ]' in script, script[-400:]
+    assert "between 1 and 100000" in script
+
+    # The input description must not tell an operator to do the thing the
+    # bound refuses; the first draft said "set to a very large number".
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["max_pdf_mb"]["description"]
+    assert "very large number" not in desc, desc
+    assert "100000" in desc, desc
 
 
 def test_max_pdf_mb_reaches_the_capture():

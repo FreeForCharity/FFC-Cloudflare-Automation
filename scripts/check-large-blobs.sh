@@ -81,39 +81,26 @@ is_allowlisted() {
   return 1
 }
 
-# Scratch space for blob content sniffing. One directory, cleaned on any exit.
-SNIFF_DIR="$(mktemp -d)"
-# shellcheck disable=SC2064  # expand SNIFF_DIR now, while it is still set
-trap "rm -rf '$SNIFF_DIR'" EXIT
-
-# "Is this blob text?" -- no NUL byte in its first 8 KiB, the same heuristic git
-# itself uses to decide whether to print a diff.
+# "Is this blob text?" -- it contains no NUL byte, which is the heuristic git
+# itself uses to decide whether a path gets a diff. Takes the blob's sha and the
+# size `cat-file --batch-check` already reported for it, so nothing is measured
+# twice. Returns 0 = text, 1 = binary, 2 = could not read.
 #
-# The blob is dumped to a file first rather than piped into `head`, because
-# `head` closing the pipe early can leave `git` with SIGPIPE and, under
-# `set -o pipefail`, turn the sniff non-zero for every blob larger than the
-# window -- which is every blob this guard ever reports.
-#
-# Measured, because the obvious form is not obviously wrong: on ubuntu bash
-# 5.2.21, `git cat-file blob $sha | head -c 8192 > /dev/null` does exit **141**,
-# but the same producer feeding `head -c 8192 | wc -c` inside a command
-# substitution exits **0** on five consecutive runs. So the hazard is real in
-# one spelling and did not reproduce in the one this function would have used.
-# The file form is kept anyway: it costs one write of an already-oversized blob
-# on a run that is failing regardless, and it does not depend on the timing of a
-# signal. It has NOT been measured on the Windows git-bash host that also runs
-# this suite. Returns 0 = text, 1 = binary, 2 = could not read.
+# Deliberately no `head -c <window>` and no scratch file. Sniffing a window
+# would mean either a pipeline whose consumer closes early -- leaving `git` with
+# SIGPIPE, which `set -o pipefail` turns into a failure for every blob larger
+# than the window, i.e. every blob this guard ever reports -- or a temp file,
+# whose creation is one more thing that can fail on a run that is trying to
+# report something else. `tr` consumes the whole stream, so neither applies, and
+# reading a couple of megabytes on a run that is already failing costs nothing.
+# Scanning the whole blob rather than a prefix is also strictly the more
+# accurate answer; git's window exists for speed this script does not need.
 is_text_blob() {
-  local sha="$1" blob raw stripped
-  blob="${SNIFF_DIR}/blob"
-  if ! git cat-file blob "$sha" >"$blob" 2>/dev/null; then
+  local sha="$1" size="$2" stripped
+  if ! stripped="$(git cat-file blob "$sha" | LC_ALL=C tr -d '\000' | wc -c)"; then
     return 2
   fi
-  # `head` reading a FILE and `wc` consuming all of its output: no early close,
-  # so no SIGPIPE on either side.
-  raw="$(head -c 8192 "$blob" | wc -c)"
-  stripped="$(head -c 8192 "$blob" | LC_ALL=C tr -d '\000' | wc -c)"
-  [ "$raw" = "$stripped" ]
+  [ "$size" = "$stripped" ]
 }
 
 # Size of <path> as it stands on the base ref, or "" if the path is not there.
@@ -194,7 +181,7 @@ if [ -n "$object_list" ]; then
     # that cannot be determined must never drop the file from the report, so
     # every branch below still appends an entry.
     base_size="$(size_on_base "$path")"
-    if is_text_blob "$sha"; then
+    if is_text_blob "$sha" "$osize"; then
       kind="text file"
     elif [ "$?" = "1" ]; then
       kind="binary file"

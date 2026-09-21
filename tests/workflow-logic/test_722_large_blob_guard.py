@@ -253,17 +253,19 @@ def test_a_grown_tracked_text_file_is_not_diagnosed_as_a_committed_binary(tmp_pa
 def test_a_text_blob_far_larger_than_the_sniff_window_is_still_read_as_text(tmp_path):
     """The classification must not collapse on exactly the files it is for.
 
-    The blob is sniffed for NUL bytes in its first 8 KiB, so every file this
-    guard reports is orders of magnitude larger than the window. This pins that
-    the sniff still answers: a 1.2 MB text file, 146x the window, reads as text.
+    Every blob this guard reports is, by definition, over 1 MiB. A sniff that
+    only worked on small inputs would be green on every fixture a reviewer
+    thinks to write by hand and useless in production, so the size is the point
+    of this case rather than incidental to it.
 
-    What this does NOT pin is the guard's choice to dump the blob to a file
-    rather than pipe it into `head` -- reverting that spelling leaves this test
-    green on ubuntu, measured. The SIGPIPE failure it guards against reproduces
-    for `git cat-file blob | head -c 8192 > /dev/null` (exit 141) and not for
-    the `| wc -c` form the function would have used (exit 0, five runs). The
-    file form is kept as cheap insurance on the Windows host, where it has not
-    been measured; if it ever does fail there, this test is what reddens.
+    It is also what keeps the `head -c <window>` shape out: piping a multi-MB
+    blob into `head` leaves `git` with SIGPIPE once the consumer closes, and
+    under `set -o pipefail` that is a failure for exactly these files.
+    Measured on ubuntu bash 5.2.21: `git cat-file blob $sha | head -c 8192 >
+    /dev/null` exits 141, while the same producer feeding `head -c 8192 | wc -c`
+    inside a command substitution exits 0 on five consecutive runs -- so the
+    hazard is real in one spelling and does not reproduce in the other. The
+    guard sidesteps the question by reading the whole stream through `tr`.
     """
     result = _grow_tracked_file(
         tmp_path, "ledger.md", b"x" * 900_000, b"x" * BIG

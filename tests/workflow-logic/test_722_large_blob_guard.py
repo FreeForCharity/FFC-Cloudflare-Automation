@@ -316,6 +316,40 @@ def test_a_grown_tracked_binary_is_distinguished_from_both(tmp_path):
     assert "A TRACKED TEXT FILE GREW" not in result.stderr, out
 
 
+def test_a_dot_path_is_still_recognised_as_tracked(tmp_path):
+    """A path under `.github/` must classify the same as any other.
+
+    The obvious way to ask "how big was this on the base" is
+    `git cat-file -s "<rev>:<path>"`, and on the Windows git-bash host that runs
+    this suite MSYS rewrites that argument when the path starts with a dot --
+    `origin/main:.github/x` reaches git as `origin\\main;.github\\x`. The lookup
+    would fail, the file would come back absent, and every `.github/...` file
+    would be reported as NEW: silently, and in the direction of the message this
+    guard was changed to stop producing.
+
+    Stated plainly: on ubuntu this case **cannot** fail, because MSYS is not
+    there to mangle anything -- reverting the lookup to the `cat-file` form
+    leaves it green in CI. It is here for the Windows run, which is the only
+    place the difference is observable, and it is the whole reason the dot-path
+    is in the fixture rather than a plain filename.
+    """
+    repo = _init_repo(tmp_path)
+    workflows = repo / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "big.yml").write_bytes(b"x" * 900_000)
+    _commit(repo, "baseline: a dot-path file under the limit")
+    _git(repo, "branch", "-f", "base", "HEAD")
+
+    (workflows / "big.yml").write_bytes(b"x" * BIG)
+    _commit(repo, "grow it")
+
+    result = _run_guard(repo)
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert "TRACKED text file that GREW" in result.stdout, out
+    assert "NEW " not in result.stdout, out
+
+
 def test_classification_never_swallows_an_offender(tmp_path):
     """Two offenders of different shapes must both be reported.
 

@@ -103,15 +103,32 @@ is_text_blob() {
   [ "$size" = "$stripped" ]
 }
 
-# Size of <path> as it stands on the base ref, or "" if the path is not there.
+# Size of <path> as it stands on the base ref, or "" if there is no blob there.
 # A path that is absent on the base is new to this PR; a path that is present
 # and smaller is a tracked file this PR grew, which is a different mistake with
 # a different remedy.
+#
+# `ls-tree` rather than the shorter `cat-file -s "<rev>:<path>"`, because MSYS
+# rewrites a `rev:path` argument whose path begins with a dot -- `origin/main:`
+# `.github/x` reaches git as `origin\main;.github\workflows\x` (CLAUDE.md). On
+# the Windows host that runs this suite, every `.github/...` file would have
+# come back absent and been reported as NEW: silently, and in the direction of
+# the old message this change exists to stop.
+#
+# Anything that is not a blob with a numeric size answers "not there". A tree
+# entry reports its size as `-`, which would otherwise reach the caller's
+# arithmetic and abort the guard with exit 1 -- the code reserved for "oversized
+# blob found".
 size_on_base() {
-  local path="$1" size
-  if size="$(git cat-file -s "${BASE_REF}:${path}" 2>/dev/null)"; then
-    printf '%s' "$size"
-  fi
+  local path="$1" line _mode type _sha size _rest
+  line="$(git ls-tree -l "$BASE_REF" -- "$path" 2>/dev/null)" || return 0
+  [ -n "$line" ] || return 0
+  read -r _mode type _sha size _rest <<< "$line"
+  [ "$type" = "blob" ] || return 0
+  case "$size" in
+    '' | *[!0-9]*) return 0 ;;
+  esac
+  printf '%s' "$size"
 }
 
 # `rev-list --objects` prints "<sha> [<path>]"; `cat-file --batch-check` then

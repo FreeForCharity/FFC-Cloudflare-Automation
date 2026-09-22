@@ -1649,6 +1649,81 @@ def test_a_slash_escaped_quote_in_a_title_is_not_published_as_a_backslash():
         assert f"ok   {name}" in out, (name, out[-2000:])
 
 
+def test_a_captured_page_with_no_heading_of_its_own_is_given_one():
+    """The FFC template's `verify:build` requires exactly one `<h1>` per
+    indexable page (WCAG 1.3.1 / 2.4.6), and a WordPress archive template often
+    renders none. Measured on FFC-EX-newheightseducation.org: 86 of 785
+    captured fragments carry no `h1`, all of them `/publications/books/<slug>/`
+    archive pages -- the post beside each one has `<h1 class="entry-title">`,
+    so it is the theme's archive template rather than anything the capture
+    dropped. Once the image budget was fixed, this was the step keeping the
+    whole migration from deploying.
+
+    Nothing is invented: the heading carries the page's own title, and it is
+    clipped with the `.ffc-sr-only` rule the converter already installs,
+    because these pages were designed without a visible heading."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a page with no heading of its own is given one from its title",
+        "a page that already has an h1 is left exactly as captured",
+        "...however the tag is spelled",
+        "a tag that merely starts with h1 does not count as one",
+        "the title is escaped, not interpolated",
+        "a page with no title to use is left alone rather than given an empty heading",
+        "a non-string fragment is not a crash",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+    # ...and that the converter actually calls it. A library function nothing
+    # reaches is the same as no fix.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    assert "ensureSingleH1(`${fragmentCss.html}" in src, src[:200]
+
+
+def test_the_built_output_verifier_is_scoped_to_routes_not_captured_assets():
+    """`verify-build.mjs` walks every `.html` under `out/` and asserts one
+    `<h1>` and a self-referential canonical -- invariants about PAGES. The
+    capture localizes third-party embeds, and some are HTML: an Animoto player
+    landed at `out/_ffc-assets/s3.amazonaws.com/embed.animoto.com/play__*.html`
+    and failed both. It is an iframe document belonging to another site, and
+    there is nothing about it to fix.
+
+    Patched in the target repo because the assets directory is this pipeline's
+    convention -- the verifier cannot know about it, and every migrated site
+    hits this the moment a page embeds anything. Asserted by RUNNING the
+    converter's self-test, including the refusal: a patch that silently failed
+    would fail every later delivery at a step naming an embedded video."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "the verifier is patched to skip the captured assets tree",
+        "...with a guard INSIDE the directory branch, before the walk recurses",
+        "...and the walk it guards is still there",
+        "a repo with no verifier is reported, not crashed on",
+        "an unrecognised verifier is refused, not silently left unpatched",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+    # ...and that the conversion actually calls it. Mutation review removed the
+    # call and every case above still passed: a function exercised only by its
+    # own self-test is indistinguishable from one nothing reaches.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    assert "scopeVerifyBuildToRoutes(repo, assetsDir)" in src, src[:200]
+
+
 def _dedupe_script_text() -> str:
     return (REPO_ROOT / "scripts" / "dedupe-capture-assets.mjs").read_text(encoding="utf-8")
 

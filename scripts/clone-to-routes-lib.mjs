@@ -132,6 +132,39 @@ export function unslashQuotes(text) {
   return text.replace(SLASHED_QUOTE, '');
 }
 
+/**
+ * Give a captured page an `<h1>` when its own markup has none.
+ *
+ * The FFC template's `verify:build` requires exactly one `<h1>` per indexable
+ * page -- WCAG 1.3.1 / 2.4.6 -- and a WordPress archive template often renders
+ * no heading at all. Measured on FFC-EX-newheightseducation.org: 86 of 785
+ * captured fragments carry no `h1`, and after the image budget was fixed that
+ * became the step keeping the whole migration from deploying. All 86 are
+ * `/publications/books/<slug>/` archive pages; the post at
+ * `/publications/<slug>/` right beside each one has
+ * `<h1 class="entry-title">`, so this is the theme's archive template rather
+ * than anything the capture dropped.
+ *
+ * The heading carries the page's OWN title -- the one already in its `<title>`
+ * and its metadata -- so nothing is invented. It is clipped with the
+ * `.ffc-sr-only` rule the converter already installs, because these pages were
+ * designed without a visible heading and adding one would change how the
+ * charity's site looks; a page with no `h1` is an accessibility defect whether
+ * or not a sighted reader would notice, and this is the standard remedy.
+ *
+ * ONLY the zero case. A page with two `h1`s also fails the verifier, and
+ * fixing that means demoting one of the charity's headings -- an editorial
+ * decision, not an encoding one. No captured page has hit it yet; when one
+ * does it should be reported, not silently rewritten.
+ */
+export function ensureSingleH1(fragment, title) {
+  if (typeof fragment !== 'string') return '';
+  if (/<h1[\s>]/i.test(fragment)) return fragment;
+  const text = typeof title === 'string' ? title.trim() : '';
+  if (!text) return fragment;
+  return `<h1 class="ffc-sr-only">${escapeHtml(text)}</h1>\n${fragment}`;
+}
+
 export function extractTitle(html) {
   const raw = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? '';
   return unslashQuotes(decodeEntities(raw)).replace(/\s+/g, ' ').trim();
@@ -1457,6 +1490,49 @@ function selfTest() {
   // a crashed self-test instead of a named failure, and a crash is not a
   // detection. Same reason `integrate-clone-into-nextjs.mjs` reads its
   // preserved files through a tolerant helper.
+  eq(
+    'a page with no heading of its own is given one from its title',
+    ensureSingleH1('<p>body</p>\n', 'About NHEG Publications'),
+    '<h1 class="ffc-sr-only">About NHEG Publications</h1>\n<p>body</p>\n',
+  );
+  eq(
+    'a page that already has an h1 is left exactly as captured',
+    ensureSingleH1('<h1 class="entry-title">2014 Newsletter</h1>\n<p>b</p>', 'Ignored'),
+    '<h1 class="entry-title">2014 Newsletter</h1>\n<p>b</p>',
+  );
+  eq(
+    '...however the tag is spelled',
+    ensureSingleH1('<H1 id="t">x</H1>', 'Ignored').startsWith('<H1'),
+    true,
+  );
+  // `<h10>` is not an `h1`, and neither is the word in prose. A bare `/<h1/`
+  // test matches both, and would leave a genuinely heading-less page alone.
+  eq(
+    'a tag that merely starts with h1 does not count as one',
+    ensureSingleH1('<h10>x</h10>', 'Title').startsWith('<h1 class="ffc-sr-only">'),
+    true,
+  );
+  eq(
+    'the title is escaped, not interpolated',
+    ensureSingleH1('<p>b</p>', 'Tom & Jerry <script>'),
+    '<h1 class="ffc-sr-only">Tom &amp; Jerry &lt;script&gt;</h1>\n<p>b</p>',
+  );
+  eq(
+    'a page with no title to use is left alone rather than given an empty heading',
+    ensureSingleH1('<p>b</p>', '   '),
+    '<p>b</p>',
+  );
+  eq(
+    'a non-string fragment is not a crash',
+    (() => {
+      try {
+        return ensureSingleH1(null, 'T');
+      } catch {
+        return 'THREW';
+      }
+    })(),
+    '',
+  );
   eq(
     'a non-string is not a crash',
     (() => {

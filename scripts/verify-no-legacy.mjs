@@ -257,6 +257,109 @@ export function classifyMissing({ status = 0, contentType = '', error = null, ur
   return { fatal: true, reason: `the source site serves this (HTTP ${status}); the clone lost it` };
 }
 
+/** The part of a capture filename before its folded query string. */
+export function foldFamilyBase(name) {
+  const dot = name.lastIndexOf('.');
+  const stem = dot === -1 ? name : name.slice(0, dot);
+  const cut = stem.lastIndexOf('__');
+  return cut > 0 ? stem.slice(0, cut) : stem;
+}
+
+const EXPLAIN_EXT = new Set([
+  '.html',
+  '.htm',
+  '.css',
+  '.js',
+  '.mjs',
+  '.json',
+  '.xml',
+  '.svg',
+  '.txt',
+]);
+
+/**
+ * Why a local asset 404'd: what is on disk near it, and who names it.
+ *
+ * The gate can say a page asked for a file that is not there. It cannot, on
+ * its own, say whether the file was never captured or whether something later
+ * dropped it — and those have opposite fixes. The repair pass upstream is no
+ * help here either, and reading it as help is the trap: it names only the
+ * references it can PARSE and finds BROKEN, so its silence about an asset is
+ * not evidence that the asset is fine. It is compatible with three different
+ * states — never referenced, referenced and resolving, or referenced in a form
+ * the parser cannot see — and on this repo's first encounter with such a
+ * failure that silence was read as the second.
+ *
+ * So this searches the served tree for the missing file's BASENAME rather than
+ * for its `_ffc-assets/...` path. That is the whole point: a relative
+ * `url(hero.jpg)` inside a captured stylesheet contains the basename and
+ * nothing else recognisable, and it is exactly the shape a path-based scanner
+ * misses. "Named in NO file" is therefore a real finding, not a shrug — it
+ * means the reference is assembled at runtime.
+ *
+ * Diagnostic only. It runs on the failure path, decides no verdict, and is
+ * bounded in both hits and bytes so a 1 GB export cannot turn a failed gate
+ * into a hung job.
+ */
+export async function explainMissingAsset(
+  dir,
+  pathname,
+  { maxHits = 5, maxBytes = 268435456 } = {},
+) {
+  let rel;
+  try {
+    rel = decodeURIComponent(pathname);
+  } catch {
+    rel = pathname;
+  }
+  const abs = resolveWithin(dir, rel);
+  if (abs === null) return null;
+
+  const basename = rel.replace(/^\/+/, '').split('/').pop();
+  const out = { basename, onDisk: existsSync(abs), siblings: [], mentionedIn: [], capped: false };
+
+  const family = foldFamilyBase(basename);
+  try {
+    const names = await readdir(join(abs, '..'));
+    out.siblings = names
+      .filter((n) => n !== basename && foldFamilyBase(n) === family)
+      .slice(0, maxHits);
+  } catch {
+    // The directory is missing too, which is itself the answer.
+  }
+
+  let budget = maxBytes;
+  const walk = async (d) => {
+    if (out.mentionedIn.length >= maxHits || budget <= 0) return;
+    let entries;
+    try {
+      entries = await readdir(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (out.mentionedIn.length >= maxHits || budget <= 0) return;
+      const p = join(d, e.name);
+      if (e.isDirectory()) {
+        await walk(p);
+        continue;
+      }
+      if (!e.isFile() || !EXPLAIN_EXT.has(extname(e.name).toLowerCase())) continue;
+      let text;
+      try {
+        text = await readFile(p, 'utf8');
+      } catch {
+        continue;
+      }
+      budget -= Buffer.byteLength(text);
+      if (budget <= 0) out.capped = true;
+      if (text.includes(basename)) out.mentionedIn.push(relative(dir, p).split(sep).join('/'));
+    }
+  };
+  await walk(dir);
+  return out;
+}
+
 function arg(name, def = undefined) {
   const i = process.argv.indexOf(`--${name}`);
   return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : def;
@@ -273,6 +376,23 @@ if (process.argv.includes('--self-test')) {
     }
     return hostname === d || hostname.endsWith(`.${d}`);
   };
+  // A real tree on disk, because explainMissingAsset's whole job is to read
+  // one. The decoy is a BINARY extension holding the same text: a search that
+  // ignored the extension allowlist would "find" it and report a reference
+  // that does not exist.
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const explainRoot = mkdtempSync(join(tmpdir(), 'vnl-explain-'));
+  const wanted = 'hero__fit-500-2C400.jpg';
+  mkdirSync(join(explainRoot, 'a', 'b'), { recursive: true });
+  writeFileSync(join(explainRoot, 'a', 'b', 'hero__w-100.jpg'), 'binary-ish');
+  writeFileSync(join(explainRoot, 'index.html'), `<img src="/a/b/${wanted}">`);
+  writeFileSync(join(explainRoot, 'rel.css'), `.x{background:url(${wanted})}`);
+  writeFileSync(join(explainRoot, 'decoy.jpg'), `not text but mentions ${wanted}`);
+  const explained = await explainMissingAsset(explainRoot, `/a/b/${wanted}`);
+  const present = await explainMissingAsset(explainRoot, '/a/b/hero__w-100.jpg');
+  const escaped = await explainMissingAsset(explainRoot, '/../etc/passwd');
+
   const cases = [
     ['apex is legacy', legacy('https://example.org/a.jpg'), true],
     ['www is legacy', legacy('https://www.example.org/a.jpg'), true],
@@ -662,6 +782,33 @@ if (process.argv.includes('--self-test')) {
       ]),
       false,
     ],
+    // explainMissingAsset, against a real tree built below. The relative-
+    // reference case is the one that justifies the function: a path-based
+    // scanner cannot see it, so without this the gate's 404 has no explanation
+    // anywhere in the log.
+    ['explainMissingAsset says a missing file is not on disk', explained.onDisk, false],
+    [
+      'explainMissingAsset finds the sibling that shares the folded base name',
+      explained.siblings.includes('hero__w-100.jpg'),
+      true,
+    ],
+    [
+      'explainMissingAsset finds an ABSOLUTE reference by basename',
+      explained.mentionedIn.includes('index.html'),
+      true,
+    ],
+    [
+      'explainMissingAsset finds a RELATIVE reference the path scanner cannot see',
+      explained.mentionedIn.includes('rel.css'),
+      true,
+    ],
+    [
+      'explainMissingAsset does not claim a BINARY neighbour mentions it',
+      explained.mentionedIn.includes('decoy.jpg'),
+      false,
+    ],
+    ['explainMissingAsset reports a file that IS on disk', present.onDisk, true],
+    ['explainMissingAsset refuses a path that escapes the served dir', escaped === null, true],
   ];
   let failed = 0;
   for (const [name, got, want] of cases) {
@@ -1071,6 +1218,46 @@ async function main() {
     }
     for (const u of [...new Set(r.thirdPartyFailed)].slice(0, 3)) {
       console.log(`        third-party unreachable (not fatal): ${u}`);
+    }
+  }
+
+  // Diagnostic, printed only when something already failed. A 404 on its own
+  // says a file is absent and nothing about WHY, and the difference decides
+  // the fix: a reference nothing in the export names is assembled at runtime
+  // or written relatively, and no amount of staring at the repair pass's
+  // output will show it — that pass reports only what it can parse.
+  const missingPaths = new Set();
+  for (const r of results) {
+    for (const m of r.fatalMissing) {
+      try {
+        missingPaths.add(new URL(m.url).pathname);
+      } catch {
+        /* not a URL we can take apart; the MISSING LOCAL line above still names it */
+      }
+    }
+  }
+  if (dir && missingPaths.size) {
+    console.log(`\n[verify] Where the missing local asset(s) come from (decides no verdict):`);
+    for (const p of [...missingPaths].slice(0, 8)) {
+      console.log(`  ${p}`);
+      const e = await explainMissingAsset(dir, p);
+      if (!e) {
+        console.log(`      refused: that path escapes ${dir}`);
+        continue;
+      }
+      console.log(
+        `      on disk under ${dir}: ${e.onDisk ? 'YES — the export HAS it and the server still 404ed' : 'NO'}`,
+      );
+      console.log(
+        `      other files sharing the base name "${foldFamilyBase(e.basename)}": ${e.siblings.length ? e.siblings.join(', ') : 'none'}`,
+      );
+      console.log(
+        `      named in: ${
+          e.mentionedIn.length
+            ? e.mentionedIn.join(', ')
+            : 'NO file in the export — the reference is assembled at runtime, not written down'
+        }${e.capped ? ' (search stopped at the byte budget)' : ''}`,
+      );
     }
   }
 

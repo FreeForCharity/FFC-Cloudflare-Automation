@@ -1557,6 +1557,58 @@ def _dedupe_script_text() -> str:
     return (REPO_ROOT / "scripts" / "dedupe-capture-assets.mjs").read_text(encoding="utf-8")
 
 
+def _integrate_script_text() -> str:
+    return (REPO_ROOT / "scripts" / "integrate-clone-into-nextjs.mjs").read_text(encoding="utf-8")
+
+
+def test_the_templates_own_asset_directories_survive_the_public_wipe():
+    """integrate wipes `public/` wholesale, and the template's components go on
+    referencing /Images/... and /Svgs/... by absolute path. Measured on
+    FFC-EX-newheightseducation.org: 19 such assets across 12 files under src/.
+    Every one was deleted, so every one 404'd in the export.
+
+    Run 35698011512 surfaced three of them at the self-containment gate; the
+    other sixteen were equally broken and merely sat on pages that crawl did
+    not reach. Directories, not filenames: a name list stops tracking a
+    template that gains and renames assets, which is how this got here."""
+    src = _integrate_script_text()
+    assert "export const PRESERVED_PUBLIC_DIRS" in src, src[:400]
+    decl = src.split("export const PRESERVED_PUBLIC_DIRS", 1)[1].split("\n", 1)[0]
+    for d in ("Images", "Svgs"):
+        assert f"'{d}'" in decl, (d, decl)
+
+
+def test_a_preserved_directory_still_loses_to_the_captured_site():
+    """A directory entry is not a licence to overwrite the charity's content.
+    The restore must stay per-file and skip a destination the clone already
+    wrote, or a captured site shipping its own /Images/logo.webp would have the
+    FFC template's logo written over it by the migration."""
+    src = _integrate_script_text()
+    body = src.split("export function restorePreservedPublicFiles", 1)[1].split("\n}", 1)[0]
+    assert "if (existsSync(dest)) continue;" in body, body
+
+
+def test_integrate_self_tests_cover_the_preserved_directories():
+    """Asserted by RUNNING them, not by reading them. The behaviour that keeps a
+    charity's site whole here is the recursive walk and the collision rule, and
+    a source-text assertion cannot tell a live case from a deleted one."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "integrate-clone-into-nextjs.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "the template asset directories survive the public/ wipe",
+        "a preserved directory is walked recursively, not just its top level",
+        "the captured site still wins inside a preserved directory",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
 def test_duplicate_assets_are_collapsed_after_the_capture_and_before_integration():
     """The whole value of this pass is WHERE it sits. Placed inside the capture
     it could not act on a capture reused from an earlier run, so recovering the
@@ -1689,6 +1741,431 @@ def test_dedupe_leaves_same_size_different_content_files_alone():
         assert proc.returncode == 0, out
         assert "no byte-identical assets found" in out, out
         assert (assets / "a.pdf").exists() and (assets / "b.pdf").exists()
+
+
+def test_the_heal_step_runs_after_the_dedupe_and_before_integration():
+    """Order is the whole design. The dedupe RENAMES assets, and this pass
+    exists to repair references a rename left behind, so running it first would
+    measure a tree the next step is about to change -- and it would report a
+    clean bill of health for exactly the damage it is there to find."""
+    steps = load_workflow(WORKFLOW)["jobs"]["convert"]["steps"]
+    names = [str(s.get("name", "")) for s in steps]
+
+    def only(substring: str) -> int:
+        hits = [i for i, n in enumerate(names) if substring.lower() in n.lower()]
+        assert len(hits) == 1, f"expected exactly one step matching {substring!r}, got {hits}: {names}"
+        return hits[0]
+
+    heal = only("assets the capture no longer has")
+    dedupe = only("duplicate assets")
+    integrate = only("Integrate the capture")
+    assert dedupe < heal < integrate, (dedupe, heal, integrate, names)
+
+
+def test_the_heal_step_reads_the_same_directory_both_earlier_steps_write():
+    """A capture and a reused capture converge on one path. Naming a different
+    one would repair nothing and say so in a way that reads like 'there was
+    nothing to repair'."""
+    run = step_run(WORKFLOW, "convert", "assets the capture no longer has")
+    assert '--site "$RUNNER_TEMP/capture/site"' in run, run
+
+
+def test_the_heal_self_test_gates_every_later_job():
+    """This script rewrites a charity's markup. It does not get to run against
+    their capture without its own tests having passed first."""
+    run = step_run(WORKFLOW, "resolve", "Offline self-tests")
+    assert "node scripts/heal-missing-asset-refs.mjs --self-test" in run, run
+
+
+def test_heal_repoints_a_missing_reference_and_never_invents_one():
+    """End to end against a real tree, because the two failures that matter --
+    repointing at a file that is not there, and rewriting a reference that was
+    fine -- are both invisible to a reading of the source.
+
+    The unresolvable case is asserted in the same tree as the resolvable one on
+    purpose: a pass that heals nothing would also leave `vanished.png` alone,
+    so neither half is evidence without the other."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        assets = root / "_ffc-assets" / "pub.x.org" / "u"
+        assets.mkdir(parents=True)
+        (assets / "books.jpeg").write_bytes(b"BOOKS")
+        (root / "index.html").write_text(
+            '<img src="/_ffc-assets/i0.wp.com/pub.x.org/u/books__fit-1280-2C858-ssl-1.jpeg">'
+            '<img src="/_ffc-assets/pub.x.org/u/vanished.png">',
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"),
+                "--site",
+                forward_slashes(str(root)),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+
+        html = (root / "index.html").read_text(encoding="utf-8")
+        assert '/_ffc-assets/pub.x.org/u/books.jpeg"' in html, html
+        assert "i0.wp.com" not in html, html
+        assert '/_ffc-assets/pub.x.org/u/vanished.png' in html, html
+        assert "pub.x.org/u/vanished.png" in out, out
+
+
+def test_heal_cannot_fail_the_run_on_a_reference_it_could_not_repair():
+    """Deliberate, and the decision most worth pinning. This pass scans EVERY
+    text file in the capture, including pages nothing links to; the
+    self-containment gate loads real pages in a real browser and so speaks only
+    about references a visitor can reach. Exiting non-zero here would let an
+    unreachable stray halt a charity's migration on the gate's behalf, without
+    the gate ever having judged it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "_ffc-assets").mkdir()
+        (root / "orphan.html").write_text(
+            '<img src="/_ffc-assets/x.org/nothing-has-this.png">', encoding="utf-8"
+        )
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"),
+                "--site",
+                forward_slashes(str(root)),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+        assert "could NOT be resolved" in out, out
+        assert "x.org/nothing-has-this.png" in out, out
+
+
+def test_heal_refuses_a_reference_that_traverses_out_of_the_assets_dir():
+    """Copilot's finding on #1355. The reference character class admits `.` and
+    `-`, so it admits `..` as a whole segment -- and `join(assetsRoot, ...)`
+    normalises the traversal away, so a candidate could be probed, and a
+    rewrite written back into a charity's markup, against a path outside the
+    capture. Asserted end to end because the guard has to hold in the scanner,
+    not merely in a helper someone could stop calling."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "_ffc-assets" / "x.org").mkdir(parents=True)
+        (root / "_ffc-assets" / "x.org" / "a.png").write_bytes(b"A")
+        (root / "outside.png").write_bytes(b"OUTSIDE")
+        before = (
+            '<img src="/_ffc-assets/../outside.png">'
+            '<img src="/_ffc-assets/x.org/./a.png">'
+            '<img src="/_ffc-assets/x.org/a__v2.png">'
+        )
+        (root / "index.html").write_text(before, encoding="utf-8")
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"),
+                "--site",
+                forward_slashes(str(root)),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+
+        html = (root / "index.html").read_text(encoding="utf-8")
+        # The two traversal forms are untouched and never reported either way.
+        assert "/_ffc-assets/../outside.png" in html, html
+        assert "/_ffc-assets/x.org/./a.png" in html, html
+        assert "outside.png" not in out, out
+        # ...and the ordinary reference beside them is still healed, so this is
+        # not passing merely because the whole pass did nothing.
+        assert '/_ffc-assets/x.org/a.png"' in html, html
+        assert "a__v2.png" not in html.replace("a__v2.png.bak", ""), html
+
+
+def test_the_second_heal_runs_after_conversion_and_before_the_size_gate():
+    """Two passes, and the second is the one that judges what ships. Run
+    35733489308 proved the first is not enough on its own: the capture pass
+    repaired 18 of 23 broken references and the gate still 404'd on one it had
+    never seen, because that reference does not exist as a literal in the
+    capture -- the conversion writes it. Asserted in BOTH jobs, because
+    `deliver` re-runs the conversion and is what actually pushes."""
+    wf = load_workflow(WORKFLOW)
+    for job in ("convert", "deliver"):
+        names = [str(s.get("name", "")) for s in wf["jobs"][job]["steps"]]
+
+        def only(substring: str) -> int:
+            hits = [i for i, n in enumerate(names) if substring.lower() in n.lower()]
+            assert len(hits) == 1, f"{job}: expected one step matching {substring!r}, got {hits}: {names}"
+            return hits[0]
+
+        convert = only("Convert the capture into real app routes")
+        second_heal = only("conversion left pointing at nothing")
+        size_gate = only("must be publishable")
+        assert convert < second_heal < size_gate, (job, convert, second_heal, size_gate)
+
+
+def test_the_second_heal_resolves_against_public_and_scans_the_generated_routes():
+    """The assets and the references live in DIFFERENT directories once the
+    capture is integrated. Pointing --site at the repo root would look for
+    `_ffc-assets` where there is none, so every reference it found would be
+    reported unresolved -- a wall of names nobody can act on, still exiting 0;
+    omitting `--scan ffc-ex/src` would never read the generated routes and
+    would report a clean tree for the files the second pass exists to fix.
+    Neither mistake fails the run."""
+    for job in ("convert", "deliver"):
+        run = step_run(WORKFLOW, job, "conversion left pointing at nothing")
+        assert "--site ffc-ex/public" in run, (job, run)
+        assert "--scan ffc-ex/public" in run, (job, run)
+        assert "--scan ffc-ex/src" in run, (job, run)
+
+
+def test_heal_walks_a_next_checkout_without_touching_node_modules():
+    """This pass REWRITES what it walks, and the second invocation points it at
+    a Next.js checkout. Walking node_modules there would be slow and dangerous;
+    walking `out/` would rewrite build output, which the next build discards --
+    making the pass look effective while the source stayed broken."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "public" / "_ffc-assets" / "x.org").mkdir(parents=True)
+        (root / "public" / "_ffc-assets" / "x.org" / "hero.jpg").write_bytes(b"H")
+        (root / "src").mkdir()
+        (root / "src" / "page.tsx").write_text(
+            'const a = "/_ffc-assets/x.org/hero__fit-9.jpg";', encoding="utf-8"
+        )
+        # Inside src/, which IS scanned. Placed beside it they would be skipped
+        # for being out of range rather than by the guard, and the assertion
+        # below would hold with SKIP_DIRS deleted.
+        for skipped in ("node_modules", "out", ".next"):
+            (root / "src" / skipped).mkdir()
+            (root / "src" / skipped / "f.js").write_text(
+                'const a = "/_ffc-assets/x.org/hero__fit-9.jpg";', encoding="utf-8"
+            )
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"),
+                "--site",
+                forward_slashes(str(root / "public")),
+                "--scan",
+                forward_slashes(str(root / "public")),
+                "--scan",
+                forward_slashes(str(root / "src")),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+
+        assert '"/_ffc-assets/x.org/hero.jpg"' in (root / "src" / "page.tsx").read_text(
+            encoding="utf-8"
+        ), out
+        for skipped in ("node_modules", "out", ".next"):
+            assert "hero__fit-9.jpg" in (root / "src" / skipped / "f.js").read_text(
+                encoding="utf-8"
+            ), skipped
+
+
+def test_heal_self_tests_cover_the_escaped_and_unresolvable_cases():
+    """A source-text assertion cannot tell a live case from a deleted one, so
+    this runs the self-test and requires the cases by name. The escaped
+    spelling is the one that matters most: WordPress inlines JSON inside
+    <script>, where every slash arrives as `\\/`, and a plain-literal matcher
+    reads such a document as containing no references at all -- silently, and
+    in the reassuring direction."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "referencesIn finds a JSON-escaped reference",
+        "the escaped spelling is repointed too",
+        "an unresolvable reference is left exactly as it was",
+        "a prefix-sharing neighbour is not rewritten",
+        "nothing is ever deleted",
+        "referencesIn drops a reference that traverses out of the assets dir",
+        "a reference in a generated .tsx route is healed against public/_ffc-assets",
+        "node_modules is never walked, let alone rewritten",
+    ):
+        assert f"PASS {name}" in out, (name, out[-2000:])
+
+
+def test_heal_repairs_a_reference_written_relative_to_its_own_document():
+    """Run 70's diagnostic found a blind spot; this closes it.
+
+    The gate failed on one image; its diagnostic named the file that referenced
+    it -- an Elementor stylesheet inside the assets tree -- and the reference
+    there is written RELATIVE to that stylesheet. No `_ffc-assets` appears in
+    it, so the path-based scanner reads the whole document as containing no
+    references, which is why two runs of "every reference resolves" sat beside
+    a 404 without contradicting it.
+
+    Required by name from the script's own self-test, because a source-text
+    assertion cannot tell a live case from a deleted one. Two of these carry
+    more weight than the repair itself: the reference must still be RELATIVE
+    afterwards (these sites are served from a project Pages subpath, where an
+    absolute `/_ffc-assets/...` breaks), and a token resolving outside the
+    assets tree must be ignored rather than guessed at.
+    """
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a RELATIVE reference to a missing fold is repointed at its sibling",
+        "...and it is still RELATIVE afterwards",
+        "a RELATIVE reference whose target EXISTS is untouched",
+        "a RELATIVE reference with no sibling is left exactly as it was",
+        "a RELATIVE token that escapes the assets tree is ignored",
+        "a token a slash continues is a path prefix, not a reference",
+        "...and the path prefix is left in the document untouched",
+        "a real reference is repaired where it stands alone",
+        "...and the SAME string is left alone where a slash continues it",
+        "isInside accepts a directory whose name merely begins with dots",
+        "isInside rejects the parent itself",
+        "isInside rejects a sibling of the root",
+        "the relative repair is counted, not silently applied",
+        "the path-based scan saw nothing here",
+        "a second relative run is a no-op",
+    ):
+        assert f"PASS {name}" in out, (name, out[-2500:])
+
+
+def test_the_gate_explains_a_missing_asset_instead_of_only_naming_it():
+    """A 404 says a file is absent and nothing about why.
+
+    Run 69 is the reason this exists. The gate failed on one asset; the repair
+    pass over the same tree had reported every reference it checked as
+    resolving; and those two facts together read as "the reference must be
+    fine, so something else is wrong". They are not in tension at all -- that
+    pass names only references it can PARSE and finds BROKEN, so its silence
+    about an asset is equally consistent with never having seen it. The
+    decisive question -- is this name written down anywhere in the export? --
+    had no answer anywhere in the log.
+
+    The cases are required BY NAME from the script's own self-test, because a
+    source-text assertion cannot tell a live case from a deleted one. The
+    relative-reference case is the load-bearing one: it is the shape a
+    path-based scanner cannot see, and therefore the shape this exists for.
+    """
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "verify-no-legacy.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "explainMissingAsset says a missing file is not on disk",
+        "explainMissingAsset finds the sibling that shares the folded base name",
+        "explainMissingAsset finds an ABSOLUTE reference by basename",
+        "explainMissingAsset finds a RELATIVE reference the path scanner cannot see",
+        "explainMissingAsset does not claim a BINARY neighbour mentions it",
+        "explainMissingAsset reports a file that IS on disk",
+        "explainMissingAsset refuses a path that escapes the served dir",
+        "explainMissingAsset does not read a file bigger than the whole byte budget",
+        "explainMissingAsset says so when the byte budget stopped it",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
+def test_the_gate_diagnostic_cannot_change_a_verdict():
+    """It runs on the failure path and only reports. If it could decide
+    anything, a bug in a diagnostic would become a bug in the gate -- and this
+    gate is the only check that can see a live-origin dependency."""
+    gate = (REPO_ROOT / "scripts" / "verify-no-legacy.mjs").read_text(encoding="utf-8")
+    start = gate.index("export async function explainMissingAsset")
+    end = gate.index("function arg(", start)
+    body = gate[start:end]
+    for forbidden in ("process.exitCode", "process.exit(", "verdictFor", "fatal"):
+        assert forbidden not in body, forbidden
+    # And it is consulted only where a failure has already been recorded, so an
+    # export with nothing wrong never pays for the walk.
+    assert "if (dir && missingPaths.size) {" in gate
+
+
+def test_heal_refuses_an_argument_that_would_silently_narrow_the_scan():
+    """A `--scan` that does not take is worse than one that errors.
+
+    The pass reports what it could not repair, so a root it never read costs
+    nothing visible: it prints a smaller total, no unresolved names, and exits
+    0. That reads exactly like a healthy tree. Three spellings reach that
+    state -- a trailing `--scan`, a `--scan` swallowed by the next flag, and a
+    `--scan` pointed at a FILE (which satisfies existsSync and then walks to
+    nothing) -- so each must be refused BY NAME rather than ignored.
+
+    Every case asserts the message as well as the exit code. `rc == 2` alone
+    cannot tell a refusal from a node that failed to start, and this module
+    has already shipped one test that went green for exactly that reason
+    (CLAUDE.md, 2026-07-29).
+    """
+    heal = str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs")
+
+    def run(*args: str) -> tuple[int, str]:
+        proc = subprocess.run(
+            ["node", heal, *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "public" / "_ffc-assets").mkdir(parents=True)
+        (root / "src").mkdir()
+        (root / "src" / "page.tsx").write_text("const a = 1;", encoding="utf-8")
+        a_file = root / "src" / "page.tsx"
+
+        site = forward_slashes(str(root / "public"))
+        src = forward_slashes(str(root / "src"))
+        the_file = forward_slashes(str(a_file))
+
+        # The positive control comes FIRST and is not optional: a script that
+        # returned 2 for everything would satisfy every case below.
+        rc, out = run("--site", site, "--scan", src)
+        assert rc == 0, out
+
+        for args, needle in (
+            (("--site", site, "--scan"), "--scan requires a directory"),
+            (("--site", site, "--scan", "--dry-run"), "--scan requires a directory"),
+            (("--site", site, "--scan", the_file), "is not a directory"),
+            (("--site",), "--site requires a directory"),
+            (("--site", the_file), "is not a directory"),
+            (("--scan", src), "--site is required"),
+        ):
+            rc, out = run(*args)
+            assert rc == 2, (args, rc, out)
+            assert needle in out, (args, needle, out)
 
 
 # Built HERE, at the end of the module, and not one line earlier. This is a

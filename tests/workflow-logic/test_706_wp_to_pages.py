@@ -1715,6 +1715,11 @@ def test_the_built_output_verifier_is_scoped_to_routes_not_captured_assets():
         "...and the walk it guards is still there",
         "a repo with no verifier is reported, not crashed on",
         "an unrecognised verifier is refused, not silently left unpatched",
+        "a verifier that merely MENTIONS the assets dir is still patched",
+        "another WALK's guard does not count as this one",
+        "...and patching it twice is still a no-op",
+        "another directory's guard does not count as this one",
+        "a directory branch that never recurses is refused, not guessed at",
     ):
         assert f"ok   {name}" in out, (name, out[-2000:])
     # ...and that the conversion actually calls it. Mutation review removed the

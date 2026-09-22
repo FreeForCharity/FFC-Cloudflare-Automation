@@ -936,16 +936,32 @@ function scopeVerifyBuildToRoutes(repo, assetsDirName) {
   } catch {
     return { patched: false, reason: 'no scripts/verify-build.mjs in the target repo' };
   }
-  if (src.includes(assetsDirName)) return { patched: false, reason: 'already scoped' };
   const anchor = /(\n(\s*)if \(entry\.isDirectory\(\)\) \{\n)/;
   const m = anchor.exec(src);
-  if (!m) {
+  const branchStart = m ? m.index + m[0].length : -1;
+  const walkAt = m ? src.indexOf('await walkHtml', branchStart) : -1;
+  if (!m || walkAt === -1) {
     throw new Error(
       `[convert] cannot scope ${path} to routes: its directory walk does not match the` +
         ' expected shape. The captured assets tree would be audited as if it were pages,' +
         ' which fails the build on documents belonging to other sites. Update this patch' +
         ' to the verifier the template now ships rather than skipping it.',
     );
+  }
+  // Is the walk ALREADY scoped? Asked of the region between the directory
+  // branch and the recursive call it guards -- not of the file.
+  //
+  // `src.includes(assetsDirName)` was the first spelling and review was right
+  // to call it weak: the directory name can appear in a comment, a constant or
+  // an error message while the walk still recurses into that tree, and this
+  // would then report `already scoped` and patch nothing. The delivery would
+  // fail later, on an embedded player's HTML, with an error naming a file that
+  // has nothing to do with the cause. A guard that can answer "yes" about a
+  // comment is not reading the code it claims to have checked.
+  const escaped = assetsDirName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const branchHead = src.slice(branchStart, walkAt);
+  if (new RegExp(`entry\\.name === ['"\`]${escaped}['"\`]`).test(branchHead)) {
+    return { patched: false, reason: 'already scoped' };
   }
   const indent = `${m[2]}  `;
   const guard =
@@ -1296,6 +1312,77 @@ function selfTest() {
     // instead of reporting -- makes the call THROW, and a throw here kills the
     // run before the harness prints anything. A crashed self-test is not a
     // detection, so the case would be satisfied by the very defect it names.
+    // The case the weak predicate got wrong: the directory name appears in the
+    // file, but the walk still recurses into that tree. Reporting "already
+    // scoped" here patches nothing and fails the delivery later on an embedded
+    // player's HTML, naming a file that has nothing to do with the cause.
+    write(
+      join(dir, 'scripts', 'verify-build.mjs'),
+      verifierSrc.replace(
+        'async function walkHtml',
+        "// Assets captured under _ffc-assets are copied verbatim.\nconst NOTE = '_ffc-assets'\nasync function walkHtml",
+      ),
+    );
+    const mentioned = scopeVerifyBuildToRoutes(dir, '_ffc-assets');
+    eq('a verifier that merely MENTIONS the assets dir is still patched', mentioned.patched, true);
+    // A SECOND directory walk, after `walkHtml`, that DOES skip the assets
+    // tree -- while the walk that matters does not. This is what makes the
+    // region narrowing testable rather than merely sensible: the string
+    // `entry.name === '_ffc-assets'` is genuinely in the file, so a check that
+    // reads the whole file calls this scoped and patches nothing.
+    write(
+      join(dir, 'scripts', 'verify-build.mjs'),
+      `${verifierSrc}\nasync function walkAssets(dir) {\n` +
+        '  for (const entry of entries) {\n' +
+        '    if (entry.isDirectory()) {\n' +
+        "      if (entry.name === '_ffc-assets') continue\n" +
+        '      await walkAssets(join(dir, entry.name))\n' +
+        '    }\n  }\n}\n',
+    );
+    eq(
+      "another WALK's guard does not count as this one",
+      scopeVerifyBuildToRoutes(dir, '_ffc-assets').patched,
+      true,
+    );
+    write(join(dir, 'scripts', 'verify-build.mjs'), verifierSrc);
+    scopeVerifyBuildToRoutes(dir, '_ffc-assets');
+    eq(
+      '...and patching it twice is still a no-op',
+      scopeVerifyBuildToRoutes(dir, '_ffc-assets').patched,
+      false,
+    );
+    // A guard on the WRONG directory is not this one, and must not count.
+    write(
+      join(dir, 'scripts', 'verify-build.mjs'),
+      verifierSrc.replace(
+        '      await walkHtml(full, results)',
+        "      if (entry.name === 'node_modules') continue\n      await walkHtml(full, results)",
+      ),
+    );
+    eq(
+      "another directory's guard does not count as this one",
+      scopeVerifyBuildToRoutes(dir, '_ffc-assets').patched,
+      true,
+    );
+    // A walk whose branch never recurses is not the shape this patch anchors
+    // to, and guessing where the guard belongs is how it lands somewhere that
+    // never runs.
+    write(
+      join(dir, 'scripts', 'verify-build.mjs'),
+      verifierSrc.replace('      await walkHtml(full, results)', '      results.push(full)'),
+    );
+    eq(
+      'a directory branch that never recurses is refused, not guessed at',
+      (() => {
+        try {
+          scopeVerifyBuildToRoutes(dir, '_ffc-assets');
+          return 'NO THROW';
+        } catch (err) {
+          return /does not match the expected shape/.test(err.message) ? 'refused' : err.message;
+        }
+      })(),
+      'refused',
+    );
     eq(
       'a repo with no verifier is reported, not crashed on',
       (() => {

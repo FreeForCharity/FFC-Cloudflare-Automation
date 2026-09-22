@@ -1588,6 +1588,37 @@ def test_a_preserved_directory_still_loses_to_the_captured_site():
     assert "if (existsSync(dest)) continue;" in body, body
 
 
+def test_the_templates_root_level_files_are_carried_by_a_rule_not_a_name_list():
+    """The name list carried `_headers` and `security.txt` and dropped the other
+    six files the template ships at the root of `public/`. Measured on
+    FFC-EX-newheightseducation.org at its template commit e28032d: the root held
+    eight files, the wipe kept two, and `src/app/manifest.ts` and
+    `src/app/layout.tsx` -- both of which survive integration -- went on naming
+    the deleted ones by absolute path. The shipped `manifest.webmanifest`
+    pointed at two PNGs that were not there.
+
+    So the rule is inverted: carry whatever is at that root, and name only what
+    this pipeline itself writes there. That list cannot drift out of date the
+    way a snapshot of someone else's template does, because this repo is what
+    writes the names in it."""
+    src = _integrate_script_text()
+    assert "export const UNCARRIED_PUBLIC_ROOT_FILES" in src, src[:400]
+    body = src.split("export function readPreservedPublicFiles", 1)[1].split("\n}", 1)[0]
+    assert "readdirSync(publicDir" in body, body
+    assert "isUncarriedPublicRootFile" in body, body
+
+
+def test_security_txt_is_tracked_as_a_directory_now_that_the_root_is_swept():
+    """`_headers` and the root `security.txt` are root-level files, so the sweep
+    carries them without naming them. The `.well-known/` copy is one level down
+    and would have been lost when the name list went away -- it is the artifact
+    the target repo's drift check fails on, and the one that gives a charity
+    site a way to receive vulnerability reports."""
+    src = _integrate_script_text()
+    decl = src.split("export const PRESERVED_PUBLIC_DIRS", 1)[1].split("\n", 1)[0]
+    assert "'.well-known'" in decl, decl
+
+
 def test_integrate_self_tests_cover_the_preserved_directories():
     """Asserted by RUNNING them, not by reading them. The behaviour that keeps a
     charity's site whole here is the recursive walk and the collision rule, and
@@ -1605,6 +1636,11 @@ def test_integrate_self_tests_cover_the_preserved_directories():
         "the template asset directories survive the public/ wipe",
         "a preserved directory is walked recursively, not just its top level",
         "the captured site still wins inside a preserved directory",
+        "a root-level template file NO list names survives",
+        "every template icon at the root of public/ survives the wipe",
+        "a previous run's capture report does NOT survive the wipe",
+        "a template DIRECTORY the list does not name is still wiped",
+        "the pipeline owns exactly the report names and CNAME, and nothing else",
     ):
         assert f"ok   {name}" in out, (name, out[-2000:])
 

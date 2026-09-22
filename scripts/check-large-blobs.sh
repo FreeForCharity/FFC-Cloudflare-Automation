@@ -221,7 +221,9 @@ if [ -n "$object_list" ]; then
       if [ "$kind" = "text file" ]; then
         grown_text_seen=1
       fi
-      detail="$(printf '%14sTRACKED %s that GREW: %s bytes on %s -> %s bytes here (+%s). Limit %s, over by %s.' \
+      # "in this PR", not "here": the oversized blob need not be in the tip
+      # tree. A branch that grew the file and shrank it again still carries it.
+      detail="$(printf '%14sTRACKED %s that GREW: %s bytes on %s -> %s bytes in this PR (+%s). Limit %s, over by %s.' \
         "" "$kind" "$base_size" "$BASE_REF" "$osize" "$((osize - base_size))" "$MAX_BLOB_BYTES" "$over")"
     else
       new_seen=1
@@ -278,20 +280,21 @@ ${MAX_BLOB_BYTES} bytes and the file is simply over it. Shrink it or exempt it:
     description. Also update whatever documentation states the old ceiling --
     an exemption that is not written down keeps being obeyed after it is
     lifted (#1243).
+
+WHICH ONE YOU PICK DECIDES WHETHER YOU ALSO NEED THE REWRITE BELOW. Allowlisting
+clears this check on its own. SHRINKING DOES NOT: the oversized blob is already
+reachable from this branch, so a follow-up commit that makes the file smaller
+leaves it exactly where it was and this check still fails. Shrink it in a
+rewritten history instead -- the recipe below, minus its \`rm -f\` step, because
+the file itself stays.
 EOF
 
   if [ "$new_seen" = 1 ]; then
     cat >&2 <<'EOF'
 
 THIS PR ALSO INTRODUCES A NEW OVERSIZED BLOB -- see the entries marked NEW
-above. The branch rewrite below DOES apply to those, so this report needs both
-remedies. Do not read the paragraph above as permission to skip the rewrite.
-EOF
-  else
-    cat >&2 <<'EOF'
-
-The branch rewrite below is for a blob that should never have existed. No
-offender in this report is one, so it does not apply here.
+above. The rewrite below applies to those in full, `rm -f` included, whatever
+you decide about the grown file. This report needs both remedies.
 EOF
   fi
 fi

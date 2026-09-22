@@ -259,7 +259,7 @@ def test_a_grown_tracked_text_file_is_not_diagnosed_as_a_committed_binary(tmp_pa
     # the mixed-case warning must NOT fire, or the disclaimer would be hedged
     # for a case that is not happening.
     assert "A TRACKED TEXT FILE GREW PAST THE LIMIT" in result.stderr, out
-    assert "so it does not apply here" in result.stderr, out
+    assert "SHRINKING DOES NOT" in result.stderr, out
     assert "ALSO INTRODUCES A NEW OVERSIZED BLOB" not in result.stderr, out
 
     # The two halves of the message must agree. A list header reading
@@ -397,6 +397,50 @@ def test_a_right_aligned_wc_count_does_not_turn_text_into_binary(tmp_path):
     assert "binary" not in result.stdout, out
 
 
+def test_a_grown_file_shrunk_again_is_still_caught_and_told_so(tmp_path):
+    """Grow-then-shrink is the grown-file twin of PR #910's add-then-delete.
+
+    The tip tree is back under the limit and `git diff base..HEAD` shows a small
+    file, so every diff-based view says the branch is fine. The oversized blob
+    is still reachable, and under merge_method=MERGE it lands in `main` — so the
+    guard must still fail.
+
+    The second half is what this case exists for. The remedy text used to end
+    "the branch rewrite below ... does not apply here", which is true only if
+    you allowlist the file. An author who instead shrinks it — the first option
+    the message offers — needs the rewrite, because a follow-up commit cannot
+    unreach a blob. They would have been told to do the one thing that cannot
+    clear the check, by the paragraph written to help them.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "ledger.md").write_bytes(b"x" * 900_000)
+    _commit(repo, "baseline under the limit")
+    _git(repo, "branch", "-f", "base", "HEAD")
+
+    (repo / "ledger.md").write_bytes(b"x" * BIG)
+    _commit(repo, "grow it past the limit")
+    (repo / "ledger.md").write_bytes(b"x" * 900_000)
+    _commit(repo, "shrink it back under the limit")
+
+    # Precondition: the tip really is small, which is why a diff-based check
+    # would pass and why the author would expect to be clear.
+    assert (repo / "ledger.md").stat().st_size == 900_000
+
+    result = _run_guard(repo)
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, (
+        "shrinking in a later commit must not clear the guard: the blob stays "
+        "reachable\n" + out
+    )
+    assert "TRACKED text file that GREW" in result.stdout, out
+    # Not "bytes here" -- the tip tree does not have it.
+    assert "bytes in this PR" in result.stdout, out
+    # And the reader must be told that the option they are most likely to pick
+    # needs the rewrite too.
+    assert "SHRINKING DOES NOT" in result.stderr, out
+    assert "rewritten history" in result.stderr, out
+
+
 def test_a_dot_path_is_still_recognised_as_tracked(tmp_path):
     """A path under `.github/` must classify the same as any other.
 
@@ -469,8 +513,7 @@ def test_classification_never_swallows_an_offender(tmp_path):
     # Both remedies, and no sentence that contradicts the other offender.
     assert "A TRACKED TEXT FILE GREW PAST THE LIMIT" in result.stderr, out
     assert "ALSO INTRODUCES A NEW OVERSIZED BLOB" in result.stderr, out
-    assert "The branch rewrite below DOES apply" in result.stderr, out
-    assert "so it does not apply here" not in result.stderr, out
+    assert "applies to those in full" in result.stderr, out
     # The two claims that were false here before this was pinned.
     assert "no binary to delete" not in result.stderr, out
     assert "nothing to delete: the limit" in result.stderr, out

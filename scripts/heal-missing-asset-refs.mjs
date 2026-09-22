@@ -64,7 +64,7 @@ import {
   mkdtempSync,
   rmSync,
 } from 'node:fs';
-import { join, relative, sep, extname, basename } from 'node:path';
+import { join, dirname, resolve, relative, isAbsolute, sep, extname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
@@ -334,6 +334,110 @@ export function referenceRes(name) {
 }
 
 /**
+ * A reference written RELATIVE to the document that carries it.
+ *
+ * This is the blind spot the path-based scanner above has by construction, and
+ * it is not hypothetical: run 70 of workflow 706 failed its self-containment
+ * gate on one image, and the gate's own diagnostic found the reference inside
+ * `_ffc-assets/.../elementor/css/post-6271__ver-....css`, written relatively.
+ * A browser resolves `url(../../../i0.wp.com/.../photo__fit-1280.jpeg)`
+ * against the STYLESHEET's location and asks for `/_ffc-assets/i0.wp.com/...`;
+ * the text contains no `_ffc-assets` anywhere, so `referencesIn` reads that
+ * document as containing no references at all. WordPress page builders emit
+ * these by the hundred, so the blind spot is a property of every capture, not
+ * of this one site.
+ *
+ * The lookbehind excludes `/`, which is what keeps this from re-matching the
+ * tail of a path the first pass already owns: in `/_ffc-assets/a/b/x__f.jpg`
+ * every candidate start is preceded by a slash.
+ *
+ * `__` is required in the stem. That is the capture's own query-string fold
+ * marker, so the token is one this pipeline created and cannot collide with an
+ * author's prose. Without it this would match any word with a dot in it.
+ *
+ * The trailing lookahead excludes `/` as well as the filename characters, and
+ * that slash is the load-bearing part: in `sub/photo__x.jpg/extra.png` the real
+ * reference is `extra.png`, and without it the scanner would hand back
+ * `sub/photo__x.jpg` -- a PATH PREFIX -- as if it were the whole token, and the
+ * repair would rewrite a directory component. Same class as `referenceRes`
+ * uses at the other end of the file, for the same reason.
+ */
+export const RELATIVE_REF_RE =
+  /(?<![A-Za-z0-9._~%/-])((?:\.\.?\/)*(?:[A-Za-z0-9._~%-]+\/)*)([A-Za-z0-9._~%-]*__[A-Za-z0-9._~%-]*\.[A-Za-z0-9]{2,5})(?![A-Za-z0-9._~%/-])/g;
+
+/**
+ * Is `abs` inside `root`?
+ *
+ * The traversal forms are exactly `..` and `..<sep>...`, and nothing else. A
+ * `startsWith('..')` test also rejects a real directory called `..foo`, which
+ * fails in the reassuring direction: the reference inside it is silently
+ * treated as out of range and never repaired, and the run reports nothing.
+ */
+export function isInside(root, abs) {
+  const rel = relative(root, abs);
+  return rel !== '' && !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`);
+}
+
+/**
+ * The member of `name`'s fold family that is actually in `dir`, if any.
+ *
+ * SAME directory, deliberately. The repair rewrites only the basename inside a
+ * relative reference, leaving the path it is relative to untouched -- which is
+ * the whole reason it is safe on a site served from a project Pages subpath,
+ * where rewriting to an absolute `/_ffc-assets/...` would break every one of
+ * them. A candidate from some other directory would not be what the rewritten
+ * reference resolves to, so it is not a candidate at all.
+ */
+export function siblingInDir(dir, name) {
+  const family = stripQueryFold(name) ?? name;
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  return (
+    entries
+      .filter((e) => e.isFile() && e.name !== name && (stripQueryFold(e.name) ?? e.name) === family)
+      .map((e) => e.name)
+      // Shortest first, then lexicographic -- the same rule `indexByFoldFamily`
+      // and the dedupe pass use, so every pass prefers the same member and a
+      // re-run is a no-op rather than a reshuffle.
+      .sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0))[0] ?? null
+  );
+}
+
+/**
+ * Relative references in one document that name a file which is not there.
+ *
+ * Resolution is real, not textual: the token is resolved against the
+ * document's own directory and the result must land inside the assets tree.
+ * A token that escapes it is ignored rather than guessed at, and a token whose
+ * target exists is left alone.
+ */
+export function relativeFixesFor(assetsRoot, fileAbs, text) {
+  const out = [];
+  const seen = new Set();
+  const from = dirname(fileAbs);
+  for (const m of text.matchAll(RELATIVE_REF_RE)) {
+    const [whole, prefix, name] = m;
+    if (seen.has(whole)) continue;
+    seen.add(whole);
+    const target = resolve(from, `${prefix}${name}`);
+    if (!isInside(assetsRoot, target)) continue;
+    if (existsSync(target)) continue;
+    out.push({ whole, prefix, name, target, to: siblingInDir(dirname(target), name) });
+  }
+  return out;
+}
+
+/** A regex matching `token` as a whole reference, never as part of a longer one. */
+export function relativeRefRe(token) {
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![A-Za-z0-9._~%/-])${escapeRe(token)}(?![A-Za-z0-9._~%/-])`, 'g');
+}
+
+/**
  * Repoint every reference naming a file that is not in the capture.
  *
  * Resolution happens BEFORE anything is written, so a document is rewritten
@@ -351,8 +455,13 @@ export function heal(siteRoot, { dryRun = false, scanRoots } = {}) {
   // where the assets are under `public/` and the routes under `src/`.
   const docs = textFiles(scanRoots?.length ? scanRoots : [siteRoot]);
 
+  // Two passes over the documents, holding ONE file's text at a time. Keeping
+  // every document in a Map was the obvious way to avoid re-reading them and
+  // it scales with the CAPTURE rather than with the repair: a large export is
+  // hundreds of megabytes of HTML, and this pass is one step in a job that
+  // also builds a Next.js site. Re-reading a file costs milliseconds; running
+  // the runner out of memory costs the whole migration.
   const referenced = new Set();
-  const textByFile = new Map();
   for (const abs of docs) {
     let text;
     try {
@@ -361,7 +470,6 @@ export function heal(siteRoot, { dryRun = false, scanRoots } = {}) {
       continue;
     }
     if (!text.includes(ASSETS_DIR)) continue;
-    textByFile.set(abs, text);
     for (const name of referencesIn(text)) referenced.add(name);
   }
 
@@ -378,9 +486,19 @@ export function heal(siteRoot, { dryRun = false, scanRoots } = {}) {
 
   let filesChanged = 0;
   let refsRewritten = 0;
-  if (resolved.size) {
-    for (const [abs, before] of textByFile) {
-      let after = before;
+  const relativeResolved = new Map();
+  const relativeUnresolved = [];
+
+  for (const abs of docs) {
+    let before;
+    try {
+      before = readFileSync(abs, 'utf8');
+    } catch {
+      continue;
+    }
+    let after = before;
+
+    if (resolved.size && after.includes(ASSETS_DIR)) {
       for (const [from, to] of resolved) {
         for (const spec of referenceRes(from)) {
           if (!after.includes(spec.from)) continue;
@@ -393,10 +511,36 @@ export function heal(siteRoot, { dryRun = false, scanRoots } = {}) {
           });
         }
       }
-      if (after !== before) {
-        filesChanged++;
-        if (!dryRun) writeFileSync(abs, after);
+    }
+
+    // Every document, including ones with no `_ffc-assets` in them at all --
+    // that string is exactly the condition a RELATIVE reference fails, so
+    // filtering on it here would skip the documents most likely to carry one.
+    //
+    // And every document wherever it sits, not only those inside the assets
+    // tree. Restricting it to those was the obvious narrowing and it was inert:
+    // mutation review deleted the restriction and not one assertion changed,
+    // because the guard that decides anything is the one below -- the token has
+    // to RESOLVE to a path inside the assets tree. A guard no test can
+    // distinguish from its own absence is not protection, it is decoration.
+    {
+      for (const fix of relativeFixesFor(assetsRoot, abs, after)) {
+        const where = relative(assetsRoot, fix.target).split(sep).join('/');
+        if (!fix.to) {
+          if (!relativeUnresolved.includes(where)) relativeUnresolved.push(where);
+          continue;
+        }
+        relativeResolved.set(where, fix.to);
+        after = after.replace(relativeRefRe(fix.whole), () => {
+          refsRewritten++;
+          return `${fix.prefix}${fix.to}`;
+        });
       }
+    }
+
+    if (after !== before) {
+      filesChanged++;
+      if (!dryRun) writeFileSync(abs, after);
     }
   }
 
@@ -405,6 +549,8 @@ export function heal(siteRoot, { dryRun = false, scanRoots } = {}) {
     missing: resolved.size + unresolved.length,
     resolved,
     unresolved,
+    relativeResolved,
+    relativeUnresolved,
     filesChanged,
     refsRewritten,
   };
@@ -412,21 +558,43 @@ export function heal(siteRoot, { dryRun = false, scanRoots } = {}) {
 
 function report(result, { dryRun }) {
   const verb = dryRun ? 'would repoint' : 'repointed';
-  if (!result.missing) {
+  const relFound = result.relativeResolved.size + result.relativeUnresolved.length;
+
+  if (!result.missing && !relFound) {
     console.error(
       `[heal] ${result.referenced} asset reference(s) checked; every one resolves to a file in the capture.`,
     );
     return;
   }
-  console.error(
-    `[heal] ${result.missing} of ${result.referenced} asset reference(s) name a file the capture does not have.`,
-  );
-  if (result.resolved.size) {
+
+  if (result.missing) {
     console.error(
-      `[heal] ${verb} ${result.refsRewritten} reference(s) across ${result.filesChanged} file(s):`,
+      `[heal] ${result.missing} of ${result.referenced} asset reference(s) name a file the capture does not have.`,
     );
+  }
+  if (relFound) {
+    // Counted apart from the figure above, and named as relative, because the
+    // two are found by different means. A relative reference carries no
+    // `_ffc-assets` path, so it is absent from the `referenced` total entirely
+    // -- reporting them together would imply a denominator that never included
+    // them.
+    console.error(
+      `[heal] ${relFound} further reference(s) are written RELATIVE to the document carrying them,` +
+        ' where no _ffc-assets path appears and the scan above is blind by construction.',
+    );
+  }
+  if (result.filesChanged) {
+    console.error(
+      `[heal] ${verb} ${result.refsRewritten} reference(s) across ${result.filesChanged} file(s).`,
+    );
+  }
+  if (result.resolved.size) {
     for (const [from, to] of result.resolved)
       console.error(`[heal]   ${from}\n[heal]     -> ${to}`);
+  }
+  if (result.relativeResolved.size) {
+    for (const [from, to] of result.relativeResolved)
+      console.error(`[heal]   (relative) ${from}\n[heal]     -> ${to}`);
   }
   if (result.unresolved.length) {
     // Named in full rather than counted. An operator cannot act on "3
@@ -437,6 +605,13 @@ function report(result, { dryRun }) {
         ' The self-containment gate decides whether any of them is reachable by a visitor:',
     );
     for (const name of result.unresolved) console.error(`[heal]   ${name}`);
+  }
+  if (result.relativeUnresolved.length) {
+    console.error(
+      `[heal] ${result.relativeUnresolved.length} RELATIVE reference(s) had no sibling in their own directory` +
+        ' and were left untouched:',
+    );
+    for (const name of result.relativeUnresolved) console.error(`[heal]   ${name}`);
   }
 }
 
@@ -663,6 +838,180 @@ function selfTest() {
       true,
     );
     eq('...and still reports the unresolved one', again.unresolved, ['x.org/vanished.png']);
+
+    // The run-70 shape, reproduced exactly: an Elementor stylesheet INSIDE the
+    // assets tree referencing an upload RELATIVELY, across hosts, at a fold the
+    // capture never fetched. No `_ffc-assets` appears anywhere in the file, so
+    // the pass above reads it as containing nothing at all.
+    const cap = join(root, 'relcap');
+    const relAssets = join(cap, ASSETS_DIR);
+    const uploads = join(relAssets, 'i0.wp.com', 'pub.example.org', 'wp-content', 'uploads');
+    mkdirSync(join(uploads, '2024', '06'), { recursive: true });
+    writeFileSync(join(uploads, '2024', '06', 'photo__fit-1024-2C858-ssl-1.jpeg'), 'A');
+    writeFileSync(join(uploads, '2024', '06', 'photo__resize-550-2C536-ssl-1.jpeg'), 'B');
+    writeFileSync(join(uploads, '2024', '06', 'kept__fit-100-ssl-1.png'), 'K');
+    const cssDir = join(relAssets, 'pub.example.org', 'wp-content', 'uploads', 'elementor', 'css');
+    mkdirSync(cssDir, { recursive: true });
+    // A repairable-looking sibling for the path-prefix decoy below: without the
+    // scanner's trailing `/` guard the decoy resolves, finds this, and a
+    // DIRECTORY component gets rewritten.
+    mkdirSync(join(cssDir, 'sub'), { recursive: true });
+    writeFileSync(join(cssDir, 'sub', 'cover__w-1-ssl-1.jpg'), 'C');
+    mkdirSync(join(cssDir, 'dirlike'), { recursive: true });
+    writeFileSync(join(cssDir, 'dirlike', 'prefix__w-1-ssl-1.jpg'), 'D');
+    const up = '../../../../../';
+    const toUploads = `${up}i0.wp.com/pub.example.org/wp-content/uploads/2024/06/`;
+    const cssPath = join(cssDir, 'post-6271__ver-1790041496.css');
+    writeFileSync(
+      cssPath,
+      `.a{background:url(${toUploads}photo__fit-1280-2C858-ssl-1.jpeg)}` +
+        `.b{background:url(${toUploads}kept__fit-100-ssl-1.png)}` +
+        `.c{background:url(${toUploads}orphan__fit-9-ssl-1.gif)}` +
+        `.d{background:url(${up}${up}${up}${up}etc/passwd__x-1.conf)}` +
+        // No `__`, so not a name this pipeline ever wrote. Without that
+        // requirement the scanner would treat any dotted word as a reference.
+        `.e{background:url(notes/README.md)}` +
+        // The SCANNER's guard: a `/` continues the path, so
+        // `dirlike/prefix__fit-1-ssl-1.jpg` is a directory component and not
+        // the reference at all. The sibling beside it exists, so without the
+        // guard this resolves and is reported as a repair.
+        `.f{background:url(dirlike/prefix__fit-1-ssl-1.jpg/extra.png)}` +
+        // The REWRITER's guard, which the scanner's cannot stand in for: this
+        // token IS a real reference, and the same string appears again below
+        // as a directory component. A replace that treats `/` as a boundary
+        // rewrites both.
+        `.g{background:url(sub/cover__fit-1-ssl-1.jpg)}` +
+        `.h{background:url(sub/cover__fit-1-ssl-1.jpg/extra.png)}`,
+    );
+
+    const relRun = heal(cap);
+    const css = readFileSync(cssPath, 'utf8');
+
+    eq(
+      'a RELATIVE reference to a missing fold is repointed at its sibling',
+      css.includes(`${toUploads}photo__fit-1024-2C858-ssl-1.jpeg`),
+      true,
+    );
+    // Load-bearing, not cosmetic: these sites are served from a project Pages
+    // SUBPATH, so rewriting a relative reference to an absolute
+    // `/_ffc-assets/...` would break every one of them.
+    eq('...and it is still RELATIVE afterwards', css.includes(`/${ASSETS_DIR}/`), false);
+    eq(
+      '...and the missing fold is gone from the stylesheet',
+      css.includes('photo__fit-1280-2C858-ssl-1.jpeg'),
+      false,
+    );
+    eq(
+      'a RELATIVE reference whose target EXISTS is untouched',
+      css.includes(`${toUploads}kept__fit-100-ssl-1.png`),
+      true,
+    );
+    // Untouched is not enough on its own: a reference that IS considered and
+    // then found unrepairable is also left in place, and reads identically in
+    // the file. The report is where the two come apart.
+    eq(
+      '...and is not even considered',
+      relRun.relativeUnresolved.some((n) => n.includes('kept__')),
+      false,
+    );
+    eq(
+      'a RELATIVE reference with no sibling is left exactly as it was',
+      css.includes(`${toUploads}orphan__fit-9-ssl-1.gif`),
+      true,
+    );
+    eq('...and is reported by name', relRun.relativeUnresolved, [
+      'i0.wp.com/pub.example.org/wp-content/uploads/2024/06/orphan__fit-9-ssl-1.gif',
+    ]);
+    // Resolution is real, so a token that climbs out of the assets tree is
+    // ignored rather than guessed at.
+    eq(
+      'a RELATIVE token that escapes the assets tree is ignored',
+      css.includes('etc/passwd__x-1.conf'),
+      true,
+    );
+    eq(
+      '...and is not reported as an unrepairable asset either',
+      relRun.relativeUnresolved.some((n) => n.includes('passwd')),
+      false,
+    );
+    eq(
+      'a token with no capture fold marker is not a reference at all',
+      relRun.relativeUnresolved.some((n) => n.includes('README')),
+      false,
+    );
+    eq(
+      'a token a slash continues is a path prefix, not a reference',
+      [...relRun.relativeResolved.keys()].some((n) => n.includes('prefix__')),
+      false,
+    );
+    eq(
+      '...and the path prefix is left in the document untouched',
+      css.includes('dirlike/prefix__fit-1-ssl-1.jpg/extra.png'),
+      true,
+    );
+    eq(
+      'a real reference is repaired where it stands alone',
+      css.includes('url(sub/cover__w-1-ssl-1.jpg)'),
+      true,
+    );
+    eq(
+      '...and the SAME string is left alone where a slash continues it',
+      css.includes('sub/cover__fit-1-ssl-1.jpg/extra.png'),
+      true,
+    );
+    eq('the relative repair is counted, not silently applied', relRun.refsRewritten, 2);
+    eq(
+      '...and reported as relative, apart from the path-based total',
+      [...relRun.relativeResolved.values()],
+      ['photo__fit-1024-2C858-ssl-1.jpeg', 'cover__w-1-ssl-1.jpg'],
+    );
+    eq('the path-based scan saw nothing here', relRun.referenced, 0);
+
+    const relAgain = heal(cap);
+    eq('a second relative run is a no-op', relAgain.refsRewritten, 0);
+
+    // isInside's boundary. A `startsWith('..')` test calls a real directory
+    // named `..foo` an escape, which is the failure that reports nothing: the
+    // reference inside it is silently treated as out of range.
+    eq(
+      'isInside accepts a directory whose name merely begins with dots',
+      isInside(cap, join(cap, '..foo', 'x.jpg')),
+      true,
+    );
+    eq('isInside rejects the parent itself', isInside(cap, join(cap, '..')), false);
+    eq(
+      'isInside rejects a sibling of the root',
+      isInside(cap, resolve(cap, '..', 'other', 'x.jpg')),
+      false,
+    );
+    eq('isInside rejects the root itself', isInside(cap, cap), false);
+
+    // An ABSOLUTE reference, in a document inside the assets tree. The first
+    // pass owns it; the relative pass must not also match its tail, which is
+    // what the scanner's lookbehind is for. Without that lookbehind the tail
+    // resolves against the wrong base and is reported as an unrepairable
+    // asset that does not exist.
+    const absRoot = join(root, 'relabs');
+    const absAssets = join(absRoot, ASSETS_DIR);
+    mkdirSync(join(absAssets, 'x.org'), { recursive: true });
+    writeFileSync(join(absAssets, 'x.org', 'banner__w-100-ssl-1.png'), 'P');
+    writeFileSync(
+      join(absAssets, 'abs.css'),
+      `.g{background:url(/${ASSETS_DIR}/x.org/banner__fit-900-2C300-ssl-1.png)}`,
+    );
+    const absRun = heal(absRoot);
+    eq(
+      'an ABSOLUTE reference is repaired by the path pass',
+      readFileSync(join(absAssets, 'abs.css'), 'utf8').includes(
+        `/${ASSETS_DIR}/x.org/banner__w-100-ssl-1.png`,
+      ),
+      true,
+    );
+    eq(
+      '...and the relative pass does not also claim it',
+      absRun.relativeUnresolved.length + absRun.relativeResolved.size,
+      0,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

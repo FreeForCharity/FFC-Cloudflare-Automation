@@ -2011,6 +2011,107 @@ def test_heal_self_tests_cover_the_escaped_and_unresolvable_cases():
         assert f"PASS {name}" in out, (name, out[-2000:])
 
 
+def test_heal_repairs_a_reference_written_relative_to_its_own_document():
+    """Run 70's diagnostic found a blind spot; this closes it.
+
+    The gate failed on one image; its diagnostic named the file that referenced
+    it -- an Elementor stylesheet inside the assets tree -- and the reference
+    there is written RELATIVE to that stylesheet. No `_ffc-assets` appears in
+    it, so the path-based scanner reads the whole document as containing no
+    references, which is why two runs of "every reference resolves" sat beside
+    a 404 without contradicting it.
+
+    Required by name from the script's own self-test, because a source-text
+    assertion cannot tell a live case from a deleted one. Two of these carry
+    more weight than the repair itself: the reference must still be RELATIVE
+    afterwards (these sites are served from a project Pages subpath, where an
+    absolute `/_ffc-assets/...` breaks), and a token resolving outside the
+    assets tree must be ignored rather than guessed at.
+    """
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a RELATIVE reference to a missing fold is repointed at its sibling",
+        "...and it is still RELATIVE afterwards",
+        "a RELATIVE reference whose target EXISTS is untouched",
+        "a RELATIVE reference with no sibling is left exactly as it was",
+        "a RELATIVE token that escapes the assets tree is ignored",
+        "a token a slash continues is a path prefix, not a reference",
+        "...and the path prefix is left in the document untouched",
+        "a real reference is repaired where it stands alone",
+        "...and the SAME string is left alone where a slash continues it",
+        "isInside accepts a directory whose name merely begins with dots",
+        "isInside rejects the parent itself",
+        "isInside rejects a sibling of the root",
+        "the relative repair is counted, not silently applied",
+        "the path-based scan saw nothing here",
+        "a second relative run is a no-op",
+    ):
+        assert f"PASS {name}" in out, (name, out[-2500:])
+
+
+def test_the_gate_explains_a_missing_asset_instead_of_only_naming_it():
+    """A 404 says a file is absent and nothing about why.
+
+    Run 69 is the reason this exists. The gate failed on one asset; the repair
+    pass over the same tree had reported every reference it checked as
+    resolving; and those two facts together read as "the reference must be
+    fine, so something else is wrong". They are not in tension at all -- that
+    pass names only references it can PARSE and finds BROKEN, so its silence
+    about an asset is equally consistent with never having seen it. The
+    decisive question -- is this name written down anywhere in the export? --
+    had no answer anywhere in the log.
+
+    The cases are required BY NAME from the script's own self-test, because a
+    source-text assertion cannot tell a live case from a deleted one. The
+    relative-reference case is the load-bearing one: it is the shape a
+    path-based scanner cannot see, and therefore the shape this exists for.
+    """
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "verify-no-legacy.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "explainMissingAsset says a missing file is not on disk",
+        "explainMissingAsset finds the sibling that shares the folded base name",
+        "explainMissingAsset finds an ABSOLUTE reference by basename",
+        "explainMissingAsset finds a RELATIVE reference the path scanner cannot see",
+        "explainMissingAsset does not claim a BINARY neighbour mentions it",
+        "explainMissingAsset reports a file that IS on disk",
+        "explainMissingAsset refuses a path that escapes the served dir",
+        "explainMissingAsset does not read a file bigger than the whole byte budget",
+        "explainMissingAsset says so when the byte budget stopped it",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
+def test_the_gate_diagnostic_cannot_change_a_verdict():
+    """It runs on the failure path and only reports. If it could decide
+    anything, a bug in a diagnostic would become a bug in the gate -- and this
+    gate is the only check that can see a live-origin dependency."""
+    gate = (REPO_ROOT / "scripts" / "verify-no-legacy.mjs").read_text(encoding="utf-8")
+    start = gate.index("export async function explainMissingAsset")
+    end = gate.index("function arg(", start)
+    body = gate[start:end]
+    for forbidden in ("process.exitCode", "process.exit(", "verdictFor", "fatal"):
+        assert forbidden not in body, forbidden
+    # And it is consulted only where a failure has already been recorded, so an
+    # export with nothing wrong never pays for the walk.
+    assert "if (dir && missingPaths.size) {" in gate
+
+
 def test_heal_refuses_an_argument_that_would_silently_narrow_the_scan():
     """A `--scan` that does not take is worse than one that errors.
 

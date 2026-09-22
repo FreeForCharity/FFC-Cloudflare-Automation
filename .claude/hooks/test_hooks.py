@@ -243,8 +243,61 @@ RULES = [
     Rule("force-push-protected", 'Force-push to a protected branch', BLOCK_TIER, [
         ("force-push main", "git push --force origin main", BLOCK),
         ("force-with-lease main", "git push --force-with-lease origin main", BLOCK),
+        ("force-push -f main", "git push -f origin main", BLOCK),
+        ("force-with-lease master", "git push --force-with-lease origin master", BLOCK),
+        ("commit then force-push main via &&", "git commit -m x && git push -f origin main", BLOCK),
+        # git's option parser bundles short options, so these force-push too.
+        # Measured: `-fq`/`-qf` reach the remote lookup, `-qZ` is rejected as an
+        # unknown switch -- the cluster really is being split. Copilot on #1310.
+        ("force-push main via bundled -fq", "git push -fq origin main", BLOCK),
+        ("force-push main via bundled -qf", "git push -qf origin main", BLOCK),
+        # Heredoc bodies are analysed, not skipped: `bash <<EOF` really does run
+        # what is inside one, so this must stay the direction the rule fails in.
+        ("force-push main inside a heredoc body",
+         "bash <<'EOF'\ngit push --force origin main\nEOF", BLOCK),
         ("normal push feature", "git push -u origin claude/ai-agent-hooks-security-bchbh8", ALLOW),
         ("force-push feature/main allowed", "git push --force origin feature/main", ALLOW),
+        # force-push-protected decides per SEGMENT (#1309). Judging the whole
+        # command made "a push appears somewhere" AND "a force flag appears
+        # somewhere" AND "the word main appears somewhere" a violation, which
+        # blocked Conductor run 168 three times on an ordinary feature-branch
+        # push. Cases A and B are verbatim from the issue; neither can rewrite
+        # a protected branch. Note `-F` is not a git-push flag at all -- it is
+        # `git commit -F`, `gh api -F` and `grep -F`, which is why the short
+        # flag is now matched case-sensitively.
+        ("commit -F file then push feature",
+         "git commit -q -F msg.txt; git push -q origin feature-x", ALLOW),
+        # Widening the short flag to a bundled cluster must not undo that: the
+        # `f` inside the cluster is lowercase-only, so `-qF` stays clear.
+        ("commit -qF file naming main then push feature",
+         "git commit -qF main-notes.txt; git push -q origin feature-x", ALLOW),
+        ("heredoc commit message naming main then push feature",
+         "git commit -q -F - <<'EOF'\nfix: only for CI runs on main\nEOF\n"
+         "git push -q origin feature-x", ALLOW),
+        ("push feature then gh api -f body naming main",
+         "git push -q origin feature-x; "
+         "gh api repos/o/r/pulls/1/comments -f body='... main ...'", ALLOW),
+        ("push feature then echo main via &&", "git push origin feature-x && echo main", ALLOW),
+        # A later pipeline stage supplies flags and words the push never saw.
+        # `_echo_segments` keeps a pipeline whole (rule 3 needs that), so rule 2
+        # splits on `|` itself. The lowercase row is Copilot's on #1310 -- the
+        # uppercase one is cleared by the case-sensitive flag match as well.
+        ("push feature piped through grep -F main",
+         "git push origin feature-x | grep -F main", ALLOW),
+        ("push feature piped through grep -f naming main",
+         "git push origin feature-x | grep -f patterns.txt main", ALLOW),
+        # Splitting on `|` must not open a bypass: a real force-push carries
+        # its verb, flag and refspec in its own stage, wherever it sits.
+        ("force-push main as the last pipeline stage",
+         "echo x | git push --force origin main", BLOCK),
+        ("force-push main as the first pipeline stage",
+         "git push --force origin main | tee push.log", BLOCK),
+        # Keeps the case-sensitive short flag pinned now that pipe splitting
+        # clears the `grep -F` row on its own: prose inside a heredoc body is
+        # analysed (bodies are deliberately not skipped), and this line holds
+        # all three halves in ONE stage. Only `-F != -f` clears it.
+        ("heredoc prose naming git push -F and main",
+         "gh pr create -F - <<'EOF'\nwe force-push with git push -F only on main\nEOF", ALLOW),
     ]),
 
     Rule("echo-secret-var", 'Refusing to echo/print a secret value', BLOCK_TIER, [

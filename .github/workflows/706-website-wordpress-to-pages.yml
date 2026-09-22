@@ -513,6 +513,7 @@ jobs:
           node scripts/verify-no-legacy.mjs --self-test
           node scripts/assess-capture-completeness.mjs --self-test
           node scripts/dedupe-capture-assets.mjs --self-test
+          node scripts/heal-missing-asset-refs.mjs --self-test
           node scripts/clone-to-routes-lib.mjs --self-test
           node scripts/convert-clone-to-routes.mjs --self-test
           node scripts/check-publishable-size.mjs --self-test
@@ -914,6 +915,22 @@ jobs:
           set -euo pipefail
           node scripts/dedupe-capture-assets.mjs --site "$RUNNER_TEMP/capture/site"
 
+      # AFTER the dedupe, deliberately: the dedupe renames assets, and this pass
+      # exists to repair references that a rename left behind. Running it first
+      # would measure a tree the next step is about to change.
+      #
+      # It cannot fail the run, and that is the point of its position rather
+      # than a weakness in it — the self-containment gate further down loads
+      # real pages in a real browser and is the authority on whether anything
+      # a visitor can reach is broken. This only removes damage it can repair
+      # from what the capture already holds.
+      - name: Repair references to assets the capture no longer has
+        working-directory: automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/heal-missing-asset-refs.mjs --site "$RUNNER_TEMP/capture/site"
+
       # Runs BEFORE integration, so the forms are dead in the artifact too and
       # a later stage cannot accidentally publish the un-neutralized capture.
       - name: 'Replace forms with a mailto: block'
@@ -1032,6 +1049,26 @@ jobs:
           node automation/scripts/convert-clone-to-routes.mjs \
             --repo ffc-ex \
             --site-name "$SOURCE_DOMAIN"
+
+      # The SECOND heal pass, and the one that judges what actually ships.
+      #
+      # The first runs over the capture. This runs over the integrated repo,
+      # where the assets live under `public/` and the references live in the
+      # routes the step above just generated. Run 35733489308 is why both
+      # exist: the capture pass found 23 broken references and repaired 18 of
+      # them, and the self-containment gate then 404'd on a reference that pass
+      # had never seen, because it did not exist as a literal in the capture.
+      #
+      # Same script, same guarantees — it only ever repoints at a file already
+      # in `public/`, never fetches, never deletes, and never fails the run.
+      - name: Repair references the conversion left pointing at nothing
+        shell: bash
+        run: |
+          set -euo pipefail
+          node automation/scripts/heal-missing-asset-refs.mjs \
+            --site ffc-ex/public \
+            --scan ffc-ex/public \
+            --scan ffc-ex/src
 
       # Ask the one question every gate above skips: can this tree be PUSHED?
       #
@@ -1486,6 +1523,26 @@ jobs:
           node automation/scripts/convert-clone-to-routes.mjs \
             --repo ffc-ex \
             --site-name "$SOURCE_DOMAIN"
+
+      # The SECOND heal pass, and the one that judges what actually ships.
+      #
+      # The first runs over the capture. This runs over the integrated repo,
+      # where the assets live under `public/` and the references live in the
+      # routes the step above just generated. Run 35733489308 is why both
+      # exist: the capture pass found 23 broken references and repaired 18 of
+      # them, and the self-containment gate then 404'd on a reference that pass
+      # had never seen, because it did not exist as a literal in the capture.
+      #
+      # Same script, same guarantees — it only ever repoints at a file already
+      # in `public/`, never fetches, never deletes, and never fails the run.
+      - name: Repair references the conversion left pointing at nothing
+        shell: bash
+        run: |
+          set -euo pipefail
+          node automation/scripts/heal-missing-asset-refs.mjs \
+            --site ffc-ex/public \
+            --scan ffc-ex/public \
+            --scan ffc-ex/src
 
       # Ask the one question every gate above skips: can this tree be PUSHED?
       #

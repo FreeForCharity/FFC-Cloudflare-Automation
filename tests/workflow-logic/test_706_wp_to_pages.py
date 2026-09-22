@@ -2045,6 +2045,8 @@ def test_the_gate_explains_a_missing_asset_instead_of_only_naming_it():
         "explainMissingAsset does not claim a BINARY neighbour mentions it",
         "explainMissingAsset reports a file that IS on disk",
         "explainMissingAsset refuses a path that escapes the served dir",
+        "explainMissingAsset does not read a file bigger than the whole byte budget",
+        "explainMissingAsset says so when the byte budget stopped it",
     ):
         assert f"ok   {name}" in out, (name, out[-2000:])
 

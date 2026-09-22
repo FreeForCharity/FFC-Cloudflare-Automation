@@ -55,8 +55,8 @@
  */
 
 import { createServer } from 'node:http';
-import { readFile, mkdir, readdir } from 'node:fs/promises';
-import { join, extname, relative, resolve, isAbsolute, sep } from 'node:path';
+import { readFile, mkdir, readdir, stat } from 'node:fs/promises';
+import { join, dirname, extname, relative, resolve, isAbsolute, sep } from 'node:path';
 import { existsSync } from 'node:fs';
 
 /**
@@ -299,7 +299,9 @@ const EXPLAIN_EXT = new Set([
  *
  * Diagnostic only. It runs on the failure path, decides no verdict, and is
  * bounded in both hits and bytes so a 1 GB export cannot turn a failed gate
- * into a hung job.
+ * into a hung job. The byte bound is checked BEFORE each read, not after: a
+ * budget decremented afterwards is arithmetic, not a limit, and one oversized
+ * file would already be resident by the time it noticed.
  */
 export async function explainMissingAsset(
   dir,
@@ -320,7 +322,7 @@ export async function explainMissingAsset(
 
   const family = foldFamilyBase(basename);
   try {
-    const names = await readdir(join(abs, '..'));
+    const names = await readdir(dirname(abs));
     out.siblings = names
       .filter((n) => n !== basename && foldFamilyBase(n) === family)
       .slice(0, maxHits);
@@ -345,14 +347,27 @@ export async function explainMissingAsset(
         continue;
       }
       if (!e.isFile() || !EXPLAIN_EXT.has(extname(e.name).toLowerCase())) continue;
+      // Size FIRST. Deducting after the read would let one 900 MB `.json`
+      // through in full and leave the budget describing a limit it had
+      // already blown — bounded in arithmetic, unbounded in memory.
+      let size;
+      try {
+        size = (await stat(p)).size;
+      } catch {
+        continue;
+      }
+      if (size > budget) {
+        out.capped = true;
+        budget = 0;
+        return;
+      }
       let text;
       try {
         text = await readFile(p, 'utf8');
       } catch {
         continue;
       }
-      budget -= Buffer.byteLength(text);
-      if (budget <= 0) out.capped = true;
+      budget -= size;
       if (text.includes(basename)) out.mentionedIn.push(relative(dir, p).split(sep).join('/'));
     }
   };
@@ -392,6 +407,13 @@ if (process.argv.includes('--self-test')) {
   const explained = await explainMissingAsset(explainRoot, `/a/b/${wanted}`);
   const present = await explainMissingAsset(explainRoot, '/a/b/hero__w-100.jpg');
   const escaped = await explainMissingAsset(explainRoot, '/../etc/passwd');
+
+  // A file larger than the whole budget. The guarantee is that it is never
+  // READ, not that the arithmetic notices afterwards -- so the assertion is on
+  // mentionedIn staying empty, which only holds if the read never happened.
+  const budgetRoot = mkdtempSync(join(tmpdir(), 'vnl-budget-'));
+  writeFileSync(join(budgetRoot, 'big.html'), 'x'.repeat(5000) + wanted);
+  const budgeted = await explainMissingAsset(budgetRoot, `/a/b/${wanted}`, { maxBytes: 100 });
 
   const cases = [
     ['apex is legacy', legacy('https://example.org/a.jpg'), true],
@@ -809,6 +831,12 @@ if (process.argv.includes('--self-test')) {
     ],
     ['explainMissingAsset reports a file that IS on disk', present.onDisk, true],
     ['explainMissingAsset refuses a path that escapes the served dir', escaped === null, true],
+    [
+      'explainMissingAsset does not read a file bigger than the whole byte budget',
+      budgeted.mentionedIn.length,
+      0,
+    ],
+    ['explainMissingAsset says so when the byte budget stopped it', budgeted.capped, true],
   ];
   let failed = 0;
   for (const [name, got, want] of cases) {

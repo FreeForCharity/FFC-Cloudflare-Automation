@@ -512,6 +512,7 @@ jobs:
           node scripts/integrate-clone-into-nextjs.mjs --self-test
           node scripts/verify-no-legacy.mjs --self-test
           node scripts/assess-capture-completeness.mjs --self-test
+          node scripts/dedupe-capture-assets.mjs --self-test
           node scripts/clone-to-routes-lib.mjs --self-test
           node scripts/convert-clone-to-routes.mjs --self-test
           node scripts/check-publishable-size.mjs --self-test
@@ -895,6 +896,23 @@ jobs:
           done
 
           echo "Captured 1 apex + $mounted mounted host(s)."
+
+      # Deliberately AFTER both the capture and the reuse step, which converge
+      # on the same directory: a capture reused from an earlier run carries the
+      # same duplicates, and fixing this inside the capture would mean
+      # re-crawling a charity's site to collect the benefit.
+      #
+      # Not gated on a flag. A byte-identical second copy has no reader — the
+      # references that pointed at it now point at the file it duplicated — so
+      # there is no site for which keeping it is the right answer, and a flag
+      # would only add a state in which the size gate fails for a reason we
+      # already know how to remove.
+      - name: Collapse duplicate assets
+        working-directory: automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/dedupe-capture-assets.mjs --site "$RUNNER_TEMP/capture/site"
 
       # Runs BEFORE integration, so the forms are dead in the artifact too and
       # a later stage cannot accidentally publish the un-neutralized capture.

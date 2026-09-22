@@ -1553,6 +1553,144 @@ def test_pdfs_still_over_budget_are_named_not_counted():
     assert "will be REJECTED by a" in src
 
 
+def _dedupe_script_text() -> str:
+    return (REPO_ROOT / "scripts" / "dedupe-capture-assets.mjs").read_text(encoding="utf-8")
+
+
+def test_duplicate_assets_are_collapsed_after_the_capture_and_before_integration():
+    """The whole value of this pass is WHERE it sits. Placed inside the capture
+    it could not act on a capture reused from an earlier run, so recovering the
+    size of a five-hour crawl would mean crawling the charity's site again.
+    Placed after integration it would be rewriting the FFC-EX repo rather than
+    the capture, and the publishable-size gate would already have failed."""
+    steps = load_workflow(WORKFLOW)["jobs"]["convert"]["steps"]
+    names = [str(s.get("name", "")) for s in steps]
+    def only(substring: str) -> int:
+        """The index of the one step matching `substring`.
+
+        Indexing a comprehension would raise IndexError on a renamed step, which
+        names neither the step that vanished nor the steps that exist. It also
+        cannot tell "no match" from "two matches" -- and a second match here
+        would mean the ordering this test asserts is ambiguous."""
+        hits = [i for i, n in enumerate(names) if substring.lower() in n.lower()]
+        assert len(hits) == 1, f"expected exactly one step matching {substring!r}, got {hits}: {names}"
+        return hits[0]
+
+    dedupe = only("duplicate assets")
+    capture = only("Capture the live WordPress site")
+    reuse = only("Reuse the capture")
+    integrate = only("Integrate the capture")
+    gate = only("must be publishable")
+    assert capture < dedupe, (capture, dedupe, names)
+    assert reuse < dedupe, (reuse, dedupe, names)
+    assert dedupe < integrate < gate, (dedupe, integrate, gate, names)
+
+
+def test_the_dedupe_step_reads_the_same_directory_both_earlier_steps_write():
+    """A capture and a reused capture converge on one path. If this step named a
+    different one it would silently dedupe nothing, and the only symptom would
+    be a size gate that still fails -- which looks like 'the fix did not help'
+    rather than 'the fix never ran'."""
+    run = step_run(WORKFLOW, "convert", "duplicate assets")
+    assert '--site "$RUNNER_TEMP/capture/site"' in run, run
+
+
+def test_the_dedupe_self_test_gates_every_later_job():
+    """This script DELETES files from the capture. It does not get to run
+    against a charity's site without its own tests having passed first."""
+    run = step_run(WORKFLOW, "resolve", "Offline self-tests")
+    assert "node scripts/dedupe-capture-assets.mjs --self-test" in run, run
+
+
+def test_dedupe_deletes_only_after_the_rewrite_has_been_verified():
+    """The safety property, and the one worth a test rather than a comment.
+    Delete-then-rewrite turns a blind spot in the rewrite into 404s on a
+    charity's live site; rewrite-then-verify-then-delete turns the same blind
+    spot into a failed step over a tree that is still publishable, because
+    every reference already points at a canonical file that exists."""
+    src = _dedupe_script_text()
+    rewrite = src.index("const { filesChanged, refsRewritten } = rewriteReferences(")
+    verify = src.index("const stale = findStaleReferences(")
+    delete = src.index("rmSync(abs, { force: true })")
+    assert rewrite < verify < delete, (rewrite, verify, delete)
+    # ...and the verification must ABORT rather than warn.
+    between = src[verify:delete]
+    assert "if (stale.length)" in between, between
+    assert "return {" in between, between
+
+
+def test_dedupe_collapses_a_real_duplicate_and_repoints_its_references():
+    """Exercised end to end against a real tree rather than asserted about the
+    source, because the failure that matters here is a file deleted while some
+    reference still names it -- which no reading of the code can rule out."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        assets = root / "_ffc-assets" / "h" / "up"
+        assets.mkdir(parents=True)
+        body = b"VIDEO" * 2000
+        (assets / "Characters.mp4").write_bytes(body)
+        (assets / "Characters__1.mp4").write_bytes(body)
+        (root / "index.html").write_text(
+            '<video src="./_ffc-assets/h/up/Characters__1.mp4"></video>',
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "dedupe-capture-assets.mjs"),
+                "--site",
+                forward_slashes(str(root)),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+        assert "1 duplicate asset(s) collapsed" in out, out
+
+        assert (assets / "Characters.mp4").exists()
+        assert not (assets / "Characters__1.mp4").exists()
+        assert (
+            root / "index.html"
+        ).read_text(encoding="utf-8") == '<video src="./_ffc-assets/h/up/Characters.mp4"></video>'
+
+
+def test_dedupe_leaves_same_size_different_content_files_alone():
+    """Grouping by size is an optimization, not the decision. If a same-size
+    pair were collapsed without comparing bytes, this pass would quietly serve
+    one charity's document in place of another."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        assets = root / "_ffc-assets" / "h"
+        assets.mkdir(parents=True)
+        (assets / "a.pdf").write_bytes(b"A" * 4096)
+        (assets / "b.pdf").write_bytes(b"B" * 4096)
+        (root / "index.html").write_text(
+            '<a href="./_ffc-assets/h/a.pdf">a</a><a href="./_ffc-assets/h/b.pdf">b</a>',
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "dedupe-capture-assets.mjs"),
+                "--site",
+                forward_slashes(str(root)),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+        assert "no byte-identical assets found" in out, out
+        assert (assets / "a.pdf").exists() and (assets / "b.pdf").exists()
+
+
 # Built HERE, at the end of the module, and not one line earlier. This is a
 # snapshot of `globals()` taken where it appears, so a roster placed mid-file
 # silently omits every test defined below it -- this module defined 108 and ran

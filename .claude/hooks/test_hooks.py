@@ -439,8 +439,17 @@ RULES = [
          "git --work-tree /repo push -f origin main", BLOCK),
         ("force-push main via git --namespace",
          "git --namespace x push --force origin main", BLOCK),
+        # `--config-env` takes `section.key=ENVVAR`, and BOTH halves have to be
+        # real: this row read `a=B` until Copilot caught it on #1336. Measured,
+        # the two failure causes are separable and only one is about the key --
+        # `a=B` reports the missing env var `B` first, a VALID key with a
+        # missing var (`core.pager=PAGER_ENV`) fails identically, and exporting
+        # `B` does not help, while `a=HOME` still gives
+        # `error: key does not contain a section: a`. So the key is the real
+        # defect. `a.b=HOME` is the spelling `guard_bash.py` documents as
+        # measured-working, and it is what this row uses now.
         ("force-push main via git --config-env",
-         "git --config-env a=B push --force origin main", BLOCK),
+         "git --config-env a.b=HOME push --force origin main", BLOCK),
         # `--git-dir <path>` was already blocked, but only by accident: the
         # path ends `.git push`, and `\bgit\s+push\b` matched INSIDE it. Pin
         # it now that the rule itself covers the form, so a future narrowing

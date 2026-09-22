@@ -110,7 +110,13 @@ def _run_guard(
         # with no exemptions regardless of the caller's working directory.
         env["BLOB_ALLOWLIST"] = str(repo / "no-allowlist-here.txt")
     if path_prefix is not None:
-        env["PATH"] = str(path_prefix) + os.pathsep + env["PATH"]
+        # `env.get`, not `env["PATH"]`: a KeyError here would fail the module
+        # for a reason that has nothing to do with the guard, and this file's
+        # own header records how expensive a harness failure wearing the system
+        # under test's clothes is. An absent PATH is not worth a diagnosis --
+        # the subprocess would fail to find `bash` a moment later and say so.
+        existing = env.get("PATH", "")
+        env["PATH"] = str(path_prefix) + (os.pathsep + existing if existing else "")
     return subprocess.run(
         [_bash(), str(GUARD), base, head],
         cwd=repo,

@@ -98,9 +98,43 @@ export function extractBody(html) {
 }
 
 /** `<title>` with the site-name suffix left intact; Next.js owns the template. */
+/**
+ * Quote characters WordPress's slash-escaping puts a backslash in front of.
+ *
+ * The typographic four are here because the escaping happens on the way INTO
+ * the database, before `wptexturize` turns a straight quote into a curly one
+ * on the way out -- so the backslash written against `'` can arrive sitting
+ * against `\u2019`. A class covering only the ASCII pair matches the spelling
+ * one site happens to serve and misses the same defect on the next.
+ */
+const SLASHED_QUOTE = /\\(?=['"\\\u2018\u2019\u201C\u201D])/g;
+
+/**
+ * Undo WordPress's slash-escaping of quotes.
+ *
+ * This is `wp_unslash`, which WordPress applies on the way out of the database
+ * and which a title stored double-slashed survives: the CMS hands back
+ * `Fitness: What\&#8217;s Wrong or Right With Fitness Magazines?`, backslash
+ * and all, and the rendered `<title>` carries it to the browser tab. Measured
+ * on newheightseducation.org: four titles, visible in the tab and in every
+ * search result.
+ *
+ * Reversing an encoding artifact is not editing the charity's content. Nobody
+ * publishes `What\'s`; the slash is not in the copy the author typed, and
+ * WordPress's own read path removes it -- this pass reads the rendered page
+ * instead, which is where the removal did not happen.
+ *
+ * Only a backslash IMMEDIATELY BEFORE a quote goes, so a title carrying one
+ * for its own sake (`C:\Users`, a regex, a path) keeps it.
+ */
+export function unslashQuotes(text) {
+  if (typeof text !== 'string') return '';
+  return text.replace(SLASHED_QUOTE, '');
+}
+
 export function extractTitle(html) {
   const raw = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? '';
-  return decodeEntities(raw).replace(/\s+/g, ' ').trim();
+  return unslashQuotes(decodeEntities(raw)).replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -1392,6 +1426,47 @@ function selfTest() {
     'the title is decoded, not passed through raw',
     extractTitle('<title>Let&#8217;s Talk &amp; Listen</title>'),
     'Let’s Talk & Listen',
+  );
+  // WordPress slash-escaping, which `wp_unslash` removes on WordPress's own
+  // read path and which the RENDERED page therefore still carries. Measured on
+  // newheightseducation.org: four titles, backslash visible in the browser tab.
+  eq(
+    'a slash-escaped apostrophe is unescaped, not published as a backslash',
+    extractTitle("<title>Fitness: What\\'s Wrong or Right?</title>"),
+    "Fitness: What's Wrong or Right?",
+  );
+  eq(
+    '...including after wptexturize curled the quote the slash was written against',
+    extractTitle('<title>Toronto\\&#8217;s Anime North</title>'),
+    'Toronto’s Anime North',
+  );
+  eq(
+    '...and the same for double quotes',
+    extractTitle('<title>He said \\"hello\\"</title>'),
+    'He said "hello"',
+  );
+  eq(
+    "a backslash that is not escaping a quote is the author's, and stays",
+    extractTitle('<title>Installing to C:\\Users\\Public</title>'),
+    'Installing to C:\\Users\\Public',
+  );
+  eq('a doubled backslash collapses to one, as stripslashes does', unslashQuotes('a\\\\b'), 'a\\b');
+  // Caught rather than called bare. `unslashQuotes(null)` THROWS without its
+  // type guard, and a throw here kills the run before the harness can print
+  // anything -- so the case that exists to detect a missing guard would report
+  // a crashed self-test instead of a named failure, and a crash is not a
+  // detection. Same reason `integrate-clone-into-nextjs.mjs` reads its
+  // preserved files through a tolerant helper.
+  eq(
+    'a non-string is not a crash',
+    (() => {
+      try {
+        return unslashQuotes(null);
+      } catch {
+        return 'THREW';
+      }
+    })(),
+    '',
   );
   eq(
     'a description is read whichever order the attributes come in',

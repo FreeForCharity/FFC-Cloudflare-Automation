@@ -1617,6 +1617,38 @@ def test_a_re_encode_that_keeps_its_name_is_not_held_to_the_rename_threshold():
     assert "worthReencoding(buf.length, encoded.buffer.length)" in keep, keep
 
 
+def test_a_slash_escaped_quote_in_a_title_is_not_published_as_a_backslash():
+    """WordPress's magic-quotes legacy stores `What\\'s`, and `wp_unslash`
+    removes the slash on WordPress's own read path. 706 reads the RENDERED
+    page, which is where that removal did not happen -- so the backslash
+    reaches the browser tab. Measured on FFC-EX-newheightseducation.org: four
+    titles, e.g. `Fitness: What\\'s Wrong or Right With Fitness Magazines?`.
+
+    Reversing an encoding artifact is not editing the charity's content; nobody
+    publishes a backslash there. Asserted by RUNNING the library's own
+    self-test, including the negative case -- a title with a backslash in it
+    for its own sake keeps it, or this stops being an unescape and becomes a
+    rewrite."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a slash-escaped apostrophe is unescaped, not published as a backslash",
+        "...including after wptexturize curled the quote the slash was written against",
+        "...and the same for double quotes",
+        "a backslash that is not escaping a quote is the author's, and stays",
+        "a doubled backslash collapses to one, as stripslashes does",
+        "a non-string is not a crash",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
 def _dedupe_script_text() -> str:
     return (REPO_ROOT / "scripts" / "dedupe-capture-assets.mjs").read_text(encoding="utf-8")
 

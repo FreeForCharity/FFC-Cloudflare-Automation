@@ -170,6 +170,12 @@ def _statements(cmd):
     return stmts
 
 
+# The three span kinds `_top_level_ops` tracks, and why they are not one thing:
+# bare `(`/`{` nest inside a command substitution and are literal inside a
+# parameter expansion, and a backtick span is opaque to both.
+CMD, PARAM, TICK = "cmd", "param", "tick"
+
+
 def _top_level_ops(bare, ops):
     """Yield `(index, length)` for each operator in `ops` that is TOP LEVEL.
 
@@ -199,17 +205,40 @@ def _top_level_ops(bare, ops):
     `ops` is matched longest-first by the caller's ordering, so `|&` wins over
     `|`.
 
-    A backtick is only a span delimiter at TOP LEVEL. Inside an open `$(...)`
-    it is one of that substitution's own characters, and the `)` ends the span
-    regardless -- so toggling on it there would carry the flag out past the
-    close. The damage is not the missed split it looks like: an odd backtick
-    inside a substitution INVERTS the parity for everything after it, so the
-    opening backtick of a later, genuine `` `...` `` reads as a close and its
-    contents are scanned as top level. The `|` in
-    `git push --force `git remote | head -1` main` then splits a real
-    force-push into two stages, which is exactly the permissive tear this
-    scanner exists to prevent -- 21 of them, measured over the probe corpus.
-    Copilot review on #1336.
+    A backtick span is tracked on the SAME stack as the other two kinds. The
+    two side-flag spellings that came before it were each wrong, in opposite
+    directions, and only one of the two was a bypass:
+
+    - A flag toggled on EVERY backtick lets an odd backtick inside a
+      substitution invert the parity for everything after it, so the opening
+      backtick of a later, genuine span reads as a close and its contents are
+      scanned as top level. The `|` in a backticked remote then splits a real
+      force-push into two stages. Measured: **21 real force-pushes allowed**.
+    - Toggling it only at TOP LEVEL fixes that but leaves backticks inside
+      `$(...)` untracked, so an unquoted `)` inside them can match the outer
+      substitution's closer and empty the stack early. Measured over 72
+      bash-valid vectors of that shape: **0 bypasses** -- after the premature
+      close the next backtick turns suppression back on, which saves it by
+      accident -- but **1 false positive**,
+      `git push origin $(echo `printf a)b`) | grep -f p.txt main`, blocked
+      when it should not be. That is #1309's defect, not a permissive tear.
+
+    So the stack is not here to close a measured hole; it is here because
+    "accidentally safe" is not a property worth depending on in a guard, and
+    because it removes that false positive.
+
+    While a backtick span is open nothing else may open, close, or be an
+    operator, so an unterminated backtick swallows the rest of the line. That
+    costs 5 extra blocks on the probe corpus and every one of them is a command
+    **bash itself refuses** -- `bash -n` on the injected prefix says
+    `unexpected EOF while looking for matching ``'` -- so nothing a shell would
+    run changes verdict. Verified against the balanced control, which stays
+    valid and still splits. Under-splitting also fails toward BLOCK, the only
+    direction a guard may fail in.
+
+    Copilot review on #1336, three rounds. The severity on this last one was
+    higher than measurement supports, and two of my own attempts to measure it
+    were wrong first -- see the ledger row.
 
     Extracted from `_pipe_stages`, which had this scanner inline, because
     `_split_on_logical` needs exactly the same span model and a second copy
@@ -218,8 +247,9 @@ def _top_level_ops(bare, ops):
     # Each entry is `(closing_char, is_param_expansion)`. The flag matters
     # because bare `(`/`{` nest differently in the two span kinds -- see the
     # `closers[-1][1]` test below.
+    # One stack for all three span kinds. A backtick span lives here too, not
+    # in a side flag -- see CMD/PARAM/TICK above.
     closers = []
-    backtick = False
     i = 0
     n = len(bare)
     while i < n:
@@ -228,23 +258,30 @@ def _top_level_ops(bare, ops):
             # An escaped character is data, never an operator -- `\|` included.
             i += 2
             continue
-        if ch == "`" and not closers:
-            backtick = not backtick
+        if closers and closers[-1][1] == TICK:
+            # Inside a backtick span only its own backtick ends it. Nothing
+            # else may open a span, close an outer one, or be an operator.
+            if ch == "`":
+                closers.pop()
+            i += 1
+            continue
+        if ch == "`":
+            closers.append(("`", TICK))
             i += 1
             continue
         if ch == "$" and bare[i + 1 : i + 2] in ("(", "{"):
-            closers.append((")", False) if bare[i + 1] == "(" else ("}", True))
+            closers.append((")", CMD) if bare[i + 1] == "(" else ("}", PARAM))
             i += 2
             continue
-        if closers and not closers[-1][1] and ch in "({":
-            closers.append((")" if ch == "(" else "}", False))
+        if closers and closers[-1][1] == CMD and ch in "({":
+            closers.append((")" if ch == "(" else "}", CMD))
             i += 1
             continue
         if closers and ch == closers[-1][0]:
             closers.pop()
             i += 1
             continue
-        if not closers and not backtick:
+        if not closers:
             for op in ops:
                 if bare.startswith(op, i):
                     yield i, len(op)

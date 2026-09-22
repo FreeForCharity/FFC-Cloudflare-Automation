@@ -353,6 +353,22 @@ RULES = [
          "echo ${x:-foo(} ; git push --force origin main", BLOCK),
         ("force-push main with a grouped subshell inside $()",
          "git push --force $( (echo origin) && cat r.txt ) main", BLOCK),
+        # A `)` inside BACKTICKS inside `$(...)`. bash accepts this unquoted
+        # (checked with `bash -n`) and `_strip_quoted` leaves the paren intact,
+        # so the scanner really does see it. While backticks inside a
+        # substitution went untracked, that `)` matched the outer `$(`'s closer
+        # and emptied the stack early. It produced no bypass -- the next
+        # backtick turned suppression back on -- but it did block the benign
+        # pipeline below. Both polarities pinned so neither the premature close
+        # nor the fix for it can regress unseen. Copilot on #1336.
+        ("push feature, ) inside backticks inside $(), then pipe to grep main",
+         "git push origin $(echo `printf a)b`) | grep -f p.txt main", ALLOW),
+        ("push feature, ) inside backticks and an operator inside $()",
+         "git push origin $(echo `printf a)b` && true) feature-x", ALLOW),
+        ("force-push main, ) inside backticks and an operator inside $()",
+         "git push --force origin $(echo `printf a)b` && true) main", BLOCK),
+        ("force-push main, ) inside backticks supplying the remote",
+         "git push --force $(echo `printf a)b` ; true) main", BLOCK),
         # Same defect one level UP, in `_split_on_logical`, which tears the
         # statement into segments before `_pipe_stages` ever runs. An `&&` or
         # `||` inside a substitution is not a segment boundary either, and all

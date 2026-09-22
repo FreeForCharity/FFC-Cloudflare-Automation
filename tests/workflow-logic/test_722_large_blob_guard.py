@@ -432,9 +432,16 @@ def test_a_grown_file_shrunk_again_is_still_caught_and_told_so(tmp_path):
         "shrinking in a later commit must not clear the guard: the blob stays "
         "reachable\n" + out
     )
-    assert "TRACKED text file that GREW" in result.stdout, out
-    # Not "bytes here" -- the tip tree does not have it.
-    assert "bytes in this PR" in result.stdout, out
+    # The whole measured phrase, not the substring "bytes in this PR" on its
+    # own: the list header two lines up reads "Blobs over N bytes in this PR's
+    # commits", so a loose assertion is satisfied by a line that is not the one
+    # under test. Caught by mutation -- reverting this wording to "bytes here"
+    # left the loose form green.
+    assert (
+        f"900000 bytes on base -> {BIG} bytes in this PR (+{BIG - 900_000})"
+        in result.stdout
+    ), out
+    assert "bytes here" not in result.stdout, out
     # And the reader must be told that the option they are most likely to pick
     # needs the rewrite too.
     assert "SHRINKING DOES NOT" in result.stderr, out

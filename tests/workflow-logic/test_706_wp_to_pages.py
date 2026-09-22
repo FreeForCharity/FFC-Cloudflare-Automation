@@ -2011,6 +2011,45 @@ def test_heal_self_tests_cover_the_escaped_and_unresolvable_cases():
         assert f"PASS {name}" in out, (name, out[-2000:])
 
 
+def test_heal_repairs_a_reference_written_relative_to_its_own_document():
+    """The blind spot run 70's diagnostic found, closed.
+
+    The gate failed on one image; its diagnostic named the file that referenced
+    it -- an Elementor stylesheet inside the assets tree -- and the reference
+    there is written RELATIVE to that stylesheet. No `_ffc-assets` appears in
+    it, so the path-based scanner reads the whole document as containing no
+    references, which is why two runs of "every reference resolves" sat beside
+    a 404 without contradicting it.
+
+    Required by name from the script's own self-test, because a source-text
+    assertion cannot tell a live case from a deleted one. Two of these carry
+    more weight than the repair itself: the reference must still be RELATIVE
+    afterwards (these sites are served from a project Pages subpath, where an
+    absolute `/_ffc-assets/...` breaks), and a token resolving outside the
+    assets tree must be ignored rather than guessed at.
+    """
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a RELATIVE reference to a missing fold is repointed at its sibling",
+        "...and it is still RELATIVE afterwards",
+        "a RELATIVE reference whose target EXISTS is untouched",
+        "a RELATIVE reference with no sibling is left exactly as it was",
+        "a RELATIVE token that escapes the assets tree is ignored",
+        "the relative repair is counted, not silently applied",
+        "the path-based scan saw nothing here",
+        "a second relative run is a no-op",
+    ):
+        assert f"PASS {name}" in out, (name, out[-2500:])
+
+
 def test_the_gate_explains_a_missing_asset_instead_of_only_naming_it():
     """A 404 says a file is absent and nothing about why.
 

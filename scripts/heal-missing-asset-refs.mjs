@@ -40,7 +40,9 @@
  * It reports what it could not resolve, loudly and by name, and lets the gate
  * decide.
  *
- * Read-only against the network; only rewrites text files under --site.
+ * Read-only against the network. The only files it writes are text files under
+ * the --scan roots, which default to --site but need not be inside it: the
+ * integrated repo keeps its assets under public/ and its routes under src/.
  *
  * Usage:
  *   node scripts/heal-missing-asset-refs.mjs --site <assetsParent> [--scan <dir>]... [--dry-run]
@@ -54,6 +56,7 @@
 import {
   readdirSync,
   lstatSync,
+  statSync,
   existsSync,
   readFileSync,
   writeFileSync,
@@ -670,30 +673,65 @@ function selfTest() {
 
 // ---------------------------------------------------------------------- cli
 
+const USAGE =
+  'usage: heal-missing-asset-refs.mjs --site <assetsParent> [--scan <dir>]... [--dry-run]';
+
+/**
+ * The value that follows a flag, or `null` when the flag has none.
+ *
+ * A flag at the end of `argv`, or one followed by another flag, has no value.
+ * The caller REJECTS both spellings rather than skipping them, and that is the
+ * point: a `--scan` that quietly did not take produces a pass that read fewer
+ * files and still exits 0, reporting a clean tree for routes it never opened.
+ * That is the reassuring-direction failure this whole script exists to stop,
+ * so it must not be reachable from the script's own argument parsing.
+ */
+function flagValue(argv, i) {
+  const value = argv[i + 1];
+  return value === undefined || value.startsWith('--') ? null : value;
+}
+
+/** True if `value` is a directory this pass can actually walk. */
+function usableRoot(flag, value) {
+  if (!existsSync(value)) {
+    console.error(`[heal] ${flag} ${value} does not exist`);
+    return false;
+  }
+  // stat, not lstat: `walk` readdir's the root itself, which follows a symlink,
+  // so a symlinked directory is a usable root. A FILE is not -- it satisfies
+  // existsSync, walks to nothing, and yields an empty scan that exits 0.
+  if (!statSync(value).isDirectory()) {
+    console.error(`[heal] ${flag} ${value} is not a directory`);
+    return false;
+  }
+  return true;
+}
+
 function main(argv) {
   if (argv.includes('--self-test')) return selfTest() ? 0 : 1;
-  const siteIdx = argv.indexOf('--site');
-  if (siteIdx === -1 || !argv[siteIdx + 1]) {
-    console.error(
-      'usage: heal-missing-asset-refs.mjs --site <assetsParent> [--scan <dir>]... [--dry-run]',
-    );
-    return 2;
-  }
-  const site = argv[siteIdx + 1];
-  if (!existsSync(site)) {
-    console.error(`[heal] --site ${site} does not exist`);
-    return 2;
-  }
+
+  let site = null;
   const scanRoots = [];
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--scan' && argv[i + 1]) {
-      if (!existsSync(argv[i + 1])) {
-        console.error(`[heal] --scan ${argv[i + 1]} does not exist`);
-        return 2;
-      }
-      scanRoots.push(argv[i + 1]);
+    const flag = argv[i];
+    if (flag !== '--site' && flag !== '--scan') continue;
+    const value = flagValue(argv, i);
+    if (value === null) {
+      console.error(`[heal] ${flag} requires a directory`);
+      console.error(USAGE);
+      return 2;
     }
+    if (!usableRoot(flag, value)) return 2;
+    if (flag === '--site') site = value;
+    else scanRoots.push(value);
+    i++; // the value is consumed; it is not a flag in its own right
   }
+  if (site === null) {
+    console.error(`[heal] --site is required`);
+    console.error(USAGE);
+    return 2;
+  }
+
   const dryRun = argv.includes('--dry-run');
   report(heal(site, { dryRun, scanRoots }), { dryRun });
   return 0;

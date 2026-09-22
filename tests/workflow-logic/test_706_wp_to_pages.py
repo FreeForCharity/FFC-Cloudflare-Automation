@@ -1920,9 +1920,11 @@ def test_the_second_heal_runs_after_conversion_and_before_the_size_gate():
 def test_the_second_heal_resolves_against_public_and_scans_the_generated_routes():
     """The assets and the references live in DIFFERENT directories once the
     capture is integrated. Pointing --site at the repo root would look for
-    `_ffc-assets` where there is none and report a clean tree; omitting
-    `--scan ffc-ex/src` would never read the generated routes. Either mistake
-    is silent and reassuring."""
+    `_ffc-assets` where there is none, so every reference it found would be
+    reported unresolved -- a wall of names nobody can act on, still exiting 0;
+    omitting `--scan ffc-ex/src` would never read the generated routes and
+    would report a clean tree for the files the second pass exists to fix.
+    Neither mistake fails the run."""
     for job in ("convert", "deliver"):
         run = step_run(WORKFLOW, job, "conversion left pointing at nothing")
         assert "--site ffc-ex/public" in run, (job, run)
@@ -2007,6 +2009,62 @@ def test_heal_self_tests_cover_the_escaped_and_unresolvable_cases():
         "node_modules is never walked, let alone rewritten",
     ):
         assert f"PASS {name}" in out, (name, out[-2000:])
+
+
+def test_heal_refuses_an_argument_that_would_silently_narrow_the_scan():
+    """A `--scan` that does not take is worse than one that errors.
+
+    The pass reports what it could not repair, so a root it never read costs
+    nothing visible: it prints a smaller total, no unresolved names, and exits
+    0. That reads exactly like a healthy tree. Three spellings reach that
+    state -- a trailing `--scan`, a `--scan` swallowed by the next flag, and a
+    `--scan` pointed at a FILE (which satisfies existsSync and then walks to
+    nothing) -- so each must be refused BY NAME rather than ignored.
+
+    Every case asserts the message as well as the exit code. `rc == 2` alone
+    cannot tell a refusal from a node that failed to start, and this module
+    has already shipped one test that went green for exactly that reason
+    (CLAUDE.md, 2026-07-29).
+    """
+    heal = str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs")
+
+    def run(*args: str) -> tuple[int, str]:
+        proc = subprocess.run(
+            ["node", heal, *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "public" / "_ffc-assets").mkdir(parents=True)
+        (root / "src").mkdir()
+        (root / "src" / "page.tsx").write_text("const a = 1;", encoding="utf-8")
+        a_file = root / "src" / "page.tsx"
+
+        site = forward_slashes(str(root / "public"))
+        src = forward_slashes(str(root / "src"))
+        the_file = forward_slashes(str(a_file))
+
+        # The positive control comes FIRST and is not optional: a script that
+        # returned 2 for everything would satisfy every case below.
+        rc, out = run("--site", site, "--scan", src)
+        assert rc == 0, out
+
+        for args, needle in (
+            (("--site", site, "--scan"), "--scan requires a directory"),
+            (("--site", site, "--scan", "--dry-run"), "--scan requires a directory"),
+            (("--site", site, "--scan", the_file), "is not a directory"),
+            (("--site",), "--site requires a directory"),
+            (("--site", the_file), "is not a directory"),
+            (("--scan", src), "--site is required"),
+        ):
+            rc, out = run(*args)
+            assert rc == 2, (args, rc, out)
+            assert needle in out, (args, needle, out)
 
 
 # Built HERE, at the end of the module, and not one line earlier. This is a

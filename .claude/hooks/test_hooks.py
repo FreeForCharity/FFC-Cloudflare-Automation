@@ -461,7 +461,16 @@ RULES = [
         # second is `-c`'s ARGUMENT beginning with `push`, which an earlier
         # draft read as the subcommand by backtracking; the third proves a
         # quoted `push` still cannot supply it.
-        ("normal push feature via git -c", "git -c a=b push --force origin feature-x", ALLOW),
+        #
+        # The key must be `section.key=value`. This row read `-c a=b` until
+        # Copilot caught it on #1336: `git -c a=b status` exits 128 with
+        # `error: key does not contain a section: a`, so the row was asserting
+        # that the guard leaves alone a command git itself refuses -- which says
+        # nothing about REAL `git -c` usage, the whole point of the case. Note
+        # `git -c a=b --version` exits 0, because `--version` answers before
+        # config is parsed; check such a key with a subcommand that reads it.
+        ("normal push feature via git -c",
+         "git -c core.pager=cat push --force origin feature-x", ALLOW),
         ("git -c push.default then an unrelated main and force",
          "git -c push.default=simple config --list && echo main --force", ALLOW),
         ("commit message naming push, force and main",

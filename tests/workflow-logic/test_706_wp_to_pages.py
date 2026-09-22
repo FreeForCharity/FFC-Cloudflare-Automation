@@ -1588,6 +1588,104 @@ def test_a_preserved_directory_still_loses_to_the_captured_site():
     assert "if (existsSync(dest)) continue;" in body, body
 
 
+def _deliver_steps():
+    return load_workflow(WORKFLOW)["jobs"]["deliver"]["steps"]
+
+
+def _one_step(steps, substring):
+    """The index of the one step whose name matches, or a failure that names the
+    alternatives. Indexing a comprehension would raise IndexError on a renamed
+    step and could not tell "no match" from "two matches"."""
+    names = [str(s.get("name", "")) for s in steps]
+    hits = [i for i, n in enumerate(names) if substring.lower() in n.lower()]
+    assert len(hits) == 1, f"expected exactly one step matching {substring!r}, got {hits}: {names}"
+    return hits[0]
+
+
+def test_the_delivered_tree_is_formatted_before_the_pr_is_opened():
+    """Every FFC-EX repo's CI runs `prettier --check .`; nothing 706 writes is
+    formatted. The routes come out of string templates and
+    `retargetLighthouseUrls` re-serialises with `JSON.stringify(_, null, 2)`,
+    which always expands an array prettier would fit on one line. Measured on
+    FFC-EX-newheightseducation.org: 778 `.tsx` files plus `lighthouserc.json`,
+    i.e. `Check formatting` failed on every migration this workflow has
+    delivered.
+
+    Position is the assertion. Formatting after the commit would format
+    nothing that ships; formatting before the conversion would format a tree
+    the conversion then rewrites."""
+    steps = _deliver_steps()
+    fmt = _one_step(steps, "Format the converted tree")
+    assert fmt > _one_step(steps, "Convert the capture into real app routes")
+    assert fmt > _one_step(steps, "Repair references the conversion left")
+    assert fmt < _one_step(steps, "Commit and open a draft PR")
+
+
+def test_the_formatter_is_the_target_repos_own_not_a_version_pinned_here():
+    """The check that has to pass is the TARGET repo's `format:check`, run
+    against its own `.prettierrc.json` with the version its lockfile resolves.
+    Pinning a version here would drift from that silently -- prettier's array
+    and Markdown reflow differ between minors, which is the local-pass/CI-fail
+    loop CLAUDE.md records as L240. This repo's own CI pins `prettier@3.8.1`
+    for its own tree; reaching for that spelling here is the mistake."""
+    steps = _deliver_steps()
+    run = str(steps[_one_step(steps, "Format the converted tree")]["run"])
+    assert "prettier@" not in run, run
+    assert "npm run format" in run and "pnpm run format" in run, run
+    # The lockfile, not a range: `^3.9.6` in package.json resolves to whatever
+    # is newest at install time, which is how the two sides come to disagree.
+    assert "--frozen-lockfile" in run, run
+    assert "npm ci" in run, run
+
+
+def test_the_format_step_verifies_the_formatting_actually_happened():
+    """`prettier --write` exits 0 for files it reformatted and for files it
+    never reached alike. A `.prettierignore` that grew an entry, or a `format`
+    script narrowed to `src/`, would leave the generated JSON at the repo root
+    untouched with this step still green -- the same defect this step exists to
+    prevent, reached from the other side. So the repo's own `format:check` runs
+    after the write, in both package-manager branches.
+
+    An earlier draft also probed for `format:check` in a separate variable and
+    refused on its absence. Mutation review found that redundant: `npm run
+    <missing>` already exits non-zero, so the probe could be deleted with no
+    test able to tell. What survives is one guard whose value is its MESSAGE,
+    which is why the test below asserts the message names both scripts."""
+    steps = _deliver_steps()
+    run = str(steps[_one_step(steps, "Format the converted tree")]["run"])
+    # Per BRANCH, not over the whole body. Asserting `index("run format") <
+    # index("run format:check")` across the step passes while the npm branch
+    # runs them in the wrong order, because the pnpm branch above it satisfies
+    # both lookups -- mutation review caught exactly that.
+    pnpm, npm = run.split("if [ -f pnpm-lock.yaml ]", 1)[1].split("else", 1)
+    for branch, body in (("pnpm", pnpm), ("npm", npm)):
+        assert "run format\n" in body, (branch, body)
+        assert "run format:check" in body, (branch, body)
+        assert body.index("run format\n") < body.index("run format:check"), (branch, body)
+
+
+def test_the_format_step_refuses_a_repo_that_cannot_verify_its_own_formatting():
+    """Both scripts are required, and the guard names whichever is missing.
+    `format` is how the tree gets formatted and `format:check` is how this step
+    knows it did, so an FFC-EX template that dropped either one must stop a
+    migration rather than deliver a PR whose formatting is unknown.
+
+    The guard changes no outcome -- `npm run <missing>` fails on its own -- and
+    is kept for what it says in the log. So the assertion is on the message: a
+    guard justified by its diagnosis has to be tested for its diagnosis."""
+    steps = _deliver_steps()
+    run = str(steps[_one_step(steps, "Format the converted tree")]["run"])
+    guard = run.split("missing=", 1)[1].split("if [ -f pnpm-lock.yaml ]", 1)[0]
+    assert '"format", "format:check"' in guard, guard
+    # The CONDITION, verbatim. Asserting only that `::error::` and `exit 1` are
+    # present passes for `if [ -n "" ]` -- a guard whose body can never run,
+    # which is how a refusal becomes decoration without a line being deleted.
+    assert 'if [ -n "$missing" ]; then' in guard, guard
+    assert "::error::" in guard and "$missing" in guard, guard
+    assert "exit 1" in guard, guard
+    assert run.count("::error::") == 1, run
+
+
 def test_the_templates_root_level_files_are_carried_by_a_rule_not_a_name_list():
     """The name list carried `_headers` and `security.txt` and dropped the other
     six files the template ships at the root of `public/`. Measured on

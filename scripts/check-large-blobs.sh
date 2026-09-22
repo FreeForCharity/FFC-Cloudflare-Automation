@@ -259,12 +259,16 @@ echo "Blobs over ${MAX_BLOB_BYTES} bytes in this PR's commits:"
 printf '%s' "$offenders"
 
 if [ "$grown_text_seen" = 1 ]; then
+  # Scoped to the file(s) marked TRACKED above, never to the whole report: a PR
+  # can grow a tracked text file AND commit a binary in the same range, and an
+  # unqualified "there is no binary to delete" is then false about a blob this
+  # very message just printed -- telling the reader to skip the one remedy that
+  # does apply.
   cat >&2 <<EOF
 
-A TRACKED TEXT FILE GREW PAST THE LIMIT. That is not the mistake the rest of
-this message describes: nothing was committed by accident, and there is no
-binary to delete. The limit is ${MAX_BLOB_BYTES} bytes and the file is over it,
-so shrink it or exempt it:
+A TRACKED TEXT FILE GREW PAST THE LIMIT. For the file(s) marked TRACKED above,
+nothing was committed by accident and there is nothing to delete: the limit is
+${MAX_BLOB_BYTES} bytes and the file is simply over it. Shrink it or exempt it:
 
   * Shrink the file -- split it, archive the older part, or move long content
     into a linked file. Note that trimming a Markdown TABLE usually does not
@@ -274,10 +278,22 @@ so shrink it or exempt it:
     description. Also update whatever documentation states the old ceiling --
     an exemption that is not written down keeps being obeyed after it is
     lifted (#1243).
-
-The branch rewrite below is for a blob that should never have existed. It does
-not apply to a tracked file that is simply too big now.
 EOF
+
+  if [ "$new_seen" = 1 ]; then
+    cat >&2 <<'EOF'
+
+THIS PR ALSO INTRODUCES A NEW OVERSIZED BLOB -- see the entries marked NEW
+above. The branch rewrite below DOES apply to those, so this report needs both
+remedies. Do not read the paragraph above as permission to skip the rewrite.
+EOF
+  else
+    cat >&2 <<'EOF'
+
+The branch rewrite below is for a blob that should never have existed. No
+offender in this report is one, so it does not apply here.
+EOF
+  fi
 fi
 
 cat >&2 <<'EOF'

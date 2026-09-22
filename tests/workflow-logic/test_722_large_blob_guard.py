@@ -248,8 +248,13 @@ def test_a_grown_tracked_text_file_is_not_diagnosed_as_a_committed_binary(tmp_pa
     assert "1048576" in result.stdout, out
     assert f"over by {BIG - 1048576}" in result.stdout, out
 
-    # And the remedy that actually applies must be present.
+    # And the remedy that actually applies must be present. In this fixture
+    # nothing was introduced, so the branch rewrite must be disclaimed -- and
+    # the mixed-case warning must NOT fire, or the disclaimer would be hedged
+    # for a case that is not happening.
     assert "A TRACKED TEXT FILE GREW PAST THE LIMIT" in result.stderr, out
+    assert "so it does not apply here" in result.stderr, out
+    assert "ALSO INTRODUCES A NEW OVERSIZED BLOB" not in result.stderr, out
 
     # The two halves of the message must agree. A list header reading
     # "blobs INTRODUCED in this PR's commits" sits two lines under a headline
@@ -421,11 +426,21 @@ def test_a_dot_path_is_still_recognised_as_tracked(tmp_path):
 
 
 def test_classification_never_swallows_an_offender(tmp_path):
-    """Two offenders of different shapes must both be reported.
+    """Two offenders of different shapes must both be reported, and the
+    remedies must be true of both.
 
     The classification only shapes the message; it must not be able to decide
     that a file is fine. A branch that reports one offender and drops the other
     is the false-clean this guard exists to prevent, one file at a time.
+
+    The stderr half is the more dangerous one, and it shipped wrong: the
+    grown-text paragraph said "there is no binary to delete" and "does not
+    apply to a tracked file" unconditionally, so in this exact fixture the
+    guard printed a `NEW binary file` entry and then told the reader, four
+    lines later, that there was no binary and the rewrite did not apply. A
+    reader who believed it would leave a 1.2 MB binary permanently reachable
+    from `main`, which is the whole failure this guard exists to prevent --
+    reached through its own remediation text.
     """
     repo = _init_repo(tmp_path)
     (repo / "ledger.md").write_bytes(b"x" * 900_000)
@@ -444,6 +459,15 @@ def test_classification_never_swallows_an_offender(tmp_path):
     # Mixed shapes: the generic headline is the honest one, because something
     # WAS introduced.
     assert "introduces one or more blobs" in result.stdout, out
+
+    # Both remedies, and no sentence that contradicts the other offender.
+    assert "A TRACKED TEXT FILE GREW PAST THE LIMIT" in result.stderr, out
+    assert "ALSO INTRODUCES A NEW OVERSIZED BLOB" in result.stderr, out
+    assert "The branch rewrite below DOES apply" in result.stderr, out
+    assert "so it does not apply here" not in result.stderr, out
+    # The two claims that were false here before this was pinned.
+    assert "no binary to delete" not in result.stderr, out
+    assert "nothing to delete: the limit" in result.stderr, out
 
 
 def test_unresolvable_ref_fails_loudly(tmp_path):

@@ -64,7 +64,7 @@ import {
   mkdtempSync,
   rmSync,
 } from 'node:fs';
-import { join, dirname, resolve, relative, sep, extname, basename } from 'node:path';
+import { join, dirname, resolve, relative, isAbsolute, sep, extname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
@@ -365,10 +365,17 @@ export function referenceRes(name) {
 export const RELATIVE_REF_RE =
   /(?<![A-Za-z0-9._~%/-])((?:\.\.?\/)*(?:[A-Za-z0-9._~%-]+\/)*)([A-Za-z0-9._~%-]*__[A-Za-z0-9._~%-]*\.[A-Za-z0-9]{2,5})(?![A-Za-z0-9._~%/-])/g;
 
-/** Is `abs` inside `root`? */
+/**
+ * Is `abs` inside `root`?
+ *
+ * The traversal forms are exactly `..` and `..<sep>...`, and nothing else. A
+ * `startsWith('..')` test also rejects a real directory called `..foo`, which
+ * fails in the reassuring direction: the reference inside it is silently
+ * treated as out of range and never repaired, and the run reports nothing.
+ */
 export function isInside(root, abs) {
   const rel = relative(root, abs);
-  return rel !== '' && !rel.startsWith('..') && !rel.startsWith(`..${sep}`);
+  return rel !== '' && !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`);
 }
 
 /**
@@ -448,8 +455,13 @@ export function heal(siteRoot, { dryRun = false, scanRoots } = {}) {
   // where the assets are under `public/` and the routes under `src/`.
   const docs = textFiles(scanRoots?.length ? scanRoots : [siteRoot]);
 
+  // Two passes over the documents, holding ONE file's text at a time. Keeping
+  // every document in a Map was the obvious way to avoid re-reading them and
+  // it scales with the CAPTURE rather than with the repair: a large export is
+  // hundreds of megabytes of HTML, and this pass is one step in a job that
+  // also builds a Next.js site. Re-reading a file costs milliseconds; running
+  // the runner out of memory costs the whole migration.
   const referenced = new Set();
-  const textByFile = new Map();
   for (const abs of docs) {
     let text;
     try {
@@ -457,11 +469,6 @@ export function heal(siteRoot, { dryRun = false, scanRoots } = {}) {
     } catch {
       continue;
     }
-    // Every document is kept, including ones with no `_ffc-assets` in them at
-    // all. That string used to be the filter, and it is exactly the condition
-    // a RELATIVE reference fails -- so the documents most likely to carry one
-    // were the documents this pass refused to look at.
-    textByFile.set(abs, text);
     if (!text.includes(ASSETS_DIR)) continue;
     for (const name of referencesIn(text)) referenced.add(name);
   }
@@ -482,7 +489,13 @@ export function heal(siteRoot, { dryRun = false, scanRoots } = {}) {
   const relativeResolved = new Map();
   const relativeUnresolved = [];
 
-  for (const [abs, before] of textByFile) {
+  for (const abs of docs) {
+    let before;
+    try {
+      before = readFileSync(abs, 'utf8');
+    } catch {
+      continue;
+    }
     let after = before;
 
     if (resolved.size && after.includes(ASSETS_DIR)) {
@@ -500,12 +513,16 @@ export function heal(siteRoot, { dryRun = false, scanRoots } = {}) {
       }
     }
 
-    // Every document, not only the ones inside the assets tree. Restricting it
-    // to those was the obvious narrowing and it was inert: mutation review
-    // deleted the restriction and not one assertion changed, because the guard
-    // that actually decides anything is the one below -- the token has to
-    // RESOLVE to a path inside the assets tree. A guard no test can distinguish
-    // from its own absence is not protection, it is decoration.
+    // Every document, including ones with no `_ffc-assets` in them at all --
+    // that string is exactly the condition a RELATIVE reference fails, so
+    // filtering on it here would skip the documents most likely to carry one.
+    //
+    // And every document wherever it sits, not only those inside the assets
+    // tree. Restricting it to those was the obvious narrowing and it was inert:
+    // mutation review deleted the restriction and not one assertion changed,
+    // because the guard that decides anything is the one below -- the token has
+    // to RESOLVE to a path inside the assets tree. A guard no test can
+    // distinguish from its own absence is not protection, it is decoration.
     {
       for (const fix of relativeFixesFor(assetsRoot, abs, after)) {
         const where = relative(assetsRoot, fix.target).split(sep).join('/');
@@ -952,6 +969,22 @@ function selfTest() {
 
     const relAgain = heal(cap);
     eq('a second relative run is a no-op', relAgain.refsRewritten, 0);
+
+    // isInside's boundary. A `startsWith('..')` test calls a real directory
+    // named `..foo` an escape, which is the failure that reports nothing: the
+    // reference inside it is silently treated as out of range.
+    eq(
+      'isInside accepts a directory whose name merely begins with dots',
+      isInside(cap, join(cap, '..foo', 'x.jpg')),
+      true,
+    );
+    eq('isInside rejects the parent itself', isInside(cap, join(cap, '..')), false);
+    eq(
+      'isInside rejects a sibling of the root',
+      isInside(cap, resolve(cap, '..', 'other', 'x.jpg')),
+      false,
+    );
+    eq('isInside rejects the root itself', isInside(cap, cap), false);
 
     // An ABSOLUTE reference, in a document inside the assets tree. The first
     // pass owns it; the relative pass must not also match its tail, which is

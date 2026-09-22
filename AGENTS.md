@@ -567,16 +567,33 @@ concluding anything:
   while it holds. An open 747 issue, or a `conductor-silence` signal past its 6h warn threshold,
   means the run's one contribution is to escalate the **supervisor's** absence — not to re-verify an
   unchanged cohort for the tenth time.
-- Reading it by hand is one call, and #719 is the same source 747 uses. Per **L215** match the
-  em-dash heading form the log has used since ~run 87, not the pre-87 bare form:
+- Reading it by hand is one call, and #719 is the same source 747 uses. **Match the separator
+  loosely** — #719 has changed heartbeat format twice (bold `**Conductor run 174 — START**` since
+  run 167, `## Run 166 — END` before that, bare `RUN 86 START` before ~87), so pin the run number
+  and the phase word and let anything sit between them:
 
   ```bash
   gh api --paginate repos/FreeForCharity/FFC-Cloudflare-Automation/issues/719/comments \
-    --jq '.[] | "\(.created_at) \(.body[0:40])"' | grep -iE 'run [0-9]+ .?(START|END)' | tail -3
+    --jq '.[] | "\(.created_at) \(.body[0:60])"' \
+    | grep -iE 'run [0-9]+[^A-Za-z0-9]*(START|END)' | tail -3
   ```
 
   A newest entry older than a few hours is the finding. Note this needs `--paginate` and a
   **streaming** `--jq`, for the two reasons in the rate-budget section above.
+
+  **Over-match on purpose here.** The two failure directions are not symmetric: a loose pattern
+  shows you a worker comment that mentions a run, which you discard by reading it, while a tight one
+  prints nothing and reads as _"no heartbeat found"_ — indistinguishable from the outage you are
+  checking for. This line shipped tight and wrong: `run [0-9]+ .?(START|END)` allows exactly one
+  character between the number and the phase, so against the four formats above it matched **1 of
+  4** — only the pre-87 bare form — and missed both spellings the log actually uses. Measured, not
+  argued (Copilot caught it on #1341).
+
+  That makes three instances of one mistake in a single PR: the shipped `CONDUCTOR_RE` stopped at
+  run 166 for the same reason, and the safety-table row broke on a related formatting assumption.
+  **When you write a pattern against a log you do not control, enumerate its real formats from the
+  log itself and test against all of them** — every one of these was written from the formats the
+  author happened to have seen.
 
 Nothing in this repository can restart the Conductor — it runs on an operator workstation reachable
 only by @clarkemoyer — so the deliverable is the escalation, not a fix.

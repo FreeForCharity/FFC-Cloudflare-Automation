@@ -80,12 +80,66 @@ const PAGE = /^page\.(tsx|ts|jsx|js)$/;
 // wrong thing to express through a mechanism that promises the opposite.
 export const PRESERVED_PUBLIC_FILES = ['_headers', 'security.txt', '.well-known/security.txt'];
 
-/** Read the preserved files before the wipe. Missing ones are simply absent. */
+/**
+ * Template ASSET directories that must survive the wipe, listed as directories
+ * rather than as filenames.
+ *
+ * The template's own components reference these by absolute path — measured on
+ * FFC-EX-newheightseducation.org, 19 assets across 12 files under `src/`. The
+ * wipe deleted every one of them, and the template code that names them
+ * survives integration, so each became a 404 in the export.
+ *
+ * Run 35698011512 is what made this visible: three of them
+ * (`Images/figma-hero-img.webp`, `Images/logo.webp`, `Svgs/footerImage.svg`)
+ * failed the self-containment gate. The other sixteen were equally deleted and
+ * simply sat on pages that run's crawl did not reach — so the observed count
+ * was a property of the crawl, not of the damage.
+ *
+ * ORDER OF DISCOVERY MATTERS HERE. Every earlier delivery of this site died at
+ * the publishable-size gate, which runs BEFORE the self-containment gate, so
+ * this defect was unreachable rather than absent. It has been in every
+ * integration since `public/` started being wiped.
+ *
+ * Listed as DIRECTORIES on purpose. A filename list is what failed: the
+ * template gains and renames assets, and a list of names silently stops
+ * tracking it — which is exactly how nineteen live references came to point at
+ * deleted files with nothing failing until a gate happened to crawl the right
+ * page. A directory tracks the template instead of a snapshot of it.
+ *
+ * Small enough to hold in memory: 380 KB across 20 files, measured.
+ */
+export const PRESERVED_PUBLIC_DIRS = ['Images', 'Svgs'];
+
+/**
+ * Read the preserved files before the wipe. Missing ones are simply absent.
+ *
+ * Directory entries are expanded to one map entry per file, so the
+ * clone-wins-on-collision rule below stays per-file: a captured site that
+ * happens to ship `Images/logo.webp` keeps its own, and the rest of the
+ * template's directory still comes back.
+ */
 export function readPreservedPublicFiles(publicDir) {
   const kept = new Map();
   for (const rel of PRESERVED_PUBLIC_FILES) {
     const p = join(publicDir, rel);
     if (existsSync(p)) kept.set(rel, readFileSync(p));
+  }
+  for (const dir of PRESERVED_PUBLIC_DIRS) {
+    const root = join(publicDir, dir);
+    if (!existsSync(root)) continue;
+    const walk = (abs) => {
+      for (const e of readdirSync(abs, { withFileTypes: true })) {
+        const child = join(abs, e.name);
+        if (e.isDirectory()) walk(child);
+        else if (e.isFile()) {
+          // Forward slashes: these keys are compared against clone paths and
+          // printed in the report, and `relative` spells them with `\` on the
+          // Windows host this repo's own Conductor runs on.
+          kept.set(relative(publicDir, child).split(sep).join('/'), readFileSync(child));
+        }
+      }
+    };
+    walk(root);
   }
   return kept;
 }
@@ -494,6 +548,15 @@ function selfTest() {
     join(repo, 'public', '_headers'),
     '/*\n  Content-Security-Policy: default-src self\n',
   );
+  // The template's own asset directories. `nested/` is not decoration: the
+  // expansion walks recursively, and a flat readdir would pass every other
+  // assertion here while dropping a subdirectory on the real template.
+  mkdirSync(join(repo, 'public', 'Images', 'nested'), { recursive: true });
+  writeFileSync(join(repo, 'public', 'Images', 'figma-hero-img.webp'), 'HERO');
+  writeFileSync(join(repo, 'public', 'Images', 'logo.webp'), 'TEMPLATE-LOGO');
+  writeFileSync(join(repo, 'public', 'Images', 'nested', 'deep.webp'), 'DEEP');
+  mkdirSync(join(repo, 'public', 'Svgs'), { recursive: true });
+  writeFileSync(join(repo, 'public', 'Svgs', 'footerImage.svg'), '<svg/>');
   // An ESLint 9 flat config, shaped like the real template's.
   writeFileSync(
     join(repo, 'eslint.config.mjs'),
@@ -502,6 +565,10 @@ function selfTest() {
   // …and a clone that ships its own file at one preserved path, to prove the
   // captured site is not overwritten by the template.
   writeFileSync(join(clone, '_headers'), '/*\n  X-From: from-the-clone\n');
+  // …and its own file inside a preserved DIRECTORY, which must also win. A
+  // directory entry is not a licence to overwrite the charity's content.
+  mkdirSync(join(clone, 'Images'), { recursive: true });
+  writeFileSync(join(clone, 'Images', 'logo.webp'), 'CLONE-LOGO');
   // …and its own CNAME, which must NOT win: the published domain is an FFC
   // deployment decision, not content captured from the source site.
   writeFileSync(join(clone, 'CNAME'), 'from-the-clone.example\n');
@@ -752,6 +819,29 @@ function selfTest() {
     'the root-path security.txt fallback and _headers survive too',
     existsSync(join(repo, 'public', 'security.txt')) &&
       existsSync(join(repo, 'public', '_headers')),
+  );
+  // Reads that tolerate absence. A bare readFileSync here THROWS when the file
+  // is missing, which is precisely the state these three cases exist to detect
+  // — so the self-test would die with ENOENT instead of printing FAIL, and a
+  // crashed run is indistinguishable from a harness that could not start.
+  // Found by mutation testing: dropping the recursive walk, and dropping the
+  // map write, both produced a stack trace rather than a named failure.
+  const keptText = (...parts) => {
+    const abs = join(repo, 'public', ...parts);
+    return existsSync(abs) ? readFileSync(abs, 'utf8') : null;
+  };
+  check(
+    'the template asset directories survive the public/ wipe',
+    keptText('Images', 'figma-hero-img.webp') === 'HERO' &&
+      keptText('Svgs', 'footerImage.svg') === '<svg/>',
+  );
+  check(
+    'a preserved directory is walked recursively, not just its top level',
+    keptText('Images', 'nested', 'deep.webp') === 'DEEP',
+  );
+  check(
+    'the captured site still wins inside a preserved directory',
+    keptText('Images', 'logo.webp') === 'CLONE-LOGO',
   );
   check(
     'the captured site wins where it ships its own file at a preserved path',

@@ -699,12 +699,71 @@ def test_the_schedule_polls_faster_than_the_alert_threshold():
     assert any("/" in c.split()[1] for c in crons), crons
 
 
+def _cron_minutes(field):
+    """Expand a cron minute field to the concrete set of minutes it fires on.
+
+    Comparing the raw field STRING is what this guard did first, and it is weaker
+    than it reads: `19` and `19,49` are different strings and the same collision.
+    740 already schedules `9,39` in this repo, so the list form is not
+    hypothetical — it simply happens not to overlap :19 today, which is exactly
+    the kind of accident that stops being true on someone else's edit.
+
+    Handles the four field shapes cron allows: a literal, a `a,b` list, an `a-b`
+    range, and a `*`/`a-b` with a `/n` step.
+    """
+    out = set()
+    for part in field.split(","):
+        part = part.strip()
+        step = 1
+        if "/" in part:
+            part, _, raw_step = part.partition("/")
+            step = int(raw_step)
+        if part == "*":
+            lo, hi = 0, 59
+        elif "-" in part:
+            lo_text, _, hi_text = part.partition("-")
+            lo, hi = int(lo_text), int(hi_text)
+        else:
+            lo = hi = int(part)
+        out.update(range(lo, hi + 1, step))
+    return out
+
+
+def test_the_minute_expander_sees_through_every_cron_spelling():
+    """The collision guard below is only as strong as this expansion.
+
+    An expander that silently returned the empty set would make every collision
+    disjoint — the same fail-open shape the rest of this module exists to refuse,
+    one layer down in the test's own machinery. Pin each spelling, including the
+    list form that produced the finding.
+    """
+    assert _cron_minutes("19") == {19}
+    assert _cron_minutes("19,49") == {19, 49}
+    assert _cron_minutes("9,39") == {9, 39}
+    assert _cron_minutes("0-4") == {0, 1, 2, 3, 4}
+    assert _cron_minutes("*/15") == {0, 15, 30, 45}
+    assert _cron_minutes("10-40/10") == {10, 20, 30, 40}
+    assert len(_cron_minutes("*")) == 60
+    # The finding itself, stated as an assertion: different STRINGS, overlapping
+    # minute SETS. The raw-string comparison this replaced passes on this pair.
+    assert "19" != "19,49"
+    assert _cron_minutes("19") & _cron_minutes("19,49") == {19}
+
+
 def test_the_cron_collides_with_no_other_hub_schedule():
-    mine = {
-        s["cron"]
-        for s in load_workflow(WF_FILE).get(True, load_workflow(WF_FILE).get("on"))["schedule"]
-    }
-    others = set()
+    """The header comment claims minute :19 is used by no other hub workflow.
+
+    Assert that by the minutes the crons FIRE on rather than by how they are
+    spelled — a `19,49` elsewhere is a real collision that a raw-string
+    comparison scores as disjoint. Copilot's finding on #1341, and correct.
+    """
+    on = load_workflow(WF_FILE)
+    mine = {s["cron"] for s in on.get(True, on.get("on"))["schedule"]}
+    minutes_mine = set()
+    for c in mine:
+        minutes_mine |= _cron_minutes(c.split()[0])
+
+    others = {}
     for f in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
         if f.name == WF_FILE:
             continue
@@ -712,10 +771,13 @@ def test_the_cron_collides_with_no_other_hub_schedule():
         for line in raw.splitlines():
             line = line.strip()
             if line.startswith("- cron:"):
-                others.add(line.split("cron:", 1)[1].strip().strip("'\"").split("#")[0].strip())
-    minutes_mine = {c.split()[0] for c in mine}
-    minutes_others = {c.split()[0] for c in others}
-    assert minutes_mine.isdisjoint(minutes_others), (minutes_mine & minutes_others, mine)
+                cron = line.split("cron:", 1)[1].strip().strip("'\"").split("#")[0].strip()
+                others.setdefault(f.name, set()).update(_cron_minutes(cron.split()[0]))
+
+    clashes = {
+        name: sorted(minutes_mine & mins) for name, mins in others.items() if minutes_mine & mins
+    }
+    assert not clashes, (clashes, sorted(minutes_mine))
 
 
 def test_the_sweep_is_not_cancel_in_progress():

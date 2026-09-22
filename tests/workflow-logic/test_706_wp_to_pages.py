@@ -1557,6 +1557,58 @@ def _dedupe_script_text() -> str:
     return (REPO_ROOT / "scripts" / "dedupe-capture-assets.mjs").read_text(encoding="utf-8")
 
 
+def _integrate_script_text() -> str:
+    return (REPO_ROOT / "scripts" / "integrate-clone-into-nextjs.mjs").read_text(encoding="utf-8")
+
+
+def test_the_templates_own_asset_directories_survive_the_public_wipe():
+    """integrate wipes `public/` wholesale, and the template's components go on
+    referencing /Images/... and /Svgs/... by absolute path. Measured on
+    FFC-EX-newheightseducation.org: 19 such assets across 12 files under src/.
+    Every one was deleted, so every one 404'd in the export.
+
+    Run 35698011512 surfaced three of them at the self-containment gate; the
+    other sixteen were equally broken and merely sat on pages that crawl did
+    not reach. Directories, not filenames: a name list stops tracking a
+    template that gains and renames assets, which is how this got here."""
+    src = _integrate_script_text()
+    assert "export const PRESERVED_PUBLIC_DIRS" in src, src[:400]
+    decl = src.split("export const PRESERVED_PUBLIC_DIRS", 1)[1].split("\n", 1)[0]
+    for d in ("Images", "Svgs"):
+        assert f"'{d}'" in decl, (d, decl)
+
+
+def test_a_preserved_directory_still_loses_to_the_captured_site():
+    """A directory entry is not a licence to overwrite the charity's content.
+    The restore must stay per-file and skip a destination the clone already
+    wrote, or a captured site shipping its own /Images/logo.webp would have the
+    FFC template's logo written over it by the migration."""
+    src = _integrate_script_text()
+    body = src.split("export function restorePreservedPublicFiles", 1)[1].split("\n}", 1)[0]
+    assert "if (existsSync(dest)) continue;" in body, body
+
+
+def test_integrate_self_tests_cover_the_preserved_directories():
+    """Asserted by RUNNING them, not by reading them. The behaviour that keeps a
+    charity's site whole here is the recursive walk and the collision rule, and
+    a source-text assertion cannot tell a live case from a deleted one."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "integrate-clone-into-nextjs.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "the template asset directories survive the public/ wipe",
+        "a preserved directory is walked recursively, not just its top level",
+        "the captured site still wins inside a preserved directory",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
 def test_duplicate_assets_are_collapsed_after_the_capture_and_before_integration():
     """The whole value of this pass is WHERE it sits. Placed inside the capture
     it could not act on a capture reused from an earlier run, so recovering the

@@ -135,10 +135,32 @@ export function referenceName(matchedTail) {
   return matchedTail.replace(/\\\//g, '/').replace(/^\//, '');
 }
 
-/** Distinct asset names referenced by `text`. */
+/**
+ * A reference whose every segment is an ordinary name.
+ *
+ * The character class above admits `.` and `-`, so it also admits `..` as a
+ * whole segment. `join(assetsRoot, ...name.split('/'))` would then normalise
+ * the traversal away and probe a path OUTSIDE the capture's asset directory —
+ * and a candidate resolved that way would be written back into a charity's
+ * markup as a URL the browser normalises in turn.
+ *
+ * Skipping such a reference costs nothing, because there is nothing correct to
+ * do with it: `capture-wordpress-api.mjs` refuses to WRITE outside the assets
+ * dir (`isContainedPath`), so no file this pass is allowed to repoint at could
+ * ever satisfy one. Reported by Copilot on #1355.
+ */
+export function isSafeReferenceName(name) {
+  if (!name) return false;
+  return name.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..');
+}
+
+/** Distinct asset names referenced by `text`, traversal attempts excluded. */
 export function referencesIn(text) {
   const names = new Set();
-  for (const m of text.matchAll(REFERENCE_RE)) names.add(referenceName(m[1]));
+  for (const m of text.matchAll(REFERENCE_RE)) {
+    const name = referenceName(m[1]);
+    if (isSafeReferenceName(name)) names.add(name);
+  }
   return names;
 }
 
@@ -414,6 +436,21 @@ function selfTest() {
     'referencesIn finds a JSON-escaped reference',
     [...referencesIn('{"u":"\\/_ffc-assets\\/x.org\\/a.png"}')],
     ['x.org/a.png'],
+  );
+  eq(
+    'referencesIn drops a reference that traverses out of the assets dir',
+    [...referencesIn('<img src="/_ffc-assets/../../etc/passwd">')],
+    [],
+  );
+  eq(
+    'referencesIn drops a dot segment too',
+    [...referencesIn('<img src="/_ffc-assets/x.org/./a.png">')],
+    [],
+  );
+  eq(
+    'referencesIn keeps a dotted DIRECTORY, which is an ordinary capture name',
+    [...referencesIn('<img src="/_ffc-assets/x.org/v1.2/a.png">')],
+    ['x.org/v1.2/a.png'],
   );
 
   const root = mkdtempSync(join(tmpdir(), 'heal-'));

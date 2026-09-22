@@ -1850,6 +1850,51 @@ def test_heal_cannot_fail_the_run_on_a_reference_it_could_not_repair():
         assert "x.org/nothing-has-this.png" in out, out
 
 
+def test_heal_refuses_a_reference_that_traverses_out_of_the_assets_dir():
+    """Copilot's finding on #1355. The reference character class admits `.` and
+    `-`, so it admits `..` as a whole segment -- and `join(assetsRoot, ...)`
+    normalises the traversal away, so a candidate could be probed, and a
+    rewrite written back into a charity's markup, against a path outside the
+    capture. Asserted end to end because the guard has to hold in the scanner,
+    not merely in a helper someone could stop calling."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "_ffc-assets" / "x.org").mkdir(parents=True)
+        (root / "_ffc-assets" / "x.org" / "a.png").write_bytes(b"A")
+        (root / "outside.png").write_bytes(b"OUTSIDE")
+        before = (
+            '<img src="/_ffc-assets/../outside.png">'
+            '<img src="/_ffc-assets/x.org/./a.png">'
+            '<img src="/_ffc-assets/x.org/a__v2.png">'
+        )
+        (root / "index.html").write_text(before, encoding="utf-8")
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"),
+                "--site",
+                forward_slashes(str(root)),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+
+        html = (root / "index.html").read_text(encoding="utf-8")
+        # The two traversal forms are untouched and never reported either way.
+        assert "/_ffc-assets/../outside.png" in html, html
+        assert "/_ffc-assets/x.org/./a.png" in html, html
+        assert "outside.png" not in out, out
+        # ...and the ordinary reference beside them is still healed, so this is
+        # not passing merely because the whole pass did nothing.
+        assert '/_ffc-assets/x.org/a.png"' in html, html
+        assert "a__v2.png" not in html.replace("a__v2.png.bak", ""), html
+
+
 def test_heal_self_tests_cover_the_escaped_and_unresolvable_cases():
     """A source-text assertion cannot tell a live case from a deleted one, so
     this runs the self-test and requires the cases by name. The escaped
@@ -1872,6 +1917,7 @@ def test_heal_self_tests_cover_the_escaped_and_unresolvable_cases():
         "an unresolvable reference is left exactly as it was",
         "a prefix-sharing neighbour is not rewritten",
         "nothing is ever deleted",
+        "referencesIn drops a reference that traverses out of the assets dir",
     ):
         assert f"PASS {name}" in out, (name, out[-2000:])
 

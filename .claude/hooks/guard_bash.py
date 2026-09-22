@@ -244,11 +244,11 @@ def _top_level_ops(bare, ops):
     `_split_on_logical` needs exactly the same span model and a second copy
     would be one more place for the two to drift apart (#1309).
     """
-    # Each entry is `(closing_char, is_param_expansion)`. The flag matters
-    # because bare `(`/`{` nest differently in the two span kinds -- see the
-    # `closers[-1][1]` test below.
-    # One stack for all three span kinds. A backtick span lives here too, not
-    # in a side flag -- see CMD/PARAM/TICK above.
+    # One stack for all three span kinds -- a backtick span lives here too,
+    # not in a side flag. Each entry is `(closing_char, kind)` where kind is
+    # CMD, PARAM or TICK; the kind is what the `closers[-1][1]` tests below
+    # branch on, because bare `(`/`{` nest inside CMD, are literal inside
+    # PARAM, and are just characters inside TICK.
     closers = []
     i = 0
     n = len(bare)

@@ -2012,7 +2012,7 @@ def test_heal_self_tests_cover_the_escaped_and_unresolvable_cases():
 
 
 def test_heal_repairs_a_reference_written_relative_to_its_own_document():
-    """The blind spot run 70's diagnostic found, closed.
+    """Run 70's diagnostic found a blind spot; this closes it.
 
     The gate failed on one image; its diagnostic named the file that referenced
     it -- an Elementor stylesheet inside the assets tree -- and the reference
@@ -2043,6 +2043,10 @@ def test_heal_repairs_a_reference_written_relative_to_its_own_document():
         "a RELATIVE reference whose target EXISTS is untouched",
         "a RELATIVE reference with no sibling is left exactly as it was",
         "a RELATIVE token that escapes the assets tree is ignored",
+        "a token a slash continues is a path prefix, not a reference",
+        "...and the path prefix is left in the document untouched",
+        "a real reference is repaired where it stands alone",
+        "...and the SAME string is left alone where a slash continues it",
         "the relative repair is counted, not silently applied",
         "the path-based scan saw nothing here",
         "a second relative run is a no-op",

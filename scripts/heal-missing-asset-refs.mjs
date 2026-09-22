@@ -354,9 +354,16 @@ export function referenceRes(name) {
  * `__` is required in the stem. That is the capture's own query-string fold
  * marker, so the token is one this pipeline created and cannot collide with an
  * author's prose. Without it this would match any word with a dot in it.
+ *
+ * The trailing lookahead excludes `/` as well as the filename characters, and
+ * that slash is the load-bearing part: in `sub/photo__x.jpg/extra.png` the real
+ * reference is `extra.png`, and without it the scanner would hand back
+ * `sub/photo__x.jpg` -- a PATH PREFIX -- as if it were the whole token, and the
+ * repair would rewrite a directory component. Same class as `referenceRes`
+ * uses at the other end of the file, for the same reason.
  */
 export const RELATIVE_REF_RE =
-  /(?<![A-Za-z0-9._~%/-])((?:\.\.?\/)*(?:[A-Za-z0-9._~%-]+\/)*)([A-Za-z0-9._~%-]*__[A-Za-z0-9._~%-]*\.[A-Za-z0-9]{2,5})/g;
+  /(?<![A-Za-z0-9._~%/-])((?:\.\.?\/)*(?:[A-Za-z0-9._~%-]+\/)*)([A-Za-z0-9._~%-]*__[A-Za-z0-9._~%-]*\.[A-Za-z0-9]{2,5})(?![A-Za-z0-9._~%/-])/g;
 
 /** Is `abs` inside `root`? */
 export function isInside(root, abs) {
@@ -420,7 +427,7 @@ export function relativeFixesFor(assetsRoot, fileAbs, text) {
 /** A regex matching `token` as a whole reference, never as part of a longer one. */
 export function relativeRefRe(token) {
   const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?<![A-Za-z0-9._~%/-])${escapeRe(token)}(?![A-Za-z0-9._~%-])`, 'g');
+  return new RegExp(`(?<![A-Za-z0-9._~%/-])${escapeRe(token)}(?![A-Za-z0-9._~%/-])`, 'g');
 }
 
 /**
@@ -828,6 +835,13 @@ function selfTest() {
     writeFileSync(join(uploads, '2024', '06', 'kept__fit-100-ssl-1.png'), 'K');
     const cssDir = join(relAssets, 'pub.example.org', 'wp-content', 'uploads', 'elementor', 'css');
     mkdirSync(cssDir, { recursive: true });
+    // A repairable-looking sibling for the path-prefix decoy below: without the
+    // scanner's trailing `/` guard the decoy resolves, finds this, and a
+    // DIRECTORY component gets rewritten.
+    mkdirSync(join(cssDir, 'sub'), { recursive: true });
+    writeFileSync(join(cssDir, 'sub', 'cover__w-1-ssl-1.jpg'), 'C');
+    mkdirSync(join(cssDir, 'dirlike'), { recursive: true });
+    writeFileSync(join(cssDir, 'dirlike', 'prefix__w-1-ssl-1.jpg'), 'D');
     const up = '../../../../../';
     const toUploads = `${up}i0.wp.com/pub.example.org/wp-content/uploads/2024/06/`;
     const cssPath = join(cssDir, 'post-6271__ver-1790041496.css');
@@ -839,7 +853,18 @@ function selfTest() {
         `.d{background:url(${up}${up}${up}${up}etc/passwd__x-1.conf)}` +
         // No `__`, so not a name this pipeline ever wrote. Without that
         // requirement the scanner would treat any dotted word as a reference.
-        `.e{background:url(notes/README.md)}`,
+        `.e{background:url(notes/README.md)}` +
+        // The SCANNER's guard: a `/` continues the path, so
+        // `dirlike/prefix__fit-1-ssl-1.jpg` is a directory component and not
+        // the reference at all. The sibling beside it exists, so without the
+        // guard this resolves and is reported as a repair.
+        `.f{background:url(dirlike/prefix__fit-1-ssl-1.jpg/extra.png)}` +
+        // The REWRITER's guard, which the scanner's cannot stand in for: this
+        // token IS a real reference, and the same string appears again below
+        // as a directory component. A replace that treats `/` as a boundary
+        // rewrites both.
+        `.g{background:url(sub/cover__fit-1-ssl-1.jpg)}` +
+        `.h{background:url(sub/cover__fit-1-ssl-1.jpg/extra.png)}`,
     );
 
     const relRun = heal(cap);
@@ -897,11 +922,31 @@ function selfTest() {
       relRun.relativeUnresolved.some((n) => n.includes('README')),
       false,
     );
-    eq('the relative repair is counted, not silently applied', relRun.refsRewritten, 1);
+    eq(
+      'a token a slash continues is a path prefix, not a reference',
+      [...relRun.relativeResolved.keys()].some((n) => n.includes('prefix__')),
+      false,
+    );
+    eq(
+      '...and the path prefix is left in the document untouched',
+      css.includes('dirlike/prefix__fit-1-ssl-1.jpg/extra.png'),
+      true,
+    );
+    eq(
+      'a real reference is repaired where it stands alone',
+      css.includes('url(sub/cover__w-1-ssl-1.jpg)'),
+      true,
+    );
+    eq(
+      '...and the SAME string is left alone where a slash continues it',
+      css.includes('sub/cover__fit-1-ssl-1.jpg/extra.png'),
+      true,
+    );
+    eq('the relative repair is counted, not silently applied', relRun.refsRewritten, 2);
     eq(
       '...and reported as relative, apart from the path-based total',
       [...relRun.relativeResolved.values()],
-      ['photo__fit-1024-2C858-ssl-1.jpeg'],
+      ['photo__fit-1024-2C858-ssl-1.jpeg', 'cover__w-1-ssl-1.jpg'],
     );
     eq('the path-based scan saw nothing here', relRun.referenced, 0);
 

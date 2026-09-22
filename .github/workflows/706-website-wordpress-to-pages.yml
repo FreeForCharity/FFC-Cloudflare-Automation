@@ -1050,6 +1050,26 @@ jobs:
             --repo ffc-ex \
             --site-name "$SOURCE_DOMAIN"
 
+      # The SECOND heal pass, and the one that judges what actually ships.
+      #
+      # The first runs over the capture. This runs over the integrated repo,
+      # where the assets live under `public/` and the references live in the
+      # routes the step above just generated. Run 35733489308 is why both
+      # exist: the capture pass found 23 broken references and repaired 18 of
+      # them, and the self-containment gate then 404'd on a reference that pass
+      # had never seen, because it did not exist as a literal in the capture.
+      #
+      # Same script, same guarantees — it only ever repoints at a file already
+      # in `public/`, never fetches, never deletes, and never fails the run.
+      - name: Repair references the conversion left pointing at nothing
+        shell: bash
+        run: |
+          set -euo pipefail
+          node automation/scripts/heal-missing-asset-refs.mjs \
+            --site ffc-ex/public \
+            --scan ffc-ex/public \
+            --scan ffc-ex/src
+
       # Ask the one question every gate above skips: can this tree be PUSHED?
       #
       # The completeness gate, the self-containment gate and the build all ask
@@ -1503,6 +1523,26 @@ jobs:
           node automation/scripts/convert-clone-to-routes.mjs \
             --repo ffc-ex \
             --site-name "$SOURCE_DOMAIN"
+
+      # The SECOND heal pass, and the one that judges what actually ships.
+      #
+      # The first runs over the capture. This runs over the integrated repo,
+      # where the assets live under `public/` and the references live in the
+      # routes the step above just generated. Run 35733489308 is why both
+      # exist: the capture pass found 23 broken references and repaired 18 of
+      # them, and the self-containment gate then 404'd on a reference that pass
+      # had never seen, because it did not exist as a literal in the capture.
+      #
+      # Same script, same guarantees — it only ever repoints at a file already
+      # in `public/`, never fetches, never deletes, and never fails the run.
+      - name: Repair references the conversion left pointing at nothing
+        shell: bash
+        run: |
+          set -euo pipefail
+          node automation/scripts/heal-missing-asset-refs.mjs \
+            --site ffc-ex/public \
+            --scan ffc-ex/public \
+            --scan ffc-ex/src
 
       # Ask the one question every gate above skips: can this tree be PUSHED?
       #

@@ -40,15 +40,23 @@
  * It reports what it could not resolve, loudly and by name, and lets the gate
  * decide.
  *
- * Read-only against the network; only rewrites text files under --site.
+ * Read-only against the network. The only files it writes are text files under
+ * the --scan roots, which default to --site but need not be inside it: the
+ * integrated repo keeps its assets under public/ and its routes under src/.
  *
  * Usage:
- *   node scripts/heal-missing-asset-refs.mjs --site <siteRoot> [--dry-run]
+ *   node scripts/heal-missing-asset-refs.mjs --site <assetsParent> [--scan <dir>]... [--dry-run]
+ *
+ * `--site` is the directory that CONTAINS `_ffc-assets`; `--scan` (repeatable)
+ * names where to look for references, defaulting to `--site` itself. They are
+ * the same directory for a capture and different ones for the integrated repo,
+ * whose assets live under `public/` and whose routes live under `src/`.
  *   node scripts/heal-missing-asset-refs.mjs --self-test
  */
 import {
   readdirSync,
   lstatSync,
+  statSync,
   existsSync,
   readFileSync,
   writeFileSync,
@@ -68,7 +76,36 @@ const ASSETS_DIR = '_ffc-assets';
  * Same allowlist as `dedupe-capture-assets.mjs`, and for the same reason: a
  * binary cannot carry one, and rewriting a binary would corrupt it.
  */
-const TEXT_EXT = new Set(['.html', '.htm', '.css', '.js', '.mjs', '.svg', '.xml', '.json', '.txt']);
+const TEXT_EXT = new Set([
+  '.html',
+  '.htm',
+  '.css',
+  '.js',
+  '.mjs',
+  '.svg',
+  '.xml',
+  '.json',
+  '.txt',
+  // The conversion writes captured pages out as Next.js routes, so a reference
+  // can arrive in the published tree having never existed as a literal in the
+  // capture. Run 68 measured exactly that: the heal pass found and repaired 23
+  // broken references in the capture and the gate still 404'd on one the pass
+  // had never seen.
+  '.tsx',
+  '.ts',
+  '.jsx',
+]);
+
+/**
+ * Directories never walked, whatever root is given.
+ *
+ * `--scan` can now be pointed at a Next.js checkout rather than a capture, and
+ * walking `node_modules` there would be slow and — since this pass REWRITES
+ * what it walks — genuinely dangerous. `out`/`.next` are build output: rewriting
+ * them changes nothing that survives the next build, and would make the pass
+ * look effective while the source it was meant to fix stayed broken.
+ */
+const SKIP_DIRS = new Set(['.git', 'node_modules', '.next', 'out', '.vercel']);
 
 /**
  * The capture's own report is a RECORD of what the capture did, not a set of
@@ -99,19 +136,24 @@ function walk(root) {
       } catch {
         continue;
       }
-      if (st.isDirectory()) visit(abs);
-      else if (st.isFile()) out.push(abs);
+      if (st.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name)) visit(abs);
+      } else if (st.isFile()) out.push(abs);
     }
   };
   visit(root);
   return out.sort();
 }
 
-/** Text files whose contents may reference an asset. */
-function textFiles(siteRoot) {
-  return walk(siteRoot).filter(
-    (abs) => TEXT_EXT.has(extname(abs).toLowerCase()) && !isCaptureReport(abs),
-  );
+/** Text files under any of `roots` whose contents may reference an asset. */
+function textFiles(roots) {
+  const seen = new Set();
+  for (const root of roots) {
+    for (const abs of walk(root)) {
+      if (TEXT_EXT.has(extname(abs).toLowerCase()) && !isCaptureReport(abs)) seen.add(abs);
+    }
+  }
+  return [...seen].sort();
 }
 
 /**
@@ -301,10 +343,13 @@ export function referenceRes(name) {
  * reference silently pointed at the wrong picture is a lie in a charity's
  * publication.
  */
-export function heal(siteRoot, { dryRun = false } = {}) {
+export function heal(siteRoot, { dryRun = false, scanRoots } = {}) {
   const assetsRoot = join(siteRoot, ASSETS_DIR);
   const foldIndex = indexByFoldFamily(assetsRoot);
-  const docs = textFiles(siteRoot);
+  // The tree holding the assets and the trees holding the references are the
+  // same directory for a capture and DIFFERENT ones for an integrated repo,
+  // where the assets are under `public/` and the routes under `src/`.
+  const docs = textFiles(scanRoots?.length ? scanRoots : [siteRoot]);
 
   const referenced = new Set();
   const textByFile = new Map();
@@ -577,6 +622,46 @@ function selfTest() {
 
     const again = heal(site);
     eq('a second run is a no-op', again.refsRewritten, 0);
+
+    // The integrated-repo shape: assets under public/, references under src/,
+    // and a node_modules that must never be walked. This is the arrangement
+    // run 68 proved the capture-only scan cannot see.
+    const repo = join(root, 'repo');
+    mkdirSync(join(repo, 'public', ASSETS_DIR, 'x.org'), { recursive: true });
+    writeFileSync(join(repo, 'public', ASSETS_DIR, 'x.org', 'hero.jpg'), 'HERO');
+    mkdirSync(join(repo, 'src', 'app'), { recursive: true });
+    writeFileSync(
+      join(repo, 'src', 'app', 'page.tsx'),
+      'export default () => <img src="/_ffc-assets/x.org/hero__fit-1280.jpg" />;',
+    );
+    // INSIDE a scanned root, deliberately. A node_modules beside the scanned
+    // directories is skipped because it is out of range, not because the guard
+    // works -- a fixture placed there passes with SKIP_DIRS deleted, which is
+    // exactly the inert-fixture mistake the mutation run caught twice before.
+    mkdirSync(join(repo, 'src', 'node_modules', 'pkg'), { recursive: true });
+    writeFileSync(
+      join(repo, 'src', 'node_modules', 'pkg', 'index.js'),
+      'const u = "/_ffc-assets/x.org/hero__fit-1280.jpg";',
+    );
+
+    const integrated = heal(join(repo, 'public'), {
+      scanRoots: [join(repo, 'public'), join(repo, 'src')],
+    });
+    eq(
+      'a reference in a generated .tsx route is healed against public/_ffc-assets',
+      readFileSync(join(repo, 'src', 'app', 'page.tsx'), 'utf8').includes(
+        '/_ffc-assets/x.org/hero.jpg"',
+      ),
+      true,
+    );
+    eq('...and it is counted, not silently skipped', integrated.refsRewritten, 1);
+    eq(
+      'node_modules is never walked, let alone rewritten',
+      readFileSync(join(repo, 'src', 'node_modules', 'pkg', 'index.js'), 'utf8').includes(
+        'hero__fit-1280.jpg',
+      ),
+      true,
+    );
     eq('...and still reports the unresolved one', again.unresolved, ['x.org/vanished.png']);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -588,20 +673,67 @@ function selfTest() {
 
 // ---------------------------------------------------------------------- cli
 
+const USAGE =
+  'usage: heal-missing-asset-refs.mjs --site <assetsParent> [--scan <dir>]... [--dry-run]';
+
+/**
+ * The value that follows a flag, or `null` when the flag has none.
+ *
+ * A flag at the end of `argv`, or one followed by another flag, has no value.
+ * The caller REJECTS both spellings rather than skipping them, and that is the
+ * point: a `--scan` that quietly did not take produces a pass that read fewer
+ * files and still exits 0, reporting a clean tree for routes it never opened.
+ * That is the reassuring-direction failure this whole script exists to stop,
+ * so it must not be reachable from the script's own argument parsing.
+ */
+function flagValue(argv, i) {
+  const value = argv[i + 1];
+  return value === undefined || value.startsWith('--') ? null : value;
+}
+
+/** True if `value` is a directory this pass can actually walk. */
+function usableRoot(flag, value) {
+  if (!existsSync(value)) {
+    console.error(`[heal] ${flag} ${value} does not exist`);
+    return false;
+  }
+  // stat, not lstat: `walk` readdir's the root itself, which follows a symlink,
+  // so a symlinked directory is a usable root. A FILE is not -- it satisfies
+  // existsSync, walks to nothing, and yields an empty scan that exits 0.
+  if (!statSync(value).isDirectory()) {
+    console.error(`[heal] ${flag} ${value} is not a directory`);
+    return false;
+  }
+  return true;
+}
+
 function main(argv) {
   if (argv.includes('--self-test')) return selfTest() ? 0 : 1;
-  const siteIdx = argv.indexOf('--site');
-  if (siteIdx === -1 || !argv[siteIdx + 1]) {
-    console.error('usage: heal-missing-asset-refs.mjs --site <siteRoot> [--dry-run]');
+
+  let site = null;
+  const scanRoots = [];
+  for (let i = 0; i < argv.length; i++) {
+    const flag = argv[i];
+    if (flag !== '--site' && flag !== '--scan') continue;
+    const value = flagValue(argv, i);
+    if (value === null) {
+      console.error(`[heal] ${flag} requires a directory`);
+      console.error(USAGE);
+      return 2;
+    }
+    if (!usableRoot(flag, value)) return 2;
+    if (flag === '--site') site = value;
+    else scanRoots.push(value);
+    i++; // the value is consumed; it is not a flag in its own right
+  }
+  if (site === null) {
+    console.error(`[heal] --site is required`);
+    console.error(USAGE);
     return 2;
   }
-  const site = argv[siteIdx + 1];
-  if (!existsSync(site)) {
-    console.error(`[heal] --site ${site} does not exist`);
-    return 2;
-  }
+
   const dryRun = argv.includes('--dry-run');
-  report(heal(site, { dryRun }), { dryRun });
+  report(heal(site, { dryRun, scanRoots }), { dryRun });
   return 0;
 }
 

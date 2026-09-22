@@ -77,6 +77,19 @@ export const UNCARRIED_PUBLIC_ROOT_FILES = [
   // `wp-capture-report.<label>.json` in the directory. A stale one is not a
   // lost icon, it is a wrong answer about what was captured.
   /^wp-capture-report(\.[^/]+)?\.json$/,
+  // HTML, which the template never ships at this root: `public/` holds assets
+  // only -- zero HTML -- and every page is a route under `src/app`. So HTML
+  // here is a PREVIOUS run's captured page, which is pipeline output by the
+  // same argument as the report above.
+  //
+  // Raised by review against the first version of this rule, which carried it.
+  // The stated consequence was wrong -- `convert-clone-to-routes` removes
+  // every `*/index.html` it converts, and `exit(1)`s on any unrouted HTML left
+  // under `public/`, so a resurrected page could not reach a visitor. The cost
+  // is the other one: a stale `foo.html` is not `*/index.html`, so it is
+  // neither converted nor removed, and it fails the conversion of a site it
+  // has nothing to do with, after the crawl has already been paid for.
+  /\.x?html?$/i,
   // CNAME is carried by its own step, which then writes `keptCname || domain`
   // unconditionally — so carrying it here would make the "clone wins on a
   // collision" rule below false for exactly one entry. That is the right
@@ -611,6 +624,10 @@ function selfTest() {
   // as evidence that it did.
   writeFileSync(join(repo, 'public', 'wp-capture-report.json'), '{"stale":true}');
   writeFileSync(join(repo, 'public', 'wp-capture-report.oldsub.json'), '{"stale":true}');
+  // A previous run's captured page. `.html` at this root is never the
+  // template's -- `public/` is assets only -- so carrying it would hand the
+  // next conversion a page from a site it has nothing to do with.
+  writeFileSync(join(repo, 'public', 'stale-page.html'), '<h1>from a previous run</h1>');
   // A template directory the list deliberately does NOT name. It is here so
   // the wholesale root sweep cannot be mistaken for a wholesale sweep: a
   // 5.7 MB video nothing can reach after integration must still be wiped.
@@ -755,12 +772,18 @@ function selfTest() {
   // one 706 writes per host, and it is spelled out rather than derived
   // because the pattern has to survive a hostname full of dots.
   check(
-    'the pipeline owns exactly the report names and CNAME, and nothing else',
+    'the pipeline owns exactly the report names, CNAME and HTML, and nothing else',
     isUncarriedPublicRootFile('wp-capture-report.json') &&
       isUncarriedPublicRootFile('wp-capture-report.school.newheightseducation.org.json') &&
+      isUncarriedPublicRootFile('index.html') &&
+      isUncarriedPublicRootFile('About-Us.HTM') &&
       !isUncarriedPublicRootFile('favicon.ico') &&
       !isUncarriedPublicRootFile('android-chrome-512x512.png') &&
-      !isUncarriedPublicRootFile('_headers'),
+      !isUncarriedPublicRootFile('_headers') &&
+      // `.htm` is HTML; `.htaccess` and `.html-template` are not, and a
+      // pattern loose enough to catch them would start eating real files.
+      !isUncarriedPublicRootFile('.htaccess') &&
+      !isUncarriedPublicRootFile('notes.html.bak'),
   );
   check(
     'public/ is excluded from Prettier',
@@ -933,6 +956,10 @@ function selfTest() {
       keptText('apple-icon.png') === 'APPLE' &&
       keptText('android-chrome-192x192.png') === 'A192' &&
       keptText('android-chrome-512x512.png') === 'A512',
+  );
+  check(
+    "a previous run's captured PAGE does NOT survive the wipe",
+    keptText('stale-page.html') === null,
   );
   check(
     "a previous run's capture report does NOT survive the wipe",

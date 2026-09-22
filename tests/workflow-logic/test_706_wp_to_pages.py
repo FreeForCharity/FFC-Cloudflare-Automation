@@ -1909,7 +1909,8 @@ def test_integrate_self_tests_cover_the_preserved_directories():
         "every template icon at the root of public/ survives the wipe",
         "a previous run's capture report does NOT survive the wipe",
         "a template DIRECTORY the list does not name is still wiped",
-        "the pipeline owns exactly the report names and CNAME, and nothing else",
+        "a previous run's captured PAGE does NOT survive the wipe",
+        "the pipeline owns exactly the report names, CNAME and HTML, and nothing else",
     ):
         assert f"ok   {name}" in out, (name, out[-2000:])
 

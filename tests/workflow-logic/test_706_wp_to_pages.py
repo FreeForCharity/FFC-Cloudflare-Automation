@@ -1553,6 +1553,70 @@ def test_pdfs_still_over_budget_are_named_not_counted():
     assert "will be REJECTED by a" in src
 
 
+def test_an_oversized_webp_is_re_encoded_rather_than_waved_through():
+    """`RECODABLE` excluded WebP on the reasoning that it is already the
+    destination format. That is a statement about the container and says
+    nothing about the bytes -- and on a Jetpack site the format this pass
+    converts TO is the format most oversized images arrive in. Measured on
+    FFC-EX-newheightseducation.org: 34 images over the receiving repo's 400 KB
+    budget, **29 of them `.webp`**, largest 4,251 KB, and not one was ever a
+    candidate.
+
+    Asserted by RUNNING the capture script's own self-test, so the case cannot
+    pass by having been deleted."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "capture-wordpress-api.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "an oversized WebP is a candidate -- the format is not the budget",
+        "a WebP already under budget is still left byte-identical",
+        "an AVIF is not re-encoded -- that WOULD rename, for a usually-smaller format",
+        "re-encoding a WebP does not rename it",
+        "every full-size quality rung is tried before the first resize",
+        "the caps come down largest first, and never below the content column",
+        "each cap is tried at more than one quality",
+        "a rung with a cap resizes the pipeline",
+        "...to a LONG-edge cap, whichever way round the image is",
+        "...and never enlarges an image that is already smaller",
+        "a full-size rung leaves the pipeline untouched",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
+def test_the_ladder_can_lose_pixels_because_quality_alone_cannot_always_fit():
+    """Ten of that site's offenders went through the quality ladder and stayed
+    over budget: a 2560px WordPress `-scaled` export does not fit in 400 KB at
+    any quality a reader would accept, and no quality rung can say so. The
+    edge ladder is what answers that, and its floor is the assertion that
+    matters -- 1400px is still wider than the content column these render in,
+    so the smallest rung reachable cannot visibly degrade a photograph."""
+    src = (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+    decl = src.split("export const IMAGE_EDGE_LADDER = ", 1)[1].split(";", 1)[0]
+    edges = [int(n) for n in re.findall(r"\d+", decl)]
+    assert edges == sorted(edges, reverse=True), edges
+    assert min(edges) >= 1400, edges
+
+
+def test_a_re_encode_that_keeps_its_name_is_not_held_to_the_rename_threshold():
+    """`worthReencoding`'s 25% floor exists to pay for a rename, and every
+    rename is a chance to strand a reference. A WebP re-encoded to WebP keeps
+    its name, so that floor buys nothing there and costs something real: it
+    discards a result that lands UNDER BUDGET for saving only 20%, and ships
+    the oversized original instead. Same reasoning `worthShrinking` already
+    carries for a downsampled PDF, which also keeps its name."""
+    src = (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+    keep = src.split("const keep = encoded", 1)[1].split("if (keep) {", 1)[0]
+    assert "target === name" in keep, keep
+    assert "worthShrinking(buf.length, encoded.buffer.length)" in keep, keep
+    assert "worthReencoding(buf.length, encoded.buffer.length)" in keep, keep
+
+
 def _dedupe_script_text() -> str:
     return (REPO_ROOT / "scripts" / "dedupe-capture-assets.mjs").read_text(encoding="utf-8")
 

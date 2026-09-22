@@ -81,8 +81,24 @@ GUARD = REPO_ROOT / "scripts" / "check-pwsh-exit-downgrade.py"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "101-domain-status.yml"
 
 _spec = importlib.util.spec_from_file_location("check_pwsh_exit_downgrade", GUARD)
+# Checked BEFORE `module_from_spec`, which is what the old order got wrong
+# (Copilot, #1347). Measured, because the two failure modes are not the same and
+# only one of them reaches here:
+#   * a MISSING `.py` file still yields a spec -- it fails later at
+#     `exec_module` with a `FileNotFoundError` naming the path, which is clear;
+#   * a rename that drops the `.py` EXTENSION returns `None`, and the old order
+#     then raised `AttributeError: 'NoneType' object has no attribute 'loader'`
+#     from inside importlib -- a message that names neither this module nor the
+#     guard it was looking for.
+# That second one aborts at import, so the whole module reports nothing rather
+# than failing a test: the same truncated-roster hazard as L194, one step
+# earlier. An assertion that names the path is the difference between "the guard
+# was renamed" and a stack trace in the standard library.
+assert _spec is not None and _spec.loader is not None, (
+    f"cannot build an import spec for the guard at {GUARD} -- renamed, moved, or "
+    "no longer a .py file? Every test in this module depends on loading it."
+)
 guard = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
 # Registered BEFORE exec: `@dataclass` resolves its field annotations through
 # `sys.modules[cls.__module__]`, which is None for a module loaded by spec alone
 # -- the import raises `AttributeError: 'NoneType' object has no attribute

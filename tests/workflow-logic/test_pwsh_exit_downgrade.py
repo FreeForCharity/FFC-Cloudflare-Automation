@@ -631,7 +631,7 @@ def test_the_guard_installs_its_own_yaml_dependency_in_ci():
     # so a renamed step would abort the module mid-roster and take the 11 tests
     # that sort after this one with it, reporting a harness death rather than a
     # wiring failure (L194).
-    step = "Validate pwsh steps that downgrade an exit code"
+    step = "Validate a downgraded exit code ends with an explicit exit"
     assert step in ci, (
         f"722-ci.yml no longer has a step named {step!r} -- if it was renamed, "
         "update this test; if it was removed, the guard is no longer wired in"

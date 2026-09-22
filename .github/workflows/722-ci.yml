@@ -337,7 +337,7 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/check-workflow-fixed-tmp-paths.py
 
-      - name: Validate pwsh steps that downgrade an exit code end with an explicit exit
+      - name: Validate a downgraded exit code ends with an explicit exit
         shell: bash
         run: |
           # The runner appends `exit $LASTEXITCODE` to every pwsh `run:` body, so a

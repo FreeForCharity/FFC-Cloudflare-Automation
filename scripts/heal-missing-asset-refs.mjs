@@ -493,11 +493,13 @@ export function heal(siteRoot, { dryRun = false, scanRoots } = {}) {
       }
     }
 
-    // The relative pass needs a directory to resolve against, so it applies
-    // only to documents inside the assets tree -- which is where a capture's
-    // stylesheets live. A generated route outside it writes absolute
-    // references, and those the first pass already sees.
-    if (isInside(assetsRoot, abs)) {
+    // Every document, not only the ones inside the assets tree. Restricting it
+    // to those was the obvious narrowing and it was inert: mutation review
+    // deleted the restriction and not one assertion changed, because the guard
+    // that actually decides anything is the one below -- the token has to
+    // RESOLVE to a path inside the assets tree. A guard no test can distinguish
+    // from its own absence is not protection, it is decoration.
+    {
       for (const fix of relativeFixesFor(assetsRoot, abs, after)) {
         const where = relative(assetsRoot, fix.target).split(sep).join('/');
         if (!fix.to) {
@@ -834,7 +836,10 @@ function selfTest() {
       `.a{background:url(${toUploads}photo__fit-1280-2C858-ssl-1.jpeg)}` +
         `.b{background:url(${toUploads}kept__fit-100-ssl-1.png)}` +
         `.c{background:url(${toUploads}orphan__fit-9-ssl-1.gif)}` +
-        `.d{background:url(${up}${up}${up}${up}etc/passwd__x-1.conf)}`,
+        `.d{background:url(${up}${up}${up}${up}etc/passwd__x-1.conf)}` +
+        // No `__`, so not a name this pipeline ever wrote. Without that
+        // requirement the scanner would treat any dotted word as a reference.
+        `.e{background:url(notes/README.md)}`,
     );
 
     const relRun = heal(cap);
@@ -859,6 +864,14 @@ function selfTest() {
       css.includes(`${toUploads}kept__fit-100-ssl-1.png`),
       true,
     );
+    // Untouched is not enough on its own: a reference that IS considered and
+    // then found unrepairable is also left in place, and reads identically in
+    // the file. The report is where the two come apart.
+    eq(
+      '...and is not even considered',
+      relRun.relativeUnresolved.some((n) => n.includes('kept__')),
+      false,
+    );
     eq(
       'a RELATIVE reference with no sibling is left exactly as it was',
       css.includes(`${toUploads}orphan__fit-9-ssl-1.gif`),
@@ -874,6 +887,16 @@ function selfTest() {
       css.includes('etc/passwd__x-1.conf'),
       true,
     );
+    eq(
+      '...and is not reported as an unrepairable asset either',
+      relRun.relativeUnresolved.some((n) => n.includes('passwd')),
+      false,
+    );
+    eq(
+      'a token with no capture fold marker is not a reference at all',
+      relRun.relativeUnresolved.some((n) => n.includes('README')),
+      false,
+    );
     eq('the relative repair is counted, not silently applied', relRun.refsRewritten, 1);
     eq(
       '...and reported as relative, apart from the path-based total',
@@ -884,6 +907,33 @@ function selfTest() {
 
     const relAgain = heal(cap);
     eq('a second relative run is a no-op', relAgain.refsRewritten, 0);
+
+    // An ABSOLUTE reference, in a document inside the assets tree. The first
+    // pass owns it; the relative pass must not also match its tail, which is
+    // what the scanner's lookbehind is for. Without that lookbehind the tail
+    // resolves against the wrong base and is reported as an unrepairable
+    // asset that does not exist.
+    const absRoot = join(root, 'relabs');
+    const absAssets = join(absRoot, ASSETS_DIR);
+    mkdirSync(join(absAssets, 'x.org'), { recursive: true });
+    writeFileSync(join(absAssets, 'x.org', 'banner__w-100-ssl-1.png'), 'P');
+    writeFileSync(
+      join(absAssets, 'abs.css'),
+      `.g{background:url(/${ASSETS_DIR}/x.org/banner__fit-900-2C300-ssl-1.png)}`,
+    );
+    const absRun = heal(absRoot);
+    eq(
+      'an ABSOLUTE reference is repaired by the path pass',
+      readFileSync(join(absAssets, 'abs.css'), 'utf8').includes(
+        `/${ASSETS_DIR}/x.org/banner__w-100-ssl-1.png`,
+      ),
+      true,
+    );
+    eq(
+      '...and the relative pass does not also claim it',
+      absRun.relativeUnresolved.length + absRun.relativeResolved.size,
+      0,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

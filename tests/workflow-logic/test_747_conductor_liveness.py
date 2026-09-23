@@ -475,6 +475,46 @@ def test_the_cap_alone_is_never_a_finding():
     assert "context only" in s["detail"], s
 
 
+def test_an_empty_ish_open_count_is_unknown_not_a_confident_zero():
+    """`Number.isFinite(Number(v))` reads as a numeric guard and is not one.
+
+    `Number(null)`, `Number('')`, `Number(' ')`, `Number([])` and `Number(false)`
+    are every one of them `0`, so each passed the guard and was reported as a
+    measured count of zero — "0 open, at or below the cap of 3". That is the
+    exact shape this whole module exists to refuse: a value that could not be
+    read, rendered as a healthy measurement rather than as UNKNOWN.
+
+    `undefined` and `{}` coerce to NaN and were always caught, which is what made
+    the hole easy to miss — the obvious probe passes.
+    """
+    for empty in (None, "", " ", [], False):
+        s = _sig(_healthy(openPRs=empty), "open-pr-cap")
+        assert s["verdict"] == "UNKNOWN", (empty, s)
+        assert s["measured"] is None, (empty, s)
+    # Control: real counts, including a numeric string, still measure.
+    for good, want in ((0, 0), (7, 7), ("7", 7)):
+        s = _sig(_healthy(openPRs=good), "open-pr-cap")
+        assert s["verdict"] == "OK" and s["measured"] == want, (good, s)
+
+
+def test_a_null_history_sample_is_dropped_not_read_as_zero():
+    """parseHistory's input is the rolling ISSUE BODY, not our own wiring.
+
+    A `{"openPRs": null}` sample became `0`, so a history of `null,2,3` read back
+    as `0,2,3` — a STEEPER rise than the truth, which can manufacture a growth
+    finding as readily as flatten a real one. The PR promised a corrupt block
+    "suppresses only that signal, and says so"; a null laundered into a zero is
+    neither suppressed nor said.
+    """
+    poisoned = parse_history(
+        render_history([{"at": "a", "openPRs": None}, {"at": "b", "openPRs": 2}])
+    )
+    assert [h["openPRs"] for h in poisoned] == [2], poisoned
+    # An all-null block yields no samples at all, so growth reports that it
+    # cannot judge a trend rather than reporting no growth.
+    assert parse_history(render_history([{"at": "a", "openPRs": None}] * 3)) == []
+
+
 def test_sustained_growth_above_the_cap_alerts():
     a = analyze(
         comments=[_comment(NOW)],

@@ -573,13 +573,16 @@ concluding anything:
   and the phase word and let anything sit between them:
 
   ```bash
-  gh api --paginate repos/FreeForCharity/FFC-Cloudflare-Automation/issues/719/comments \
+  gh api --paginate 'repos/FreeForCharity/FFC-Cloudflare-Automation/issues/719/comments?per_page=100' \
     --jq '.[] | "\(.created_at) \(.body[0:60])"' \
     | grep -iE 'run [0-9]+[^A-Za-z0-9]*(START|END)' | tail -3
   ```
 
   A newest entry older than a few hours is the finding. Note this needs `--paginate` and a
-  **streaming** `--jq`, for the two reasons in the rate-budget section above.
+  **streaming** `--jq`, for the two reasons in the rate-budget section above — and `per_page=100`,
+  because `--paginate` does not raise the page size on its own. The default is **30**, and #719
+  carries 871+ comments, so omitting it spends ~30 requests where 9 do the same work. That is a
+  self-inflicted cost in the one section of this file that is about the shared rate budget.
 
   **Over-match on purpose here.** The two failure directions are not symmetric: a loose pattern
   shows you a worker comment that mentions a run, which you discard by reading it, while a tight one

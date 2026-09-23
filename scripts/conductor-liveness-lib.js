@@ -243,6 +243,35 @@ function _signal(name, verdict, measured, detail) {
 }
 
 /**
+ * A PR count, or `null` when the value is not one.
+ *
+ * `Number.isFinite(Number(v))` reads as a strict numeric guard and is not one:
+ * `Number(null)`, `Number('')`, `Number(' ')`, `Number([])` and `Number(false)`
+ * are all `0`, so every one of those passes and is then reported as a measured
+ * count of zero. For this monitor that is the worst available failure — the
+ * whole design refuses to render an unknown as an OK, and "0 open, at or below
+ * the cap" is a confident healthy statement made from no data at all.
+ *
+ * It matters most in `parseHistory`, whose input is the rolling issue body
+ * rather than our own wiring: a `{"openPRs": null}` sample became `0`, so a
+ * history of `null,2,3` read back as `0,2,3` — a STEEPER rise than the truth,
+ * which can manufacture a growth finding as easily as flatten one. The PR
+ * promised a corrupt block "suppresses only that signal, and says so"; a null
+ * laundered into a zero is neither suppressed nor said.
+ *
+ * Numeric strings stay acceptable, because callers and older history blocks may
+ * carry them; only the empty-ish values that coerce to zero are refused.
+ */
+function _finiteCount(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/**
  * How long the Conductor Log has been silent.
  *
  * UNKNOWN (a finding) when the log could not be read, when it returned no
@@ -362,10 +391,10 @@ function classifyPrCap(input) {
     return _signal(name, 'UNKNOWN', null, `could not read open agentic-os PRs: ${readError}`);
   }
   const open = input && input.openPRs;
-  if (!Number.isFinite(Number(open))) {
+  const n = _finiteCount(open);
+  if (n === null) {
     return _signal(name, 'UNKNOWN', null, `open PR count is not a number: \`${String(open)}\``);
   }
-  const n = Number(open);
   return _signal(
     name,
     'OK',
@@ -390,7 +419,7 @@ function classifyPrCap(input) {
 function classifyGrowth(history) {
   const name = 'pr-growth';
   const samples = (Array.isArray(history) ? history : []).filter(
-    (h) => h && Number.isFinite(Number(h.openPRs)),
+    (h) => h && _finiteCount(h.openPRs) !== null,
   );
   if (samples.length < GROWTH_SAMPLES) {
     return _signal(
@@ -452,8 +481,8 @@ function parseHistory(body) {
   }
   if (!Array.isArray(parsed)) return [];
   return parsed
-    .filter((h) => h && typeof h === 'object' && Number.isFinite(Number(h.openPRs)))
-    .map((h) => ({ at: typeof h.at === 'string' ? h.at : null, openPRs: Number(h.openPRs) }))
+    .filter((h) => h && typeof h === 'object' && _finiteCount(h.openPRs) !== null)
+    .map((h) => ({ at: typeof h.at === 'string' ? h.at : null, openPRs: _finiteCount(h.openPRs) }))
     .slice(-HISTORY_LIMIT);
 }
 

@@ -1544,6 +1544,62 @@ jobs:
             --scan ffc-ex/public \
             --scan ffc-ex/src
 
+      # Every FFC-EX repo's CI runs `prettier --check .`, and nothing 706 writes
+      # is formatted. The routes are emitted from string templates, and
+      # `retargetLighthouseUrls` re-serialises with `JSON.stringify(_, null, 2)`,
+      # which always expands an array prettier would fit on one line. Measured on
+      # FFC-EX-newheightseducation.org (its PR #14): 778 `.tsx` files plus
+      # `lighthouserc.json` -- so `Check formatting` has failed on every
+      # migration this workflow has ever delivered, and each one cost a human a
+      # round of triage to learn that the failure was the conversion's rather
+      # than the charity's.
+      #
+      # Run the TARGET repo's own formatter, never a version pinned here. What
+      # has to pass is that repo's `format:check` against its own
+      # `.prettierrc.json`, and a version chosen in this repo would drift from it
+      # silently -- prettier's array and Markdown reflow differ between minors,
+      # which is the local-pass/CI-fail loop CLAUDE.md records as L240. The
+      # install resolves the lockfile, so this is the same binary that repo's CI
+      # will run against the result.
+      #
+      # `public/` is excluded by the `.prettierignore` entry `integrate`
+      # guarantees, so this does not walk a gigabyte of captured assets. It runs
+      # before the size gate so the gate measures the bytes actually delivered;
+      # `node_modules/` is in the gate's SKIP_DIRS and in `.gitignore`, so the
+      # install is invisible to both the measurement and the commit.
+      - name: Format the converted tree with the target repo's own Prettier
+        working-directory: ffc-ex
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Both scripts, checked together and BEFORE the install, because the
+          # step needs both and neither absence is recoverable. `format` is how
+          # the tree gets formatted; `format:check` is how this step knows it
+          # did. `prettier --write` exits 0 for files it reformatted and for
+          # files it never reached alike, so a `.prettierignore` that grew an
+          # entry -- or a `format` script narrowed to `src/` -- would leave the
+          # generated JSON at the repo root untouched with this step green.
+          #
+          # The message is what this guard is for. `npm run <missing>` already
+          # exits non-zero, so refusing here changes no outcome; it changes the
+          # log from "Missing script" to a sentence that says which script, and
+          # why a migration cannot be delivered without it.
+          missing="$(node -e 'const s = require("./package.json").scripts || {}; process.stdout.write(["format", "format:check"].filter((k) => !s[k]).join(" "))')"
+          if [ -n "$missing" ]; then
+            echo "::error::The target repo defines no $missing script. 706 emits unformatted routes and JSON, so without the repo's own formatter this opens a PR that fails that repo's own Check formatting step -- and without the repo's own check, the formatting cannot be verified. Refusing to deliver a PR whose formatting is unknown."
+            exit 1
+          fi
+          if [ -f pnpm-lock.yaml ]; then
+            corepack enable
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm install --frozen-lockfile
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm run format
+            COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm run format:check
+          else
+            npm ci
+            npm run format
+            npm run format:check
+          fi
+
       # Ask the one question every gate above skips: can this tree be PUSHED?
       #
       # The completeness gate, the self-containment gate and the build all ask

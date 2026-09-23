@@ -1732,8 +1732,8 @@ def test_the_dead_social_share_chrome_is_repaired_or_removed():
     # half of that.
     assert re.search(
         r"import\s*\{[^}]*\brepairSocialShareChrome\b[^}]*\}\s*from", src, re.S
-    ), src[:400]
-    assert "repairSocialShareChrome(" in src, src[:400]
+    ), _around(src, "import {", "repairSocialShareChrome import")
+    assert "repairSocialShareChrome(" in src, _around(src, "const share =", "repairSocialShareChrome(")
 
 
 def test_captured_fixed_chrome_cannot_sit_above_ffcs_own_modals():
@@ -1764,6 +1764,69 @@ def test_captured_fixed_chrome_cannot_sit_above_ffcs_own_modals():
     # And the per-id cap must not come back alongside it: two mechanisms for
     # one job is how the weaker one goes on being trusted.
     assert "#ss-floating-bar" not in css, css[-800:]
+
+
+def _around(src: str, anchor: str, needle: str, span: int = 400) -> str:
+    """An excerpt from where the reader should look, not from the file's top.
+
+    `src[:400]` on a string that lives 450 lines in prints the imports, which
+    is worse than no context: it looks like evidence and points somewhere
+    unrelated. Raised by Copilot on #1364.
+    """
+    i = src.find(anchor)
+    if i == -1:
+        return f"{needle!r} not found, and neither was the anchor {anchor!r}"
+    return f"{needle!r} not found near {anchor!r}:\n...{src[max(0, i - span // 4) : i + span]}..."
+
+
+def test_a_hidden_widget_title_does_not_count_as_the_pages_heading():
+    """`widgettitle` is WordPress core's class for a sidebar widget's title,
+    and Jupiter emits it as an `<h1>`. On FFC-EX-newheightseducation.org that
+    left **429 of 785** pages looking like they had a heading when they had
+    none a screen reader could reach: the theme sets the widget
+    `display: none`, so `verify:build` counted an `<h1>` TAG, axe reported
+    `page-has-heading-one` against the ACCESSIBILITY TREE, and
+    `ensureSingleH1` saw the tag and skipped the page.
+
+    All three were right about what they measured, which is why no static
+    check caught it -- and a fragment cannot know its own computed CSS, so the
+    level cannot be decided by asking whether the heading is visible. It is
+    decided semantically instead: a widget title describes a widget, not the
+    document. The capture already agreed, tagging these `ffc-h2`.
+
+    Found by the post-deploy smoke suite added in
+    FFC-EX-newheightseducation.org#19, which renders the page in a browser --
+    the only layer at which the disagreement is observable."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a widget title emitted as an h1 is demoted to h2",
+        "...keeping the widget, its classes and its text",
+        "...so the page then gets a heading a reader can actually reach",
+        "a real page heading is NOT demoted",
+        "...and a class that merely contains the word is not the widget class",
+        "...including one separated by a hyphen, which is a regex word boundary",
+        "...while a single-quoted class attribute still works",
+        "...and an h1 with no class at all is left alone",
+        "an h2 that is already correct is left alone",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+    # ...and that the converter runs it BEFORE the heading check. Run after,
+    # it demotes a heading the page was already counting and leaves nothing.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    for needle in ("demoteWidgetTitles(share.html)", "ensureSingleH1(widget.html, title)"):
+        # The excerpt is taken around the CALL SITE, not from the top of the
+        # file: these strings live ~450 lines in, so `src[:400]` printed the
+        # imports on failure and sent the reader somewhere unrelated. Raised by
+        # Copilot on #1364.
+        assert needle in src, _around(src, "const fragment =", needle)
 
 
 def test_a_captured_page_with_no_heading_of_its_own_is_given_one():
@@ -1807,7 +1870,9 @@ def test_a_captured_page_with_no_heading_of_its_own_is_given_one():
     # to be assigned first for the code to run at all, so no mutation could
     # fail that assertion -- and an assertion nothing can break reads as
     # coverage while supplying none.
-    assert "ensureSingleH1(share.html, title)" in src, src[:200]
+    assert "ensureSingleH1(widget.html, title)" in src, _around(
+        src, "const fragment =", "ensureSingleH1(widget.html, title)"
+    )
 
 
 def test_the_built_output_verifier_is_scoped_to_routes_not_captured_assets():

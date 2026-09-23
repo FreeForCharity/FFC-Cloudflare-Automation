@@ -2008,6 +2008,67 @@ def test_what_can_be_repaired_is_repaired_rather_than_removed():
     )
 
 
+def test_an_attribute_is_read_whichever_quote_the_theme_used():
+    """HTML permits `alt='Share'` exactly as much as `alt="Share"`, and a
+    capture takes whatever the source theme emitted. Every pass here decides
+    whether markup SURVIVES, so a double-quote-only pattern is not a style
+    question: a control named by a single-quoted `aria-label` reads as nameless
+    and is deleted from a charity's live site -- the one direction these passes
+    are built never to fail in. A single-quoted `href='#'` fails the other way:
+    the repairs skip the button they exist to fix, and then the removal deletes
+    it as dead.
+
+    Raised by Copilot on #1367, and it could not have been found by running the
+    pipeline. Measured on the newheightseducation.org capture: 11,515
+    single-quoted hrefs, all of them on `<link rel=stylesheet>`, and **zero**
+    anchors carrying a single-quoted attribute. Re-deriving all 785 fragments
+    with the widened reads produces byte-identical output. So this is a defect
+    reachable only by reading the code, whose fix is a no-op for the one site
+    in hand and load-bearing for the next one.
+
+    `attrValue` is the single reader, and `isParkedHref` the single test for
+    "goes nowhere", so the passes cannot drift apart on either question."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a control named by a single-quoted aria-label is NOT removed",
+        "a control named by a single-quoted title is NOT removed",
+        "a control named by a single-quoted image alt is NOT removed",
+        "a single-quoted parked control is still removed",
+        "a single-quoted href is read",
+        "a double-quoted href is read",
+        "a missing attribute reads as null",
+        "an empty value reads as empty, not missing",
+        "a single-quoted parked href is recognised",
+        "a real fragment is not parked",
+        "a single-quoted share button is repaired",
+        "a single-quoted malformed href is repaired in place",
+        "a single-quoted in-site link is tokenized",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+    # One reader and one parked-href test, shared. Two copies of either is how
+    # the naming pass and the removal start disagreeing about the same anchor.
+    lib = (REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs").read_text(encoding="utf-8")
+    for caller in (
+        "removeDeadNamelessControls",
+        "repairInlineShareButtons",
+        "repairSocialShareChrome",
+    ):
+        body = lib[lib.index(f"export function {caller}") :]
+        body = body[: body.index("\n}\n")]
+        assert "isParkedHref(" in body, _around(
+            lib, f"export function {caller}", f"{caller} must use isParkedHref"
+        )
+
+
 def test_a_hidden_widget_title_does_not_count_as_the_pages_heading():
     """`widgettitle` is WordPress core's class for a sidebar widget's title,
     and Jupiter emits it as an `<h1>`. On FFC-EX-newheightseducation.org that

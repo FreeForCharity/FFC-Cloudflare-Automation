@@ -299,9 +299,10 @@ export function repairSocialShareChrome(html) {
   //    HTML-escaped in the source attribute, which is exactly what an href
   //    needs, so it is copied verbatim rather than decoded and re-encoded.
   let out = html.replace(/<a\b[^>]*>/gi, (tag) => {
-    if (!/\shref="#"/i.test(tag)) return tag;
-    const dest = /\sdata-ss-ss-link="([^"]+)"/i.exec(tag);
-    if (!dest) return tag;
+    if (!isParkedHref(tag)) return tag;
+    const parked = attrValue(tag, 'data-ss-ss-link');
+    if (!parked) return tag;
+    const dest = [null, parked];
     // Refused, not sanitised: leaving it `href="#"` keeps the anchor exactly
     // as inert as the capture found it, and a rewritten destination would be
     // a guess at what the charity meant.
@@ -310,7 +311,7 @@ export function repairSocialShareChrome(html) {
       return tag;
     }
     repaired += 1;
-    let fixed = tag.replace(/\shref="#"/i, ` href="${dest[1]}"`);
+    let fixed = tag.replace(/\shref\s*=\s*("#"|'#')/i, ` href="${dest[1]}"`);
     // Sharing should not cost the reader the page they are sharing. The
     // plugin opened a popup window; a new tab is the static equivalent.
     if (!/\starget=/i.test(fixed)) {
@@ -413,11 +414,15 @@ export function repairHref(raw) {
 export function repairMalformedHrefs(html) {
   if (typeof html !== 'string') return { html: '', repaired: 0 };
   let repaired = 0;
-  const out = html.replace(/\shref="([^"]*)"/gi, (whole, raw) => {
+  const out = html.replace(/\shref\s*=\s*("([^"]*)"|'([^']*)')/gi, (whole, _quoted, dq, sq) => {
+    const raw = dq ?? sq;
     const fixed = repairHref(raw);
     if (fixed === null) return whole;
     repaired += 1;
-    return ` href="${fixed}"`;
+    // Re-emitted with the quote the source used, so a value containing the
+    // other quote character stays valid markup.
+    const q = dq === undefined ? "'" : '"';
+    return ` href=${q}${fixed}${q}`;
   });
   return { html: out, repaired };
 }
@@ -471,13 +476,13 @@ export function repairInlineShareButtons(html, slug) {
   let rejected = 0;
   const base = `https://ffc.invalid${routePathForSlug(slug)}`;
   const out = html.replace(/<a\b([^>]*)>/gi, (tag, attrs) => {
-    if (!/\shref="#"/i.test(attrs)) return tag;
-    const classes = (/\sclass="([^"]*)"/i.exec(attrs)?.[1] ?? '').split(/\s+/);
+    if (!isParkedHref(attrs)) return tag;
+    const classes = (attrValue(attrs, 'class') ?? '').split(/\s+/);
     const network = classes
       .map((t) => /^([a-z]+)-share$/i.exec(t)?.[1]?.toLowerCase())
       .find((n) => n && Object.prototype.hasOwnProperty.call(SHARE_ENDPOINTS, n));
     if (!network) return tag;
-    const rawUrl = /\sdata-url="([^"]*)"/i.exec(attrs)?.[1];
+    const rawUrl = attrValue(attrs, 'data-url');
     if (!rawUrl) return tag;
     const decoded = decodeEntities(rawUrl).trim();
     if (!decoded) return tag;
@@ -511,11 +516,12 @@ export function repairInlineShareButtons(html, slug) {
       )}`;
     }
 
-    const title = encodeURIComponent(
-      decodeEntities(/\sdata-title="([^"]*)"/i.exec(attrs)?.[1] ?? ''),
-    );
+    const title = encodeURIComponent(decodeEntities(attrValue(attrs, 'data-title') ?? ''));
     repaired += 1;
-    let fixed = tag.replace(/\shref="#"/i, ` href="${SHARE_ENDPOINTS[network](target, title)}"`);
+    let fixed = tag.replace(
+      /\shref\s*=\s*("#"|'#')/i,
+      ` href="${SHARE_ENDPOINTS[network](target, title)}"`,
+    );
     // Sharing should not cost the reader the page they are sharing. The
     // plugin opened a popup; a new tab is the static equivalent.
     if (!/\starget=/i.test(fixed)) {
@@ -528,6 +534,42 @@ export function repairInlineShareButtons(html, slug) {
 }
 
 /**
+ * One attribute's value, accepting either quote style.
+ *
+ * HTML permits `alt='Share'` exactly as much as `alt="Share"`, and a capture
+ * takes whatever the source theme emitted. A double-quote-only pattern is
+ * therefore a correctness bug anywhere the answer decides whether markup
+ * SURVIVES: a control named by a single-quoted `aria-label` reads as nameless
+ * and is deleted from a charity's live site, which is the one direction these
+ * passes are built never to fail in.
+ *
+ * Measured on the newheightseducation.org capture: zero anchors carry a
+ * single-quoted attribute, so nothing about that site changes here. Which is
+ * the point -- this was reachable only by reading the code, never by running
+ * it against the one capture in hand. Raised by Copilot on #1367.
+ *
+ * `name` is interpolated into a pattern, so every caller passes a literal.
+ */
+export function attrValue(attrs, name) {
+  if (typeof attrs !== 'string' || typeof name !== 'string') return null;
+  const m = new RegExp(`\\s${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, 'i').exec(attrs);
+  if (!m) return null;
+  return m[2] ?? m[3] ?? '';
+}
+
+/**
+ * Is this anchor parked on a destination that goes nowhere?
+ *
+ * `href="#"` exactly -- `href="#main"` still navigates in a static export.
+ * Read through `attrValue` so a single-quoted `href='#'` is recognised too:
+ * missing one would leave a dead control on the page, and a repair pass would
+ * skip the very button it exists to fix.
+ */
+export function isParkedHref(attrs) {
+  return attrValue(attrs, 'href') === '#';
+}
+
+/**
  * Does this anchor's markup give it an accessible name?
  *
  * Conservative by construction: every source of a name counts, so anything
@@ -537,12 +579,12 @@ export function repairInlineShareButtons(html, slug) {
  */
 export function anchorHasAccessibleName(attrs, inner) {
   if (typeof attrs !== 'string' || typeof inner !== 'string') return true;
-  if (/\saria-label\s*=\s*"[^"]*\S[^"]*"/i.test(attrs)) return true;
-  if (/\saria-labelledby\s*=\s*"[^"]*\S[^"]*"/i.test(attrs)) return true;
-  if (/\stitle\s*=\s*"[^"]*\S[^"]*"/i.test(attrs)) return true;
+  for (const name of ['aria-label', 'aria-labelledby', 'title']) {
+    if ((attrValue(attrs, name) ?? '').trim()) return true;
+  }
   // An image's alt text names it; an inline SVG's <title> is caught by the text
   // fallback below, which strips tags and keeps what was inside them.
-  if (/<img\b[^>]*\salt\s*=\s*"[^"]*\S[^"]*"/i.test(inner)) return true;
+  if (/<img\b[^>]*\salt\s*=\s*("[^"]*\S[^"]*"|'[^']*\S[^']*')/i.test(inner)) return true;
   // Text content, with tags stripped and `&nbsp;` treated as the space it is.
   return (
     inner
@@ -588,7 +630,7 @@ export function removeDeadNamelessControls(fragment) {
   const html = fragment.replace(
     /<a\b([^>]*)>((?:(?!<\/a>)[\s\S])*)<\/a>/gi,
     (whole, attrs, inner) => {
-      if (!/\shref\s*=\s*"#"/i.test(attrs)) return whole;
+      if (!isParkedHref(attrs)) return whole;
       if (anchorHasAccessibleName(attrs, inner)) return whole;
       removed += 1;
       return '';
@@ -1698,7 +1740,7 @@ export function tokenizePageLinks(html, routes, sourceHosts = []) {
   // leaves 351 links to LIVE pages unrewritten — which then read as links to
   // pages the capture does not have, and were very nearly unlinked as dead.
   const out = html.replace(
-    /\bhref="((?:\.\.\/)+|\.\/)([^"#?]*?)([?#][^"]*)?"/g,
+    /\bhref\s*=\s*["']((?:\.\.\/)+|\.\/)([^"'#?]*?)([?#][^"']*)?["']/g,
     (whole, prefix, rest, suffix = '') => {
       const target = rest.replace(/\/+$/, '');
       if (target === '') {
@@ -1729,7 +1771,7 @@ export function tokenizePageLinks(html, routes, sourceHosts = []) {
   );
   const out2 = hosts.size
     ? out.replace(
-        /\bhref="https?:\/\/([^/"?#]+)([^"#?]*?)([?#][^"]*)?"/gi,
+        /\bhref\s*=\s*["']https?:\/\/([^/"'?#]+)([^"'#?]*?)([?#][^"']*)?["']/gi,
         (whole, host, rest, suffix = '') => {
           if (!hosts.has(host.toLowerCase().replace(/^www\./, ''))) return whole;
           const target = rest.replace(/^\/+/, '').replace(/\/+$/, '');
@@ -3136,6 +3178,65 @@ function selfTest() {
     'with no source host supplied nothing absolute is touched',
     tokenizePageLinks('<a href="https://example.org/about-us/">x</a>', ['about-us']).rewritten,
     0,
+  );
+
+  // --- either quote style ---------------------------------------------------
+  // HTML permits both, a capture takes whatever the theme emitted, and every
+  // pass below decides whether markup SURVIVES. Measured: this capture uses
+  // none, so these cases exist to stop the next one being deleted.
+  eq(
+    'a control named by a single-quoted aria-label is NOT removed',
+    removeDeadNamelessControls('<a href="#" aria-label=\'Search\'><i></i></a>').removed,
+    0,
+  );
+  eq(
+    'a control named by a single-quoted title is NOT removed',
+    removeDeadNamelessControls('<a href="#" title=\'Zulu\'><span></span></a>').removed,
+    0,
+  );
+  eq(
+    'a control named by a single-quoted image alt is NOT removed',
+    removeDeadNamelessControls("<a href=\"#\"><img src='x.png' alt='Share'></a>").removed,
+    0,
+  );
+  // ...and the same anchor written entirely in single quotes is still DEAD,
+  // so widening the read did not quietly stop the removal working.
+  eq(
+    'a single-quoted parked control is still removed',
+    removeDeadNamelessControls("<a href='#' class='mk-search-trigger'><i></i></a>").removed,
+    1,
+  );
+  eq('a single-quoted href is read', attrValue("<a href='#'>", 'href'), '#');
+  eq('a double-quoted href is read', attrValue('<a href="#">', 'href'), '#');
+  eq('a missing attribute reads as null', attrValue('<a href="#">', 'title'), null);
+  eq('an empty value reads as empty, not missing', attrValue('<a title="">', 'title'), '');
+  eq('a single-quoted parked href is recognised', isParkedHref("<a href='#'>"), true);
+  eq('a real fragment is not parked', isParkedHref('<a href="#main">'), false);
+  // The repairs read the same way, so a single-quoted share button is fixed
+  // rather than skipped and then deleted as dead.
+  eq(
+    'a single-quoted share button is repaired',
+    repairInlineShareButtons(
+      "<a class='facebook-share' data-title='A' data-url='./x/' href='#'></a>",
+      'p',
+    ).repaired,
+    1,
+  );
+  // A repaired href keeps the quote style it was found with, so a value
+  // containing the other quote character stays valid markup.
+  eq(
+    'a single-quoted malformed href is repaired in place',
+    repairMalformedHrefs("<a href='hhttps://x.com/'>a</a>").html,
+    "<a href='https://x.com/'>a</a>",
+  );
+  eq(
+    'a single-quoted in-site link is tokenized',
+    tokenizePageLinks(
+      "<a href='https://example.org/about-us/'>x</a>",
+      ['about-us'],
+      ['example.org'],
+    ).rewritten,
+    1,
   );
 
   eq('a slug label is humanised', labelForHref('../about-us/', 'V'), 'About us');

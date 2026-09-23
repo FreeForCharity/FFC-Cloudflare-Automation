@@ -685,11 +685,38 @@ def test_the_real_tree_reaches_credentials():
     findings, unreadable, scanned = guard.scan_all()
     assert not unreadable and scanned > 50, (scanned, unreadable)
     sites = guard.reachability_by_site(findings)
-    assert len(sites) > 10, f"only {len(sites)} sites reach a credential — check the extractor"
+
+    # The floor is DERIVED from the freeze, never a literal.
+    #
+    # It was `> 10`, and that made this module a second mutex on the #1080
+    # burn-down (#1210, one file over): every lane removes call sites, so a hard
+    # floor goes red on a CORRECT tree the moment the freeze drops past it, and
+    # becomes permanently unsatisfiable once the burn-down finishes. Lane 26 is
+    # where it happened — 9 sites, and the message said "check the extractor"
+    # about an extractor that was working perfectly.
+    #
+    # The vacuity this guard exists to catch is an extractor that has stopped
+    # matching, which drives the count to ZERO while findings remain. That is
+    # what the floor has to separate from a shrinking freeze, and half the
+    # frozen workflows does it: a dead extractor scores 0 against a floor of
+    # `max(1, n // 2)` at every size the freeze will ever take, while a lane
+    # that merely removes entries drags floor and count down together.
+    frozen_workflows = len(guard.KNOWN_UNGUARDED)
+    assert frozen_workflows > 0, (
+        "the freeze is empty, so this module can no longer tell a working "
+        "extractor from a dead one — #1080 is finished and this guard needs "
+        "retiring rather than relaxing"
+    )
+    floor = max(1, frozen_workflows // 2)
+    assert len(sites) >= floor, (
+        f"only {len(sites)} of {frozen_workflows} frozen workflows' sites reach "
+        f"a credential (floor {floor}) — check the extractor"
+    )
     hidden = [k for k, v in sites.items() if any(r.hidden for r in v)]
-    assert len(hidden) > 10, (
-        f"only {len(hidden)} sites reach a credential through GITHUB_ENV, which is "
-        "the path this whole resolver exists to surface"
+    assert len(hidden) >= floor, (
+        f"only {len(hidden)} sites reach a credential through GITHUB_ENV or an "
+        f"acquired CLI session (floor {floor}), which is the path this whole "
+        "resolver exists to surface"
     )
 
 

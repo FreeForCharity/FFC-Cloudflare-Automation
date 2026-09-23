@@ -1687,6 +1687,16 @@ def test_the_dead_social_share_chrome_is_repaired_or_removed():
         "a link that already has a real href is not rewritten",
         "unbalanced markup is left alone rather than truncated",
         "elementSpan refuses an unbalanced element",
+        # Reverse tabnabbing: we are the ones adding target="_blank", so the
+        # rel is ours to get right. Raised by Copilot on #1363 and real as a
+        # PIPELINE defect -- all 756 links on the site that prompted the fix
+        # already carried rel="nofollow noopener", because that is what Social
+        # Snap emits, so no captured page here exercises the vulnerable path.
+        'a link we give target="_blank" is not left open to reverse tabnabbing',
+        "...and a rel the site already wrote keeps its own referrer policy",
+        "...with nothing added when it already says noopener",
+        "...and a lookalike token does not count as the real one",
+        "a link whose target the site set is not given a rel it did not ask for",
     ):
         assert f"ok   {name}" in out, (name, out[-2000:])
     # ...and that the converter calls it. A library function nothing reaches

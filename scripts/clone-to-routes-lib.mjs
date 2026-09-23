@@ -183,6 +183,31 @@ export function elementSpan(html, openIdx, tag) {
 }
 
 /**
+ * A `target="_blank"` link needs `rel="noopener"`, or the opened page can
+ * reach back through `window.opener` and navigate the tab it came from
+ * (reverse tabnabbing).
+ *
+ * Two behaviours on purpose, because authoring a `rel` and editing one the
+ * charity's site already wrote are different acts:
+ *
+ *   - no `rel` at all  -> write this repo's own convention, `noopener
+ *     noreferrer`, since nothing is being overridden;
+ *   - a `rel` exists   -> add ONLY the missing `noopener`. `noreferrer` is a
+ *     referrer-policy choice rather than the fix for tabnabbing, and a site
+ *     that wrote `rel="nofollow noopener"` (which is what Social Snap emits)
+ *     chose to keep sending a referrer. Closing the hole does not require
+ *     changing that, so it does not.
+ */
+export function ensureNoopener(tag) {
+  if (typeof tag !== 'string') return '';
+  const rel = /\srel="([^"]*)"/i.exec(tag);
+  if (!rel) return tag.replace(/^<a\b/i, '<a rel="noopener noreferrer"');
+  const tokens = rel[1].split(/\s+/).filter(Boolean);
+  if (tokens.some((tok) => tok.toLowerCase() === 'noopener')) return tag;
+  return tag.replace(rel[0], ` rel="${[...tokens, 'noopener'].join(' ')}"`);
+}
+
+/**
  * Repair the social-share chrome a captured WordPress page leaves behind.
  *
  * The capture strips scripts, and a share plugin is almost entirely script.
@@ -231,7 +256,10 @@ export function repairSocialShareChrome(html) {
     let fixed = tag.replace(/\shref="#"/i, ` href="${dest[1]}"`);
     // Sharing should not cost the reader the page they are sharing. The
     // plugin opened a popup window; a new tab is the static equivalent.
-    if (!/\starget=/i.test(fixed)) fixed = fixed.replace(/^<a\b/i, '<a target="_blank"');
+    if (!/\starget=/i.test(fixed)) {
+      fixed = fixed.replace(/^<a\b/i, '<a target="_blank"');
+      fixed = ensureNoopener(fixed);
+    }
     return fixed;
   });
 
@@ -1673,6 +1701,53 @@ function selfTest() {
     // prepending a second `target="_blank"` leaves the original present, so
     // the substring check passes while the browser honours the FIRST
     // attribute and the link is retargeted after all.
+    // --- reverse tabnabbing on the links we retarget --------------------
+    // Measured on FFC-EX-newheightseducation.org: all 756 repaired links
+    // already carried `rel="nofollow noopener"`, because that is what Social
+    // Snap emits -- so this is a latent defect in the PIPELINE, not a live
+    // exposure on that site. A capture whose plugin omits `rel` is the case
+    // that matters, and it is the one no real page here exercises.
+    eq(
+      'a link we give target="_blank" is not left open to reverse tabnabbing',
+      repairSocialShareChrome('<a href="#" data-ss-ss-link="https://x/">y</a>').html,
+      '<a rel="noopener noreferrer" target="_blank" href="https://x/" data-ss-ss-link="https://x/">y</a>',
+    );
+    eq(
+      '...and a rel the site already wrote keeps its own referrer policy',
+      repairSocialShareChrome(
+        '<a href="#" rel="nofollow" data-ss-ss-link="https://x/">y</a>',
+      ).html.includes('rel="nofollow noopener"'),
+      true,
+    );
+    eq(
+      '...with nothing added when it already says noopener',
+      repairSocialShareChrome(
+        '<a href="#" rel="nofollow noopener" data-ss-ss-link="https://x/">y</a>',
+      ).html,
+      '<a target="_blank" href="https://x/" rel="nofollow noopener" data-ss-ss-link="https://x/">y</a>',
+    );
+    eq(
+      '...matched case-insensitively, so NOOPENER is not doubled',
+      ensureNoopener('<a href="x" rel="NOOPENER">'),
+      '<a href="x" rel="NOOPENER">',
+    );
+    // A token that merely CONTAINS the word is not the token.
+    eq(
+      '...and a lookalike token does not count as the real one',
+      ensureNoopener('<a href="x" rel="nonoopener">'),
+      '<a href="x" rel="nonoopener noopener">',
+    );
+    // The site's own target is left alone above, so we never added _blank and
+    // have no business rewriting its rel either.
+    eq(
+      'a link whose target the site set is not given a rel it did not ask for',
+      repairSocialShareChrome(
+        '<a href="#" target="_self" data-ss-ss-link="https://x/">y</a>',
+      ).html.includes('rel='),
+      false,
+    );
+    eq('ensureNoopener on a non-string is not a crash', ensureNoopener(null), '');
+
     eq(
       'a target the markup already set is not overridden',
       repairSocialShareChrome('<a href="#" target="_self" data-ss-ss-link="https://x/">y</a>').html,

@@ -1746,7 +1746,20 @@ function selfTest() {
       ).html.includes('rel='),
       false,
     );
-    eq('ensureNoopener on a non-string is not a crash', ensureNoopener(null), '');
+    // Wrapped for the same reason as the case below: without the guard this
+    // throws, node exits non-zero, and a probe reading only the exit code
+    // scores the missing guard as a passing check.
+    eq(
+      'ensureNoopener on a non-string is not a crash',
+      (() => {
+        try {
+          return ensureNoopener(null);
+        } catch (err) {
+          return `threw ${err.name}`;
+        }
+      })(),
+      '',
+    );
 
     eq(
       'a target the markup already set is not overridden',

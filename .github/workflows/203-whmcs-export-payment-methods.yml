@@ -39,6 +39,35 @@ jobs:
         shell: pwsh
         env:
           WHMCS_API_URL: ${{ inputs.api_url }}
+          # #1080 lane 26, the twin of 201 in the same lane. `output_file`
+          # arrives as DATA in the process environment instead of being
+          # substituted into this script's TEXT.
+          #
+          # The site it replaces read `$out = "<interpolation>"` — DOUBLE
+          # quoted, where `$( )` expands, so no quote breakout was ever needed:
+          # a value ending `$(Set-Content -Path SENTINEL.txt -Value
+          # $env:WHMCS_API_SECRET)` runs where it stands, and because
+          # `Set-Content` emits nothing the path itself is unchanged, so the
+          # callee still binds the legitimate CSV path and the step still exits
+          # 0. Every observable in the run matches an ordinary export.
+          #
+          # Measured on THIS body rather than carried from 208, on pwsh 7.4.6,
+          # by `test_201_203_csv_export_wiring.py`'s pre-fix control -- which
+          # derives the shipped-before text from what ships now, so it cannot
+          # drift into vouching for a body nobody runs:
+          #
+          #   pre-fix   payload ran, SENTINEL held the decoy credential, the
+          #             callee bound `Out=[artifacts/whmcs/whmcs_payment_methods.csv]`
+          #             -- the legitimate path -- and the step exited **0**
+          #   shipped   payload arrives as one literal filename, never runs,
+          #             no sentinel, step exits 1
+          #
+          # This job enters `whmcs-prod-read`, whose WHMCS credential the
+          # `whmcs-secrets-from-kv` step above exports through GITHUB_ENV, plus
+          # the `az` CLI session it leaves on disk (#1188/#1208) — none of
+          # which appears in this step's own `env:`, so an L213 read or a
+          # `secrets.` grep scores this step as holding nothing.
+          IN_OUTPUT_FILE: ${{ inputs.output_file }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -54,7 +83,95 @@ jobs:
             $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
           }
 
-          $out = "${{ inputs.output_file }}"
+          # Fail closed, not default-fill (ledger L254), for the reason 208 and
+          # 218 already record: the `Upload CSV Artifact` step below consumes
+          # the same `output_file` input a SECOND time, directly, in its
+          # `path:`. That is an artifact selector rather than a script body, so
+          # #1080's guard correctly does not judge it and this lane does not
+          # widen to cover it — but it makes this step one of two consumers of
+          # one value. A default supplied only here would write the CSV to the
+          # substituted path while the upload still looked at the blank one,
+          # turning a clear failure into an `if-no-files-found: error` two steps
+          # later that names neither cause.
+          #
+          # `-not IsNullOrWhiteSpace` rather than `-ne ''`, matching the
+          # predicate `$dir` already uses two lines below and the #1213
+          # spelling: `-ne ''` is true for an all-whitespace value, which is the
+          # one blank form that reaches the callee as a path rather than dying
+          # on the way.
+          #
+          # HONEST SCOPE, and the place this lane does NOT inherit 208's
+          # measurement. 208's step ends at `$LASTEXITCODE`; THIS one also
+          # asserts `Test-Path $out` afterwards, so a blank that got past the
+          # body there was silent and here is not — it surfaces as
+          # `Expected output file not found: ` with nothing after the colon,
+          # plus an `if-no-files-found: error` in the upload step looking for
+          # the same blank name. So this guard is not closing a silent hole the
+          # way 208's was; what it adds is a failure that NAMES THE INPUT, at
+          # the input, instead of two downstream errors that name neither cause.
+          # Stated rather than assumed because the reverse claim was written
+          # here first, carried over from 208 on the strength of the two bodies
+          # looking alike (ledger L260 — attribution is not evidence). The path
+          # guards below are the load-bearing half of this block.
+          #
+          # The move to `env:` also widens the predicate's DOMAIN from string to
+          # string-or-null: an omitted input reached the interpolated body as
+          # the empty string between two quotes and reaches this one as `$null`.
+          # `IsNullOrWhiteSpace` is true for both; `-ne ''` is true for `$null`.
+          if ([string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)) {
+            throw "output_file is blank. It is consumed BOTH here and by the 'Upload CSV Artifact' step's path:, so this step does not substitute a default — re-dispatch with a path, or omit the input to get its declared default."
+          }
+
+          # FIRST of the path guards, and the two anchored ones below depend on
+          # it. `actions/upload-artifact` reads `path:` as a NEWLINE-DELIMITED
+          # LIST of patterns, so one input carrying a newline is several
+          # patterns to that consumer while still being one string here — ledger
+          # L298, two consumers with different grammars. It also defeats the
+          # anchored guards: `^` anchors at the start of the STRING, not of each
+          # line, so a payload on the second line walks straight past them.
+          # Forbidding the newline is the remedy rather than sprinkling `(?m)`,
+          # which would still leave the value meaning ONE path here and SEVERAL
+          # there. A newline is never legitimate in a CSV filename.
+          if ($env:IN_OUTPUT_FILE -match '[\r\n]') {
+            throw "output_file contains a carriage return or newline. The 'Upload CSV Artifact' step reads its path: as a newline-delimited list of patterns, so a newline here smuggles extra patterns past the checks below — which anchor on the start of the value and therefore only ever see its first line."
+          }
+          # `*` and `?` are illegal in a Windows filename, so those die at the
+          # export and the upload never runs. `[` and `]` are NOT: they are
+          # legal filename characters AND character-class metacharacters to
+          # `@actions/glob`, so the export writes a literal `[m]sal….json`, exits
+          # 0, and the upload's glob then matches a different, real file. That
+          # is the shape with no self-block, and this job holds a WHMCS
+          # credential plus the `az` session on disk that neither appears in
+          # this step's `env:`.
+          if ($env:IN_OUTPUT_FILE -match '[*?\[\]]') {
+            throw "output_file contains a glob metacharacter (one of * ? [ ]). It is passed unchanged to the 'Upload CSV Artifact' step, whose path: is a glob selector, so a pattern can match files this export never wrote. Pass a plain relative path."
+          }
+          # `[A-Za-z]+:`, not `[A-Za-z]:` — a PSDrive qualifier is not limited
+          # to a single-letter filesystem drive (`Temp:/x.csv`, `env:/x`), so
+          # the narrow spelling admits a workspace escape that looks nothing
+          # like `C:\`. An explicit regex rather than
+          # [System.IO.Path]::IsPathRooted, which is platform-DEPENDENT: a test
+          # on ubuntu CI would assert something the `windows-latest` runner does
+          # not do.
+          if ($env:IN_OUTPUT_FILE -match '^([A-Za-z]+:|[\\/])') {
+            throw "output_file must be a workspace-relative path; got an absolute, UNC, drive- or PSDrive-qualified path. The 'Upload CSV Artifact' step uploads whatever its path: resolves to, so a path outside the workspace can put runner files into a downloadable artifact."
+          }
+          # `~` starts with neither a separator nor a qualifier, so the test
+          # above does not catch it. It is the sharpest instance of L298 rather
+          # than a repeat: PowerShell expands `~` and `@actions/glob` does not,
+          # so the two consumers do not merely apply different grammars — they
+          # disagree about WHICH FILE IS MEANT. The export would write into the
+          # user profile (where the `az` session lives) while the upload looked
+          # for a literal `~` directory under the workspace and failed at
+          # `if-no-files-found`, two steps from the damage.
+          if ($env:IN_OUTPUT_FILE -match '^~') {
+            throw "output_file must not begin with '~': PowerShell expands it to the user profile, so this export would write outside the workspace, while the 'Upload CSV Artifact' step's globber does not expand it — the two consumers would not even agree which file is meant."
+          }
+          if (($env:IN_OUTPUT_FILE -split '[\\/]') -contains '..') {
+            throw "output_file must not contain a '..' segment: it escapes the workspace, and the 'Upload CSV Artifact' step uploads whatever its path: resolves to."
+          }
+
+          $out = $env:IN_OUTPUT_FILE
           $dir = Split-Path -Parent $out
           if (-not [string]::IsNullOrWhiteSpace($dir)) {
             New-Item -ItemType Directory -Force -Path $dir | Out-Null

@@ -1058,13 +1058,38 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # environments at once — cloudflare-prod-write for the apex flip and github-prod for
     # the CNAME flip — so an injected payload ran twice, under two credentials.
     # --- WHMCS --------------------------------------------------------------
-    "201-whmcs-export-domains.yml": ("output_file",),
+    # 201-whmcs-export-domains.yml burned down (#1080 lane 26, with 203): the one
+    # free-text input, `output_file`, reaches the pwsh body through step-level
+    # `env:` (IN_OUTPUT_FILE), guarded by the same six checks lane 24 measured on
+    # 208 — blank, newline, glob metacharacter, rooted/PSDrive, `~`, `..`.
+    #
+    # The lane where the standing "this sandbox cannot run PowerShell" note was
+    # tested instead of inherited. It is true of the cloud-worker image and it is
+    # not a limit on what can be measured there: the official
+    # `powershell-7.4.6-linux-x64.tar.gz` unpacks and runs, so the pre-fix
+    # control was measured on BOTH bodies rather than cited from 208 -- payload
+    # ran, decoy credential written to a sentinel, callee bound the LEGITIMATE
+    # CSV path, step exited 0; shipped body binds the same payload as one
+    # literal filename at exit 1.
+    #
+    # The claim that WAS inherited and turned out to be false is worth the line:
+    # 208's "a blank output_file is silent at rc 0" does not hold here, because
+    # 201 and 203 both assert `Test-Path $out` and 208 does not. It was written
+    # into these two steps first, from the two bodies looking alike (ledger
+    # L260), and `test_both_bodies_assert_test_path_which_is_why_the_blank_case
+    # _is_loud` now pins the difference so it cannot come back.
     # 202-whmcs-export-products.yml burned down (#1080 lane 25): both output-path
     # inputs reach the pwsh body through step-level `env:`, and one `foreach` guard
     # body applies the same six checks to both — the first lane whose step carried
     # two free-text paths, where duplicated guards are how one value silently keeps
     # a check the other gains.
-    "203-whmcs-export-payment-methods.yml": ("output_file",),
+    # 203-whmcs-export-payment-methods.yml burned down (#1080 lane 26, with 201):
+    # same single `output_file` input, same double-quoted assignment, same
+    # `Upload CSV Artifact` second consumer, same six guards. Taken in one lane
+    # with 201 deliberately: the two bodies differ only in the callee script, the
+    # step name and the artifact name, and a shared test module parametrised over
+    # both makes "applied to both" structural rather than reviewed — the point
+    # lane 25 made about two values inside one step, one level up.
     # 205-whmcs-ticket-open.yml burned down: `deptid` and `client_id` now reach
     # the pwsh body through step-level `env:` (TICKET_DEPTID / TICKET_CLIENT_ID).
     # It runs on `whmcs-prod` (write), and its injection point sits beside the

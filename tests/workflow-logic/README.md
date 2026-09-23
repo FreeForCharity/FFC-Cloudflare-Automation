@@ -43,8 +43,29 @@ python3 tests/workflow-logic/run_all.py     # everything (what CI runs)
 python3 tests/workflow-logic/test_701_parse.py   # one module
 ```
 
-Needs `python3` + PyYAML and `node`; the 720 module needs `pwsh` and self-skips where PowerShell
-isn't installed (it always runs in CI).
+Needs `python3` + PyYAML and `node`; several modules need `pwsh` and self-skip where PowerShell
+isn't installed (they always run in CI).
+
+**A self-skip is not a verdict, and on the Linux cloud-worker sandbox it does not have to be the end
+of it.** `pwsh` is absent from that image, which is why the skips exist — but absent from the image
+is not the same as unavailable, and the two have been conflated in PR bodies as "this sandbox cannot
+parse-check PowerShell". Measured 2026-09-23: the official `powershell-7.4.6-linux-x64.tar.gz`
+downloads through the egress proxy, unpacks and runs there, and putting it on `PATH` turns the skips
+into real results — for this suite and for the three fail-closed guards
+(`check-pwsh-workflow-invocations.py`, `check-powershell-command-resolution.py`,
+`check-workflow-empty-input-guard.py`) that otherwise refuse to report a pass they did not measure:
+
+```bash
+curl -sSL -o pwsh.tar.gz \
+  https://github.com/PowerShell/PowerShell/releases/download/v7.4.6/powershell-7.4.6-linux-x64.tar.gz
+mkdir -p pwsh && tar -xzf pwsh.tar.gz -C pwsh && chmod +x pwsh/pwsh
+PATH="$PWD/pwsh:$PATH" python3 tests/workflow-logic/run_all.py
+```
+
+The version is pinned deliberately: 7.4.6 is the version every "measured on pwsh …" note in this
+repo cites, so a fresh measurement is comparable with the recorded ones rather than a second
+unknown. Do this before writing "CI-only" into a PR body — a skip that could have been a measurement
+is the weakest evidence this repo accepts, and it reads as diligence.
 
 ## Adding coverage
 

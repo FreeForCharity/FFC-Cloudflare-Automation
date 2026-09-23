@@ -349,6 +349,53 @@ export function repairSocialShareChrome(html) {
   return { html: out, repaired, removed, rejected };
 }
 
+/**
+ * A WordPress WIDGET title is not the page's heading.
+ *
+ * `widgettitle` is WordPress core's class for a sidebar widget's title, and
+ * several themes emit it as an `<h1>`. Jupiter does, and on
+ * FFC-EX-newheightseducation.org that made 429 of 785 pages look like they
+ * had a heading when they did not: the theme sets the widget `display: none`,
+ * so `verify:build` counted an `<h1>` tag, axe reported `page-has-heading-one`
+ * against the accessibility tree, and `ensureSingleH1` saw the tag and skipped
+ * the page. All three were right about what they measured, and a
+ * screen-reader user still arrived somewhere with no heading.
+ *
+ * A fragment cannot know its own computed CSS, so the level cannot be decided
+ * by asking whether the heading is visible. It can be decided semantically,
+ * which is stronger anyway: a widget title describes a widget, not the
+ * document, so `<h1>` is the wrong level whether or not the theme hides it.
+ * The capture already agrees -- it tags these `ffc-h2`, meaning "style this
+ * like an h2" -- so this only brings the TAG into line with the styling that
+ * was already applied to it.
+ *
+ * Demoted rather than removed: the widget and its title are the charity's
+ * content, and a sidebar heading at the right level is useful. Only the level
+ * is wrong.
+ */
+export function demoteWidgetTitles(fragment) {
+  if (typeof fragment !== 'string') return { html: '', demoted: 0 };
+  let demoted = 0;
+  const html = fragment.replace(
+    /<h1\b([^>]*\bwidgettitle\b[^>]*)>([\s\S]*?)<\/h1>/gi,
+    (_whole, attrs, inner) => {
+      demoted += 1;
+      return `<h2${attrs}>${inner}</h2>`;
+    },
+  );
+  return { html, demoted };
+}
+
+/**
+ * Give a captured page exactly one `<h1>`, taken from its own title.
+ *
+ * The heading is `ffc-sr-only`: visually hidden with the clip pattern, which
+ * keeps it in the accessibility tree rather than removing it the way
+ * `display: none` would.
+ *
+ * Run AFTER `demoteWidgetTitles`, or a hidden widget title counts as the
+ * page's heading and the page keeps none a reader can reach.
+ */
 export function ensureSingleH1(fragment, title) {
   if (typeof fragment !== 'string') return '';
   if (/<h1[\s>]/i.test(fragment)) return fragment;
@@ -1958,6 +2005,53 @@ function selfTest() {
       'a page with no share chrome is returned unchanged',
       repairSocialShareChrome('<p>x</p>').html,
       '<p>x</p>',
+    );
+  }
+
+  // --- widget titles are not page headings ---------------------------------
+  {
+    const widget = '<aside><h1 class="widgettitle ffc-h2">Cart</h1></aside>\n<p>body</p>';
+    const d = demoteWidgetTitles(widget);
+    eq('a widget title emitted as an h1 is demoted to h2', d.demoted, 1);
+    eq(
+      '...keeping the widget, its classes and its text',
+      d.html,
+      '<aside><h2 class="widgettitle ffc-h2">Cart</h2></aside>\n<p>body</p>',
+    );
+    // The whole point: after the demotion the page has no h1, so the real
+    // heading can be supplied. Before it, the hidden widget title counted.
+    eq(
+      '...so the page then gets a heading a reader can actually reach',
+      ensureSingleH1(d.html, 'Cart - NHEG'),
+      '<h1 class="ffc-sr-only">Cart - NHEG</h1>\n<aside><h2 class="widgettitle ffc-h2">Cart</h2></aside>\n<p>body</p>',
+    );
+    eq(
+      'a real page heading is NOT demoted',
+      demoteWidgetTitles('<h1 class="entry-title">Real</h1>').demoted,
+      0,
+    );
+    // `widgettitle` must be matched as a whole class, not as a substring: a
+    // theme shipping `nonwidgettitle` is not WordPress's widget class.
+    eq(
+      '...and a class that merely contains the word is not the widget class',
+      demoteWidgetTitles('<h1 class="nonwidgettitleish">x</h1>').demoted,
+      0,
+    );
+    eq(
+      'an h2 that is already correct is left alone',
+      demoteWidgetTitles('<h2 class="widgettitle">x</h2>').demoted,
+      0,
+    );
+    eq(
+      'a non-string is not a crash',
+      (() => {
+        try {
+          return demoteWidgetTitles(null).html;
+        } catch (err) {
+          return `threw ${err.name}`;
+        }
+      })(),
+      '',
     );
   }
 

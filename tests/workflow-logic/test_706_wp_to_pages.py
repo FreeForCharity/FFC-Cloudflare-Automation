@@ -1870,7 +1870,9 @@ def test_a_captured_page_with_no_heading_of_its_own_is_given_one():
     # to be assigned first for the code to run at all, so no mutation could
     # fail that assertion -- and an assertion nothing can break reads as
     # coverage while supplying none.
-    assert "ensureSingleH1(widget.html, title)" in src, src[:200]
+    assert "ensureSingleH1(widget.html, title)" in src, _around(
+        src, "const fragment =", "ensureSingleH1(widget.html, title)"
+    )
 
 
 def test_the_built_output_verifier_is_scoped_to_routes_not_captured_assets():

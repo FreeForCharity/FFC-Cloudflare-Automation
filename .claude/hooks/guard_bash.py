@@ -53,7 +53,7 @@ def finish():
 
 
 def _strip_quoted(text):
-    """Blank out single/double-quoted spans, preserving length.
+    r"""Blank out single/double-quoted spans, preserving length.
 
     Used only where a *shell operator* is being looked for, so that `echo "a|b"`
     does not read as a pipeline. Never use it to look for `$?`, which most often
@@ -68,11 +68,29 @@ def _strip_quoted(text):
     copy. It fails PERMISSIVELY, which is the direction that matters: the
     caller sees a command with nothing left in it to object to.
 
-    Outside single quotes a backslash consumes the next character (so `\"` does
-    not close a double-quoted span); inside single quotes nothing is special
-    and only `'` closes. The escaped character is blanked along with its
-    backslash, because an escaped character is data and never an operator,
+    The scanner's own rule, stated as such because it is deliberately BROADER
+    than bash's: outside single quotes a backslash consumes the next character
+    (so `\"` does not close a double-quoted span); inside single quotes nothing
+    is special and only `'` closes. The escaped character is blanked along with
+    its backslash, because an escaped character is data and never an operator,
     which is the only question any caller of this asks.
+
+    Where that is broader than the shell, and why it is safe: inside double
+    quotes bash escapes only backslash, `"`, `$`, backtick and newline, and
+    keeps the backslash before anything else -- measured, `"a\zb"` and
+    `"a\|b"` print `a\zb` and `a\|b` in both bash and dash. This scanner
+    instead treats a backslash plus ANY next character there as an escape. The
+    two cannot disagree about what this function returns: inside a
+    double-quoted span every character is blanked regardless, and the one
+    character whose escaping could move the span's END is `"`, which bash
+    escapes too. Measured exhaustively over the alphabet that reaches here
+    (`a`, backslash, `"`, `'`, `|`, `;`, `&`, `$`, backtick, `/`, `>`) to
+    length 5 -- 177,155 strings, ZERO differing from a bash-accurate variant.
+
+    So the broader rule is a simplification, not a bug, and the paragraph above
+    is this scanner's rule rather than a statement about how the shell parses.
+    `test_strip_quoted_matches_a_bash_accurate_scanner` pins the equivalence,
+    so a later "fix" toward bash has to keep it rather than trust this note.
     """
     out = list(text)
     quote = None

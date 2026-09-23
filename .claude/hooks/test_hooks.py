@@ -958,6 +958,75 @@ def test_rule_polarity():
     record("every rule has both a firing and a quiet case", not problems, "\n".join(problems))
 
 
+def test_strip_quoted_matches_a_bash_accurate_scanner():
+    """`_strip_quoted`'s escape rule is broader than bash's -- pin that it costs
+    nothing, rather than asserting it in a docstring.
+
+    Inside double quotes bash escapes only `\\`, `"`, `$`, backtick and newline
+    and PRESERVES the backslash before anything else (measured: `"a\\zb"` prints
+    `a\\zb` in bash and dash). The scanner treats every `\\x` there as an escape,
+    which is simpler and, for the one question its callers ask -- where the
+    operators and the endpoint are -- indistinguishable, because inside a
+    double-quoted span every character is blanked anyway and the only character
+    whose escaping could move the span's END is `"`, which bash escapes too.
+
+    That argument is exactly the kind that stops being true after a refactor,
+    so it is a test: compare against a bash-accurate reference over every
+    string the shell metacharacters can form. Copilot raised the docstring as
+    misleading on #1313 and was right about bash; this is what makes the reply
+    checkable by the next reader instead of quotable.
+    """
+    import importlib.util
+    import itertools
+
+    spec = importlib.util.spec_from_file_location("_gb_for_test", GUARD_BASH)
+    gb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gb)
+
+    bs, dq, sq = chr(92), '"', "'"
+    dq_escapable = {bs, dq, "$", "`", chr(10)}
+
+    def bash_accurate(text):
+        out, quote, i, n = list(text), None, 0, len(text)
+        while i < n:
+            ch = text[i]
+            if quote == sq:
+                if ch == sq:
+                    quote = None
+                else:
+                    out[i] = " "
+            elif ch == bs and i + 1 < n and (quote is None or text[i + 1] in dq_escapable):
+                out[i] = out[i + 1] = " "
+                i += 2
+                continue
+            elif quote == dq:
+                if ch == quote:
+                    quote = None
+                else:
+                    out[i] = " "
+            elif ch in sq + dq:
+                quote = ch
+                out[i] = " "
+            i += 1
+        return "".join(out)
+
+    alphabet = ["a", bs, dq, sq, "|", ";", "&", "$", "`", ">"]
+    diffs = []
+    for length in (1, 2, 3, 4):
+        for combo in itertools.product(alphabet, repeat=length):
+            s = "".join(combo)
+            if gb._strip_quoted(s) != bash_accurate(s):
+                diffs.append(s)
+                if len(diffs) >= 5:
+                    break
+        if diffs:
+            break
+    record("_strip_quoted's broader escape rule never changes what it blanks",
+           not diffs,
+           "\n".join(f"{s!r}: scanner={gb._strip_quoted(s)!r} "
+                     f"bash-accurate={bash_accurate(s)!r}" for s in diffs))
+
+
 def test_rule_attribution():
     """A case must fire for ITS OWN rule's reason.
 
@@ -1098,6 +1167,7 @@ def main():
 
     print("guard_bash meta-tests (over the rule registry):")
     test_rule_polarity()
+    test_strip_quoted_matches_a_bash_accurate_scanner()
     test_rule_attribution()
     test_refusal_site_coverage()
 

@@ -867,13 +867,13 @@ export function ensureImageAlt(html) {
  * every name here is read out of the href.
  */
 export function linkDestinationLabel(href, siteName) {
-  if (typeof href !== 'string') return null;
   const raw = decodeEntities(href).trim();
-  // A bare `#`, an empty href and a `javascript:` URL each return null --
-  // but from further down, not from a guard here. The fragment branch
-  // refuses an EMPTY fragment, and `labelForHref` already refuses both
-  // `javascript:` and ''. Guards for them up here were measured unkillable
-  // by mutation: correct, and doing nothing. The outcomes stay asserted.
+  // A bare `#`, an empty href, a `javascript:` URL and a non-string each
+  // return null -- but from further down, never from a guard here. The
+  // fragment branch refuses an EMPTY fragment, `labelForHref` refuses
+  // `javascript:` and '', and `decodeEntities` turns a non-string into ''.
+  // Guards for all four up here were measured unkillable by mutation:
+  // correct, and doing nothing. The outcomes stay asserted below.
   if (/^mailto:/i.test(raw)) return safeDecodeURIComponent(raw.slice(7).split('?')[0]) || null;
   // An in-page target: `#top-of-page` is a real destination, `#` is not.
   if (raw.startsWith('#')) {

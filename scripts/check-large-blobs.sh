@@ -113,9 +113,11 @@ is_text_blob() {
 }
 
 # Size of <path> as it stands on the base ref, or "" if there is no blob there.
-# A path that is absent on the base is new to this PR; a path that is present
-# and smaller is a tracked file this PR grew, which is a different mistake with
-# a different remedy.
+# A path absent on the base is new to this PR. A path that IS there is one the
+# repository already tracks, whatever this PR did to its size -- the caller
+# compares the two numbers and says which way it moved. Returning the size
+# rather than a grew/did-not verdict is deliberate: the distinction the report
+# turns on is tracked-vs-new, and the direction is a detail of the wording.
 #
 # `ls-tree` rather than the shorter `cat-file -s "<rev>:<path>"`, because MSYS
 # rewrites a `rev:path` argument whose path begins with a dot -- `origin/main:`
@@ -149,8 +151,8 @@ allowed=""
 # committed binary is removed, a tracked text file that grew past the limit is
 # not -- and until #1243 the message described only the first, so every reader
 # of the second was handed a diagnosis about somebody else's mistake.
-grown_seen=0
-grown_text_seen=0
+tracked_seen=0
+tracked_text_seen=0
 new_seen=0
 
 # An enumeration failure must never read as "no objects, therefore clean" -- that
@@ -217,14 +219,29 @@ if [ -n "$object_list" ]; then
 
     over=$((osize - MAX_BLOB_BYTES))
     if [ -n "$base_size" ]; then
-      grown_seen=1
+      tracked_seen=1
       if [ "$kind" = "text file" ]; then
-        grown_text_seen=1
+        tracked_text_seen=1
+      fi
+      # Do not assume it grew. A file that is ALREADY over the limit on the base
+      # can be edited smaller and still be over it, and saying "GREW ... (+-500000)"
+      # to someone who just removed half a megabyte is the kind of sentence this
+      # whole change exists to stop printing.
+      delta=$((osize - base_size))
+      if [ "$delta" -gt 0 ]; then
+        change="GREW"
+        signed="+${delta}"
+      elif [ "$delta" -lt 0 ]; then
+        change="SHRANK and is still over"
+        signed="${delta}"
+      else
+        change="CHANGED without changing size"
+        signed="+0"
       fi
       # "in this PR", not "here": the oversized blob need not be in the tip
       # tree. A branch that grew the file and shrank it again still carries it.
-      detail="$(printf '%14sTRACKED %s that GREW: %s bytes on %s -> %s bytes in this PR (+%s). Limit %s, over by %s.' \
-        "" "$kind" "$base_size" "$BASE_REF" "$osize" "$((osize - base_size))" "$MAX_BLOB_BYTES" "$over")"
+      detail="$(printf '%14sTRACKED %s that %s: %s bytes on %s -> %s bytes in this PR (%s). Limit %s, over by %s.' \
+        "" "$kind" "$change" "$base_size" "$BASE_REF" "$osize" "$signed" "$MAX_BLOB_BYTES" "$over")"
     else
       new_seen=1
       detail="$(printf '%14sNEW %s, not present on %s. Limit %s, over by %s.' \
@@ -245,12 +262,13 @@ if [ -z "$offenders" ]; then
   exit 0
 fi
 
-if [ "$grown_seen" = 1 ] && [ "$new_seen" = 0 ]; then
+if [ "$tracked_seen" = 1 ] && [ "$new_seen" = 0 ]; then
   # Nothing was added -- a file the repository already tracks crossed the line.
   # Say so in the headline, because "this PR introduces a blob" reads as "you
   # committed a binary by mistake" and sends the reader looking for one.
   echo "::error::This PR pushes a file the repository already tracks past the" \
-    "${MAX_BLOB_BYTES}-byte blob limit. Nothing new was committed -- an existing file grew."
+    "${MAX_BLOB_BYTES}-byte blob limit. Nothing new was committed -- a file the repo" \
+    "already had is over it."
 else
   echo "::error::This PR introduces one or more blobs over ${MAX_BLOB_BYTES} bytes."
 fi
@@ -260,7 +278,7 @@ fi
 echo "Blobs over ${MAX_BLOB_BYTES} bytes in this PR's commits:"
 printf '%s' "$offenders"
 
-if [ "$grown_text_seen" = 1 ]; then
+if [ "$tracked_text_seen" = 1 ]; then
   # Scoped to the file(s) marked TRACKED above, never to the whole report: a PR
   # can grow a tracked text file AND commit a binary in the same range, and an
   # unqualified "there is no binary to delete" is then false about a blob this
@@ -268,7 +286,7 @@ if [ "$grown_text_seen" = 1 ]; then
   # does apply.
   cat >&2 <<EOF
 
-A TRACKED TEXT FILE GREW PAST THE LIMIT. For the file(s) marked TRACKED above,
+A TRACKED TEXT FILE IS OVER THE LIMIT. For the file(s) marked TRACKED above,
 nothing was committed by accident and there is nothing to delete: the limit is
 ${MAX_BLOB_BYTES} bytes and the file is simply over it. Shrink it or exempt it:
 

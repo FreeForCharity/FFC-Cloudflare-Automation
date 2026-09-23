@@ -244,7 +244,7 @@ def test_a_grown_tracked_text_file_is_not_diagnosed_as_a_committed_binary(tmp_pa
 
     # The headline must not claim something was introduced -- nothing was.
     assert "already tracks" in result.stdout, out
-    assert "an existing file grew" in result.stdout, out
+    assert "a file the repo already had is over it" in result.stdout, out
 
     # The per-file line must classify it and name both sizes, the limit and the
     # overage, so the reader can see how far over it is without measuring.
@@ -258,7 +258,7 @@ def test_a_grown_tracked_text_file_is_not_diagnosed_as_a_committed_binary(tmp_pa
     # nothing was introduced, so the branch rewrite must be disclaimed -- and
     # the mixed-case warning must NOT fire, or the disclaimer would be hedged
     # for a case that is not happening.
-    assert "A TRACKED TEXT FILE GREW PAST THE LIMIT" in result.stderr, out
+    assert "A TRACKED TEXT FILE IS OVER THE LIMIT" in result.stderr, out
     assert "SHRINKING DOES NOT" in result.stderr, out
     assert "ALSO INTRODUCES A NEW OVERSIZED BLOB" not in result.stderr, out
 
@@ -316,7 +316,7 @@ def test_a_new_binary_keeps_the_binary_diagnosis(tmp_path):
 
     # The text-file remedy must NOT fire here: it tells the reader not to delete
     # anything, which is exactly the wrong advice for a swept-in binary.
-    assert "A TRACKED TEXT FILE GREW" not in result.stderr, out
+    assert "A TRACKED TEXT FILE IS OVER THE LIMIT" not in result.stderr, out
     assert "git push --force-with-lease" in result.stderr, out
 
 
@@ -334,7 +334,7 @@ def test_a_grown_tracked_binary_is_distinguished_from_both(tmp_path):
     assert result.returncode == 1, out
     assert "TRACKED binary file that GREW" in result.stdout, out
     assert "already tracks" in result.stdout, out
-    assert "A TRACKED TEXT FILE GREW" not in result.stderr, out
+    assert "A TRACKED TEXT FILE IS OVER THE LIMIT" not in result.stderr, out
 
 
 def test_a_right_aligned_wc_count_does_not_turn_text_into_binary(tmp_path):
@@ -448,6 +448,36 @@ def test_a_grown_file_shrunk_again_is_still_caught_and_told_so(tmp_path):
     assert "rewritten history" in result.stderr, out
 
 
+def test_a_tracked_file_that_shrank_is_not_reported_as_having_grown(tmp_path):
+    """Tracked does not imply grown, and the report used to assume it did.
+
+    A file that is ALREADY over the limit on the base can be edited smaller and
+    still be over it. Before this, the guard told that author their file `GREW`,
+    with a delta rendered `(+-500000)`, under a headline reading "an existing
+    file grew" — to someone who had just removed half a megabyte.
+
+    Reachable in this repository, not only in principle: `main` carries blobs
+    over 1 MiB, and only the allowlisted ones are exempt. Any other oversized
+    file already on `main` that a PR edits downward lands exactly here.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "big.md").write_bytes(b"x" * 2_000_000)
+    _commit(repo, "baseline: already over the limit on the base ref")
+    _git(repo, "branch", "-f", "base", "HEAD")
+
+    (repo / "big.md").write_bytes(b"x" * 1_500_000)
+    _commit(repo, "the PR makes it smaller, but still over")
+
+    result = _run_guard(repo)
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert "TRACKED text file that SHRANK and is still over" in result.stdout, out
+    assert "2000000 bytes on base -> 1500000 bytes in this PR (-500000)" in result.stdout, out
+    # The two statements that were false for this author.
+    assert "GREW" not in result.stdout, out
+    assert "(+-" not in result.stdout, out
+
+
 def test_a_dot_path_is_still_recognised_as_tracked(tmp_path):
     """A path under `.github/` must classify the same as any other.
 
@@ -518,7 +548,7 @@ def test_classification_never_swallows_an_offender(tmp_path):
     assert "introduces one or more blobs" in result.stdout, out
 
     # Both remedies, and no sentence that contradicts the other offender.
-    assert "A TRACKED TEXT FILE GREW PAST THE LIMIT" in result.stderr, out
+    assert "A TRACKED TEXT FILE IS OVER THE LIMIT" in result.stderr, out
     assert "ALSO INTRODUCES A NEW OVERSIZED BLOB" in result.stderr, out
     assert "applies to those in full" in result.stderr, out
     # The two claims that were false here before this was pinned.

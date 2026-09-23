@@ -1615,9 +1615,13 @@ function selfTest() {
       fixed.html.includes('href="https://www.facebook.com/sharer.php?u=x&amp;t=y"'),
       true,
     );
+    // Asserted against the HREF, not against the fragment: the source
+    // `data-ss-ss-link` attribute is left in place and carries `&amp;t=y`
+    // itself, so a decode on the way into the href passes a whole-fragment
+    // check while shipping a broken share URL.
     eq(
       '...escaped exactly as the source had it, not decoded and re-encoded',
-      fixed.html.includes('&amp;t=y'),
+      /href="[^"]*\?u=x&amp;t=y"/.test(fixed.html),
       true,
     );
     eq(
@@ -1653,12 +1657,14 @@ function selfTest() {
       repairSocialShareChrome('<a href="/about" data-ss-ss-link="https://evil">x</a>').repaired,
       0,
     );
+    // Asserted as the whole tag rather than `includes('target="_self"')`:
+    // prepending a second `target="_blank"` leaves the original present, so
+    // the substring check passes while the browser honours the FIRST
+    // attribute and the link is retargeted after all.
     eq(
       'a target the markup already set is not overridden',
-      repairSocialShareChrome(
-        '<a href="#" target="_self" data-ss-ss-link="https://x/">y</a>',
-      ).html.includes('target="_self"'),
-      true,
+      repairSocialShareChrome('<a href="#" target="_self" data-ss-ss-link="https://x/">y</a>').html,
+      '<a href="https://x/" target="_self" data-ss-ss-link="https://x/">y</a>',
     );
     // Unbalanced markup: leave it alone rather than truncate the page.
     const unbalanced = '<ul><li><a href="#" class="ss-share-all">+</a></ul><p>keep</p>';

@@ -1748,10 +1748,13 @@ def test_a_captured_page_with_no_heading_of_its_own_is_given_one():
     # ...and that the converter actually calls it. A library function nothing
     # reaches is the same as no fix.
     src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    # Named as `share.html`, which is what pins the heading to the REPAIRED
+    # fragment rather than to the captured one. The ordering that used to be
+    # asserted alongside it was dropped: with the argument named, `share` has
+    # to be assigned first for the code to run at all, so no mutation could
+    # fail that assertion -- and an assertion nothing can break reads as
+    # coverage while supplying none.
     assert "ensureSingleH1(share.html, title)" in src, src[:200]
-    # ...and that it runs AFTER the share repair, which removes elements. A
-    # heading counted before a removal could be a heading the removal takes.
-    assert src.index("repairSocialShareChrome(") < src.index("ensureSingleH1(share.html"), src[:200]
 
 
 def test_the_built_output_verifier_is_scoped_to_routes_not_captured_assets():

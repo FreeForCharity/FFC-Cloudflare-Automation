@@ -869,7 +869,11 @@ export function ensureImageAlt(html) {
 export function linkDestinationLabel(href, siteName) {
   if (typeof href !== 'string') return null;
   const raw = decodeEntities(href).trim();
-  if (!raw || raw === '#' || /^javascript:/i.test(raw)) return null;
+  // A bare `#`, an empty href and a `javascript:` URL each return null --
+  // but from further down, not from a guard here. The fragment branch
+  // refuses an EMPTY fragment, and `labelForHref` already refuses both
+  // `javascript:` and ''. Guards for them up here were measured unkillable
+  // by mutation: correct, and doing nothing. The outcomes stay asserted.
   if (/^mailto:/i.test(raw)) return safeDecodeURIComponent(raw.slice(7).split('?')[0]) || null;
   // An in-page target: `#top-of-page` is a real destination, `#` is not.
   if (raw.startsWith('#')) {
@@ -2683,6 +2687,14 @@ function selfTest() {
     'Top of page',
   );
   eq('javascript: is not a destination', linkDestinationLabel('javascript:void(0)', 'NHEG'), null);
+  // The entity case has to be one where decoding CHANGES the answer. A
+  // `&amp;` inside a query string does not: the host is read before it.
+  eq(
+    'an entity-encoded fragment is decoded before it is read',
+    linkDestinationLabel('&#35;top-of-page', 'NHEG'),
+    'Top of page',
+  );
+  eq('a non-string href is not a destination', linkDestinationLabel(42, 'NHEG'), null);
   eq('an empty href is not a destination', linkDestinationLabel('', 'NHEG'), null);
   eq(
     'a mailto is named by its address',

@@ -1873,6 +1873,8 @@ def test_a_working_link_with_no_name_is_named_rather_than_removed():
         "a mailto is named by its address",
         "the host is normalised",
         "an entity-encoded href is decoded first",
+        "an entity-encoded fragment is decoded before it is read",
+        "a non-string href is not a destination",
         "the existing markup is preserved exactly",
         "a named link following a nameless one is not swallowed",
     ):

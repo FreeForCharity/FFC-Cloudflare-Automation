@@ -1553,6 +1553,182 @@ def test_pdfs_still_over_budget_are_named_not_counted():
     assert "will be REJECTED by a" in src
 
 
+def test_an_oversized_webp_is_re_encoded_rather_than_waved_through():
+    """`RECODABLE` excluded WebP on the reasoning that it is already the
+    destination format. That is a statement about the container and says
+    nothing about the bytes -- and on a Jetpack site the format this pass
+    converts TO is the format most oversized images arrive in. Measured on
+    FFC-EX-newheightseducation.org: 34 images over the receiving repo's 400 KB
+    budget, **29 of them `.webp`**, largest 4,251 KB, and not one was ever a
+    candidate.
+
+    Asserted by RUNNING the capture script's own self-test, so the case cannot
+    pass by having been deleted."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "capture-wordpress-api.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "an oversized WebP is a candidate -- the format is not the budget",
+        "a WebP already under budget is still left byte-identical",
+        "an AVIF is not re-encoded -- that WOULD rename, for a usually-smaller format",
+        "re-encoding a WebP does not rename it",
+        "every full-size quality rung is tried before the first resize",
+        "the caps come down largest first, and never below the content column",
+        "each cap is tried at more than one quality",
+        "a rung with a cap resizes the pipeline",
+        "...to a LONG-edge cap, whichever way round the image is",
+        "...and never enlarges an image that is already smaller",
+        "a full-size rung leaves the pipeline untouched",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
+def test_the_ladder_can_lose_pixels_because_quality_alone_cannot_always_fit():
+    """Ten of that site's offenders went through the quality ladder and stayed
+    over budget: a 2560px WordPress `-scaled` export does not fit in 400 KB at
+    any quality a reader would accept, and no quality rung can say so. The
+    edge ladder is what answers that, and its floor is the assertion that
+    matters -- 1400px is still wider than the content column these render in,
+    so the smallest rung reachable cannot visibly degrade a photograph."""
+    src = (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+    decl = src.split("export const IMAGE_EDGE_LADDER = ", 1)[1].split(";", 1)[0]
+    edges = [int(n) for n in re.findall(r"\d+", decl)]
+    assert edges == sorted(edges, reverse=True), edges
+    assert min(edges) >= 1400, edges
+
+
+def test_a_re_encode_that_keeps_its_name_is_not_held_to_the_rename_threshold():
+    """`worthReencoding`'s 25% floor exists to pay for a rename, and every
+    rename is a chance to strand a reference. A WebP re-encoded to WebP keeps
+    its name, so that floor buys nothing there and costs something real: it
+    discards a result that lands UNDER BUDGET for saving only 20%, and ships
+    the oversized original instead. Same reasoning `worthShrinking` already
+    carries for a downsampled PDF, which also keeps its name."""
+    src = (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+    keep = src.split("const keep = encoded", 1)[1].split("if (keep) {", 1)[0]
+    assert "target === name" in keep, keep
+    assert "worthShrinking(buf.length, encoded.buffer.length)" in keep, keep
+    assert "worthReencoding(buf.length, encoded.buffer.length)" in keep, keep
+
+
+def test_a_slash_escaped_quote_in_a_title_is_not_published_as_a_backslash():
+    """WordPress's magic-quotes legacy stores `What\\'s`, and `wp_unslash`
+    removes the slash on WordPress's own read path. 706 reads the RENDERED
+    page, which is where that removal did not happen -- so the backslash
+    reaches the browser tab. Measured on FFC-EX-newheightseducation.org: four
+    titles, e.g. `Fitness: What\\'s Wrong or Right With Fitness Magazines?`.
+
+    Reversing an encoding artifact is not editing the charity's content; nobody
+    publishes a backslash there. Asserted by RUNNING the library's own
+    self-test, including the negative case -- a title with a backslash in it
+    for its own sake keeps it, or this stops being an unescape and becomes a
+    rewrite."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a slash-escaped apostrophe is unescaped, not published as a backslash",
+        "...including after wptexturize curled the quote the slash was written against",
+        "...and the same for double quotes",
+        "a backslash that is not escaping a quote is the author's, and stays",
+        "a doubled backslash collapses to one, as stripslashes does",
+        "a non-string is not a crash",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
+def test_a_captured_page_with_no_heading_of_its_own_is_given_one():
+    """The FFC template's `verify:build` requires exactly one `<h1>` per
+    indexable page (WCAG 1.3.1 / 2.4.6), and a WordPress archive template often
+    renders none. Measured on FFC-EX-newheightseducation.org: 86 of 785
+    captured fragments carry no `h1`, all of them `/publications/books/<slug>/`
+    archive pages -- the post beside each one has `<h1 class="entry-title">`,
+    so it is the theme's archive template rather than anything the capture
+    dropped. Once the image budget was fixed, this was the step keeping the
+    whole migration from deploying.
+
+    Nothing is invented: the heading carries the page's own title, and it is
+    clipped with the `.ffc-sr-only` rule the converter already installs,
+    because these pages were designed without a visible heading."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a page with no heading of its own is given one from its title",
+        "a page that already has an h1 is left exactly as captured",
+        "...however the tag is spelled",
+        "a tag that merely starts with h1 does not count as one",
+        "the title is escaped, not interpolated",
+        "a page with no title to use is left alone rather than given an empty heading",
+        "a non-string fragment is not a crash",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+    # ...and that the converter actually calls it. A library function nothing
+    # reaches is the same as no fix.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    assert "ensureSingleH1(`${fragmentCss.html}" in src, src[:200]
+
+
+def test_the_built_output_verifier_is_scoped_to_routes_not_captured_assets():
+    """`verify-build.mjs` walks every `.html` under `out/` and asserts one
+    `<h1>` and a self-referential canonical -- invariants about PAGES. The
+    capture localizes third-party embeds, and some are HTML: an Animoto player
+    landed at `out/_ffc-assets/s3.amazonaws.com/embed.animoto.com/play__*.html`
+    and failed both. It is an iframe document belonging to another site, and
+    there is nothing about it to fix.
+
+    Patched in the target repo because the assets directory is this pipeline's
+    convention -- the verifier cannot know about it, and every migrated site
+    hits this the moment a page embeds anything. Asserted by RUNNING the
+    converter's self-test, including the refusal: a patch that silently failed
+    would fail every later delivery at a step naming an embedded video."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "the verifier is patched to skip the captured assets tree",
+        "...with a guard INSIDE the directory branch, before the walk recurses",
+        "...and the walk it guards is still there",
+        "a repo with no verifier is reported, not crashed on",
+        "an unrecognised verifier is refused, not silently left unpatched",
+        "a verifier that merely MENTIONS the assets dir is still patched",
+        "another WALK's guard does not count as this one",
+        "...and patching it twice is still a no-op",
+        "another directory's guard does not count as this one",
+        "a directory branch that never recurses is refused, not guessed at",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+    # ...and that the conversion actually calls it. Mutation review removed the
+    # call and every case above still passed: a function exercised only by its
+    # own self-test is indistinguishable from one nothing reaches.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    assert "scopeVerifyBuildToRoutes(repo, assetsDir)" in src, src[:200]
+
+
 def _dedupe_script_text() -> str:
     return (REPO_ROOT / "scripts" / "dedupe-capture-assets.mjs").read_text(encoding="utf-8")
 
@@ -1588,6 +1764,135 @@ def test_a_preserved_directory_still_loses_to_the_captured_site():
     assert "if (existsSync(dest)) continue;" in body, body
 
 
+def _deliver_steps():
+    return load_workflow(WORKFLOW)["jobs"]["deliver"]["steps"]
+
+
+def _one_step(steps, substring):
+    """The index of the one step whose name matches, or a failure that names the
+    alternatives. Indexing a comprehension would raise IndexError on a renamed
+    step and could not tell "no match" from "two matches"."""
+    names = [str(s.get("name", "")) for s in steps]
+    hits = [i for i, n in enumerate(names) if substring.lower() in n.lower()]
+    assert len(hits) == 1, f"expected exactly one step matching {substring!r}, got {hits}: {names}"
+    return hits[0]
+
+
+def test_the_delivered_tree_is_formatted_before_the_pr_is_opened():
+    """Every FFC-EX repo's CI runs `prettier --check .`; nothing 706 writes is
+    formatted. The routes come out of string templates and
+    `retargetLighthouseUrls` re-serialises with `JSON.stringify(_, null, 2)`,
+    which always expands an array prettier would fit on one line. Measured on
+    FFC-EX-newheightseducation.org: 778 `.tsx` files plus `lighthouserc.json`,
+    i.e. `Check formatting` failed on every migration this workflow has
+    delivered.
+
+    Position is the assertion. Formatting after the commit would format
+    nothing that ships; formatting before the conversion would format a tree
+    the conversion then rewrites."""
+    steps = _deliver_steps()
+    fmt = _one_step(steps, "Format the converted tree")
+    assert fmt > _one_step(steps, "Convert the capture into real app routes")
+    assert fmt > _one_step(steps, "Repair references the conversion left")
+    assert fmt < _one_step(steps, "Commit and open a draft PR")
+
+
+def test_the_formatter_is_the_target_repos_own_not_a_version_pinned_here():
+    """The check that has to pass is the TARGET repo's `format:check`, run
+    against its own `.prettierrc.json` with the version its lockfile resolves.
+    Pinning a version here would drift from that silently -- prettier's array
+    and Markdown reflow differ between minors, which is the local-pass/CI-fail
+    loop CLAUDE.md records as L240. This repo's own CI pins `prettier@3.8.1`
+    for its own tree; reaching for that spelling here is the mistake."""
+    steps = _deliver_steps()
+    run = str(steps[_one_step(steps, "Format the converted tree")]["run"])
+    assert "prettier@" not in run, run
+    assert "npm run format" in run and "pnpm run format" in run, run
+    # The lockfile, not a range: `^3.9.6` in package.json resolves to whatever
+    # is newest at install time, which is how the two sides come to disagree.
+    assert "--frozen-lockfile" in run, run
+    assert "npm ci" in run, run
+
+
+def test_the_format_step_verifies_the_formatting_actually_happened():
+    """`prettier --write` exits 0 for files it reformatted and for files it
+    never reached alike. A `.prettierignore` that grew an entry, or a `format`
+    script narrowed to `src/`, would leave the generated JSON at the repo root
+    untouched with this step still green -- the same defect this step exists to
+    prevent, reached from the other side. So the repo's own `format:check` runs
+    after the write, in both package-manager branches.
+
+    An earlier draft also probed for `format:check` in a separate variable and
+    refused on its absence. Mutation review found that redundant: `npm run
+    <missing>` already exits non-zero, so the probe could be deleted with no
+    test able to tell. What survives is one guard whose value is its MESSAGE,
+    which is why the test below asserts the message names both scripts."""
+    steps = _deliver_steps()
+    run = str(steps[_one_step(steps, "Format the converted tree")]["run"])
+    # Per BRANCH, not over the whole body. Asserting `index("run format") <
+    # index("run format:check")` across the step passes while the npm branch
+    # runs them in the wrong order, because the pnpm branch above it satisfies
+    # both lookups -- mutation review caught exactly that.
+    pnpm, npm = run.split("if [ -f pnpm-lock.yaml ]", 1)[1].split("else", 1)
+    for branch, body in (("pnpm", pnpm), ("npm", npm)):
+        assert "run format\n" in body, (branch, body)
+        assert "run format:check" in body, (branch, body)
+        assert body.index("run format\n") < body.index("run format:check"), (branch, body)
+
+
+def test_the_format_step_refuses_a_repo_that_cannot_verify_its_own_formatting():
+    """Both scripts are required, and the guard names whichever is missing.
+    `format` is how the tree gets formatted and `format:check` is how this step
+    knows it did, so an FFC-EX template that dropped either one must stop a
+    migration rather than deliver a PR whose formatting is unknown.
+
+    The guard changes no outcome -- `npm run <missing>` fails on its own -- and
+    is kept for what it says in the log. So the assertion is on the message: a
+    guard justified by its diagnosis has to be tested for its diagnosis."""
+    steps = _deliver_steps()
+    run = str(steps[_one_step(steps, "Format the converted tree")]["run"])
+    guard = run.split("missing=", 1)[1].split("if [ -f pnpm-lock.yaml ]", 1)[0]
+    assert '"format", "format:check"' in guard, guard
+    # The CONDITION, verbatim. Asserting only that `::error::` and `exit 1` are
+    # present passes for `if [ -n "" ]` -- a guard whose body can never run,
+    # which is how a refusal becomes decoration without a line being deleted.
+    assert 'if [ -n "$missing" ]; then' in guard, guard
+    assert "::error::" in guard and "$missing" in guard, guard
+    assert "exit 1" in guard, guard
+    assert run.count("::error::") == 1, run
+
+
+def test_the_templates_root_level_files_are_carried_by_a_rule_not_a_name_list():
+    """The name list carried `_headers` and `security.txt` and dropped the other
+    six files the template ships at the root of `public/`. Measured on
+    FFC-EX-newheightseducation.org at its template commit e28032d: the root held
+    eight files, the wipe kept two, and `src/app/manifest.ts` and
+    `src/app/layout.tsx` -- both of which survive integration -- went on naming
+    the deleted ones by absolute path. The shipped `manifest.webmanifest`
+    pointed at two PNGs that were not there.
+
+    So the rule is inverted: carry whatever is at that root, and name only what
+    this pipeline itself writes there. That list cannot drift out of date the
+    way a snapshot of someone else's template does, because this repo is what
+    writes the names in it."""
+    src = _integrate_script_text()
+    assert "export const UNCARRIED_PUBLIC_ROOT_FILES" in src, src[:400]
+    body = src.split("export function readPreservedPublicFiles", 1)[1].split("\n}", 1)[0]
+    assert "readdirSync(publicDir" in body, body
+    assert "isUncarriedPublicRootFile" in body, body
+
+
+def test_security_txt_is_tracked_as_a_directory_now_that_the_root_is_swept():
+    """`_headers` and the root `security.txt` are root-level files, so the sweep
+    carries them without naming them. The `.well-known/` copy is one level down
+    and would have been lost when the name list went away -- it is the artifact
+    the target repo's drift check fails on, and the one that gives a charity
+    site a way to receive vulnerability reports."""
+    src = _integrate_script_text()
+    decl = src.split("export const PRESERVED_PUBLIC_DIRS", 1)[1].split("\n", 1)[0]
+    assert "'.well-known'" in decl, decl
+
+
 def test_integrate_self_tests_cover_the_preserved_directories():
     """Asserted by RUNNING them, not by reading them. The behaviour that keeps a
     charity's site whole here is the recursive walk and the collision rule, and
@@ -1605,6 +1910,12 @@ def test_integrate_self_tests_cover_the_preserved_directories():
         "the template asset directories survive the public/ wipe",
         "a preserved directory is walked recursively, not just its top level",
         "the captured site still wins inside a preserved directory",
+        "a root-level template file NO list names survives",
+        "every template icon at the root of public/ survives the wipe",
+        "a previous run's capture report does NOT survive the wipe",
+        "a template DIRECTORY the list does not name is still wiped",
+        "a previous run's captured PAGE does NOT survive the wipe",
+        "the pipeline owns exactly the report names, CNAME and HTML, and nothing else",
     ):
         assert f"ok   {name}" in out, (name, out[-2000:])
 
@@ -2009,6 +2320,107 @@ def test_heal_self_tests_cover_the_escaped_and_unresolvable_cases():
         "node_modules is never walked, let alone rewritten",
     ):
         assert f"PASS {name}" in out, (name, out[-2000:])
+
+
+def test_heal_repairs_a_reference_written_relative_to_its_own_document():
+    """Run 70's diagnostic found a blind spot; this closes it.
+
+    The gate failed on one image; its diagnostic named the file that referenced
+    it -- an Elementor stylesheet inside the assets tree -- and the reference
+    there is written RELATIVE to that stylesheet. No `_ffc-assets` appears in
+    it, so the path-based scanner reads the whole document as containing no
+    references, which is why two runs of "every reference resolves" sat beside
+    a 404 without contradicting it.
+
+    Required by name from the script's own self-test, because a source-text
+    assertion cannot tell a live case from a deleted one. Two of these carry
+    more weight than the repair itself: the reference must still be RELATIVE
+    afterwards (these sites are served from a project Pages subpath, where an
+    absolute `/_ffc-assets/...` breaks), and a token resolving outside the
+    assets tree must be ignored rather than guessed at.
+    """
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a RELATIVE reference to a missing fold is repointed at its sibling",
+        "...and it is still RELATIVE afterwards",
+        "a RELATIVE reference whose target EXISTS is untouched",
+        "a RELATIVE reference with no sibling is left exactly as it was",
+        "a RELATIVE token that escapes the assets tree is ignored",
+        "a token a slash continues is a path prefix, not a reference",
+        "...and the path prefix is left in the document untouched",
+        "a real reference is repaired where it stands alone",
+        "...and the SAME string is left alone where a slash continues it",
+        "isInside accepts a directory whose name merely begins with dots",
+        "isInside rejects the parent itself",
+        "isInside rejects a sibling of the root",
+        "the relative repair is counted, not silently applied",
+        "the path-based scan saw nothing here",
+        "a second relative run is a no-op",
+    ):
+        assert f"PASS {name}" in out, (name, out[-2500:])
+
+
+def test_the_gate_explains_a_missing_asset_instead_of_only_naming_it():
+    """A 404 says a file is absent and nothing about why.
+
+    Run 69 is the reason this exists. The gate failed on one asset; the repair
+    pass over the same tree had reported every reference it checked as
+    resolving; and those two facts together read as "the reference must be
+    fine, so something else is wrong". They are not in tension at all -- that
+    pass names only references it can PARSE and finds BROKEN, so its silence
+    about an asset is equally consistent with never having seen it. The
+    decisive question -- is this name written down anywhere in the export? --
+    had no answer anywhere in the log.
+
+    The cases are required BY NAME from the script's own self-test, because a
+    source-text assertion cannot tell a live case from a deleted one. The
+    relative-reference case is the load-bearing one: it is the shape a
+    path-based scanner cannot see, and therefore the shape this exists for.
+    """
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "verify-no-legacy.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "explainMissingAsset says a missing file is not on disk",
+        "explainMissingAsset finds the sibling that shares the folded base name",
+        "explainMissingAsset finds an ABSOLUTE reference by basename",
+        "explainMissingAsset finds a RELATIVE reference the path scanner cannot see",
+        "explainMissingAsset does not claim a BINARY neighbour mentions it",
+        "explainMissingAsset reports a file that IS on disk",
+        "explainMissingAsset refuses a path that escapes the served dir",
+        "explainMissingAsset does not read a file bigger than the whole byte budget",
+        "explainMissingAsset says so when the byte budget stopped it",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
+def test_the_gate_diagnostic_cannot_change_a_verdict():
+    """It runs on the failure path and only reports. If it could decide
+    anything, a bug in a diagnostic would become a bug in the gate -- and this
+    gate is the only check that can see a live-origin dependency."""
+    gate = (REPO_ROOT / "scripts" / "verify-no-legacy.mjs").read_text(encoding="utf-8")
+    start = gate.index("export async function explainMissingAsset")
+    end = gate.index("function arg(", start)
+    body = gate[start:end]
+    for forbidden in ("process.exitCode", "process.exit(", "verdictFor", "fatal"):
+        assert forbidden not in body, forbidden
+    # And it is consulted only where a failure has already been recorded, so an
+    # export with nothing wrong never pays for the walk.
+    assert "if (dir && missingPaths.size) {" in gate
 
 
 def test_heal_refuses_an_argument_that_would_silently_narrow_the_scan():

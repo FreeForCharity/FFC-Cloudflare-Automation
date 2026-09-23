@@ -350,6 +350,76 @@ export function repairSocialShareChrome(html) {
 }
 
 /**
+ * Does this anchor's markup give it an accessible name?
+ *
+ * Conservative by construction: every source of a name counts, so anything
+ * a visitor or a screen reader can perceive is reported as NAMED and is
+ * therefore never removed. Being wrong in the other direction would delete
+ * working navigation from a charity's site.
+ */
+export function anchorHasAccessibleName(attrs, inner) {
+  if (typeof attrs !== 'string' || typeof inner !== 'string') return true;
+  if (/\saria-label\s*=\s*"[^"]*\S[^"]*"/i.test(attrs)) return true;
+  if (/\saria-labelledby\s*=\s*"[^"]*\S[^"]*"/i.test(attrs)) return true;
+  if (/\stitle\s*=\s*"[^"]*\S[^"]*"/i.test(attrs)) return true;
+  // An image's alt text and an inline SVG's <title> both name the link.
+  if (/<img\b[^>]*\salt\s*=\s*"[^"]*\S[^"]*"/i.test(inner)) return true;
+  if (/<title\b[^>]*>[^<]*\S/i.test(inner)) return true;
+  // Text content, with tags stripped and `&nbsp;` treated as the space it is.
+  return (
+    inner
+      .replace(/<[^>]*>/g, '')
+      .replace(/&nbsp;|&#160;|&#xa0;/gi, ' ')
+      .trim().length > 0
+  );
+}
+
+/**
+ * Remove a captured control that can neither act nor be announced.
+ *
+ * The capture strips JavaScript, so a theme's icon-only `href="#"` trigger is
+ * left unable to do anything -- and because its only content is an icon, it
+ * has no accessible name either. axe reports it as `link-name` at SERIOUS
+ * severity, and on FFC-EX-newheightseducation.org that was 11-21 nodes per
+ * page and the single largest contributor to the accessibility score.
+ *
+ * The same treatment `repairSocialShareChrome` already gives `ss-share-all`,
+ * generalised: repair what has a destination, remove what is a dead trigger.
+ * Run AFTER that function, so a share link with a parked destination has
+ * already been repaired and is no longer `href="#"`.
+ *
+ * BOTH conditions are required, and the pairing is the whole safety argument:
+ *
+ *   - `href="#"` exactly. An anchor pointing at a real fragment (`#main`) or
+ *     a URL still navigates in a static export.
+ *   - no accessible name. A named control is one a visitor can see and a
+ *     reader can announce, and removing it would take real navigation off the
+ *     site -- measured on that capture, the named set is 58,491 anchors
+ *     including 1,760 menu items and ~100 translator flags, against 3,540
+ *     nameless ones across 9 icon-only signatures.
+ *
+ * Only the anchor is removed, not its container. An empty wrapper is inert,
+ * while guessing at which ancestor "belonged" to the control risks taking a
+ * layout element the page still needs.
+ */
+export function removeDeadNamelessControls(fragment) {
+  if (typeof fragment !== 'string') return { html: '', removed: 0 };
+  let removed = 0;
+  // Non-greedy to the first `</a>`: anchors cannot legally nest, so the first
+  // close is this anchor's own.
+  const html = fragment.replace(
+    /<a\b([^>]*)>((?:(?!<\/a>)[\s\S])*)<\/a>/gi,
+    (whole, attrs, inner) => {
+      if (!/\shref\s*=\s*"#"/i.test(attrs)) return whole;
+      if (anchorHasAccessibleName(attrs, inner)) return whole;
+      removed += 1;
+      return '';
+    },
+  );
+  return { html, removed };
+}
+
+/**
  * A WordPress WIDGET title is not the page's heading.
  *
  * `widgettitle` is WordPress core's class for a sidebar widget's title, and
@@ -2012,6 +2082,93 @@ function selfTest() {
       'a page with no share chrome is returned unchanged',
       repairSocialShareChrome('<p>x</p>').html,
       '<p>x</p>',
+    );
+  }
+
+  // --- dead nameless controls ----------------------------------------------
+  {
+    // Both conditions are required, and the NAMED cases are the ones that
+    // matter: being wrong there deletes working navigation from a charity's
+    // site. Measured on FFC-EX-newheightseducation.org, the named set is
+    // 58,491 anchors against 3,540 nameless ones.
+    eq(
+      'an icon-only href="#" trigger is removed',
+      removeDeadNamelessControls(
+        '<a class="mk-search-trigger" href="#"><svg><path d="x"/></svg></a>',
+      ).removed,
+      1,
+    );
+    eq(
+      '...and the page around it is left intact',
+      removeDeadNamelessControls('<p>a</p><a href="#"><svg/></a><p>b</p>').html,
+      '<p>a</p><p>b</p>',
+    );
+    eq(
+      'a menu item with text is NOT removed',
+      removeDeadNamelessControls('<a class="menu-item-link js-smooth-scroll" href="#">About Us</a>')
+        .removed,
+      0,
+    );
+    eq(
+      'a control named by title is NOT removed',
+      removeDeadNamelessControls('<a href="#" title="Zulu" class="flag"><span></span></a>').removed,
+      0,
+    );
+    eq(
+      'a control named by aria-label is NOT removed',
+      removeDeadNamelessControls('<a href="#" aria-label="Search button"><i></i></a>').removed,
+      0,
+    );
+    eq(
+      "a control named by its image's alt is NOT removed",
+      removeDeadNamelessControls('<a href="#"><img src="x.png" alt="Share"></a>').removed,
+      0,
+    );
+    eq(
+      "a control named by its SVG's title is NOT removed",
+      removeDeadNamelessControls('<a href="#"><svg><title>Close</title></svg></a>').removed,
+      0,
+    );
+    // `href="#main"` still navigates in a static export; only a bare `#` is
+    // the dead case.
+    eq(
+      'an anchor pointing at a real fragment is NOT removed',
+      removeDeadNamelessControls('<a href="#main"><svg/></a>').removed,
+      0,
+    );
+    eq(
+      'an anchor with a real URL is NOT removed',
+      removeDeadNamelessControls('<a href="/about/"><svg/></a>').removed,
+      0,
+    );
+    // Whitespace-only content is not a name, however it is spelled.
+    eq(
+      'an anchor holding only &nbsp; is still nameless',
+      removeDeadNamelessControls('<a href="#">&nbsp;</a>').removed,
+      1,
+    );
+    eq(
+      'an empty title or alt does not count as a name',
+      removeDeadNamelessControls('<a href="#" title="  "><img src="x" alt=""></a>').removed,
+      1,
+    );
+    // Two anchors in a row must not be swallowed as one: anchors cannot nest,
+    // so the match has to stop at the FIRST close tag.
+    eq(
+      'a named anchor immediately after a nameless one survives',
+      removeDeadNamelessControls('<a href="#"><svg/></a><a href="/x/">Keep me</a>').html,
+      '<a href="/x/">Keep me</a>',
+    );
+    eq(
+      'a non-string is not a crash',
+      (() => {
+        try {
+          return removeDeadNamelessControls(null).html;
+        } catch (err) {
+          return `threw ${err.name}`;
+        }
+      })(),
+      '',
     );
   }
 

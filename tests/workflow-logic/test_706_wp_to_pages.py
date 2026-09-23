@@ -1779,6 +1779,57 @@ def _around(src: str, anchor: str, needle: str, span: int = 400) -> str:
     return f"{needle!r} not found near {anchor!r}:\n...{src[max(0, i - span // 4) : i + span]}..."
 
 
+def test_a_control_that_can_neither_act_nor_be_announced_is_removed():
+    """The capture strips JavaScript, so a theme's icon-only `href="#"` trigger
+    can no longer do anything -- and because its only content is an icon it has
+    no accessible name either. axe reports `link-name` at SERIOUS severity, and
+    on FFC-EX-newheightseducation.org that was 11-21 nodes per page and the
+    largest single contributor to the accessibility score.
+
+    Clarke's call was removal rather than labelling: the capability is not
+    possible in a static export, so a named control that still does nothing
+    would be a worse promise to a visitor than no control.
+
+    BOTH conditions are required, and the NAMED half is the safety argument.
+    Measured on that capture: 3,540 nameless anchors across 9 icon-only
+    signatures against **58,491 named** ones, including 1,760 menu items and
+    ~100 translator flags. A rule that keyed on `href="#"` alone would have
+    deleted the site's navigation."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        'an icon-only href="#" trigger is removed',
+        "...and the page around it is left intact",
+        "a menu item with text is NOT removed",
+        "a control named by title is NOT removed",
+        "a control named by aria-label is NOT removed",
+        "a control named by its image's alt is NOT removed",
+        "a control named by its SVG's title is NOT removed",
+        "an anchor pointing at a real fragment is NOT removed",
+        "an anchor with a real URL is NOT removed",
+        "an anchor holding only &nbsp; is still nameless",
+        "a named anchor immediately after a nameless one survives",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+    # ...and that it runs AFTER the share repair, which turns a parked
+    # destination into a real href. Run before, a repairable share link is
+    # still `href="#"` and would be deleted instead of fixed.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    assert "removeDeadNamelessControls(share.html)" in src, _around(
+        src, "const dead =", "removeDeadNamelessControls(share.html)"
+    )
+    assert src.index("repairSocialShareChrome(") < src.index(
+        "removeDeadNamelessControls(share.html)"
+    ), _around(src, "const share =", "share repair before dead-control removal")
+
+
 def test_a_hidden_widget_title_does_not_count_as_the_pages_heading():
     """`widgettitle` is WordPress core's class for a sidebar widget's title,
     and Jupiter emits it as an `<h1>`. On FFC-EX-newheightseducation.org that
@@ -1821,7 +1872,11 @@ def test_a_hidden_widget_title_does_not_count_as_the_pages_heading():
     # ...and that the converter runs it BEFORE the heading check. Run after,
     # it demotes a heading the page was already counting and leaves nothing.
     src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
-    for needle in ("demoteWidgetTitles(share.html)", "ensureSingleH1(widget.html, title)"):
+    # `dead.html`, not `share.html`: the dead-control removal now sits between
+    # the share repair and this step. The chain is
+    # share -> dead -> widget -> heading, and each link is asserted by the test
+    # that owns its step.
+    for needle in ("demoteWidgetTitles(dead.html)", "ensureSingleH1(widget.html, title)"):
         # The excerpt is taken around the CALL SITE, not from the top of the
         # file: these strings live ~450 lines in, so `src[:400]` printed the
         # imports on failure and sent the reader somewhere unrelated. Raised by

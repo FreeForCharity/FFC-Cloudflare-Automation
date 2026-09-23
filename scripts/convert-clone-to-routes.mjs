@@ -68,6 +68,7 @@ import {
   scopeCloneCss,
   fragmentHead,
   demoteWidgetTitles,
+  removeDeadNamelessControls,
   ensureSingleH1,
   repairSocialShareChrome,
   stripLayoutDuplicates,
@@ -314,6 +315,7 @@ function main() {
     shareChromeRemoved: 0,
     shareLinksRefused: 0,
     widgetTitlesDemoted: 0,
+    deadControlsRemoved: 0,
     footersDemoted: 0,
     footersKeptNested: 0,
     consentUiRemoved: 0,
@@ -449,10 +451,14 @@ function main() {
     // The heading last, from the title computed just above: a WordPress
     // archive template often renders none, and the FFC template's
     // `verify:build` requires exactly one per indexable page.
+    // After the share repair, which turns a parked destination into a real
+    // href -- so anything still `href="#"` here genuinely has nowhere to go.
+    const dead = removeDeadNamelessControls(share.html);
+    tally.deadControlsRemoved += dead.removed;
     // Before the heading check, not after: a hidden widget title counts as
     // the page's <h1> otherwise, and the page keeps no heading a reader can
     // reach while every static check reports one.
-    const widget = demoteWidgetTitles(share.html);
+    const widget = demoteWidgetTitles(dead.html);
     tally.widgetTitlesDemoted += widget.demoted;
     const fragment = ensureSingleH1(widget.html, title);
     const wrapperClass = [WRAPPER_CLASS, bodyClass].filter(Boolean).join(' ');
@@ -564,6 +570,7 @@ function main() {
   console.log(`share links repointed          ${tally.shareLinksRepaired}`);
   console.log(`dead share controls removed    ${tally.shareChromeRemoved}`);
   console.log(`widget titles demoted to h2    ${tally.widgetTitlesDemoted}`);
+  console.log(`dead nameless controls removed ${tally.deadControlsRemoved}`);
   // Loud rather than silent: a refusal means the capture parked a
   // destination this conversion will not make live (javascript:, data:,
   // protocol-relative). Zero is the expected reading, and a non-zero one is

@@ -376,13 +376,20 @@ export function repairSocialShareChrome(html) {
 export function demoteWidgetTitles(fragment) {
   if (typeof fragment !== 'string') return { html: '', demoted: 0 };
   let demoted = 0;
-  const html = fragment.replace(
-    /<h1\b([^>]*\bwidgettitle\b[^>]*)>([\s\S]*?)<\/h1>/gi,
-    (_whole, attrs, inner) => {
-      demoted += 1;
-      return `<h2${attrs}>${inner}</h2>`;
-    },
-  );
+  const html = fragment.replace(/<h1\b([^>]*)>([\s\S]*?)<\/h1>/gi, (whole, attrs, inner) => {
+    // The class attribute is SPLIT, not pattern-matched. `\bwidgettitle\b`
+    // looks right and is wrong: `-` is a word boundary in a regex, so it
+    // also matches `widgettitle-custom` and `my-widgettitle-x`, and would
+    // demote a theme's unrelated heading. Raised by Copilot on #1364; the
+    // self-test that was supposed to cover this only tried letters either
+    // side (`nonwidgettitleish`), which `\b` does reject -- so the test
+    // passed and the bug was real.
+    const cls = /\sclass\s*=\s*("([^"]*)"|'([^']*)')/i.exec(attrs);
+    const tokens = (cls?.[2] ?? cls?.[3] ?? '').split(/\s+/).filter(Boolean);
+    if (!tokens.includes('widgettitle')) return whole;
+    demoted += 1;
+    return `<h2${attrs}>${inner}</h2>`;
+  });
   return { html, demoted };
 }
 
@@ -2035,6 +2042,28 @@ function selfTest() {
     eq(
       '...and a class that merely contains the word is not the widget class',
       demoteWidgetTitles('<h1 class="nonwidgettitleish">x</h1>').demoted,
+      0,
+    );
+    // The case the first version got wrong, and the one a `\b` regex cannot
+    // see: `-` IS a word boundary, so `widgettitle-custom` matched. The class
+    // attribute is split into tokens instead of pattern-matched.
+    eq(
+      '...including one separated by a hyphen, which is a regex word boundary',
+      [
+        demoteWidgetTitles('<h1 class="widgettitle-custom">x</h1>').demoted,
+        demoteWidgetTitles('<h1 class="my-widgettitle-x">x</h1>').demoted,
+        demoteWidgetTitles("<h1 class='sidebar widgettitle-alt'>x</h1>").demoted,
+      ].join(','),
+      '0,0,0',
+    );
+    eq(
+      '...while a single-quoted class attribute still works',
+      demoteWidgetTitles("<h1 class='widgettitle ffc-h2'>x</h1>").demoted,
+      1,
+    );
+    eq(
+      '...and an h1 with no class at all is left alone',
+      demoteWidgetTitles('<h1>x</h1>').demoted,
       0,
     );
     eq(

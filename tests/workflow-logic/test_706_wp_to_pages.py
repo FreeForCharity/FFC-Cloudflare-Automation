@@ -1996,7 +1996,11 @@ def test_what_can_be_repaired_is_repaired_rather_than_removed():
     # token has to exist on both sides. A fragment carrying a token nothing
     # substitutes ships `%%SITEURL_ENC%%` to a visitor's Facebook share dialog.
     loader = (REPO_ROOT / "assets" / "clone-content-lib.ts").read_text(encoding="utf-8")
-    assert "%%SITEURL_ENC%%" in loader, _around(
+    # The SUBSTITUTION, not the token: the docblock above names the token too,
+    # so asserting on the bare string passes for a loader that has stopped
+    # resolving it -- and a fragment whose token nothing substitutes ships
+    # `%%SITEURL_ENC%%` into a visitor's Facebook share dialog.
+    assert ".split('%%SITEURL_ENC%%').join(siteUrlEncoded)" in loader, _around(
         loader, "loadCloneContent", "the loader resolves %%SITEURL_ENC%%"
     )
     assert "encodeURIComponent(siteConfig.url" in loader, _around(

@@ -2963,6 +2963,11 @@ function selfTest() {
   eq('a relative directory is left alone', repairHref('about/'), null);
   eq('a dotted relative directory is left alone', repairHref('../who-we-are/'), null);
   eq('a fragment is left alone', repairHref('#main'), null);
+  // The one shape that distinguishes the relative guard from the TLD
+  // allowlist: every other relative href is refused by the allowlist too,
+  // because `..` and `.` leave an empty last label. Without the guard this
+  // becomes `https://.org`.
+  eq('an href that is itself a dotted TLD is left alone', repairHref('.org'), null);
   eq('an already-tokenized link is left alone', repairHref('%%BASE%%/about/'), null);
   eq('a mailto is left alone', repairHref('mailto:a@b.org'), null);
   // Browsers trim this, so the link works -- but the naming pass reads the
@@ -3067,9 +3072,13 @@ function selfTest() {
   eq('the home page resolves as the root', routePathForSlug(''), '/');
   eq('a slug becomes a directory path', routePathForSlug('a/b'), '/a/b/');
   // A non-share `href="#"` control is none of this pass's business.
+  // The data-url matters: without one this passes even if the class rule is
+  // gone, because the repair needs a destination and finds none -- so the test
+  // would be green for a reason that has nothing to do with what it names.
   eq(
     'a search trigger is not mistaken for a share button',
-    repairInlineShareButtons('<a class="mk-search-trigger" href="#"></a>', 'p').repaired,
+    repairInlineShareButtons('<a class="mk-search-trigger" data-url="./x/" href="#"></a>', 'p')
+      .repaired,
     0,
   );
 

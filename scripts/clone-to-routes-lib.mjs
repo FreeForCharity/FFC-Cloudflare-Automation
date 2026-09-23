@@ -362,9 +362,9 @@ export function anchorHasAccessibleName(attrs, inner) {
   if (/\saria-label\s*=\s*"[^"]*\S[^"]*"/i.test(attrs)) return true;
   if (/\saria-labelledby\s*=\s*"[^"]*\S[^"]*"/i.test(attrs)) return true;
   if (/\stitle\s*=\s*"[^"]*\S[^"]*"/i.test(attrs)) return true;
-  // An image's alt text and an inline SVG's <title> both name the link.
+  // An image's alt text names it; an inline SVG's <title> is caught by the text
+  // fallback below, which strips tags and keeps what was inside them.
   if (/<img\b[^>]*\salt\s*=\s*"[^"]*\S[^"]*"/i.test(inner)) return true;
-  if (/<title\b[^>]*>[^<]*\S/i.test(inner)) return true;
   // Text content, with tags stripped and `&nbsp;` treated as the space it is.
   return (
     inner

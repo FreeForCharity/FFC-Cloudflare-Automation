@@ -157,6 +157,110 @@ export function unslashQuotes(text) {
  * decision, not an encoding one. No captured page has hit it yet; when one
  * does it should be reported, not silently rewritten.
  */
+/**
+ * The `[start, end)` span of the element opening at `openIdx`, by tag balance.
+ *
+ * Returns null when the tags do not balance, and the callers below treat that
+ * as "leave this markup alone". Truncating a charity's page because a plugin
+ * emitted an unclosed tag would be a far worse outcome than the dead control
+ * the removal was trying to take out.
+ */
+export function elementSpan(html, openIdx, tag) {
+  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, 'gi');
+  re.lastIndex = openIdx;
+  let depth = 0;
+  let m;
+  while ((m = re.exec(html))) {
+    if (m[1]) {
+      depth -= 1;
+      if (depth === 0) return [openIdx, m.index + m[0].length];
+      if (depth < 0) return null;
+    } else {
+      depth += 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * Repair the social-share chrome a captured WordPress page leaves behind.
+ *
+ * The capture strips scripts, and a share plugin is almost entirely script.
+ * Measured on FFC-EX-newheightseducation.org, where Social Snap's bar appears
+ * in 127 of 785 fragments and every one of its links is `href="#"` with the
+ * real destination parked in `data-ss-ss-link`:
+ *
+ *   <a href="#" aria-label="Facebook"
+ *      data-ss-ss-link="https://www.facebook.com/sharer.php?t=…&u=…">
+ *
+ * So the bar cannot share anything, and it does two kinds of harm. Its
+ * `ss-share-all` trigger has no text, no `aria-label` and no `title`, which is
+ * a SERIOUS axe `link-name` violation on every page carrying it. And the bar
+ * is `position: fixed; z-index: 999`, so it sits above FFC's own
+ * cookie-consent modal (`z-50`) and swallows clicks meant for the overlay --
+ * a visitor dismissing the banner by clicking outside is blocked wherever the
+ * bar covers. (The z-index half is fixed in `assets/ffc-footer.css`; this
+ * function handles the markup.)
+ *
+ * Two different treatments, because the two kinds of control differ in whether
+ * anything can be restored:
+ *
+ * - A link with a `data-ss-ss-link` HAS a destination, so it is repaired: the
+ *   href is pointed at it and it opens in a new tab, which is the closest
+ *   static equivalent of the popup window the plugin's JS used to open. The
+ *   charity gets working share links for the first time since the migration.
+ * - `ss-share-all` (opens a share modal) and the modal's own `ss-close-modal`
+ *   have NO destination -- they are pure script triggers. There is nothing to
+ *   repair them to, so they and the `#ss-all-networks-popup` they drive are
+ *   removed. Same reasoning as replacing a `<form>` with a `mailto:` block: a
+ *   control that looks interactive and does nothing is worse than no control.
+ */
+export function repairSocialShareChrome(html) {
+  if (typeof html !== 'string') return { html: '', repaired: 0, removed: 0 };
+  let repaired = 0;
+  let removed = 0;
+
+  // 1. Point each parked destination at its own href. The value is already
+  //    HTML-escaped in the source attribute, which is exactly what an href
+  //    needs, so it is copied verbatim rather than decoded and re-encoded.
+  let out = html.replace(/<a\b[^>]*>/gi, (tag) => {
+    if (!/\shref="#"/i.test(tag)) return tag;
+    const dest = /\sdata-ss-ss-link="([^"]+)"/i.exec(tag);
+    if (!dest) return tag;
+    repaired += 1;
+    let fixed = tag.replace(/\shref="#"/i, ` href="${dest[1]}"`);
+    // Sharing should not cost the reader the page they are sharing. The
+    // plugin opened a popup window; a new tab is the static equivalent.
+    if (!/\starget=/i.test(fixed)) fixed = fixed.replace(/^<a\b/i, '<a target="_blank"');
+    return fixed;
+  });
+
+  // 2. The share-all trigger, with the <li> that exists only to hold it.
+  for (;;) {
+    const m = /<a\b[^>]*\sclass="[^"]*\bss-share-all\b[^"]*"[^>]*>/i.exec(out);
+    if (!m) break;
+    const liStart = out.lastIndexOf('<li', m.index);
+    if (liStart === -1) break;
+    const span = elementSpan(out, liStart, 'li');
+    if (!span) break;
+    out = out.slice(0, span[0]) + out.slice(span[1]);
+    removed += 1;
+  }
+
+  // 3. The modal it opened, which `display: none` keeps out of axe's reach and
+  //    which nothing can now open.
+  for (;;) {
+    const i = out.search(/<div\b[^>]*\sid="ss-all-networks-popup"/i);
+    if (i === -1) break;
+    const span = elementSpan(out, i, 'div');
+    if (!span) break;
+    out = out.slice(0, span[0]) + out.slice(span[1]);
+    removed += 1;
+  }
+
+  return { html: out, repaired, removed };
+}
+
 export function ensureSingleH1(fragment, title) {
   if (typeof fragment !== 'string') return '';
   if (/<h1[\s>]/i.test(fragment)) return fragment;
@@ -1490,6 +1594,102 @@ function selfTest() {
   // a crashed self-test instead of a named failure, and a crash is not a
   // detection. Same reason `integrate-clone-into-nextjs.mjs` reads its
   // preserved files through a tolerant helper.
+  // --- social-share chrome ------------------------------------------------
+  {
+    const bar =
+      '<div id="ss-floating-bar" class="ss-left-sidebar">\n' +
+      '<ul class="ss-social-icons-container">\n' +
+      '<li><a href="#" aria-label="Facebook" data-ss-ss-link="https://www.facebook.com/sharer.php?u=x&amp;t=y" class="ss-facebook-color" rel="nofollow noopener"><span>f</span></a></li>\n' +
+      '<li><a href="#" aria-label="Email" data-ss-ss-link="mailto:?body=x" class="ss-envelope-color"><span>e</span></a>' +
+      '<span class="ss-share-network-tooltip">Email</span></li>\n' +
+      '<li><a href="#" class="ss-share-all ss-shareall-color" rel="nofollow noopener"><span><i>+</i></span></a>' +
+      '<span class="ss-share-network-tooltip">More Networks</span></li>\n' +
+      '</ul></div>\n' +
+      '<div id="ss-all-networks-popup" class="ss-popup-overlay"><div class="ss-popup">' +
+      '<a href="#" class="ss-close-modal"><svg/></a></div></div>\n' +
+      '<p>real content</p>';
+    const fixed = repairSocialShareChrome(bar);
+    eq('a parked share destination is restored to its href', fixed.repaired, 2);
+    eq(
+      '...pointing at the destination the plugin left in the data attribute',
+      fixed.html.includes('href="https://www.facebook.com/sharer.php?u=x&amp;t=y"'),
+      true,
+    );
+    eq(
+      '...escaped exactly as the source had it, not decoded and re-encoded',
+      fixed.html.includes('&amp;t=y'),
+      true,
+    );
+    eq(
+      '...and opening in a new tab, as the plugin popup did',
+      fixed.html.includes('<a target="_blank"'),
+      true,
+    );
+    eq('a mailto destination is restored too', fixed.html.includes('href="mailto:?body=x"'), true);
+    eq('the two destination-less triggers are removed', fixed.removed, 2);
+    eq('...the share-all trigger is gone', fixed.html.includes('ss-share-all'), false);
+    eq(
+      '...with the <li> that existed only to hold it',
+      fixed.html.includes('More Networks'),
+      false,
+    );
+    eq(
+      '...and the modal nothing can open any more',
+      fixed.html.includes('ss-all-networks-popup'),
+      false,
+    );
+    eq('...including its unlabelled close link', fixed.html.includes('ss-close-modal'), false);
+    eq('the links that DO work are kept', fixed.html.includes('aria-label="Facebook"'), true);
+    eq('...and so is the page content', fixed.html.includes('<p>real content</p>'), true);
+    // A link with no parked destination is not a share link at all.
+    eq(
+      'an ordinary href="#" with no data attribute is left alone',
+      repairSocialShareChrome('<a href="#" class="skip">x</a>').repaired,
+      0,
+    );
+    // An href the site already set is the site's, not ours to overwrite.
+    eq(
+      'a link that already has a real href is not rewritten',
+      repairSocialShareChrome('<a href="/about" data-ss-ss-link="https://evil">x</a>').repaired,
+      0,
+    );
+    eq(
+      'a target the markup already set is not overridden',
+      repairSocialShareChrome(
+        '<a href="#" target="_self" data-ss-ss-link="https://x/">y</a>',
+      ).html.includes('target="_self"'),
+      true,
+    );
+    // Unbalanced markup: leave it alone rather than truncate the page.
+    const unbalanced = '<ul><li><a href="#" class="ss-share-all">+</a></ul><p>keep</p>';
+    eq(
+      'unbalanced markup is left alone rather than truncated',
+      repairSocialShareChrome(unbalanced).html.includes('<p>keep</p>'),
+      true,
+    );
+    eq('...and nothing is reported as removed', repairSocialShareChrome(unbalanced).removed, 0);
+    eq('elementSpan refuses an unbalanced element', elementSpan('<li><a></a>', 0, 'li'), null);
+    // Asserted as the SLICE rather than as indices: the first draft of this
+    // case expected [0, 22] and the answer is [0, 21], which is the kind of
+    // off-by-one a reader cannot check without counting characters. The slice
+    // is self-evident, and it is what the callers actually cut out.
+    eq(
+      'elementSpan finds the matching close through a nested same-tag element',
+      (() => {
+        const s = '<li>a<li>b</li>c</li>after';
+        const span = elementSpan(s, 0, 'li');
+        return span ? s.slice(span[0], span[1]) : null;
+      })(),
+      '<li>a<li>b</li>c</li>',
+    );
+    eq('a non-string is not a crash', repairSocialShareChrome(null).html, '');
+    eq(
+      'a page with no share chrome is returned unchanged',
+      repairSocialShareChrome('<p>x</p>').html,
+      '<p>x</p>',
+    );
+  }
+
   eq(
     'a page with no heading of its own is given one from its title',
     ensureSingleH1('<p>body</p>\n', 'About NHEG Publications'),

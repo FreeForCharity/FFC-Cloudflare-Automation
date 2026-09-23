@@ -1649,6 +1649,70 @@ def test_a_slash_escaped_quote_in_a_title_is_not_published_as_a_backslash():
         assert f"ok   {name}" in out, (name, out[-2000:])
 
 
+def test_the_dead_social_share_chrome_is_repaired_or_removed():
+    """The capture strips scripts, and a share plugin is almost entirely
+    script. Measured on FFC-EX-newheightseducation.org: Social Snap's floating
+    bar in 127 of 785 fragments, every link `href="#"` with the real
+    destination parked in `data-ss-ss-link`. It could not share anything, and
+    it broke two things that matter -- its unlabelled `ss-share-all` trigger
+    was a SERIOUS axe `link-name` violation, and the bar's
+    `position: fixed; z-index: 999` sat above FFC's cookie-consent modal
+    (`z-50`) and swallowed the click that dismisses it.
+
+    Two treatments, split by whether anything can be restored: a link with a
+    parked destination is repaired, a pure script trigger is removed. Asserted
+    by RUNNING the library's self-test, including the case that keeps this
+    honest -- unbalanced markup is left alone rather than truncated, because
+    cutting a charity's page short would be worse than the dead control."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a parked share destination is restored to its href",
+        "...pointing at the destination the plugin left in the data attribute",
+        "...escaped exactly as the source had it, not decoded and re-encoded",
+        "...and opening in a new tab, as the plugin popup did",
+        "the two destination-less triggers are removed",
+        "...and the modal nothing can open any more",
+        "the links that DO work are kept",
+        "...and so is the page content",
+        "an ordinary href=\"#\" with no data attribute is left alone",
+        "a link that already has a real href is not rewritten",
+        "unbalanced markup is left alone rather than truncated",
+        "elementSpan refuses an unbalanced element",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+    # ...and that the converter calls it. A library function nothing reaches
+    # is the same as no fix.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    assert "repairSocialShareChrome(`${fragmentCss.html}" in src, src[:200]
+
+
+def test_captured_fixed_chrome_cannot_sit_above_ffcs_own_modals():
+    """The markup half of the share fix cannot reach the z-index: the bar's
+    `z-index: 999` is in the plugin's stylesheet, and FFC's cookie modal is
+    `z-50`. Playwright measured the consequence as
+    `#ss-floating-bar … subtree intercepts pointer events`, 56 retries, 30s
+    timeout -- a GDPR control a visitor cannot dismiss by clicking outside.
+
+    Capped on the captured side rather than by raising the modal, because the
+    modal's z-index is a Tailwind utility in a template component and every
+    captured site would need it raised past whatever the next plugin chose."""
+    css = (REPO_ROOT / "assets" / "ffc-footer.css").read_text(encoding="utf-8")
+    assert "#ss-floating-bar" in css, css[-600:]
+    block = css.split("#ss-floating-bar", 1)[1]
+    assert "z-index: 40 !important" in block, block[:400]
+    # Named selectors, not every fixed element under .ffc-clone: a captured
+    # site may have a sticky header that is genuinely meant to float.
+    assert "position: fixed" not in block.split("}", 1)[0], block[:400]
+
+
 def test_a_captured_page_with_no_heading_of_its_own_is_given_one():
     """The FFC template's `verify:build` requires exactly one `<h1>` per
     indexable page (WCAG 1.3.1 / 2.4.6), and a WordPress archive template often
@@ -1684,7 +1748,10 @@ def test_a_captured_page_with_no_heading_of_its_own_is_given_one():
     # ...and that the converter actually calls it. A library function nothing
     # reaches is the same as no fix.
     src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
-    assert "ensureSingleH1(`${fragmentCss.html}" in src, src[:200]
+    assert "ensureSingleH1(share.html, title)" in src, src[:200]
+    # ...and that it runs AFTER the share repair, which removes elements. A
+    # heading counted before a removal could be a heading the removal takes.
+    assert src.index("repairSocialShareChrome(") < src.index("ensureSingleH1(share.html"), src[:200]
 
 
 def test_the_built_output_verifier_is_scoped_to_routes_not_captured_assets():

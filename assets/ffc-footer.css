@@ -92,3 +92,31 @@
 .ffc-clone .rsswidget.rss-widget-title {
   text-align: left;
 }
+
+/* --- Captured fixed chrome must not sit above FFC's own UI ----------------
+   A WordPress share plugin's floating bar is `position: fixed` with a
+   z-index chosen to beat any theme: Social Snap ships
+   `#ss-floating-bar{position:fixed;z-index:999}`. FFC's cookie-consent modal
+   is `z-50`, so the captured bar sits on top of it and SWALLOWS CLICKS meant
+   for the overlay — measured on FFC-EX-newheightseducation.org, where
+   Playwright logged `#ss-floating-bar … subtree intercepts pointer events`,
+   56 retries, then a 30s timeout. A visitor dismissing the cookie banner by
+   clicking outside it is blocked wherever the bar covers, and that banner is
+   a GDPR control rather than decoration.
+
+   Capped rather than raising the modal: the modal's z-index comes from a
+   Tailwind utility in a template component, and every captured site would
+   need it raised again past whatever the next plugin picked. The cap is on
+   the captured side, where the arbitrary number actually is.
+
+   `!important` because the plugin's own rule is `.ffc-clone #ss-floating-bar`
+   after the capture rewrite — identical specificity to anything written here,
+   decided by load order that is not guaranteed between a fragment's own
+   <link> and this global sheet. Named selectors rather than every fixed
+   element under `.ffc-clone`, because a captured site may have a sticky
+   header that is genuinely meant to float. */
+.ffc-clone #ss-floating-bar,
+.ffc-clone #ss-sticky-bar,
+.ffc-clone #ss-share-hub {
+  z-index: 40 !important;
+}

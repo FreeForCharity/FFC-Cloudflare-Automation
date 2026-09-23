@@ -92,3 +92,30 @@
 .ffc-clone .rsswidget.rss-widget-title {
   text-align: left;
 }
+
+/* --- The captured site gets its own stacking context ----------------------
+   A captured page brings its own z-indexes, chosen by its theme and plugins
+   to beat each OTHER, with no knowledge of the FFC chrome around them.
+   Social Snap's share bar is `position: fixed; z-index: 999`; Astra's
+   `.site-primary-header-wrap` is fixed too. Both outrank FFC's cookie-consent
+   modal (`z-50`) and SWALLOW the click that dismisses it -- measured, as
+   `... subtree intercepts pointer events`, 56 retries, 30s timeout. That
+   banner is a GDPR control, not decoration.
+
+   `isolation: isolate` rather than a list of capped selectors: it makes
+   `.ffc-clone` a stacking context, so every z-index inside the capture is
+   resolved against its siblings INSIDE the capture and none of them can
+   paint above an FFC element outside it. Relative order within the clone is
+   untouched, which is what a per-selector cap could not promise -- and the
+   first version of this rule capped the two ids that had been looked at, was
+   measured to work, and then lost to the sticky header that was next in line.
+
+   `isolation` and not `position: relative; z-index: 0`: relative would make
+   the wrapper a containing block for absolutely-positioned descendants that
+   currently resolve against the page, moving captured layout. `isolation`
+   creates the stacking context and nothing else. It is also not one of the
+   properties that re-anchor `position: fixed`, so the captured sticky header
+   still floats against the viewport -- it simply cannot float above FFC. */
+.ffc-clone {
+  isolation: isolate;
+}

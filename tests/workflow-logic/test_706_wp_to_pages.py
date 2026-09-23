@@ -1830,6 +1830,70 @@ def test_a_control_that_can_neither_act_nor_be_announced_is_removed():
     ), _around(src, "const share =", "share repair before dead-control removal")
 
 
+def test_a_working_link_with_no_name_is_named_rather_than_removed():
+    """The removal in the test above cleared the capture's DEAD controls and
+    moved `link-name` on FFC-EX-newheightseducation.org from 21 nodes to 20:
+    the theme's search trigger was one node per page, and the other 5,522 were
+    a different population entirely -- icon-only links that WORK.
+
+    The charity's Facebook page, its YouTube channel, its Yelp listing: each
+    drawn as a CSS `::before` with no text, so each announces as a bare "link".
+    Removing those would delete the charity's real social presence, so the
+    treatment is the opposite of the dead case, and the two are told apart by
+    the one thing that differs -- whether the href goes anywhere.
+
+    `nameAnonymousLinks` already existed for this and could not reach them: it
+    required an `alt=""` image to be present, and an icon drawn in CSS has no
+    `<img>` at all. The widening drops that requirement and defers to
+    `anchorHasAccessibleName`, which is the SAME judge the removal uses, so the
+    two passes can never disagree about what "nameless" means.
+
+    The ordering constraint is load-bearing and runs the opposite way to the
+    share repair's. Naming happens BEFORE the removal, so if it ever named a
+    bare `href="#"` the removal would find a labelled control and keep it --
+    the fix would silently stop working while every one of its own tests went
+    on passing."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "an icon-only social link with a real destination is named by its host",
+        "an opaque id in the path is not used as the name",
+        "another site's front page is not announced as this site's home",
+        "a bare # is left for the removal pass, not named",
+        "a back-to-top button is named from the fragment it targets",
+        "javascript: is not a destination",
+        "an empty href is not a destination",
+        "a mailto is named by its address",
+        "the host is normalised",
+        "an entity-encoded href is decoded first",
+        "the existing markup is preserved exactly",
+        "a named link following a nameless one is not swallowed",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+    lib = (REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs").read_text(encoding="utf-8")
+    # One judge of "nameless", shared. A second copy of this logic is how the
+    # naming pass and the removal pass start disagreeing about the same anchor.
+    body = lib[lib.index("export function nameAnonymousLinks") :]
+    body = body[: body.index("\n}\n")]
+    assert "anchorHasAccessibleName(attrs, inner)" in body, _around(
+        lib, "export function nameAnonymousLinks", "anchorHasAccessibleName"
+    )
+
+    # ...and the ordering, read off the converter rather than assumed.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    assert src.index("nameAnonymousLinks(out, siteName)") < src.index(
+        "removeDeadNamelessControls(share.html)"
+    ), _around(src, "nameAnonymousLinks(", "naming before dead-control removal")
+
+
 def test_a_hidden_widget_title_does_not_count_as_the_pages_heading():
     """`widgettitle` is WordPress core's class for a sidebar widget's title,
     and Jupiter emits it as an `<h1>`. On FFC-EX-newheightseducation.org that

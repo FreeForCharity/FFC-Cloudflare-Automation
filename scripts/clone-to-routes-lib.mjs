@@ -850,25 +850,67 @@ export function ensureImageAlt(html) {
 }
 
 /**
- * Give a link that wraps only a decorative image an accessible name.
+ * Name a link by where it actually goes.
  *
- * 71 links here contain nothing but an `alt=""` image, so they announce as
- * "link" with no destination — Lighthouse's `link-name`, and one of the two
- * audits keeping this site's accessibility score below its threshold. The name
- * is derived from where the link goes, never from guessing what the image
- * shows: a link to the site root is the site name, and anything else falls back
- * to its own path. A link that already has text, a title or an aria-label is
- * left completely alone.
+ * `labelForHref` reads the last PATH SEGMENT, which is the right answer for a
+ * link into the charity's own site and the wrong one for a link out of it: a
+ * social icon row yields `10828913` (a LinkedIn company id),
+ * `UCcpyuCpFRzYzfHYznRlX_zw` (a YouTube channel id) and `Ref=sr 1 5` (an
+ * Amazon tracking parameter) -- names that are accurate and tell a listener
+ * nothing. Worse, it strips the host before testing for a root URL, so
+ * `https://www.4imprint.com/` comes back as "<site> -- home", naming someone
+ * else's front page as the charity's own.
+ *
+ * So an off-site link is named by its HOST, which is the part a listener can
+ * act on ("link, facebook.com"), and an on-page link by the fragment it
+ * targets. Nothing is invented and nothing is guessed from an icon's class:
+ * every name here is read out of the href.
+ */
+export function linkDestinationLabel(href, siteName) {
+  if (typeof href !== 'string') return null;
+  const raw = decodeEntities(href).trim();
+  if (!raw || raw === '#' || /^javascript:/i.test(raw)) return null;
+  if (/^mailto:/i.test(raw)) return safeDecodeURIComponent(raw.slice(7).split('?')[0]) || null;
+  // An in-page target: `#top-of-page` is a real destination, `#` is not.
+  if (raw.startsWith('#')) {
+    const words = safeDecodeURIComponent(raw.slice(1)).replace(/[-_]+/g, ' ').trim();
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : null;
+  }
+  const host = /^https?:\/\/([^/?#]+)/i.exec(raw)?.[1];
+  if (host) return host.replace(/^www\./i, '').toLowerCase() || null;
+  return labelForHref(raw, siteName);
+}
+
+/**
+ * Give a link that announces as bare "link" an accessible name.
+ *
+ * A captured theme draws its social row, its back-to-top button and its image
+ * links as icons -- a CSS `::before`, an inline `<svg>`, an `alt=""` image --
+ * so they carry no text for a screen reader to read. axe reports each one as
+ * `link-name` at SERIOUS, and on this capture that is 5,522 links across 785
+ * pages: by far the largest accessibility defect a migration ships.
+ *
+ * These are NOT the dead controls `removeDeadNamelessControls` deletes, and
+ * the difference decides the treatment. Those go nowhere, so naming them would
+ * promise a capability the static export cannot deliver. These go somewhere
+ * real -- the charity's Facebook page, its YouTube channel -- so removing them
+ * would delete working links, and naming them is the whole fix.
+ *
+ * `href="#"` is therefore skipped here on purpose rather than by accident: it
+ * is the one destination that is not one, and this function runs BEFORE the
+ * removal in the pipeline, so naming it would defeat that pass entirely.
+ *
+ * A link that already has a name -- text, `aria-label`, `title`, an image with
+ * alt text, an SVG `<title>` -- is left completely alone;
+ * `anchorHasAccessibleName` is the single judge of that, shared with the
+ * removal so the two can never disagree about what "nameless" means.
  */
 export function nameAnonymousLinks(html, siteName) {
   let named = 0;
-  const out = html.replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi, (whole, attrs, inner) => {
-    if (/\baria-label\s*=/i.test(attrs) || /\btitle\s*=/i.test(attrs)) return whole;
-    if (decodeEntities(inner.replace(/<[^>]+>/g, '')).trim()) return whole;
-    const alts = [...inner.matchAll(/<img[^>]*\balt\s*=\s*["']([^"']*)["']/gi)].map((m) => m[1]);
-    if (!alts.length || alts.some((a) => a.trim())) return whole;
+  const out = html.replace(/<a\b([^>]*)>((?:(?!<\/a>)[\s\S])*)<\/a>/gi, (whole, attrs, inner) => {
+    if (anchorHasAccessibleName(attrs, inner)) return whole;
     const href = /\bhref\s*=\s*["']([^"']*)["']/i.exec(attrs)?.[1] ?? '';
-    const label = labelForHref(href, siteName);
+    const label = linkDestinationLabel(href, siteName);
     if (!label) return whole;
     named += 1;
     return `<a${attrs} aria-label="${escapeAttr(label)}">${inner}</a>`;
@@ -2591,6 +2633,89 @@ function selfTest() {
     'a link around a described image is left alone',
     nameAnonymousLinks('<a href="/x"><img alt="A cat"></a>', 'V').named,
     0,
+  );
+  // The population this widening exists for: a social icon row. The theme
+  // draws each one with a CSS `::before`, so the anchor holds nothing at all --
+  // no text, no <img>, no <svg>. Before the widening `nameAnonymousLinks`
+  // skipped these outright (it required an `alt=""` image to be present), and
+  // they were 5,522 of the capture's `link-name` violations.
+  eq(
+    'an icon-only social link with a real destination is named by its host',
+    nameAnonymousLinks(
+      '<a class="facebook-hover c_" href="https://www.facebook.com/NHEG/"></a>',
+      'NHEG',
+    ).html,
+    '<a class="facebook-hover c_" href="https://www.facebook.com/NHEG/" aria-label="facebook.com"></a>',
+  );
+  // ...and NOT by its last path segment, which is what `labelForHref` reads.
+  // On this capture that yields `10828913` for a LinkedIn company id and
+  // `UCcpyuCpFRzYzfHYznRlX zw` for a YouTube channel -- accurate, useless.
+  eq(
+    'an opaque id in the path is not used as the name',
+    linkDestinationLabel('https://www.linkedin.com/company/10828913', 'NHEG'),
+    'linkedin.com',
+  );
+  // `labelForHref` strips the host BEFORE testing for a root URL, so someone
+  // else's front page comes back as this charity's home. Naming an off-site
+  // link by its host is what stops that being announced to a visitor.
+  eq(
+    "another site's front page is not announced as this site's home",
+    linkDestinationLabel('https://www.4imprint.com/', 'NHEG'),
+    '4imprint.com',
+  );
+  eq(
+    'labelForHref alone would have said otherwise',
+    labelForHref('https://www.4imprint.com/', 'NHEG'),
+    'NHEG — home',
+  );
+  // `href="#"` is the dead case `removeDeadNamelessControls` owns. Naming it
+  // would both promise a capability the export cannot deliver AND defeat that
+  // pass, which runs later in the pipeline and keys on the bare `#`.
+  eq(
+    'a bare # is left for the removal pass, not named',
+    nameAnonymousLinks('<a class="mk-search-trigger" href="#"><i></i></a>', 'NHEG').named,
+    0,
+  );
+  // A real fragment does navigate, so it is named rather than removed.
+  eq(
+    'a back-to-top button is named from the fragment it targets',
+    linkDestinationLabel('#top-of-page', 'NHEG'),
+    'Top of page',
+  );
+  eq('javascript: is not a destination', linkDestinationLabel('javascript:void(0)', 'NHEG'), null);
+  eq('an empty href is not a destination', linkDestinationLabel('', 'NHEG'), null);
+  eq(
+    'a mailto is named by its address',
+    linkDestinationLabel('mailto:a@b.org?subject=Hi', 'N'),
+    'a@b.org',
+  );
+  // The host is compared case-insensitively and `www.` is dropped, so one
+  // social row does not announce three spellings of the same site.
+  eq(
+    'the host is normalised',
+    linkDestinationLabel('HTTPS://WWW.Example.COM/x', 'N'),
+    'example.com',
+  );
+  // An entity-encoded href is decoded before it is read: the capture ships
+  // `&amp;` inside query strings throughout.
+  eq(
+    'an entity-encoded href is decoded first',
+    linkDestinationLabel('https://nheg.memberhub.com/store?a=1&amp;b=2', 'N'),
+    'nheg.memberhub.com',
+  );
+  // Naming must not disturb the anchor's own attributes or its contents.
+  eq(
+    'the existing markup is preserved exactly',
+    nameAnonymousLinks('<a rel="noopener" target="_blank" href="https://x.com/n"><svg/></a>', 'N')
+      .html,
+    '<a rel="noopener" target="_blank" href="https://x.com/n" aria-label="x.com"><svg/></a>',
+  );
+  // Anchors cannot nest, so the first `</a>` closes this one -- a greedy match
+  // would swallow the next link and name the pair.
+  eq(
+    'a named link following a nameless one is not swallowed',
+    nameAnonymousLinks('<a href="https://a.org/"></a><a href="/b/">Read it</a>', 'N').named,
+    1,
   );
   eq('a slug label is humanised', labelForHref('../about-us/', 'V'), 'About us');
   eq('an anchor is not a destination worth naming', labelForHref('#top', 'V'), null);

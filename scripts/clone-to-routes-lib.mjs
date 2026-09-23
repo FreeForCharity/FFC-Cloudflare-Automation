@@ -188,30 +188,44 @@ export function elementSpan(html, openIdx, tag) {
  * This matters more than a normal URL check, because repairing a share link
  * takes an anchor that was INERT (`href="#"`) and makes it executable. A
  * captured page whose plugin -- or whose compromise -- parked
- * `javascript:...` in `data-ss-ss-link` would have been harmless on the
- * WordPress original and would become a live script link here. The conversion
- * must not be the step that arms it.
+ * `javascript:...` in `data-ss-ss-link` was harmless on the WordPress
+ * original and would become a live script link here. The conversion must not
+ * be the step that arms it.
  *
- * Validated against what the BROWSER will see, not what the file holds:
+ * THE GUARD IS THE SCHEME REQUIREMENT, and it is worth being exact about
+ * that, because the first version of this comment credited the decoding
+ * below and was wrong. Anything that does not parse as
+ * `<allowlisted-scheme>:` is refused, which already covers the obfuscations
+ * an attacker would reach for: `&#106;avascript:` and `//evil.example` are
+ * refused not because they are recognised as dangerous but because neither
+ * presents a clean allowlisted scheme. Mutation testing is what showed this:
+ * removing the entity decode, the control-character strip, and an explicit
+ * protocol-relative guard changed no outcome at all.
  *
- *   - the attribute is HTML-escaped in the source, and the browser decodes it
- *     before parsing a URL, so `&#106;avascript:` really is `javascript:`;
- *   - browsers ignore ASCII whitespace and C0 controls while parsing a
- *     scheme, so `java\tscript:` and a leading newline are the same link.
+ * So the decode and the strip are here for PERMISSIVENESS, not safety. They
+ * exist so a link the browser would treat as ordinary is not refused by us:
+ * the browser decodes the attribute before parsing a URL, and ignores ASCII
+ * whitespace and C0 controls inside a scheme, so `&#104;ttps://x` and
+ * `ht<tab>tps://x` are both real https links and are allowed. They can only
+ * widen the set: an obfuscation that survives them still has to end up
+ * spelling an allowlisted scheme, and if it does, it IS that scheme.
  *
- * Allowlist rather than a denylist of `javascript:`/`data:`: a denylist has to
- * anticipate every executable scheme, and the set of schemes a share bar
- * legitimately uses is short and closed. Anything else leaves the anchor
- * exactly as captured -- still inert, which is the safe failure.
+ * An allowlist rather than a denylist of `javascript:`/`data:`: a denylist
+ * has to anticipate every executable scheme, while the set a share bar
+ * legitimately uses is short and closed.
  */
 export const SAFE_SHARE_PROTOCOLS = ['http:', 'https:', 'mailto:', 'sms:', 'tel:'];
 
 export function isSafeShareDestination(raw) {
-  if (typeof raw !== 'string') return false;
+  // No `typeof` guard: `decodeEntities` returns '' for a non-string, which
+  // then fails the scheme match. One was written here and mutation testing
+  // proved it unreachable -- a line no mutation can kill is a line that is
+  // not doing anything. The behaviour stays pinned by a self-test.
   const url = decodeEntities(raw).replace(/[\u0000-\u0020\u007f]/g, '');
-  // Protocol-relative borrows the page's scheme and hides the destination
-  // behind a form no share plugin needs to emit.
-  if (url.startsWith('//')) return false;
+  // No explicit protocol-relative guard either, for the same reason: `//x`
+  // presents no scheme and is refused by the match below. The self-test for
+  // it is kept, because the OUTCOME is worth pinning even though no single
+  // line implements it.
   const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(url);
   if (!scheme) return false;
   return SAFE_SHARE_PROTOCOLS.includes(`${scheme[1].toLowerCase()}:`);
@@ -1768,16 +1782,34 @@ function selfTest() {
     // before it parses a URL, so validating the raw bytes is not validating
     // the link. This is the case a naive allowlist walks straight past.
     eq(
-      '...including one hidden behind an HTML entity, which the browser decodes',
+      '...including one hidden behind an HTML entity',
       isSafeShareDestination('&#106;avascript:alert(1)'),
       false,
     );
+    // ...and the decode itself, which only ever WIDENS: an entity-escaped
+    // https link is a real https link to the browser, so refusing it would be
+    // a false refusal. This is the case that fails if the decode is dropped;
+    // the case above passes either way, because the scheme match refuses it.
+    eq(
+      'an entity-escaped https destination is still recognised as https',
+      isSafeShareDestination('&#104;ttps://x/'),
+      true,
+    );
     // Browsers ignore ASCII whitespace and C0 controls inside a scheme.
     eq(
-      '...and one split by a control character, which the browser ignores',
+      '...and one split by a control character',
       isSafeShareDestination('JAVA\tSCRIPT:alert(1)'),
       false,
     );
+    // Same shape: the strip widens, so the discriminating case is a LEGITIMATE
+    // link the browser would accept and a naive check would refuse.
+    eq(
+      'a control character inside a legitimate scheme does not cause a refusal',
+      isSafeShareDestination('ht\ttps://x/'),
+      true,
+    );
+    // Uppercase schemes appear in older markup and are the same scheme.
+    eq('an uppercase scheme is the same scheme', isSafeShareDestination('HTTPS://x/'), true);
     eq('a data: destination is refused too', isSafeShareDestination('data:text/html,x'), false);
     eq(
       'a protocol-relative destination is refused',

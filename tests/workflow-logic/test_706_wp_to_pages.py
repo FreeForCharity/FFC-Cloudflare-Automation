@@ -1700,8 +1700,15 @@ def test_the_dead_social_share_chrome_is_repaired_or_removed():
         # must not be the step that arms one.
         "a javascript: destination is refused rather than promoted to a live href",
         "...and counted as refused rather than as repaired",
-        "...including one hidden behind an HTML entity, which the browser decodes",
-        "...and one split by a control character, which the browser ignores",
+        "...including one hidden behind an HTML entity",
+        "...and one split by a control character",
+        # The decode and the control-strip only WIDEN -- mutation testing
+        # proved removing either changes no refusal. These two are the cases
+        # that actually discriminate: a legitimate link the browser accepts
+        # and a naive check would refuse.
+        "an entity-escaped https destination is still recognised as https",
+        "a control character inside a legitimate scheme does not cause a refusal",
+        "an uppercase scheme is the same scheme",
         "a protocol-relative destination is refused",
         "a scheme-less destination is refused",
         "the schemes a share bar actually uses are allowed",

@@ -1272,13 +1272,95 @@ export function assetLocalName(absUrl) {
  * Formats worth re-encoding, and the one they are re-encoded to.
  *
  * GIF is excluded because it may be animated and a still WebP would silently
- * drop the animation; SVG because it is not raster; WebP and AVIF because they
- * are already the destination format.
+ * drop the animation; SVG because it is not raster; AVIF because re-encoding
+ * it to WebP would rename the file for a format that is usually already
+ * smaller.
+ *
+ * WebP IS included, and used not to be. "Already the destination format" is a
+ * statement about the container, and the budget is a statement about bytes --
+ * treating the first as an answer to the second is what let a 4,251 KB WebP
+ * ship untouched from newheightseducation.org. Jetpack and i0.wp.com serve
+ * WebP at whatever size the upload was, so on a Jetpack site the format this
+ * pass converts TO is also the format most of the oversized images arrive in:
+ * 29 of that site's 34 offenders were `.webp` and not one of them was ever a
+ * candidate. A WebP re-encoded to WebP keeps its name, which is why
+ * `worthShrinking` rather than `worthReencoding` decides whether to keep it
+ * (see the call site) -- there is no rename to pay for.
  */
-const RECODABLE = /\.(png|jpe?g)(\?|$)/i;
+const RECODABLE = /\.(png|jpe?g|webp)(\?|$)/i;
 
-/** Quality ladder: the first rung that lands under budget wins. */
+/**
+ * Quality rungs, tried at the image's own dimensions. The first that lands
+ * under budget wins.
+ */
 export const IMAGE_QUALITY_LADDER = [85, 78, 70];
+
+/**
+ * Long-edge caps, tried only after quality alone has failed.
+ *
+ * Quality is exhausted first because it costs no pixels, and most images need
+ * nothing else. Measured by replaying these exact rungs against
+ * newheightseducation.org's 34 over-budget originals: all 34 land under
+ * 400 KB, and **22 of them keep their original dimensions** -- 21 at q85, one
+ * at q78 -- including the 4,251 KB magazine cover, which lands at 362 KB at
+ * q85. The other 12 are 2560 px WordPress `-scaled` exports and Jetpack
+ * resizes of them; those do not fit in 400 KB at any quality a reader would
+ * accept, and no quality rung can say so.
+ *
+ * 1400 px is the floor on purpose: it is still wider than the content column
+ * these render in, so the smallest rung this ladder can reach does not visibly
+ * degrade a charity's photograph.
+ */
+export const IMAGE_EDGE_LADDER = [2048, 1600, 1400];
+
+/** Qualities tried at each capped size. */
+export const IMAGE_RESIZE_QUALITY_LADDER = [82, 75];
+
+/**
+ * The full rung list, in the order they are tried: every quality at the
+ * original size, then every quality at each cap, largest cap first.
+ *
+ * Built rather than written out so the ordering cannot drift from the two
+ * ladders it is made of -- the property that matters is that no rung drops a
+ * pixel before every rung that does not has been tried.
+ */
+/**
+ * Apply one rung's dimension cap to a sharp pipeline.
+ *
+ * Pulled out of `encodeWebp` so it can be exercised without `sharp`, which
+ * this repo does not depend on -- 706 installs it before the capture step, and
+ * `Validate Repository` never has it. Mutation review is what forced this out:
+ * with the resize inline, replacing its condition with `if (false)` passed
+ * every check, because nothing in the suite could observe whether a rung's
+ * `edge` reached the encoder at all. A ladder whose rungs are asserted in the
+ * right order and then never applied is the same defect as having no ladder.
+ *
+ * `fit: 'inside'` caps the LONG edge whichever way round the image is, and
+ * `withoutEnlargement` means a rung larger than the image leaves it alone -- so
+ * a portrait cover and a landscape banner take the same rung without this
+ * needing to read either one's dimensions first.
+ */
+export function withRungResize(pipe, rung) {
+  if (!rung || !rung.edge) return pipe;
+  return pipe.resize({
+    width: rung.edge,
+    height: rung.edge,
+    fit: 'inside',
+    withoutEnlargement: true,
+  });
+}
+
+export function imageRecodeRungs(
+  qualities = IMAGE_QUALITY_LADDER,
+  edges = IMAGE_EDGE_LADDER,
+  resizeQualities = IMAGE_RESIZE_QUALITY_LADDER,
+) {
+  const rungs = qualities.map((quality) => ({ quality, edge: null }));
+  for (const edge of edges) {
+    for (const quality of resizeQualities) rungs.push({ quality, edge });
+  }
+  return rungs;
+}
 
 /**
  * Decide whether a re-encoded image is worth keeping.
@@ -2097,11 +2179,89 @@ function selfTest() {
     shouldReencodeImage('https://x.org/a/icon.svg', 900_000, 400 * 1024),
     false,
   );
+  // This case used to assert `false`, on the reasoning that WebP is already the
+  // destination format. That is true about the CONTAINER and says nothing
+  // about the bytes, and it is what let a 4,251 KB WebP ship untouched from
+  // newheightseducation.org -- 29 of that site's 34 over-budget images were
+  // `.webp`, served that way by Jetpack, and none was ever a candidate.
   eq(
-    'an image already in the destination format is not re-encoded',
-    shouldReencodeImage('https://x.org/a/photo.webp', 900_000, 400 * 1024),
+    'an oversized WebP is a candidate -- the format is not the budget',
+    shouldReencodeImage('https://x.org/a/cover.webp', 900_000, 400 * 1024),
+    true,
+  );
+  eq(
+    'a WebP already under budget is still left byte-identical',
+    shouldReencodeImage('https://x.org/a/icon.webp', 12_000, 400 * 1024),
     false,
   );
+  eq(
+    'an AVIF is not re-encoded -- that WOULD rename, for a usually-smaller format',
+    shouldReencodeImage('https://x.org/a/photo.avif', 900_000, 400 * 1024),
+    false,
+  );
+  // A WebP re-encoded to WebP keeps its name, which is what makes
+  // `worthShrinking` the right test for it at the call site: there is no
+  // rename to pay for, so a 20% saving that lands UNDER BUDGET is worth
+  // keeping where the same saving on a renamed PNG is not.
+  eq('re-encoding a WebP does not rename it', webpName('cover.webp'), 'cover.webp');
+  eq('re-encoding a PNG does rename it', webpName('flyer.png'), 'flyer.webp');
+  // No rung may drop a pixel before every rung that does not has been tried.
+  {
+    const rungs = imageRecodeRungs();
+    const firstResize = rungs.findIndex((r) => r.edge !== null);
+    eq(
+      'every full-size quality rung is tried before the first resize',
+      rungs.slice(0, firstResize).every((r) => r.edge === null) &&
+        firstResize === IMAGE_QUALITY_LADDER.length,
+      true,
+    );
+    eq(
+      'the caps come down largest first, and never below the content column',
+      rungs
+        .filter((r) => r.edge !== null)
+        .map((r) => r.edge)
+        .every((e, i, all) => (i === 0 || all[i - 1] >= e) && e >= 1400),
+      true,
+    );
+    eq(
+      'each cap is tried at more than one quality',
+      rungs.filter((r) => r.edge === IMAGE_EDGE_LADDER[0]).length,
+      IMAGE_RESIZE_QUALITY_LADDER.length,
+    );
+    // The rung has to REACH the encoder. A stub pipeline records what it is
+    // asked to do, so this runs without `sharp` -- which this repo does not
+    // depend on, and which `Validate Repository` never has.
+    const stub = () => {
+      const calls = [];
+      const pipe = {
+        calls,
+        resize(opts) {
+          calls.push(opts);
+          return pipe;
+        },
+      };
+      return pipe;
+    };
+    const capped = withRungResize(stub(), { quality: 82, edge: 1600 });
+    eq('a rung with a cap resizes the pipeline', capped.calls.length, 1);
+    eq(
+      '...to a LONG-edge cap, whichever way round the image is',
+      capped.calls[0].width === 1600 &&
+        capped.calls[0].height === 1600 &&
+        capped.calls[0].fit === 'inside',
+      true,
+    );
+    eq(
+      '...and never enlarges an image that is already smaller',
+      capped.calls[0].withoutEnlargement,
+      true,
+    );
+    eq(
+      'a full-size rung leaves the pipeline untouched',
+      withRungResize(stub(), { quality: 85, edge: null }).calls.length,
+      0,
+    );
+  }
   // Re-encoding an already-optimised JPEG routinely produces a LARGER file.
   // Shipping that would make the site heavier while reporting an optimisation.
   eq('a larger result is refused', worthReencoding(100_000, 120_000), false);
@@ -4037,21 +4197,24 @@ async function capture() {
       }
     }
     let best = null;
-    for (const quality of IMAGE_QUALITY_LADDER) {
+    let bestRung = null;
+    for (const rung of imageRecodeRungs()) {
       let out;
       try {
-        out = await sharpModule(buf).webp({ quality, effort: 6 }).toBuffer();
+        const pipe = withRungResize(sharpModule(buf), rung);
+        out = await pipe.webp({ quality: rung.quality, effort: 6 }).toBuffer();
       } catch {
         // An image sharp cannot decode is not a failure of the capture; the
         // original is already downloaded and gets shipped unchanged.
         return null;
       }
-      if (!best || out.length < best.length) best = out;
-      if (out.length <= budget) return { buffer: out, quality };
+      if (!best || out.length < best.length) {
+        best = out;
+        bestRung = rung;
+      }
+      if (out.length <= budget) return { buffer: out, quality: rung.quality, edge: rung.edge };
     }
-    return best
-      ? { buffer: best, quality: IMAGE_QUALITY_LADDER[IMAGE_QUALITY_LADDER.length - 1] }
-      : null;
+    return best ? { buffer: best, quality: bestRung.quality, edge: bestRung.edge } : null;
   }
 
   /**
@@ -4182,7 +4345,19 @@ async function capture() {
         imageRecode.collisions.push(name);
       } else {
         const encoded = await encodeWebp(buf, maxImageBytes);
-        if (encoded && worthReencoding(buf.length, encoded.buffer.length)) {
+        // Which test applies depends on whether the file is being RENAMED.
+        // `worthReencoding`'s 25% floor exists to pay for a rename, and a WebP
+        // re-encoded to WebP keeps its name -- so for those the test is
+        // `worthShrinking`, exactly as it is for a downsampled PDF, which also
+        // keeps its name. Applying the floor there would discard a result that
+        // lands UNDER BUDGET for saving only 20%, and ship the oversized
+        // original instead.
+        const keep = encoded
+          ? target === name
+            ? worthShrinking(buf.length, encoded.buffer.length)
+            : worthReencoding(buf.length, encoded.buffer.length)
+          : false;
+        if (keep) {
           imageRecode.recoded += 1;
           imageRecode.bytesBefore += buf.length;
           imageRecode.bytesAfter += encoded.buffer.length;

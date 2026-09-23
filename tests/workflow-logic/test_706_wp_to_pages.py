@@ -1699,19 +1699,30 @@ def test_captured_fixed_chrome_cannot_sit_above_ffcs_own_modals():
     """The markup half of the share fix cannot reach the z-index: the bar's
     `z-index: 999` is in the plugin's stylesheet, and FFC's cookie modal is
     `z-50`. Playwright measured the consequence as
-    `#ss-floating-bar … subtree intercepts pointer events`, 56 retries, 30s
+    `#ss-floating-bar ... subtree intercepts pointer events`, 56 retries, 30s
     timeout -- a GDPR control a visitor cannot dismiss by clicking outside.
 
-    Capped on the captured side rather than by raising the modal, because the
-    modal's z-index is a Tailwind utility in a template component and every
-    captured site would need it raised past whatever the next plugin chose."""
+    The first fix capped the two ids that had been looked at, and it WORKED --
+    and then the same test named `.site-primary-header-wrap`, Astra's own fixed
+    header, next in the queue. So the assertion here is deliberately not "the
+    known offenders are capped": it is that the capture is a stacking context,
+    which is the only form of the fix that does not need editing when the next
+    charity's theme picks a different number.
+
+    `isolation` and not `position: relative`, which would make the wrapper a
+    containing block for absolutely-positioned descendants and move captured
+    layout; `isolation` creates the stacking context and nothing else, and does
+    not re-anchor `position: fixed`, so a captured sticky header still floats."""
     css = (REPO_ROOT / "assets" / "ffc-footer.css").read_text(encoding="utf-8")
-    assert "#ss-floating-bar" in css, css[-600:]
-    block = css.split("#ss-floating-bar", 1)[1]
-    assert "z-index: 40 !important" in block, block[:400]
-    # Named selectors, not every fixed element under .ffc-clone: a captured
-    # site may have a sticky header that is genuinely meant to float.
-    assert "position: fixed" not in block.split("}", 1)[0], block[:400]
+    block = re.search(r"\.ffc-clone\s*\{([^}]*)\}", css)
+    assert block, css[-800:]
+    assert "isolation: isolate" in block.group(1), block.group(1)
+    # A bare `.ffc-clone` rule is global to the capture, so it must not carry
+    # anything else -- `position: relative` here is the failure mode above.
+    assert "position:" not in block.group(1), block.group(1)
+    # And the per-id cap must not come back alongside it: two mechanisms for
+    # one job is how the weaker one goes on being trusted.
+    assert "#ss-floating-bar" not in css, css[-800:]
 
 
 def test_a_captured_page_with_no_heading_of_its_own_is_given_one():

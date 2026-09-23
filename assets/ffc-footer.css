@@ -93,30 +93,29 @@
   text-align: left;
 }
 
-/* --- Captured fixed chrome must not sit above FFC's own UI ----------------
-   A WordPress share plugin's floating bar is `position: fixed` with a
-   z-index chosen to beat any theme: Social Snap ships
-   `#ss-floating-bar{position:fixed;z-index:999}`. FFC's cookie-consent modal
-   is `z-50`, so the captured bar sits on top of it and SWALLOWS CLICKS meant
-   for the overlay — measured on FFC-EX-newheightseducation.org, where
-   Playwright logged `#ss-floating-bar … subtree intercepts pointer events`,
-   56 retries, then a 30s timeout. A visitor dismissing the cookie banner by
-   clicking outside it is blocked wherever the bar covers, and that banner is
-   a GDPR control rather than decoration.
+/* --- The captured site gets its own stacking context ----------------------
+   A captured page brings its own z-indexes, chosen by its theme and plugins
+   to beat each OTHER, with no knowledge of the FFC chrome around them.
+   Social Snap's share bar is `position: fixed; z-index: 999`; Astra's
+   `.site-primary-header-wrap` is fixed too. Both outrank FFC's cookie-consent
+   modal (`z-50`) and SWALLOW the click that dismisses it -- measured, as
+   `... subtree intercepts pointer events`, 56 retries, 30s timeout. That
+   banner is a GDPR control, not decoration.
 
-   Capped rather than raising the modal: the modal's z-index comes from a
-   Tailwind utility in a template component, and every captured site would
-   need it raised again past whatever the next plugin picked. The cap is on
-   the captured side, where the arbitrary number actually is.
+   `isolation: isolate` rather than a list of capped selectors: it makes
+   `.ffc-clone` a stacking context, so every z-index inside the capture is
+   resolved against its siblings INSIDE the capture and none of them can
+   paint above an FFC element outside it. Relative order within the clone is
+   untouched, which is what a per-selector cap could not promise -- and the
+   first version of this rule capped the two ids that had been looked at, was
+   measured to work, and then lost to the sticky header that was next in line.
 
-   `!important` because the plugin's own rule is `.ffc-clone #ss-floating-bar`
-   after the capture rewrite — identical specificity to anything written here,
-   decided by load order that is not guaranteed between a fragment's own
-   <link> and this global sheet. Named selectors rather than every fixed
-   element under `.ffc-clone`, because a captured site may have a sticky
-   header that is genuinely meant to float. */
-.ffc-clone #ss-floating-bar,
-.ffc-clone #ss-sticky-bar,
-.ffc-clone #ss-share-hub {
-  z-index: 40 !important;
+   `isolation` and not `position: relative; z-index: 0`: relative would make
+   the wrapper a containing block for absolutely-positioned descendants that
+   currently resolve against the page, moving captured layout. `isolation`
+   creates the stacking context and nothing else. It is also not one of the
+   properties that re-anchor `position: fixed`, so the captured sticky header
+   still floats against the viewport -- it simply cannot float above FFC. */
+.ffc-clone {
+  isolation: isolate;
 }

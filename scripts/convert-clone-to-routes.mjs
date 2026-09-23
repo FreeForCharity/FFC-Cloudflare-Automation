@@ -67,6 +67,7 @@ import {
   mirrorHeadingSelectors,
   scopeCloneCss,
   fragmentHead,
+  demoteWidgetTitles,
   ensureSingleH1,
   repairSocialShareChrome,
   stripLayoutDuplicates,
@@ -312,6 +313,7 @@ function main() {
     shareLinksRepaired: 0,
     shareChromeRemoved: 0,
     shareLinksRefused: 0,
+    widgetTitlesDemoted: 0,
     footersDemoted: 0,
     footersKeptNested: 0,
     consentUiRemoved: 0,
@@ -447,7 +449,12 @@ function main() {
     // The heading last, from the title computed just above: a WordPress
     // archive template often renders none, and the FFC template's
     // `verify:build` requires exactly one per indexable page.
-    const fragment = ensureSingleH1(share.html, title);
+    // Before the heading check, not after: a hidden widget title counts as
+    // the page's <h1> otherwise, and the page keeps no heading a reader can
+    // reach while every static check reports one.
+    const widget = demoteWidgetTitles(share.html);
+    tally.widgetTitlesDemoted += widget.demoted;
+    const fragment = ensureSingleH1(widget.html, title);
     const wrapperClass = [WRAPPER_CLASS, bodyClass].filter(Boolean).join(' ');
     if (!dryRun) {
       write(join(repo, 'src', 'clone-content', `${slug || 'index'}.html`), fragment);
@@ -556,6 +563,7 @@ function main() {
   console.log(`scripts removed from fragments  ${tally.scriptsRemoved}`);
   console.log(`share links repointed          ${tally.shareLinksRepaired}`);
   console.log(`dead share controls removed    ${tally.shareChromeRemoved}`);
+  console.log(`widget titles demoted to h2    ${tally.widgetTitlesDemoted}`);
   // Loud rather than silent: a refusal means the capture parked a
   // destination this conversion will not make live (javascript:, data:,
   // protocol-relative). Zero is the expected reading, and a non-zero one is

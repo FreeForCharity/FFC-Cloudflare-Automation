@@ -1669,6 +1669,18 @@ function selfTest() {
     );
     eq('...and nothing is reported as removed', repairSocialShareChrome(unbalanced).removed, 0);
     eq('elementSpan refuses an unbalanced element', elementSpan('<li><a></a>', 0, 'li'), null);
+    // `<link>` starts with `li`. Without a word boundary it reads as another
+    // open tag, the depth never returns to zero, and the removal is silently
+    // skipped -- which looks exactly like a page that had no share bar.
+    eq(
+      'elementSpan does not mistake a longer tag for the one asked for',
+      (() => {
+        const s = '<li><link rel="x"></li>after';
+        const span = elementSpan(s, 0, 'li');
+        return span ? s.slice(span[0], span[1]) : null;
+      })(),
+      '<li><link rel="x"></li>',
+    );
     // Asserted as the SLICE rather than as indices: the first draft of this
     // case expected [0, 22] and the answer is [0, 21], which is the kind of
     // off-by-one a reader cannot check without counting characters. The slice
@@ -1682,7 +1694,20 @@ function selfTest() {
       })(),
       '<li>a<li>b</li>c</li>',
     );
-    eq('a non-string is not a crash', repairSocialShareChrome(null).html, '');
+    // Wrapped, because a crash is not a detection: without the guard this
+    // throws a TypeError, node exits non-zero, and a harness reading only the
+    // exit code scores the missing guard as a passing check.
+    eq(
+      'a non-string is not a crash',
+      (() => {
+        try {
+          return repairSocialShareChrome(null).html;
+        } catch (err) {
+          return `threw ${err.name}`;
+        }
+      })(),
+      '',
+    );
     eq(
       'a page with no share chrome is returned unchanged',
       repairSocialShareChrome('<p>x</p>').html,

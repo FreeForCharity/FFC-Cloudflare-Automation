@@ -247,10 +247,13 @@ export function repairSocialShareChrome(html) {
     removed += 1;
   }
 
-  // 3. The modal it opened, which `display: none` keeps out of axe's reach and
-  //    which nothing can now open.
+  // 3. The modals those triggers opened, which nothing can now open. Matched
+  //    on the plugin's own overlay CLASS rather than on the ids observed in
+  //    one capture: newheightseducation.org ships two of these
+  //    (`#ss-all-networks-popup` and `#ss-copy-popup`), and an id list would
+  //    have carried exactly the one that was looked at first.
   for (;;) {
-    const i = out.search(/<div\b[^>]*\sid="ss-all-networks-popup"/i);
+    const i = out.search(/<div\b[^>]*\sclass="[^"]*\bss-popup-overlay\b[^"]*"/i);
     if (i === -1) break;
     const span = elementSpan(out, i, 'div');
     if (!span) break;
@@ -1607,6 +1610,8 @@ function selfTest() {
       '</ul></div>\n' +
       '<div id="ss-all-networks-popup" class="ss-popup-overlay"><div class="ss-popup">' +
       '<a href="#" class="ss-close-modal"><svg/></a></div></div>\n' +
+      '<div id="ss-copy-popup" class="ss-popup-overlay"><div class="ss-popup">' +
+      '<a href="#" class="ss-button">Copy</a></div></div>\n' +
       '<p>real content</p>';
     const fixed = repairSocialShareChrome(bar);
     eq('a parked share destination is restored to its href', fixed.repaired, 2);
@@ -1630,7 +1635,7 @@ function selfTest() {
       true,
     );
     eq('a mailto destination is restored too', fixed.html.includes('href="mailto:?body=x"'), true);
-    eq('the two destination-less triggers are removed', fixed.removed, 2);
+    eq('the destination-less chrome is removed', fixed.removed, 3);
     eq('...the share-all trigger is gone', fixed.html.includes('ss-share-all'), false);
     eq(
       '...with the <li> that existed only to hold it',
@@ -1643,6 +1648,13 @@ function selfTest() {
       false,
     );
     eq('...including its unlabelled close link', fixed.html.includes('ss-close-modal'), false);
+    // The second overlay, and the reason the match is on the class: an id
+    // list written from the first capture looked at would have kept this one.
+    eq(
+      '...and the other overlay the same plugin ships',
+      fixed.html.includes('ss-copy-popup'),
+      false,
+    );
     eq('the links that DO work are kept', fixed.html.includes('aria-label="Facebook"'), true);
     eq('...and so is the page content', fixed.html.includes('<p>real content</p>'), true);
     // A link with no parked destination is not a share link at all.

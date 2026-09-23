@@ -98,9 +98,76 @@ export function extractBody(html) {
 }
 
 /** `<title>` with the site-name suffix left intact; Next.js owns the template. */
+/**
+ * Quote characters WordPress's slash-escaping puts a backslash in front of.
+ *
+ * The typographic four are here because the escaping happens on the way INTO
+ * the database, before `wptexturize` turns a straight quote into a curly one
+ * on the way out -- so the backslash written against `'` can arrive sitting
+ * against `\u2019`. A class covering only the ASCII pair matches the spelling
+ * one site happens to serve and misses the same defect on the next.
+ */
+const SLASHED_QUOTE = /\\(?=['"\\\u2018\u2019\u201C\u201D])/g;
+
+/**
+ * Undo WordPress's slash-escaping of quotes.
+ *
+ * This is `wp_unslash`, which WordPress applies on the way out of the database
+ * and which a title stored double-slashed survives: the CMS hands back
+ * `Fitness: What\&#8217;s Wrong or Right With Fitness Magazines?`, backslash
+ * and all, and the rendered `<title>` carries it to the browser tab. Measured
+ * on newheightseducation.org: four titles, visible in the tab and in every
+ * search result.
+ *
+ * Reversing an encoding artifact is not editing the charity's content. Nobody
+ * publishes `What\'s`; the slash is not in the copy the author typed, and
+ * WordPress's own read path removes it -- this pass reads the rendered page
+ * instead, which is where the removal did not happen.
+ *
+ * Only a backslash IMMEDIATELY BEFORE a quote goes, so a title carrying one
+ * for its own sake (`C:\Users`, a regex, a path) keeps it.
+ */
+export function unslashQuotes(text) {
+  if (typeof text !== 'string') return '';
+  return text.replace(SLASHED_QUOTE, '');
+}
+
+/**
+ * Give a captured page an `<h1>` when its own markup has none.
+ *
+ * The FFC template's `verify:build` requires exactly one `<h1>` per indexable
+ * page -- WCAG 1.3.1 / 2.4.6 -- and a WordPress archive template often renders
+ * no heading at all. Measured on FFC-EX-newheightseducation.org: 86 of 785
+ * captured fragments carry no `h1`, and after the image budget was fixed that
+ * became the step keeping the whole migration from deploying. All 86 are
+ * `/publications/books/<slug>/` archive pages; the post at
+ * `/publications/<slug>/` right beside each one has
+ * `<h1 class="entry-title">`, so this is the theme's archive template rather
+ * than anything the capture dropped.
+ *
+ * The heading carries the page's OWN title -- the one already in its `<title>`
+ * and its metadata -- so nothing is invented. It is clipped with the
+ * `.ffc-sr-only` rule the converter already installs, because these pages were
+ * designed without a visible heading and adding one would change how the
+ * charity's site looks; a page with no `h1` is an accessibility defect whether
+ * or not a sighted reader would notice, and this is the standard remedy.
+ *
+ * ONLY the zero case. A page with two `h1`s also fails the verifier, and
+ * fixing that means demoting one of the charity's headings -- an editorial
+ * decision, not an encoding one. No captured page has hit it yet; when one
+ * does it should be reported, not silently rewritten.
+ */
+export function ensureSingleH1(fragment, title) {
+  if (typeof fragment !== 'string') return '';
+  if (/<h1[\s>]/i.test(fragment)) return fragment;
+  const text = typeof title === 'string' ? title.trim() : '';
+  if (!text) return fragment;
+  return `<h1 class="ffc-sr-only">${escapeHtml(text)}</h1>\n${fragment}`;
+}
+
 export function extractTitle(html) {
   const raw = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? '';
-  return decodeEntities(raw).replace(/\s+/g, ' ').trim();
+  return unslashQuotes(decodeEntities(raw)).replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -1392,6 +1459,90 @@ function selfTest() {
     'the title is decoded, not passed through raw',
     extractTitle('<title>Let&#8217;s Talk &amp; Listen</title>'),
     'Let’s Talk & Listen',
+  );
+  // WordPress slash-escaping, which `wp_unslash` removes on WordPress's own
+  // read path and which the RENDERED page therefore still carries. Measured on
+  // newheightseducation.org: four titles, backslash visible in the browser tab.
+  eq(
+    'a slash-escaped apostrophe is unescaped, not published as a backslash',
+    extractTitle("<title>Fitness: What\\'s Wrong or Right?</title>"),
+    "Fitness: What's Wrong or Right?",
+  );
+  eq(
+    '...including after wptexturize curled the quote the slash was written against',
+    extractTitle('<title>Toronto\\&#8217;s Anime North</title>'),
+    'Toronto’s Anime North',
+  );
+  eq(
+    '...and the same for double quotes',
+    extractTitle('<title>He said \\"hello\\"</title>'),
+    'He said "hello"',
+  );
+  eq(
+    "a backslash that is not escaping a quote is the author's, and stays",
+    extractTitle('<title>Installing to C:\\Users\\Public</title>'),
+    'Installing to C:\\Users\\Public',
+  );
+  eq('a doubled backslash collapses to one, as stripslashes does', unslashQuotes('a\\\\b'), 'a\\b');
+  // Caught rather than called bare. `unslashQuotes(null)` THROWS without its
+  // type guard, and a throw here kills the run before the harness can print
+  // anything -- so the case that exists to detect a missing guard would report
+  // a crashed self-test instead of a named failure, and a crash is not a
+  // detection. Same reason `integrate-clone-into-nextjs.mjs` reads its
+  // preserved files through a tolerant helper.
+  eq(
+    'a page with no heading of its own is given one from its title',
+    ensureSingleH1('<p>body</p>\n', 'About NHEG Publications'),
+    '<h1 class="ffc-sr-only">About NHEG Publications</h1>\n<p>body</p>\n',
+  );
+  eq(
+    'a page that already has an h1 is left exactly as captured',
+    ensureSingleH1('<h1 class="entry-title">2014 Newsletter</h1>\n<p>b</p>', 'Ignored'),
+    '<h1 class="entry-title">2014 Newsletter</h1>\n<p>b</p>',
+  );
+  eq(
+    '...however the tag is spelled',
+    ensureSingleH1('<H1 id="t">x</H1>', 'Ignored').startsWith('<H1'),
+    true,
+  );
+  // `<h10>` is not an `h1`, and neither is the word in prose. A bare `/<h1/`
+  // test matches both, and would leave a genuinely heading-less page alone.
+  eq(
+    'a tag that merely starts with h1 does not count as one',
+    ensureSingleH1('<h10>x</h10>', 'Title').startsWith('<h1 class="ffc-sr-only">'),
+    true,
+  );
+  eq(
+    'the title is escaped, not interpolated',
+    ensureSingleH1('<p>b</p>', 'Tom & Jerry <script>'),
+    '<h1 class="ffc-sr-only">Tom &amp; Jerry &lt;script&gt;</h1>\n<p>b</p>',
+  );
+  eq(
+    'a page with no title to use is left alone rather than given an empty heading',
+    ensureSingleH1('<p>b</p>', '   '),
+    '<p>b</p>',
+  );
+  eq(
+    'a non-string fragment is not a crash',
+    (() => {
+      try {
+        return ensureSingleH1(null, 'T');
+      } catch {
+        return 'THREW';
+      }
+    })(),
+    '',
+  );
+  eq(
+    'a non-string is not a crash',
+    (() => {
+      try {
+        return unslashQuotes(null);
+      } catch {
+        return 'THREW';
+      }
+    })(),
+    '',
   );
   eq(
     'a description is read whichever order the attributes come in',

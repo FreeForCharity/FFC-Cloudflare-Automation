@@ -29,6 +29,24 @@ unconditionally free -- GitHub's secondary rate limits still apply to it, so a
 caller that polled it in a loop could be throttled. That is not this caller: the
 check runs **once, at bootstrap**, which is what keeps the cheapness real.
 
+**There is a second probe because one of them is structurally unavailable to half
+the fleet (#1335).** The scheduled multi-repo cloud worker has no `gh` CLI at all
+-- it reaches GitHub through MCP by design -- so for that session class the `gh`
+probe could never run, and the verdict was `UNVERIFIED` on every run since this
+check was written. Not a lie, but never a pass: the bootstrap step AGENTS.md
+instructs every agent to run had exactly one probe, and it was the one that
+session class does not have. That is the clock half of the hole #1237/#1042 found
+in the hooks half, one section further down the same list. So `gh` is tried
+first, and `curl` against the same endpoint second. Failing closed survives:
+`unknown` still requires BOTH probes to come back empty.
+
+The fallback's timestamp has to be GitHub's, not the local egress proxy's -- a
+proxy-minted `Date` shares this host's surface and would be worth exactly nothing
+(L242), which is the whole reason a remote reference is used. Two things enforce
+that: the `Date` is read from the LAST response block in the transcript (the
+proxy's `HTTP/1.1 200 Connection Established` is the first), and that block must
+identify itself as GitHub's.
+
 It fails CLOSED. An unreachable API, a missing header or an unparseable one all
 report `unknown` and exit non-zero, because "I could not check your clock" and
 "your clock is fine" must never render identically (L241, L267).
@@ -43,8 +61,10 @@ import argparse
 import datetime
 import email.utils
 import json
+import os
 import subprocess
 import sys
+from collections.abc import Callable
 
 # 120s is chosen to be well inside anything that changes a decision (the finest
 # grain the Conductor reasons about is a workflow tick, minutes apart) while
@@ -56,6 +76,32 @@ DEFAULT_TOLERANCE_SECONDS = 120
 VERDICT_OK = "ok"
 VERDICT_SKEWED = "skewed"
 VERDICT_UNKNOWN = "unknown"
+
+# The endpoint, pinned BY NAME rather than left to whoever edits next, because
+# the cloud worker reaches `api.github.com` through an egress proxy that
+# allowlists it PER PATH -- and a path that is not allowlisted comes back with no
+# `Date` header at all rather than a wrong one. Measured from a worker sandbox on
+# 2026-09-17 and again on 2026-09-18:
+#
+#     /rate_limit   200 OK          Date PRESENT
+#     /             200 OK          Date ABSENT
+#     /zen          403 Forbidden   Date ABSENT
+#     /meta         403 Forbidden   Date ABSENT
+#
+# `/zen` is GitHub's canonical liveness endpoint and `/` is the obvious "cheapest
+# possible probe"; either is a natural later simplification of a call that exists
+# only to read a header. Both exit 0 through `curl`, one of them with a `200 OK`,
+# and both would leave this check with no timestamp source and nothing in the
+# output to say so. The 403 body compounds it by reading as a general policy
+# ("sessions are bound to their configured repositories") when `/rate_limit` is
+# itself a non-repo-scoped path that is allowed. Do not swap this endpoint
+# without re-measuring all four.
+GITHUB_DATE_PROBE_URL = "https://api.github.com/rate_limit"
+
+# Headers that only the GitHub origin sets, used to prove the block a `Date` was
+# read from is GitHub's response and not the proxy's. Matched lowercased and
+# anchored at the start of the line, like the `Date` scan itself.
+GITHUB_ORIGIN_MARKERS = ("server: github.com", "x-github-request-id:")
 
 EXIT_BY_VERDICT = {VERDICT_OK: 0, VERDICT_SKEWED: 1, VERDICT_UNKNOWN: 2}
 
@@ -148,23 +194,86 @@ def decide_clock(
     }
 
 
-def fetch_github_date(timeout_seconds: int = 20) -> str | None:
-    """Return GitHub's `Date` response header, or None if it cannot be read.
+def split_response_blocks(transcript: str) -> list[list[str]]:
+    """Split an HTTP transcript into one list of lines per response.
 
-    Uses `gh api rate_limit --include`: authenticated (so it does not burn the
-    unauthenticated per-IP allowance), and cheap -- the `rate_limit` endpoint does
-    not consume the primary REST quota. "Cheap", not "free": secondary rate limits
-    still apply, so this is safe as a once-per-run bootstrap check and would not be
-    safe inside a poll loop.
+    A new block starts at every status line (`HTTP/...`). Anything before the
+    first status line is discarded: it belongs to no response.
 
-    Every failure mode collapses to None on purpose -- `gh` absent, not logged
-    in, offline, a proxy returning a body with no `Date`. The caller's job is to
-    report `unknown`, and distinguishing "no gh" from "no network" here would
-    only tempt a future edit into treating one of them as benign.
+    This exists because the fallback's transcript carries TWO responses -- the
+    proxy's `HTTP/1.1 200 Connection Established` for the CONNECT, then GitHub's
+    own. Reading "the first `Date` in the stream" happens to work today only
+    because the CONNECT block has none; a proxy that added one would silently
+    substitute a local timestamp for the remote reference this check exists to
+    obtain.
+    """
+    blocks: list[list[str]] = []
+    current: list[str] | None = None
+    for line in transcript.splitlines():
+        if line.upper().startswith("HTTP/"):
+            current = []
+            blocks.append(current)
+        elif current is not None:
+            current.append(line)
+    return blocks
+
+
+def _date_header_in(lines: list[str]) -> str | None:
+    """Return the raw value of the `Date:` header in one response block, or None.
+
+    Matched case-insensitively on the header NAME only, anchored at the start of
+    the line, so a `"date": ...` field inside a JSON body -- which `gh api
+    --include` prints after the headers, indented -- cannot be mistaken for it.
+    """
+    for line in lines:
+        if line.lower().startswith("date:"):
+            return line.split(":", 1)[1]
+    return None
+
+
+def date_from_gh_transcript(transcript: str) -> str | None:
+    """Read the `Date` header out of `gh api --include` output."""
+    blocks = split_response_blocks(transcript)
+    return _date_header_in(blocks[-1]) if blocks else None
+
+
+def date_from_curl_transcript(transcript: str) -> str | None:
+    """Read GitHub's `Date` header out of a `curl -D -` transcript, or None.
+
+    Two conditions beyond "there is a `Date` somewhere", both aimed at the same
+    failure -- a timestamp that did not come from GitHub, or no timestamp at all
+    reported as though it were one:
+
+    * the LAST response block is the one read, so the proxy's CONNECT cannot
+      supply it;
+    * that block must carry a GitHub origin header. The proxy answers a
+      non-allowlisted path itself, with `curl` exiting 0, so "the command
+      succeeded" says nothing about who replied.
+
+    No status-code check: a `Date` minted by GitHub is a usable instant whatever
+    the status, and the refusals this actually sees carry no `Date` at all.
+    """
+    blocks = split_response_blocks(transcript)
+    if not blocks:
+        return None
+    last = blocks[-1]
+    if not any(line.lower().startswith(GITHUB_ORIGIN_MARKERS) for line in last):
+        return None
+    return _date_header_in(last)
+
+
+def _run_probe(argv: list[str], timeout_seconds: int) -> str | None:
+    """Run one probe command and return its stdout, or None if it could not run.
+
+    Every failure mode collapses to None on purpose -- the binary absent, not
+    logged in, offline, a non-zero exit. The caller's job is to try the next
+    probe and ultimately report `unknown`; distinguishing "no gh" from "no
+    network" here would only tempt a future edit into treating one of them as
+    benign.
     """
     try:
         proc = subprocess.run(
-            ["gh", "api", "rate_limit", "--include"],
+            argv,
             capture_output=True,
             encoding="utf-8",
             errors="replace",
@@ -174,13 +283,70 @@ def fetch_github_date(timeout_seconds: int = 20) -> str | None:
         return None
     if proc.returncode != 0:
         return None
-    for line in proc.stdout.splitlines():
-        # Headers precede the JSON body and are `Name: value`. Matched
-        # case-insensitively on the header NAME only, anchored at the start of
-        # the line, so a `"date": ...` field inside the JSON body cannot be
-        # mistaken for the header.
-        if line.lower().startswith("date:"):
-            return line.split(":", 1)[1]
+    return proc.stdout
+
+
+def probe_commands(
+    timeout_seconds: int,
+) -> list[tuple[list[str], Callable[[str], str | None]]]:
+    """The probes to try, in order, each paired with its transcript reader.
+
+    The reader type is spelled inline rather than hoisted to a module-level
+    alias on purpose. The distinction is WHEN the text is evaluated, not where
+    it is written: an alias is an ASSIGNMENT, and `from __future__ import
+    annotations` does not defer an assignment's right-hand side, so
+    `Callable[[str], str | None]` there is evaluated at import; the identical
+    text in this annotation is never evaluated at all. (Measured: an undefined
+    name is fine in the annotation and raises `NameError` in the assignment.)
+
+    Which matters here because an evaluated `str | None` needs Python >= 3.10.
+    The repo uses PEP-604 unions freely -- but an audit of every tracked `.py`
+    puts 115 of 118 in annotations under the future import, where they are
+    deferred and cost nothing; the 3 that are evaluated are all annotations in
+    two TEST modules that happen to lack the import. So no script that runs on
+    an operator's host carries that floor today, and the Conductor's host pins
+    no Python version. An alias here would have put one under the first thing
+    every agent runs, where the failure mode is an ImportError before `main()`
+    rather than the fail-closed `UNVERIFIED` this module exists to report.
+
+    `gh` stays first: it is authenticated, so it does not spend the
+    unauthenticated per-IP allowance, and on a host that has it the answer costs
+    one call. `curl` is the fallback for the session class that has no `gh`.
+    """
+    return [
+        (["gh", "api", "rate_limit", "--include"], date_from_gh_transcript),
+        (
+            [
+                "curl",
+                "-sS",
+                "--max-time",
+                str(timeout_seconds),
+                "-o",
+                os.devnull,
+                "-D",
+                "-",
+                GITHUB_DATE_PROBE_URL,
+            ],
+            date_from_curl_transcript,
+        ),
+    ]
+
+
+def fetch_github_date(timeout_seconds: int = 20) -> str | None:
+    """Return GitHub's `Date` response header, or None if no probe can read it.
+
+    Tries each probe in order and returns the first `Date` any of them yields. A
+    probe that runs but produces no usable timestamp is not treated as an answer
+    -- the next one is still tried -- and None is returned only when every probe
+    has been exhausted, which is what keeps the fail-closed contract intact.
+    """
+    for argv, read_date in probe_commands(timeout_seconds):
+        transcript = _run_probe(argv, timeout_seconds)
+        if transcript is None:
+            continue
+        raw = read_date(transcript)
+        if raw is not None:
+            return raw
     return None
 
 

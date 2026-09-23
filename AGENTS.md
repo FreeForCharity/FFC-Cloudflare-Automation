@@ -92,6 +92,28 @@ NTP has usually corrected it, leaving wrong timestamps already written and nothi
 reproduce. The check was `ok` on this same host forty minutes after the skew was measured. Ledger
 **L270**.
 
+**The reference is reached by whichever probe the host has, and the cloud worker's is `curl` through
+the egress proxy (#1335).** The check asks `gh api rate_limit --include` first and falls back to
+`curl` against `https://api.github.com/rate_limit`. There is a second probe because the first is
+structurally unavailable to the scheduled multi-repo worker — that session has **no `gh` CLI at
+all**, by design, so from the day this step was written until #1335 it returned `UNVERIFIED` on
+every run of that class. Honest, and never a pass: the hooks half of the same trap (L218/L261) lied
+and was noticed; this half merely never worked. Two things are worth knowing before re-diagnosing a
+`UNVERIFIED` here:
+
+- **The proxy allowlists `api.github.com` per PATH, and a blocked path is `Date`-less, not
+  `Date`-wrong.** Measured from a worker sandbox: `/rate_limit` → `200` with a `Date`; `/` → `200`
+  with **no** `Date`; `/zen` and `/meta` → `403`, no `Date`. The 403 body says sessions are "bound
+  to their configured repositories", which reads as a general policy and is not one — `/rate_limit`
+  is non-repo-scoped and allowed. The endpoint is pinned by name in the script for that reason; do
+  not swap it for the cheaper-looking `/zen`.
+- **The transcript carries two responses**, the proxy's `CONNECT` and GitHub's, and only the second
+  may supply the timestamp — a proxy-minted `Date` shares this host's surface and is worth nothing
+  (**L242**). The script reads the last block and requires it to carry a GitHub origin header.
+
+`UNVERIFIED` still means what it always did: both probes came back empty, so date the run from a
+GitHub timestamp rather than from this host.
+
 ## Onboarding a charity (start here for the full chain)
 
 If the task is to **onboard / provision / "set up the repo for" a charity or domain** — or you just
@@ -240,7 +262,9 @@ URL, and the workflow-121 DNS-ready verdict (epic #702).
     line naming the failing modules, so require that line in **both** files before comparing:
 
     ```bash
-    # run_all.py:215,217 — exactly one of these is the last line of a finished run.
+    # run_all.py:398,400 — exactly one of these is the last line of a finished run.
+    # Still true after #1290 added the classified breakdown: that prints ABOVE the
+    # failure line precisely so this stays the terminal one.
     for f in pr.txt base.txt; do
       grep -qE '^(::error::workflow-logic tests failed:|All [0-9]+ workflow-logic test modules passed\.)' "$f" \
         || { echo "$f INCOMPLETE — do not compare"; exit 1; }
@@ -491,6 +515,53 @@ and all authenticate as the same user. Before starting ANY issue:
    last hour means a rollout may be in flight (two sessions racing the same fleet fix produced
    conflicting variants on 2026-07-19).
 
+### The landing sweep, and when it is finished (#1261, #1272, #1281)
+
+The scheduled cloud worker opens each run with a **PR cap**: if 3 or more `agentic-os` PRs are open,
+it spends the run landing them — fixing CI failures, addressing review comments, resolving threads,
+updating PR descriptions — instead of starting new work. That rule lives in a prompt stored on
+Clarke's account and, until this section, appeared nowhere in this repository, so a worker reading
+`AGENTS.md` faithfully learned nothing about the cap or about when a sweep should stop. It has no
+natural terminal state, and that is what this section supplies.
+
+**A PR is _complete_ — not landing work — when all four hold:** CI green · **0 behind `main`** · all
+review threads resolved · it already carries a landing-sweep comment. Check each open `agentic-os`
+PR against that test **before** starting a sweep.
+
+**If _every_ open PR is complete, do not re-verify.** Post a one-paragraph "still blocked, nothing
+changed" note on #719, escalate the stall to a human, and spend the run on the backlog instead. The
+load-bearing clause is the last one: a fully-complete PR set means **no landing work is available**,
+not _work to redo_. Re-measuring an unchanged tree produces a verification matrix that reads like
+progress and moves nothing.
+
+**Why a complete PR is not worker-actionable: promotion is the Conductor's, not the worker's.** The
+only remaining action on a green, resolved, up-to-date draft is `gh pr ready` followed by an
+enqueue, and both are outside a sandbox worker's authority — so a worker cannot clear the cap
+itself, however many runs it spends trying. Run 153's finding put it exactly: _"The verification was
+never the bottleneck. Promotion was, and promotion is ours alone."_
+
+**A PR in a reserved lane is never worker-landing-work, whatever its state.** `.claude/hooks/` is
+reviewed and merged by @clarkemoyer alone (#1027), so a hooks PR cannot be landed by a worker even
+when it is green, resolved and 0 behind. Treat a lane check as the **first** filter, ahead of the
+four-part test: on 2026-09-15 all four open `agentic-os` PRs (#1297, #1310, #1312, #1313) were hooks
+PRs, which is a cap held entirely by work no worker could ever move.
+
+**"Escalate to a human" must name a destination a human actually reads.** #719 alone is not one —
+that is its own tracked defect (**#1269**: 739's silence alarm fired 4 times correctly into #719
+across a 30-day outage, with 0 addressees). Post the note on #719 _and_ follow #1269 for the
+delivery channel rather than inventing one here.
+
+Two mechanics for whoever does have promotion authority, both already paid for:
+
+- **The first `enqueuePullRequest` after `gh pr ready` is expected to fail** with
+  `Required status check "Phantom Revert Guard" is expected`, even when that exact SHA already
+  carries a green run of it. Promoting a draft re-registers the branch checks; it is a
+  re-registration race, not a missing check. Poll the head SHA's `check-runs` and retry — do not
+  diagnose it.
+- **Do not pre-emptively `update-branch` on a PR that is 0 behind.** Being behind is the trigger,
+  not promoting. A merge commit on a worker's branch is pure cost. Check first:
+  `gh api repos/FreeForCharity/FFC-Cloudflare-Automation/compare/main...<branch> --jq '{ahead:.ahead_by,behind:.behind_by}'`.
+
 ## GitHub API rate budget (shared — be frugal)
 
 Every agent session, scheduled task, and PAT-based workflow authenticates as the same user and
@@ -604,6 +675,27 @@ reported that #1064's functions "do not exist" from a `main` fetched 36 seconds 
 run 107 reviewed the 703 gate whose run is **123 commits** behind `main` and confirmed with one
 `git diff` that `703-sites-list-generate.yml` is byte-identical across all 123 — same check,
 opposite answer, and only the check tells you which case you are in.
+
+**…and `--ref` can name a BRANCH, which is both a genuinely useful capability and the sharpest case
+of the rule above.** `gh workflow run <file>.yml --ref <branch>` checks the workflow _and its
+scripts_ out from that branch, so a fix to a pipeline can be validated against a real site **before
+it merges** — on 2026-09-21 `706` was dispatched on `claude/new-heights-education-app-kr7yq0` and
+the conversion passed a gate it had been failing, in production, against the charity's live site,
+with the fix still in an open PR. Nothing else gives you that.
+
+The other half is not optional. A branch dispatch runs **unreviewed code with the environment's
+credentials**, so approving a gated run means checking which ref it is on, not only which workflow
+it is:
+
+```bash
+gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id> \
+  --jq '"\(.head_branch)  \(.head_sha[0:8])  \(.event)"'
+# main  1ec71c6c  schedule          -> reviewed code
+# claude/…  ff5155f1  workflow_dispatch -> an open PR's code, holding the gate's credential
+```
+
+`head_branch != main` is not a reason to refuse — it is a reason to read the diff at that SHA before
+approving, using the commands above.
 
 **A held gate also stops the schedule behind it, and `status=waiting` will not show you that
 (L212).** A run parked at a gate holds its `concurrency` slot for as long as it waits, so the next

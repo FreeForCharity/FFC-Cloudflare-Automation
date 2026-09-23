@@ -28,7 +28,14 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import WORKFLOWS, child_env, forward_slashes, load_workflow, step_run
+from wf_extract import (
+    WORKFLOWS,
+    child_env,
+    find_step,
+    forward_slashes,
+    load_workflow,
+    step_run,
+)
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -56,6 +63,13 @@ def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]
             INPUT_IGNORE="",
             INPUT_PUBLISH="",
             INPUT_MINPCT="",
+            # A real workflow_dispatch always SETS every input to its
+            # default, so the empty string is the production shape —
+            # and setting them here means an inherited INPUT_REUSE_RUN
+            # from the surrounding shell cannot quietly turn these
+            # tests into tests of a reuse dispatch.
+            INPUT_REUSE_RUN="",
+            INPUT_REUSE_MAX_AGE="",
         )
         env.update(env_overrides)
         proc = subprocess.run(
@@ -221,6 +235,460 @@ def test_ignore_hosts_normalize_and_dedupe():
     proc, outputs = run_resolve(INPUT_IGNORE="A.org,,www.a.org,b.org,")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ignore_hosts=a.org,b.org" in outputs, outputs
+
+
+# --- extra_hosts: folding a charity's subdomains into one repo ---------------
+
+
+def test_extra_hosts_is_optional_and_defaults_to_no_mounts():
+    """A single-hostname site must be completely unaffected. Asserted on the
+    OUTPUT rather than the exit code: an unset input that aborted the step under
+    `set -u` would also be caught by every other test here, but a silently empty
+    mount list that still reported success would not."""
+    proc, outputs = run_resolve()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "mount_count=0" in outputs, outputs
+    assert "mounts=\n" in outputs or outputs.rstrip().endswith("mounts="), outputs
+
+
+def test_extra_hosts_parses_into_host_equals_mount_pairs():
+    proc, outputs = run_resolve(
+        INPUT_EXTRA_HOSTS="school.example.org => /school\npublications.example.org => publications"
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "mounts=school.example.org=school publications.example.org=publications" in outputs, outputs
+    assert "mount_count=2" in outputs, outputs
+
+
+def test_extra_hosts_refuses_the_apex_domain():
+    """Mounting the apex would capture the same site twice, the second time into
+    a subdirectory, and the completeness gate would pass for both."""
+    proc, _ = run_resolve(INPUT_EXTRA_HOSTS="example.org => /main")
+    assert proc.returncode != 0, proc.stdout
+    assert "apex domain" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_extra_hosts_refuses_an_empty_mount():
+    """An empty mount silently merges a subdomain INTO the apex's routes, where
+    it collides slug for slug — the expensive failure this validation exists
+    for, and the one that looks like a successful run."""
+    proc, _ = run_resolve(INPUT_EXTRA_HOSTS="school.example.org => /")
+    assert proc.returncode != 0, proc.stdout
+    assert "collide" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_extra_hosts_refuses_a_mount_with_a_space():
+    """`resolve` flattens the parser's output with a whitespace-delimited awk,
+    so a mount containing a space is TRUNCATED at that space rather than
+    rejected — the charity's pages land at a URL nobody typed and every gate in
+    the run still passes. Asserted end to end through the step, not just in the
+    parser's own self-test, because the truncation lives in the step."""
+    proc, outputs = run_resolve(INPUT_EXTRA_HOSTS="school.example.org => /school catalog")
+    assert proc.returncode != 0, proc.stdout
+    both = proc.stdout + proc.stderr
+    assert "kebab-case" in both, both
+    # The failure mode this guards against, stated as an assertion: the step
+    # must not have emitted the truncated mount as if it were the real one.
+    assert "school.example.org=school " not in outputs, outputs
+
+
+def test_extra_hosts_refuses_overlapping_mounts():
+    proc, _ = run_resolve(
+        INPUT_EXTRA_HOSTS="a.example.org => /x\nb.example.org => /x/y"
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "overlaps" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_extra_hosts_validation_happens_before_any_network_work():
+    """`resolve` reaches no live site. Validating here is what keeps a typo from
+    costing a 15-minute crawl AND a human approval before it is noticed."""
+    resolve_job = load_workflow(WORKFLOW)["jobs"]["resolve"]
+    assert "environment" not in resolve_job, resolve_job
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    assert "parse-host-mounts.mjs" in script, script
+
+
+def test_the_capture_step_mounts_each_extra_host():
+    """Each host is captured with its own `--mount`, and gated on its OWN
+    completeness report: an aggregate across hosts would let a 40% capture of a
+    110-page subdomain hide behind a complete apex."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert "--mount" in run, run
+    assert "capture_one" in run, run
+    # The apex is captured unmounted, at the root.
+    assert 'capture_one "$DOMAIN" "" "apex"' in run, run
+    # Every host runs the same assessment, inside the function.
+    assert run.count("assess-capture-completeness.mjs") == 1, run
+
+
+def test_convert_has_time_to_finish_a_polite_multi_host_crawl():
+    """`timeout-minutes: 90` cut a healthy crawl in half. Measured on run
+    35659542248, three hostnames at delay_ms=2000: apex 40 min (1 of 1),
+    school 36 min (111 of 111), then the axe fell 14 minutes into
+    publications. Nothing was wrong — the run simply ran out of clock.
+
+    The failure mode is what makes this worth a test rather than a bigger
+    number. A `timeout-minutes` expiry reports as **cancelled**, not failed,
+    so it looks like a human pressed the button; it took a full re-read of
+    the log to establish the crawl had been healthy throughout.
+
+    And the slowness is deliberate. Crawling this charity's apex at the 250ms
+    default knocked its two subdomains offline twice, so `delay_ms` has to
+    stay high — the timeout must accommodate the politeness, not cap it.
+
+    Bounded at both ends on purpose, and the lower bound is 240 rather than
+    the ~3h projection because only two of the three hosts have been timed.
+    apex (40 min) and school (36 min) are measured, so 76 minutes of the
+    total is known. publications is the one that has never finished at this
+    delay, and it is the largest by every axis that costs time: 246 pages
+    against school's 111, ~500 MB of EdGuide PDFs to fetch, and Ghostscript
+    now actually processing them at max_pdf_mb=20. Its plausible range runs
+    to ~150 minutes, which puts the three-host total near 226 — so a bound
+    set at the projection itself would sit *below* outcomes this run can
+    legitimately produce, and would fail a good crawl exactly as 90 did.
+    240 is the projection plus the margin the unmeasured term deserves;
+    re-measure publications and this can tighten.
+
+    The upper bound is GitHub's 360-minute hard cap for hosted runners: at
+    or above it the value stops being a backstop against a stuck job at
+    all, because the platform kills the job first either way."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    timeout = convert.get("timeout-minutes")
+    assert isinstance(timeout, int), convert
+    assert timeout >= 240, timeout
+    assert timeout < 360, timeout
+
+
+def test_ghostscript_is_installed_before_the_capture_that_needs_it():
+    """#1348 shipped the PDF downsampling pass assuming `gs` was on the runner.
+    Run 35634361425 measured that it is not:
+
+        [asset] ghostscript (gs) is not installed, so oversized PDFs ship as
+        captured. Install it before the capture step to downsample them.
+        [capture] 4 oversized PDF(s) shipped as captured because ghostscript
+        was not available. This is NOT a judgement that they were already
+        optimal: nothing tried.
+
+    The pass degraded exactly as it was built to — it said so, and the
+    publishable-size gate then refused the tree and named all four files. That
+    is the good failure mode, and it still bought nothing: those four are
+    507.7 MB of a charity's own magazines that no `git push` will take.
+
+    Ordering is the assertion. An install placed after the capture is a
+    no-op that looks like a fix, and nothing in the run's output would say so
+    — the capture would go on reporting `pdfsSkippedNoEncoder` while a green
+    `gs --version` scrolled past underneath it."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]["steps"]
+    names = [s.get("name", "") for s in convert]
+    gs = [i for i, n in enumerate(names) if "Ghostscript" in n]
+    capture = names.index("Capture the live WordPress site")
+    assert gs, names
+    assert gs[0] < capture, (gs, capture, names)
+
+    run = convert[gs[0]]["run"]
+    assert "apt-get install" in run and "ghostscript" in run, run
+    # `apt-get update` first: the runner image ships no package lists, so a
+    # bare install 404s on every mirror path.
+    assert run.index("apt-get update") < run.index("apt-get install"), run
+    # And prove the binary exists rather than trusting apt's exit code — a
+    # renamed or dropped package then fails HERE, in seconds, instead of
+    # 20 minutes later as one line in a capture log.
+    assert "gs --version" in run, run
+
+
+def test_each_host_starts_from_no_report_so_a_stale_one_cannot_be_assessed():
+    """Every host writes the SAME report path, so it must be cleared before
+    each capture — otherwise a host that dies before writing one is assessed
+    against the PREVIOUS host's report, and passes.
+
+    Measured, run 35622301582: school.newheightseducation.org became
+    unreachable, its capture aborted at `REST API is not usable` before
+    writing anything, and the apex's report from twelve minutes earlier was
+    still on disk. The gate read that and reported `Captured 1 of 1 inventory
+    entries (100.0%)` for a host that fetched nothing at all — byte-identical
+    to the apex's summary, down to the apex's own asset-failure counts and its
+    `www.newheightseducation.org` unlocalized host. Had the third host not
+    hard-failed, the run would have delivered a site missing all 110 of that
+    subdomain's pages while reporting three green hosts.
+
+    The `[ ! -f "$report" ]` branch was written for exactly this case and
+    could not fire, because the file existed. A guard that cannot observe the
+    state it guards is not a weaker guard, it is an absent one.
+
+    Ordering carries the whole assertion. An `rm -f` placed after the capture
+    would delete the very report the gate is about to read, turning a silent
+    false pass into a loud false failure — the opposite defect, equally wrong."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert 'rm -f "$report"' in run, run
+    removed = run.index('rm -f "$report"')
+    captured = run.index('node scripts/capture-wordpress-api.mjs "${args[@]}" || rc=$?')
+    assessed = run.index("assess-capture-completeness.mjs")
+    assert removed < captured < assessed, (removed, captured, assessed)
+    # ...and INSIDE capture_one, so it runs once per host rather than once for
+    # the whole step. Cleared only at the top, the second host inherits the
+    # first host's report exactly as before.
+    body = run.split("capture_one() {", 1)[1].split("\n}", 1)[0]
+    assert 'rm -f "$report"' in body, body
+
+
+def test_the_per_host_report_is_labelled_by_HOST_not_by_MOUNT():
+    """`label` is interpolated into a filename. A mount is a URL path and may
+    legally nest (`/school/spring-2026`), so labelling by mount turns the `cp`
+    destination into a path whose directory does not exist: the capture
+    succeeds and the run dies copying the report it was meant to preserve —
+    after the 15-minute crawl, which is the most expensive place in this
+    pipeline to lose. A hostname cannot contain a `/` (isHostname)."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert 'capture_one "$host" "$mount" "$host"' in run, run
+    assert 'capture_one "$host" "$mount" "$mount"' not in run, run
+    # And the reason the assertion above matters: the label reaches a filename.
+    assert 'wp-capture-report.${label}.json' in run, run
+
+
+# --- error handling: the step's declared mode must stay its mode -----------
+
+
+def test_no_step_toggles_errexit_mid_script():
+    """`set +e … set -e` does not restore — it ASSERTS. In a step that declares
+    `set -uo pipefail` (no errexit, deliberately, so every failure reports a
+    named ::error:: instead of dying silently at whichever line failed first),
+    the pair turns errexit ON for the remainder of the step. Measured: off
+    before the first call, ON after it.
+
+    Two of 706's steps had it, in both cases in a loop, so the mode flipped on
+    the first iteration and stayed flipped. `cmd || rc=$?` captures the same
+    status and touches no option — verified identical under both modes."""
+    wf = load_workflow(WORKFLOW)
+    offenders = []
+    for job_id, job in wf["jobs"].items():
+        for step in job.get("steps", []) or []:
+            run = step.get("run") or ""
+            for i, line in enumerate(run.splitlines(), 1):
+                if line.strip() in ("set +e", "set -e"):
+                    offenders.append(f"{job_id}/{step.get('name', '?')}:{i} {line.strip()}")
+    assert not offenders, offenders
+
+
+def test_the_capture_captures_its_exit_code_without_disabling_errexit():
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert 'node scripts/capture-wordpress-api.mjs "${args[@]}" || rc=$?' in run, run
+    assert "local rc=0" in run, run
+
+
+def test_the_per_host_report_copy_is_guarded_explicitly():
+    """errexit never covered this `cp`, even while it was (accidentally) on:
+    `capture_one` is always invoked as `capture_one … || exit 1`, and a tested
+    context suspends errexit inside the function body too. Measured: a failing
+    untested `cp` let the function return 0.
+
+    It is not a cosmetic file. `verify-reused-capture.mjs` reads the per-host
+    reports to decide which hosts a reused capture may publish and where, so a
+    silently missing one turns into a refusal — or worse, a wrong publish — in
+    a later run that has no way to know why."""
+    run = step_run(WORKFLOW, "convert", "Capture the live WordPress site")
+    assert 'wp-capture-report.${label}.json" || {' in run, run
+    # And the guard must actually stop the host, not just narrate.
+    # Taken line by line to the closing brace. `split("}")` is wrong here and
+    # fails in the flattering direction: the guard's own message contains
+    # `${label}`, so it cuts mid-string and reports the guard as empty.
+    tail = run.split('wp-capture-report.${label}.json" || {', 1)[1].splitlines()
+    body = []
+    for line in tail:
+        if line.strip() == "}":
+            break
+        body.append(line)
+    else:
+        raise AssertionError("the report-copy guard has no closing brace")
+    copy_guard = "\n".join(body)
+    assert "::error::" in copy_guard, copy_guard
+    assert "return 1" in copy_guard, copy_guard
+
+
+# --- reuse_capture_from_run: not crawling a charity twice for one result ----
+
+
+def test_reuse_is_off_by_default():
+    """Every existing dispatch must be completely unaffected. Asserted on the
+    OUTPUT, because an input that silently defaulted to something truthy would
+    skip the crawl and publish an artifact from a run nobody named."""
+    proc, outputs = run_resolve()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "reuse_run=\n" in outputs or outputs.rstrip().endswith("reuse_run="), outputs
+
+
+def test_reuse_run_id_must_be_numeric():
+    """A run id reaches `gh run download` and an artifact name. Refused here,
+    in the job that reaches no network, so a typo costs seconds rather than a
+    job that has already installed a native module."""
+    proc, _ = run_resolve(INPUT_REUSE_RUN="not-a-run")
+    assert proc.returncode != 0, proc.stdout
+    assert "numeric run id" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_a_numeric_reuse_run_id_is_published_for_the_convert_job():
+    proc, outputs = run_resolve(INPUT_REUSE_RUN=" 35571249633 ")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "reuse_run=35571249633" in outputs, outputs
+
+
+def test_reuse_max_age_defaults_and_refuses_junk():
+    """The age limit is the only check standing between a reused capture and a
+    site that has changed since, so it may not silently fall back to 'no limit'
+    when it is mistyped."""
+    proc, outputs = run_resolve()
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "reuse_max_age_hours=168" in outputs, outputs
+    for bad in ("0", "-5", "lots"):
+        proc, _ = run_resolve(INPUT_REUSE_MAX_AGE=bad)
+        assert proc.returncode != 0, (bad, proc.stdout)
+        assert "reuse_max_age_hours" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+
+
+def test_the_crawl_and_the_reuse_are_exact_complements():
+    """The load-bearing property. If both steps could run, the crawl would
+    overwrite the very capture the reuse was meant to preserve and the run
+    would still report success; if neither could, the job would proceed with an
+    empty capture directory. Asserted as literal, opposite conditions on the
+    same expression rather than as 'both mention reuse_run'."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    by_name = {s.get("name", ""): s for s in convert["steps"]}
+    crawl = by_name["Capture the live WordPress site"]
+    reuse = by_name["Reuse the capture from an earlier run"]
+    assert crawl["if"] == "needs.resolve.outputs.reuse_run == ''", crawl["if"]
+    assert reuse["if"] == "needs.resolve.outputs.reuse_run != ''", reuse["if"]
+
+
+def test_convert_keeps_contents_read_when_it_gains_actions_read():
+    """A job-level `permissions` block REPLACES the workflow-level one rather
+    than extending it, so adding `actions: read` for the artifact download
+    without restating `contents: read` breaks the checkout — which reads as a
+    checkout problem, not as a permissions one."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    assert convert["permissions"]["actions"] == "read", convert["permissions"]
+    assert convert["permissions"]["contents"] == "read", convert["permissions"]
+
+
+def test_reuse_refuses_a_run_of_a_different_workflow():
+    """A run id from another workflow would otherwise fail later at 'no
+    artifact named wp-capture-<id>', which reads as an expired artifact rather
+    than as the wrong run. The literal path is asserted against this file's own
+    name so a rename cannot leave the check pointing at nothing."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert f"self='.github/workflows/{WORKFLOW}'" in run, run
+
+
+def test_reuse_reapplies_this_runs_completeness_threshold():
+    """Inheriting the source run's gate would mean `min_capture_percent` stops
+    meaning anything the moment a capture is reused: a capture that passed at
+    90% would satisfy a dispatch asking for 98%."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert "assess-capture-completeness.mjs" in run, run
+    assert '--min-percent "$MIN_PERCENT"' in run, run
+
+
+def test_reuse_counts_what_it_assessed_against_what_it_expected():
+    """A per-item success log is not evidence of completeness: a file with no
+    trailing newline loses its last line to `read`, and every line that DID run
+    prints a pass. The count is the only thing that can see the missing one."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert "assessed=$((assessed + 1))" in run, run
+    assert "expected=$((MOUNT_COUNT + 1))" in run, run
+    assert '[ "$assessed" -ne "$expected" ]' in run, run
+
+
+def test_reuse_verifies_the_artifact_before_anything_reads_it():
+    """Domain, host set, mounts and age are checked against THIS dispatch. Every
+    later gate in this workflow asks whether the tree is a coherent site, and
+    none asks whether it is the site that was asked for."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert "verify-reused-capture.mjs" in run, run
+    assert '--domain "$DOMAIN"' in run, run
+    assert '--mounts "$MOUNTS"' in run, run
+    assert '--max-age-hours "$MAX_AGE"' in run, run
+
+
+def test_reuse_reads_the_verifier_exit_code_without_a_pipe():
+    """Ledger L50. The verifier's whole contract is its exit code; reading it
+    through a pipe reports the reader's status and turns a refusal into a pass."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    assert 'rc=$?' in run, run
+    assert 'verify-reused-capture.mjs' in run, run
+    # The verifier's stdout goes to a FILE, never into another command.
+    assert '> "$reports"' in run, run
+    assert "verify-reused-capture.mjs |" not in run.replace("\n", " "), run
+
+
+def test_a_reused_capture_is_re_uploaded_under_THIS_runs_id():
+    """`deliver` downloads `wp-capture-<this run's id>`. The upload step is
+    therefore unconditional: make it skip on a reused capture and the handoff
+    breaks for exactly the dispatch capture reuse exists to serve — a retried
+    `deliver` — and it breaks AFTER the approval has been spent."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    upload = next(
+        s for s in convert["steps"] if "Upload the neutralized capture" in s.get("name", "")
+    )
+    assert upload["with"]["name"] == "wp-capture-${{ github.run_id }}", upload["with"]
+    # It may be conditioned on a capture EXISTING, never on how this run was
+    # dispatched: skipping the upload on a reused capture breaks the handoff
+    # for the retried `deliver` that capture reuse exists to serve.
+    assert "reuse_run" not in (upload.get("if") or ""), upload.get("if")
+
+
+def test_the_capture_is_uploaded_even_when_a_LATER_step_fails():
+    """The measured cost of getting this wrong, on run 35571249633: three
+    hostnames crawled for 36m32s, all three past their completeness gates, then
+    `Convert the capture into real app routes` failed — and because the upload
+    sat after it, the whole capture was discarded and the retry had to crawl
+    again. The failure a reuse is FOR is a failure after the capture, so an
+    artifact that only survives a green run cannot serve one."""
+    convert = load_workflow(WORKFLOW)["jobs"]["convert"]
+    upload = next(
+        s for s in convert["steps"] if "Upload the neutralized capture" in s.get("name", "")
+    )
+    cond = upload.get("if") or ""
+    assert "cancelled()" in cond, cond
+    # Conditioned on a capture existing, so a run that never captured does not
+    # add a second red step on top of the real failure.
+    assert "steps.capture.outcome" in cond, cond
+    assert "steps.reuse.outcome" in cond, cond
+    # `outcome`, not `conclusion`: they differ exactly when a step failed,
+    # which is the case being handled.
+    assert "conclusion" not in cond, cond
+    ids = {s.get("id") for s in convert["steps"]}
+    assert {"capture", "reuse"} <= ids, ids
+
+
+def test_reuse_does_not_require_the_SOURCE_run_to_have_succeeded():
+    """The capture worth reusing usually belongs to a run that FAILED after the
+    crawl. A check on the source run's conclusion would refuse exactly the runs
+    this input exists for."""
+    run = step_run(WORKFLOW, "convert", "Reuse the capture from an earlier run")
+    # Asserted on what the step QUERIES, not on the word "success" appearing
+    # anywhere: a prose comment in this step legitimately contains it, and a
+    # bare substring assert failed on that comment rather than on any check.
+    code = "\n".join(l for l in run.splitlines() if not l.lstrip().startswith("#"))
+    assert ".conclusion" not in code, code
+    assert ".status" not in code, code
+
+
+def test_verify_reused_capture_is_self_tested_in_the_gate():
+    gate = step_run(WORKFLOW, "resolve", "Offline self-tests (gate every later job)")
+    assert "verify-reused-capture.mjs --self-test" in gate, gate
+
+
+def test_the_summary_says_when_a_capture_was_reused():
+    """An approval is only meaningful if the approver can see what they are
+    approving, and a reused capture describes the site at an earlier moment.
+    The run log that says so is fifteen steps above the gate."""
+    run = step_run(WORKFLOW, "convert", "Report what would be written")
+    assert "REUSE_RUN" in run, run
+    assert "REUSED" in run, run
+
+
+def test_parse_host_mounts_is_self_tested_in_the_gate():
+    gate = step_run(WORKFLOW, "resolve", "Offline self-tests (gate every later job)")
+    assert "parse-host-mounts.mjs --self-test" in gate, gate
 
 
 # --- job wiring -------------------------------------------------------------
@@ -923,7 +1391,1103 @@ def test_min_capture_percent_is_validated():
     assert "must be a whole number between 1 and 100" in proc.stdout, proc.stdout
 
 
+
+
+def _step_names(job_id: str) -> list[str]:
+    """Step names of one job, in order."""
+    wf = load_workflow(WORKFLOW)
+    return [s.get("name", "") for s in wf["jobs"][job_id]["steps"]]
+
+
+def _index_of(job_id: str, substring: str) -> int:
+    for i, name in enumerate(_step_names(job_id)):
+        if substring in name:
+            return i
+    raise AssertionError(f"no step matching {substring!r} in job {job_id}: {_step_names(job_id)}")
+
+
+def _capture_script_text() -> str:
+    return (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+
+
+GUARD = "the tree must be publishable"
+
+
+def test_the_publishable_size_guard_runs_in_BOTH_jobs():
+    """The convert-job copy is the early warning; the deliver-job copy is the
+    one that actually protects the push.
+
+    Neither is redundant. `deliver` can run against a capture REUSED from a run
+    that predates the PDF pass, so a convert-side check alone proves nothing
+    about the tree being pushed; and a deliver-side check alone moves the
+    failure back behind the human approval, which is the cost this guard
+    exists to avoid.
+    """
+    for job in ("convert", "deliver"):
+        i = _index_of(job, GUARD)
+        script = step_run(WORKFLOW, job, GUARD)
+        assert "check-publishable-size.mjs ffc-ex" in script, (job, script)
+        assert i >= 0
+
+
+def test_the_size_guard_runs_before_the_steps_it_exists_to_save():
+    """Fail in milliseconds, not after a multi-minute build or behind a push.
+
+    The guard only reads file sizes off disk. Ordering it later would still
+    catch the problem, but only once the run has spent the very time this
+    check exists to save.
+    """
+    assert _index_of("convert", GUARD) < _index_of("convert", "Build the static export")
+    assert _index_of("deliver", GUARD) < _index_of("deliver", "Commit and open a draft PR")
+
+
+def test_the_size_guard_is_self_tested_before_anything_uses_it():
+    """Same rule every other decision-making script in this workflow follows:
+    a guard that decides whether a run may proceed does not run unverified."""
+    script = step_run(WORKFLOW, "resolve", "Offline self-tests")
+    assert "node scripts/check-publishable-size.mjs --self-test" in script
+
+
+def test_max_pdf_mb_is_validated_before_the_network():
+    """A bad budget must cost seconds, not a 40-minute crawl AND an approval."""
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    assert "max_pdf_mb must be a whole number of MB between 1 and 100000" in script
+    assert 'echo "max_pdf_mb=$max_pdf_mb"' in script
+
+
+def test_max_pdf_mb_is_bounded_to_match_the_capture():
+    """`resolve` and the capture must agree on the range, or the earlier check
+    is decorative.
+
+    Measured: `capture-wordpress-api.mjs` declares
+    `['max-pdf-mb', ..., { min: 1, max: 100000 }]` and exits 2 with
+    "expected an integer 1..100000". A resolve that only checks positivity lets
+    999999 through, and the run then dies in `convert` -- after checkout and
+    setup -- which is exactly the "fail before the network" promise this job
+    exists to keep.
+    """
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    assert '[ "$max_pdf_mb" -gt 100000 ]' in script, script[-400:]
+    assert "between 1 and 100000" in script
+
+    # The input description must not tell an operator to do the thing the
+    # bound refuses; the first draft said "set to a very large number".
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["max_pdf_mb"]["description"]
+    assert "very large number" not in desc, desc
+    assert "100000" in desc, desc
+
+
+def test_max_pdf_mb_reaches_the_capture():
+    """The input is inert unless it is BOTH exported to the step and appended
+    to the capture's argv. Asserting only one of the two passes while the
+    budget silently stays at the script's own default."""
+    wf = load_workflow(WORKFLOW)
+    step = find_step(wf, "convert", "Capture the live WordPress site")
+    assert step["env"]["MAX_PDF_MB"] == "${{ needs.resolve.outputs.max_pdf_mb }}", step["env"]
+    assert 'args+=(--max-pdf-mb "$MAX_PDF_MB")' in step["run"]
+
+
+def test_the_resolve_job_publishes_max_pdf_mb():
+    """A job output that names a step output the step never sets resolves to
+    the empty string, and an empty budget is not an error anywhere downstream
+    — it simply stops being applied."""
+    wf = load_workflow(WORKFLOW)
+    assert wf["jobs"]["resolve"]["outputs"]["max_pdf_mb"] == (
+        "${{ steps.resolve.outputs.max_pdf_mb }}"
+    )
+
+
+def test_the_pdf_budget_default_is_below_githubs_hard_limit():
+    """90, not 100.
+
+    Ghostscript's output size is not predictable from its input, so a budget
+    set AT the limit lets a file land at 99.7 MB on one run and 100.4 MB on the
+    next — and that difference only shows up at the push, after the approval.
+    """
+    wf = load_workflow(WORKFLOW)
+    # YAML parses a bare `on:` key as the boolean True, so this cannot be
+    # read as wf["on"] — the same dance test_workflow_is_dispatch_only does.
+    triggers = wf[True] if True in wf else wf["on"]
+    assert triggers["workflow_dispatch"]["inputs"]["max_pdf_mb"]["default"] == "90"
+
+
+def test_the_pdf_ladder_excludes_the_rung_that_inflates_a_file():
+    """/prepress measured 176% of its input on a scan-shaped fixture. A pass
+    that reports an optimisation while making the file bigger is worse than no
+    pass, so that rung is not on the ladder at all."""
+    src = _capture_script_text()
+    ladder = src.split("export const PDF_DOWNSAMPLE_LADDER = ")[1].split(";")[0]
+    assert "/prepress" not in ladder, ladder
+    assert "/printer" not in ladder, ladder
+    assert "/ebook" in ladder and "/screen" in ladder, ladder
+
+
+def test_a_shrunk_pdf_keeps_its_name():
+    """The image pass renames (.png -> .webp) and must rewrite every reference
+    to match. The PDF pass must NOT rename: a renamed PDF strands every link to
+    it, including links in places the capture never parses, such as a sitemap
+    or a PDF that links to another PDF."""
+    src = _capture_script_text()
+    call = src.split("if (optimizePdfs && shouldShrinkPdf(")[1].split("usedAssetNames.add(name)")[0]
+    assert "name = " not in call, f"the PDF pass must not reassign the local name:\n{call}"
+    assert "buf = shrunk.buffer;" in call
+
+
+def test_ghostscript_absence_is_distinguished_from_a_bad_pdf():
+    """Opposite responses — stop trying at all, versus skip this one file —
+    and they are indistinguishable by whether an output file appeared. An
+    earlier draft inferred it from existsSync and would have announced
+    'ghostscript is not installed' on the first corrupt PDF, on a box where it
+    is installed and working."""
+    src = _capture_script_text()
+    assert "err.code === 'ENOENT'" in src
+
+
+def test_pdfs_still_over_budget_are_named_not_counted():
+    """These are exactly the files a push will reject. A count cannot be acted
+    on without re-running the crawl that produced it."""
+    src = _capture_script_text()
+    assert "pdfShrink.stillOverBudget.join(', ')" in src
+    assert "will be REJECTED by a" in src
+
+
+def test_an_oversized_webp_is_re_encoded_rather_than_waved_through():
+    """`RECODABLE` excluded WebP on the reasoning that it is already the
+    destination format. That is a statement about the container and says
+    nothing about the bytes -- and on a Jetpack site the format this pass
+    converts TO is the format most oversized images arrive in. Measured on
+    FFC-EX-newheightseducation.org: 34 images over the receiving repo's 400 KB
+    budget, **29 of them `.webp`**, largest 4,251 KB, and not one was ever a
+    candidate.
+
+    Asserted by RUNNING the capture script's own self-test, so the case cannot
+    pass by having been deleted."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "capture-wordpress-api.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "an oversized WebP is a candidate -- the format is not the budget",
+        "a WebP already under budget is still left byte-identical",
+        "an AVIF is not re-encoded -- that WOULD rename, for a usually-smaller format",
+        "re-encoding a WebP does not rename it",
+        "every full-size quality rung is tried before the first resize",
+        "the caps come down largest first, and never below the content column",
+        "each cap is tried at more than one quality",
+        "a rung with a cap resizes the pipeline",
+        "...to a LONG-edge cap, whichever way round the image is",
+        "...and never enlarges an image that is already smaller",
+        "a full-size rung leaves the pipeline untouched",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
+def test_the_ladder_can_lose_pixels_because_quality_alone_cannot_always_fit():
+    """Ten of that site's offenders went through the quality ladder and stayed
+    over budget: a 2560px WordPress `-scaled` export does not fit in 400 KB at
+    any quality a reader would accept, and no quality rung can say so. The
+    edge ladder is what answers that, and its floor is the assertion that
+    matters -- 1400px is still wider than the content column these render in,
+    so the smallest rung reachable cannot visibly degrade a photograph."""
+    src = (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+    decl = src.split("export const IMAGE_EDGE_LADDER = ", 1)[1].split(";", 1)[0]
+    edges = [int(n) for n in re.findall(r"\d+", decl)]
+    assert edges == sorted(edges, reverse=True), edges
+    assert min(edges) >= 1400, edges
+
+
+def test_a_re_encode_that_keeps_its_name_is_not_held_to_the_rename_threshold():
+    """`worthReencoding`'s 25% floor exists to pay for a rename, and every
+    rename is a chance to strand a reference. A WebP re-encoded to WebP keeps
+    its name, so that floor buys nothing there and costs something real: it
+    discards a result that lands UNDER BUDGET for saving only 20%, and ships
+    the oversized original instead. Same reasoning `worthShrinking` already
+    carries for a downsampled PDF, which also keeps its name."""
+    src = (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+    keep = src.split("const keep = encoded", 1)[1].split("if (keep) {", 1)[0]
+    assert "target === name" in keep, keep
+    assert "worthShrinking(buf.length, encoded.buffer.length)" in keep, keep
+    assert "worthReencoding(buf.length, encoded.buffer.length)" in keep, keep
+
+
+def test_a_slash_escaped_quote_in_a_title_is_not_published_as_a_backslash():
+    """WordPress's magic-quotes legacy stores `What\\'s`, and `wp_unslash`
+    removes the slash on WordPress's own read path. 706 reads the RENDERED
+    page, which is where that removal did not happen -- so the backslash
+    reaches the browser tab. Measured on FFC-EX-newheightseducation.org: four
+    titles, e.g. `Fitness: What\\'s Wrong or Right With Fitness Magazines?`.
+
+    Reversing an encoding artifact is not editing the charity's content; nobody
+    publishes a backslash there. Asserted by RUNNING the library's own
+    self-test, including the negative case -- a title with a backslash in it
+    for its own sake keeps it, or this stops being an unescape and becomes a
+    rewrite."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a slash-escaped apostrophe is unescaped, not published as a backslash",
+        "...including after wptexturize curled the quote the slash was written against",
+        "...and the same for double quotes",
+        "a backslash that is not escaping a quote is the author's, and stays",
+        "a doubled backslash collapses to one, as stripslashes does",
+        "a non-string is not a crash",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
+def test_a_captured_page_with_no_heading_of_its_own_is_given_one():
+    """The FFC template's `verify:build` requires exactly one `<h1>` per
+    indexable page (WCAG 1.3.1 / 2.4.6), and a WordPress archive template often
+    renders none. Measured on FFC-EX-newheightseducation.org: 86 of 785
+    captured fragments carry no `h1`, all of them `/publications/books/<slug>/`
+    archive pages -- the post beside each one has `<h1 class="entry-title">`,
+    so it is the theme's archive template rather than anything the capture
+    dropped. Once the image budget was fixed, this was the step keeping the
+    whole migration from deploying.
+
+    Nothing is invented: the heading carries the page's own title, and it is
+    clipped with the `.ffc-sr-only` rule the converter already installs,
+    because these pages were designed without a visible heading."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a page with no heading of its own is given one from its title",
+        "a page that already has an h1 is left exactly as captured",
+        "...however the tag is spelled",
+        "a tag that merely starts with h1 does not count as one",
+        "the title is escaped, not interpolated",
+        "a page with no title to use is left alone rather than given an empty heading",
+        "a non-string fragment is not a crash",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+    # ...and that the converter actually calls it. A library function nothing
+    # reaches is the same as no fix.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    assert "ensureSingleH1(`${fragmentCss.html}" in src, src[:200]
+
+
+def test_the_built_output_verifier_is_scoped_to_routes_not_captured_assets():
+    """`verify-build.mjs` walks every `.html` under `out/` and asserts one
+    `<h1>` and a self-referential canonical -- invariants about PAGES. The
+    capture localizes third-party embeds, and some are HTML: an Animoto player
+    landed at `out/_ffc-assets/s3.amazonaws.com/embed.animoto.com/play__*.html`
+    and failed both. It is an iframe document belonging to another site, and
+    there is nothing about it to fix.
+
+    Patched in the target repo because the assets directory is this pipeline's
+    convention -- the verifier cannot know about it, and every migrated site
+    hits this the moment a page embeds anything. Asserted by RUNNING the
+    converter's self-test, including the refusal: a patch that silently failed
+    would fail every later delivery at a step naming an embedded video."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "the verifier is patched to skip the captured assets tree",
+        "...with a guard INSIDE the directory branch, before the walk recurses",
+        "...and the walk it guards is still there",
+        "a repo with no verifier is reported, not crashed on",
+        "an unrecognised verifier is refused, not silently left unpatched",
+        "a verifier that merely MENTIONS the assets dir is still patched",
+        "another WALK's guard does not count as this one",
+        "...and patching it twice is still a no-op",
+        "another directory's guard does not count as this one",
+        "a directory branch that never recurses is refused, not guessed at",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+    # ...and that the conversion actually calls it. Mutation review removed the
+    # call and every case above still passed: a function exercised only by its
+    # own self-test is indistinguishable from one nothing reaches.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    assert "scopeVerifyBuildToRoutes(repo, assetsDir)" in src, src[:200]
+
+
+def _dedupe_script_text() -> str:
+    return (REPO_ROOT / "scripts" / "dedupe-capture-assets.mjs").read_text(encoding="utf-8")
+
+
+def _integrate_script_text() -> str:
+    return (REPO_ROOT / "scripts" / "integrate-clone-into-nextjs.mjs").read_text(encoding="utf-8")
+
+
+def test_the_templates_own_asset_directories_survive_the_public_wipe():
+    """integrate wipes `public/` wholesale, and the template's components go on
+    referencing /Images/... and /Svgs/... by absolute path. Measured on
+    FFC-EX-newheightseducation.org: 19 such assets across 12 files under src/.
+    Every one was deleted, so every one 404'd in the export.
+
+    Run 35698011512 surfaced three of them at the self-containment gate; the
+    other sixteen were equally broken and merely sat on pages that crawl did
+    not reach. Directories, not filenames: a name list stops tracking a
+    template that gains and renames assets, which is how this got here."""
+    src = _integrate_script_text()
+    assert "export const PRESERVED_PUBLIC_DIRS" in src, src[:400]
+    decl = src.split("export const PRESERVED_PUBLIC_DIRS", 1)[1].split("\n", 1)[0]
+    for d in ("Images", "Svgs"):
+        assert f"'{d}'" in decl, (d, decl)
+
+
+def test_a_preserved_directory_still_loses_to_the_captured_site():
+    """A directory entry is not a licence to overwrite the charity's content.
+    The restore must stay per-file and skip a destination the clone already
+    wrote, or a captured site shipping its own /Images/logo.webp would have the
+    FFC template's logo written over it by the migration."""
+    src = _integrate_script_text()
+    body = src.split("export function restorePreservedPublicFiles", 1)[1].split("\n}", 1)[0]
+    assert "if (existsSync(dest)) continue;" in body, body
+
+
+def _deliver_steps():
+    return load_workflow(WORKFLOW)["jobs"]["deliver"]["steps"]
+
+
+def _one_step(steps, substring):
+    """The index of the one step whose name matches, or a failure that names the
+    alternatives. Indexing a comprehension would raise IndexError on a renamed
+    step and could not tell "no match" from "two matches"."""
+    names = [str(s.get("name", "")) for s in steps]
+    hits = [i for i, n in enumerate(names) if substring.lower() in n.lower()]
+    assert len(hits) == 1, f"expected exactly one step matching {substring!r}, got {hits}: {names}"
+    return hits[0]
+
+
+def test_the_delivered_tree_is_formatted_before_the_pr_is_opened():
+    """Every FFC-EX repo's CI runs `prettier --check .`; nothing 706 writes is
+    formatted. The routes come out of string templates and
+    `retargetLighthouseUrls` re-serialises with `JSON.stringify(_, null, 2)`,
+    which always expands an array prettier would fit on one line. Measured on
+    FFC-EX-newheightseducation.org: 778 `.tsx` files plus `lighthouserc.json`,
+    i.e. `Check formatting` failed on every migration this workflow has
+    delivered.
+
+    Position is the assertion. Formatting after the commit would format
+    nothing that ships; formatting before the conversion would format a tree
+    the conversion then rewrites."""
+    steps = _deliver_steps()
+    fmt = _one_step(steps, "Format the converted tree")
+    assert fmt > _one_step(steps, "Convert the capture into real app routes")
+    assert fmt > _one_step(steps, "Repair references the conversion left")
+    assert fmt < _one_step(steps, "Commit and open a draft PR")
+
+
+def test_the_formatter_is_the_target_repos_own_not_a_version_pinned_here():
+    """The check that has to pass is the TARGET repo's `format:check`, run
+    against its own `.prettierrc.json` with the version its lockfile resolves.
+    Pinning a version here would drift from that silently -- prettier's array
+    and Markdown reflow differ between minors, which is the local-pass/CI-fail
+    loop CLAUDE.md records as L240. This repo's own CI pins `prettier@3.8.1`
+    for its own tree; reaching for that spelling here is the mistake."""
+    steps = _deliver_steps()
+    run = str(steps[_one_step(steps, "Format the converted tree")]["run"])
+    assert "prettier@" not in run, run
+    assert "npm run format" in run and "pnpm run format" in run, run
+    # The lockfile, not a range: `^3.9.6` in package.json resolves to whatever
+    # is newest at install time, which is how the two sides come to disagree.
+    assert "--frozen-lockfile" in run, run
+    assert "npm ci" in run, run
+
+
+def test_the_format_step_verifies_the_formatting_actually_happened():
+    """`prettier --write` exits 0 for files it reformatted and for files it
+    never reached alike. A `.prettierignore` that grew an entry, or a `format`
+    script narrowed to `src/`, would leave the generated JSON at the repo root
+    untouched with this step still green -- the same defect this step exists to
+    prevent, reached from the other side. So the repo's own `format:check` runs
+    after the write, in both package-manager branches.
+
+    An earlier draft also probed for `format:check` in a separate variable and
+    refused on its absence. Mutation review found that redundant: `npm run
+    <missing>` already exits non-zero, so the probe could be deleted with no
+    test able to tell. What survives is one guard whose value is its MESSAGE,
+    which is why the test below asserts the message names both scripts."""
+    steps = _deliver_steps()
+    run = str(steps[_one_step(steps, "Format the converted tree")]["run"])
+    # Per BRANCH, not over the whole body. Asserting `index("run format") <
+    # index("run format:check")` across the step passes while the npm branch
+    # runs them in the wrong order, because the pnpm branch above it satisfies
+    # both lookups -- mutation review caught exactly that.
+    pnpm, npm = run.split("if [ -f pnpm-lock.yaml ]", 1)[1].split("else", 1)
+    for branch, body in (("pnpm", pnpm), ("npm", npm)):
+        assert "run format\n" in body, (branch, body)
+        assert "run format:check" in body, (branch, body)
+        assert body.index("run format\n") < body.index("run format:check"), (branch, body)
+
+
+def test_the_format_step_refuses_a_repo_that_cannot_verify_its_own_formatting():
+    """Both scripts are required, and the guard names whichever is missing.
+    `format` is how the tree gets formatted and `format:check` is how this step
+    knows it did, so an FFC-EX template that dropped either one must stop a
+    migration rather than deliver a PR whose formatting is unknown.
+
+    The guard changes no outcome -- `npm run <missing>` fails on its own -- and
+    is kept for what it says in the log. So the assertion is on the message: a
+    guard justified by its diagnosis has to be tested for its diagnosis."""
+    steps = _deliver_steps()
+    run = str(steps[_one_step(steps, "Format the converted tree")]["run"])
+    guard = run.split("missing=", 1)[1].split("if [ -f pnpm-lock.yaml ]", 1)[0]
+    assert '"format", "format:check"' in guard, guard
+    # The CONDITION, verbatim. Asserting only that `::error::` and `exit 1` are
+    # present passes for `if [ -n "" ]` -- a guard whose body can never run,
+    # which is how a refusal becomes decoration without a line being deleted.
+    assert 'if [ -n "$missing" ]; then' in guard, guard
+    assert "::error::" in guard and "$missing" in guard, guard
+    assert "exit 1" in guard, guard
+    assert run.count("::error::") == 1, run
+
+
+def test_the_templates_root_level_files_are_carried_by_a_rule_not_a_name_list():
+    """The name list carried `_headers` and `security.txt` and dropped the other
+    six files the template ships at the root of `public/`. Measured on
+    FFC-EX-newheightseducation.org at its template commit e28032d: the root held
+    eight files, the wipe kept two, and `src/app/manifest.ts` and
+    `src/app/layout.tsx` -- both of which survive integration -- went on naming
+    the deleted ones by absolute path. The shipped `manifest.webmanifest`
+    pointed at two PNGs that were not there.
+
+    So the rule is inverted: carry whatever is at that root, and name only what
+    this pipeline itself writes there. That list cannot drift out of date the
+    way a snapshot of someone else's template does, because this repo is what
+    writes the names in it."""
+    src = _integrate_script_text()
+    assert "export const UNCARRIED_PUBLIC_ROOT_FILES" in src, src[:400]
+    body = src.split("export function readPreservedPublicFiles", 1)[1].split("\n}", 1)[0]
+    assert "readdirSync(publicDir" in body, body
+    assert "isUncarriedPublicRootFile" in body, body
+
+
+def test_security_txt_is_tracked_as_a_directory_now_that_the_root_is_swept():
+    """`_headers` and the root `security.txt` are root-level files, so the sweep
+    carries them without naming them. The `.well-known/` copy is one level down
+    and would have been lost when the name list went away -- it is the artifact
+    the target repo's drift check fails on, and the one that gives a charity
+    site a way to receive vulnerability reports."""
+    src = _integrate_script_text()
+    decl = src.split("export const PRESERVED_PUBLIC_DIRS", 1)[1].split("\n", 1)[0]
+    assert "'.well-known'" in decl, decl
+
+
+def test_integrate_self_tests_cover_the_preserved_directories():
+    """Asserted by RUNNING them, not by reading them. The behaviour that keeps a
+    charity's site whole here is the recursive walk and the collision rule, and
+    a source-text assertion cannot tell a live case from a deleted one."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "integrate-clone-into-nextjs.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "the template asset directories survive the public/ wipe",
+        "a preserved directory is walked recursively, not just its top level",
+        "the captured site still wins inside a preserved directory",
+        "a root-level template file NO list names survives",
+        "every template icon at the root of public/ survives the wipe",
+        "a previous run's capture report does NOT survive the wipe",
+        "a template DIRECTORY the list does not name is still wiped",
+        "a previous run's captured PAGE does NOT survive the wipe",
+        "the pipeline owns exactly the report names, CNAME and HTML, and nothing else",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
+def test_duplicate_assets_are_collapsed_after_the_capture_and_before_integration():
+    """The whole value of this pass is WHERE it sits. Placed inside the capture
+    it could not act on a capture reused from an earlier run, so recovering the
+    size of a five-hour crawl would mean crawling the charity's site again.
+    Placed after integration it would be rewriting the FFC-EX repo rather than
+    the capture, and the publishable-size gate would already have failed."""
+    steps = load_workflow(WORKFLOW)["jobs"]["convert"]["steps"]
+    names = [str(s.get("name", "")) for s in steps]
+    def only(substring: str) -> int:
+        """The index of the one step matching `substring`.
+
+        Indexing a comprehension would raise IndexError on a renamed step, which
+        names neither the step that vanished nor the steps that exist. It also
+        cannot tell "no match" from "two matches" -- and a second match here
+        would mean the ordering this test asserts is ambiguous."""
+        hits = [i for i, n in enumerate(names) if substring.lower() in n.lower()]
+        assert len(hits) == 1, f"expected exactly one step matching {substring!r}, got {hits}: {names}"
+        return hits[0]
+
+    dedupe = only("duplicate assets")
+    capture = only("Capture the live WordPress site")
+    reuse = only("Reuse the capture")
+    integrate = only("Integrate the capture")
+    gate = only("must be publishable")
+    assert capture < dedupe, (capture, dedupe, names)
+    assert reuse < dedupe, (reuse, dedupe, names)
+    assert dedupe < integrate < gate, (dedupe, integrate, gate, names)
+
+
+def test_the_dedupe_step_reads_the_same_directory_both_earlier_steps_write():
+    """A capture and a reused capture converge on one path. If this step named a
+    different one it would silently dedupe nothing, and the only symptom would
+    be a size gate that still fails -- which looks like 'the fix did not help'
+    rather than 'the fix never ran'."""
+    run = step_run(WORKFLOW, "convert", "duplicate assets")
+    assert '--site "$RUNNER_TEMP/capture/site"' in run, run
+
+
+def test_the_dedupe_self_test_gates_every_later_job():
+    """This script DELETES files from the capture. It does not get to run
+    against a charity's site without its own tests having passed first."""
+    run = step_run(WORKFLOW, "resolve", "Offline self-tests")
+    assert "node scripts/dedupe-capture-assets.mjs --self-test" in run, run
+
+
+def test_dedupe_deletes_only_after_the_rewrite_has_been_verified():
+    """The safety property, and the one worth a test rather than a comment.
+    Delete-then-rewrite turns a blind spot in the rewrite into 404s on a
+    charity's live site; rewrite-then-verify-then-delete turns the same blind
+    spot into a failed step over a tree that is still publishable, because
+    every reference already points at a canonical file that exists."""
+    src = _dedupe_script_text()
+    rewrite = src.index("const { filesChanged, refsRewritten } = rewriteReferences(")
+    verify = src.index("const stale = findStaleReferences(")
+    delete = src.index("rmSync(abs, { force: true })")
+    assert rewrite < verify < delete, (rewrite, verify, delete)
+    # ...and the verification must ABORT rather than warn.
+    between = src[verify:delete]
+    assert "if (stale.length)" in between, between
+    assert "return {" in between, between
+
+
+def test_dedupe_collapses_a_real_duplicate_and_repoints_its_references():
+    """Exercised end to end against a real tree rather than asserted about the
+    source, because the failure that matters here is a file deleted while some
+    reference still names it -- which no reading of the code can rule out."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        assets = root / "_ffc-assets" / "h" / "up"
+        assets.mkdir(parents=True)
+        body = b"VIDEO" * 2000
+        (assets / "Characters.mp4").write_bytes(body)
+        (assets / "Characters__1.mp4").write_bytes(body)
+        (root / "index.html").write_text(
+            '<video src="./_ffc-assets/h/up/Characters__1.mp4"></video>',
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "dedupe-capture-assets.mjs"),
+                "--site",
+                forward_slashes(str(root)),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+        assert "1 duplicate asset(s) collapsed" in out, out
+
+        assert (assets / "Characters.mp4").exists()
+        assert not (assets / "Characters__1.mp4").exists()
+        assert (
+            root / "index.html"
+        ).read_text(encoding="utf-8") == '<video src="./_ffc-assets/h/up/Characters.mp4"></video>'
+
+
+def test_dedupe_leaves_same_size_different_content_files_alone():
+    """Grouping by size is an optimization, not the decision. If a same-size
+    pair were collapsed without comparing bytes, this pass would quietly serve
+    one charity's document in place of another."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        assets = root / "_ffc-assets" / "h"
+        assets.mkdir(parents=True)
+        (assets / "a.pdf").write_bytes(b"A" * 4096)
+        (assets / "b.pdf").write_bytes(b"B" * 4096)
+        (root / "index.html").write_text(
+            '<a href="./_ffc-assets/h/a.pdf">a</a><a href="./_ffc-assets/h/b.pdf">b</a>',
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "dedupe-capture-assets.mjs"),
+                "--site",
+                forward_slashes(str(root)),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+        assert "no byte-identical assets found" in out, out
+        assert (assets / "a.pdf").exists() and (assets / "b.pdf").exists()
+
+
+def test_the_heal_step_runs_after_the_dedupe_and_before_integration():
+    """Order is the whole design. The dedupe RENAMES assets, and this pass
+    exists to repair references a rename left behind, so running it first would
+    measure a tree the next step is about to change -- and it would report a
+    clean bill of health for exactly the damage it is there to find."""
+    steps = load_workflow(WORKFLOW)["jobs"]["convert"]["steps"]
+    names = [str(s.get("name", "")) for s in steps]
+
+    def only(substring: str) -> int:
+        hits = [i for i, n in enumerate(names) if substring.lower() in n.lower()]
+        assert len(hits) == 1, f"expected exactly one step matching {substring!r}, got {hits}: {names}"
+        return hits[0]
+
+    heal = only("assets the capture no longer has")
+    dedupe = only("duplicate assets")
+    integrate = only("Integrate the capture")
+    assert dedupe < heal < integrate, (dedupe, heal, integrate, names)
+
+
+def test_the_heal_step_reads_the_same_directory_both_earlier_steps_write():
+    """A capture and a reused capture converge on one path. Naming a different
+    one would repair nothing and say so in a way that reads like 'there was
+    nothing to repair'."""
+    run = step_run(WORKFLOW, "convert", "assets the capture no longer has")
+    assert '--site "$RUNNER_TEMP/capture/site"' in run, run
+
+
+def test_the_heal_self_test_gates_every_later_job():
+    """This script rewrites a charity's markup. It does not get to run against
+    their capture without its own tests having passed first."""
+    run = step_run(WORKFLOW, "resolve", "Offline self-tests")
+    assert "node scripts/heal-missing-asset-refs.mjs --self-test" in run, run
+
+
+def test_heal_repoints_a_missing_reference_and_never_invents_one():
+    """End to end against a real tree, because the two failures that matter --
+    repointing at a file that is not there, and rewriting a reference that was
+    fine -- are both invisible to a reading of the source.
+
+    The unresolvable case is asserted in the same tree as the resolvable one on
+    purpose: a pass that heals nothing would also leave `vanished.png` alone,
+    so neither half is evidence without the other."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        assets = root / "_ffc-assets" / "pub.x.org" / "u"
+        assets.mkdir(parents=True)
+        (assets / "books.jpeg").write_bytes(b"BOOKS")
+        (root / "index.html").write_text(
+            '<img src="/_ffc-assets/i0.wp.com/pub.x.org/u/books__fit-1280-2C858-ssl-1.jpeg">'
+            '<img src="/_ffc-assets/pub.x.org/u/vanished.png">',
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"),
+                "--site",
+                forward_slashes(str(root)),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+
+        html = (root / "index.html").read_text(encoding="utf-8")
+        assert '/_ffc-assets/pub.x.org/u/books.jpeg"' in html, html
+        assert "i0.wp.com" not in html, html
+        assert '/_ffc-assets/pub.x.org/u/vanished.png' in html, html
+        assert "pub.x.org/u/vanished.png" in out, out
+
+
+def test_heal_cannot_fail_the_run_on_a_reference_it_could_not_repair():
+    """Deliberate, and the decision most worth pinning. This pass scans EVERY
+    text file in the capture, including pages nothing links to; the
+    self-containment gate loads real pages in a real browser and so speaks only
+    about references a visitor can reach. Exiting non-zero here would let an
+    unreachable stray halt a charity's migration on the gate's behalf, without
+    the gate ever having judged it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "_ffc-assets").mkdir()
+        (root / "orphan.html").write_text(
+            '<img src="/_ffc-assets/x.org/nothing-has-this.png">', encoding="utf-8"
+        )
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"),
+                "--site",
+                forward_slashes(str(root)),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+        assert "could NOT be resolved" in out, out
+        assert "x.org/nothing-has-this.png" in out, out
+
+
+def test_heal_refuses_a_reference_that_traverses_out_of_the_assets_dir():
+    """Copilot's finding on #1355. The reference character class admits `.` and
+    `-`, so it admits `..` as a whole segment -- and `join(assetsRoot, ...)`
+    normalises the traversal away, so a candidate could be probed, and a
+    rewrite written back into a charity's markup, against a path outside the
+    capture. Asserted end to end because the guard has to hold in the scanner,
+    not merely in a helper someone could stop calling."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "_ffc-assets" / "x.org").mkdir(parents=True)
+        (root / "_ffc-assets" / "x.org" / "a.png").write_bytes(b"A")
+        (root / "outside.png").write_bytes(b"OUTSIDE")
+        before = (
+            '<img src="/_ffc-assets/../outside.png">'
+            '<img src="/_ffc-assets/x.org/./a.png">'
+            '<img src="/_ffc-assets/x.org/a__v2.png">'
+        )
+        (root / "index.html").write_text(before, encoding="utf-8")
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"),
+                "--site",
+                forward_slashes(str(root)),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+
+        html = (root / "index.html").read_text(encoding="utf-8")
+        # The two traversal forms are untouched and never reported either way.
+        assert "/_ffc-assets/../outside.png" in html, html
+        assert "/_ffc-assets/x.org/./a.png" in html, html
+        assert "outside.png" not in out, out
+        # ...and the ordinary reference beside them is still healed, so this is
+        # not passing merely because the whole pass did nothing.
+        assert '/_ffc-assets/x.org/a.png"' in html, html
+        assert "a__v2.png" not in html.replace("a__v2.png.bak", ""), html
+
+
+def test_the_second_heal_runs_after_conversion_and_before_the_size_gate():
+    """Two passes, and the second is the one that judges what ships. Run
+    35733489308 proved the first is not enough on its own: the capture pass
+    repaired 18 of 23 broken references and the gate still 404'd on one it had
+    never seen, because that reference does not exist as a literal in the
+    capture -- the conversion writes it. Asserted in BOTH jobs, because
+    `deliver` re-runs the conversion and is what actually pushes."""
+    wf = load_workflow(WORKFLOW)
+    for job in ("convert", "deliver"):
+        names = [str(s.get("name", "")) for s in wf["jobs"][job]["steps"]]
+
+        def only(substring: str) -> int:
+            hits = [i for i, n in enumerate(names) if substring.lower() in n.lower()]
+            assert len(hits) == 1, f"{job}: expected one step matching {substring!r}, got {hits}: {names}"
+            return hits[0]
+
+        convert = only("Convert the capture into real app routes")
+        second_heal = only("conversion left pointing at nothing")
+        size_gate = only("must be publishable")
+        assert convert < second_heal < size_gate, (job, convert, second_heal, size_gate)
+
+
+def test_the_second_heal_resolves_against_public_and_scans_the_generated_routes():
+    """The assets and the references live in DIFFERENT directories once the
+    capture is integrated. Pointing --site at the repo root would look for
+    `_ffc-assets` where there is none, so every reference it found would be
+    reported unresolved -- a wall of names nobody can act on, still exiting 0;
+    omitting `--scan ffc-ex/src` would never read the generated routes and
+    would report a clean tree for the files the second pass exists to fix.
+    Neither mistake fails the run."""
+    for job in ("convert", "deliver"):
+        run = step_run(WORKFLOW, job, "conversion left pointing at nothing")
+        assert "--site ffc-ex/public" in run, (job, run)
+        assert "--scan ffc-ex/public" in run, (job, run)
+        assert "--scan ffc-ex/src" in run, (job, run)
+
+
+def test_heal_walks_a_next_checkout_without_touching_node_modules():
+    """This pass REWRITES what it walks, and the second invocation points it at
+    a Next.js checkout. Walking node_modules there would be slow and dangerous;
+    walking `out/` would rewrite build output, which the next build discards --
+    making the pass look effective while the source stayed broken."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "public" / "_ffc-assets" / "x.org").mkdir(parents=True)
+        (root / "public" / "_ffc-assets" / "x.org" / "hero.jpg").write_bytes(b"H")
+        (root / "src").mkdir()
+        (root / "src" / "page.tsx").write_text(
+            'const a = "/_ffc-assets/x.org/hero__fit-9.jpg";', encoding="utf-8"
+        )
+        # Inside src/, which IS scanned. Placed beside it they would be skipped
+        # for being out of range rather than by the guard, and the assertion
+        # below would hold with SKIP_DIRS deleted.
+        for skipped in ("node_modules", "out", ".next"):
+            (root / "src" / skipped).mkdir()
+            (root / "src" / skipped / "f.js").write_text(
+                'const a = "/_ffc-assets/x.org/hero__fit-9.jpg";', encoding="utf-8"
+            )
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"),
+                "--site",
+                forward_slashes(str(root / "public")),
+                "--scan",
+                forward_slashes(str(root / "public")),
+                "--scan",
+                forward_slashes(str(root / "src")),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        assert proc.returncode == 0, out
+
+        assert '"/_ffc-assets/x.org/hero.jpg"' in (root / "src" / "page.tsx").read_text(
+            encoding="utf-8"
+        ), out
+        for skipped in ("node_modules", "out", ".next"):
+            assert "hero__fit-9.jpg" in (root / "src" / skipped / "f.js").read_text(
+                encoding="utf-8"
+            ), skipped
+
+
+def test_heal_self_tests_cover_the_escaped_and_unresolvable_cases():
+    """A source-text assertion cannot tell a live case from a deleted one, so
+    this runs the self-test and requires the cases by name. The escaped
+    spelling is the one that matters most: WordPress inlines JSON inside
+    <script>, where every slash arrives as `\\/`, and a plain-literal matcher
+    reads such a document as containing no references at all -- silently, and
+    in the reassuring direction."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "referencesIn finds a JSON-escaped reference",
+        "the escaped spelling is repointed too",
+        "an unresolvable reference is left exactly as it was",
+        "a prefix-sharing neighbour is not rewritten",
+        "nothing is ever deleted",
+        "referencesIn drops a reference that traverses out of the assets dir",
+        "a reference in a generated .tsx route is healed against public/_ffc-assets",
+        "node_modules is never walked, let alone rewritten",
+    ):
+        assert f"PASS {name}" in out, (name, out[-2000:])
+
+
+def test_heal_repairs_a_reference_written_relative_to_its_own_document():
+    """Run 70's diagnostic found a blind spot; this closes it.
+
+    The gate failed on one image; its diagnostic named the file that referenced
+    it -- an Elementor stylesheet inside the assets tree -- and the reference
+    there is written RELATIVE to that stylesheet. No `_ffc-assets` appears in
+    it, so the path-based scanner reads the whole document as containing no
+    references, which is why two runs of "every reference resolves" sat beside
+    a 404 without contradicting it.
+
+    Required by name from the script's own self-test, because a source-text
+    assertion cannot tell a live case from a deleted one. Two of these carry
+    more weight than the repair itself: the reference must still be RELATIVE
+    afterwards (these sites are served from a project Pages subpath, where an
+    absolute `/_ffc-assets/...` breaks), and a token resolving outside the
+    assets tree must be ignored rather than guessed at.
+    """
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a RELATIVE reference to a missing fold is repointed at its sibling",
+        "...and it is still RELATIVE afterwards",
+        "a RELATIVE reference whose target EXISTS is untouched",
+        "a RELATIVE reference with no sibling is left exactly as it was",
+        "a RELATIVE token that escapes the assets tree is ignored",
+        "a token a slash continues is a path prefix, not a reference",
+        "...and the path prefix is left in the document untouched",
+        "a real reference is repaired where it stands alone",
+        "...and the SAME string is left alone where a slash continues it",
+        "isInside accepts a directory whose name merely begins with dots",
+        "isInside rejects the parent itself",
+        "isInside rejects a sibling of the root",
+        "the relative repair is counted, not silently applied",
+        "the path-based scan saw nothing here",
+        "a second relative run is a no-op",
+    ):
+        assert f"PASS {name}" in out, (name, out[-2500:])
+
+
+def test_the_gate_explains_a_missing_asset_instead_of_only_naming_it():
+    """A 404 says a file is absent and nothing about why.
+
+    Run 69 is the reason this exists. The gate failed on one asset; the repair
+    pass over the same tree had reported every reference it checked as
+    resolving; and those two facts together read as "the reference must be
+    fine, so something else is wrong". They are not in tension at all -- that
+    pass names only references it can PARSE and finds BROKEN, so its silence
+    about an asset is equally consistent with never having seen it. The
+    decisive question -- is this name written down anywhere in the export? --
+    had no answer anywhere in the log.
+
+    The cases are required BY NAME from the script's own self-test, because a
+    source-text assertion cannot tell a live case from a deleted one. The
+    relative-reference case is the load-bearing one: it is the shape a
+    path-based scanner cannot see, and therefore the shape this exists for.
+    """
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "verify-no-legacy.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "explainMissingAsset says a missing file is not on disk",
+        "explainMissingAsset finds the sibling that shares the folded base name",
+        "explainMissingAsset finds an ABSOLUTE reference by basename",
+        "explainMissingAsset finds a RELATIVE reference the path scanner cannot see",
+        "explainMissingAsset does not claim a BINARY neighbour mentions it",
+        "explainMissingAsset reports a file that IS on disk",
+        "explainMissingAsset refuses a path that escapes the served dir",
+        "explainMissingAsset does not read a file bigger than the whole byte budget",
+        "explainMissingAsset says so when the byte budget stopped it",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+
+def test_the_gate_diagnostic_cannot_change_a_verdict():
+    """It runs on the failure path and only reports. If it could decide
+    anything, a bug in a diagnostic would become a bug in the gate -- and this
+    gate is the only check that can see a live-origin dependency."""
+    gate = (REPO_ROOT / "scripts" / "verify-no-legacy.mjs").read_text(encoding="utf-8")
+    start = gate.index("export async function explainMissingAsset")
+    end = gate.index("function arg(", start)
+    body = gate[start:end]
+    for forbidden in ("process.exitCode", "process.exit(", "verdictFor", "fatal"):
+        assert forbidden not in body, forbidden
+    # And it is consulted only where a failure has already been recorded, so an
+    # export with nothing wrong never pays for the walk.
+    assert "if (dir && missingPaths.size) {" in gate
+
+
+def test_heal_refuses_an_argument_that_would_silently_narrow_the_scan():
+    """A `--scan` that does not take is worse than one that errors.
+
+    The pass reports what it could not repair, so a root it never read costs
+    nothing visible: it prints a smaller total, no unresolved names, and exits
+    0. That reads exactly like a healthy tree. Three spellings reach that
+    state -- a trailing `--scan`, a `--scan` swallowed by the next flag, and a
+    `--scan` pointed at a FILE (which satisfies existsSync and then walks to
+    nothing) -- so each must be refused BY NAME rather than ignored.
+
+    Every case asserts the message as well as the exit code. `rc == 2` alone
+    cannot tell a refusal from a node that failed to start, and this module
+    has already shipped one test that went green for exactly that reason
+    (CLAUDE.md, 2026-07-29).
+    """
+    heal = str(REPO_ROOT / "scripts" / "heal-missing-asset-refs.mjs")
+
+    def run(*args: str) -> tuple[int, str]:
+        proc = subprocess.run(
+            ["node", heal, *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=child_env(),
+        )
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "public" / "_ffc-assets").mkdir(parents=True)
+        (root / "src").mkdir()
+        (root / "src" / "page.tsx").write_text("const a = 1;", encoding="utf-8")
+        a_file = root / "src" / "page.tsx"
+
+        site = forward_slashes(str(root / "public"))
+        src = forward_slashes(str(root / "src"))
+        the_file = forward_slashes(str(a_file))
+
+        # The positive control comes FIRST and is not optional: a script that
+        # returned 2 for everything would satisfy every case below.
+        rc, out = run("--site", site, "--scan", src)
+        assert rc == 0, out
+
+        for args, needle in (
+            (("--site", site, "--scan"), "--scan requires a directory"),
+            (("--site", site, "--scan", "--dry-run"), "--scan requires a directory"),
+            (("--site", site, "--scan", the_file), "is not a directory"),
+            (("--site",), "--site requires a directory"),
+            (("--site", the_file), "is not a directory"),
+            (("--scan", src), "--site is required"),
+        ):
+            rc, out = run(*args)
+            assert rc == 2, (args, rc, out)
+            assert needle in out, (args, needle, out)
+
+
+# Built HERE, at the end of the module, and not one line earlier. This is a
+# snapshot of `globals()` taken where it appears, so a roster placed mid-file
+# silently omits every test defined below it -- this module defined 108 and ran
+# 97 that way, reporting a clean green over a suite 11 tests smaller than the
+# one in the file. Nothing in the module's own output can show that; only
+# run_all.py's roster guard catches it, as "defines N but reported M" (L194).
+# Keep this line last.
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+
 
 if __name__ == "__main__":
     failures = []

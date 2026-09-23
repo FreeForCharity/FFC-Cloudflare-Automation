@@ -46,7 +46,9 @@
  *   2  invalid usage / self-test failure / crash
  */
 
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, mkdtempSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join, dirname, extname, resolve as resolvePath, sep } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -207,22 +209,57 @@ export function classifyRestIndex(status, body) {
 }
 
 /**
+ * A `--mount` value as a path segment prefix: no leading or trailing slashes,
+ * no traversal, empty when unset.
+ *
+ * Deliberately strict rather than forgiving. The value becomes a directory the
+ * capture writes into, so `..` here would put a charity's pages outside the
+ * output tree — `isContainedPath` would then reject every write, which reads as
+ * a broken capture rather than as a bad argument.
+ */
+export function normalizeMount(mount) {
+  if (typeof mount !== 'string') return '';
+  const cleaned = mount
+    .trim()
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .split('/')
+    .filter((s) => s && s !== '.' && s !== '..')
+    .join('/');
+  return cleaned;
+}
+
+/**
  * Map a live page URL to the local path its captured HTML belongs at.
  * `https://x.org/about-us/` -> `about-us/index.html`; the home page -> `index.html`.
+ *
+ * `mount` moves the whole capture under a path prefix, which is how a charity's
+ * SUBDOMAIN is folded into the apex site's repo: capture
+ * `school.example.org` with `--mount school` and its pages land at
+ * `school/<path>/index.html`, i.e. the URLs `/school/...` on the merged site.
+ *
+ * Nothing else has to change for that to work, and the reason is
+ * `relativePrefix()`: it derives a page's `../` count from the DEPTH of this
+ * local path, so a mounted page automatically reaches the shared asset root one
+ * level further up. Applying the prefix here rather than by moving files
+ * afterwards is what keeps that true — a post-hoc move would leave every
+ * relative reference in the mounted pages pointing one level too shallow.
  */
-export function localPathForLink(link, domain) {
+export function localPathForLink(link, domain, mount = '') {
   let path;
   try {
     path = new URL(link).pathname;
   } catch {
     return null;
   }
+  const prefix = normalizeMount(mount);
+  const under = (p) => (prefix ? `${prefix}/${p}` : p);
   path = path.replace(/^\/+/, '').replace(/\/+$/, '');
-  if (path === '') return 'index.html';
+  if (path === '') return under('index.html');
   // A link that already names a file keeps its name; a directory-style link
   // becomes <dir>/index.html so a static host serves it at the same URL.
-  if (/\.[a-z0-9]{2,5}$/i.test(path)) return path;
-  return `${path}/index.html`;
+  if (/\.[a-z0-9]{2,5}$/i.test(path)) return under(path);
+  return under(`${path}/index.html`);
 }
 
 /**
@@ -1235,13 +1272,95 @@ export function assetLocalName(absUrl) {
  * Formats worth re-encoding, and the one they are re-encoded to.
  *
  * GIF is excluded because it may be animated and a still WebP would silently
- * drop the animation; SVG because it is not raster; WebP and AVIF because they
- * are already the destination format.
+ * drop the animation; SVG because it is not raster; AVIF because re-encoding
+ * it to WebP would rename the file for a format that is usually already
+ * smaller.
+ *
+ * WebP IS included, and used not to be. "Already the destination format" is a
+ * statement about the container, and the budget is a statement about bytes --
+ * treating the first as an answer to the second is what let a 4,251 KB WebP
+ * ship untouched from newheightseducation.org. Jetpack and i0.wp.com serve
+ * WebP at whatever size the upload was, so on a Jetpack site the format this
+ * pass converts TO is also the format most of the oversized images arrive in:
+ * 29 of that site's 34 offenders were `.webp` and not one of them was ever a
+ * candidate. A WebP re-encoded to WebP keeps its name, which is why
+ * `worthShrinking` rather than `worthReencoding` decides whether to keep it
+ * (see the call site) -- there is no rename to pay for.
  */
-const RECODABLE = /\.(png|jpe?g)(\?|$)/i;
+const RECODABLE = /\.(png|jpe?g|webp)(\?|$)/i;
 
-/** Quality ladder: the first rung that lands under budget wins. */
+/**
+ * Quality rungs, tried at the image's own dimensions. The first that lands
+ * under budget wins.
+ */
 export const IMAGE_QUALITY_LADDER = [85, 78, 70];
+
+/**
+ * Long-edge caps, tried only after quality alone has failed.
+ *
+ * Quality is exhausted first because it costs no pixels, and most images need
+ * nothing else. Measured by replaying these exact rungs against
+ * newheightseducation.org's 34 over-budget originals: all 34 land under
+ * 400 KB, and **22 of them keep their original dimensions** -- 21 at q85, one
+ * at q78 -- including the 4,251 KB magazine cover, which lands at 362 KB at
+ * q85. The other 12 are 2560 px WordPress `-scaled` exports and Jetpack
+ * resizes of them; those do not fit in 400 KB at any quality a reader would
+ * accept, and no quality rung can say so.
+ *
+ * 1400 px is the floor on purpose: it is still wider than the content column
+ * these render in, so the smallest rung this ladder can reach does not visibly
+ * degrade a charity's photograph.
+ */
+export const IMAGE_EDGE_LADDER = [2048, 1600, 1400];
+
+/** Qualities tried at each capped size. */
+export const IMAGE_RESIZE_QUALITY_LADDER = [82, 75];
+
+/**
+ * The full rung list, in the order they are tried: every quality at the
+ * original size, then every quality at each cap, largest cap first.
+ *
+ * Built rather than written out so the ordering cannot drift from the two
+ * ladders it is made of -- the property that matters is that no rung drops a
+ * pixel before every rung that does not has been tried.
+ */
+/**
+ * Apply one rung's dimension cap to a sharp pipeline.
+ *
+ * Pulled out of `encodeWebp` so it can be exercised without `sharp`, which
+ * this repo does not depend on -- 706 installs it before the capture step, and
+ * `Validate Repository` never has it. Mutation review is what forced this out:
+ * with the resize inline, replacing its condition with `if (false)` passed
+ * every check, because nothing in the suite could observe whether a rung's
+ * `edge` reached the encoder at all. A ladder whose rungs are asserted in the
+ * right order and then never applied is the same defect as having no ladder.
+ *
+ * `fit: 'inside'` caps the LONG edge whichever way round the image is, and
+ * `withoutEnlargement` means a rung larger than the image leaves it alone -- so
+ * a portrait cover and a landscape banner take the same rung without this
+ * needing to read either one's dimensions first.
+ */
+export function withRungResize(pipe, rung) {
+  if (!rung || !rung.edge) return pipe;
+  return pipe.resize({
+    width: rung.edge,
+    height: rung.edge,
+    fit: 'inside',
+    withoutEnlargement: true,
+  });
+}
+
+export function imageRecodeRungs(
+  qualities = IMAGE_QUALITY_LADDER,
+  edges = IMAGE_EDGE_LADDER,
+  resizeQualities = IMAGE_RESIZE_QUALITY_LADDER,
+) {
+  const rungs = qualities.map((quality) => ({ quality, edge: null }));
+  for (const edge of edges) {
+    for (const quality of resizeQualities) rungs.push({ quality, edge });
+  }
+  return rungs;
+}
 
 /**
  * Decide whether a re-encoded image is worth keeping.
@@ -1257,6 +1376,58 @@ export function worthReencoding(originalBytes, encodedBytes, minSavingRatio = 0.
   if (!Number.isFinite(originalBytes) || !Number.isFinite(encodedBytes)) return false;
   if (encodedBytes <= 0 || originalBytes <= 0) return false;
   return encodedBytes <= originalBytes * (1 - minSavingRatio);
+}
+
+/**
+ * Ghostscript rungs for an oversized PDF, tried in order; the first that
+ * lands under budget wins, exactly like IMAGE_QUALITY_LADDER.
+ *
+ * `/printer` and `/prepress` are deliberately absent. Measured on an 8-page
+ * ~200 dpi scan-shaped fixture (gradient plus low-amplitude noise, US Letter
+ * box, 1700x2200 px):
+ *
+ *   /prepress  6,160,013 -> 10,839,765   176.0%   <- LARGER than the input
+ *   /printer   6,160,013 ->  5,510,014    89.4%
+ *   /ebook     6,160,013 ->  2,726,528    44.3%
+ *   /screen    6,160,013 ->    308,369     5.0%
+ *
+ * `/prepress` inflating the file is the same hazard `worthReencoding`
+ * documents for images, and it is why `worthShrinking` below refuses a result
+ * that is not strictly smaller: a pass that reports an optimisation while
+ * making the file heavier is worse than no pass.
+ */
+export const PDF_DOWNSAMPLE_LADDER = ['/ebook', '/screen'];
+
+/**
+ * Whether this asset is a candidate for downsampling at all.
+ *
+ * Size is part of the predicate, as it is for images: a PDF already under
+ * budget is left byte-identical to what the charity uploaded. These are the
+ * charity's own publications, so the bar for touching one is that it cannot
+ * otherwise be published.
+ */
+export function shouldShrinkPdf(absUrl, bytes, maxBytes) {
+  if (typeof absUrl !== 'string' || !/\.pdf(\?|$)/i.test(absUrl)) return false;
+  if (!Number.isFinite(bytes) || !Number.isFinite(maxBytes)) return false;
+  return bytes > maxBytes;
+}
+
+/**
+ * Whether a downsampled PDF is worth keeping.
+ *
+ * Strictly smaller is the whole test, and the missing minimum-saving ratio is
+ * the deliberate difference from `worthReencoding`. That ratio exists for
+ * images because keeping a re-encode means RENAMING the file and rewriting
+ * every reference to it, and each rewrite is a chance to strand one; a 5% win
+ * does not pay for that risk. A shrunk PDF keeps its name, so there is no
+ * reference to strand and no threshold to justify -- any real reduction is a
+ * reduction, and on a file that cannot otherwise be pushed at all, a 5% win
+ * may be exactly the one that fits.
+ */
+export function worthShrinking(originalBytes, shrunkBytes) {
+  if (!Number.isFinite(originalBytes) || !Number.isFinite(shrunkBytes)) return false;
+  if (shrunkBytes <= 0 || originalBytes <= 0) return false;
+  return shrunkBytes < originalBytes;
 }
 
 /** The local name an image takes once re-encoded to WebP. */
@@ -1285,18 +1456,52 @@ export function shouldReencodeImage(absUrl, bytes, maxBytes) {
  * that 404s and looks like a download failure rather than a rewrite bug.
  */
 export function rewriteRefs(text, replacements) {
-  const pairs = [...replacements.entries()].sort((a, b) => b[0].length - a[0].length);
+  const pairs = [...replacements.entries()]
+    .filter(([, to]) => to)
+    .sort((a, b) => b[0].length - a[0].length);
+  if (!pairs.length) return text;
+
+  // EVERY raw is swapped for a sentinel first, and only then are sentinels
+  // swapped for targets. Substituting targets directly — the obvious loop —
+  // lets a LATER raw match inside text an EARLIER replacement already wrote,
+  // and sorting longest-first does not prevent it: that ordering protects one
+  // raw from another, while this collision is between a replacement's OUTPUT
+  // and a later raw.
+  //
+  // It is not hypothetical. `normalizedLinkIndex` deliberately keeps every
+  // spelling of a destination, so a page carrying both
+  // `https://school.example.org/parents/home-school-families/` and the
+  // root-relative `/parents/home-school-families/` supplies two raws where the
+  // second occurs inside the first's target. Measured on
+  // newheightseducation.org (runs 35571249633, 35575009432):
+  //
+  //   want  ../school/parents/home-school-families/
+  //   got   ../school../../school/parents/home-school-families/
+  //
+  // and unmounted, where the same collision is SILENT because the mangled
+  // `..../../parents/…` does not match the dead-link detector's `^\.\./`:
+  //
+  //   want  ../parents/home-school-families/
+  //   got   ..../../parents/home-school-families/
+  //
+  // A sentinel cannot be matched by any later raw (no URL contains NUL), so
+  // one pass of raws followed by one pass of sentinels is order-independent.
+  const targets = [];
+  const token = (i) => `\u0000ffc-ref-${i}\u0000`;
   let out = text;
   for (const [from, to] of pairs) {
-    if (!to) continue;
-    out = out.split(from).join(to);
+    out = out.split(from).join(token(targets.push(to) - 1));
     // Page builders store URLs inside HTML-entity-escaped JSON, where the
     // delimiter is &quot; rather than a quote. Those copies are real references
     // and survive a markup-only rewrite pointing at the decommissioned host.
     const escaped = from.replace(/\//g, '\\/');
-    if (escaped !== from) out = out.split(escaped).join(to.replace(/\//g, '\\/'));
+    if (escaped !== from) {
+      const slashed = to.replace(/\//g, '\\/');
+      out = out.split(escaped).join(token(targets.push(slashed) - 1));
+    }
   }
-  return out;
+  // One pass, and via a callback so a `$&` inside a target is literal.
+  return out.replace(/\u0000ffc-ref-(\d+)\u0000/g, (whole, i) => targets[Number(i)] ?? whole);
 }
 
 /**
@@ -1602,6 +1807,67 @@ function selfTest() {
   eq('localPath nested', localPathForLink('https://x.org/a/b/', 'x.org'), 'a/b/index.html');
   eq('localPath file keeps name', localPathForLink('https://x.org/feed.xml', 'x.org'), 'feed.xml');
   eq('localPath rejects garbage', localPathForLink('not a url', 'x.org'), null);
+
+  // --- mounting a subdomain under a path prefix -------------------------
+  eq(
+    'mount: home lands under the prefix',
+    localPathForLink('https://s.x.org/', 's.x.org', 'school'),
+    'school/index.html',
+  );
+  eq(
+    'mount: nested keeps its shape below the prefix',
+    localPathForLink('https://s.x.org/a/b/', 's.x.org', 'school'),
+    'school/a/b/index.html',
+  );
+  eq(
+    'mount: a file keeps its name below the prefix',
+    localPathForLink('https://s.x.org/feed.xml', 's.x.org', 'school'),
+    'school/feed.xml',
+  );
+  eq(
+    'mount: empty is the unmounted behaviour',
+    localPathForLink('https://x.org/a/', 'x.org', ''),
+    'a/index.html',
+  );
+  eq(
+    'mount: a garbage URL is still rejected',
+    localPathForLink('not a url', 'x.org', 'school'),
+    null,
+  );
+
+  // The mount is normalized, so the three spellings an operator will actually
+  // type are ONE capture rather than three different output trees.
+  for (const spelling of ['school', '/school', 'school/', '/school/']) {
+    eq(
+      `mount: '${spelling}' normalizes to the same path`,
+      localPathForLink('https://s.x.org/a/', 's.x.org', spelling),
+      'school/a/index.html',
+    );
+  }
+  eq('mount: traversal is stripped, not honoured', normalizeMount('../../etc'), 'etc');
+  eq('mount: a lone dot segment is dropped', normalizeMount('./school/.'), 'school');
+  eq('mount: a non-string is empty', normalizeMount(null), '');
+
+  // THE load-bearing property. Applying the prefix here rather than moving
+  // files afterwards is only correct because relativePrefix() derives the `../`
+  // count from this path's depth — so a mounted page reaches the shared asset
+  // root one level further up, automatically. If these two ever disagree, every
+  // asset reference in every mounted page is silently off by one level.
+  eq(
+    'mount: relativePrefix deepens to match the mounted page',
+    relativePrefix(localPathForLink('https://s.x.org/a/', 's.x.org', 'school')),
+    '../'.repeat(2),
+  );
+  eq(
+    'mount: and the unmounted page is unchanged',
+    relativePrefix(localPathForLink('https://x.org/a/', 'x.org', '')),
+    '../',
+  );
+  eq(
+    'mount: a mounted home page is one level down, not at the root',
+    relativePrefix(localPathForLink('https://s.x.org/', 's.x.org', 'school')),
+    '../',
+  );
 
   // The politeness delay must apply to ASSETS too — they are the bulk of the
   // crawl. A cap here meant `--delay` could not slow the run down at all, and
@@ -1913,11 +2179,89 @@ function selfTest() {
     shouldReencodeImage('https://x.org/a/icon.svg', 900_000, 400 * 1024),
     false,
   );
+  // This case used to assert `false`, on the reasoning that WebP is already the
+  // destination format. That is true about the CONTAINER and says nothing
+  // about the bytes, and it is what let a 4,251 KB WebP ship untouched from
+  // newheightseducation.org -- 29 of that site's 34 over-budget images were
+  // `.webp`, served that way by Jetpack, and none was ever a candidate.
   eq(
-    'an image already in the destination format is not re-encoded',
-    shouldReencodeImage('https://x.org/a/photo.webp', 900_000, 400 * 1024),
+    'an oversized WebP is a candidate -- the format is not the budget',
+    shouldReencodeImage('https://x.org/a/cover.webp', 900_000, 400 * 1024),
+    true,
+  );
+  eq(
+    'a WebP already under budget is still left byte-identical',
+    shouldReencodeImage('https://x.org/a/icon.webp', 12_000, 400 * 1024),
     false,
   );
+  eq(
+    'an AVIF is not re-encoded -- that WOULD rename, for a usually-smaller format',
+    shouldReencodeImage('https://x.org/a/photo.avif', 900_000, 400 * 1024),
+    false,
+  );
+  // A WebP re-encoded to WebP keeps its name, which is what makes
+  // `worthShrinking` the right test for it at the call site: there is no
+  // rename to pay for, so a 20% saving that lands UNDER BUDGET is worth
+  // keeping where the same saving on a renamed PNG is not.
+  eq('re-encoding a WebP does not rename it', webpName('cover.webp'), 'cover.webp');
+  eq('re-encoding a PNG does rename it', webpName('flyer.png'), 'flyer.webp');
+  // No rung may drop a pixel before every rung that does not has been tried.
+  {
+    const rungs = imageRecodeRungs();
+    const firstResize = rungs.findIndex((r) => r.edge !== null);
+    eq(
+      'every full-size quality rung is tried before the first resize',
+      rungs.slice(0, firstResize).every((r) => r.edge === null) &&
+        firstResize === IMAGE_QUALITY_LADDER.length,
+      true,
+    );
+    eq(
+      'the caps come down largest first, and never below the content column',
+      rungs
+        .filter((r) => r.edge !== null)
+        .map((r) => r.edge)
+        .every((e, i, all) => (i === 0 || all[i - 1] >= e) && e >= 1400),
+      true,
+    );
+    eq(
+      'each cap is tried at more than one quality',
+      rungs.filter((r) => r.edge === IMAGE_EDGE_LADDER[0]).length,
+      IMAGE_RESIZE_QUALITY_LADDER.length,
+    );
+    // The rung has to REACH the encoder. A stub pipeline records what it is
+    // asked to do, so this runs without `sharp` -- which this repo does not
+    // depend on, and which `Validate Repository` never has.
+    const stub = () => {
+      const calls = [];
+      const pipe = {
+        calls,
+        resize(opts) {
+          calls.push(opts);
+          return pipe;
+        },
+      };
+      return pipe;
+    };
+    const capped = withRungResize(stub(), { quality: 82, edge: 1600 });
+    eq('a rung with a cap resizes the pipeline', capped.calls.length, 1);
+    eq(
+      '...to a LONG-edge cap, whichever way round the image is',
+      capped.calls[0].width === 1600 &&
+        capped.calls[0].height === 1600 &&
+        capped.calls[0].fit === 'inside',
+      true,
+    );
+    eq(
+      '...and never enlarges an image that is already smaller',
+      capped.calls[0].withoutEnlargement,
+      true,
+    );
+    eq(
+      'a full-size rung leaves the pipeline untouched',
+      withRungResize(stub(), { quality: 85, edge: null }).calls.length,
+      0,
+    );
+  }
   // Re-encoding an already-optimised JPEG routinely produces a LARGER file.
   // Shipping that would make the site heavier while reporting an optimisation.
   eq('a larger result is refused', worthReencoding(100_000, 120_000), false);
@@ -1931,6 +2275,57 @@ function selfTest() {
     worthReencoding(100_000, 0),
     false,
   );
+  eq(
+    'shouldShrinkPdf takes an oversized PDF',
+    shouldShrinkPdf('https://x.org/u/NHEG-May-June-2026.pdf', 167 * 1048576, 90 * 1048576),
+    true,
+  );
+  eq(
+    'shouldShrinkPdf leaves a PDF already under budget byte-identical',
+    shouldShrinkPdf('https://x.org/u/flyer.pdf', 2 * 1048576, 90 * 1048576),
+    false,
+  );
+  eq(
+    'shouldShrinkPdf ignores a non-PDF however large',
+    shouldShrinkPdf('https://x.org/u/video.mp4', 400 * 1048576, 90 * 1048576),
+    false,
+  );
+  eq(
+    'shouldShrinkPdf matches a query-suffixed PDF url',
+    shouldShrinkPdf('https://x.org/u/a.pdf?ver=3', 200 * 1048576, 90 * 1048576),
+    true,
+  );
+  eq(
+    'shouldShrinkPdf is case-insensitive about the extension',
+    shouldShrinkPdf('https://x.org/u/A.PDF', 200 * 1048576, 90 * 1048576),
+    true,
+  );
+  eq(
+    'shouldShrinkPdf refuses a non-string url rather than throwing',
+    shouldShrinkPdf(null, 200, 90),
+    false,
+  );
+  eq('shouldShrinkPdf refuses a NaN size', shouldShrinkPdf('https://x.org/a.pdf', NaN, 90), false);
+  // The ladder's top rung MEASURED larger than its input on a scan-shaped
+  // fixture (/prepress, 176%). This is the guard that makes that harmless.
+  eq('worthShrinking keeps a strictly smaller result', worthShrinking(167, 74), true);
+  eq('worthShrinking rejects a LARGER result', worthShrinking(6160013, 10839765), false);
+  eq('worthShrinking rejects an identical result', worthShrinking(100, 100), false);
+  // Deliberately different from worthReencoding's 25% floor: a shrunk PDF keeps
+  // its name, so there is no reference to strand and no threshold to justify.
+  eq(
+    'worthShrinking accepts a small win that worthReencoding would refuse',
+    worthShrinking(100, 96),
+    true,
+  );
+  eq('...and worthReencoding does refuse that same pair', worthReencoding(100, 96), false);
+  eq('worthShrinking rejects a zero-byte result', worthShrinking(100, 0), false);
+  eq(
+    'the ladder excludes the rung measured to inflate the file',
+    PDF_DOWNSAMPLE_LADDER.includes('/prepress'),
+    false,
+  );
+  eq('the ladder runs cheapest-quality-loss first', PDF_DOWNSAMPLE_LADDER, ['/ebook', '/screen']);
   eq(
     'webpName replaces the extension rather than appending',
     webpName('x/a/flyer.png'),
@@ -2903,6 +3298,65 @@ function selfTest() {
     '{"u":"assets\\/logo.png"}',
   );
 
+  // A replacement's OUTPUT must never be rescanned. `normalizedLinkIndex`
+  // keeps every spelling of one destination, so these two raws arrive together
+  // on any page that links to a section both absolutely and root-relatively —
+  // and the second occurs inside the first's target.
+  eq(
+    'rewriteRefs does not rewrite inside what it just wrote (mounted)',
+    rewriteRefs(
+      '<a href="https://s.x.org/parents/home-school-families/">x</a>',
+      new Map([
+        [
+          'https://s.x.org/parents/home-school-families/',
+          '../school/parents/home-school-families/',
+        ],
+        ['/parents/home-school-families/', '../../school/parents/home-school-families/'],
+      ]),
+    ),
+    '<a href="../school/parents/home-school-families/">x</a>',
+  );
+  eq(
+    'rewriteRefs does not rewrite inside what it just wrote (unmounted)',
+    rewriteRefs(
+      '<a href="https://x.org/parents/home-school-families/">x</a>',
+      new Map([
+        ['https://x.org/parents/home-school-families/', '../parents/home-school-families/'],
+        ['/parents/home-school-families/', '../../parents/home-school-families/'],
+      ]),
+    ),
+    '<a href="../parents/home-school-families/">x</a>',
+  );
+  // The longest-first ordering still decides which of two overlapping RAWS
+  // wins — that is a different property and this must not regress it.
+  eq(
+    'rewriteRefs still prefers the longer raw',
+    rewriteRefs(
+      '<a href="https://x.org/a/b/">x</a>',
+      new Map([
+        ['https://x.org/a/', 'SHORT'],
+        ['https://x.org/a/b/', 'LONG'],
+      ]),
+    ),
+    '<a href="LONG">x</a>',
+  );
+  // A falsy target means "no replacement known" and the reference must be left
+  // exactly as it is. The pre-sentinel code expressed this as `if (!to)
+  // continue`; the filter is the same rule and a mutation test caught that
+  // nothing covered it — without it the ref is replaced with an empty string,
+  // silently deleting a URL rather than leaving a visible one.
+  eq(
+    'rewriteRefs leaves a reference with no target alone',
+    rewriteRefs('<img src="https://x.org/a.png">', new Map([['https://x.org/a.png', '']])),
+    '<img src="https://x.org/a.png">',
+  );
+  // A target containing `$&` must land literally, not as the whole match.
+  eq(
+    'rewriteRefs treats a dollar-ampersand in a target literally',
+    rewriteRefs('<img src="https://x.org/q.png">', new Map([['https://x.org/q.png', 'a$&b']])),
+    '<img src="a$&b">',
+  );
+
   eq(
     'remainingExternalAssetHosts reports an unlocalized asset host',
     remainingExternalAssetHosts('<img src="https://cdn.example.net/a.png">', 'x.org'),
@@ -3040,6 +3494,10 @@ const flag = (name) => process.argv.includes(`--${name}`);
 const domain = normalizeDomain(arg('domain', ''));
 const inspectOnly = flag('inspect');
 const outDir = arg('out', '');
+// Path prefix this capture is mounted under; empty for an apex capture. See
+// localPathForLink(). Normalized once here so every consumer sees the same
+// value and a `--mount /school/` is not a different capture from `--mount school`.
+const mount = normalizeMount(arg('mount', ''));
 // Validated rather than parseInt'd: NaN here is silently catastrophic, not
 // loud. See parsePositiveInt.
 const numericOptions = [
@@ -3050,6 +3508,12 @@ const numericOptions = [
   // `__tests__/assets/image-weight.test.ts`. Kept as an option rather than a
   // constant so a repo that raises its own budget can say so here.
   ['max-image-kb', arg('max-image-kb', '400'), { min: 16, max: 100000 }],
+  // GitHub refuses any file of 100 MB or more at the push, so the budget is
+  // set BELOW that rather than at it. Ghostscript's output size is not
+  // predictable from its input, so a budget equal to the limit would let a
+  // file land at 99.7 MB on one run and 100.4 MB on the next -- and the
+  // failure surfaces at the push, after the crawl and after a human approval.
+  ['max-pdf-mb', arg('max-pdf-mb', '90'), { min: 1, max: 100000 }],
 ];
 const parsedOptions = {};
 const badOptions = [];
@@ -3069,6 +3533,13 @@ const includePosts = flag('include-posts');
 // are themselves the deliverable.
 const optimizeImages = !flag('no-optimize-images');
 const maxImageBytes = parsedOptions['max-image-kb'] * 1024;
+// On by default for the same reason images are: an oversized PDF is a cost the
+// visitor pays, and past 100 MB the receiving repo cannot accept it at all.
+// `--no-optimize-pdfs` ships the captured bytes verbatim, which is the right
+// choice only when the originals are themselves the deliverable AND something
+// downstream is hosting them off the repo.
+const optimizePdfs = !flag('no-optimize-pdfs');
+const maxPdfBytes = parsedOptions['max-pdf-mb'] * 1024 * 1024;
 const jsonOut = arg('json-out', '');
 // Hosts whose references are dropped from the capture entirely: not fetched,
 // not counted as failures, not counted against the "zero external asset hosts"
@@ -3485,7 +3956,7 @@ async function capture() {
       menuOrder: it.menu_order ?? 0,
       template: it.template ?? '',
       source: 'rest',
-      localPath: localPathForLink(it.link, domain),
+      localPath: localPathForLink(it.link, domain, mount),
     }))
     // localPathForLink maps by PATHNAME, so a stale-host link still yields a
     // correct local path — the entry looks fine and only the fetch fails. That
@@ -3504,7 +3975,7 @@ async function capture() {
   let fromSitemap = 0;
   for (const raw of sm.urls) {
     const url = normalizeSelfHost(raw, selfHost, domain);
-    const localPath = localPathForLink(url, domain);
+    const localPath = localPathForLink(url, domain, mount);
     if (!localPath || known.has(localPath)) continue;
     known.add(localPath);
     fromSitemap++;
@@ -3569,6 +4040,15 @@ async function capture() {
     skippedNoEncoder: 0,
     collisions: [],
     stillOverBudget: 0,
+    bytesBefore: 0,
+    bytesAfter: 0,
+    available: null,
+  };
+  const pdfShrink = {
+    shrunk: 0,
+    declined: 0,
+    skippedNoEncoder: 0,
+    stillOverBudget: [],
     bytesBefore: 0,
     bytesAfter: 0,
     available: null,
@@ -3717,21 +4197,97 @@ async function capture() {
       }
     }
     let best = null;
-    for (const quality of IMAGE_QUALITY_LADDER) {
+    let bestRung = null;
+    for (const rung of imageRecodeRungs()) {
       let out;
       try {
-        out = await sharpModule(buf).webp({ quality, effort: 6 }).toBuffer();
+        const pipe = withRungResize(sharpModule(buf), rung);
+        out = await pipe.webp({ quality: rung.quality, effort: 6 }).toBuffer();
       } catch {
         // An image sharp cannot decode is not a failure of the capture; the
         // original is already downloaded and gets shipped unchanged.
         return null;
       }
-      if (!best || out.length < best.length) best = out;
-      if (out.length <= budget) return { buffer: out, quality };
+      if (!best || out.length < best.length) {
+        best = out;
+        bestRung = rung;
+      }
+      if (out.length <= budget) return { buffer: out, quality: rung.quality, edge: rung.edge };
     }
-    return best
-      ? { buffer: best, quality: IMAGE_QUALITY_LADDER[IMAGE_QUALITY_LADDER.length - 1] }
-      : null;
+    return best ? { buffer: best, quality: bestRung.quality, edge: bestRung.edge } : null;
+  }
+
+  /**
+   * Downsample one PDF with Ghostscript, walking the rung ladder.
+   *
+   * Shelling out rather than using a library: there is no usable pure-JS PDF
+   * downsampler, and Ghostscript is present on `ubuntu-latest`. It is probed
+   * the same way `sharp` is -- once, with the absence reported once and the
+   * originals shipped unchanged. Shipping them unchanged is not silently
+   * fine here, which is why `check-publishable-size.mjs` fails the run
+   * afterwards on any file the push would reject; this pass makes the file
+   * publishable, that guard makes an unpublishable one loud and early.
+   *
+   * Ghostscript works on files, not buffers, so each attempt round-trips
+   * through a temp directory that is removed whatever happens.
+   */
+  async function shrinkPdfBuffer(buf, budget) {
+    if (pdfShrink.available === false) return null;
+    const dir = mkdtempSync(join(tmpdir(), 'ffc-pdf-'));
+    const src = join(dir, 'in.pdf');
+    try {
+      writeFileSync(src, buf);
+      let best = null;
+      for (const rung of PDF_DOWNSAMPLE_LADDER) {
+        const dest = join(dir, `out${rung.replace('/', '-')}.pdf`);
+        try {
+          await new Promise((res, rej) => {
+            execFile(
+              'gs',
+              [
+                '-q',
+                '-dNOPAUSE',
+                '-dBATCH',
+                '-dSAFER',
+                '-sDEVICE=pdfwrite',
+                `-dPDFSETTINGS=${rung}`,
+                '-dDetectDuplicateImages=true',
+                '-o',
+                dest,
+                src,
+              ],
+              { maxBuffer: 1 << 20 },
+              (err) => (err ? rej(err) : res()),
+            );
+          });
+        } catch (err) {
+          // A MISSING BINARY and a PDF THAT DEFEATED GHOSTSCRIPT are different
+          // failures needing opposite responses -- stop trying at all, versus
+          // skip this one file -- and they are indistinguishable by whether an
+          // output file appeared. Keying off ENOENT is what separates them; an
+          // earlier draft inferred it from `existsSync(dest)` and would have
+          // announced "ghostscript is not installed" on the first corrupt PDF,
+          // on a box where it is installed and working.
+          if (err && err.code === 'ENOENT') {
+            pdfShrink.available = false;
+            console.error(
+              '[asset] ghostscript (gs) is not installed, so oversized PDFs ship as' +
+                ' captured. Install it before the capture step to downsample them.',
+            );
+            return null;
+          }
+          continue; // this rung failed on this file; try the next one
+        }
+        if (!existsSync(dest)) continue;
+        const out = readFileSync(dest);
+        pdfShrink.available = true;
+        if (!best || out.length < best.buffer.length) best = { buffer: out, rung };
+        if (out.length <= budget) return { buffer: out, rung };
+      }
+      return best;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 
   async function localizeAsset(rawUrl) {
@@ -3789,7 +4345,19 @@ async function capture() {
         imageRecode.collisions.push(name);
       } else {
         const encoded = await encodeWebp(buf, maxImageBytes);
-        if (encoded && worthReencoding(buf.length, encoded.buffer.length)) {
+        // Which test applies depends on whether the file is being RENAMED.
+        // `worthReencoding`'s 25% floor exists to pay for a rename, and a WebP
+        // re-encoded to WebP keeps its name -- so for those the test is
+        // `worthShrinking`, exactly as it is for a downsampled PDF, which also
+        // keeps its name. Applying the floor there would discard a result that
+        // lands UNDER BUDGET for saving only 20%, and ship the oversized
+        // original instead.
+        const keep = encoded
+          ? target === name
+            ? worthShrinking(buf.length, encoded.buffer.length)
+            : worthReencoding(buf.length, encoded.buffer.length)
+          : false;
+        if (keep) {
           imageRecode.recoded += 1;
           imageRecode.bytesBefore += buf.length;
           imageRecode.bytesAfter += encoded.buffer.length;
@@ -3806,6 +4374,38 @@ async function capture() {
         }
       }
     }
+    // Downsample an oversized PDF.
+    //
+    // Unlike the image pass this does NOT rename: `/x/NHEG-May-June-2026.pdf`
+    // stays that path, so every reference to it -- in markup, in a link, in a
+    // sitemap the capture does not even parse -- keeps working with no rewrite.
+    // That is what makes it safe to apply to a charity's own publications.
+    //
+    // Measured on this migration: three EdGuide issues are over GitHub's hard
+    // 100 MB per-file limit (115.93 MB, 108.72 MB, 167.22 MB), and the push of
+    // an otherwise complete and gate-passing conversion was rejected outright
+    // by the pre-receive hook -- after the 40-minute crawl and after the human
+    // approval it had already spent.
+    if (optimizePdfs && shouldShrinkPdf(absUrl, buf.length, maxPdfBytes)) {
+      const shrunk = await shrinkPdfBuffer(buf, maxPdfBytes);
+      if (shrunk && worthShrinking(buf.length, shrunk.buffer.length)) {
+        pdfShrink.shrunk += 1;
+        pdfShrink.bytesBefore += buf.length;
+        pdfShrink.bytesAfter += shrunk.buffer.length;
+        if (shrunk.buffer.length > maxPdfBytes) pdfShrink.stillOverBudget.push(name);
+        buf = shrunk.buffer;
+      } else if (pdfShrink.available === false) {
+        // Not the same thing as declining on merit. Reporting it as one would
+        // be a claim the operator cannot check: "downsampling would not have
+        // been smaller" about a file nothing tried to downsample.
+        pdfShrink.skippedNoEncoder += 1;
+        pdfShrink.stillOverBudget.push(name);
+      } else {
+        pdfShrink.declined += 1;
+        pdfShrink.stillOverBudget.push(name);
+      }
+    }
+
     usedAssetNames.add(name);
 
     if (!isContainedPath(assetsRoot, name)) {
@@ -4048,6 +4648,35 @@ async function capture() {
       `[capture] ${imageRecode.collisions.length} image(s) kept their original encoding because` +
         ` the .webp name was already taken: ${imageRecode.collisions.slice(0, 5).join(', ')}`,
     );
+  if (pdfShrink.shrunk) {
+    const mb = (n) => (n / 1048576).toFixed(1);
+    console.error(
+      `[capture] downsampled ${pdfShrink.shrunk} oversized PDF(s):` +
+        ` ${mb(pdfShrink.bytesBefore)} MB -> ${mb(pdfShrink.bytesAfter)} MB` +
+        ` (${(100 - (pdfShrink.bytesAfter / pdfShrink.bytesBefore) * 100).toFixed(1)}% smaller).` +
+        ' Each kept its own name, so no reference needed rewriting.',
+    );
+  }
+  if (pdfShrink.declined)
+    console.error(
+      `[capture] ${pdfShrink.declined} oversized PDF(s) shipped as captured —` +
+        ' downsampling them produced nothing smaller.',
+    );
+  if (pdfShrink.skippedNoEncoder)
+    console.error(
+      `[capture] ${pdfShrink.skippedNoEncoder} oversized PDF(s) shipped as captured because` +
+        ' ghostscript was not available. This is NOT a judgement that they were already' +
+        ' optimal: nothing tried. Install ghostscript before the capture step.',
+    );
+  if (pdfShrink.stillOverBudget.length)
+    // Named, not counted: these are the files a push will reject, and the
+    // operator cannot act on a number. Uncapped on purpose — a long list is
+    // itself the finding, and truncating it hides the ones at the end.
+    console.error(
+      `[capture] ${pdfShrink.stillOverBudget.length} PDF(s) are still over the` +
+        ` ${Math.round(maxPdfBytes / 1048576)} MB budget and will be REJECTED by a` +
+        ` git push if they reach one: ${pdfShrink.stillOverBudget.join(', ')}`,
+    );
   const assetTally = tallyFailures(assetFailures);
   const assetFailureNote = describeFailures(assetTally, domain);
   if (assetFailureNote) console.error(`[capture] assets: ${assetFailureNote}`);
@@ -4072,6 +4701,14 @@ async function capture() {
 
   const report = {
     domain,
+    // Where this host's pages were written, relative to the site root. Recorded
+    // because a capture can be REUSED by a later run (`reuse_capture_from_run`),
+    // and a reused capture's mount is the difference between republishing the
+    // same site and publishing a charity's subdomain at a URL the new dispatch
+    // did not ask for. Nothing else in the artifact states it: the mount is
+    // visible only as directory depth, which is exactly the kind of fact a
+    // verifier should not have to infer.
+    mount,
     capturedAt: new Date().toISOString(),
     restRoot: rest.indexUrl,
     restFlavor: rest.kind,
@@ -4118,6 +4755,14 @@ async function capture() {
       headLinksRemoved: cmsHeadLinksRemoved,
     },
     imageOptimization: {
+      enabledPdfs: optimizePdfs,
+      maxPdfMb: Math.round(maxPdfBytes / 1048576),
+      pdfsShrunk: pdfShrink.shrunk,
+      pdfsDeclined: pdfShrink.declined,
+      pdfsSkippedNoEncoder: pdfShrink.skippedNoEncoder,
+      pdfsStillOverBudget: pdfShrink.stillOverBudget,
+      pdfBytesBefore: pdfShrink.bytesBefore,
+      pdfBytesAfter: pdfShrink.bytesAfter,
       enabled: optimizeImages,
       encoderAvailable: imageRecode.available,
       maxImageKb: Math.round(maxImageBytes / 1024),

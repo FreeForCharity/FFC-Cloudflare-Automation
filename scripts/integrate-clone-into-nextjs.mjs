@@ -48,44 +48,141 @@ function arg(name, def) {
 const PAGE = /^page\.(tsx|ts|jsx|js)$/;
 
 /**
- * Template files under public/ that must survive the wipe.
+ * Names at the ROOT of `public/` that must NOT be carried across the wipe.
  *
- * `public/` is replaced wholesale by the clone, and only CNAME used to be
- * carried across. The first real delivery therefore shipped a PR that failed
- * the target repo's own drift check:
+ * Everything else directly under `public/` is carried, because the template
+ * ships eight files there and the named list this replaces tracked three of
+ * them. Measured on FFC-EX-newheightseducation.org, whose `public/` root at
+ * the template commit held `_headers`, `security.txt`, `favicon.ico`,
+ * `icon.png`, `apple-icon.png`, `android-chrome-192x192.png`,
+ * `android-chrome-512x512.png` and `web-app-manifest-512x512.png`. The wipe
+ * kept the first two and deleted the other six, so the migrated site lost
+ * every icon it publishes — the browser tab, the iOS home screen, the web app
+ * manifest — and nothing failed, because an icon 404 is not a broken link in
+ * any markup the gates crawl.
  *
- *   ❌ public/.well-known/security.txt is missing. Restore it from the template.
- *   ⚠️  public/_headers is missing.
- *
- * These are not template decoration. security.txt is the security-contact
- * artifact FFC requires on every charity site, and it exists at both the
- * well-known path and the root fallback the drift check looks for. Deleting it
- * during a migration silently removes a site's way of receiving vulnerability
- * reports.
- *
- * Kept as a named list rather than a filter so that what survives is legible
- * and testable, instead of being an emergent property of the copy order.
+ * This is the same lesson `PRESERVED_PUBLIC_DIRS` already records one level
+ * down, and recording it there did not fix it here: a snapshot of the template
+ * stops tracking the template. So the rule is inverted. What survives is
+ * "whatever the template has", and what needs naming is the short list of
+ * names THIS PIPELINE owns — a list that cannot drift, because this repo is
+ * what writes them.
  */
-// Forward-slash literals, not `join()`: these are Map keys and appear in the
-// report and in test output, and `join` would spell the last one
-// `.well-known\\security.txt` on Windows — where this repo's own Conductor runs.
-// `join(publicDir, rel)` at the filesystem boundary accepts either separator,
-// so the portable spelling costs nothing.
-//
-// CNAME is deliberately ABSENT. It is carried across the wipe by its own step,
-// which then writes `keptCname || domain` unconditionally — so listing it here
-// would make the "clone wins on a collision" rule below false for exactly one
-// entry. That is the right behaviour for CNAME (the published domain is an FFC
-// deployment decision, not content captured from the source site), and the
-// wrong thing to express through a mechanism that promises the opposite.
-export const PRESERVED_PUBLIC_FILES = ['_headers', 'security.txt', '.well-known/security.txt'];
+export const UNCARRIED_PUBLIC_ROOT_FILES = [
+  // The capture's own inventory, written into the clone root by
+  // `capture-wordpress-api.mjs` and copied per-host by 706. A previous run's
+  // copy MUST NOT survive into a run that captured a different set of hosts:
+  // `convert-clone-to-routes` reads `wp-capture-report.json` as the page
+  // inventory, and `verify-reused-capture` reads every
+  // `wp-capture-report.<label>.json` in the directory. A stale one is not a
+  // lost icon, it is a wrong answer about what was captured.
+  /^wp-capture-report(\.[^/]+)?\.json$/,
+  // HTML, which the template never ships at this root: `public/` holds assets
+  // only -- zero HTML -- and every page is a route under `src/app`. So HTML
+  // here is a PREVIOUS run's captured page, which is pipeline output by the
+  // same argument as the report above.
+  //
+  // Raised by review against the first version of this rule, which carried it.
+  // The stated consequence was wrong -- `convert-clone-to-routes` removes
+  // every `*/index.html` it converts, and `exit(1)`s on any unrouted HTML left
+  // under `public/`, so a resurrected page could not reach a visitor. The cost
+  // is the other one: a stale `foo.html` is not `*/index.html`, so it is
+  // neither converted nor removed, and it fails the conversion of a site it
+  // has nothing to do with, after the crawl has already been paid for.
+  /\.x?html?$/i,
+  // CNAME is carried by its own step, which then writes `keptCname || domain`
+  // unconditionally — so carrying it here would make the "clone wins on a
+  // collision" rule below false for exactly one entry. That is the right
+  // behaviour for CNAME (the published domain is an FFC deployment decision,
+  // not content captured from the source site), and the wrong thing to express
+  // through a mechanism that promises the opposite. Behaviour-neutral on its
+  // own, since the explicit write lands either way; it is here so the
+  // mechanism's promise stays true of everything the mechanism handles.
+  /^CNAME$/,
+];
 
-/** Read the preserved files before the wipe. Missing ones are simply absent. */
+/** Is this root-level name one the pipeline owns rather than the template's? */
+export function isUncarriedPublicRootFile(name) {
+  return UNCARRIED_PUBLIC_ROOT_FILES.some((re) => re.test(name));
+}
+
+/**
+ * Template ASSET directories that must survive the wipe, listed as directories
+ * rather than as filenames.
+ *
+ * The template's own components reference these by absolute path — measured on
+ * FFC-EX-newheightseducation.org, 19 assets across 12 files under `src/`. The
+ * wipe deleted every one of them, and the template code that names them
+ * survives integration, so each became a 404 in the export.
+ *
+ * Run 35698011512 is what made this visible: three of them
+ * (`Images/figma-hero-img.webp`, `Images/logo.webp`, `Svgs/footerImage.svg`)
+ * failed the self-containment gate. The other sixteen were equally deleted and
+ * simply sat on pages that run's crawl did not reach — so the observed count
+ * was a property of the crawl, not of the damage.
+ *
+ * ORDER OF DISCOVERY MATTERS HERE. Every earlier delivery of this site died at
+ * the publishable-size gate, which runs BEFORE the self-containment gate, so
+ * this defect was unreachable rather than absent. It has been in every
+ * integration since `public/` started being wiped.
+ *
+ * Listed as DIRECTORIES on purpose. A filename list is what failed: the
+ * template gains and renames assets, and a list of names silently stops
+ * tracking it — which is exactly how nineteen live references came to point at
+ * deleted files with nothing failing until a gate happened to crawl the right
+ * page. A directory tracks the template instead of a snapshot of it.
+ *
+ * Small enough to hold in memory: 380 KB across 20 files, measured.
+ *
+ * DIRECTORIES stay a named list while root FILES are carried wholesale, and
+ * the asymmetry is the size of what each sweep can pick up. The template's
+ * `public/` root is eight small files (~525 KB in total, almost all of it one
+ * favicon); its directories are unbounded, and a rule that swept them all
+ * would carry `public/videos/mission-video.mp4` — 5.7 MB — into every
+ * migration. That video is referenced only from `src/components/home-page/`,
+ * whose page 706 parks in `_disabled_template_routes/`, so after an
+ * integration nothing can reach it. Carrying it would be 5.7 MB of dead weight
+ * charged against the publishable-size gate on every charity site.
+ *
+ * `.well-known` earns its place the other way: `security.txt` under it is what
+ * the target repo's own drift check fails on, and it is the artifact FFC
+ * requires so a charity site has a way to receive vulnerability reports. It is
+ * listed as a directory rather than as `.well-known/security.txt` for the same
+ * reason the other two are — a path is a snapshot, a directory tracks.
+ */
+export const PRESERVED_PUBLIC_DIRS = ['Images', 'Svgs', '.well-known'];
+
+/**
+ * Read the preserved files before the wipe. Missing ones are simply absent.
+ *
+ * Directory entries are expanded to one map entry per file, so the
+ * clone-wins-on-collision rule below stays per-file: a captured site that
+ * happens to ship `Images/logo.webp` keeps its own, and the rest of the
+ * template's directory still comes back.
+ */
 export function readPreservedPublicFiles(publicDir) {
   const kept = new Map();
-  for (const rel of PRESERVED_PUBLIC_FILES) {
-    const p = join(publicDir, rel);
-    if (existsSync(p)) kept.set(rel, readFileSync(p));
+  if (!existsSync(publicDir)) return kept;
+  for (const e of readdirSync(publicDir, { withFileTypes: true })) {
+    if (!e.isFile() || isUncarriedPublicRootFile(e.name)) continue;
+    kept.set(e.name, readFileSync(join(publicDir, e.name)));
+  }
+  for (const dir of PRESERVED_PUBLIC_DIRS) {
+    const root = join(publicDir, dir);
+    if (!existsSync(root)) continue;
+    const walk = (abs) => {
+      for (const e of readdirSync(abs, { withFileTypes: true })) {
+        const child = join(abs, e.name);
+        if (e.isDirectory()) walk(child);
+        else if (e.isFile()) {
+          // Forward slashes: these keys are compared against clone paths and
+          // printed in the report, and `relative` spells them with `\` on the
+          // Windows host this repo's own Conductor runs on.
+          kept.set(relative(publicDir, child).split(sep).join('/'), readFileSync(child));
+        }
+      }
+    };
+    walk(root);
   }
   return kept;
 }
@@ -494,6 +591,48 @@ function selfTest() {
     join(repo, 'public', '_headers'),
     '/*\n  Content-Security-Policy: default-src self\n',
   );
+  // The template's own asset directories. `nested/` is not decoration: the
+  // expansion walks recursively, and a flat readdir would pass every other
+  // assertion here while dropping a subdirectory on the real template.
+  mkdirSync(join(repo, 'public', 'Images', 'nested'), { recursive: true });
+  writeFileSync(join(repo, 'public', 'Images', 'figma-hero-img.webp'), 'HERO');
+  writeFileSync(join(repo, 'public', 'Images', 'logo.webp'), 'TEMPLATE-LOGO');
+  writeFileSync(join(repo, 'public', 'Images', 'nested', 'deep.webp'), 'DEEP');
+  mkdirSync(join(repo, 'public', 'Svgs'), { recursive: true });
+  writeFileSync(join(repo, 'public', 'Svgs', 'footerImage.svg'), '<svg/>');
+  // The template's root-level icons. `src/app/manifest.ts` and
+  // `src/app/layout.tsx` survive integration and name these by absolute path,
+  // so losing them is six live 404s on every migrated site — measured on
+  // FFC-EX-newheightseducation.org, where `manifest.webmanifest` shipped
+  // pointing at two PNGs the wipe had deleted.
+  writeFileSync(join(repo, 'public', 'favicon.ico'), 'ICO');
+  writeFileSync(join(repo, 'public', 'icon.png'), 'ICON');
+  writeFileSync(join(repo, 'public', 'apple-icon.png'), 'APPLE');
+  writeFileSync(join(repo, 'public', 'android-chrome-192x192.png'), 'A192');
+  writeFileSync(join(repo, 'public', 'android-chrome-512x512.png'), 'A512');
+  // A root-level file under a name nothing in this repo lists, which is the
+  // case the five above cannot prove. Restoring a NAME LIST that happened to
+  // spell those five would pass every assertion about them; only a file the
+  // rule has never heard of distinguishes "these names are carried" from
+  // "whatever the template has is carried". The next asset the template adds
+  // at this root arrives under exactly such a name.
+  writeFileSync(join(repo, 'public', 'template-gained-this-later.txt'), 'UNLISTED');
+  // …and the two things at that root the pipeline owns rather than the
+  // template. The stale per-host report is the case that makes the exclusion
+  // more than tidiness: this run captures no `oldsub` host, and a resurrected
+  // `wp-capture-report.oldsub.json` is what `verify-reused-capture` would read
+  // as evidence that it did.
+  writeFileSync(join(repo, 'public', 'wp-capture-report.json'), '{"stale":true}');
+  writeFileSync(join(repo, 'public', 'wp-capture-report.oldsub.json'), '{"stale":true}');
+  // A previous run's captured page. `.html` at this root is never the
+  // template's -- `public/` is assets only -- so carrying it would hand the
+  // next conversion a page from a site it has nothing to do with.
+  writeFileSync(join(repo, 'public', 'stale-page.html'), '<h1>from a previous run</h1>');
+  // A template directory the list deliberately does NOT name. It is here so
+  // the wholesale root sweep cannot be mistaken for a wholesale sweep: a
+  // 5.7 MB video nothing can reach after integration must still be wiped.
+  mkdirSync(join(repo, 'public', 'videos'), { recursive: true });
+  writeFileSync(join(repo, 'public', 'videos', 'mission-video.mp4'), 'MP4');
   // An ESLint 9 flat config, shaped like the real template's.
   writeFileSync(
     join(repo, 'eslint.config.mjs'),
@@ -502,9 +641,16 @@ function selfTest() {
   // …and a clone that ships its own file at one preserved path, to prove the
   // captured site is not overwritten by the template.
   writeFileSync(join(clone, '_headers'), '/*\n  X-From: from-the-clone\n');
+  // …and its own file inside a preserved DIRECTORY, which must also win. A
+  // directory entry is not a licence to overwrite the charity's content.
+  mkdirSync(join(clone, 'Images'), { recursive: true });
+  writeFileSync(join(clone, 'Images', 'logo.webp'), 'CLONE-LOGO');
   // …and its own CNAME, which must NOT win: the published domain is an FFC
   // deployment decision, not content captured from the source site.
   writeFileSync(join(clone, 'CNAME'), 'from-the-clone.example\n');
+  // …and the report for the host it actually captured, which is the only one
+  // that may exist afterwards.
+  writeFileSync(join(clone, 'wp-capture-report.json'), '{"stale":false}');
 
   // The template's route-derived sitemap and the unit test that guards it.
   mkdirSync(join(repo, '__tests__', 'app'), { recursive: true });
@@ -617,8 +763,27 @@ function selfTest() {
     readFileSync(join(repo, 'public', 'CNAME'), 'utf8').trim() === 'kept.example',
   );
   check(
-    'CNAME is governed by its own step, not by the preserved-file mechanism',
-    !PRESERVED_PUBLIC_FILES.includes('CNAME'),
+    'CNAME is governed by its own step, not by the carried-file mechanism',
+    isUncarriedPublicRootFile('CNAME'),
+  );
+  // Both directions. A predicate that answered `true` for everything would
+  // satisfy the three positives alone -- and would wipe the root wholesale,
+  // which is the defect this rule replaced. The labelled report name is the
+  // one 706 writes per host, and it is spelled out rather than derived
+  // because the pattern has to survive a hostname full of dots.
+  check(
+    'the pipeline owns exactly the report names, CNAME and HTML, and nothing else',
+    isUncarriedPublicRootFile('wp-capture-report.json') &&
+      isUncarriedPublicRootFile('wp-capture-report.school.newheightseducation.org.json') &&
+      isUncarriedPublicRootFile('index.html') &&
+      isUncarriedPublicRootFile('About-Us.HTM') &&
+      !isUncarriedPublicRootFile('favicon.ico') &&
+      !isUncarriedPublicRootFile('android-chrome-512x512.png') &&
+      !isUncarriedPublicRootFile('_headers') &&
+      // `.htm` is HTML; `.htaccess` and `.html-template` are not, and a
+      // pattern loose enough to catch them would start eating real files.
+      !isUncarriedPublicRootFile('.htaccess') &&
+      !isUncarriedPublicRootFile('notes.html.bak'),
   );
   check(
     'public/ is excluded from Prettier',
@@ -753,9 +918,60 @@ function selfTest() {
     existsSync(join(repo, 'public', 'security.txt')) &&
       existsSync(join(repo, 'public', '_headers')),
   );
+  // Reads that tolerate absence. A bare readFileSync here THROWS when the file
+  // is missing, which is precisely the state these three cases exist to detect
+  // — so the self-test would die with ENOENT instead of printing FAIL, and a
+  // crashed run is indistinguishable from a harness that could not start.
+  // Found by mutation testing: dropping the recursive walk, and dropping the
+  // map write, both produced a stack trace rather than a named failure.
+  const keptText = (...parts) => {
+    const abs = join(repo, 'public', ...parts);
+    return existsSync(abs) ? readFileSync(abs, 'utf8') : null;
+  };
+  check(
+    'the template asset directories survive the public/ wipe',
+    keptText('Images', 'figma-hero-img.webp') === 'HERO' &&
+      keptText('Svgs', 'footerImage.svg') === '<svg/>',
+  );
+  check(
+    'a preserved directory is walked recursively, not just its top level',
+    keptText('Images', 'nested', 'deep.webp') === 'DEEP',
+  );
+  check(
+    'the captured site still wins inside a preserved directory',
+    keptText('Images', 'logo.webp') === 'CLONE-LOGO',
+  );
   check(
     'the captured site wins where it ships its own file at a preserved path',
     readFileSync(join(repo, 'public', '_headers'), 'utf8').includes('from-the-clone'),
+  );
+  check(
+    'a root-level template file NO list names survives — the rule tracks, not enumerates',
+    keptText('template-gained-this-later.txt') === 'UNLISTED',
+  );
+  check(
+    'every template icon at the root of public/ survives the wipe',
+    keptText('favicon.ico') === 'ICO' &&
+      keptText('icon.png') === 'ICON' &&
+      keptText('apple-icon.png') === 'APPLE' &&
+      keptText('android-chrome-192x192.png') === 'A192' &&
+      keptText('android-chrome-512x512.png') === 'A512',
+  );
+  check(
+    "a previous run's captured PAGE does NOT survive the wipe",
+    keptText('stale-page.html') === null,
+  );
+  check(
+    "a previous run's capture report does NOT survive the wipe",
+    keptText('wp-capture-report.oldsub.json') === null,
+  );
+  check(
+    "…and the report at the plain name is this run's, not the one that was there",
+    keptText('wp-capture-report.json') === '{"stale":false}',
+  );
+  check(
+    'a template DIRECTORY the list does not name is still wiped',
+    keptText('videos', 'mission-video.mp4') === null,
   );
 
   // Re-clone and integrate again, as a repeat 702 dispatch does: nothing is

@@ -311,6 +311,7 @@ function main() {
     scriptsRemoved: 0,
     shareLinksRepaired: 0,
     shareChromeRemoved: 0,
+    shareLinksRefused: 0,
     footersDemoted: 0,
     footersKeptNested: 0,
     consentUiRemoved: 0,
@@ -442,6 +443,7 @@ function main() {
     const share = repairSocialShareChrome(`${fragmentCss.html}\n${out}`.trim() + '\n');
     tally.shareLinksRepaired += share.repaired;
     tally.shareChromeRemoved += share.removed;
+    tally.shareLinksRefused += share.rejected;
     // The heading last, from the title computed just above: a WordPress
     // archive template often renders none, and the FFC template's
     // `verify:build` requires exactly one per indexable page.
@@ -554,6 +556,13 @@ function main() {
   console.log(`scripts removed from fragments  ${tally.scriptsRemoved}`);
   console.log(`share links repointed          ${tally.shareLinksRepaired}`);
   console.log(`dead share controls removed    ${tally.shareChromeRemoved}`);
+  // Loud rather than silent: a refusal means the capture parked a
+  // destination this conversion will not make live (javascript:, data:,
+  // protocol-relative). Zero is the expected reading, and a non-zero one is
+  // worth a look at the source site.
+  if (tally.shareLinksRefused) {
+    console.log(`share links REFUSED (unsafe)   ${tally.shareLinksRefused}`);
+  }
   console.log(
     `captured page footers demoted to <div>  ${tally.footersDemoted}` +
       `  (nested, left as footers: ${tally.footersKeptNested})`,

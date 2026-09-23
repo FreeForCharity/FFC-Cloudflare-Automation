@@ -1692,6 +1692,19 @@ def test_the_dead_social_share_chrome_is_repaired_or_removed():
         # PIPELINE defect -- all 756 links on the site that prompted the fix
         # already carried rel="nofollow noopener", because that is what Social
         # Snap emits, so no captured page here exercises the vulnerable path.
+        # Repairing a share link makes an INERT anchor executable, so the
+        # destination is validated as the browser will see it -- after entity
+        # decoding and with control characters stripped. Raised by Copilot on
+        # #1363. All 756 destinations on the site that prompted this work were
+        # https:, so nothing dangerous was published; the conversion simply
+        # must not be the step that arms one.
+        "a javascript: destination is refused rather than promoted to a live href",
+        "...and counted as refused rather than as repaired",
+        "...including one hidden behind an HTML entity, which the browser decodes",
+        "...and one split by a control character, which the browser ignores",
+        "a protocol-relative destination is refused",
+        "a scheme-less destination is refused",
+        "the schemes a share bar actually uses are allowed",
         'a link we give target="_blank" is not left open to reverse tabnabbing',
         "...and a rel the site already wrote keeps its own referrer policy",
         "...with nothing added when it already says noopener",
@@ -1702,7 +1715,18 @@ def test_the_dead_social_share_chrome_is_repaired_or_removed():
     # ...and that the converter calls it. A library function nothing reaches
     # is the same as no fix.
     src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
-    assert "repairSocialShareChrome(`${fragmentCss.html}" in src, src[:200]
+    # Asserted as import + call, not as the exact argument expression. The
+    # first version pinned "repairSocialShareChrome(`${fragmentCss.html}",
+    # which a harmless refactor (naming the fragment before passing it,
+    # or reflowing the template literal) would break without changing
+    # behaviour. Raised by Copilot on #1363. What actually needs pinning is
+    # that the repair RUNS and that its output is what the page keeps, and
+    # the `ensureSingleH1(share.html, title)` assertion below is the second
+    # half of that.
+    assert re.search(
+        r"import\s*\{[^}]*\brepairSocialShareChrome\b[^}]*\}\s*from", src, re.S
+    ), src[:400]
+    assert "repairSocialShareChrome(" in src, src[:400]
 
 
 def test_captured_fixed_chrome_cannot_sit_above_ffcs_own_modals():

@@ -183,6 +183,41 @@ export function elementSpan(html, openIdx, tag) {
 }
 
 /**
+ * Is this parked destination safe to promote into a live `href`?
+ *
+ * This matters more than a normal URL check, because repairing a share link
+ * takes an anchor that was INERT (`href="#"`) and makes it executable. A
+ * captured page whose plugin -- or whose compromise -- parked
+ * `javascript:...` in `data-ss-ss-link` would have been harmless on the
+ * WordPress original and would become a live script link here. The conversion
+ * must not be the step that arms it.
+ *
+ * Validated against what the BROWSER will see, not what the file holds:
+ *
+ *   - the attribute is HTML-escaped in the source, and the browser decodes it
+ *     before parsing a URL, so `&#106;avascript:` really is `javascript:`;
+ *   - browsers ignore ASCII whitespace and C0 controls while parsing a
+ *     scheme, so `java\tscript:` and a leading newline are the same link.
+ *
+ * Allowlist rather than a denylist of `javascript:`/`data:`: a denylist has to
+ * anticipate every executable scheme, and the set of schemes a share bar
+ * legitimately uses is short and closed. Anything else leaves the anchor
+ * exactly as captured -- still inert, which is the safe failure.
+ */
+export const SAFE_SHARE_PROTOCOLS = ['http:', 'https:', 'mailto:', 'sms:', 'tel:'];
+
+export function isSafeShareDestination(raw) {
+  if (typeof raw !== 'string') return false;
+  const url = decodeEntities(raw).replace(/[\u0000-\u0020\u007f]/g, '');
+  // Protocol-relative borrows the page's scheme and hides the destination
+  // behind a form no share plugin needs to emit.
+  if (url.startsWith('//')) return false;
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(url);
+  if (!scheme) return false;
+  return SAFE_SHARE_PROTOCOLS.includes(`${scheme[1].toLowerCase()}:`);
+}
+
+/**
  * A `target="_blank"` link needs `rel="noopener"`, or the opened page can
  * reach back through `window.opener` and navigate the tab it came from
  * (reverse tabnabbing).
@@ -241,9 +276,10 @@ export function ensureNoopener(tag) {
  *   control that looks interactive and does nothing is worse than no control.
  */
 export function repairSocialShareChrome(html) {
-  if (typeof html !== 'string') return { html: '', repaired: 0, removed: 0 };
+  if (typeof html !== 'string') return { html: '', repaired: 0, removed: 0, rejected: 0 };
   let repaired = 0;
   let removed = 0;
+  let rejected = 0;
 
   // 1. Point each parked destination at its own href. The value is already
   //    HTML-escaped in the source attribute, which is exactly what an href
@@ -252,6 +288,13 @@ export function repairSocialShareChrome(html) {
     if (!/\shref="#"/i.test(tag)) return tag;
     const dest = /\sdata-ss-ss-link="([^"]+)"/i.exec(tag);
     if (!dest) return tag;
+    // Refused, not sanitised: leaving it `href="#"` keeps the anchor exactly
+    // as inert as the capture found it, and a rewritten destination would be
+    // a guess at what the charity meant.
+    if (!isSafeShareDestination(dest[1])) {
+      rejected += 1;
+      return tag;
+    }
     repaired += 1;
     let fixed = tag.replace(/\shref="#"/i, ` href="${dest[1]}"`);
     // Sharing should not cost the reader the page they are sharing. The
@@ -289,7 +332,7 @@ export function repairSocialShareChrome(html) {
     removed += 1;
   }
 
-  return { html: out, repaired, removed };
+  return { html: out, repaired, removed, rejected };
 }
 
 export function ensureSingleH1(fragment, title) {
@@ -1701,6 +1744,71 @@ function selfTest() {
     // prepending a second `target="_blank"` leaves the original present, so
     // the substring check passes while the browser honours the FIRST
     // attribute and the link is retargeted after all.
+    // --- an inert anchor must not be promoted into an executable one ----
+    // Repairing a share link takes an anchor that was `href="#"` and makes it
+    // live. On the site that prompted this work all 756 parked destinations
+    // were `https:`, so nothing dangerous was ever published -- but the
+    // conversion must not be the step that arms one.
+    eq(
+      'a javascript: destination is refused rather than promoted to a live href',
+      repairSocialShareChrome('<a href="#" data-ss-ss-link="javascript:alert(1)">x</a>').html,
+      '<a href="#" data-ss-ss-link="javascript:alert(1)">x</a>',
+    );
+    eq(
+      '...and counted as refused rather than as repaired',
+      (() => {
+        const r = repairSocialShareChrome(
+          '<a href="#" data-ss-ss-link="javascript:alert(1)">x</a>',
+        );
+        return `${r.repaired}/${r.rejected}`;
+      })(),
+      '0/1',
+    );
+    // The attribute is HTML-escaped in the file and DECODED by the browser
+    // before it parses a URL, so validating the raw bytes is not validating
+    // the link. This is the case a naive allowlist walks straight past.
+    eq(
+      '...including one hidden behind an HTML entity, which the browser decodes',
+      isSafeShareDestination('&#106;avascript:alert(1)'),
+      false,
+    );
+    // Browsers ignore ASCII whitespace and C0 controls inside a scheme.
+    eq(
+      '...and one split by a control character, which the browser ignores',
+      isSafeShareDestination('JAVA\tSCRIPT:alert(1)'),
+      false,
+    );
+    eq('a data: destination is refused too', isSafeShareDestination('data:text/html,x'), false);
+    eq(
+      'a protocol-relative destination is refused',
+      isSafeShareDestination('//evil.example/x'),
+      false,
+    );
+    eq('a scheme-less destination is refused', isSafeShareDestination('/relative'), false);
+    eq(
+      'the schemes a share bar actually uses are allowed',
+      [
+        isSafeShareDestination('https://x/'),
+        isSafeShareDestination('http://x/'),
+        isSafeShareDestination('mailto:?body=x'),
+        isSafeShareDestination('sms:?body=x'),
+        isSafeShareDestination('tel:+1'),
+        isSafeShareDestination('  https://x/'),
+      ].join(','),
+      'true,true,true,true,true,true',
+    );
+    eq(
+      'a non-string destination is not a crash',
+      (() => {
+        try {
+          return isSafeShareDestination(null);
+        } catch (err) {
+          return `threw ${err.name}`;
+        }
+      })(),
+      false,
+    );
+
     // --- reverse tabnabbing on the links we retarget --------------------
     // Measured on FFC-EX-newheightseducation.org: all 756 repaired links
     // already carried `rel="nofollow noopener"`, because that is what Social

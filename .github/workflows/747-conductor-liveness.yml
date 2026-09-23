@@ -138,23 +138,48 @@ jobs:
             let mergedPRs = [];
             let mergedError = null;
             try {
-              // Newest-updated first, one page. This looks for a MAXIMUM
-              // (`merged_at`), not for an absence, so a single page is sound:
-              // if none of the 100 most recently updated closed agentic-os items
-              // is a merged PR, the library reports UNKNOWN — a finding — rather
-              // than inferring anything.
-              const closed = await github.rest.issues.listForRepo({
-                owner,
-                repo,
-                state: 'closed',
-                labels: 'agentic-os',
-                sort: 'updated',
-                direction: 'desc',
-                per_page: 100,
-              });
-              mergedPRs = closed.data
-                .filter((i) => i && i.pull_request && i.pull_request.merged_at)
-                .map((i) => ({ number: i.number, merged_at: i.pull_request.merged_at }));
+              // Newest-updated first, paging forward only until a merged PR is
+              // found. This looks for a MAXIMUM (`merged_at`), not for an
+              // absence, so the FIRST page carrying any merged PR is enough —
+              // but one page is not, and the earlier revision of this comment
+              // argued that it was.
+              //
+              // The closed agentic-os set is already 113 items and grows, so the
+              // newest merged PR is not guaranteed a slot on page 1: a closed
+              // item is re-sorted to the top by any comment or label change, not
+              // only by a merge. Exhaust 100 such items and the newest merge
+              // falls to page 2, `mergedPRs` comes back empty, and merge-silence
+              // reports UNKNOWN while merges are in fact happening.
+              //
+              // That failure is fail-closed (a finding, never a reassuring
+              // "recently merged"), so it is noise rather than blindness — but a
+              // monitor that cries wolf gets ignored, which is the same argument
+              // this workflow already makes for keeping `open-pr-cap` off the
+              // findings list.
+              //
+              // Cost is unchanged in the common case: page 1 almost always
+              // carries a merge, the loop breaks, and this is one request. The
+              // cap bounds the tail rather than walking every closed PR.
+              const MAX_MERGE_PAGES = 5;
+              for (let page = 1; page <= MAX_MERGE_PAGES; page++) {
+                const closed = await github.rest.issues.listForRepo({
+                  owner,
+                  repo,
+                  state: 'closed',
+                  labels: 'agentic-os',
+                  sort: 'updated',
+                  direction: 'desc',
+                  per_page: 100,
+                  page,
+                });
+                mergedPRs = mergedPRs.concat(
+                  closed.data
+                    .filter((i) => i && i.pull_request && i.pull_request.merged_at)
+                    .map((i) => ({ number: i.number, merged_at: i.pull_request.merged_at }))
+                );
+                // Found the newest-updated merges, or the listing is exhausted.
+                if (mergedPRs.length > 0 || closed.data.length < 100) break;
+              }
             } catch (e) {
               mergedError = String(e.message || e).slice(0, 200);
             }

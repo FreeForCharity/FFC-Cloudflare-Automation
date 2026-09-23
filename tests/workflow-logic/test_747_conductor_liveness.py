@@ -660,6 +660,31 @@ def test_the_open_pr_count_is_paginated():
     assert "github.paginate(github.rest.issues.listForRepo" in script, script
 
 
+def test_the_merged_pr_read_pages_forward_until_it_finds_one():
+    """A single page of closed items cannot be assumed to carry a merged PR.
+
+    This read looks for a MAXIMUM (`merged_at`), so it does NOT need the full
+    `github.paginate` walk the open count needs — the first page carrying any
+    merged PR is enough. But it does need more than one page, and the shipped
+    comment argued the opposite: the closed agentic-os set is already 113 items,
+    and a closed item is re-sorted to the top by any comment or label change, not
+    only by a merge. Exhaust 100 such items and the newest merge is on page 2,
+    `mergedPRs` is empty, and merge-silence reports UNKNOWN while merges are
+    happening — fail-closed, so noise rather than blindness, but noise is what
+    teaches a reader to ignore a monitor.
+
+    Assert the loop and its bound, not just the word 'page': an unbounded walk
+    over every closed PR in the repo is the other way to get this wrong.
+    """
+    script = _script()
+    assert "MAX_MERGE_PAGES" in script, "the merged-PR read must page forward"
+    assert "page," in script, "the listForRepo call must pass a page argument"
+    # Bounded: a cap the loop actually tests against, not a walk of everything.
+    assert "page <= MAX_MERGE_PAGES" in script, script
+    # And it stops as soon as it has one, so the common case stays a single call.
+    assert "mergedPRs.length > 0" in script, script
+
+
 def test_the_monitor_holds_no_key_vault_credential():
     """#1339's load-bearing constraint, carried up from #977: a liveness check
     must not depend on a credential whose death it might need to report."""

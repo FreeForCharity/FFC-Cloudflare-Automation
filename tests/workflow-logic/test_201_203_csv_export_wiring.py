@@ -700,12 +700,18 @@ def test_the_shipped_body_binds_the_subexpression_payload_as_data():
             f"{lane.workflow}: the shipped body let the payload reach a "
             f"credential. Sentinel: {stolen!r}"
         )
-        # It is refused before it can be bound: the payload contains `(` `)` and
-        # `$`, none of which this guard set cares about, but it also contains
-        # `[` — no. It does not. The refusal here is not guaranteed, so assert
-        # the property that IS: whatever happens, the payload never RAN, and if
-        # the callee was reached at all it was reached with the payload as one
-        # literal argument rather than as code.
+        # The invariant is NOT "the guards refuse this payload", and asserting
+        # that would be asserting the wrong thing. The payload's characters are
+        # `$`, `(`, `)` and quotes — none of which any of the six guards match,
+        # so it reaches the callee as an ordinary argument and the guards are
+        # not what makes this case safe. Moving the value out of the script TEXT
+        # is.
+        #
+        # So the invariant is the one the remedy actually provides, in two
+        # parts, both asserted: the `$( )` subexpression never EXECUTES (above,
+        # by whole-line marker and by the absent sentinel), and if the callee
+        # was reached at all it received the payload as ONE literal argument
+        # value rather than as code.
         bound = _bound(out)
         if bound:
             assert payload in bound, (

@@ -350,6 +350,184 @@ export function repairSocialShareChrome(html) {
 }
 
 /**
+ * TLDs a bare hostname is allowed to be recognised by.
+ *
+ * Deliberately a short allowlist rather than "any dotted string". The input
+ * here is an href, and the overwhelmingly common dotted href is a RELATIVE
+ * FILE -- `index.html`, `brochure.pdf`, `logo.png`. Treating one of those as a
+ * hostname would send a visitor off the site, so the rule only fires for a
+ * suffix that cannot be a file extension anyone would link to.
+ */
+export const BARE_HOST_TLDS = new Set([
+  'org',
+  'com',
+  'net',
+  'edu',
+  'gov',
+  'mil',
+  'int',
+  'io',
+  'co',
+  'us',
+  'uk',
+  'ca',
+  'info',
+]);
+
+/**
+ * Repair one href the source site itself got wrong, or return null.
+ *
+ * Three defects, all found in the newheightseducation.org capture and all of
+ * them the charity's own typing rather than anything the capture did:
+ *
+ *   `hhttps://x.com/newheightseduc1`   the doubled letter makes it an unknown
+ *                                      scheme, so the link does nothing. 539
+ *                                      pages -- it is in the footer widget.
+ *   `Radio.NewHeightsEducation.org`    no scheme, so a browser reads it as a
+ *                                      RELATIVE PATH and 404s on this site.
+ *   ` https://www.dgliteracy.org/`     a leading space. Browsers trim it, so
+ *                                      the link works -- but nothing else
+ *                                      does, including the naming pass, which
+ *                                      labelled it "Www.dgliteracy".
+ *
+ * Returns null when there is nothing to repair, so the caller can tell "fixed"
+ * from "already fine" without comparing strings itself.
+ */
+export function repairHref(raw) {
+  if (typeof raw !== 'string') return null;
+  let v = raw.trim();
+  // A doubled leading `h`. Anchored and collapsing to exactly one, so a
+  // correct `https://` passes through this unchanged rather than by luck.
+  v = v.replace(/^h+(ttps?:\/\/)/i, 'h$1');
+  const looksSchemed = /^[a-z][a-z0-9+.-]*:/i.test(v);
+  const looksRelative = /^[#/.]/.test(v) || v.startsWith('%%');
+  if (!looksSchemed && !looksRelative && v) {
+    const host = v.split(/[/?#]/)[0];
+    const tld = host.split('.').pop()?.toLowerCase() ?? '';
+    if (host.includes('.') && BARE_HOST_TLDS.has(tld)) v = `https://${v}`;
+  }
+  return v === raw ? null : v;
+}
+
+/** Apply `repairHref` to every href in a fragment. */
+export function repairMalformedHrefs(html) {
+  if (typeof html !== 'string') return { html: '', repaired: 0 };
+  let repaired = 0;
+  const out = html.replace(/\shref="([^"]*)"/gi, (whole, raw) => {
+    const fixed = repairHref(raw);
+    if (fixed === null) return whole;
+    repaired += 1;
+    return ` href="${fixed}"`;
+  });
+  return { html: out, repaired };
+}
+
+/**
+ * How each network's share endpoint is spelled.
+ *
+ * `googleplus` is deliberately absent. Google+ shut down in April 2019, so
+ * there is no endpoint to point those 506 buttons at -- they are the one part
+ * of this share row that really is unrepairable, and they fall through to
+ * `removeDeadNamelessControls`.
+ */
+export const SHARE_ENDPOINTS = {
+  facebook: (url) => `https://www.facebook.com/sharer/sharer.php?u=${url}`,
+  twitter: (url, text) => `https://twitter.com/intent/tweet?url=${url}&amp;text=${text}`,
+  linkedin: (url) => `https://www.linkedin.com/sharing/share-offsite/?url=${url}`,
+  pinterest: (url, text) =>
+    `https://www.pinterest.com/pin/create/button/?url=${url}&amp;description=${text}`,
+};
+
+/** `community-news/foo` -> `/community-news/foo/`, and '' -> `/`. */
+export function routePathForSlug(slug) {
+  const s = typeof slug === 'string' ? slug.replace(/^\/+|\/+$/g, '') : '';
+  return s ? `/${s}/` : '/';
+}
+
+/**
+ * Rebuild a share button the capture left parked on `href="#"`.
+ *
+ * The plugin composed the share URL in JavaScript from `data-url` and
+ * `data-title`, and the capture strips JavaScript -- so 1,930 buttons across
+ * this site point at nothing while carrying, in plain sight, everything needed
+ * to point them somewhere real. Same defect as the floating bar that
+ * `repairSocialShareChrome` already fixes; different markup, because this is
+ * the same plugin's INLINE row and it stores the inputs to a share URL rather
+ * than a finished one.
+ *
+ * The destination is composed, never guessed: the path comes from `data-url`
+ * resolved against the page's own route, and the text from `data-title`.
+ *
+ * The origin is left as a `%%SITEURL_ENC%%` token rather than baked in, for
+ * the same reason `%%BASE%%` exists. A share URL has to be ABSOLUTE, and this
+ * site's absolute URL changes at cutover -- `freeforcharity.github.io/FFC-EX-…`
+ * today, the charity's own domain later. Baking either one in means every
+ * share button is wrong for one half of the site's life; substituting at read
+ * time means one commit is correct for both.
+ */
+export function repairInlineShareButtons(html, slug) {
+  if (typeof html !== 'string') return { html: '', repaired: 0, rejected: 0 };
+  let repaired = 0;
+  let rejected = 0;
+  const base = `https://ffc.invalid${routePathForSlug(slug)}`;
+  const out = html.replace(/<a\b([^>]*)>/gi, (tag, attrs) => {
+    if (!/\shref="#"/i.test(attrs)) return tag;
+    const classes = (/\sclass="([^"]*)"/i.exec(attrs)?.[1] ?? '').split(/\s+/);
+    const network = classes
+      .map((t) => /^([a-z]+)-share$/i.exec(t)?.[1]?.toLowerCase())
+      .find((n) => n && Object.prototype.hasOwnProperty.call(SHARE_ENDPOINTS, n));
+    if (!network) return tag;
+    const rawUrl = /\sdata-url="([^"]*)"/i.exec(attrs)?.[1];
+    if (!rawUrl) return tag;
+    const decoded = decodeEntities(rawUrl).trim();
+    if (!decoded) return tag;
+
+    let target;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(decoded)) {
+      // Already absolute. Shared verbatim, through the same allowlist the
+      // floating-bar repair uses -- a `javascript:` payload must not become a
+      // live href here any more than it may there.
+      if (!isSafeShareDestination(decoded)) {
+        rejected += 1;
+        return tag;
+      }
+      target = encodeURIComponent(decoded);
+    } else {
+      let resolved;
+      try {
+        resolved = new URL(decoded, base);
+      } catch {
+        rejected += 1;
+        return tag;
+      }
+      // A relative `data-url` that climbs out of the site is not this page's
+      // to share; refusing leaves the button exactly as inert as it was.
+      if (resolved.origin !== 'https://ffc.invalid') {
+        rejected += 1;
+        return tag;
+      }
+      target = `%%SITEURL_ENC%%${encodeURIComponent(
+        resolved.pathname + resolved.search + resolved.hash,
+      )}`;
+    }
+
+    const title = encodeURIComponent(
+      decodeEntities(/\sdata-title="([^"]*)"/i.exec(attrs)?.[1] ?? ''),
+    );
+    repaired += 1;
+    let fixed = tag.replace(/\shref="#"/i, ` href="${SHARE_ENDPOINTS[network](target, title)}"`);
+    // Sharing should not cost the reader the page they are sharing. The
+    // plugin opened a popup; a new tab is the static equivalent.
+    if (!/\starget=/i.test(fixed)) {
+      fixed = fixed.replace(/^<a\b/i, '<a target="_blank"');
+      fixed = ensureNoopener(fixed);
+    }
+    return fixed;
+  });
+  return { html: out, repaired, rejected };
+}
+
+/**
  * Does this anchor's markup give it an accessible name?
  *
  * Conservative by construction: every source of a name counts, so anything
@@ -1505,7 +1683,7 @@ export function tokenizeAssetPaths(html, assetsDirName = '_ffc-assets') {
  * Same reason as the assets: `../about-us/` resolves against the file's
  * directory, and a route is not a file. `%%BASE%%` carries the subpath.
  */
-export function tokenizePageLinks(html, routes) {
+export function tokenizePageLinks(html, routes, sourceHosts = []) {
   // The capture's own path and the route's slug are not the same string:
   // `sanitizeSlug` strips characters a directory name and a URL cannot both
   // carry, so a link has to be looked up by the path the markup names and
@@ -1533,7 +1711,42 @@ export function tokenizePageLinks(html, routes) {
       return `href="%%BASE%%/${slug}/${suffix}"`;
     },
   );
-  return { html: out, rewritten };
+  // The same in-site links written ABSOLUTELY, which the pass above cannot
+  // see: it matches `../` and `./` only. WordPress emits both forms, and on
+  // newheightseducation.org 9,074 links to pages this very export contains
+  // were still addressed as `https://www.newheightseducation.org/...`. Those
+  // work after cutover and send a visitor to the OLD SITE before it -- so for
+  // the weeks a migration sits on its temporary URL, the site links away from
+  // itself, which is exactly when someone is reviewing it.
+  //
+  // Only the apex and its `www.` form. A subdomain is a different site:
+  // `school.`, `radio.` and `publications.` are all real, separate hosts here,
+  // and rewriting them would point a visitor at a page that does not exist.
+  const hosts = new Set(
+    [...sourceHosts]
+      .filter((h) => typeof h === 'string' && h)
+      .map((h) => h.toLowerCase().replace(/^www\./, '')),
+  );
+  const out2 = hosts.size
+    ? out.replace(
+        /\bhref="https?:\/\/([^/"?#]+)([^"#?]*?)([?#][^"]*)?"/gi,
+        (whole, host, rest, suffix = '') => {
+          if (!hosts.has(host.toLowerCase().replace(/^www\./, ''))) return whole;
+          const target = rest.replace(/^\/+/, '').replace(/\/+$/, '');
+          if (target === '') {
+            rewritten += 1;
+            return `href="%%BASE%%/${suffix}"`;
+          }
+          // A path this export does not carry is left pointing at the live
+          // site, which still has the page. Rewriting it would turn a working
+          // link into a 404 on our own domain.
+          if (!known.has(target)) return whole;
+          rewritten += 1;
+          return `href="%%BASE%%/${known.get(target)}/${suffix}"`;
+        },
+      )
+    : out;
+  return { html: out2, rewritten };
 }
 
 /**
@@ -2729,6 +2942,193 @@ function selfTest() {
     nameAnonymousLinks('<a href="https://a.org/"></a><a href="/b/">Read it</a>', 'N').named,
     1,
   );
+  // --- repairHref: defects the SOURCE SITE shipped -------------------------
+  // 539 pages carried this. The doubled letter makes `hhttps` an unknown
+  // scheme, so the charity's X link did nothing on 69% of the site.
+  eq('a doubled scheme letter is repaired', repairHref('hhttps://x.com/n'), 'https://x.com/n');
+  eq('a correct scheme is not "repaired"', repairHref('https://x.com/n'), null);
+  eq('http is left as http', repairHref('hhttp://x.com/n'), 'http://x.com/n');
+  // No scheme: a browser reads this as a RELATIVE PATH and 404s on our site.
+  eq(
+    'a bare hostname is given a scheme',
+    repairHref('Radio.NewHeightsEducation.org'),
+    'https://Radio.NewHeightsEducation.org',
+  );
+  // ...and the reason that rule is an ALLOWLIST rather than "anything dotted":
+  // the overwhelmingly common dotted href is a relative FILE, and treating one
+  // as a hostname sends a visitor off the site.
+  eq('a relative file is NOT read as a hostname', repairHref('index.html'), null);
+  eq('nor a pdf', repairHref('brochure.pdf'), null);
+  eq('nor an image', repairHref('logo.png'), null);
+  eq('a relative directory is left alone', repairHref('about/'), null);
+  eq('a dotted relative directory is left alone', repairHref('../who-we-are/'), null);
+  eq('a fragment is left alone', repairHref('#main'), null);
+  eq('an already-tokenized link is left alone', repairHref('%%BASE%%/about/'), null);
+  eq('a mailto is left alone', repairHref('mailto:a@b.org'), null);
+  // Browsers trim this, so the link works -- but the naming pass reads the
+  // href, and a leading space made it label the link "Www.dgliteracy".
+  eq('surrounding whitespace is trimmed', repairHref(' https://x.org/ '), 'https://x.org/');
+  eq(
+    'the pass reports what it touched',
+    repairMalformedHrefs('<a href="hhttps://x.com/">a</a><a href="/ok/">b</a>').repaired,
+    1,
+  );
+
+  // --- repairInlineShareButtons -------------------------------------------
+  // The plugin built this URL in JavaScript, which the capture strips. Both
+  // inputs are right there in the markup, so the button is repairable -- and
+  // 1,930 of them were being deleted as dead before this existed.
+  eq(
+    'a parked share button is pointed at a real endpoint',
+    repairInlineShareButtons(
+      '<a class="facebook-share" data-title="Fire and Light" data-url="../../news/fire/" href="#"></a>',
+      'community-news/fire-and-light',
+    ).html,
+    '<a rel="noopener noreferrer" target="_blank" class="facebook-share" data-title="Fire and Light" ' +
+      'data-url="../../news/fire/" href="https://www.facebook.com/sharer/sharer.php?u=%%SITEURL_ENC%%%2Fnews%2Ffire%2F"></a>',
+  );
+  // The origin stays a TOKEN. Baked in, every share button is wrong for one
+  // half of the site's life -- the URL changes at cutover.
+  eq(
+    'the origin is left for the loader to resolve',
+    /%%SITEURL_ENC%%/.test(
+      repairInlineShareButtons(
+        '<a class="twitter-share" data-title="A &amp; B" data-url="./x/" href="#"></a>',
+        'p',
+      ).html,
+    ),
+    true,
+  );
+  // `data-url` is relative to the PAGE, so the slug is what makes it resolve.
+  eq(
+    'the path is resolved against the page the button sits on',
+    /url=%%SITEURL_ENC%%%2Fa%2Fb%2Fx%2F&amp;text=A%20%26%20B/.test(
+      repairInlineShareButtons(
+        '<a class="twitter-share" data-title="A &amp; B" data-url="./x/" href="#"></a>',
+        'a/b',
+      ).html,
+    ),
+    true,
+  );
+  // Google+ shut down in 2019. There is no endpoint, so these stay parked and
+  // fall through to the removal -- the one part of the row that really is dead.
+  eq(
+    'a googleplus button has no endpoint and is left for removal',
+    repairInlineShareButtons('<a class="googleplus-share" data-url="./x/" href="#"></a>', 'p')
+      .repaired,
+    0,
+  );
+  eq(
+    'a share button with no data-url is left alone',
+    repairInlineShareButtons('<a class="facebook-share" href="#"></a>', 'p').repaired,
+    0,
+  );
+  // Same allowlist the floating-bar repair uses: a script payload must not
+  // become a live href here either.
+  eq(
+    'a javascript: data-url is refused, not promoted',
+    repairInlineShareButtons(
+      '<a class="facebook-share" data-url="javascript:alert(1)" href="#"></a>',
+      'p',
+    ).rejected,
+    1,
+  );
+  eq(
+    'an absolute data-url is shared verbatim',
+    /u=https%3A%2F%2Felsewhere.org%2Fpost%2F/.test(
+      repairInlineShareButtons(
+        '<a class="facebook-share" data-url="https://elsewhere.org/post/" href="#"></a>',
+        'p',
+      ).html,
+    ),
+    true,
+  );
+  // `..` past the root cannot escape -- WHATWG clamps it -- so the shape that
+  // matters is a PROTOCOL-RELATIVE data-url, which resolves to another origin
+  // entirely and would turn a share button into a link to someone else's site.
+  eq(
+    'a protocol-relative data-url is refused',
+    repairInlineShareButtons(
+      '<a class="facebook-share" data-url="//evil.example/x/" href="#"></a>',
+      'a',
+    ).rejected,
+    1,
+  );
+  eq(
+    '...while climbing past the root is simply clamped, not an escape',
+    /u=%%SITEURL_ENC%%%2Fx%2F"/.test(
+      repairInlineShareButtons(
+        '<a class="facebook-share" data-url="../../../../x/" href="#"></a>',
+        'a',
+      ).html,
+    ),
+    true,
+  );
+  eq('the home page resolves as the root', routePathForSlug(''), '/');
+  eq('a slug becomes a directory path', routePathForSlug('a/b'), '/a/b/');
+  // A non-share `href="#"` control is none of this pass's business.
+  eq(
+    'a search trigger is not mistaken for a share button',
+    repairInlineShareButtons('<a class="mk-search-trigger" href="#"></a>', 'p').repaired,
+    0,
+  );
+
+  // --- tokenizePageLinks: the ABSOLUTE in-site form ------------------------
+  // 9,074 links on this capture were addressed as
+  // `https://www.newheightseducation.org/...` to pages this very export
+  // contains. They work after cutover and go to the OLD SITE before it, which
+  // is exactly when someone is reviewing the migration.
+  const absTok = tokenizePageLinks(
+    '<a href="https://www.example.org/about-us/">A</a>' +
+      '<a href="https://example.org/about-us/?x=1#c">B</a>' +
+      '<a href="https://example.org/">Home</a>',
+    ['about-us'],
+    ['example.org'],
+  );
+  eq('an absolute in-site link is tokenized', absTok.rewritten, 3);
+  eq(
+    'its query and fragment are carried across',
+    /href="%%BASE%%\/about-us\/\?x=1#c"/.test(absTok.html),
+    true,
+  );
+  // A subdomain is a DIFFERENT SITE. `school.`, `radio.` and `publications.`
+  // are all real separate hosts on this capture; rewriting one points a
+  // visitor at a page that does not exist.
+  eq(
+    'a subdomain is not the same site',
+    tokenizePageLinks(
+      '<a href="https://school.example.org/about-us/">x</a>',
+      ['about-us'],
+      ['example.org'],
+    ).rewritten,
+    0,
+  );
+  eq(
+    'another site entirely is left alone',
+    tokenizePageLinks(
+      '<a href="https://elsewhere.org/about-us/">x</a>',
+      ['about-us'],
+      ['example.org'],
+    ).rewritten,
+    0,
+  );
+  // A path this export does not carry stays pointing at the live site, which
+  // still has the page. Rewriting it would turn a working link into our 404.
+  eq(
+    'a page this export does not have is left pointing at the live site',
+    tokenizePageLinks(
+      '<a href="https://example.org/nheg-magazine/">x</a>',
+      ['about-us'],
+      ['example.org'],
+    ).rewritten,
+    0,
+  );
+  eq(
+    'with no source host supplied nothing absolute is touched',
+    tokenizePageLinks('<a href="https://example.org/about-us/">x</a>', ['about-us']).rewritten,
+    0,
+  );
+
   eq('a slug label is humanised', labelForHref('../about-us/', 'V'), 'About us');
   eq('an anchor is not a destination worth naming', labelForHref('#top', 'V'), null);
 

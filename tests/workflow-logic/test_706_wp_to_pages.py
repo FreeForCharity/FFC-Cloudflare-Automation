@@ -1822,12 +1822,23 @@ def test_a_control_that_can_neither_act_nor_be_announced_is_removed():
     # destination into a real href. Run before, a repairable share link is
     # still `href="#"` and would be deleted instead of fixed.
     src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
-    assert "removeDeadNamelessControls(share.html)" in src, _around(
-        src, "const dead =", "removeDeadNamelessControls(share.html)"
+    assert "removeDeadNamelessControls(named.html)" in src, _around(
+        src, "const dead =", "removeDeadNamelessControls(named.html)"
     )
-    assert src.index("repairSocialShareChrome(") < src.index(
-        "removeDeadNamelessControls(share.html)"
-    ), _around(src, "const share =", "share repair before dead-control removal")
+    # Removal is LAST. Every repair and the naming pass run ahead of it, so by
+    # the time it sees a control, everything that could have given that control
+    # a destination or a name has already had its chance -- which is what makes
+    # "still `href="#"` and still nameless" mean genuinely dead rather than
+    # not-yet-looked-at.
+    for earlier in (
+        "repairSocialShareChrome(",
+        "repairInlineShareButtons(",
+        "repairMalformedHrefs(",
+        "nameAnonymousLinks(",
+    ):
+        assert src.index(earlier) < src.index("removeDeadNamelessControls("), _around(
+            src, earlier, f"{earlier} must run before the removal"
+        )
 
 
 def test_a_working_link_with_no_name_is_named_rather_than_removed():
@@ -1889,11 +1900,108 @@ def test_a_working_link_with_no_name_is_named_rather_than_removed():
         lib, "export function nameAnonymousLinks", "anchorHasAccessibleName"
     )
 
-    # ...and the ordering, read off the converter rather than assumed.
+    # ...and the ordering, read off the converter rather than assumed. Naming
+    # sits between the repairs and the removal, and BOTH sides are load-bearing.
+    #
+    # After the repairs: a repair turns `href="#"` into a real destination, and
+    # this pass skips a bare `#` on purpose -- run first, it leaves every link
+    # a repair fixed nameless, and axe reports each one. That was latent for a
+    # release, because the only site to run the pipeline had already had its
+    # share bar repaired before the naming pass existed.
+    #
+    # Before the removal: a named control is one the removal keeps.
     src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
-    assert src.index("nameAnonymousLinks(out, siteName)") < src.index(
-        "removeDeadNamelessControls(share.html)"
+    assert src.index("nameAnonymousLinks(hrefs.html, siteName)") < src.index(
+        "removeDeadNamelessControls("
     ), _around(src, "nameAnonymousLinks(", "naming before dead-control removal")
+    for repair in ("repairSocialShareChrome(", "repairInlineShareButtons(", "repairMalformedHrefs("):
+        assert src.index(repair) < src.index("nameAnonymousLinks(hrefs.html"), _around(
+            src, repair, f"{repair} must run before the naming pass"
+        )
+
+
+def test_what_can_be_repaired_is_repaired_rather_than_removed():
+    """Removal is the last resort, not the first move. Three passes ahead of it
+    put a real destination back on a link the capture left parked, and each one
+    shrinks what the removal is left holding.
+
+    On FFC-EX-newheightseducation.org, measured:
+
+      1,930  share buttons whose destination was sitting in `data-url` and
+             `data-title` all along. The plugin composed the URL in JavaScript
+             and the capture strips JavaScript -- the same defect
+             `repairSocialShareChrome` already fixed on the floating bar, in
+             the same plugin's inline row, which stores the INPUTS to a share
+             URL rather than a finished one.
+        539  `hhttps://x.com/newheightseduc1` -- the charity's own typo, in a
+             footer widget, so it broke their X link on 69% of the site.
+      9,074  in-site links written as `https://www.newheightseducation.org/...`
+             to pages this very export contains. `tokenizePageLinks` matched
+             `../` and `./` only, so these were left addressing the OLD SITE --
+             which still serves them until cutover, so a reviewer on the new
+             site reads the old one and nothing looks broken.
+          1  `Radio.NewHeightsEducation.org`, with no scheme, which a browser
+             reads as a relative path.
+
+    What is left for removal is what has no repair: 1,078 JS-only overlay
+    triggers, 26 slider arrows with no paginated route to point at, and 506
+    Google+ buttons for a service that shut down in 2019.
+
+    The share URL's origin is a `%%SITEURL_ENC%%` token, not a baked string.
+    A share URL must be absolute and this site's absolute URL CHANGES at
+    cutover, so either literal would be wrong for one half of the site's life.
+    """
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a doubled scheme letter is repaired",
+        'a correct scheme is not "repaired"',
+        "a bare hostname is given a scheme",
+        "a relative file is NOT read as a hostname",
+        "nor a pdf",
+        "nor an image",
+        "a relative directory is left alone",
+        "an already-tokenized link is left alone",
+        "surrounding whitespace is trimmed",
+        "a parked share button is pointed at a real endpoint",
+        "the origin is left for the loader to resolve",
+        "the path is resolved against the page the button sits on",
+        "a googleplus button has no endpoint and is left for removal",
+        "a javascript: data-url is refused, not promoted",
+        "a protocol-relative data-url is refused",
+        "a search trigger is not mistaken for a share button",
+        "an absolute in-site link is tokenized",
+        "its query and fragment are carried across",
+        "a subdomain is not the same site",
+        "another site entirely is left alone",
+        "a page this export does not have is left pointing at the live site",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    # The tokenizer cannot recognise the absolute form without being told which
+    # host is "this site", and it must be told the CAPTURED domain rather than
+    # anything about where the export is deployed.
+    assert "tokenizePageLinks(out, rawToSlug, siteName ? [siteName] : [])" in src, _around(
+        src, "tokenizePageLinks(", "the source host reaches the tokenizer"
+    )
+    # The share button's origin is resolved at read time by the loader, so the
+    # token has to exist on both sides. A fragment carrying a token nothing
+    # substitutes ships `%%SITEURL_ENC%%` to a visitor's Facebook share dialog.
+    loader = (REPO_ROOT / "assets" / "clone-content-lib.ts").read_text(encoding="utf-8")
+    assert "%%SITEURL_ENC%%" in loader, _around(
+        loader, "loadCloneContent", "the loader resolves %%SITEURL_ENC%%"
+    )
+    assert "encodeURIComponent(siteConfig.url" in loader, _around(
+        loader, "siteUrlEncoded", "the origin comes from siteConfig, pre-encoded"
+    )
 
 
 def test_a_hidden_widget_title_does_not_count_as_the_pages_heading():

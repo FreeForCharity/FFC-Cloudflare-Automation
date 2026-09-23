@@ -157,6 +157,198 @@ export function unslashQuotes(text) {
  * decision, not an encoding one. No captured page has hit it yet; when one
  * does it should be reported, not silently rewritten.
  */
+/**
+ * The `[start, end)` span of the element opening at `openIdx`, by tag balance.
+ *
+ * Returns null when the tags do not balance, and the callers below treat that
+ * as "leave this markup alone". Truncating a charity's page because a plugin
+ * emitted an unclosed tag would be a far worse outcome than the dead control
+ * the removal was trying to take out.
+ */
+export function elementSpan(html, openIdx, tag) {
+  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, 'gi');
+  re.lastIndex = openIdx;
+  let depth = 0;
+  let m;
+  while ((m = re.exec(html))) {
+    if (m[1]) {
+      depth -= 1;
+      if (depth === 0) return [openIdx, m.index + m[0].length];
+      if (depth < 0) return null;
+    } else {
+      depth += 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * Is this parked destination safe to promote into a live `href`?
+ *
+ * This matters more than a normal URL check, because repairing a share link
+ * takes an anchor that was INERT (`href="#"`) and makes it executable. A
+ * captured page whose plugin -- or whose compromise -- parked
+ * `javascript:...` in `data-ss-ss-link` was harmless on the WordPress
+ * original and would become a live script link here. The conversion must not
+ * be the step that arms it.
+ *
+ * THE GUARD IS THE SCHEME REQUIREMENT, and it is worth being exact about
+ * that, because the first version of this comment credited the decoding
+ * below and was wrong. Anything that does not parse as
+ * `<allowlisted-scheme>:` is refused, which already covers the obfuscations
+ * an attacker would reach for: `&#106;avascript:` and `//evil.example` are
+ * refused not because they are recognised as dangerous but because neither
+ * presents a clean allowlisted scheme. Mutation testing is what showed this:
+ * removing the entity decode, the control-character strip, and an explicit
+ * protocol-relative guard changed no outcome at all.
+ *
+ * So the decode and the strip are here for PERMISSIVENESS, not safety. They
+ * exist so a link the browser would treat as ordinary is not refused by us:
+ * the browser decodes the attribute before parsing a URL, and ignores ASCII
+ * whitespace and C0 controls inside a scheme, so `&#104;ttps://x` and
+ * `ht<tab>tps://x` are both real https links and are allowed. They can only
+ * widen the set: an obfuscation that survives them still has to end up
+ * spelling an allowlisted scheme, and if it does, it IS that scheme.
+ *
+ * An allowlist rather than a denylist of `javascript:`/`data:`: a denylist
+ * has to anticipate every executable scheme, while the set a share bar
+ * legitimately uses is short and closed.
+ */
+export const SAFE_SHARE_PROTOCOLS = ['http:', 'https:', 'mailto:', 'sms:', 'tel:'];
+
+export function isSafeShareDestination(raw) {
+  // No `typeof` guard: `decodeEntities` returns '' for a non-string, which
+  // then fails the scheme match. One was written here and mutation testing
+  // proved it unreachable -- a line no mutation can kill is a line that is
+  // not doing anything. The behaviour stays pinned by a self-test.
+  const url = decodeEntities(raw).replace(/[\u0000-\u0020\u007f]/g, '');
+  // No explicit protocol-relative guard either, for the same reason: `//x`
+  // presents no scheme and is refused by the match below. The self-test for
+  // it is kept, because the OUTCOME is worth pinning even though no single
+  // line implements it.
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(url);
+  if (!scheme) return false;
+  return SAFE_SHARE_PROTOCOLS.includes(`${scheme[1].toLowerCase()}:`);
+}
+
+/**
+ * A `target="_blank"` link needs `rel="noopener"`, or the opened page can
+ * reach back through `window.opener` and navigate the tab it came from
+ * (reverse tabnabbing).
+ *
+ * Two behaviours on purpose, because authoring a `rel` and editing one the
+ * charity's site already wrote are different acts:
+ *
+ *   - no `rel` at all  -> write this repo's own convention, `noopener
+ *     noreferrer`, since nothing is being overridden;
+ *   - a `rel` exists   -> add ONLY the missing `noopener`. `noreferrer` is a
+ *     referrer-policy choice rather than the fix for tabnabbing, and a site
+ *     that wrote `rel="nofollow noopener"` (which is what Social Snap emits)
+ *     chose to keep sending a referrer. Closing the hole does not require
+ *     changing that, so it does not.
+ */
+export function ensureNoopener(tag) {
+  if (typeof tag !== 'string') return '';
+  const rel = /\srel="([^"]*)"/i.exec(tag);
+  if (!rel) return tag.replace(/^<a\b/i, '<a rel="noopener noreferrer"');
+  const tokens = rel[1].split(/\s+/).filter(Boolean);
+  if (tokens.some((tok) => tok.toLowerCase() === 'noopener')) return tag;
+  return tag.replace(rel[0], ` rel="${[...tokens, 'noopener'].join(' ')}"`);
+}
+
+/**
+ * Repair the social-share chrome a captured WordPress page leaves behind.
+ *
+ * The capture strips scripts, and a share plugin is almost entirely script.
+ * Measured on FFC-EX-newheightseducation.org, where Social Snap's bar appears
+ * in 127 of 785 fragments and every one of its links is `href="#"` with the
+ * real destination parked in `data-ss-ss-link`:
+ *
+ *   <a href="#" aria-label="Facebook"
+ *      data-ss-ss-link="https://www.facebook.com/sharer.php?t=…&u=…">
+ *
+ * So the bar cannot share anything, and it does two kinds of harm. Its
+ * `ss-share-all` trigger has no text, no `aria-label` and no `title`, which is
+ * a SERIOUS axe `link-name` violation on every page carrying it. And the bar
+ * is `position: fixed; z-index: 999`, so it sits above FFC's own
+ * cookie-consent modal (`z-50`) and swallows clicks meant for the overlay --
+ * a visitor dismissing the banner by clicking outside is blocked wherever the
+ * bar covers. (The z-index half is fixed in `assets/ffc-footer.css`; this
+ * function handles the markup.)
+ *
+ * Two different treatments, because the two kinds of control differ in whether
+ * anything can be restored:
+ *
+ * - A link with a `data-ss-ss-link` HAS a destination, so it is repaired: the
+ *   href is pointed at it and it opens in a new tab, which is the closest
+ *   static equivalent of the popup window the plugin's JS used to open. The
+ *   charity gets working share links for the first time since the migration.
+ * - `ss-share-all` (opens a share modal) and the modal's own `ss-close-modal`
+ *   have NO destination -- they are pure script triggers. There is nothing to
+ *   repair them to, so they and the `#ss-all-networks-popup` they drive are
+ *   removed. Same reasoning as replacing a `<form>` with a `mailto:` block: a
+ *   control that looks interactive and does nothing is worse than no control.
+ */
+export function repairSocialShareChrome(html) {
+  if (typeof html !== 'string') return { html: '', repaired: 0, removed: 0, rejected: 0 };
+  let repaired = 0;
+  let removed = 0;
+  let rejected = 0;
+
+  // 1. Point each parked destination at its own href. The value is already
+  //    HTML-escaped in the source attribute, which is exactly what an href
+  //    needs, so it is copied verbatim rather than decoded and re-encoded.
+  let out = html.replace(/<a\b[^>]*>/gi, (tag) => {
+    if (!/\shref="#"/i.test(tag)) return tag;
+    const dest = /\sdata-ss-ss-link="([^"]+)"/i.exec(tag);
+    if (!dest) return tag;
+    // Refused, not sanitised: leaving it `href="#"` keeps the anchor exactly
+    // as inert as the capture found it, and a rewritten destination would be
+    // a guess at what the charity meant.
+    if (!isSafeShareDestination(dest[1])) {
+      rejected += 1;
+      return tag;
+    }
+    repaired += 1;
+    let fixed = tag.replace(/\shref="#"/i, ` href="${dest[1]}"`);
+    // Sharing should not cost the reader the page they are sharing. The
+    // plugin opened a popup window; a new tab is the static equivalent.
+    if (!/\starget=/i.test(fixed)) {
+      fixed = fixed.replace(/^<a\b/i, '<a target="_blank"');
+      fixed = ensureNoopener(fixed);
+    }
+    return fixed;
+  });
+
+  // 2. The share-all trigger, with the <li> that exists only to hold it.
+  for (;;) {
+    const m = /<a\b[^>]*\sclass="[^"]*\bss-share-all\b[^"]*"[^>]*>/i.exec(out);
+    if (!m) break;
+    const liStart = out.lastIndexOf('<li', m.index);
+    if (liStart === -1) break;
+    const span = elementSpan(out, liStart, 'li');
+    if (!span) break;
+    out = out.slice(0, span[0]) + out.slice(span[1]);
+    removed += 1;
+  }
+
+  // 3. The modals those triggers opened, which nothing can now open. Matched
+  //    on the plugin's own overlay CLASS rather than on the ids observed in
+  //    one capture: newheightseducation.org ships two of these
+  //    (`#ss-all-networks-popup` and `#ss-copy-popup`), and an id list would
+  //    have carried exactly the one that was looked at first.
+  for (;;) {
+    const i = out.search(/<div\b[^>]*\sclass="[^"]*\bss-popup-overlay\b[^"]*"/i);
+    if (i === -1) break;
+    const span = elementSpan(out, i, 'div');
+    if (!span) break;
+    out = out.slice(0, span[0]) + out.slice(span[1]);
+    removed += 1;
+  }
+
+  return { html: out, repaired, removed, rejected };
+}
+
 export function ensureSingleH1(fragment, title) {
   if (typeof fragment !== 'string') return '';
   if (/<h1[\s>]/i.test(fragment)) return fragment;
@@ -1490,6 +1682,285 @@ function selfTest() {
   // a crashed self-test instead of a named failure, and a crash is not a
   // detection. Same reason `integrate-clone-into-nextjs.mjs` reads its
   // preserved files through a tolerant helper.
+  // --- social-share chrome ------------------------------------------------
+  {
+    const bar =
+      '<div id="ss-floating-bar" class="ss-left-sidebar">\n' +
+      '<ul class="ss-social-icons-container">\n' +
+      '<li><a href="#" aria-label="Facebook" data-ss-ss-link="https://www.facebook.com/sharer.php?u=x&amp;t=y" class="ss-facebook-color" rel="nofollow noopener"><span>f</span></a></li>\n' +
+      '<li><a href="#" aria-label="Email" data-ss-ss-link="mailto:?body=x" class="ss-envelope-color"><span>e</span></a>' +
+      '<span class="ss-share-network-tooltip">Email</span></li>\n' +
+      '<li><a href="#" class="ss-share-all ss-shareall-color" rel="nofollow noopener"><span><i>+</i></span></a>' +
+      '<span class="ss-share-network-tooltip">More Networks</span></li>\n' +
+      '</ul></div>\n' +
+      '<div id="ss-all-networks-popup" class="ss-popup-overlay"><div class="ss-popup">' +
+      '<a href="#" class="ss-close-modal"><svg/></a></div></div>\n' +
+      '<div id="ss-copy-popup" class="ss-popup-overlay"><div class="ss-popup">' +
+      '<a href="#" class="ss-button">Copy</a></div></div>\n' +
+      '<p>real content</p>';
+    const fixed = repairSocialShareChrome(bar);
+    eq('a parked share destination is restored to its href', fixed.repaired, 2);
+    eq(
+      '...pointing at the destination the plugin left in the data attribute',
+      fixed.html.includes('href="https://www.facebook.com/sharer.php?u=x&amp;t=y"'),
+      true,
+    );
+    // Asserted against the HREF, not against the fragment: the source
+    // `data-ss-ss-link` attribute is left in place and carries `&amp;t=y`
+    // itself, so a decode on the way into the href passes a whole-fragment
+    // check while shipping a broken share URL.
+    eq(
+      '...escaped exactly as the source had it, not decoded and re-encoded',
+      /href="[^"]*\?u=x&amp;t=y"/.test(fixed.html),
+      true,
+    );
+    eq(
+      '...and opening in a new tab, as the plugin popup did',
+      fixed.html.includes('<a target="_blank"'),
+      true,
+    );
+    eq('a mailto destination is restored too', fixed.html.includes('href="mailto:?body=x"'), true);
+    eq('the destination-less chrome is removed', fixed.removed, 3);
+    eq('...the share-all trigger is gone', fixed.html.includes('ss-share-all'), false);
+    eq(
+      '...with the <li> that existed only to hold it',
+      fixed.html.includes('More Networks'),
+      false,
+    );
+    eq(
+      '...and the modal nothing can open any more',
+      fixed.html.includes('ss-all-networks-popup'),
+      false,
+    );
+    eq('...including its unlabelled close link', fixed.html.includes('ss-close-modal'), false);
+    // The second overlay, and the reason the match is on the class: an id
+    // list written from the first capture looked at would have kept this one.
+    eq(
+      '...and the other overlay the same plugin ships',
+      fixed.html.includes('ss-copy-popup'),
+      false,
+    );
+    eq('the links that DO work are kept', fixed.html.includes('aria-label="Facebook"'), true);
+    eq('...and so is the page content', fixed.html.includes('<p>real content</p>'), true);
+    // A link with no parked destination is not a share link at all.
+    eq(
+      'an ordinary href="#" with no data attribute is left alone',
+      repairSocialShareChrome('<a href="#" class="skip">x</a>').repaired,
+      0,
+    );
+    // An href the site already set is the site's, not ours to overwrite.
+    eq(
+      'a link that already has a real href is not rewritten',
+      repairSocialShareChrome('<a href="/about" data-ss-ss-link="https://evil">x</a>').repaired,
+      0,
+    );
+    // Asserted as the whole tag rather than `includes('target="_self"')`:
+    // prepending a second `target="_blank"` leaves the original present, so
+    // the substring check passes while the browser honours the FIRST
+    // attribute and the link is retargeted after all.
+    // --- an inert anchor must not be promoted into an executable one ----
+    // Repairing a share link takes an anchor that was `href="#"` and makes it
+    // live. On the site that prompted this work all 756 parked destinations
+    // were `https:`, so nothing dangerous was ever published -- but the
+    // conversion must not be the step that arms one.
+    eq(
+      'a javascript: destination is refused rather than promoted to a live href',
+      repairSocialShareChrome('<a href="#" data-ss-ss-link="javascript:alert(1)">x</a>').html,
+      '<a href="#" data-ss-ss-link="javascript:alert(1)">x</a>',
+    );
+    eq(
+      '...and counted as refused rather than as repaired',
+      (() => {
+        const r = repairSocialShareChrome(
+          '<a href="#" data-ss-ss-link="javascript:alert(1)">x</a>',
+        );
+        return `${r.repaired}/${r.rejected}`;
+      })(),
+      '0/1',
+    );
+    // The attribute is HTML-escaped in the file and DECODED by the browser
+    // before it parses a URL, so validating the raw bytes is not validating
+    // the link. This is the case a naive allowlist walks straight past.
+    eq(
+      '...including one hidden behind an HTML entity',
+      isSafeShareDestination('&#106;avascript:alert(1)'),
+      false,
+    );
+    // ...and the decode itself, which only ever WIDENS: an entity-escaped
+    // https link is a real https link to the browser, so refusing it would be
+    // a false refusal. This is the case that fails if the decode is dropped;
+    // the case above passes either way, because the scheme match refuses it.
+    eq(
+      'an entity-escaped https destination is still recognised as https',
+      isSafeShareDestination('&#104;ttps://x/'),
+      true,
+    );
+    // Browsers ignore ASCII whitespace and C0 controls inside a scheme.
+    eq(
+      '...and one split by a control character',
+      isSafeShareDestination('JAVA\tSCRIPT:alert(1)'),
+      false,
+    );
+    // Same shape: the strip widens, so the discriminating case is a LEGITIMATE
+    // link the browser would accept and a naive check would refuse.
+    eq(
+      'a control character inside a legitimate scheme does not cause a refusal',
+      isSafeShareDestination('ht\ttps://x/'),
+      true,
+    );
+    // Uppercase schemes appear in older markup and are the same scheme.
+    eq('an uppercase scheme is the same scheme', isSafeShareDestination('HTTPS://x/'), true);
+    eq('a data: destination is refused too', isSafeShareDestination('data:text/html,x'), false);
+    eq(
+      'a protocol-relative destination is refused',
+      isSafeShareDestination('//evil.example/x'),
+      false,
+    );
+    eq('a scheme-less destination is refused', isSafeShareDestination('/relative'), false);
+    eq(
+      'the schemes a share bar actually uses are allowed',
+      [
+        isSafeShareDestination('https://x/'),
+        isSafeShareDestination('http://x/'),
+        isSafeShareDestination('mailto:?body=x'),
+        isSafeShareDestination('sms:?body=x'),
+        isSafeShareDestination('tel:+1'),
+        isSafeShareDestination('  https://x/'),
+      ].join(','),
+      'true,true,true,true,true,true',
+    );
+    eq(
+      'a non-string destination is not a crash',
+      (() => {
+        try {
+          return isSafeShareDestination(null);
+        } catch (err) {
+          return `threw ${err.name}`;
+        }
+      })(),
+      false,
+    );
+
+    // --- reverse tabnabbing on the links we retarget --------------------
+    // Measured on FFC-EX-newheightseducation.org: all 756 repaired links
+    // already carried `rel="nofollow noopener"`, because that is what Social
+    // Snap emits -- so this is a latent defect in the PIPELINE, not a live
+    // exposure on that site. A capture whose plugin omits `rel` is the case
+    // that matters, and it is the one no real page here exercises.
+    eq(
+      'a link we give target="_blank" is not left open to reverse tabnabbing',
+      repairSocialShareChrome('<a href="#" data-ss-ss-link="https://x/">y</a>').html,
+      '<a rel="noopener noreferrer" target="_blank" href="https://x/" data-ss-ss-link="https://x/">y</a>',
+    );
+    eq(
+      '...and a rel the site already wrote keeps its own referrer policy',
+      repairSocialShareChrome(
+        '<a href="#" rel="nofollow" data-ss-ss-link="https://x/">y</a>',
+      ).html.includes('rel="nofollow noopener"'),
+      true,
+    );
+    eq(
+      '...with nothing added when it already says noopener',
+      repairSocialShareChrome(
+        '<a href="#" rel="nofollow noopener" data-ss-ss-link="https://x/">y</a>',
+      ).html,
+      '<a target="_blank" href="https://x/" rel="nofollow noopener" data-ss-ss-link="https://x/">y</a>',
+    );
+    eq(
+      '...matched case-insensitively, so NOOPENER is not doubled',
+      ensureNoopener('<a href="x" rel="NOOPENER">'),
+      '<a href="x" rel="NOOPENER">',
+    );
+    // A token that merely CONTAINS the word is not the token.
+    eq(
+      '...and a lookalike token does not count as the real one',
+      ensureNoopener('<a href="x" rel="nonoopener">'),
+      '<a href="x" rel="nonoopener noopener">',
+    );
+    // The site's own target is left alone above, so we never added _blank and
+    // have no business rewriting its rel either.
+    eq(
+      'a link whose target the site set is not given a rel it did not ask for',
+      repairSocialShareChrome(
+        '<a href="#" target="_self" data-ss-ss-link="https://x/">y</a>',
+      ).html.includes('rel='),
+      false,
+    );
+    // Wrapped for the same reason as the case below: without the guard this
+    // throws, node exits non-zero, and a probe reading only the exit code
+    // scores the missing guard as a passing check.
+    eq(
+      'ensureNoopener on a non-string is not a crash',
+      (() => {
+        try {
+          return ensureNoopener(null);
+        } catch (err) {
+          return `threw ${err.name}`;
+        }
+      })(),
+      '',
+    );
+
+    eq(
+      'a target the markup already set is not overridden',
+      repairSocialShareChrome('<a href="#" target="_self" data-ss-ss-link="https://x/">y</a>').html,
+      '<a href="https://x/" target="_self" data-ss-ss-link="https://x/">y</a>',
+    );
+    // Unbalanced markup: leave it alone rather than truncate the page.
+    const unbalanced = '<ul><li><a href="#" class="ss-share-all">+</a></ul><p>keep</p>';
+    eq(
+      'unbalanced markup is left alone rather than truncated',
+      repairSocialShareChrome(unbalanced).html.includes('<p>keep</p>'),
+      true,
+    );
+    eq('...and nothing is reported as removed', repairSocialShareChrome(unbalanced).removed, 0);
+    eq('elementSpan refuses an unbalanced element', elementSpan('<li><a></a>', 0, 'li'), null);
+    // `<link>` starts with `li`. Without a word boundary it reads as another
+    // open tag, the depth never returns to zero, and the removal is silently
+    // skipped -- which looks exactly like a page that had no share bar.
+    eq(
+      'elementSpan does not mistake a longer tag for the one asked for',
+      (() => {
+        const s = '<li><link rel="x"></li>after';
+        const span = elementSpan(s, 0, 'li');
+        return span ? s.slice(span[0], span[1]) : null;
+      })(),
+      '<li><link rel="x"></li>',
+    );
+    // Asserted as the SLICE rather than as indices: the first draft of this
+    // case expected [0, 22] and the answer is [0, 21], which is the kind of
+    // off-by-one a reader cannot check without counting characters. The slice
+    // is self-evident, and it is what the callers actually cut out.
+    eq(
+      'elementSpan finds the matching close through a nested same-tag element',
+      (() => {
+        const s = '<li>a<li>b</li>c</li>after';
+        const span = elementSpan(s, 0, 'li');
+        return span ? s.slice(span[0], span[1]) : null;
+      })(),
+      '<li>a<li>b</li>c</li>',
+    );
+    // Wrapped, because a crash is not a detection: without the guard this
+    // throws a TypeError, node exits non-zero, and a harness reading only the
+    // exit code scores the missing guard as a passing check.
+    eq(
+      'a non-string is not a crash',
+      (() => {
+        try {
+          return repairSocialShareChrome(null).html;
+        } catch (err) {
+          return `threw ${err.name}`;
+        }
+      })(),
+      '',
+    );
+    eq(
+      'a page with no share chrome is returned unchanged',
+      repairSocialShareChrome('<p>x</p>').html,
+      '<p>x</p>',
+    );
+  }
+
   eq(
     'a page with no heading of its own is given one from its title',
     ensureSingleH1('<p>body</p>\n', 'About NHEG Publications'),

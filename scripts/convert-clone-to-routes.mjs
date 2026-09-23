@@ -68,6 +68,7 @@ import {
   scopeCloneCss,
   fragmentHead,
   ensureSingleH1,
+  repairSocialShareChrome,
   stripLayoutDuplicates,
   removeDeadConsentUi,
   ensureImageAlt,
@@ -308,6 +309,9 @@ function main() {
     genericLinksNamed: 0,
     iframesTitled: 0,
     scriptsRemoved: 0,
+    shareLinksRepaired: 0,
+    shareChromeRemoved: 0,
+    shareLinksRefused: 0,
     footersDemoted: 0,
     footersKeptNested: 0,
     consentUiRemoved: 0,
@@ -433,10 +437,17 @@ function main() {
       else tally.descriptionsMissing += 1;
     }
 
+    // Share chrome first: the capture strips scripts, and a share plugin is
+    // almost entirely script -- its links keep their destinations in data
+    // attributes and its modal triggers keep nothing at all.
+    const share = repairSocialShareChrome(`${fragmentCss.html}\n${out}`.trim() + '\n');
+    tally.shareLinksRepaired += share.repaired;
+    tally.shareChromeRemoved += share.removed;
+    tally.shareLinksRefused += share.rejected;
     // The heading last, from the title computed just above: a WordPress
     // archive template often renders none, and the FFC template's
     // `verify:build` requires exactly one per indexable page.
-    const fragment = ensureSingleH1(`${fragmentCss.html}\n${out}`.trim() + '\n', title);
+    const fragment = ensureSingleH1(share.html, title);
     const wrapperClass = [WRAPPER_CLASS, bodyClass].filter(Boolean).join(' ');
     if (!dryRun) {
       write(join(repo, 'src', 'clone-content', `${slug || 'index'}.html`), fragment);
@@ -543,6 +554,15 @@ function main() {
   console.log(`external frame hosts (must be in the CSP frame-src)  ${frameHosts.size}`);
   for (const h of [...frameHosts].sort()) console.log(`  https://${h}`);
   console.log(`scripts removed from fragments  ${tally.scriptsRemoved}`);
+  console.log(`share links repointed          ${tally.shareLinksRepaired}`);
+  console.log(`dead share controls removed    ${tally.shareChromeRemoved}`);
+  // Loud rather than silent: a refusal means the capture parked a
+  // destination this conversion will not make live (javascript:, data:,
+  // protocol-relative). Zero is the expected reading, and a non-zero one is
+  // worth a look at the source site.
+  if (tally.shareLinksRefused) {
+    console.log(`share links REFUSED (unsafe)   ${tally.shareLinksRefused}`);
+  }
   console.log(
     `captured page footers demoted to <div>  ${tally.footersDemoted}` +
       `  (nested, left as footers: ${tally.footersKeptNested})`,

@@ -195,11 +195,28 @@ function wireMkMenu(toggle: Element): Teardown | null {
     event.preventDefault()
     setOpen(!isOpen())
   }
+  // Escape must return focus to a control the visitor can actually reach, and
+  // `toggle` is not reliably that one. `wireMkMenu` runs per toggle, so a
+  // header with one control per breakpoint registers this handler once per
+  // control; the first to see the keydown closes the panel and every later one
+  // returns at the `isOpen()` guard. Focus therefore always went to whichever
+  // control happened to be wired FIRST -- and at any given width only one of
+  // them is rendered, so that is a coin flip. `focus()` on a `display: none`
+  // element silently does nothing, which leaves Escape closing the menu and
+  // stranding the keyboard visitor wherever they were: the dead-control shape
+  // this file exists to remove, in the handler written to prevent it.
+  //
+  // jsdom lays nothing out, so `renderedPeers()` is empty there and the
+  // fallback keeps the single-toggle behaviour the other tests assert.
+  const renderedPeers = () =>
+    peers().filter(
+      (el) => el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0
+    )
   const onEscape = (event: KeyboardEvent) => {
     if (event.key !== 'Escape' && event.key !== 'Esc') return
     if (!isOpen()) return
     setOpen(false)
-    toggle.focus()
+    ;(renderedPeers()[0] ?? toggle).focus()
   }
 
   toggle.addEventListener('click', onClick)

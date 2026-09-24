@@ -398,7 +398,11 @@ def scan_workflow(workflow_text: str, workflow_name: str) -> list[str]:
             name = step.get("name") or "(unnamed)"
             for finding in scan_body(step["run"]):
                 reported.append(
-                    f'{workflow_name} :: {job_id} :: step {index} "{name}" :: {finding}'
+                    # 1-based, to match the `line N` this same string already
+                    # carries and the way `steps:` is counted in the Actions UI.
+                    # It is the position in the job's FULL steps list, not among
+                    # the pwsh ones, so it stays usable as a YAML coordinate.
+                    f'{workflow_name} :: {job_id} :: step {index + 1} "{name}" :: {finding}'
                 )
     return reported
 

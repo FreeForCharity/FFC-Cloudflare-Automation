@@ -533,6 +533,47 @@ exit $deliberateStatus
     )
 
 
+def test_a_finding_numbers_the_step_the_way_the_yaml_does():
+    """The coordinate a reader uses to FIND the step, so an off-by-one here
+    sends them to the wrong step -- the same class as the `_last_statement`
+    defect, one field over.
+
+    Discriminates: `enumerate()` is 0-based, so reverting `index + 1` reports
+    this second step as `step 1`. Note the mixed convention that made it a real
+    inconsistency rather than a taste call -- the `line N` in this very string
+    was already 1-based.
+
+    The non-pwsh first step is load-bearing: it pins the number to the position
+    in the job's FULL `steps:` list, so a later change that enumerated only the
+    pwsh steps would still report `step 1` here and fail.
+    """
+    body = """
+on: push
+jobs:
+  probe:
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: tolerate
+        shell: pwsh
+        run: |
+          & pwsh -File .\\x.ps1
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { Write-Warning "tolerated: $code" }
+          "done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    findings = guard.scan_workflow(body, "probe.yml")
+    assert len(findings) == 1, f"expected exactly one finding; got {findings!r}"
+    assert 'step 2 "tolerate"' in findings[0], (
+        "the tolerate step is the SECOND entry under `steps:`, so it must be "
+        f"reported as `step 2`; got {findings[0]!r}"
+    )
+    assert "line 4" in findings[0], (
+        "the line number must stay 1-based -- this assertion is what makes the "
+        f"step number's convention a matching one rather than a new one; got {findings[0]!r}"
+    )
+
+
 # --- against the real tree ---------------------------------------------------
 
 

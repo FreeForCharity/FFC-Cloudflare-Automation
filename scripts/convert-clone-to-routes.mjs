@@ -76,7 +76,9 @@ import {
   ensureImageAlt,
   nameAnonymousLinks,
   repairInlineShareButtons,
+  repairEscapedAttributeQuotes,
   repairMalformedHrefs,
+  repairMojibake,
   nameGenericLinks,
   titleIframes,
   tokenizeAssetPaths,
@@ -315,6 +317,7 @@ function main() {
     scriptsRemoved: 0,
     shareLinksRepaired: 0,
     hrefsRepaired: 0,
+    mojibakeRepaired: 0,
     shareChromeRemoved: 0,
     shareLinksRefused: 0,
     widgetTitlesDemoted: 0,
@@ -462,13 +465,23 @@ function main() {
     // Typos the SOURCE SITE shipped: a doubled `hhttps://`, a hostname with no
     // scheme, an href with a leading space. Repaired before the naming pass,
     // which reads the href to build the name.
-    const hrefs = repairMalformedHrefs(inline.html);
+    // Before the href repair: an escaped `src=\\"...\\"` is not a malformed
+    // URL, it is an attribute the browser never parsed, so it has to become a
+    // real attribute before anything can inspect its value.
+    const unescaped = repairEscapedAttributeQuotes(inline.html);
+    const hrefs = repairMalformedHrefs(unescaped.html);
     tally.hrefsRepaired += hrefs.repaired;
+    // Text the source site double-encoded. Last of the repairs and before the
+    // naming pass, because the naming pass reads visible text: a control named
+    // from mojibake carries the mojibake into its accessible name, where a
+    // screen reader reads it aloud.
+    const demojibaked = repairMojibake(hrefs.html);
+    tally.mojibakeRepaired += demojibaked.repaired;
     // Naming comes AFTER every repair and BEFORE the removal. After, because a
     // repair turns `href="#"` into a real destination and this pass skips a
     // bare `#` on purpose -- run first, it leaves every repaired link nameless.
     // Before, because a named control is one the removal keeps.
-    const named = nameAnonymousLinks(hrefs.html, siteName);
+    const named = nameAnonymousLinks(demojibaked.text, siteName);
     tally.linksNamed += named.named;
     // The heading last, from the title computed just above: a WordPress
     // archive template often renders none, and the FFC template's
@@ -542,6 +555,7 @@ function main() {
     shape.verifyBuildScope = scopeVerifyBuildToRoutes(repo, assetsDir);
     shape.templateRoutes = restoreTemplateRoutes(repo);
     shape.trailingSlash = enableTrailingSlash(repo);
+    shape.wiredComponents = wireGeneratedComponents(repo);
     // Two converted pages so the audit covers the migration, not only the
     // template's policy pages. The front page is already in every config.
     shape.lighthouse = retargetLighthouseUrls(
@@ -591,6 +605,7 @@ function main() {
   console.log(`scripts removed from fragments  ${tally.scriptsRemoved}`);
   console.log(`share links repointed          ${tally.shareLinksRepaired}`);
   console.log(`malformed hrefs repaired       ${tally.hrefsRepaired}`);
+  console.log(`double-encoded text repaired  ${tally.mojibakeRepaired}`);
   console.log(`dead share controls removed    ${tally.shareChromeRemoved}`);
   console.log(`widget titles demoted to h2    ${tally.widgetTitlesDemoted}`);
   console.log(`dead nameless controls removed ${tally.deadControlsRemoved}`);
@@ -638,6 +653,19 @@ function main() {
     console.log('Lighthouse URLs retargeted:');
     for (const u of shape.lighthouse.urls) console.log(`  ${u}`);
   }
+  // Say what the wiring did, always -- including when it did nothing. The
+  // defect this step exists to prevent is a component that is generated,
+  // committed, and imported by nothing: `clone-enhance` is the captured
+  // pages' entire client-side runtime, and while it sat unwired a phone could
+  // not open the menu on any of newheightseducation.org's 793 pages. That
+  // failure is invisible in a build, in a link check and in a page's markup.
+  // A step whose whole purpose is to close a silent gap cannot itself report
+  // silently.
+  if (shape.wiredComponents) {
+    const report = describeWiring(shape.wiredComponents);
+    console.log(report.headline);
+    for (const n of report.notes) console.log(`  ${n}`);
+  }
   if (dryRun) console.log('(dry run — nothing was written)');
 
   // A page that reached no route, or an HTML file left where a second copy of
@@ -647,6 +675,26 @@ function main() {
   // link to each other with a trailing slash, so without it the migrated site's
   // own navigation 404s. Reporting that and exiting 0 would hand back a
   // "successful" conversion that does not work.
+  // A missing anchor is not "nothing to do" -- it means the layout this repo
+  // actually has does not match what the step knows how to edit, so the
+  // components were generated and left unreferenced. Treated the same way as
+  // trailingSlash above and for the same reason: reporting it in a line that
+  // scrolls past, and exiting 0, is how the gap lasted from the migration
+  // until someone rendered the site at 390px by hand.
+  const wiredWarnings = describeWiring(shape.wiredComponents).warnings;
+  if (!dryRun && wiredWarnings.length) {
+    console.error(
+      `could not wire ${wiredWarnings.length} generated component(s) into src/app/layout.tsx:`,
+    );
+    for (const w of wiredWarnings) console.error(`  ${w}`);
+    console.error(
+      'The component was written to src/components/ and nothing imports it, so it will not' +
+        ' run on any page. Wire it by hand in src/app/layout.tsx and re-run, or fix the' +
+        ' anchor this step looks for.',
+    );
+    process.exit(1);
+  }
+
   const ts = shape.trailingSlash;
   if (!dryRun && ts && !ts.changed && ts.reason !== 'already set') {
     console.error(
@@ -807,6 +855,154 @@ function restoreTemplateRoutes(repo) {
  * inbound link and search result pointing at the old URLs. It is the one
  * next.config change the conversion requires.
  */
+/**
+ * Render the two components this converter GENERATES.
+ *
+ * Step 8 copies `clone-enhance.tsx` and `ffc-footer.tsx` into the repo and
+ * nothing has ever edited `layout.tsx` to use them, so both arrived orphaned.
+ * Measured on newheightseducation.org, 2026-09-24, two days after delivery:
+ *
+ *   - `clone-enhance` is the captured pages' entire client-side runtime. Not
+ *     rendered, a phone visitor got a hamburger that did nothing and ZERO
+ *     visible navigation links on every one of 793 pages.
+ *   - `ffc-footer` is the migration footer, whose own docblock explains that a
+ *     captured page keeps its own visual footer and this strip carries the FFC
+ *     attribution and policy links. Not rendered, the template's marketing
+ *     footer shipped instead: a second 814px footer under the charity's own,
+ *     with the supporting organization's contact details and seven links to
+ *     anchors that a captured home page does not have.
+ *
+ * Both were generated correctly and wired nowhere, which no gate could see
+ * because every gate checks the export against itself and an export missing a
+ * component is perfectly self-consistent.
+ *
+ * Idempotent: 706 re-runs over a repo it has already converted, so each edit
+ * checks for its own result first.
+ */
+/**
+ * Turn a `wireGeneratedComponents` result into what the run should say about it.
+ *
+ * Pure, and separate from both callers, so the self-tests below exercise the
+ * thing that actually decides -- a test that re-derived "is this a warning?"
+ * from the notes itself would pass while the summary printed nothing.
+ *
+ * `warnings` is what the conversion exits non-zero on. A note is a warning
+ * when the step could not find the anchor it edits, which means the component
+ * was generated into src/components/ and left imported by nothing: the exact
+ * state `clone-enhance` was in on newheightseducation.org, where the captured
+ * pages' entire client-side runtime never ran and a phone could not open the
+ * menu on any of 793 pages.
+ */
+function describeWiring(wired) {
+  if (!wired) return { headline: 'layout.tsx wiring  not attempted', notes: [], warnings: [] };
+  const notes = Array.isArray(wired.notes) ? wired.notes : [];
+  const state = wired.changed ? 'edited' : (wired.reason ?? 'no change');
+  return {
+    headline: `layout.tsx wiring  ${state}`,
+    notes,
+    warnings: notes.filter((n) => String(n).startsWith('WARNING')),
+  };
+}
+
+function wireGeneratedComponents(repo) {
+  const path = join(repo, 'src', 'app', 'layout.tsx');
+  let source;
+  try {
+    source = readFileSync(path, 'utf8');
+  } catch {
+    // A WARNING and not a bare reason: this is the one outcome where BOTH
+    // generated components are certain to be unwired, and reporting it in a
+    // line that scrolls past is how the conversion reports success on a site
+    // whose captured pages have no client runtime and whose footer is the
+    // template's. A repo with no root layout is not an App Router app the
+    // converter can finish anyway -- `next build` fails on it two steps later,
+    // with an error about a missing root layout rather than about the wiring
+    // that actually stopped. Failing here names the cause.
+    return {
+      changed: false,
+      reason: 'no src/app/layout.tsx',
+      notes: ['WARNING: no src/app/layout.tsx to wire the generated components into'],
+    };
+  }
+  const before = source;
+  const done = [];
+
+  // 1. The footer. Repoint the existing import rather than adding a second
+  //    one -- the template imports a default-exported `Footer` and renders
+  //    `<Footer />`, so swapping the module keeps the JSX untouched.
+  if (/from\s+['"][^'"]*components\/ffc-footer['"]/.test(source)) {
+    done.push('footer already pointed at ffc-footer');
+  } else {
+    // `^...` with the `m` flag, not a leading `\n`: an import on the FIRST
+    // line of the file has no newline before it. The fixture caught that --
+    // this repo's layout happens to start with a `type` import, so the
+    // newline form would have worked here and failed on the next repo.
+    const footerImport = /^([ \t]*import\s+Footer\s+from\s+)(['"])([^'"]*components\/)footer\2/m;
+    if (footerImport.test(source)) {
+      source = source.replace(
+        footerImport,
+        (_m, head, q, prefix) => `${head}${q}${prefix}ffc-footer${q}`,
+      );
+      done.push('footer repointed');
+    } else {
+      done.push('WARNING: no `import Footer from .../footer` to repoint');
+    }
+  }
+
+  // 2. The clone runtime. A component with no visual output, rendered beside
+  //    the header so it mounts on every route including a client navigation.
+  //    The import and the render are checked SEPARATELY, and each is added only
+  //    if it is missing. Treating the import's presence as "already wired" is
+  //    the exact defect this step exists to fix, one level up: a component that
+  //    is imported and never rendered does nothing, and this function can
+  //    PRODUCE that state -- if the `<Header />` anchor is missing it has
+  //    already inserted the import, warns, and writes the file. A re-run then
+  //    read `components/clone-enhance`, reported "already wired", and left the
+  //    dangling import forever. Checking both also means the import is never
+  //    inserted twice.
+  const hasCloneImport = /components\/clone-enhance/.test(source);
+  const hasCloneRender = /<CloneEnhance\s*\/>/.test(source);
+  if (hasCloneImport && hasCloneRender) {
+    done.push('clone-enhance already wired');
+  } else {
+    if (!hasCloneImport) {
+      const headerImport = /^([ \t]*import\s+Header\s+from\s+)(['"])([^'"]*components\/)header\2/m;
+      const m = headerImport.exec(source);
+      if (!m) {
+        done.push('WARNING: no `import Header from .../header` to anchor the import to');
+      } else {
+        source = source.replace(
+          m[0],
+          `${m[0]}\nimport CloneEnhance from ${m[2]}${m[3]}clone-enhance${m[2]}`,
+        );
+      }
+    }
+    if (!hasCloneRender) {
+      // Rendered right after <Header />, which every FFC layout has.
+      const render = /(\n?[ \t]*)<Header\s*\/>/;
+      if (render.test(source)) {
+        source = source.replace(
+          render,
+          (_m2, indent) => `${indent}<Header />${indent}<CloneEnhance />`,
+        );
+      } else {
+        done.push('WARNING: no `<Header />` to render `<CloneEnhance />` beside');
+      }
+    }
+    // Reported from what the file NOW holds, not from which branch ran: a
+    // half-wired repo that this call completed is "wired", and one where an
+    // anchor was missing must not read as wired just because the other half
+    // succeeded.
+    if (/components\/clone-enhance/.test(source) && /<CloneEnhance\s*\/>/.test(source)) {
+      done.push('clone-enhance wired');
+    }
+  }
+
+  if (source === before) return { changed: false, notes: done };
+  write(path, source);
+  return { changed: true, notes: done };
+}
+
 function enableTrailingSlash(repo) {
   const path = join(repo, 'next.config.ts');
   let source;
@@ -1202,6 +1398,197 @@ function selfTest() {
     ),
     false,
   );
+
+  // --- wiring the components this converter generates -------------------
+  //
+  // Asserted against a real file on disk, not against the source text. The
+  // fault this fixes is precisely that the components were generated
+  // correctly and rendered nowhere, so a test that reads the converter and
+  // finds the right strings is the same kind of evidence that missed it.
+  {
+    const wd = mkdtempSync(join(tmpdir(), 'ffc-wire-'));
+    try {
+      const layoutDir = join(wd, 'src', 'app');
+      mkdirSync(layoutDir, { recursive: true });
+      const layoutPath = join(layoutDir, 'layout.tsx');
+      const original = [
+        "import Header from './../components/header'",
+        "import Footer from './../components/footer'",
+        'export default function RootLayout({ children }) {',
+        '  return (',
+        '    <body>',
+        '      <Header />',
+        '      <main>{children}</main>',
+        '      <Footer />',
+        '    </body>',
+        '  )',
+        '}',
+        '',
+      ].join('\n');
+      writeFileSync(layoutPath, original, 'utf8');
+
+      const first = wireGeneratedComponents(wd);
+      const after = readFileSync(layoutPath, 'utf8');
+      eq('wire: reports that it changed the layout', first.changed, true);
+      eq(
+        'wire: the footer import is repointed at the migration footer',
+        /import Footer from '\.\/\.\.\/components\/ffc-footer'/.test(after),
+        true,
+      );
+      eq(
+        'wire: ...and the marketing footer is no longer imported',
+        /components\/footer'/.test(after),
+        false,
+      );
+      eq(
+        'wire: the clone runtime is imported',
+        /import CloneEnhance from '\.\/\.\.\/components\/clone-enhance'/.test(after),
+        true,
+      );
+      // Imported and not rendered is the exact bug being fixed, so the render
+      // is asserted separately from the import.
+      eq('wire: ...and RENDERED', /<CloneEnhance \/>/.test(after), true);
+      eq('wire: the existing <Footer /> JSX is untouched', /<Footer \/>/.test(after), true);
+
+      // 706 re-runs over a repo it has already converted.
+      const second = wireGeneratedComponents(wd);
+      eq('wire: a second run changes nothing', second.changed, false);
+      eq('wire: ...and does not duplicate the render', after, readFileSync(layoutPath, 'utf8'));
+      eq(
+        'wire: ...nor the import',
+        (readFileSync(layoutPath, 'utf8').match(/clone-enhance/g) || []).length,
+        1,
+      );
+
+      // NO LAYOUT AT ALL: both components are certain to be unwired, so this
+      // has to reach the exit path rather than read as "nothing to do". It is
+      // the only outcome where the step knows for a fact that neither half
+      // landed.
+      const bare = mkdtempSync(join(tmpdir(), 'ffc-wire-none-'));
+      try {
+        const none = wireGeneratedComponents(bare);
+        eq('wire: a repo with no layout.tsx reports no change', none.changed, false);
+        eq(
+          'wire: ...and warns rather than passing silently',
+          describeWiring(none).warnings.length,
+          1,
+        );
+        eq(
+          'wire: ...naming the file it could not find',
+          describeWiring(none).headline.includes('no src/app/layout.tsx'),
+          true,
+        );
+      } finally {
+        rmSync(bare, { recursive: true, force: true });
+      }
+
+      // HALF-WIRED: the import present and the render missing. This is not a
+      // hypothetical -- an earlier version of this function produced it, by
+      // inserting the import and then failing to find `<Header />`. Treating
+      // the import as proof of wiring is the same "present but doing nothing"
+      // defect the whole step exists to fix, one level up.
+      const half = mkdtempSync(join(tmpdir(), 'ffc-wire-half-'));
+      try {
+        mkdirSync(join(half, 'src', 'app'), { recursive: true });
+        const halfPath = join(half, 'src', 'app', 'layout.tsx');
+        writeFileSync(
+          halfPath,
+          [
+            "import Header from './../components/header'",
+            "import CloneEnhance from './../components/clone-enhance'",
+            "import Footer from './../components/ffc-footer'",
+            'export default function RootLayout({ children }) {',
+            '  return (',
+            '    <body>',
+            '      <Header />',
+            '      <main>{children}</main>',
+            '      <Footer />',
+            '    </body>',
+            '  )',
+            '}',
+            '',
+          ].join('\n'),
+          'utf8',
+        );
+        const r = wireGeneratedComponents(half);
+        const fixed = readFileSync(halfPath, 'utf8');
+        eq(
+          'wire: an imported-but-unrendered runtime is REPAIRED, not called wired',
+          r.changed,
+          true,
+        );
+        eq('wire: ...the render is added', /<CloneEnhance \/>/.test(fixed), true);
+        eq(
+          'wire: ...and the existing import is not duplicated',
+          (fixed.match(/clone-enhance/g) || []).length,
+          1,
+        );
+        eq(
+          'wire: ...and it reports wired only now that both halves are there',
+          describeWiring(r).notes.includes('clone-enhance wired'),
+          true,
+        );
+      } finally {
+        rmSync(half, { recursive: true, force: true });
+      }
+
+      // A layout that does not match the template shape must be reported, not
+      // silently skipped: a WARNING note is how an operator learns the repo
+      // needs a hand.
+      const odd = mkdtempSync(join(tmpdir(), 'ffc-wire2-'));
+      try {
+        mkdirSync(join(odd, 'src', 'app'), { recursive: true });
+        writeFileSync(
+          join(odd, 'src', 'app', 'layout.tsx'),
+          'export default function L() {}\n',
+          'utf8',
+        );
+        const r = wireGeneratedComponents(odd);
+        eq(
+          'wire: an unrecognised layout warns rather than passing silently',
+          r.notes.some((n) => n.startsWith('WARNING')),
+          true,
+        );
+        // ...and the warning has to reach the run, which is a separate
+        // property: the notes existed from the first version of this step and
+        // no caller read them, so the conversion reported success while the
+        // components it had just written were imported by nothing.
+        // ...and it must not ALSO claim success. "warned and wired" in one
+        // note list is what an operator skims past, and the report is the only
+        // thing standing between a half-wired repo and a green run.
+        eq(
+          'wire: a warned layout is never also reported as wired',
+          r.notes.includes('clone-enhance wired'),
+          false,
+        );
+        const bad = describeWiring(r);
+        eq('wire: the warning is what the conversion exits on', bad.warnings.length > 0, true);
+        eq('wire: ...and every note is printed, not just the warnings', bad.notes, r.notes);
+      } finally {
+        rmSync(odd, { recursive: true, force: true });
+      }
+
+      // The healthy run has to say so too. A reporter that speaks only on
+      // failure leaves "wired" and "the step never ran" identical in the log.
+      const good = describeWiring(second);
+      eq('wire: a clean re-run still reports a headline', good.headline.length > 0, true);
+      eq('wire: ...with no warnings', good.warnings.length, 0);
+      eq(
+        'wire: ...and names what it found rather than staying silent',
+        good.notes.length > 0,
+        true,
+      );
+      // A step that never ran is distinguishable from one that ran cleanly.
+      eq(
+        'wire: an absent result is reported as not attempted',
+        describeWiring(undefined).headline,
+        'layout.tsx wiring  not attempted',
+      );
+      eq('wire: ...and carries no warnings to exit on', describeWiring(undefined).warnings, []);
+    } finally {
+      rmSync(wd, { recursive: true, force: true });
+    }
+  }
 
   // --- the repo shape --------------------------------------------------
   const dir = mkdtempSync(join(tmpdir(), 'ffc-convert-'));

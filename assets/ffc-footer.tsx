@@ -112,10 +112,13 @@ export default function FfcFooter() {
   // builds its expectation from the config -- failed the moment a site
   // switched from one footer to the other. The GATE is unchanged.
   const taxStatusLabel = ein && candidUrl ? siteConfig.taxStatusLabel.trim() : ''
-  // The footer standard's "policy pages, minimum set", verbatim from
+  // The footer standard's "policy pages, minimum set", quoted from
   // FFC-IN-ffcadmin.org/docs/footer-standard-adoption-checklist.md: "privacy
-  // policy, cookie policy, terms of service, donation policieS, vulnerability
-  // disclosure, security acknowledgements". Two of those were missing here
+  // policy, cookie policy, terms of service, donation policies, vulnerability
+  // disclosure, security acknowledgements". Note the plural on "donation
+  // policies" where every other item is singular -- that is what says the
+  // charity's policy and FFC's are both expected, and the template ships a
+  // route for each. Two of those were missing here
   // while the converter's own `restoreTemplateRoutes` docblock listed both as
   // "the pages the footer standard links to" and restored them -- so a site
   // that switched to this footer shipped two routes nothing linked, and a

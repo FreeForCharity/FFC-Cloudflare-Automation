@@ -287,7 +287,14 @@ export function describeJsonBody(body) {
     return `string of ${body.length} char(s) starting ${JSON.stringify(head)}`;
   }
   if (t !== 'object') return `${t} (${JSON.stringify(body).slice(0, 80)})`;
-  const keys = Object.keys(body);
+  // Keys are bounded and flattened, not just sliced. A JSON key may legally
+  // contain a newline -- this body is someone else's server's output -- and one
+  // newline breaks the single-line contract this whole function exists to keep,
+  // which is what makes a capture log scannable. `code` and `message` below go
+  // through JSON.stringify, which escapes a newline to the two characters `\n`,
+  // so they were already safe; the raw key list was not. (Copilot, #1371.)
+  const flat = (s) => s.replace(/\s+/g, ' ').slice(0, 40);
+  const keys = Object.keys(body).map(flat);
   const parts = [`object with key(s) ${keys.slice(0, 8).join(', ') || '(none)'}`];
   // The WordPress REST error envelope. Reported by name because it is the
   // difference between "this route is gone" and "you are not allowed".
@@ -3680,6 +3687,24 @@ function selfTest() {
     describeJsonBody({ message: 'x'.repeat(500) }).length < 200,
     true,
   );
+  // The one-line contract, against a body that attacks it. A key with a
+  // newline in it is legal JSON and would otherwise split the log line.
+  eq(
+    'describeJsonBody: a key containing a newline cannot break the single line',
+    describeJsonBody({ 'a\nb': 1 }).includes('\n'),
+    false,
+  );
+  eq(
+    'describeJsonBody: ...and that key is still reported, flattened',
+    describeJsonBody({ 'a\nb': 1 }),
+    'object with key(s) a b',
+  );
+  eq(
+    'describeJsonBody: a very long key is bounded too',
+    describeJsonBody({ ['k'.repeat(200)]: 1 }).length < 120,
+    true,
+  );
+
   eq(
     'describeJsonBody: an HTML body is reported as the string it is',
     describeJsonBody('<!DOCTYPE html><html><head>'),

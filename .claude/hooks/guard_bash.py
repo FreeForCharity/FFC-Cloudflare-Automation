@@ -124,9 +124,12 @@ def _split_statements(line):
         git push --force `cd /repo; git remote` main
         git push --force origin $(cd /repo; cat b.txt):main
 
-    All three BLOCK on `main`, where rule 2 judged the whole command rather
-    than each segment, so they are a regression this stack introduced rather
-    than pre-existing holes. `_top_level_ops` is shared rather than copied for
+    All three BLOCK on the PRE-STACK BASELINE -- `main` before #1310, at
+    `97789f1` -- where rule 2 judged the whole command rather than each
+    segment, so they are a regression this stack introduced rather than
+    pre-existing holes. Stated as the baseline rather than as "on `main`"
+    because once this merges, `main` carries the segment-scoped rule and the
+    sentence would invert. Copilot on #1336. `_top_level_ops` is shared rather than copied for
     the reason its own docstring gives: a second copy is how these splitters
     came to disagree in the first place.
     """
@@ -344,8 +347,9 @@ def _split_on_logical(stmt):
         git push --force $(cd /repo || echo origin) main
         git push --force origin $(cd /repo && cat b.txt):main
 
-    All six BLOCK on `main`, where the rule judged the whole command, so they
-    are a regression this stack introduced rather than pre-existing holes.
+    All six BLOCK on the PRE-STACK BASELINE (`main` before #1310, at
+    `97789f1`), where the rule judged the whole command, so they are a
+    regression this stack introduced rather than pre-existing holes.
     """
     bare = _strip_quoted(stmt)
     parts = []
@@ -453,8 +457,8 @@ def _strip_assignments(segment):
 # an assignment that prints nothing (Copilot, #1062).
 #
 # Removing that accident costs real coverage unless it is replaced, because
-# `Write-Host $env:GH_TOKEN` was blocked on `main` ONLY by the same stray match
-# -- `Write-Host` was never a listed verb. This repo is PowerShell-first, so
+# `Write-Host $env:GH_TOKEN` was blocked on the pre-stack baseline ONLY by
+# that same stray match -- the cmdlet was never a listed verb. This repo is PowerShell-first, so
 # the Write-* stream cmdlets are now named explicitly and the coverage is
 # deliberate rather than incidental.
 # The second lookbehind is the braced spelling: `${env:PASSWORD}` puts a `{`
@@ -710,9 +714,9 @@ def _pipe_stages(stmt):
         git push --force `git remote | head -1` main
         git push --force origin \\| main
 
-    All four BLOCK on `main`, where the rule judged the whole segment, so
-    these were a regression introduced with stage splitting rather than
-    pre-existing holes. Copilot on #1310.
+    All four BLOCK on the PRE-STACK BASELINE (`main` before #1310), where the
+    rule judged the whole segment, so these were a regression introduced with
+    stage splitting rather than pre-existing holes. Copilot on #1310.
 
     So `|` is a boundary only outside `$(...)`, `${...}`, backticks and a
     backslash escape. Bare `(`/`{` are tracked only once a substitution is
@@ -761,7 +765,8 @@ def force_push_violation(cmd):
     stage". It does; the claim was still wrong, because a `|` inside a command
     substitution is not a stage boundary at all, and splitting on it cut that
     single command's own words across two stages. Four real force-pushes to
-    `main` were ALLOWED as a result, all four of which `main` blocks. The
+    `main` were ALLOWED as a result, all four of which the pre-stack
+    baseline blocks. The
     rows, and what `_pipe_stages` now skips to restore them, are in its
     docstring. A stage-scoping rule is only as safe as its notion of a stage.
     """

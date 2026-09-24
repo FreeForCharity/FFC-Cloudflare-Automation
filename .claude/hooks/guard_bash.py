@@ -129,9 +129,11 @@ def _split_statements(line):
     segment, so they are a regression this stack introduced rather than
     pre-existing holes. Stated as the baseline rather than as "on `main`"
     because once this merges, `main` carries the segment-scoped rule and the
-    sentence would invert. Copilot on #1336. `_top_level_ops` is shared rather than copied for
-    the reason its own docstring gives: a second copy is how these splitters
-    came to disagree in the first place.
+    sentence would invert. Copilot on #1336.
+
+    `_top_level_ops` is shared rather than copied for the reason its own
+    docstring gives: a second copy is how these splitters came to disagree in
+    the first place.
     """
     bare = _strip_quoted(line)
     parts = []
@@ -765,10 +767,10 @@ def force_push_violation(cmd):
     stage". It does; the claim was still wrong, because a `|` inside a command
     substitution is not a stage boundary at all, and splitting on it cut that
     single command's own words across two stages. Four real force-pushes to
-    `main` were ALLOWED as a result, all four of which the pre-stack
-    baseline blocks. The
-    rows, and what `_pipe_stages` now skips to restore them, are in its
-    docstring. A stage-scoping rule is only as safe as its notion of a stage.
+    `main` were ALLOWED as a result, all four of which the pre-stack baseline
+    blocks. The rows, and what `_pipe_stages` now skips to restore them, are in
+    its docstring. A stage-scoping rule is only as safe as its notion of a
+    stage.
     """
     for seg in _echo_segments(cmd):
         for stage in _pipe_stages(seg):

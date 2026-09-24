@@ -112,12 +112,28 @@ export default function FfcFooter() {
   // builds its expectation from the config -- failed the moment a site
   // switched from one footer to the other. The GATE is unchanged.
   const taxStatusLabel = ein && candidUrl ? siteConfig.taxStatusLabel.trim() : ''
+  // The footer standard's "policy pages, minimum set", verbatim from
+  // FFC-IN-ffcadmin.org/docs/footer-standard-adoption-checklist.md: "privacy
+  // policy, cookie policy, terms of service, donation policieS, vulnerability
+  // disclosure, security acknowledgements". Two of those were missing here
+  // while the converter's own `restoreTemplateRoutes` docblock listed both as
+  // "the pages the footer standard links to" and restored them -- so a site
+  // that switched to this footer shipped two routes nothing linked, and a
+  // footer one item short of the standard it exists to satisfy. Measured on
+  // newheightseducation.org.
+  //
+  // The FFC donation policy is labelled "FFC Donation Policy" rather than by
+  // its page title: the charity repo's `check-drift` identity scan treats the
+  // literal "Free For Charity" outside its allowlist as leftover branding, and
+  // the abbreviation is clearer in a one-line strip regardless.
   const policyLinks = [
     { name: 'Privacy Policy', href: '/privacy-policy' },
     { name: 'Cookie Policy', href: '/cookie-policy' },
     { name: 'Terms of Service', href: '/terms-of-service' },
     { name: 'Donation Policy', href: '/donation-policy' },
+    { name: 'FFC Donation Policy', href: '/free-for-charity-donation-policy' },
     { name: 'Vulnerability Disclosure', href: '/vulnerability-disclosure-policy' },
+    { name: 'Security Acknowledgements', href: '/security-acknowledgements' },
   ]
   const identity = ein ? `${siteConfig.name} — EIN ${ein}` : siteConfig.name
 

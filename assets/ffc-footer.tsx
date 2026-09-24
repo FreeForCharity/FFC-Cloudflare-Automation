@@ -102,7 +102,16 @@ export default function FfcFooter() {
   // existing gates -- `ein && candidUrl`, the same condition that decides
   // whether the identity line above is wrapped in the Candid link -- so
   // this line can never appear without it (Copilot review, #1257).
-  const taxStatusLabel = ein && candidUrl ? 'a US 501(c)(3) Non-Profit' : ''
+  // The WORDING comes from the config, not from here. `taxStatusLabel` is a
+  // required SiteConfig field whose whole purpose is this line, and the
+  // template footer already renders it verbatim -- so hard-coding a second
+  // spelling meant the two footers stated the same claim two different ways
+  // on the same site. Measured on newheightseducation.org: the template
+  // footer said "a US 501c3 Non Profit" (its config value) while this one
+  // said "a US 501(c)(3) Non-Profit", and tests/copyright.spec.ts -- which
+  // builds its expectation from the config -- failed the moment a site
+  // switched from one footer to the other. The GATE is unchanged.
+  const taxStatusLabel = ein && candidUrl ? siteConfig.taxStatusLabel.trim() : ''
   const policyLinks = [
     { name: 'Privacy Policy', href: '/privacy-policy' },
     { name: 'Cookie Policy', href: '/cookie-policy' },

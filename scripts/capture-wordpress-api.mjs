@@ -263,6 +263,117 @@ export function localPathForLink(link, domain, mount = '') {
 }
 
 /**
+ * A one-line, bounded description of a JSON body that was supposed to be a
+ * collection and was not.
+ *
+ * This exists because "HTTP 200 — stopping this collection" is a sentence that
+ * cannot be acted on. It was the whole of what newheightseducation.org's apex
+ * reported on 2026-09-22: a 200 with a body that was not an array, logged as
+ * though the status were the problem, and then recorded as `restPages: 0` —
+ * indistinguishable from a site that genuinely has no pages.
+ *
+ * Bounded on purpose. The body is someone else's server's output and may be a
+ * whole HTML page; this names its shape and, for the WordPress error envelope
+ * specifically, its `code` and `data.status`, which is the part that says
+ * WHICH refusal this is (`rest_no_route`, `rest_forbidden`, a WAF's own
+ * envelope). Values are truncated, so a body cannot flood the log.
+ */
+export function describeJsonBody(body) {
+  if (body === null || body === undefined) return 'no JSON body (unparseable or empty)';
+  if (Array.isArray(body)) return `array of ${body.length}`;
+  const t = typeof body;
+  if (t === 'string') {
+    const head = body.slice(0, 80).replace(/\s+/g, ' ');
+    return `string of ${body.length} char(s) starting ${JSON.stringify(head)}`;
+  }
+  if (t !== 'object') return `${t} (${JSON.stringify(body).slice(0, 80)})`;
+  // Keys are bounded and flattened, not just sliced. A JSON key may legally
+  // contain a newline -- this body is someone else's server's output -- and one
+  // newline breaks the single-line contract this whole function exists to keep,
+  // which is what makes a capture log scannable. `code` and `message` below go
+  // through JSON.stringify, which escapes a newline to the two characters `\n`,
+  // so they were already safe; the raw key list was not. (Copilot, #1371.)
+  const flat = (s) => s.replace(/\s+/g, ' ').slice(0, 40);
+  const keys = Object.keys(body).map(flat);
+  const parts = [`object with key(s) ${keys.slice(0, 8).join(', ') || '(none)'}`];
+  // The WordPress REST error envelope. Reported by name because it is the
+  // difference between "this route is gone" and "you are not allowed".
+  if (typeof body.code === 'string') parts.push(`code=${JSON.stringify(body.code.slice(0, 60))}`);
+  if (typeof body.message === 'string')
+    parts.push(`message=${JSON.stringify(body.message.slice(0, 120))}`);
+  const status = body?.data?.status;
+  if (typeof status === 'number') parts.push(`data.status=${status}`);
+  return parts.join(' · ');
+}
+
+/**
+ * Why a REST collection could not be read, or null when it was read fine.
+ *
+ * Two different failures, and conflating them is what cost this pipeline a
+ * diagnosis. A non-200 is the server REFUSING. A 200 whose body is not an
+ * array is the server ANSWERING with something else — a WordPress error
+ * envelope, a WAF page, a cache's idea of the route. The message printed the
+ * status for both, so the second read as the self-contradictory "HTTP 200 —
+ * stopping this collection", which is what newheightseducation.org's apex
+ * logged on 2026-09-22 before its 0-page inventory was recorded as fact.
+ *
+ * The one case that must stay clean is an EMPTY collection: `[]` is an array,
+ * so a site with genuinely no pages is never a refusal.
+ */
+export function collectionRefusal(status, body) {
+  if (status !== 200) return { reason: 'http', status, detail: `HTTP ${status}` };
+  if (!Array.isArray(body)) return { reason: 'shape', status, detail: describeJsonBody(body) };
+  return null;
+}
+
+/**
+ * The synthetic front-page entry, or null when the inventory already has one.
+ *
+ * The home page is often a page whose `link` is the site root, but on a
+ * "latest posts" front page it is not in the pages collection at all — and an
+ * index.html is not optional for a static host. Hence synthesizing one.
+ *
+ * Both the path it claims and the check for an existing one are
+ * MOUNT-RELATIVE, and that is the entire point of this function existing.
+ * Both were previously the literal `index.html`, which is correct for an apex
+ * capture and wrong twice over for a mounted one: the check asks after a file
+ * a mounted capture never writes, so the entry is always synthesized, and it
+ * is then written to the shared root — over the apex capture's own home page.
+ *
+ * Measured on newheightseducation.org (2026-09-22): three captures into one
+ * tree, apex at 04:01, `--mount school` at 04:35, `--mount publications` at
+ * 05:22. Every one of the 110 school and 246 publications entries carried its
+ * prefix; the two synthetic front entries did not, so the apex's home page
+ * (164,967 bytes) was overwritten by school's and then by publications'
+ * (258,033), and the clone served the publications site at its root. Nothing
+ * reported it: `frontPageCaptured` asked the same mount-blind question and so
+ * answered `true` about the wrong file, and the apex's own byType showed no
+ * `front` at all — the tell, had anyone read it, being a capture that reports
+ * a front page it never synthesized.
+ *
+ * Note what is NOT lost by this fix: the mounted capture's home page is
+ * already in the inventory under its prefix (publications' page 6271 is
+ * `publications/index.html`), so the synthetic root copy was pure collision.
+ */
+export function frontPageEntry(entries, origin, domain, mount = '') {
+  const localPath = localPathForLink(`${origin}/`, domain, mount);
+  if (!localPath) return null;
+  if (entries.some((e) => e.localPath === localPath)) return null;
+  return {
+    id: 0,
+    type: 'front',
+    slug: '',
+    link: `${origin}/`,
+    title: 'Home',
+    localPath,
+    parent: 0,
+    menuOrder: 0,
+    template: '',
+    source: 'front',
+  };
+}
+
+/**
  * Would writing `relative` under `root` stay inside `root`?
  *
  * Every path this script writes is derived from a URL found in someone else's
@@ -1650,6 +1761,7 @@ export function captureVerdict({
   failedAssets,
   assetFailureNote,
   frontPageCaptured = true,
+  restRefusals = [],
   strandedStaleLinks = 0,
   strandedStalePages = 0,
   staleHost = null,
@@ -1665,6 +1777,16 @@ export function captureVerdict({
   if (expected > 0 && captured < expected)
     problems.push(
       `captured ${captured} of ${expected} inventory entries (REST collections + sitemap union)`,
+    );
+  // A refused collection is not a small shortfall, it is the loss of the check
+  // itself: `captured === expected` above then compares the sitemap against
+  // itself and passes by construction. Note the discrimination this keeps —
+  // a site with genuinely no pages answers 200 with `[]`, which is an array
+  // and so never a refusal.
+  if (restRefusals.length)
+    problems.push(
+      `the REST inventory was refused for ${restRefusals.map((r) => `${r.collection} (${r.detail})`).join('; ')} — ` +
+        `no X-WP-Total to check completeness against, so the sitemap is this capture's only inventory`,
     );
   if (externalHosts.length) problems.push(`unlocalized asset hosts: ${externalHosts.join(', ')}`);
   // Only the STALE host is fatal. A link to the serving domain may have no
@@ -1867,6 +1989,53 @@ function selfTest() {
     'mount: a mounted home page is one level down, not at the root',
     relativePrefix(localPathForLink('https://s.x.org/', 's.x.org', 'school')),
     '../',
+  );
+
+  // --- the synthetic front page, which is where the mount was being dropped --
+  //
+  // These four are written against the failure they come from rather than
+  // against the function's shape: a mounted capture that writes the tree root
+  // is the defect, so that is the assertion, not "the prefix is applied".
+  eq(
+    'front: an unmounted capture synthesizes the root index',
+    frontPageEntry([], 'https://x.org', 'x.org', '')?.localPath,
+    'index.html',
+  );
+  eq(
+    'front: a mounted capture synthesizes UNDER the mount',
+    frontPageEntry([], 'https://s.x.org', 's.x.org', 'school')?.localPath,
+    'school/index.html',
+  );
+  // The collision itself. An apex capture has already written the tree root;
+  // a subsequent mounted capture must not claim it, whether or not the apex's
+  // entries are visible to it -- they are not, each capture runs alone.
+  eq(
+    'front: a mounted capture never claims the tree root',
+    frontPageEntry(
+      [{ localPath: 'publications/other/index.html' }],
+      'https://p.x.org',
+      'p.x.org',
+      'publications',
+    )?.localPath === 'index.html',
+    false,
+  );
+  // ...and the guard still suppresses a duplicate, now asking about the file
+  // this capture would actually write. Publications' own page 6271 is exactly
+  // this case: already inventoried under the prefix, so nothing to synthesize.
+  eq(
+    'front: an inventory that already has the mounted home page adds nothing',
+    frontPageEntry(
+      [{ localPath: 'publications/index.html' }],
+      'https://p.x.org',
+      'p.x.org',
+      'publications',
+    ),
+    null,
+  );
+  eq(
+    'front: and the unmounted duplicate is still suppressed',
+    frontPageEntry([{ localPath: 'index.html' }], 'https://x.org', 'x.org', ''),
+    null,
   );
 
   // The politeness delay must apply to ASSETS too — they are the bulk of the
@@ -3455,6 +3624,133 @@ function selfTest() {
       .length,
     1,
   );
+  // --- a refused REST collection, which used to report as a zero -----------
+  //
+  // The discrimination that matters: an EMPTY collection is an array and must
+  // stay clean, because a site with no pages is a real and ordinary thing.
+  eq(
+    'describeJsonBody: an empty collection is an array, not a refusal',
+    describeJsonBody([]),
+    'array of 0',
+  );
+  eq(
+    'describeJsonBody: names the WordPress error envelope, code and status',
+    describeJsonBody({
+      code: 'rest_no_route',
+      message: 'No route was found.',
+      data: { status: 404 },
+    }),
+    'object with key(s) code, message, data · code="rest_no_route" · message="No route was found." · data.status=404',
+  );
+  // An unparseable body must not be describable as an empty object: the two
+  // read identically to an operator ("the server answered with nothing") and
+  // mean opposite things.
+  eq(
+    'describeJsonBody: an unparseable body says so rather than reading as empty',
+    describeJsonBody(null),
+    'no JSON body (unparseable or empty)',
+  );
+  eq(
+    'describeJsonBody: ...and an actually-empty object is not confused with it',
+    describeJsonBody({}),
+    'object with key(s) (none)',
+  );
+
+  // --- the wiring: a response BECOMES a refusal, or does not ---------------
+  eq(
+    'collectionRefusal: a 200 with a real collection is no refusal',
+    collectionRefusal(200, [{ id: 1 }]),
+    null,
+  );
+  eq(
+    'collectionRefusal: a 200 with an EMPTY collection is no refusal either',
+    collectionRefusal(200, []),
+    null,
+  );
+  eq(
+    'collectionRefusal: a 200 whose body is an error envelope IS a refusal',
+    collectionRefusal(200, { code: 'rest_forbidden', data: { status: 401 } }),
+    {
+      reason: 'shape',
+      status: 200,
+      detail: 'object with key(s) code, data · code="rest_forbidden" · data.status=401',
+    },
+  );
+  eq('collectionRefusal: a non-200 is a refusal, reported as one', collectionRefusal(403, null), {
+    reason: 'http',
+    status: 403,
+    detail: 'HTTP 403',
+  });
+  // Bounded: someone else's server decides this string's length.
+  eq(
+    'describeJsonBody: a long message is truncated',
+    describeJsonBody({ message: 'x'.repeat(500) }).length < 200,
+    true,
+  );
+  // The one-line contract, against a body that attacks it. A key with a
+  // newline in it is legal JSON and would otherwise split the log line.
+  eq(
+    'describeJsonBody: a key containing a newline cannot break the single line',
+    describeJsonBody({ 'a\nb': 1 }).includes('\n'),
+    false,
+  );
+  eq(
+    'describeJsonBody: ...and that key is still reported, flattened',
+    describeJsonBody({ 'a\nb': 1 }),
+    'object with key(s) a b',
+  );
+  eq(
+    'describeJsonBody: a very long key is bounded too',
+    describeJsonBody({ ['k'.repeat(200)]: 1 }).length < 120,
+    true,
+  );
+
+  eq(
+    'describeJsonBody: an HTML body is reported as the string it is',
+    describeJsonBody('<!DOCTYPE html><html><head>'),
+    'string of 27 char(s) starting "<!DOCTYPE html><html><head>"',
+  );
+
+  // The verdict. A refusal is fatal BECAUSE the completeness comparison it
+  // disables is the one that would otherwise catch a short capture.
+  eq(
+    'captureVerdict: a refused REST collection is a problem, not a zero',
+    captureVerdict({
+      expected: 430,
+      captured: 430,
+      externalHosts: [],
+      failedAssets: 0,
+      restRefusals: [
+        { collection: 'pages', reason: 'shape', status: 200, detail: 'code="rest_forbidden"' },
+      ],
+    }).ok,
+    false,
+  );
+  eq(
+    'captureVerdict: and it names which collection and why',
+    captureVerdict({
+      expected: 430,
+      captured: 430,
+      externalHosts: [],
+      failedAssets: 0,
+      restRefusals: [
+        { collection: 'pages', reason: 'shape', status: 200, detail: 'code="rest_forbidden"' },
+      ],
+    }).problems.some((s) => s.includes('pages') && s.includes('rest_forbidden')),
+    true,
+  );
+  eq(
+    'captureVerdict: no refusal leaves an otherwise clean capture clean',
+    captureVerdict({
+      expected: 430,
+      captured: 430,
+      externalHosts: [],
+      failedAssets: 0,
+      restRefusals: [],
+    }).ok,
+    true,
+  );
+
   eq(
     'captureVerdict flags external hosts and failed assets',
     captureVerdict({ expected: 5, captured: 5, externalHosts: ['cdn.io'], failedAssets: 2 })
@@ -3710,6 +4006,7 @@ async function fetchCollection(rest, collection, extraParams = {}) {
   let total = null;
   let totalPages = 1;
   let lastStatus = 0;
+  let refusal = null;
 
   for (let page = 1; page <= totalPages && items.length < maxItems; page++) {
     const url = collectionUrl(rest, collection, {
@@ -3719,8 +4016,14 @@ async function fetchCollection(rest, collection, extraParams = {}) {
     });
     const { status, body, headers } = await getJson(url);
     lastStatus = status;
-    if (status !== 200 || !Array.isArray(body)) {
-      console.error(`[rest] ${collection} page ${page}: HTTP ${status} — stopping this collection`);
+    refusal = collectionRefusal(status, body);
+    if (refusal) {
+      console.error(
+        refusal.reason === 'http'
+          ? `[rest] ${collection} page ${page}: HTTP ${status} — stopping this collection`
+          : `[rest] ${collection} page ${page}: HTTP 200 but the body is not a collection — ` +
+              `${refusal.detail}. Stopping this collection; there is no X-WP-Total to check against.`,
+      );
       break;
     }
     if (page === 1 && headers) {
@@ -3732,7 +4035,7 @@ async function fetchCollection(rest, collection, extraParams = {}) {
     items.push(...body);
     await sleep(delayMs);
   }
-  return { items, total: total ?? items.length, totalPages, lastStatus };
+  return { items, total: total ?? items.length, totalPages, lastStatus, refusal };
 }
 
 // --- inspect ---------------------------------------------------------------
@@ -3927,6 +4230,24 @@ async function capture() {
     posts = await fetchCollection(rest, 'posts', { status: 'publish' });
     console.error(`[capture] posts: ${posts.items.length} of ${posts.total} reported`);
   }
+  // `restPages: 0` has two causes that look identical in the report: a site
+  // with no pages, and a site that would not hand its pages over. Only the
+  // second one means the X-WP-Total completeness check -- the reason this
+  // script talks to REST at all rather than just crawling the sitemap -- did
+  // not run. Carried through to the verdict so it is stated rather than
+  // inferred from a zero.
+  const restRefusals = [
+    ['pages', pages.refusal],
+    ['posts', posts.refusal],
+  ]
+    .filter(([, r]) => r)
+    .map(([collection, r]) => ({ collection, ...r }));
+  for (const r of restRefusals) {
+    console.error(
+      `[capture] the ${r.collection} inventory was refused (${r.reason}): ${r.detail}. ` +
+        `This capture has no CMS-side count to check itself against; the sitemap is its only inventory.`,
+    );
+  }
   // The media library is a convenience, not a requirement: on a WordPress.com
   // site it answers 401 unauthenticated (measured on vpmin.org). Losing it
   // costs only the images no captured page happens to reference, so it must
@@ -3996,23 +4317,8 @@ async function capture() {
     `[capture] sitemap (${sm.source ?? 'none'}): ${sm.urls.length} page URL(s), ${fromSitemap} not in the REST inventory`,
   );
 
-  // The home page is often a page whose `link` is the site root, but on a
-  // "latest posts" front page it is not in the pages collection at all — and
-  // an index.html is not optional for a static host.
-  if (!entries.some((e) => e.localPath === 'index.html')) {
-    entries.unshift({
-      id: 0,
-      type: 'front',
-      slug: '',
-      link: `${origin}/`,
-      title: 'Home',
-      localPath: 'index.html',
-      parent: 0,
-      menuOrder: 0,
-      template: '',
-      source: 'front',
-    });
-  }
+  const front = frontPageEntry(entries, origin, domain, mount);
+  if (front) entries.unshift(front);
 
   mkdirSync(outDir, { recursive: true });
   const assetsDirName = '_ffc-assets';
@@ -4681,11 +4987,14 @@ async function capture() {
   const assetFailureNote = describeFailures(assetTally, domain);
   if (assetFailureNote) console.error(`[capture] assets: ${assetFailureNote}`);
 
-  // `index.html` is what a static host serves at `/`. Read from what was
-  // actually WRITTEN, not from what was fetched: a page can be rendered and
-  // then refused at the write (path containment), and the comment here used to
-  // claim the stronger property while the code checked the weaker one.
-  const frontPageCaptured = writtenPages.has('index.html');
+  // `index.html` is what a static host serves at `/` — under this capture's
+  // mount, not at the tree root. Read from what was actually WRITTEN, not from
+  // what was fetched: a page can be rendered and then refused at the write
+  // (path containment), and the comment here used to claim the stronger
+  // property while the code checked the weaker one.
+  const frontPageCaptured = writtenPages.has(
+    localPathForLink(`${origin}/`, domain, mount) ?? 'index.html',
+  );
   const staleNav = selfHost ? (strandedNav.get(selfHost) ?? { pages: 0, links: 0 }) : null;
   const verdict = captureVerdict({
     expected: entries.length,
@@ -4694,6 +5003,7 @@ async function capture() {
     failedAssets: assetTally.total,
     assetFailureNote,
     frontPageCaptured,
+    restRefusals,
     strandedStaleLinks: staleNav?.links ?? 0,
     strandedStalePages: staleNav?.pages ?? 0,
     staleHost: selfHost,
@@ -4715,6 +5025,8 @@ async function capture() {
     inventory: {
       restPages: pages.total,
       restPosts: posts.total,
+      // Present and non-empty means the two numbers above are not measurements.
+      restRefusals,
       sitemapSource: sm.source,
       sitemapPageUrls: sm.urls.length,
       addedBySitemap: fromSitemap,

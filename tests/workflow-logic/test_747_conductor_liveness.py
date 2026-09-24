@@ -715,14 +715,28 @@ def test_the_merged_pr_read_pages_forward_until_it_finds_one():
 
     Assert the loop and its bound, not just the word 'page': an unbounded walk
     over every closed PR in the repo is the other way to get this wrong.
+
+    And assert the STOP CONDITION, not merely that one exists. Breaking on the
+    first page carrying any merge is what the first version of this fix did, and
+    it is wrong for a reason the page count cannot see: the listing is ordered by
+    `updated_at`, not `merged_at`, so an old merge commented on yesterday sorts
+    above an untouched merge from this morning. The sound bound rests on
+    `merged_at <= updated_at` — once this page's oldest `updated_at` is at or
+    below the newest `merged_at` seen, no later page can carry a newer merge.
+    Without the `oldestUpdatedT <= newestMergeT` assertion, a regression back to
+    the too-early break still satisfies every other line here.
     """
     script = _script()
     assert "MAX_MERGE_PAGES" in script, "the merged-PR read must page forward"
     assert "page," in script, "the listForRepo call must pass a page argument"
     # Bounded: a cap the loop actually tests against, not a walk of everything.
     assert "page <= MAX_MERGE_PAGES" in script, script
-    # And it stops as soon as it has one, so the common case stays a single call.
-    assert "mergedPRs.length > 0" in script, script
+    # The stop condition is the updated_at/merged_at bound, not "found one".
+    assert "newestMergeT" in script, "the loop must track the newest merged_at"
+    assert "oldestUpdatedT <= newestMergeT" in script, (
+        "stopping on the first page with any merge measures from the wrong "
+        "merge under sort=updated"
+    )
 
 
 def test_the_monitor_holds_no_key_vault_credential():

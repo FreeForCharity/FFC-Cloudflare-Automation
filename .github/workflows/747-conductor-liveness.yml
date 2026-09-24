@@ -157,10 +157,30 @@ jobs:
               // this workflow already makes for keeping `open-pr-cap` off the
               // findings list.
               //
-              // Cost is unchanged in the common case: page 1 almost always
-              // carries a merge, the loop breaks, and this is one request. The
-              // cap bounds the tail rather than walking every closed PR.
+              // Stopping at the first page that carries ANY merge is NOT
+              // enough, and an earlier revision of this loop did exactly that.
+              // The listing is ordered by `updated_at`, not by `merged_at`: an
+              // old merge that someone commented on yesterday sorts above a
+              // merge from this morning that nobody has touched since. Break on
+              // "found one" and `merge-silence` measures from the older merge
+              // and can WARN or ALERT while a newer merge exists — the same
+              // false-alarm noise this loop was widened to remove.
+              //
+              // The sound bound uses the one relation that always holds:
+              // `merged_at <= updated_at`, because merging bumps `updated_at`
+              // (measured on #1340 — merged 16:48:51, updated 16:48:52). So
+              // once THIS page's OLDEST `updated_at` is at or below the newest
+              // `merged_at` seen, every item on every later page has an older
+              // `updated_at` still, and therefore cannot carry a newer merge.
+              //
+              // Cost is unchanged in the common case: the newest merge is
+              // normally near the top of page 1 while page 1's 100th item is
+              // weeks older, so the bound is satisfied immediately and this is
+              // one request. It pages on only when recent churn on closed items
+              // outruns the merge cadence — which is precisely the case that
+              // used to return the wrong answer.
               const MAX_MERGE_PAGES = 5;
+              let newestMergeT = -Infinity;
               for (let page = 1; page <= MAX_MERGE_PAGES; page++) {
                 const closed = await github.rest.issues.listForRepo({
                   owner,
@@ -172,13 +192,27 @@ jobs:
                   per_page: 100,
                   page,
                 });
-                mergedPRs = mergedPRs.concat(
-                  closed.data
-                    .filter((i) => i && i.pull_request && i.pull_request.merged_at)
-                    .map((i) => ({ number: i.number, merged_at: i.pull_request.merged_at }))
-                );
-                // Found the newest-updated merges, or the listing is exhausted.
-                if (mergedPRs.length > 0 || closed.data.length < 100) break;
+                if (!closed.data.length) break;
+                for (const i of closed.data) {
+                  if (i && i.pull_request && i.pull_request.merged_at) {
+                    mergedPRs.push({ number: i.number, merged_at: i.pull_request.merged_at });
+                    const t = Date.parse(i.pull_request.merged_at);
+                    if (Number.isFinite(t) && t > newestMergeT) newestMergeT = t;
+                  }
+                }
+                // The listing is exhausted — there is no later page to check.
+                if (closed.data.length < 100) break;
+                const oldest = closed.data[closed.data.length - 1];
+                const oldestUpdatedT = Date.parse((oldest && oldest.updated_at) || '');
+                // An unparseable boundary proves nothing, so it does NOT stop
+                // the walk; the page cap is what bounds it then.
+                if (
+                  mergedPRs.length > 0 &&
+                  Number.isFinite(oldestUpdatedT) &&
+                  oldestUpdatedT <= newestMergeT
+                ) {
+                  break;
+                }
               }
             } catch (e) {
               mergedError = String(e.message || e).slice(0, 200);

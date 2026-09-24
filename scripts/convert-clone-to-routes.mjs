@@ -542,6 +542,7 @@ function main() {
     shape.verifyBuildScope = scopeVerifyBuildToRoutes(repo, assetsDir);
     shape.templateRoutes = restoreTemplateRoutes(repo);
     shape.trailingSlash = enableTrailingSlash(repo);
+    shape.wiredComponents = wireGeneratedComponents(repo);
     // Two converted pages so the audit covers the migration, not only the
     // template's policy pages. The front page is already in every config.
     shape.lighthouse = retargetLighthouseUrls(
@@ -807,6 +808,98 @@ function restoreTemplateRoutes(repo) {
  * inbound link and search result pointing at the old URLs. It is the one
  * next.config change the conversion requires.
  */
+/**
+ * Render the two components this converter GENERATES.
+ *
+ * Step 8 copies `clone-enhance.tsx` and `ffc-footer.tsx` into the repo and
+ * nothing has ever edited `layout.tsx` to use them, so both arrived orphaned.
+ * Measured on newheightseducation.org, 2026-09-24, two days after delivery:
+ *
+ *   - `clone-enhance` is the captured pages' entire client-side runtime. Not
+ *     rendered, a phone visitor got a hamburger that did nothing and ZERO
+ *     visible navigation links on every one of 793 pages.
+ *   - `ffc-footer` is the migration footer, whose own docblock explains that a
+ *     captured page keeps its own visual footer and this strip carries the FFC
+ *     attribution and policy links. Not rendered, the template's marketing
+ *     footer shipped instead: a second 814px footer under the charity's own,
+ *     with the supporting organization's contact details and seven links to
+ *     anchors that a captured home page does not have.
+ *
+ * Both were generated correctly and wired nowhere, which no gate could see
+ * because every gate checks the export against itself and an export missing a
+ * component is perfectly self-consistent.
+ *
+ * Idempotent: 706 re-runs over a repo it has already converted, so each edit
+ * checks for its own result first.
+ */
+function wireGeneratedComponents(repo) {
+  const path = join(repo, 'src', 'app', 'layout.tsx');
+  let source;
+  try {
+    source = readFileSync(path, 'utf8');
+  } catch {
+    return { changed: false, reason: 'no src/app/layout.tsx' };
+  }
+  const before = source;
+  const done = [];
+
+  // 1. The footer. Repoint the existing import rather than adding a second
+  //    one -- the template imports a default-exported `Footer` and renders
+  //    `<Footer />`, so swapping the module keeps the JSX untouched.
+  if (/from\s+['"][^'"]*components\/ffc-footer['"]/.test(source)) {
+    done.push('footer already pointed at ffc-footer');
+  } else {
+    // `^...` with the `m` flag, not a leading `\n`: an import on the FIRST
+    // line of the file has no newline before it. The fixture caught that --
+    // this repo's layout happens to start with a `type` import, so the
+    // newline form would have worked here and failed on the next repo.
+    const footerImport = /^([ \t]*import\s+Footer\s+from\s+)(['"])([^'"]*components\/)footer\2/m;
+    if (footerImport.test(source)) {
+      source = source.replace(
+        footerImport,
+        (_m, head, q, prefix) => `${head}${q}${prefix}ffc-footer${q}`,
+      );
+      done.push('footer repointed');
+    } else {
+      done.push('WARNING: no `import Footer from .../footer` to repoint');
+    }
+  }
+
+  // 2. The clone runtime. A component with no visual output, rendered beside
+  //    the header so it mounts on every route including a client navigation.
+  if (/components\/clone-enhance/.test(source)) {
+    done.push('clone-enhance already wired');
+  } else {
+    const headerImport = /^([ \t]*import\s+Header\s+from\s+)(['"])([^'"]*components\/)header\2/m;
+    const m = headerImport.exec(source);
+    if (!m) {
+      done.push('WARNING: no `import Header from .../header` to anchor to');
+    } else {
+      const quote = m[2];
+      const prefix = m[3];
+      source = source.replace(
+        m[0],
+        `${m[0]}\nimport CloneEnhance from ${quote}${prefix}clone-enhance${quote}`,
+      );
+      // Rendered right after <Header />, which every FFC layout has.
+      const render = /(\n?[ \t]*)<Header\s*\/>/;
+      if (render.test(source)) {
+        source = source.replace(
+          render,
+          (_m2, indent) => `${indent}<Header />${indent}<CloneEnhance />`,
+        );
+        done.push('clone-enhance wired');
+      } else {
+        done.push('WARNING: no `<Header />` to render beside');
+      }
+    }
+  }
+
+  if (source === before) return { changed: false, notes: done };
+  write(path, source);
+  return { changed: true, notes: done };
+}
+
 function enableTrailingSlash(repo) {
   const path = join(repo, 'next.config.ts');
   let source;
@@ -1202,6 +1295,92 @@ function selfTest() {
     ),
     false,
   );
+
+  // --- wiring the components this converter generates -------------------
+  //
+  // Asserted against a real file on disk, not against the source text. The
+  // fault this fixes is precisely that the components were generated
+  // correctly and rendered nowhere, so a test that reads the converter and
+  // finds the right strings is the same kind of evidence that missed it.
+  {
+    const wd = mkdtempSync(join(tmpdir(), 'ffc-wire-'));
+    try {
+      const layoutDir = join(wd, 'src', 'app');
+      mkdirSync(layoutDir, { recursive: true });
+      const layoutPath = join(layoutDir, 'layout.tsx');
+      const original = [
+        "import Header from './../components/header'",
+        "import Footer from './../components/footer'",
+        'export default function RootLayout({ children }) {',
+        '  return (',
+        '    <body>',
+        '      <Header />',
+        '      <main>{children}</main>',
+        '      <Footer />',
+        '    </body>',
+        '  )',
+        '}',
+        '',
+      ].join('\n');
+      writeFileSync(layoutPath, original, 'utf8');
+
+      const first = wireGeneratedComponents(wd);
+      const after = readFileSync(layoutPath, 'utf8');
+      eq('wire: reports that it changed the layout', first.changed, true);
+      eq(
+        'wire: the footer import is repointed at the migration footer',
+        /import Footer from '\.\/\.\.\/components\/ffc-footer'/.test(after),
+        true,
+      );
+      eq(
+        'wire: ...and the marketing footer is no longer imported',
+        /components\/footer'/.test(after),
+        false,
+      );
+      eq(
+        'wire: the clone runtime is imported',
+        /import CloneEnhance from '\.\/\.\.\/components\/clone-enhance'/.test(after),
+        true,
+      );
+      // Imported and not rendered is the exact bug being fixed, so the render
+      // is asserted separately from the import.
+      eq('wire: ...and RENDERED', /<CloneEnhance \/>/.test(after), true);
+      eq('wire: the existing <Footer /> JSX is untouched', /<Footer \/>/.test(after), true);
+
+      // 706 re-runs over a repo it has already converted.
+      const second = wireGeneratedComponents(wd);
+      eq('wire: a second run changes nothing', second.changed, false);
+      eq('wire: ...and does not duplicate the render', after, readFileSync(layoutPath, 'utf8'));
+      eq(
+        'wire: ...nor the import',
+        (readFileSync(layoutPath, 'utf8').match(/clone-enhance/g) || []).length,
+        1,
+      );
+
+      // A layout that does not match the template shape must be reported, not
+      // silently skipped: a WARNING note is how an operator learns the repo
+      // needs a hand.
+      const odd = mkdtempSync(join(tmpdir(), 'ffc-wire2-'));
+      try {
+        mkdirSync(join(odd, 'src', 'app'), { recursive: true });
+        writeFileSync(
+          join(odd, 'src', 'app', 'layout.tsx'),
+          'export default function L() {}\n',
+          'utf8',
+        );
+        const r = wireGeneratedComponents(odd);
+        eq(
+          'wire: an unrecognised layout warns rather than passing silently',
+          r.notes.some((n) => n.startsWith('WARNING')),
+          true,
+        );
+      } finally {
+        rmSync(odd, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(wd, { recursive: true, force: true });
+    }
+  }
 
   // --- the repo shape --------------------------------------------------
   const dir = mkdtempSync(join(tmpdir(), 'ffc-convert-'));

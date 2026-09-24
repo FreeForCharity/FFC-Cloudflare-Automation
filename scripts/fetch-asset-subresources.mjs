@@ -96,7 +96,14 @@ export function isFollowableRelativeRef(ref) {
   // so a separate test for it can never be the reason anything is refused. It
   // was here, and no mutation of it could be made to fail a test — which is the
   // signal that it was decoration rather than a guard.
-  if (value.startsWith('/')) return false;
+  // Backslash counts as a separator and as a root, because on Windows
+  // `path.resolve` treats it as both: `resolve('C:/a/b', '..\\..\\x.js')` is
+  // `C:\\x.js`, and `resolve('C:/a/b', '\\x.js')` is `C:\\x.js` too. On Linux the
+  // same strings are an ordinary filename, so a `/`-only guard is correct on
+  // the runner and wrong anywhere this is run by hand — and it is run by hand.
+  // A backslash in a web reference is a mistake or an escape, never a path a
+  // server resolves the way the document meant, so refusing it loses nothing.
+  if (value.startsWith('/') || value.startsWith('\\')) return false;
   if (value.startsWith('#') || value.startsWith('?')) return false;
   // Strip the fragment and query: they address a part of the file, not a
   // different file, and the capture writes the file under its bare path.
@@ -111,7 +118,7 @@ export function isFollowableRelativeRef(ref) {
   // `%2e%2e` while the request goes somewhere else entirely. The decode and
   // this check have to agree about what a segment MEANS, or the guard is
   // checking a different string from the one that gets sent.
-  for (const segment of bare.split('/')) {
+  for (const segment of bare.split(/[\\/]+/)) {
     let meaning = segment;
     try {
       meaning = decodeURIComponent(segment);
@@ -219,10 +226,16 @@ export function planFetches(assetsRoot) {
       // is refused rather than clamped: clamping would silently fetch a
       // DIFFERENT path than the document asked for.
       //
-      // TODAY THIS IS UNREACHABLE, and saying so is the point.
-      // `isFollowableRelativeRef` already rejects any reference with a `..`
-      // segment, and nothing between there and here decodes, so no input that
-      // survives the filter can escape. No mutation of this line fails a test.
+      // UNREACHABLE GIVEN THE FILTER ABOVE, and saying so is the point.
+      // `isFollowableRelativeRef` rejects a `.`/`..` segment on either
+      // separator and a root on either separator, so no input that survives it
+      // can escape. No mutation of this line fails a test.
+      //
+      // That claim used to be written without the qualifier, and it was wrong
+      // on Windows: the filter split on `/` only, while `path.resolve` there
+      // also honours `\\`, so `..\\..\\x.js` reached this line and THIS was the
+      // guard that stopped it. The filter now covers both separators, which is
+      // what makes the sentence true again.
       // It is kept as a second barrier because the filter and this resolve are
       // separated by a function boundary, and the day someone relaxes the
       // filter is the day it earns its place — but it is defence in depth, not
@@ -392,6 +405,17 @@ function selfTest() {
   eq('a mixed-case percent-encoded traversal is not', isFollowableRelativeRef('%2E%2e/x'), false);
   eq('a percent-encoded single dot is not', isFollowableRelativeRef('%2e/x'), false);
   eq('a filename that merely CONTAINS dots is fine', isFollowableRelativeRef('a..b/x.js'), true);
+  // On Windows `path.resolve` honours `\\` as a separator and as a root, so a
+  // `/`-only guard is correct on the runner and wrong on the machine an
+  // operator runs this from.
+  eq('a backslash traversal is not followable', isFollowableRelativeRef('..\\..\\x.js'), false);
+  eq('a backslash root is not followable', isFollowableRelativeRef('\\x.js'), false);
+  eq(
+    'a backslash traversal hidden in escapes is not either',
+    isFollowableRelativeRef('%2e%2e\\x.js'),
+    false,
+  );
+  eq('a mixed-separator traversal is not', isFollowableRelativeRef('js/..\\..\\x'), false);
   eq('an empty reference is not', isFollowableRelativeRef('   '), false);
 
   eq(

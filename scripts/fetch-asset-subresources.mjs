@@ -119,6 +119,30 @@ export function subresourceRefs(html) {
 }
 
 /**
+ * Percent-encode one path segment WITHOUT double-encoding one that already is.
+ *
+ * The on-disk name is whatever the document referenced, resolved against its
+ * directory — so it arrives either decoded (`Crèche.png`, which is what
+ * `assetLocalName` writes when decoding is safe) or still encoded
+ * (`Cr%C3%A8che.png`, which is what a relative reference in the document
+ * literally says). Encoding the second form again yields `Cr%25C3%25A8che.png`,
+ * a different URL, and the fetch 404s on a file that is really there.
+ *
+ * Decoding first makes both forms converge. A segment whose escapes are
+ * malformed is not decodable and is encoded literally, which is correct: a
+ * filename containing a bare `%` is a filename containing a bare `%`.
+ */
+function encodePathSegment(segment) {
+  let decoded = segment;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    // Not a valid encoding, so the `%` is part of the name, not an escape.
+  }
+  return encodeURIComponent(decoded);
+}
+
+/**
  * The URL a file under `_ffc-assets/<host>/<rest>` was downloaded from.
  *
  * The host comes from the PATH, never from the document, which is what bounds
@@ -137,7 +161,7 @@ export function sourceUrlFor(assetsRoot, absPath) {
   if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(host)) {
     return null;
   }
-  return `https://${host}/${path.split('/').map(encodeURIComponent).join('/')}`;
+  return `https://${host}/${path.split('/').map(encodePathSegment).join('/')}`;
 }
 
 function walk(dir, out = []) {
@@ -333,6 +357,29 @@ function selfTest() {
     'a single-label host directory is refused',
     sourceUrlFor('/cap/_ffc-assets', '/cap/_ffc-assets/localhost/x.js'),
     null,
+  );
+
+  // A relative reference in a document says what it says. An already-encoded
+  // segment must reach the network unchanged, not as `%25…`.
+  eq(
+    'an already-encoded segment is not encoded twice',
+    sourceUrlFor('/cap/_ffc-assets', '/cap/_ffc-assets/ex.com/img/Cr%C3%A8che.png'),
+    'https://ex.com/img/Cr%C3%A8che.png',
+  );
+  eq(
+    'a decoded segment is encoded, so both spellings converge on one URL',
+    sourceUrlFor('/cap/_ffc-assets', '/cap/_ffc-assets/ex.com/img/Cr\u00e8che.png'),
+    'https://ex.com/img/Cr%C3%A8che.png',
+  );
+  eq(
+    'a bare % that is not an escape is part of the name',
+    sourceUrlFor('/cap/_ffc-assets', '/cap/_ffc-assets/ex.com/img/100%.png'),
+    'https://ex.com/img/100%25.png',
+  );
+  eq(
+    'a slash encoded inside a segment round-trips',
+    sourceUrlFor('/cap/_ffc-assets', '/cap/_ffc-assets/ex.com/a%2Fb.js'),
+    'https://ex.com/a%2Fb.js',
   );
 
   // --- the tree shape ------------------------------------------------------

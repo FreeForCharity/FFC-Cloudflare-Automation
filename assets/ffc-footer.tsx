@@ -42,7 +42,11 @@ import { siteConfig } from '@/lib/site.config'
  * program attribution required on every supported site. The second is genuine
  * fiscal sponsorship -- "a project of" -- which says the charity is NOT
  * independent. An FFC-EX repo is an external charity's own site: FFC gives it
- * a website, the charity is its own 501(c)(3).
+ * a website, and the charity is its own organization. (Not "its own
+ * 501(c)(3)": the footer standard separates Level 1, a pre-501c3 charity whose
+ * determination letter has not arrived and whose 501(c)(3) language is
+ * deliberately removed, from Level 2. Independence is true of both; tax status
+ * is not this line's claim to make.)
  *
  * The template ships `parentOrg` pointing at Free For Charity, the same
  * organization as `supportedBy`, so a fork that changes nothing renders
@@ -56,9 +60,11 @@ import { siteConfig } from '@/lib/site.config'
  * site inheriting it, and wrong in the direction that misstates the charity.
  *
  * Inlined rather than imported because workflow 706 copies THIS file into
- * charity repos whose `site.config` may not export the shared helper yet. The
- * repo-side `assertedParentOrg` is the same rule; a unit test asserts the two
- * agree so they cannot drift apart silently.
+ * charity repos whose `site.config` may not export the shared helper yet. So
+ * the rule lives HERE, in this file -- the charity-side `site.config.ts`
+ * carries an identical copy for its other two consumers, and a unit test in
+ * that repo asserts the two are the same code so they cannot drift apart
+ * silently.
  *
  * Compared on name OR url: a fork that retitles the block without repointing
  * it, or repoints without retitling, is still the template default wearing a
@@ -170,11 +176,11 @@ export default function FfcFooter() {
             that relationship. */}
         {!parentOrg && (
           <p className="ffc-footer__relationship">
-            {siteConfig.name} is an independent nonprofit organization.{' '}
             <a href={siteConfig.supportedBy.url} target="_blank" rel="noopener noreferrer">
               {siteConfig.supportedBy.name}
             </a>{' '}
-            provides its website and domain services at no cost.
+            provides this website and its domain services at no cost. {siteConfig.name} is an
+            independent organization, responsible for its own content and operations.
           </p>
         )}
       </div>

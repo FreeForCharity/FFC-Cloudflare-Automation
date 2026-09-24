@@ -263,6 +263,53 @@ export function localPathForLink(link, domain, mount = '') {
 }
 
 /**
+ * The synthetic front-page entry, or null when the inventory already has one.
+ *
+ * The home page is often a page whose `link` is the site root, but on a
+ * "latest posts" front page it is not in the pages collection at all — and an
+ * index.html is not optional for a static host. Hence synthesizing one.
+ *
+ * Both the path it claims and the check for an existing one are
+ * MOUNT-RELATIVE, and that is the entire point of this function existing.
+ * Both were previously the literal `index.html`, which is correct for an apex
+ * capture and wrong twice over for a mounted one: the check asks after a file
+ * a mounted capture never writes, so the entry is always synthesized, and it
+ * is then written to the shared root — over the apex capture's own home page.
+ *
+ * Measured on newheightseducation.org (2026-09-22): three captures into one
+ * tree, apex at 04:01, `--mount school` at 04:35, `--mount publications` at
+ * 05:22. Every one of the 110 school and 246 publications entries carried its
+ * prefix; the two synthetic front entries did not, so the apex's home page
+ * (164,967 bytes) was overwritten by school's and then by publications'
+ * (258,033), and the clone served the publications site at its root. Nothing
+ * reported it: `frontPageCaptured` asked the same mount-blind question and so
+ * answered `true` about the wrong file, and the apex's own byType showed no
+ * `front` at all — the tell, had anyone read it, being a capture that reports
+ * a front page it never synthesized.
+ *
+ * Note what is NOT lost by this fix: the mounted capture's home page is
+ * already in the inventory under its prefix (publications' page 6271 is
+ * `publications/index.html`), so the synthetic root copy was pure collision.
+ */
+export function frontPageEntry(entries, origin, domain, mount = '') {
+  const localPath = localPathForLink(`${origin}/`, domain, mount);
+  if (!localPath) return null;
+  if (entries.some((e) => e.localPath === localPath)) return null;
+  return {
+    id: 0,
+    type: 'front',
+    slug: '',
+    link: `${origin}/`,
+    title: 'Home',
+    localPath,
+    parent: 0,
+    menuOrder: 0,
+    template: '',
+    source: 'front',
+  };
+}
+
+/**
  * Would writing `relative` under `root` stay inside `root`?
  *
  * Every path this script writes is derived from a URL found in someone else's
@@ -1867,6 +1914,53 @@ function selfTest() {
     'mount: a mounted home page is one level down, not at the root',
     relativePrefix(localPathForLink('https://s.x.org/', 's.x.org', 'school')),
     '../',
+  );
+
+  // --- the synthetic front page, which is where the mount was being dropped --
+  //
+  // These four are written against the failure they come from rather than
+  // against the function's shape: a mounted capture that writes the tree root
+  // is the defect, so that is the assertion, not "the prefix is applied".
+  eq(
+    'front: an unmounted capture synthesizes the root index',
+    frontPageEntry([], 'https://x.org', 'x.org', '')?.localPath,
+    'index.html',
+  );
+  eq(
+    'front: a mounted capture synthesizes UNDER the mount',
+    frontPageEntry([], 'https://s.x.org', 's.x.org', 'school')?.localPath,
+    'school/index.html',
+  );
+  // The collision itself. An apex capture has already written the tree root;
+  // a subsequent mounted capture must not claim it, whether or not the apex's
+  // entries are visible to it -- they are not, each capture runs alone.
+  eq(
+    'front: a mounted capture never claims the tree root',
+    frontPageEntry(
+      [{ localPath: 'publications/other/index.html' }],
+      'https://p.x.org',
+      'p.x.org',
+      'publications',
+    )?.localPath === 'index.html',
+    false,
+  );
+  // ...and the guard still suppresses a duplicate, now asking about the file
+  // this capture would actually write. Publications' own page 6271 is exactly
+  // this case: already inventoried under the prefix, so nothing to synthesize.
+  eq(
+    'front: an inventory that already has the mounted home page adds nothing',
+    frontPageEntry(
+      [{ localPath: 'publications/index.html' }],
+      'https://p.x.org',
+      'p.x.org',
+      'publications',
+    ),
+    null,
+  );
+  eq(
+    'front: and the unmounted duplicate is still suppressed',
+    frontPageEntry([{ localPath: 'index.html' }], 'https://x.org', 'x.org', ''),
+    null,
   );
 
   // The politeness delay must apply to ASSETS too — they are the bulk of the
@@ -3996,23 +4090,8 @@ async function capture() {
     `[capture] sitemap (${sm.source ?? 'none'}): ${sm.urls.length} page URL(s), ${fromSitemap} not in the REST inventory`,
   );
 
-  // The home page is often a page whose `link` is the site root, but on a
-  // "latest posts" front page it is not in the pages collection at all — and
-  // an index.html is not optional for a static host.
-  if (!entries.some((e) => e.localPath === 'index.html')) {
-    entries.unshift({
-      id: 0,
-      type: 'front',
-      slug: '',
-      link: `${origin}/`,
-      title: 'Home',
-      localPath: 'index.html',
-      parent: 0,
-      menuOrder: 0,
-      template: '',
-      source: 'front',
-    });
-  }
+  const front = frontPageEntry(entries, origin, domain, mount);
+  if (front) entries.unshift(front);
 
   mkdirSync(outDir, { recursive: true });
   const assetsDirName = '_ffc-assets';
@@ -4681,11 +4760,14 @@ async function capture() {
   const assetFailureNote = describeFailures(assetTally, domain);
   if (assetFailureNote) console.error(`[capture] assets: ${assetFailureNote}`);
 
-  // `index.html` is what a static host serves at `/`. Read from what was
-  // actually WRITTEN, not from what was fetched: a page can be rendered and
-  // then refused at the write (path containment), and the comment here used to
-  // claim the stronger property while the code checked the weaker one.
-  const frontPageCaptured = writtenPages.has('index.html');
+  // `index.html` is what a static host serves at `/` — under this capture's
+  // mount, not at the tree root. Read from what was actually WRITTEN, not from
+  // what was fetched: a page can be rendered and then refused at the write
+  // (path containment), and the comment here used to claim the stronger
+  // property while the code checked the weaker one.
+  const frontPageCaptured = writtenPages.has(
+    localPathForLink(`${origin}/`, domain, mount) ?? 'index.html',
+  );
   const staleNav = selfHost ? (strandedNav.get(selfHost) ?? { pages: 0, links: 0 }) : null;
   const verdict = captureVerdict({
     expected: entries.length,

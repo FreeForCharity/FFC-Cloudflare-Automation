@@ -939,20 +939,33 @@ function wireGeneratedComponents(repo) {
 
   // 2. The clone runtime. A component with no visual output, rendered beside
   //    the header so it mounts on every route including a client navigation.
-  if (/components\/clone-enhance/.test(source)) {
+  //    The import and the render are checked SEPARATELY, and each is added only
+  //    if it is missing. Treating the import's presence as "already wired" is
+  //    the exact defect this step exists to fix, one level up: a component that
+  //    is imported and never rendered does nothing, and this function can
+  //    PRODUCE that state -- if the `<Header />` anchor is missing it has
+  //    already inserted the import, warns, and writes the file. A re-run then
+  //    read `components/clone-enhance`, reported "already wired", and left the
+  //    dangling import forever. Checking both also means the import is never
+  //    inserted twice.
+  const hasCloneImport = /components\/clone-enhance/.test(source);
+  const hasCloneRender = /<CloneEnhance\s*\/>/.test(source);
+  if (hasCloneImport && hasCloneRender) {
     done.push('clone-enhance already wired');
   } else {
-    const headerImport = /^([ \t]*import\s+Header\s+from\s+)(['"])([^'"]*components\/)header\2/m;
-    const m = headerImport.exec(source);
-    if (!m) {
-      done.push('WARNING: no `import Header from .../header` to anchor to');
-    } else {
-      const quote = m[2];
-      const prefix = m[3];
-      source = source.replace(
-        m[0],
-        `${m[0]}\nimport CloneEnhance from ${quote}${prefix}clone-enhance${quote}`,
-      );
+    if (!hasCloneImport) {
+      const headerImport = /^([ \t]*import\s+Header\s+from\s+)(['"])([^'"]*components\/)header\2/m;
+      const m = headerImport.exec(source);
+      if (!m) {
+        done.push('WARNING: no `import Header from .../header` to anchor the import to');
+      } else {
+        source = source.replace(
+          m[0],
+          `${m[0]}\nimport CloneEnhance from ${m[2]}${m[3]}clone-enhance${m[2]}`,
+        );
+      }
+    }
+    if (!hasCloneRender) {
       // Rendered right after <Header />, which every FFC layout has.
       const render = /(\n?[ \t]*)<Header\s*\/>/;
       if (render.test(source)) {
@@ -960,10 +973,16 @@ function wireGeneratedComponents(repo) {
           render,
           (_m2, indent) => `${indent}<Header />${indent}<CloneEnhance />`,
         );
-        done.push('clone-enhance wired');
       } else {
-        done.push('WARNING: no `<Header />` to render beside');
+        done.push('WARNING: no `<Header />` to render `<CloneEnhance />` beside');
       }
+    }
+    // Reported from what the file NOW holds, not from which branch ran: a
+    // half-wired repo that this call completed is "wired", and one where an
+    // anchor was missing must not read as wired just because the other half
+    // succeeded.
+    if (/components\/clone-enhance/.test(source) && /<CloneEnhance\s*\/>/.test(source)) {
+      done.push('clone-enhance wired');
     }
   }
 
@@ -1429,6 +1448,56 @@ function selfTest() {
         1,
       );
 
+      // HALF-WIRED: the import present and the render missing. This is not a
+      // hypothetical -- an earlier version of this function produced it, by
+      // inserting the import and then failing to find `<Header />`. Treating
+      // the import as proof of wiring is the same "present but doing nothing"
+      // defect the whole step exists to fix, one level up.
+      const half = mkdtempSync(join(tmpdir(), 'ffc-wire-half-'));
+      try {
+        mkdirSync(join(half, 'src', 'app'), { recursive: true });
+        const halfPath = join(half, 'src', 'app', 'layout.tsx');
+        writeFileSync(
+          halfPath,
+          [
+            "import Header from './../components/header'",
+            "import CloneEnhance from './../components/clone-enhance'",
+            "import Footer from './../components/ffc-footer'",
+            'export default function RootLayout({ children }) {',
+            '  return (',
+            '    <body>',
+            '      <Header />',
+            '      <main>{children}</main>',
+            '      <Footer />',
+            '    </body>',
+            '  )',
+            '}',
+            '',
+          ].join('\n'),
+          'utf8',
+        );
+        const r = wireGeneratedComponents(half);
+        const fixed = readFileSync(halfPath, 'utf8');
+        eq(
+          'wire: an imported-but-unrendered runtime is REPAIRED, not called wired',
+          r.changed,
+          true,
+        );
+        eq('wire: ...the render is added', /<CloneEnhance \/>/.test(fixed), true);
+        eq(
+          'wire: ...and the existing import is not duplicated',
+          (fixed.match(/clone-enhance/g) || []).length,
+          1,
+        );
+        eq(
+          'wire: ...and it reports wired only now that both halves are there',
+          describeWiring(r).notes.includes('clone-enhance wired'),
+          true,
+        );
+      } finally {
+        rmSync(half, { recursive: true, force: true });
+      }
+
       // A layout that does not match the template shape must be reported, not
       // silently skipped: a WARNING note is how an operator learns the repo
       // needs a hand.
@@ -1450,6 +1519,14 @@ function selfTest() {
         // property: the notes existed from the first version of this step and
         // no caller read them, so the conversion reported success while the
         // components it had just written were imported by nothing.
+        // ...and it must not ALSO claim success. "warned and wired" in one
+        // note list is what an operator skims past, and the report is the only
+        // thing standing between a half-wired repo and a green run.
+        eq(
+          'wire: a warned layout is never also reported as wired',
+          r.notes.includes('clone-enhance wired'),
+          false,
+        );
         const bad = describeWiring(r);
         eq('wire: the warning is what the conversion exits on', bad.warnings.length > 0, true);
         eq('wire: ...and every note is printed, not just the warnings', bad.notes, r.notes);

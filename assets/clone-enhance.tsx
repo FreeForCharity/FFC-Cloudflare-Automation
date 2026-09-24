@@ -147,41 +147,57 @@ function wireMenu(module: Element): Teardown | null {
 const MK_TOGGLE = '.mk-nav-responsive-link'
 
 function wireMkMenu(toggle: Element): Teardown | null {
-  const header = toggle.closest('header') ?? document
-  const panel = header.querySelector<HTMLElement>('.mk-responsive-wrap')
+  const scope: ParentNode = toggle.closest('header') ?? document
+  const panel = scope.querySelector<HTMLElement>('.mk-responsive-wrap')
   if (!panel || !(toggle instanceof HTMLElement)) return null
   // A panel with no links is not a menu; leave it alone rather than offering a
   // control that opens an empty box.
   if (!panel.querySelector('a')) return null
 
-  let open = false
+  // State is READ FROM THE PANEL, never held in a local flag, and every toggle
+  // sharing that panel is updated together.
+  //
+  // A header can carry more than one `.mk-nav-responsive-link` -- this capture
+  // carries two, one per breakpoint -- and `wireMkMenu` runs once per toggle,
+  // each resolving the SAME panel through `closest('header')`. With a
+  // per-toggle `open` flag the second control starts out believing the menu is
+  // closed: after the first opens it, tapping the second writes
+  // `display: block` over an already-open panel, so it does not close and the
+  // visitor's tap does nothing. That is the dead-control shape this whole file
+  // exists to remove, reintroduced by the fix for it. `aria-expanded` on the
+  // untouched toggle was wrong for the same reason.
+  //
+  // `getComputedStyle` and not `panel.style.display`: before the first toggle
+  // the inline style is empty and the truth lives in the theme's own
+  // stylesheet rule.
+  const isOpen = () => getComputedStyle(panel).display !== 'none'
+  const peers = () => Array.from(scope.querySelectorAll<HTMLElement>(MK_TOGGLE))
 
   toggle.setAttribute('role', 'button')
   toggle.setAttribute('tabindex', '0')
   toggle.setAttribute('aria-label', 'Toggle menu')
-  toggle.setAttribute('aria-expanded', 'false')
+  toggle.setAttribute('aria-expanded', isOpen() ? 'true' : 'false')
 
   const setOpen = (next: boolean) => {
-    open = next
     // The theme's rule is `display: none`; overriding the property it sets is
     // the whole mechanism. `block` and not `''` because `''` would fall back
     // to that rule and the menu would never appear.
     panel.style.display = next ? 'block' : 'none'
-    toggle.setAttribute('aria-expanded', next ? 'true' : 'false')
+    for (const peer of peers()) peer.setAttribute('aria-expanded', next ? 'true' : 'false')
   }
 
   const onClick = (event: Event) => {
     event.preventDefault()
-    setOpen(!open)
+    setOpen(!isOpen())
   }
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return
     event.preventDefault()
-    setOpen(!open)
+    setOpen(!isOpen())
   }
   const onEscape = (event: KeyboardEvent) => {
     if (event.key !== 'Escape' && event.key !== 'Esc') return
-    if (!open) return
+    if (!isOpen()) return
     setOpen(false)
     toggle.focus()
   }

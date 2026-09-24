@@ -1076,8 +1076,9 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # 208's "a blank output_file is silent at rc 0" does not hold here, because
     # 201 and 203 both assert `Test-Path $out` and 208 does not. It was written
     # into these two steps first, from the two bodies looking alike (ledger
-    # L260), and `test_both_bodies_assert_test_path_which_is_why_the_blank_case
-    # _is_loud` now pins the difference so it cannot come back.
+    # L260). Pinned now by
+    # `test_both_bodies_assert_test_path_which_is_why_the_blank_case_is_loud`,
+    # so it cannot come back.
     # 202-whmcs-export-products.yml burned down (#1080 lane 25): both output-path
     # inputs reach the pwsh body through step-level `env:`, and one `foreach` guard
     # body applies the same six checks to both — the first lane whose step carried

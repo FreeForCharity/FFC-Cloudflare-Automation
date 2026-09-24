@@ -714,12 +714,21 @@ def test_the_real_tree_reaches_credentials():
     # cases above and in the two mutation controls beside them
     # (`test_deleting_306s_export_…`, `test_deleting_101s_azure_login_…`), which
     # build their own fixtures and are unaffected by the freeze size.
+    # An EMPTY freeze is #1080 succeeding, and must not fail this suite.
+    #
+    # This asserted `frozen_workflows > 0` for one commit, as a tripwire meant to
+    # force whoever lands the last lane to retire the case rather than leave it
+    # asserting nothing. Copilot called it on #1361 and is right: the last lane
+    # would land on a CORRECT tree and go red here, on a module its diff does
+    # not touch — the same mutex this PR exists to remove, moved one step
+    # further out. A guard's preference for being retired does not license it to
+    # fail a correct tree, and I do not get to make an exception for my own.
+    #
+    # So the note lives here instead of in an assertion: WHEN THE FREEZE REACHES
+    # ZERO, retire this case. Nothing below it will fail, because with no
+    # findings there are no sites, and `floor` is 0 — which is the honest
+    # reading, not a loophole.
     frozen_workflows = len(guard.KNOWN_UNGUARDED)
-    assert frozen_workflows > 0, (
-        "the freeze is empty, so this module can no longer tell a working "
-        "extractor from a dead one — #1080 is finished and this guard needs "
-        "retiring rather than relaxing"
-    )
     floor = frozen_workflows // 2
     if floor:
         assert len(sites) >= floor, (
@@ -754,9 +763,35 @@ def test_the_guard_still_exits_zero_and_prints_the_frozen_counts():
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "workflow input interpolation OK:" in proc.stdout
     assert "credential reachability (#1188):" in proc.stdout
-    assert "GITHUB_ENV from step" in proc.stdout, (
-        "the arrival path must reach the operator, not just the library"
-    )
+
+    # The same end-state mutex as the case above, found while verifying its fix
+    # rather than reported: at an empty freeze `reachability_paragraph` takes
+    # its documented no-sites branch, which carries no arrival line, so this
+    # assertion would fail the suite on the tree where #1080 has SUCCEEDED.
+    # Pre-existing and not what the review flagged — fixed here because the
+    # comment above now claims nothing below it fails at that state, and that
+    # claim has to be true.
+    #
+    # The gate reads the FREEZE, not the guard's own output, and that is the
+    # whole of why it is written this way. Gating on the printed no-sites
+    # sentence — which is what this first tried — lets the subject of the test
+    # decide whether the test runs: a DEAD extractor prints that same sentence
+    # at any freeze size, so the gate swallows exactly the failure the
+    # assertion exists to catch. Measured: with `reachability_by_site` stubbed
+    # to {} at today's freeze of 8, the output-gated form dropped detection
+    # from two cases to one.
+    #
+    # `KNOWN_UNGUARDED` is a literal the extractor cannot influence, so an
+    # empty-freeze skip cannot be manufactured by breaking the thing under
+    # test.
+    if guard.KNOWN_UNGUARDED:
+        assert "GITHUB_ENV from step" in proc.stdout, (
+            "the arrival path must reach the operator, not just the library. "
+            "Either the extractor stopped reporting arrivals, or the freeze has "
+            "reached a state where no frozen site reaches a credential through "
+            "GITHUB_ENV or an acquired session — the second is new and wants a "
+            "decision here, not a relaxed assertion"
+        )
 
 
 def test_the_reachability_mode_answers_for_a_burned_down_workflow():

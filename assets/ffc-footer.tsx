@@ -35,10 +35,53 @@ import { siteConfig } from '@/lib/site.config'
  * The moment a real EIN is set the identity line starts carrying it, with no
  * further edit here.
  */
+/**
+ * The parent organization to ASSERT, or null.
+ *
+ * `supportedBy` and `parentOrg` are different claims. The first is the FFC
+ * program attribution required on every supported site. The second is genuine
+ * fiscal sponsorship -- "a project of" -- which says the charity is NOT
+ * independent. An FFC-EX repo is an external charity's own site: FFC gives it
+ * a website, the charity is its own 501(c)(3).
+ *
+ * The template ships `parentOrg` pointing at Free For Charity, the same
+ * organization as `supportedBy`, so a fork that changes nothing renders
+ * "Supported by Free For Charity | A project of Free For Charity" -- measured
+ * on newheightseducation.org's `main`, on all 793 pages. That pair is
+ * self-contradictory by FFC's own definitions, and the authoritative footer
+ * standard (FFC-IN-ffcadmin.org/docs/footer-standard-adoption-checklist.md)
+ * has no parent-organization item at all.
+ *
+ * Same class as TEMPLATE_EIN below: a shipped default that is wrong for every
+ * site inheriting it, and wrong in the direction that misstates the charity.
+ *
+ * Inlined rather than imported because workflow 706 copies THIS file into
+ * charity repos whose `site.config` may not export the shared helper yet. The
+ * repo-side `assertedParentOrg` is the same rule; a unit test asserts the two
+ * agree so they cannot drift apart silently.
+ *
+ * Compared on name OR url: a fork that retitles the block without repointing
+ * it, or repoints without retitling, is still the template default wearing a
+ * different label.
+ */
+function assertedParentOrg() {
+  const parent = siteConfig.parentOrg
+  if (!parent) return null
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\/+$/, '')
+  const same =
+    norm(parent.name) === norm(siteConfig.supportedBy.name) ||
+    norm(parent.url) === norm(siteConfig.supportedBy.url)
+  return same ? null : parent
+}
+
 const TEMPLATE_EIN = '46-2471893'
 const TEMPLATE_GUIDESTAR = 'https://www.guidestar.org/profile/46-2471893'
 export default function FfcFooter() {
   const year = new Date().getFullYear()
+  // Never the raw `siteConfig.parentOrg`: the template ships it pointing at
+  // the supporting organization, which is not a parent relationship at all.
+  // See `assertedParentOrg` in site.config.ts.
+  const parentOrg = assertedParentOrg()
   const rawEin = siteConfig.ein?.trim() ?? ''
   const ein = rawEin === TEMPLATE_EIN ? '' : rawEin
   const profileUrl = siteConfig.guidestar?.profileUrl
@@ -108,15 +151,32 @@ export default function FfcFooter() {
           <a href={siteConfig.supportedBy.url} target="_blank" rel="noopener noreferrer">
             {siteConfig.supportedBy.name}
           </a>
-          {siteConfig.parentOrg && (
+          {parentOrg && (
             <>
               {' | A project of '}
-              <a href={siteConfig.parentOrg.url} target="_blank" rel="noopener noreferrer">
-                {siteConfig.parentOrg.name}
+              <a href={parentOrg.url} target="_blank" rel="noopener noreferrer">
+                {parentOrg.name}
               </a>
             </>
           )}
         </p>
+
+        {/* Said in words, because "Supported by" alone has been read as
+            ownership. This is an FFC-EX site: the charity is its own
+            organization and Free For Charity gives it a website. The line
+            renders only when there is NO asserted parent -- a site that
+            genuinely is a project of an umbrella org must not claim to be
+            independent, and the "A project of" clause above already states
+            that relationship. */}
+        {!parentOrg && (
+          <p className="ffc-footer__relationship">
+            {siteConfig.name} is an independent nonprofit organization.{' '}
+            <a href={siteConfig.supportedBy.url} target="_blank" rel="noopener noreferrer">
+              {siteConfig.supportedBy.name}
+            </a>{' '}
+            provides its website and domain services at no cost.
+          </p>
+        )}
       </div>
     </footer>
   )

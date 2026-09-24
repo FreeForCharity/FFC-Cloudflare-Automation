@@ -263,6 +263,70 @@ export function localPathForLink(link, domain, mount = '') {
 }
 
 /**
+ * A one-line, bounded description of a JSON body that was supposed to be a
+ * collection and was not.
+ *
+ * This exists because "HTTP 200 — stopping this collection" is a sentence that
+ * cannot be acted on. It was the whole of what newheightseducation.org's apex
+ * reported on 2026-09-22: a 200 with a body that was not an array, logged as
+ * though the status were the problem, and then recorded as `restPages: 0` —
+ * indistinguishable from a site that genuinely has no pages.
+ *
+ * Bounded on purpose. The body is someone else's server's output and may be a
+ * whole HTML page; this names its shape and, for the WordPress error envelope
+ * specifically, its `code` and `data.status`, which is the part that says
+ * WHICH refusal this is (`rest_no_route`, `rest_forbidden`, a WAF's own
+ * envelope). Values are truncated, so a body cannot flood the log.
+ */
+export function describeJsonBody(body) {
+  if (body === null || body === undefined) return 'no JSON body (unparseable or empty)';
+  if (Array.isArray(body)) return `array of ${body.length}`;
+  const t = typeof body;
+  if (t === 'string') {
+    const head = body.slice(0, 80).replace(/\s+/g, ' ');
+    return `string of ${body.length} char(s) starting ${JSON.stringify(head)}`;
+  }
+  if (t !== 'object') return `${t} (${JSON.stringify(body).slice(0, 80)})`;
+  // Keys are bounded and flattened, not just sliced. A JSON key may legally
+  // contain a newline -- this body is someone else's server's output -- and one
+  // newline breaks the single-line contract this whole function exists to keep,
+  // which is what makes a capture log scannable. `code` and `message` below go
+  // through JSON.stringify, which escapes a newline to the two characters `\n`,
+  // so they were already safe; the raw key list was not. (Copilot, #1371.)
+  const flat = (s) => s.replace(/\s+/g, ' ').slice(0, 40);
+  const keys = Object.keys(body).map(flat);
+  const parts = [`object with key(s) ${keys.slice(0, 8).join(', ') || '(none)'}`];
+  // The WordPress REST error envelope. Reported by name because it is the
+  // difference between "this route is gone" and "you are not allowed".
+  if (typeof body.code === 'string') parts.push(`code=${JSON.stringify(body.code.slice(0, 60))}`);
+  if (typeof body.message === 'string')
+    parts.push(`message=${JSON.stringify(body.message.slice(0, 120))}`);
+  const status = body?.data?.status;
+  if (typeof status === 'number') parts.push(`data.status=${status}`);
+  return parts.join(' · ');
+}
+
+/**
+ * Why a REST collection could not be read, or null when it was read fine.
+ *
+ * Two different failures, and conflating them is what cost this pipeline a
+ * diagnosis. A non-200 is the server REFUSING. A 200 whose body is not an
+ * array is the server ANSWERING with something else — a WordPress error
+ * envelope, a WAF page, a cache's idea of the route. The message printed the
+ * status for both, so the second read as the self-contradictory "HTTP 200 —
+ * stopping this collection", which is what newheightseducation.org's apex
+ * logged on 2026-09-22 before its 0-page inventory was recorded as fact.
+ *
+ * The one case that must stay clean is an EMPTY collection: `[]` is an array,
+ * so a site with genuinely no pages is never a refusal.
+ */
+export function collectionRefusal(status, body) {
+  if (status !== 200) return { reason: 'http', status, detail: `HTTP ${status}` };
+  if (!Array.isArray(body)) return { reason: 'shape', status, detail: describeJsonBody(body) };
+  return null;
+}
+
+/**
  * The synthetic front-page entry, or null when the inventory already has one.
  *
  * The home page is often a page whose `link` is the site root, but on a
@@ -1697,6 +1761,7 @@ export function captureVerdict({
   failedAssets,
   assetFailureNote,
   frontPageCaptured = true,
+  restRefusals = [],
   strandedStaleLinks = 0,
   strandedStalePages = 0,
   staleHost = null,
@@ -1712,6 +1777,16 @@ export function captureVerdict({
   if (expected > 0 && captured < expected)
     problems.push(
       `captured ${captured} of ${expected} inventory entries (REST collections + sitemap union)`,
+    );
+  // A refused collection is not a small shortfall, it is the loss of the check
+  // itself: `captured === expected` above then compares the sitemap against
+  // itself and passes by construction. Note the discrimination this keeps —
+  // a site with genuinely no pages answers 200 with `[]`, which is an array
+  // and so never a refusal.
+  if (restRefusals.length)
+    problems.push(
+      `the REST inventory was refused for ${restRefusals.map((r) => `${r.collection} (${r.detail})`).join('; ')} — ` +
+        `no X-WP-Total to check completeness against, so the sitemap is this capture's only inventory`,
     );
   if (externalHosts.length) problems.push(`unlocalized asset hosts: ${externalHosts.join(', ')}`);
   // Only the STALE host is fatal. A link to the serving domain may have no
@@ -3549,6 +3624,133 @@ function selfTest() {
       .length,
     1,
   );
+  // --- a refused REST collection, which used to report as a zero -----------
+  //
+  // The discrimination that matters: an EMPTY collection is an array and must
+  // stay clean, because a site with no pages is a real and ordinary thing.
+  eq(
+    'describeJsonBody: an empty collection is an array, not a refusal',
+    describeJsonBody([]),
+    'array of 0',
+  );
+  eq(
+    'describeJsonBody: names the WordPress error envelope, code and status',
+    describeJsonBody({
+      code: 'rest_no_route',
+      message: 'No route was found.',
+      data: { status: 404 },
+    }),
+    'object with key(s) code, message, data · code="rest_no_route" · message="No route was found." · data.status=404',
+  );
+  // An unparseable body must not be describable as an empty object: the two
+  // read identically to an operator ("the server answered with nothing") and
+  // mean opposite things.
+  eq(
+    'describeJsonBody: an unparseable body says so rather than reading as empty',
+    describeJsonBody(null),
+    'no JSON body (unparseable or empty)',
+  );
+  eq(
+    'describeJsonBody: ...and an actually-empty object is not confused with it',
+    describeJsonBody({}),
+    'object with key(s) (none)',
+  );
+
+  // --- the wiring: a response BECOMES a refusal, or does not ---------------
+  eq(
+    'collectionRefusal: a 200 with a real collection is no refusal',
+    collectionRefusal(200, [{ id: 1 }]),
+    null,
+  );
+  eq(
+    'collectionRefusal: a 200 with an EMPTY collection is no refusal either',
+    collectionRefusal(200, []),
+    null,
+  );
+  eq(
+    'collectionRefusal: a 200 whose body is an error envelope IS a refusal',
+    collectionRefusal(200, { code: 'rest_forbidden', data: { status: 401 } }),
+    {
+      reason: 'shape',
+      status: 200,
+      detail: 'object with key(s) code, data · code="rest_forbidden" · data.status=401',
+    },
+  );
+  eq('collectionRefusal: a non-200 is a refusal, reported as one', collectionRefusal(403, null), {
+    reason: 'http',
+    status: 403,
+    detail: 'HTTP 403',
+  });
+  // Bounded: someone else's server decides this string's length.
+  eq(
+    'describeJsonBody: a long message is truncated',
+    describeJsonBody({ message: 'x'.repeat(500) }).length < 200,
+    true,
+  );
+  // The one-line contract, against a body that attacks it. A key with a
+  // newline in it is legal JSON and would otherwise split the log line.
+  eq(
+    'describeJsonBody: a key containing a newline cannot break the single line',
+    describeJsonBody({ 'a\nb': 1 }).includes('\n'),
+    false,
+  );
+  eq(
+    'describeJsonBody: ...and that key is still reported, flattened',
+    describeJsonBody({ 'a\nb': 1 }),
+    'object with key(s) a b',
+  );
+  eq(
+    'describeJsonBody: a very long key is bounded too',
+    describeJsonBody({ ['k'.repeat(200)]: 1 }).length < 120,
+    true,
+  );
+
+  eq(
+    'describeJsonBody: an HTML body is reported as the string it is',
+    describeJsonBody('<!DOCTYPE html><html><head>'),
+    'string of 27 char(s) starting "<!DOCTYPE html><html><head>"',
+  );
+
+  // The verdict. A refusal is fatal BECAUSE the completeness comparison it
+  // disables is the one that would otherwise catch a short capture.
+  eq(
+    'captureVerdict: a refused REST collection is a problem, not a zero',
+    captureVerdict({
+      expected: 430,
+      captured: 430,
+      externalHosts: [],
+      failedAssets: 0,
+      restRefusals: [
+        { collection: 'pages', reason: 'shape', status: 200, detail: 'code="rest_forbidden"' },
+      ],
+    }).ok,
+    false,
+  );
+  eq(
+    'captureVerdict: and it names which collection and why',
+    captureVerdict({
+      expected: 430,
+      captured: 430,
+      externalHosts: [],
+      failedAssets: 0,
+      restRefusals: [
+        { collection: 'pages', reason: 'shape', status: 200, detail: 'code="rest_forbidden"' },
+      ],
+    }).problems.some((s) => s.includes('pages') && s.includes('rest_forbidden')),
+    true,
+  );
+  eq(
+    'captureVerdict: no refusal leaves an otherwise clean capture clean',
+    captureVerdict({
+      expected: 430,
+      captured: 430,
+      externalHosts: [],
+      failedAssets: 0,
+      restRefusals: [],
+    }).ok,
+    true,
+  );
+
   eq(
     'captureVerdict flags external hosts and failed assets',
     captureVerdict({ expected: 5, captured: 5, externalHosts: ['cdn.io'], failedAssets: 2 })
@@ -3804,6 +4006,7 @@ async function fetchCollection(rest, collection, extraParams = {}) {
   let total = null;
   let totalPages = 1;
   let lastStatus = 0;
+  let refusal = null;
 
   for (let page = 1; page <= totalPages && items.length < maxItems; page++) {
     const url = collectionUrl(rest, collection, {
@@ -3813,8 +4016,14 @@ async function fetchCollection(rest, collection, extraParams = {}) {
     });
     const { status, body, headers } = await getJson(url);
     lastStatus = status;
-    if (status !== 200 || !Array.isArray(body)) {
-      console.error(`[rest] ${collection} page ${page}: HTTP ${status} — stopping this collection`);
+    refusal = collectionRefusal(status, body);
+    if (refusal) {
+      console.error(
+        refusal.reason === 'http'
+          ? `[rest] ${collection} page ${page}: HTTP ${status} — stopping this collection`
+          : `[rest] ${collection} page ${page}: HTTP 200 but the body is not a collection — ` +
+              `${refusal.detail}. Stopping this collection; there is no X-WP-Total to check against.`,
+      );
       break;
     }
     if (page === 1 && headers) {
@@ -3826,7 +4035,7 @@ async function fetchCollection(rest, collection, extraParams = {}) {
     items.push(...body);
     await sleep(delayMs);
   }
-  return { items, total: total ?? items.length, totalPages, lastStatus };
+  return { items, total: total ?? items.length, totalPages, lastStatus, refusal };
 }
 
 // --- inspect ---------------------------------------------------------------
@@ -4020,6 +4229,24 @@ async function capture() {
   if (includePosts) {
     posts = await fetchCollection(rest, 'posts', { status: 'publish' });
     console.error(`[capture] posts: ${posts.items.length} of ${posts.total} reported`);
+  }
+  // `restPages: 0` has two causes that look identical in the report: a site
+  // with no pages, and a site that would not hand its pages over. Only the
+  // second one means the X-WP-Total completeness check -- the reason this
+  // script talks to REST at all rather than just crawling the sitemap -- did
+  // not run. Carried through to the verdict so it is stated rather than
+  // inferred from a zero.
+  const restRefusals = [
+    ['pages', pages.refusal],
+    ['posts', posts.refusal],
+  ]
+    .filter(([, r]) => r)
+    .map(([collection, r]) => ({ collection, ...r }));
+  for (const r of restRefusals) {
+    console.error(
+      `[capture] the ${r.collection} inventory was refused (${r.reason}): ${r.detail}. ` +
+        `This capture has no CMS-side count to check itself against; the sitemap is its only inventory.`,
+    );
   }
   // The media library is a convenience, not a requirement: on a WordPress.com
   // site it answers 401 unauthenticated (measured on vpmin.org). Losing it
@@ -4776,6 +5003,7 @@ async function capture() {
     failedAssets: assetTally.total,
     assetFailureNote,
     frontPageCaptured,
+    restRefusals,
     strandedStaleLinks: staleNav?.links ?? 0,
     strandedStalePages: staleNav?.pages ?? 0,
     staleHost: selfHost,
@@ -4797,6 +5025,8 @@ async function capture() {
     inventory: {
       restPages: pages.total,
       restPosts: posts.total,
+      // Present and non-empty means the two numbers above are not measurements.
+      restRefusals,
       sitemapSource: sm.source,
       sitemapPageUrls: sm.urls.length,
       addedBySitemap: fromSitemap,

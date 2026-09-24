@@ -978,6 +978,7 @@ def test_strip_quoted_matches_a_bash_accurate_scanner():
     """
     import importlib.util
     import itertools
+    import re
 
     spec = importlib.util.spec_from_file_location("_gb_for_test", GUARD_BASH)
     gb = importlib.util.module_from_spec(spec)
@@ -1010,11 +1011,38 @@ def test_strip_quoted_matches_a_bash_accurate_scanner():
             i += 1
         return "".join(out)
 
-    alphabet = ["a", bs, dq, sq, "|", ";", "&", "$", "`", ">"]
+    # Every character that can reach `_strip_quoted` and change where a span
+    # ends or where an operator is found: the quotes and the escape, the five
+    # shell operators rule 8 stops at (`|`, `;`, `&`, `<`, `>`), `$` and the
+    # backtick (substitution), `/` (the leading slash rule 8 is ABOUT), and one
+    # ordinary letter to stand for inert text. `/` and `<` were missing here
+    # while the docstring claimed them (#1313 review), which is the drift the
+    # count check below now makes impossible.
+    alphabet = ["a", bs, dq, sq, "|", ";", "&", "$", "`", "/", "<", ">"]
+    max_length = 5
+
+    # The docstring states this measurement as a number, and a number in prose
+    # drifts from the test that is supposed to back it -- which is exactly what
+    # happened: it claimed 177,155 strings over 11 characters to length 5 while
+    # this test enumerated 11,110 over 10 characters to length 4, so the
+    # "measured exhaustively" sentence was backed by 6% of the corpus it named.
+    # Deriving the claim from the corpus means neither side can move alone.
+    corpus_size = sum(len(alphabet) ** n for n in range(1, max_length + 1))
+    claimed = re.search(r"to\s+length\s+(\d+)\s*--\s*([\d,]+)\s+strings",
+                        gb._strip_quoted.__doc__ or "", re.S)
+    record("the docstring's corpus claim matches the corpus this test walks",
+           bool(claimed)
+           and int(claimed.group(1)) == max_length
+           and int(claimed.group(2).replace(",", "")) == corpus_size,
+           f"docstring says {claimed.groups() if claimed else None}, "
+           f"test walks length {max_length} / {corpus_size:,} strings")
+
     diffs = []
-    for length in (1, 2, 3, 4):
+    walked = 0
+    for length in range(1, max_length + 1):
         for combo in itertools.product(alphabet, repeat=length):
             s = "".join(combo)
+            walked += 1
             if gb._strip_quoted(s) != bash_accurate(s):
                 diffs.append(s)
                 if len(diffs) >= 5:
@@ -1025,6 +1053,12 @@ def test_strip_quoted_matches_a_bash_accurate_scanner():
            not diffs,
            "\n".join(f"{s!r}: scanner={gb._strip_quoted(s)!r} "
                      f"bash-accurate={bash_accurate(s)!r}" for s in diffs))
+    # A corpus that silently shrinks is the failure this test had; assert the
+    # walk actually completed rather than inferring it from the absence of
+    # diffs, which an empty corpus also produces.
+    record("the equivalence walk covered the whole corpus",
+           bool(diffs) or walked == corpus_size,
+           f"walked {walked:,} of {corpus_size:,} strings")
 
 
 def test_rule_attribution():

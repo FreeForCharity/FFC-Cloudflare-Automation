@@ -84,8 +84,8 @@ def _strip_quoted(text):
     double-quoted span every character is blanked regardless, and the one
     character whose escaping could move the span's END is `"`, which bash
     escapes too. Measured exhaustively over the alphabet that reaches here
-    (`a`, backslash, `"`, `'`, `|`, `;`, `&`, `$`, backtick, `/`, `>`) to
-    length 5 -- 177,155 strings, ZERO differing from a bash-accurate variant.
+    (`a`, backslash, `"`, `'`, `|`, `;`, `&`, `$`, backtick, `/`, `<`, `>`) to
+    length 5 -- 271,452 strings, ZERO differing from a bash-accurate variant.
 
     So the broader rule is a simplification, not a bug, and the paragraph above
     is this scanner's rule rather than a statement about how the shell parses.

@@ -1920,9 +1920,17 @@ def test_a_working_link_with_no_name_is_named_rather_than_removed():
     assert src.index(naming) < src.index("removeDeadNamelessControls("), _around(
         src, "nameAnonymousLinks(", "naming before dead-control removal"
     )
+    # EVERY repair in the pipeline, not the ones that happened to be added with
+    # a test. `repairEscapedAttributeQuotes` was missing from this tuple -- it
+    # arrived with its own PR and nothing here pinned its position, so it could
+    # have been moved below the naming pass silently. Caught in review of
+    # #1374. Keep this list matching the `repair*` calls in `convertFragments`:
+    # an unescaped attribute is not a URL until it is repaired, and the naming
+    # pass reads hrefs.
     for repair in (
         "repairSocialShareChrome(",
         "repairInlineShareButtons(",
+        "repairEscapedAttributeQuotes(",
         "repairMalformedHrefs(",
         "repairMojibake(",
     ):

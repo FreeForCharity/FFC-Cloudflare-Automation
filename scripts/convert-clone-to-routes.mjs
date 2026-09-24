@@ -910,7 +910,19 @@ function wireGeneratedComponents(repo) {
   try {
     source = readFileSync(path, 'utf8');
   } catch {
-    return { changed: false, reason: 'no src/app/layout.tsx' };
+    // A WARNING and not a bare reason: this is the one outcome where BOTH
+    // generated components are certain to be unwired, and reporting it in a
+    // line that scrolls past is how the conversion reports success on a site
+    // whose captured pages have no client runtime and whose footer is the
+    // template's. A repo with no root layout is not an App Router app the
+    // converter can finish anyway -- `next build` fails on it two steps later,
+    // with an error about a missing root layout rather than about the wiring
+    // that actually stopped. Failing here names the cause.
+    return {
+      changed: false,
+      reason: 'no src/app/layout.tsx',
+      notes: ['WARNING: no src/app/layout.tsx to wire the generated components into'],
+    };
   }
   const before = source;
   const done = [];
@@ -1447,6 +1459,28 @@ function selfTest() {
         (readFileSync(layoutPath, 'utf8').match(/clone-enhance/g) || []).length,
         1,
       );
+
+      // NO LAYOUT AT ALL: both components are certain to be unwired, so this
+      // has to reach the exit path rather than read as "nothing to do". It is
+      // the only outcome where the step knows for a fact that neither half
+      // landed.
+      const bare = mkdtempSync(join(tmpdir(), 'ffc-wire-none-'));
+      try {
+        const none = wireGeneratedComponents(bare);
+        eq('wire: a repo with no layout.tsx reports no change', none.changed, false);
+        eq(
+          'wire: ...and warns rather than passing silently',
+          describeWiring(none).warnings.length,
+          1,
+        );
+        eq(
+          'wire: ...naming the file it could not find',
+          describeWiring(none).headline.includes('no src/app/layout.tsx'),
+          true,
+        );
+      } finally {
+        rmSync(bare, { recursive: true, force: true });
+      }
 
       // HALF-WIRED: the import present and the render missing. This is not a
       // hypothetical -- an earlier version of this function produced it, by

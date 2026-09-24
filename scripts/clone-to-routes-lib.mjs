@@ -446,6 +446,42 @@ export function repairEscapedAttributeQuotes(html) {
   return { html: out, repaired };
 }
 
+/**
+ * Undo one round of UTF-8-decoded-as-Latin-1 in captured text.
+ *
+ * `\u00C2` (\u00C2) followed immediately by a character in U+0080..U+00BF is
+ * not text anyone typed: it is the two bytes of a 2-byte UTF-8 sequence, each
+ * decoded as its own Latin-1 character and then re-encoded. The commonest
+ * visible form is a right guillemet, `\u00BB`, arriving as `\u00C2\u00BB`.
+ *
+ * Measured on newheightseducation.org: **429 of 581 fragments**, always the
+ * same string -- the Google Language Translator plugin's trigger, which reads
+ * `Translate \u00C2\u00BB` on every page it appears on, in an orange tab in the
+ * corner of the viewport. No other mojibake signature occurs anywhere in the
+ * capture (`\u00E2\u0080\u0099`, `\u00C3\u00A9`, `\u00E2\u0080\u009C` and the rest: zero files), so this is the
+ * source site's own plugin output rather than anything the capture did to it.
+ *
+ * Reproducing it faithfully is not a goal. The page's meaning is `\u00BB`, the
+ * charity did not choose to publish `\u00C2\u00BB`, and it is on every page of their
+ * site.
+ *
+ * Scoped to the C2 range only, and to ADJACENT characters. The C3 range
+ * (accented letters: `\u00C3\u00A9` for `\u00E9`) is the same bug and is deliberately left
+ * alone here because it did not occur -- a repair that fires on text nobody
+ * measured is how a pass like this starts corrupting the charity's prose. A
+ * legitimate `\u00C2` immediately followed by a guillemet or a non-breaking space,
+ * with no separator, is not a sequence a human writes.
+ */
+export function repairMojibake(text) {
+  if (typeof text !== 'string') return { text: '', repaired: 0 };
+  let repaired = 0;
+  const out = text.replace(/\u00C2([\u0080-\u00BF])/g, (_whole, tail) => {
+    repaired += 1;
+    return tail;
+  });
+  return { text: out, repaired };
+}
+
 export function repairMalformedHrefs(html) {
   if (typeof html !== 'string') return { html: '', repaired: 0 };
   let repaired = 0;
@@ -3078,6 +3114,46 @@ function selfTest() {
     repairEscapedAttributeQuotes(null).html,
     '',
   );
+
+  // --- text the source double-encoded ------------------------------------
+  eq(
+    'mojibake: a double-encoded guillemet is restored',
+    repairMojibake('<span>Translate \u00C2\u00BB</span>').text,
+    '<span>Translate \u00BB</span>',
+  );
+  eq('mojibake: and counted', repairMojibake('a \u00C2\u00BB b \u00C2\u00A0 c').repaired, 2);
+  // The two discriminations that keep this off the charity's prose. Neither is
+  // hypothetical: \u00C2 is a letter in French and Portuguese, and a guillemet
+  // preceded by a space is how French punctuates.
+  eq(
+    'mojibake: a lone \u00C2 is left alone',
+    repairMojibake('\u00C0 la carte, \u00C2 by itself, caf\u00E9').text,
+    '\u00C0 la carte, \u00C2 by itself, caf\u00E9',
+  );
+  eq(
+    'mojibake: a SPACED \u00C2 \u00BB is not a double-encoding',
+    repairMojibake('\u00C2 \u00BB').text,
+    '\u00C2 \u00BB',
+  );
+  // The TAIL range matters as much as the lead byte: a real 2-byte UTF-8
+  // sequence starting C2 can only continue 80..BF, so `\u00C2` followed by a
+  // letter is two letters, not one mis-decoded character. Widening the tail
+  // is the one mutation the first version of these tests did not catch.
+  eq(
+    'mojibake: \u00C2 followed by a LETTER is two letters, not a sequence',
+    repairMojibake('\u00C2\u00E9 and \u00C2\u00FF').text,
+    '\u00C2\u00E9 and \u00C2\u00FF',
+  );
+  // The C3 range is the same bug in accented letters and is deliberately NOT
+  // repaired -- it did not occur in this capture, and a pass that fires on
+  // text nobody measured is how prose gets corrupted.
+  eq(
+    'mojibake: the unmeasured C3 range is left for evidence',
+    repairMojibake('caf\u00C3\u00A9').text,
+    'caf\u00C3\u00A9',
+  );
+  eq('mojibake: clean text is a no-op', repairMojibake('Translate \u00BB').repaired, 0);
+  eq('mojibake: a non-string is refused rather than crashing', repairMojibake(undefined).text, '');
 
   eq(
     'the pass reports what it touched',

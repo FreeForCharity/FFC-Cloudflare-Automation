@@ -1911,11 +1911,22 @@ def test_a_working_link_with_no_name_is_named_rather_than_removed():
     #
     # Before the removal: a named control is one the removal keeps.
     src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
-    assert src.index("nameAnonymousLinks(hrefs.html, siteName)") < src.index(
-        "removeDeadNamelessControls("
-    ), _around(src, "nameAnonymousLinks(", "naming before dead-control removal")
-    for repair in ("repairSocialShareChrome(", "repairInlineShareButtons(", "repairMalformedHrefs("):
-        assert src.index(repair) < src.index("nameAnonymousLinks(hrefs.html"), _around(
+    # Named by the value it consumes, not just by the call: the naming pass has
+    # to read the output of the LAST repair, so a repair added to the end of the
+    # chain and left unwired cannot slip past this. `repairMojibake` is that
+    # last repair today -- it was added after this assertion was first written,
+    # and the assertion caught the rename rather than sleeping through it.
+    naming = "nameAnonymousLinks(demojibaked.text, siteName)"
+    assert src.index(naming) < src.index("removeDeadNamelessControls("), _around(
+        src, "nameAnonymousLinks(", "naming before dead-control removal"
+    )
+    for repair in (
+        "repairSocialShareChrome(",
+        "repairInlineShareButtons(",
+        "repairMalformedHrefs(",
+        "repairMojibake(",
+    ):
+        assert src.index(repair) < src.index(naming), _around(
             src, repair, f"{repair} must run before the naming pass"
         )
 

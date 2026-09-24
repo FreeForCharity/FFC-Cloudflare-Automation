@@ -78,6 +78,7 @@ import {
   repairInlineShareButtons,
   repairEscapedAttributeQuotes,
   repairMalformedHrefs,
+  repairMojibake,
   nameGenericLinks,
   titleIframes,
   tokenizeAssetPaths,
@@ -316,6 +317,7 @@ function main() {
     scriptsRemoved: 0,
     shareLinksRepaired: 0,
     hrefsRepaired: 0,
+    mojibakeRepaired: 0,
     shareChromeRemoved: 0,
     shareLinksRefused: 0,
     widgetTitlesDemoted: 0,
@@ -469,11 +471,17 @@ function main() {
     const unescaped = repairEscapedAttributeQuotes(inline.html);
     const hrefs = repairMalformedHrefs(unescaped.html);
     tally.hrefsRepaired += hrefs.repaired;
+    // Text the source site double-encoded. Last of the repairs and before the
+    // naming pass, because the naming pass reads visible text: a control named
+    // from mojibake carries the mojibake into its accessible name, where a
+    // screen reader reads it aloud.
+    const demojibaked = repairMojibake(hrefs.html);
+    tally.mojibakeRepaired += demojibaked.repaired;
     // Naming comes AFTER every repair and BEFORE the removal. After, because a
     // repair turns `href="#"` into a real destination and this pass skips a
     // bare `#` on purpose -- run first, it leaves every repaired link nameless.
     // Before, because a named control is one the removal keeps.
-    const named = nameAnonymousLinks(hrefs.html, siteName);
+    const named = nameAnonymousLinks(demojibaked.text, siteName);
     tally.linksNamed += named.named;
     // The heading last, from the title computed just above: a WordPress
     // archive template often renders none, and the FFC template's
@@ -597,6 +605,7 @@ function main() {
   console.log(`scripts removed from fragments  ${tally.scriptsRemoved}`);
   console.log(`share links repointed          ${tally.shareLinksRepaired}`);
   console.log(`malformed hrefs repaired       ${tally.hrefsRepaired}`);
+  console.log(`double-encoded text repaired  ${tally.mojibakeRepaired}`);
   console.log(`dead share controls removed    ${tally.shareChromeRemoved}`);
   console.log(`widget titles demoted to h2    ${tally.widgetTitlesDemoted}`);
   console.log(`dead nameless controls removed ${tally.deadControlsRemoved}`);

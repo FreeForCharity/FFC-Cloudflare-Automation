@@ -117,6 +117,149 @@ function wireMenu(module: Element): Teardown | null {
 }
 
 /**
+ * The Jupiter / MK theme's hamburger, which is a different theme entirely.
+ *
+ * Everything above is Divi. newheightseducation.org is Jupiter, and on a
+ * Jupiter capture none of the Divi selectors match -- so wiring this component
+ * up made no difference at all until this function existed. Measured at 390px
+ * on /who-we-are/ and /contact-us/: two hamburger controls present, **zero**
+ * visible navigation links, and tapping either changed nothing. A visitor on a
+ * phone could not move around the site.
+ *
+ * Jupiter needs almost nothing from us, because the capture already carries
+ * both halves:
+ *
+ *   `div.mk-nav-responsive-link`  the control (38x38, top right)
+ *   `div.mk-responsive-wrap`      the panel, holding `ul.mk-responsive-nav`
+ *                                 with all 45 menu links
+ *
+ * and the theme's own stylesheet already says `.mk-responsive-wrap {
+ * display: none }`. So this toggles that one property and the theme styles the
+ * open menu itself. Nothing is built, nothing is cloned, no markup is authored
+ * here -- which keeps the "nothing is built from a string" property above, by
+ * not needing a string in the first place.
+ *
+ * The accessibility defects are fixed rather than reproduced, exactly as
+ * `wireMenu` does for Divi: the bare `<div>` becomes a real button to the
+ * accessibility tree, carries its expanded state, and answers Enter, Space and
+ * Escape.
+ */
+const MK_TOGGLE = '.mk-nav-responsive-link'
+
+function wireMkMenu(toggle: Element): Teardown | null {
+  const scope: ParentNode = toggle.closest('header') ?? document
+  const panel = scope.querySelector<HTMLElement>('.mk-responsive-wrap')
+  if (!panel || !(toggle instanceof HTMLElement)) return null
+  // A panel with no links is not a menu; leave it alone rather than offering a
+  // control that opens an empty box.
+  if (!panel.querySelector('a')) return null
+
+  // State is READ FROM THE PANEL, never held in a local flag, and every toggle
+  // sharing that panel is updated together.
+  //
+  // A header can carry more than one `.mk-nav-responsive-link` -- this capture
+  // carries two, one per breakpoint -- and `wireMkMenu` runs once per toggle,
+  // each resolving the SAME panel through `closest('header')`. With a
+  // per-toggle `open` flag the second control starts out believing the menu is
+  // closed: after the first opens it, tapping the second writes
+  // `display: block` over an already-open panel, so it does not close and the
+  // visitor's tap does nothing. That is the dead-control shape this whole file
+  // exists to remove, reintroduced by the fix for it. `aria-expanded` on the
+  // untouched toggle was wrong for the same reason.
+  //
+  // `getComputedStyle` and not `panel.style.display`: before the first toggle
+  // the inline style is empty and the truth lives in the theme's own
+  // stylesheet rule.
+  const isOpen = () => getComputedStyle(panel).display !== 'none'
+  const peers = () => Array.from(scope.querySelectorAll<HTMLElement>(MK_TOGGLE))
+
+  toggle.setAttribute('role', 'button')
+  toggle.setAttribute('tabindex', '0')
+  toggle.setAttribute('aria-label', 'Toggle menu')
+  toggle.setAttribute('aria-expanded', isOpen() ? 'true' : 'false')
+
+  const setOpen = (next: boolean) => {
+    // The theme's rule is `display: none`; overriding the property it sets is
+    // the whole mechanism. `block` and not `''` because `''` would fall back
+    // to that rule and the menu would never appear.
+    panel.style.display = next ? 'block' : 'none'
+    for (const peer of peers()) peer.setAttribute('aria-expanded', next ? 'true' : 'false')
+  }
+
+  const onClick = (event: Event) => {
+    event.preventDefault()
+    setOpen(!isOpen())
+  }
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return
+    event.preventDefault()
+    setOpen(!isOpen())
+  }
+  const onEscape = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' && event.key !== 'Esc') return
+    if (!isOpen()) return
+    setOpen(false)
+    toggle.focus()
+  }
+
+  toggle.addEventListener('click', onClick)
+  toggle.addEventListener('keydown', onKeyDown)
+  document.addEventListener('keydown', onEscape as EventListener)
+
+  // The submenu chevrons inside the panel. Jupiter draws a `<span>` carrying
+  // an SVG arrow next to every parent item and hides `ul.sub-menu` with
+  // `display: none`; without a handler the chevron is a control that promises
+  // a submenu and does nothing -- the same dead-control shape this migration
+  // has already had to clear elsewhere. Measured before this: tapping one left
+  // the visible link count at 13.
+  //
+  // Nothing is destroyed if a capture has no submenus: the loop simply finds
+  // no arrows.
+  const subTeardowns: Teardown[] = []
+  for (const arrow of panel.querySelectorAll<HTMLElement>('.mk-nav-arrow')) {
+    const sub = arrow.parentElement?.querySelector<HTMLElement>(':scope > ul.sub-menu')
+    if (!sub) continue
+    let subOpen = false
+    arrow.setAttribute('role', 'button')
+    arrow.setAttribute('tabindex', '0')
+    arrow.setAttribute('aria-expanded', 'false')
+    const label = arrow.parentElement?.querySelector('a')?.textContent?.trim()
+    arrow.setAttribute('aria-label', label ? `Toggle ${label} submenu` : 'Toggle submenu')
+    const setSub = (next: boolean) => {
+      subOpen = next
+      sub.style.display = next ? 'block' : 'none'
+      arrow.setAttribute('aria-expanded', next ? 'true' : 'false')
+      // The theme's own state classes, so its chevron rotates as it would have.
+      arrow.classList.toggle('mk-nav-sub-opened', next)
+      arrow.classList.toggle('mk-nav-sub-closed', !next)
+    }
+    const onSubClick = (event: Event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      setSub(!subOpen)
+    }
+    const onSubKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return
+      event.preventDefault()
+      setSub(!subOpen)
+    }
+    arrow.addEventListener('click', onSubClick)
+    arrow.addEventListener('keydown', onSubKey)
+    subTeardowns.push(() => {
+      arrow.removeEventListener('click', onSubClick)
+      arrow.removeEventListener('keydown', onSubKey)
+    })
+  }
+
+  return () => {
+    toggle.removeEventListener('click', onClick)
+    toggle.removeEventListener('keydown', onKeyDown)
+    document.removeEventListener('keydown', onEscape as EventListener)
+    subTeardowns.forEach((off) => off())
+  }
+}
+
+/**
  * Reveal Divi's scroll-in elements.
  *
  * Divi hides `.et-waypoint` at `opacity: 0` and reveals it from a scroll
@@ -153,6 +296,13 @@ export default function CloneEnhance() {
     const teardowns: Teardown[] = []
     document.querySelectorAll(MENU_MODULE).forEach((module) => {
       const off = wireMenu(module)
+      if (off) teardowns.push(off)
+    })
+    // Jupiter/MK captures match none of the Divi selectors above. Both are
+    // attempted because one repo's converter output can be either theme, and a
+    // selector that matches nothing costs nothing.
+    document.querySelectorAll(MK_TOGGLE).forEach((toggle) => {
+      const off = wireMkMenu(toggle)
       if (off) teardowns.push(off)
     })
     const offWaypoints = wireWaypoints()

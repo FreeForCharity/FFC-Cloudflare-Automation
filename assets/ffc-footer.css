@@ -48,6 +48,18 @@
   color: #3d3d3d;
   font-size: 0.85rem;
 }
+/* The independence statement, set to match the legal line above it: same muted
+   grey and same size, because they are the same kind of small print and a
+   visitor reads them as one block. It carries its own class rather than
+   reusing `__legal` so the two can be styled apart later, and because the
+   markup names it -- a class in the component with no selector here renders as
+   an unstyled paragraph on every FFC-EX site the converter touches, which is
+   what a review of #1373 caught. */
+.ffc-footer__relationship {
+  color: #3d3d3d;
+  font-size: 0.85rem;
+  margin-top: 0.35rem;
+}
 
 /* Text that exists for a screen reader and a crawler, not for a sighted
    reader: the destination appended to a "Read More" link. Clipped rather than

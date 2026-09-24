@@ -1911,11 +1911,30 @@ def test_a_working_link_with_no_name_is_named_rather_than_removed():
     #
     # Before the removal: a named control is one the removal keeps.
     src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
-    assert src.index("nameAnonymousLinks(hrefs.html, siteName)") < src.index(
-        "removeDeadNamelessControls("
-    ), _around(src, "nameAnonymousLinks(", "naming before dead-control removal")
-    for repair in ("repairSocialShareChrome(", "repairInlineShareButtons(", "repairMalformedHrefs("):
-        assert src.index(repair) < src.index("nameAnonymousLinks(hrefs.html"), _around(
+    # Named by the value it consumes, not just by the call: the naming pass has
+    # to read the output of the LAST repair, so a repair added to the end of the
+    # chain and left unwired cannot slip past this. `repairMojibake` is that
+    # last repair today -- it was added after this assertion was first written,
+    # and the assertion caught the rename rather than sleeping through it.
+    naming = "nameAnonymousLinks(demojibaked.text, siteName)"
+    assert src.index(naming) < src.index("removeDeadNamelessControls("), _around(
+        src, "nameAnonymousLinks(", "naming before dead-control removal"
+    )
+    # EVERY repair in the pipeline, not the ones that happened to be added with
+    # a test. `repairEscapedAttributeQuotes` was missing from this tuple -- it
+    # arrived with its own PR and nothing here pinned its position, so it could
+    # have been moved below the naming pass silently. Caught in review of
+    # #1374. Keep this list matching the `repair*` calls in `convertFragments`:
+    # an unescaped attribute is not a URL until it is repaired, and the naming
+    # pass reads hrefs.
+    for repair in (
+        "repairSocialShareChrome(",
+        "repairInlineShareButtons(",
+        "repairEscapedAttributeQuotes(",
+        "repairMalformedHrefs(",
+        "repairMojibake(",
+    ):
+        assert src.index(repair) < src.index(naming), _around(
             src, repair, f"{repair} must run before the naming pass"
         )
 

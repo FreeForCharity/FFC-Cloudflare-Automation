@@ -419,6 +419,49 @@ def test_the_pattern_does_not_match_mere_prose_about_a_run():
         assert p["matched"] == 0, (body, p)
 
 
+def test_a_markdown_bullet_is_not_a_heartbeat():
+    """`* run 174 START` is a list item, and it used to read as a heartbeat.
+
+    The prefix class was `[>#*_ \\t]*`, which does not distinguish an emphasis
+    marker from a list bullet. #719 is written by cloud workers and humans as
+    well as the Conductor, and a bullet mentioning a run number and phase is
+    something any of them might write. The monitor takes the NEWEST match, so
+    one such line hands over that comment's `created_at` as the heartbeat and
+    reports the Conductor ALIVE while it is down.
+
+    That is the worst direction this module can fail in. Every other guard here
+    exists to stop an unknown reading as an OK; this one would have made a real
+    outage read as health — and the surrounding tests would not have noticed,
+    because they only ever fed it well-formed Conductor lines.
+
+    The discriminator is that emphasis binds to the text while a bullet is
+    followed by whitespace, so the prefix admits `*` only via `\\*(?!\\s)`.
+    Measured against the live log (all 117 #719 comments from 2026-09-13 to
+    2026-09-24, spanning the whole current silence) both the old and the new
+    pattern return 13 matches with the same newest timestamp, so the tightening
+    costs no real detection.
+    """
+    for body in (
+        "* run 174 START",
+        "*   run 174 START",
+        "  * run 174 END",
+        "> * run 174 START",
+        "- run 174 START",
+    ):
+        p = parse_comments([_comment(NOW, body)])
+        assert p["matched"] == 0, (body, p)
+
+    # Control, in the same test: every emphasis spelling still matches, so this
+    # cannot pass by having broken the pattern outright.
+    for body, num in (
+        ("**Conductor run 174 — START**", 174),
+        ("*Conductor run 174 — START*", 174),
+        ("_Conductor run 174 — START_", 174),
+    ):
+        p = parse_comments([_comment(NOW, body)])
+        assert p["matched"] == 1 and p["newest"]["run"] == num, (body, p)
+
+
 def test_the_pattern_matches_the_pre_87_bare_form():
     """Ledger L215: a filter written for one era silently stops matching."""
     p = parse_comments([_comment(NOW, "RUN 86 START")])

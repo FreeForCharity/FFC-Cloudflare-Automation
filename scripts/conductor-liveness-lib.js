@@ -148,8 +148,25 @@ const ISO_8601 = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\
 // exercises all four separator spellings and fails loudly if these bytes change.
 // Do not "simplify" the class to ASCII-only: the log's current format uses the em
 // dash, so that edit silently stops matching every recent comment.
+// The prefix admits `*` ONLY as an emphasis marker, never as a list bullet.
+// `[>#*_ \t]*` did not make that distinction, so `* run 174 START` — an
+// ordinary Markdown bullet — read as a heartbeat. #719 is written by cloud
+// workers and humans as well as the Conductor, and a bullet list mentioning a
+// run number and phase is a thing any of them might write; the monitor takes
+// the NEWEST match, so one such line supplies that comment's `created_at` as
+// the heartbeat and reports the Conductor ALIVE while it is down. That is the
+// worst direction this module can fail in — every other guard here exists to
+// stop an unknown reading as an OK, and this one would have made a real outage
+// read as health.
+//
+// `\*(?!\s)` is the whole discriminator: emphasis binds to the text (`**Run`,
+// `*Run`), a bullet is followed by whitespace. Measured against the live log —
+// all 117 #719 comments from 2026-09-13 to 2026-09-24, spanning the entire
+// current silence — the old class produced 13 matches, all genuine, and 0 false
+// positives, so this was structural rather than live. It is fixed anyway
+// because the cost of the first instance is a masked outage.
 const CONDUCTOR_RE =
-  /^[>#*_ \t]*(?:conductor[ \t]+)?run[ \t]+(\d+)[ \t]*[—–-]?[ \t]*(START|END)(?![A-Za-z0-9])/im;
+  /^(?:[>#_ \t]|\*(?!\s))*(?:conductor[ \t]+)?run[ \t]+(\d+)[ \t]*[—–-]?[ \t]*(START|END)(?![A-Za-z0-9])/im;
 
 const MARKER = '<!-- conductor-liveness -->';
 // The history the next run reads back. Kept as one HTML-comment line so the

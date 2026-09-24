@@ -775,6 +775,24 @@ function hasRoutablePage(dir) {
   return readdirSync(dir).some((name) => /^page\.(tsx|ts|jsx|js)$/.test(name));
 }
 
+/** A `page.*` or `route.*` ANYWHERE beneath here — i.e. this tree holds routes. */
+function containsRoutablePage(dir) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (containsRoutablePage(join(dir, entry.name))) return true;
+    } else if (/^(page|route)\.(tsx|ts|jsx|js)$/.test(entry.name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Move a parked route tree into place, tolerating a destination that already
  * exists as the empty husk integrate left behind.
@@ -803,6 +821,7 @@ function restoreTemplateRoutes(repo) {
   const parked = join(repo, '_disabled_template_routes');
   const restored = [];
   const collided = [];
+  const skipped = [];
   let entries;
   try {
     entries = readdirSync(parked, { withFileTypes: true });
@@ -812,8 +831,14 @@ function restoreTemplateRoutes(repo) {
   for (const entry of entries) {
     const from = join(parked, entry.name);
     if (entry.isFile()) {
-      // page.tsx at the top level is the template home page.
-      rmSync(from, { force: true });
+      // `page.*` at the top level is the template home page, and the charity's
+      // front page owns `/` now — so it is dropped.
+      //
+      // Anything ELSE at the top level is not this function's to delete. It
+      // used to delete every top-level file, which took out the README a repo
+      // had written to explain its own parked subtree. A file here is either
+      // the home page or something a human put there; only the first is ours.
+      if (/^page\.(tsx|ts|jsx|js)$/.test(entry.name)) rmSync(from, { force: true });
       continue;
     }
     const to = join(repo, 'src', 'app', entry.name);
@@ -835,6 +860,24 @@ function restoreTemplateRoutes(repo) {
     // with the captured site. The old self-test could not catch it because its
     // fixture built `src/app/about-us/` WITH a page.tsx, i.e. only the genuine
     // collision, never the empty husk the real pipeline produces.
+    // NOT A ROUTE — leave it parked where it is.
+    //
+    // Every top-level entry here was assumed to be a route slug, so the whole
+    // subtree was moved to `src/app/<name>/` sight unseen. Repos park other
+    // things beside 706's routes: FFC-EX-newheightseducation.org parked the
+    // template's unreachable components, its unit tests and its home-page E2E
+    // specs, and run 36003387454 duly produced `src/app/src/components/…`,
+    // `src/app/__tests__/…` and `src/app/tests/…`. The build then failed with
+    // eight `TS2307`s, because those files' `@/…` imports resolve to siblings
+    // that are no longer in `src/`.
+    //
+    // A route tree contains a `page.*` or `route.*` somewhere; a parked
+    // component tree does not. Anything without one stays parked, which is
+    // also the honest answer: this function has no idea where it belongs.
+    if (!containsRoutablePage(from)) {
+      skipped.push(entry.name);
+      continue;
+    }
     if (hasRoutablePage(to)) {
       collided.push(entry.name);
       continue;
@@ -843,7 +886,7 @@ function restoreTemplateRoutes(repo) {
     restored.push(entry.name);
   }
   if (!readdirSync(parked).length) rmSync(parked, { recursive: true, force: true });
-  return { restored, collided };
+  return { restored, collided, skipped };
 }
 
 /**
@@ -1620,6 +1663,19 @@ function selfTest() {
     write(join(dir, '_disabled_template_routes', 'legal', 'terms', 'page.tsx'), 'template terms');
     write(join(dir, 'src', 'app', 'legal', 'terms', 'page.tsx'), 'the captured terms');
 
+    // A parked subtree that is NOT a route — the shape a repo creates when it
+    // parks unreachable template code beside 706's routes. No `page.*` or
+    // `route.*` anywhere beneath it, and a README of its own at the top level.
+    mkdirSync(join(dir, '_disabled_template_routes', 'src', 'components', 'ui'), {
+      recursive: true,
+    });
+    mkdirSync(join(dir, '_disabled_template_routes', '__tests__', 'components'), {
+      recursive: true,
+    });
+    write(join(dir, '_disabled_template_routes', 'src', 'components', 'ui', 'Card.tsx'), 'card');
+    write(join(dir, '_disabled_template_routes', '__tests__', 'components', 'Card.test.tsx'), 't');
+    write(join(dir, '_disabled_template_routes', 'README.md'), 'why this is parked');
+
     const routes = restoreTemplateRoutes(dir);
     // The footer standard links to these; leaving them parked ships 404s.
     // Sorted: readdir order is filesystem-dependent and is not the property
@@ -1629,6 +1685,34 @@ function selfTest() {
       'legal',
       'privacy-policy',
     ]);
+    // A subtree with no route in it is left where it is. Restoring it would put
+    // `src/` at `src/app/src/`, whose `@/…` imports resolve to siblings that
+    // are not there — eight `TS2307`s and a dead build, measured on run
+    // 36003387454 against FFC-EX-newheightseducation.org.
+    eq('a parked subtree that is not a route stays parked', [...routes.skipped].sort(), [
+      '__tests__',
+      'src',
+    ]);
+    eq(
+      '...and its files are still where the repo put them',
+      readFileSync(
+        join(dir, '_disabled_template_routes', 'src', 'components', 'ui', 'Card.tsx'),
+        'utf8',
+      ),
+      'card',
+    );
+    eq(
+      '...and nothing landed under src/app for it',
+      existsSync(join(dir, 'src', 'app', 'src')),
+      false,
+    );
+    // Only `page.*` at the top level is the template home page. A README a repo
+    // wrote to explain its own parked subtree is not this function's to delete.
+    eq(
+      'a top-level file that is not a page is not deleted',
+      readFileSync(join(dir, '_disabled_template_routes', 'README.md'), 'utf8'),
+      'why this is parked',
+    );
     eq(
       'a nested template page lands where the capture left room for it',
       readFileSync(join(dir, 'src', 'app', 'legal', 'page.tsx'), 'utf8'),

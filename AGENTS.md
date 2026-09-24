@@ -575,7 +575,7 @@ concluding anything:
   ```bash
   gh api --paginate 'repos/FreeForCharity/FFC-Cloudflare-Automation/issues/719/comments?per_page=100' \
     --jq '.[] | "\(.created_at) \(.body[0:60])"' \
-    | grep -iE 'run [0-9]+[^A-Za-z0-9]*(START|END)' | tail -3
+    | grep -iE 'run [0-9]+[^A-Za-z0-9]*(START|END)([^A-Za-z0-9]|$)' | tail -3
   ```
 
   A newest entry older than a few hours is the finding. Note this needs `--paginate` and a
@@ -584,13 +584,30 @@ concluding anything:
   carries 871+ comments, so omitting it spends ~30 requests where 9 do the same work. That is a
   self-inflicted cost in the one section of this file that is about the shared rate budget.
 
-  **Over-match on purpose here.** The two failure directions are not symmetric: a loose pattern
-  shows you a worker comment that mentions a run, which you discard by reading it, while a tight one
-  prints nothing and reads as _"no heartbeat found"_ — indistinguishable from the outage you are
-  checking for. This line shipped tight and wrong: `run [0-9]+ .?(START|END)` allows exactly one
-  character between the number and the phase, so against the four formats above it matched **1 of
-  4** — only the pre-87 bare form — and missed both spellings the log actually uses. Measured, not
-  argued (Copilot caught it on #1341).
+  **Over-match on purpose here — on the SEPARATOR, not on the phase.** The two failure directions
+  are not symmetric: a loose pattern shows you a worker comment that mentions a run, which you
+  discard by reading it, while a tight one prints nothing and reads as _"no heartbeat found"_ —
+  indistinguishable from the outage you are checking for. This line shipped tight and wrong:
+  `run [0-9]+ .?(START|END)` allows exactly one character between the number and the phase, so
+  against the four formats above it matched **1 of 4** — only the pre-87 bare form — and missed both
+  spellings the log actually uses. Measured, not argued (Copilot caught it on #1341).
+
+  That licence stops at the phase word, and the trailing `([^A-Za-z0-9]|$)` is what stops it.
+  Without it `(START|END)` also matches `STARTED` and `ENDED`, and **that** over-match is not the
+  harmless kind: it does not show you something you discard by reading, it shows you something that
+  reads exactly like a heartbeat. Worse, it disagrees with the monitor — `CONDUCTOR_RE` carries
+  `(?![A-Za-z0-9])` and rejects both — so the hand check would report a heartbeat 747 does not
+  count, and an operator would dismiss a true alert as a false alarm. Measured on the four inputs:
+
+  | line                            | this grep | `CONDUCTOR_RE` |
+  | ------------------------------- | --------- | -------------- |
+  | `**Conductor run 174 — START**` | match     | match          |
+  | `run 174 END`                   | match     | match          |
+  | `run 174 STARTED`               | **no**    | no             |
+  | `run 174 ENDED`                 | **no**    | no             |
+
+  Before the boundary was added the first column read `match` on all four. A diagnostic that is
+  looser than the thing it diagnoses is worse than one that is merely loose.
 
   That makes three instances of one mistake in a single PR: the shipped `CONDUCTOR_RE` stopped at
   run 166 for the same reason, and the safety-table row broke on a related formatting assumption.

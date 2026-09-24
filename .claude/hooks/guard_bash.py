@@ -207,13 +207,24 @@ def _top_level_ops(bare, ops):
 
     A backtick span is tracked on the SAME stack as the other two kinds. The
     two side-flag spellings that came before it were each wrong, in opposite
-    directions, and only one of the two was a bypass:
+    directions, and -- measured against the same standard -- **neither was a
+    reachable bypass**:
 
     - A flag toggled on EVERY backtick lets an odd backtick inside a
       substitution invert the parity for everything after it, so the opening
       backtick of a later, genuine span reads as a close and its contents are
       scanned as top level. The `|` in a backticked remote then splits a real
-      force-push into two stages. Measured: **21 real force-pushes allowed**.
+      force-push into two stages. 21 such splits were measured -- but the
+      injected prefix carrying the odd backtick is **bash-invalid**, and a
+      sweep of 132 bash-VALID vectors of this shape found **0** the old code
+      allowed. Bash makes unquoted backticks pair, so a runnable command
+      carries an even count and the scanner counts the same ones; the one place
+      an odd backtick is tolerated is a heredoc body, which
+      `_split_statements` skips. So this was a real parsing defect that
+      mis-split input no shell would run, not a permissive hole. The first
+      write-up of this docstring said "21 real force-pushes allowed", which
+      overstated it by skipping the `bash -n` filter the bullet below applies;
+      Copilot caught the contradiction.
     - Toggling it only at TOP LEVEL fixes that but leaves backticks inside
       `$(...)` untracked, so an unquoted `)` inside them can match the outer
       substitution's closer and empty the stack early. Measured over 72

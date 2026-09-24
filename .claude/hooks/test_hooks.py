@@ -312,7 +312,17 @@ RULES = [
         # parity for the rest of the line. The opening backtick of the later,
         # genuine span then read as a close, so its `|` and `&&` were scanned
         # as top level and tore a real force-push into two stages. 21 of these
-        # were ALLOWED before the `not closers` guard. Copilot on #1336.
+        # were ALLOWED before the `not closers` guard.
+        #
+        # These three vectors are deliberately **bash-invalid** -- `bash -n`
+        # rejects the unbalanced backtick with `unexpected EOF while looking
+        # for matching ``'` -- so they pin the PARSER, not a reachable bypass.
+        # A sweep of 132 bash-valid vectors of this shape found 0 the old code
+        # allowed, because bash makes unquoted backticks pair. Kept anyway: a
+        # guard must fail closed on malformed input too, and these are the only
+        # rows that exercise the inversion at all. Do not read the 21 as a
+        # severity figure -- the first version of this comment invited exactly
+        # that, and Copilot caught it on #1336.
         ("force-push main after an odd backtick leaked out of $()",
          "echo $(echo ` ) ; git push --force `git remote | head -1` main", BLOCK),
         ("force-push main after an odd backtick, && in the later span",
